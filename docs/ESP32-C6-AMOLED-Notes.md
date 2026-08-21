@@ -434,6 +434,36 @@ Untapped headroom, in rough order of value: raise the QSPI clock from 40 MHz
 frame's bounding box instead of all 165k pixels. Together those put ~24 fps
 within reach without touching the rasterizer.
 
+### Release and diagnostics run at the same speed
+
+Worth writing down because the first measurement said otherwise. The shell ran
+at **41.7 fps in release and 40.0 fps in diagnostics**, which looks like the
+test code costing ~4%.
+
+It is not. Release registers one app and diagnostics registers two, so the two
+builds were drawing a different number of buttons. Registering `app_cube` twice
+in a release build reproduces 40.0 fps exactly — the entire difference is one
+microui button.
+
+The suites only ever run at boot; nothing test-related executes in the frame
+loop. What the diagnostics build actually costs:
+
+| | Release | Diagnostics |
+|---|---|---|
+| Shell framerate | 41.7 fps | 41.7 fps (like for like) |
+| Boot to ready | 1029 ms | 1696 ms |
+| Image size | 0x55f20 | 0x58d10 |
+
+Two things this does expose:
+
+- **One microui button costs about a millisecond.** The shell is not free, and
+  the menu gets slower as apps are added.
+- **The 1 ms tick quantises everything.** The frame loop ends in `vTaskDelay(1)`
+  (`main.c`), so frame time is work rounded up to a whole tick. 24 vs 25 ms is
+  one tick, which is why a small difference showed up as a clean 1.7 fps step.
+  Any framerate comparison here is quantised to ~1.7 fps near 40 fps — compare
+  microseconds of work, not the fps figure.
+
 ### There is no graphics acceleration
 
 Verified, not assumed. `SOC_PPA_SUPPORTED` is defined **only for the ESP32-P4**
