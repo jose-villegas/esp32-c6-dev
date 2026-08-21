@@ -11,7 +11,7 @@ Living document: correct it when the hardware disagrees with it.
 
 ## The board
 
-Probed at runtime by `board_check`, which asks the BSP rather than assuming:
+Reported by the BSP at boot rather than assumed:
 
 | Property | Value |
 |---|---|
@@ -71,11 +71,13 @@ variable silently overruns it. This cost us a boot loop:
 ```
 Guru Meditation Error: Core 0 panic'ed (Stack protection fault).
 Detected in task "main" at 0x4200b2f8
---- app_main at triangle_demo.c:23
+--- app_main at <file>:23
 ```
 
-Line 23 was the *opening brace* — the ~5 KiB `swrast` context was declared as a
-stack local. Anything of that size must be `malloc`'d.
+Line 23 was the *opening brace* of `app_main` — a rasterizer context of roughly
+5 KiB had been declared as a stack local. Anything that size must be
+`malloc`'d. Note the panic points at the function's entry, not at any statement
+inside it, which is the signature of blowing the stack on frame setup.
 
 Also worth knowing: the AMOLED retains its last frame in its own GRAM, so a
 crash-looping app shows a stale image rather than going black. A frozen picture
@@ -245,8 +247,9 @@ firmware returns from `app_main` and goes idle, reset signalling stops working
 entirely — `Hard resetting via RTS pin` does nothing, esptool reports
 `No serial data received`, and manual DTR/RTS pulses produce zero bytes.
 
-This is why `cube_demo` loops forever rather than returning: it stays
-flashable.
+This is why the launcher's frame loop never exits, and why its error paths park
+in a sleep loop rather than returning from `app_main`: the device has to stay
+flashable even when startup fails.
 
 If the board becomes unreachable:
 

@@ -1,9 +1,9 @@
 /*=============================================================================
  * app_cube - the Gouraud-shaded rotating RGB cube, as a launcher app.
  *
- * This is the cube_demo renderer with its ownership inverted: it no longer
- * runs a frame loop, owns a framebuffer or talks to the panel. It draws into
- * the shared framebuffer when the shell calls frame() and returns.
+ * Ownership is inverted compared with a standalone renderer: this does not run
+ * a frame loop, own a framebuffer, or talk to the panel. It draws into the
+ * shared framebuffer when the shell calls frame(), and returns.
  *
  * Why small3dlib rather than a conventional rasterizer: it owns no
  * framebuffer (every rasterized pixel comes back through a callback) and with
