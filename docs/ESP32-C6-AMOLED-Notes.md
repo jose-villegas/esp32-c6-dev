@@ -199,6 +199,71 @@ for LVGL that snaps areas to even boundaries. Full-width strips at multiples of
 
 ---
 
+## Touch input
+
+Three separate traps, and like the panel ones they all fail quietly — the
+screen simply feels broken rather than reporting anything.
+
+**1. The FT5x06 NACKs register reads while idle.** Polling it unconditionally
+produces a failed I2C transaction every time, and each failure costs a bus
+timeout. Doing that once per frame stalled the whole loop from 25 fps to
+roughly 0.3 fps, with the console filling with:
+
+```
+lcd_panel.io.i2c: panel_io_i2c_rx_buffer(149): i2c transaction failed
+FT5x06: esp_lcd_touch_ft5x06_read_data(186): I2C read error!
+```
+
+Gate reads on the INT line (GPIO 15, active low). That is what it is for.
+
+**2. INT means "data ready", not "finger down".** It drops briefly mid-touch,
+so treating every deassertion as a release makes a held finger flicker between
+pressed and released. Require a quiet period — 60 ms works — before declaring
+the finger gone.
+
+**3. microui encodes a mouse's interaction model, and touch cannot satisfy
+it.** This is the subtle one. `mu_update_control()` only establishes hover on a
+frame where the button is *not* held, and a control only submits once it has
+focus:
+
+```c
+if (mouseover && !ctx->mouse_down) { ctx->hover = id; }
+if (ctx->hover == id) { if (ctx->mouse_pressed) { mu_set_focus(ctx, id); } }
+```
+
+That is "point at it, then click" — hover on one frame, press on the next. A
+touchscreen never produces the first half, because the pointer does not exist
+until a finger is already down. Send move and press together and hover is never
+set, focus is never taken, and the control never fires.
+
+The fix is to synthesise the missing frame: on a press deliver only the
+position, and let the button-down land on the following frame. That costs one
+frame of latency (~40 ms, imperceptible) and makes taps reliable.
+
+Worth knowing because it is not specific to buttons — every microui control
+resolves interaction through `mu_update_control()`, so anything that reacts to
+a press has the same requirement.
+
+The symptom, before the fix, was that a deliberate press of roughly 120 ms
+worked while a quick tap did nothing. It "worked" only because the flickering
+INT line from trap 2 occasionally faked a not-down frame between two down
+frames — one bug accidentally papering over another.
+
+**Sampling rate matters too.** Reading touch once per rendered frame is too
+coarse: a frame is ~40 ms here (the blit alone is 25 ms) and a quick tap can be
+shorter than that, so taps fall between samples entirely. Poll on a separate
+task — 100 Hz is plenty and costs nothing next to rendering — and latch the
+press/release edges so an event that happens wholly between two frames is still
+delivered to the next one.
+
+**On targets and gestures.** A small back button is fine to aim at with a mouse
+and miserable with a fingertip. A swipe up from the bottom edge — what the
+board's stock firmware used — has no target to miss, cannot be triggered
+accidentally mid-app, and leaves the app the whole screen. Trigger it partway
+through the swipe rather than on release, or it feels sluggish.
+
+---
+
 ## Measured performance
 
 Full-screen 368×448, Gouraud-shaded rotating cube, `small3dlib`, no PSRAM, no
