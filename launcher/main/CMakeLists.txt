@@ -14,7 +14,8 @@ set(app_srcs
 # post.c reaches for chip identity, flash size, I2C probing and the on-die
 # temperature sensor, so it pulls in more of the platform than the rest.
 set(app_reqs microui small3dlib esp_lcd heap esp_timer
-             esp_driver_i2c esp_driver_tsens esp_hw_support spi_flash)
+             esp_driver_i2c esp_driver_tsens esp_hw_support spi_flash
+             fatfs esp_driver_sdspi sdmmc)
 
 if(CONFIG_LAUNCHER_SELFTEST)
     # The suites are shared with the host runner - same sources, so what passes

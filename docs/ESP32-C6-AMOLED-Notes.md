@@ -47,9 +47,16 @@ All the I2C parts share one bus (port 0, SDA 8, SCL 7), so a single probe per
 address establishes whether each is addressable. That is the cheapest possible
 health check and what the POST is built on.
 
-Two things are deliberately *not* probed, because a probe would report a false
-result rather than no result: the SD card, which would need the display torn
-down, and the audio codec, which is unpowered until audio is initialised.
+Both awkward peripherals are genuinely tested rather than assumed:
+
+- **SD card** — probed *before* `gfx_init()`, in the window where SPI2 is still
+  free. That means a real mount, with no teardown and nothing to restore. An
+  absent card is reported as optional rather than failing the board. Doing this
+  after the display is up would mean dismantling a running panel.
+- **Audio codec** — the ES8311 sits behind the power-amp enable on the IO
+  expander, so POST raises that rail before probing (and lowers it again).
+  Probing without it reports a working codec as missing. Note the datasheet
+  address 0x30 is 8-bit; I2C wants the 7-bit `0x18`.
 
 There is a V2 of this board (CO5300 + CST820). The BSP auto-detects which one
 it is by probing the touch controller's I2C address — CST816S at `0x15` means

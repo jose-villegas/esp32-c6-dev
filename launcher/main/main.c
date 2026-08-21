@@ -70,6 +70,10 @@ static void draw_home_hint(void)
 
 void app_main(void)
 {
+    /* Before the display: the SD card shares SPI2 with the panel, so this is
+     * the one moment it can be tested without tearing anything down. */
+    post_run_before_display();
+
     if (!gfx_init()) {
         ESP_LOGE(TAG, "Graphics failed to start; nothing more to do");
         /* Park rather than return - returning from app_main leaves the chip
@@ -77,12 +81,10 @@ void app_main(void)
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 
-    /* Health check of the hardware itself. Ships in every build, release
-     * included: "is this board working" stays worth knowing in the field, and
-     * unlike the test suites this is read-only and costs a few milliseconds.
-     * Runs after gfx_init so the large framebuffer allocation has already
-     * succeeded and the display can be reported on. */
-    post_run();
+    /* The rest of the health check, now that the display is up and can be
+     * reported on. Ships in every build, release included: "is this board
+     * working" stays worth knowing in the field. */
+    post_run_after_display();
 
 #if CONFIG_LAUNCHER_SELFTEST
     /* Diagnostics build only - a default build compiles none of this. The

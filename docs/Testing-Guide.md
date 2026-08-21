@@ -80,10 +80,15 @@ idf.py build                          # build/       release, no test code
 The two use separate build directories so each keeps its own `sdkconfig` and
 running the tests can never silently reconfigure your normal build.
 
-The honest trade: if tests are excluded from release, the release image is not
-*literally* the tested image. The variants differ only by the test scaffolding,
-and covering the release binary properly means black-box functional tests
-rather than embedded unit tests. Worth knowing rather than assuming it is free.
+This is the norm, not a compromise. Unit tests verify *units* - `touch_fsm.c`
+compiles from identical sources with identical flags in both variants, and
+linking a test framework beside it cannot change how it behaves. Verifying an
+*image* is a separate activity (POST, functional tests, checksums) that unit
+tests were never doing in either build.
+
+If anything the direction favours release: the diagnostics variant carries more
+code and less free RAM, so a suite passing there leaves release with more
+headroom, not less.
 
 A failing self test is logged, not fatal — the harness reads the result from
 the console, and a board that still boots is easier to investigate than one
@@ -113,9 +118,12 @@ so a production rig can grep it.
 Keep it non-destructive. Anything that changes device state or takes real time
 belongs in a suite, not here, because this runs on every boot of every unit.
 
-Two peripherals are reported as deliberately unprobed rather than tested: the
-SD card (probing needs the display torn down) and the audio codec (unpowered
-until audio starts). Reporting the constraint beats a false negative.
+It runs in two phases, because the SD card and the display cannot both hold
+SPI2. The card is tested *before* `gfx_init()` takes the bus, which makes it a
+real mount rather than an assumption, with nothing to tear down afterwards. An
+absent card is optional, not a failure. The audio codec needs its power-amp
+rail raised before it will answer, so POST raises it, probes, and lowers it
+again — leaving the state the shell inherits unchanged.
 
 ---
 
