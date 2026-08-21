@@ -78,14 +78,33 @@ resolution including ones no real panel has.
 
 ### The resulting shape
 
-Hardware access and interpretation live in separate files:
+Hardware access and interpretation live in separate files. The split is the
+whole technique:
 
-| File | Role | Tested |
-|---|---|---|
-| `touch.c` | talks to the FT5x06 over I2C, runs the polling task | no |
-| `touch_fsm.c` | decides what samples *mean* | yes |
-| `main.c` | owns the frame loop | no |
-| `gesture.c` | recognises a swipe | yes |
+```mermaid
+flowchart LR
+    subgraph device["Runs only on the device"]
+        direction TB
+        HW1["touch.c<br/><i>I2C, FreeRTOS task</i>"]
+        HW2["gfx.c<br/><i>panel, DMA</i>"]
+        HW3["ui_launcher.c<br/><i>microui integration</i>"]
+        HW4["main.c<br/><i>frame loop</i>"]
+    end
+
+    subgraph host["Runs anywhere — tested in under a second"]
+        direction TB
+        P1["touch_fsm.c<br/><i>samples to events</i>"]
+        P2["gesture.c<br/><i>swipe recognition</i>"]
+    end
+
+    HW1 -->|"sample + now_us"| P1
+    HW4 -->|"input_t + screen height"| P2
+```
+
+Note the direction of the arrows: the hardware side calls *into* the pure side
+and hands it everything it needs. The pure modules never call back, never
+include a hardware header, and never read a global. That is what makes them
+linkable on their own.
 
 When something feels untestable, it is usually one file doing both jobs. Split
 it.
@@ -118,6 +137,22 @@ TEST_ASSERT_FALSE_MESSAGE(second.pressed,
 
 That message is what a future reader sees at the moment of failure, which is
 exactly when they need it.
+
+---
+
+## The loop
+
+```mermaid
+flowchart LR
+    RED["Write the test<br/><b>watch it fail</b>"] --> GREEN["Make it pass<br/><i>simplest thing</i>"]
+    GREEN --> REFACTOR["Clean up<br/><i>tests stay green</i>"]
+    REFACTOR --> RED
+
+    RED -.->|"skipping this step is<br/>how untrustworthy<br/>suites happen"| RED
+```
+
+The failing step is not ceremony. A test never seen red might be asserting
+nothing at all, and you will not find out until it fails to catch a regression.
 
 ---
 

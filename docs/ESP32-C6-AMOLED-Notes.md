@@ -131,6 +131,30 @@ MOSI/MISO/SCLK pins. Combined with the C6 having exactly one general-purpose
 SPI controller (`SOC_SPI_PERIPH_NUM 2` = SPI1-flash + SPI2) and **no SDMMC host
 peripheral at all**, the two cannot run concurrently.
 
+```mermaid
+flowchart LR
+    subgraph chip["ESP32-C6"]
+        SPI0["SPI0/1<br/><i>flash only</i>"]
+        SPI2["SPI2<br/><b>the only general-purpose SPI</b>"]
+    end
+
+    SPI0 -->|"memory-mapped, always available"| FLASH["16 MB flash"]
+
+    SPI2 -.->|"pins 0-5 &nbsp;QSPI 40 MHz"| LCD["SH8601 AMOLED"]
+    SPI2 -.->|"pins 6,10,11,18 &nbsp;1-bit"| SD["microSD"]
+
+    LCD -.- X(("either<br/>or")) -.- SD
+```
+
+The dashed pair is the whole problem. One controller can be bound to one pin
+mapping at a time, and Waveshare wired the two devices to different pins — so
+switching devices means tearing down and re-initialising the bus, not just
+asserting a different chip select. On a board that shared the wires (the common
+case) both would work concurrently with no visible effect.
+
+Flash, by contrast, sits on its own controller and is never in contention,
+which is why it is the viable option for streaming data while rendering.
+
 Waveshare presumably chose this deliberately: hanging an SD card on the
 display's lines adds AC loading, which the same guide warns can prevent pins
 toggling fast enough to hold 40 MHz timing. Display bandwidth won.

@@ -28,6 +28,40 @@ launcher/
 
 ---
 
+## How it fits together
+
+Input flows up from the panel, drawing flows down into one framebuffer, and the
+shell sits in the middle deciding who gets called.
+
+```mermaid
+flowchart TB
+    FT["FT5x06 touch controller"] -->|"I2C, only when INT asserted"| TP
+    TP["touch.c<br/><i>polling task, 100 Hz</i>"] -->|"sample + timestamp"| FSM
+    FSM["touch_fsm.c<br/><i>press / release edges</i>"] -->|"input_t"| SHELL
+
+    SHELL["main.c<br/><i>the one frame loop</i>"]
+    SHELL -->|"is it a home swipe?"| GEST["gesture.c"]
+    SHELL -->|"launcher showing"| UI["ui_launcher.c<br/><i>microui command list</i>"]
+    SHELL -->|"app running"| APP["apps/app_cube.c<br/><i>small3dlib</i>"]
+
+    UI --> FB
+    APP --> FB
+    SHELL -->|"home hint"| FB
+
+    FB[("gfx.c<br/><b>the single framebuffer</b><br/>368 x 448 x 2 = 322 KiB")]
+    FB -->|"7 full-width strips, QSPI DMA"| PANEL["SH8601 AMOLED"]
+```
+
+Two things the diagram makes obvious that prose does not:
+
+- **Every drawing path converges on one buffer.** Nothing else allocates
+  pixels, because nothing else can afford to.
+- **Hardware touches the system at exactly two points** — `touch.c` at the top,
+  `gfx.c` at the bottom. Everything between them is ordinary logic, which is
+  why `touch_fsm` and `gesture` can be tested on a laptop.
+
+---
+
 ## Three rules that shape everything
 
 ### 1. There is exactly one framebuffer
@@ -61,7 +95,25 @@ become a goal.
 
 ## The frame loop
 
-Each iteration of `app_main`:
+The shell is a two-state machine. `current == NULL` means the launcher is
+showing; anything else is the running app.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Launcher
+
+    Launcher --> Launcher: ui_launcher_frame()<br/>draws the app list
+    Launcher --> Running: tap an entry<br/><i>app->enter()</i>
+
+    Running --> Running: app->frame(dt_ms, input)<br/>+ home hint
+    Running --> Launcher: swipe up from bottom<br/><i>app->exit()</i>
+```
+
+Only `enter()` and `exit()` run on the transitions, and both run exactly once,
+which is why an app may assume `enter()` has happened before any `frame()` and
+that `exit()` will follow the last one.
+
+Each iteration:
 
 ```
 touch_read()          latched press/release edges from the polling task
