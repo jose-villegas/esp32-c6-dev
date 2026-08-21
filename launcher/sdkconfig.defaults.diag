@@ -1,0 +1,6 @@
+# Diagnostics variant: the firmware plus the on-device test suites.
+#
+# Used by test/run_device_tests.sh, which builds it into its own directory so
+# it never overwrites the normal build. Not for shipping - the suites draw to
+# the panel and add test code to the image.
+CONFIG_LAUNCHER_SELFTEST=y

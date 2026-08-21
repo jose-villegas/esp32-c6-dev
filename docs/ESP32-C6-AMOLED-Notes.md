@@ -22,6 +22,35 @@ Reported by the BSP at boot rather than assumed:
 | PSRAM | **none** |
 | CPU | single core @ 160 MHz (`SOC_CPU_CORES_NUM 1`) |
 
+### Hardware inventory
+
+Everything on the board, and how to tell it is alive. The POST that ships in
+the firmware probes each of these at boot and prints exactly this table — see
+`main/post.c`.
+
+| Peripheral | Part | Where | Notes |
+|---|---|---|---|
+| Display | SH8601 (V1) / CO5300 (V2) | QSPI, pins 0–5 | 368×448 RGB565, 40 MHz |
+| Touch | FT5x06 (V1) / CST820 (V2) | I2C `0x38` / `0x15` | which address answers identifies the board revision |
+| IO expander | TCA9554 | I2C `0x20` | drives display and touch reset lines |
+| Power management | AXP2101 | I2C `0x34` | battery charging; the PWR button goes through it |
+| IMU | QMI8658 | I2C `0x6b` | accelerometer + gyroscope |
+| Real-time clock | PCF85063 | I2C `0x51` | |
+| Audio codec | ES8311 | I2C, I2S pins 19–23 | speaker + mic; amp enable on expander pin 7 |
+| microSD | — | SPI2, pins 6/10/11/18 | **cannot run while the display is up** |
+| Flash | — | SPI0/1 | 16 MB, memory-mapped, never contended |
+| PSRAM | — | — | **none** — the constraint behind most decisions here |
+| Wi-Fi 6 / BLE 5 / 802.15.4 | on-die | — | radios present; Thread and Zigbee capable |
+| Temperature sensor | on-die | — | reads ~31 °C idle |
+
+All the I2C parts share one bus (port 0, SDA 8, SCL 7), so a single probe per
+address establishes whether each is addressable. That is the cheapest possible
+health check and what the POST is built on.
+
+Two things are deliberately *not* probed, because a probe would report a false
+result rather than no result: the SD card, which would need the display torn
+down, and the audio codec, which is unpowered until audio is initialised.
+
 There is a V2 of this board (CO5300 + CST820). The BSP auto-detects which one
 it is by probing the touch controller's I2C address — CST816S at `0x15` means
 V2, FT5x06 at `0x38` means V1. Always go through `bsp_board_detect()` rather

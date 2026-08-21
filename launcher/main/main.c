@@ -16,9 +16,13 @@
 #include "app.h"
 #include "gesture.h"
 #include "gfx.h"
-#include "selftest.h"
+#include "post.h"
 #include "touch.h"
 #include "ui_launcher.h"
+
+#if CONFIG_LAUNCHER_SELFTEST
+#include "selftest.h"
+#endif
 
 #include "bsp/esp-bsp.h"
 #include "esp_timer.h"
@@ -73,13 +77,23 @@ void app_main(void)
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 
-    /* Verify the shipped binary before handing the device to the user. Runs
-     * every suite, hardware and portable alike, and costs about half a second.
-     * A failure is logged rather than fatal: a board with a broken clip rect
-     * is still more useful than a board that refuses to boot. */
+    /* Health check of the hardware itself. Ships in every build, release
+     * included: "is this board working" stays worth knowing in the field, and
+     * unlike the test suites this is read-only and costs a few milliseconds.
+     * Runs after gfx_init so the large framebuffer allocation has already
+     * succeeded and the display can be reported on. */
+    post_run();
+
+#if CONFIG_LAUNCHER_SELFTEST
+    /* Diagnostics build only - a default build compiles none of this. The
+     * suites draw to the framebuffer and drive the panel, so they run before
+     * the shell paints anything of its own. A failure is reported rather than
+     * fatal: the harness reads the result from the console, and a board that
+     * still boots is easier to investigate than one that does not. */
     if (selftest_run() != 0) {
-        ESP_LOGE(TAG, "self test reported failures - continuing anyway");
+        ESP_LOGE(TAG, "self test reported failures");
     }
+#endif
 
     touch_start();
 

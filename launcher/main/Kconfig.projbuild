@@ -1,0 +1,24 @@
+menu "Launcher"
+
+    config LAUNCHER_SELFTEST
+        bool "Include the on-device test suites"
+        default n
+        help
+            Compiles the test suites into the firmware and runs them at boot,
+            before the shell starts.
+
+            Off by default, so a normal build carries no test code at all.
+            The suites draw to the framebuffer and drive the panel, which is
+            harmless in a diagnostics build and unacceptable in a shipped one,
+            and test hooks in a release image are a liability rather than a
+            feature.
+
+            Turn this on through the diagnostics build rather than by hand:
+
+                ./test/run_device_tests.sh
+
+            which builds this variant into its own directory, flashes it,
+            collects the results over the serial console and exits non-zero if
+            anything failed.
+
+endmenu

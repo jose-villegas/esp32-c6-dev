@@ -10,14 +10,15 @@ Living document: update it when the approach changes.
 ## Running them
 
 ```sh
-./launcher/test/run_tests.sh     # the portable suites, on this machine
+./launcher/test/run_tests.sh          # portable suites, on this machine, <1 s
+./launcher/test/run_device_tests.sh   # every suite, on the board, host-triggered
 ```
 
-The device suites run themselves — flash the firmware and watch the console:
-
-```sh
-./monitor.sh                     # look for SELFTEST_COMPLETE failures=0
-```
+The second builds the diagnostics variant, flashes it, collects results over
+the console and exits non-zero on failure — so it works in CI. On Windows,
+ESP-IDF cannot be driven from Git Bash, so build and flash from PowerShell and
+then use `--no-flash` to collect; the script says so rather than silently
+reporting stale results.
 
 POSIX sh — works under Git Bash or MSYS on Windows and natively on Linux and
 macOS. It finds a compiler via `$CC`, then `PATH`, then the location winget
@@ -60,13 +61,61 @@ portable ones. That is deliberate: passing on a laptop only proves the logic is
 right on x86, whereas running on-target proves the same source behaves
 identically built by the RISC-V toolchain and executed on this chip.
 
-Critically, **there is no separate test firmware**. The suites ship inside the
-launcher and run from `app_main` before the shell starts, so what gets verified
-is byte-for-byte the binary that ships. A test-only build could drift from
-production; this cannot.
+### Release builds contain no test code
 
-A failing self test is logged, not fatal. A board with a broken clip rect is
-still more useful than a board that refuses to boot.
+`CONFIG_LAUNCHER_SELFTEST` defaults **off**, and the CMake conditional leaves
+the suites, the runner and the Unity dependency out of the build entirely —
+not `#ifdef`-ed out, simply never compiled. A default `idf.py build` produces an
+image with no test symbols in it at all.
+
+That matters for more than size. The suites draw to the framebuffer and drive
+the panel, which is fine in diagnostics and unacceptable in a product; and test
+hooks in a shipped image are a liability rather than a feature.
+
+```sh
+idf.py build                          # build/       release, no test code
+./test/run_device_tests.sh            # build.diag/  firmware + suites
+```
+
+The two use separate build directories so each keeps its own `sdkconfig` and
+running the tests can never silently reconfigure your normal build.
+
+The honest trade: if tests are excluded from release, the release image is not
+*literally* the tested image. The variants differ only by the test scaffolding,
+and covering the release binary properly means black-box functional tests
+rather than embedded unit tests. Worth knowing rather than assuming it is free.
+
+A failing self test is logged, not fatal — the harness reads the result from
+the console, and a board that still boots is easier to investigate than one
+that refuses to.
+
+---
+
+## POST is a third thing
+
+Separate from both runners is the **power-on self test** in `main/post.c`. It
+answers a different question, so it lives in a different place and obeys
+different rules.
+
+| | POST | Test suites |
+|---|---|---|
+| Ships in release | **yes** | diagnostics builds only |
+| Asks | "is this **board** working?" | "is this **code** correct?" |
+| Side effects | none — probe and report | draws to the panel, mutates state |
+| Cost | ~95 ms | ~580 ms |
+| A failure means | this unit is faulty | this code is wrong |
+
+It probes each I2C peripheral, checks flash size, heap headroom, MAC validity
+and reads the on-die temperature — fifteen checks, printed as a table and
+summarised on one machine-readable line (`POST_COMPLETE checks=N failures=N`)
+so a production rig can grep it.
+
+Keep it non-destructive. Anything that changes device state or takes real time
+belongs in a suite, not here, because this runs on every boot of every unit.
+
+Two peripherals are reported as deliberately unprobed rather than tested: the
+SD card (probing needs the display torn down) and the audio codec (unpowered
+until audio starts). Reporting the constraint beats a false negative.
 
 ---
 

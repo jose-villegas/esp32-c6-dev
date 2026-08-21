@@ -638,6 +638,12 @@ CONFIG_PARTITION_TABLE_MD5=y
 # end of Partition Table
 
 #
+# Launcher
+#
+# CONFIG_LAUNCHER_SELFTEST is not set
+# end of Launcher
+
+#
 # Compiler options
 #
 CONFIG_COMPILER_OPTIMIZATION_DEBUG=y
