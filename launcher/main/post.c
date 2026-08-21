@@ -60,6 +60,12 @@ static void report(const char *name, bool ok, post_severity_t severity,
     ESP_LOGI(TAG, "  [%s] %-16s %s", mark, name, detail ? detail : "");
 }
 
+/* The SD result is kept aside so a re-run can carry it forward. Re-testing the
+ * card needs SPI2, which the display holds once it is up, so a re-run cannot
+ * repeat it - see post_rerun(). */
+static post_result_t sd_result;
+static bool sd_result_valid;
+
 const post_result_t *post_results(void) { return results; }
 int post_result_count(void) { return checks_run < POST_MAX_CHECKS ? checks_run : POST_MAX_CHECKS; }
 int post_failure_count(void) { return checks_failed; }
@@ -80,6 +86,8 @@ void post_run_before_display(void)
      * without tearing it down again. */
     const esp_err_t err = bsp_sdcard_mount();
 
+    sd_result_valid = true;
+
     if (err == ESP_OK && bsp_sdcard != NULL) {
         const uint64_t bytes =
             (uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size;
@@ -88,6 +96,7 @@ void post_run_before_display(void)
         snprintf(detail, sizeof(detail), "%s, %llu MB, mounted and released",
                  bsp_sdcard->cid.name, (unsigned long long)(bytes >> 20));
         report("sd card", true, POST_OPTIONAL, detail);
+        sd_result = results[0];
 
         /* Release it again so the display can have the bus back. */
         bsp_sdcard_unmount();
@@ -96,6 +105,7 @@ void post_run_before_display(void)
         report("sd card", false, POST_OPTIONAL,
                err == ESP_ERR_NOT_FOUND ? "no card inserted"
                                         : "no card / not mountable");
+        sd_result = results[0];
     }
 }
 
@@ -258,6 +268,29 @@ static void check_display(void)
     snprintf(detail, sizeof(detail), "%dx%d %s", GFX_WIDTH, GFX_HEIGHT,
              bsp_board_variant_to_name(bsp_board_get_variant()));
     report("display", gfx_framebuffer() != NULL, POST_REQUIRED, detail);
+}
+
+void post_rerun(void)
+{
+    checks_run = 0;
+    checks_failed = 0;
+
+    ESP_LOGI(TAG, "re-running self test");
+
+    /* Carry the boot SD result forward rather than dropping the row or
+     * pretending it was re-tested. The card and the display cannot both hold
+     * SPI2, and the BSP offers no way to release the display, so this is the
+     * one check a live re-run genuinely cannot repeat. Saying so on screen is
+     * better than a report that looks complete but quietly is not. */
+    if (sd_result_valid) {
+        /* Deliberately wider than post_result_t::detail so appending the
+         * suffix cannot truncate here; report() then trims to fit. */
+        char detail[sizeof(sd_result.detail) + 16];
+        snprintf(detail, sizeof(detail), "%s (at boot)", sd_result.detail);
+        report(sd_result.name, sd_result.ok, sd_result.severity, detail);
+    }
+
+    post_run_after_display();
 }
 
 bool post_run_after_display(void)

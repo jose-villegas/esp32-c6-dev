@@ -56,6 +56,15 @@ void post_run_before_display(void);
  * peripherals - an absent SD card, say - are reported but never fail. */
 bool post_run_after_display(void);
 
+/* Re-runs every check that can be repeated while the shell is live, replacing
+ * the retained results.
+ *
+ * The SD card is the one exception: testing it needs SPI2, which the display
+ * holds, and the BSP offers no way to release the display. Its row is carried
+ * forward from boot and labelled "(at boot)" rather than silently dropped or
+ * presented as fresh. */
+void post_rerun(void);
+
 /* The results of the last run, retained so they can be shown on screen as well
  * as logged - a board in the field may have no serial cable attached. */
 const post_result_t *post_results(void);

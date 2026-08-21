@@ -8,8 +8,10 @@ set(app_srcs
     "touch_fsm.c"
     "gesture.c"
     "post.c"
+    "post_ui.c"
     "ui_launcher.c"
     "apps/app_cube.c"
+    "apps/app_diagnostics.c"
 )
 # post.c reaches for chip identity, flash size, I2C probing and the on-die
 # temperature sensor, so it pulls in more of the platform than the rest.

@@ -199,7 +199,17 @@ int gfx_text_height(void)
 
 void gfx_text(int x, int y, const char *text, gfx_color_t color)
 {
-    for (const char *p = text; *p != '\0'; p++, x += GFX_CHAR_W) {
+    gfx_text_scaled(x, y, text, color, GFX_GLYPH_SCALE);
+}
+
+void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
+                     int scale)
+{
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    for (const char *p = text; *p != '\0'; p++, x += 8 * scale) {
         const unsigned char ch = (unsigned char)*p;
         if (ch >= 128) {
             continue;   /* font covers ASCII only */
@@ -215,11 +225,9 @@ void gfx_text(int x, int y, const char *text, gfx_color_t color)
                 if (!(bits & (1 << col))) {
                     continue;
                 }
-                /* One font pixel becomes a GFX_GLYPH_SCALE square. */
-                gfx_fill_rect(x + col * GFX_GLYPH_SCALE,
-                              y + row * GFX_GLYPH_SCALE,
-                              GFX_GLYPH_SCALE, GFX_GLYPH_SCALE,
-                              color);
+                /* One font pixel becomes a scale x scale square. */
+                gfx_fill_rect(x + col * scale, y + row * scale,
+                              scale, scale, color);
             }
         }
     }

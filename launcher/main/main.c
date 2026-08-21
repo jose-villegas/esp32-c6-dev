@@ -17,6 +17,7 @@
 #include "gesture.h"
 #include "gfx.h"
 #include "post.h"
+#include "post_ui.h"
 #include "touch.h"
 #include "ui_launcher.h"
 
@@ -49,9 +50,11 @@ static const char *TAG = "shell";
 
 /* Adding an app is: write it, declare it here, add one line to the registry. */
 extern const app_t app_cube;
+extern const app_t app_diagnostics;
 
 const app_t *const app_registry[] = {
     &app_cube,
+    &app_diagnostics,
 };
 
 const int app_count = (int)(sizeof(app_registry) / sizeof(app_registry[0]));
@@ -64,6 +67,28 @@ static void draw_home_hint(void)
                   GFX_HEIGHT - HOME_HINT_MARGIN - HOME_HINT_HEIGHT,
                   HOME_HINT_WIDTH, HOME_HINT_HEIGHT,
                   gfx_rgb(HOME_HINT_RGB));
+}
+
+/* Holds the failing checks on screen long enough to be read, or until the
+ * screen is touched. Deliberately blocking: a board with dead hardware should
+ * not scroll past its own diagnosis into a launcher that looks normal. */
+static void show_post_failures(void)
+{
+    ESP_LOGE(TAG, "POST failed - showing report");
+
+    gfx_clear(gfx_rgb(0x0A0C14));
+    gfx_text(10, 10, "HARDWARE FAULT", gfx_rgb(0xFF5C5C));
+
+    int y = 10 + gfx_text_height() + 10;
+    y = post_ui_draw(y, true);
+
+    gfx_text_scaled(10, y + 12, "touch to continue", gfx_rgb(0x8A93A8), 1);
+    gfx_present();
+
+    /* Touch is not running yet at this point in boot, so this is a plain
+     * timeout. Long enough to read and photograph, short enough that an
+     * unattended board still reaches the launcher. */
+    vTaskDelay(pdMS_TO_TICKS(8000));
 }
 
 /* --- main --------------------------------------------------------------- */
@@ -83,8 +108,16 @@ void app_main(void)
 
     /* The rest of the health check, now that the display is up and can be
      * reported on. Ships in every build, release included: "is this board
-     * working" stays worth knowing in the field. */
-    post_run_after_display();
+     * working" stays worth knowing in the field.
+     *
+     * Silent when healthy - a device should boot, not announce that it is
+     * fine. Only a failure gets the screen, because that is the case where
+     * nobody may have a serial cable attached and the information is
+     * actionable. The full report is always available from the Diagnostics
+     * app. */
+    if (!post_run_after_display()) {
+        show_post_failures();
+    }
 
 #if CONFIG_LAUNCHER_SELFTEST
     /* Diagnostics build only - a default build compiles none of this. The

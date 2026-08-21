@@ -45,7 +45,15 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
+
+/* Draws at GFX_GLYPH_SCALE - the size the UI is laid out around. */
 void gfx_text(int x, int y, const char *text, gfx_color_t color);
+
+/* Same, at an explicit glyph scale. Scale 1 gives 8x8 glyphs and 46 columns
+ * across the panel, which is what makes a dense report like the POST table fit
+ * on screen at all. */
+void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
+                     int scale);
 
 /* Text metrics. Kept here so the UI layer and the renderer cannot disagree. */
 int gfx_text_width(const char *text, int len);
