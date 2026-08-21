@@ -181,6 +181,13 @@ automatically.
 
 **3. Add the source to `main/CMakeLists.txt`.**
 
+**Bench-only apps** go in the `if(CONFIG_LAUNCHER_SELFTEST)` block in the same
+file, with their registry entry wrapped in `#ifdef CONFIG_LAUNCHER_SELFTEST`.
+Diagnostics is the example: it re-runs POST, which cycles the audio rail and
+takes the display off SPI2, so it has no business being reachable in a shipped
+image. See [Testing-Guide](Testing-Guide.md#release-builds-contain-no-test-code)
+— note in particular that `REQUIRES` must **not** be gated this way.
+
 ### What an app may and may not do
 
 | | |

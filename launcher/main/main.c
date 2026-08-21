@@ -50,11 +50,19 @@ static const char *TAG = "shell";
 
 /* Adding an app is: write it, declare it here, add one line to the registry. */
 extern const app_t app_cube;
+#ifdef CONFIG_LAUNCHER_SELFTEST
 extern const app_t app_diagnostics;
+#endif
 
 const app_t *const app_registry[] = {
     &app_cube,
+#ifdef CONFIG_LAUNCHER_SELFTEST
+    /* Diagnostics is a bench tool, not a feature. It re-runs POST, which cycles
+     * the audio rail and drops the display off SPI2 mid-session - fine while
+     * debugging, not something to leave reachable in a shipped product. The
+     * boot POST still runs in release; only this way in is compiled out. */
     &app_diagnostics,
+#endif
 };
 
 const int app_count = (int)(sizeof(app_registry) / sizeof(app_registry[0]));

@@ -64,13 +64,47 @@ identically built by the RISC-V toolchain and executed on this chip.
 ### Release builds contain no test code
 
 `CONFIG_LAUNCHER_SELFTEST` defaults **off**, and the CMake conditional leaves
-the suites, the runner and the Unity dependency out of the build entirely —
-not `#ifdef`-ed out, simply never compiled. A default `idf.py build` produces an
-image with no test symbols in it at all.
+the suites, the runner and **the Diagnostics app** out of the build entirely —
+not `#ifdef`-ed out, simply never compiled.
+
+Verified rather than assumed, by counting symbols in the two images:
+
+```sh
+riscv32-esp-elf-nm build/launcher.elf      | grep -ci 'unity\|suite_\|selftest\|app_diagnostics'   # 0
+riscv32-esp-elf-nm build.diag/launcher.elf | grep -ci 'unity\|suite_\|selftest\|app_diagnostics'   # 39
+```
 
 That matters for more than size. The suites draw to the framebuffer and drive
 the panel, which is fine in diagnostics and unacceptable in a product; and test
 hooks in a shipped image are a liability rather than a feature.
+
+The **Diagnostics app** is gated the same way, for the same reason. It is a
+bench tool: entering it re-runs POST, which cycles the audio power rail and
+drops the display off SPI2 mid-session. Reasonable while debugging, not
+something to leave reachable in a shipped product. The boot POST still runs in
+release — only this way *in* is compiled out.
+
+### The Kconfig trap in REQUIRES
+
+One thing must **not** be gated on `CONFIG_LAUNCHER_SELFTEST`: the `unity`
+entry in `REQUIRES`.
+
+ESP-IDF expands component requirements in an early pass where `CONFIG_*` is not
+yet defined, so a Kconfig-gated `REQUIRES` silently evaluates false and does
+nothing. `SRCS` and `target_compile_definitions` are evaluated in a later pass
+and *do* work — which makes the failure genuinely confusing: the test sources
+get compiled, `DEVICE_BUILD` is defined, and every one of them fails with
+`fatal error: unity.h: No such file or directory`.
+
+Worse, it only shows up on a **clean** build directory. An incremental build
+already has a `sdkconfig`, so it appears to work — meaning this can sit latent
+until CI, or until someone deletes `build.diag/`.
+
+So `unity` is listed unconditionally. That costs release nothing: IDF puts unity
+in the component graph either way, `REQUIRES` only decides whether `main` can
+see its headers, and with no test sources compiled nothing references it and
+`--gc-sections` drops it. Confirmed — the release binary is byte-for-byte the
+same size with and without the entry.
 
 ```sh
 idf.py build                          # build/       release, no test code

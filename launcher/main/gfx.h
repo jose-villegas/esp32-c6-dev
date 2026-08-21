@@ -65,6 +65,22 @@ int gfx_text_height(void);
 void gfx_set_clip(int x, int y, int w, int h);
 void gfx_clear_clip(void);
 
+/* Release SPI2 so something else can use it - in practice, the SD card, which
+ * is wired to different pins on the same controller and so cannot share it.
+ * The framebuffer survives: it is ordinary RAM, unrelated to the bus.
+ *
+ * Nothing may be presented between suspend and resume. The panel keeps showing
+ * whatever was last sent to it, because it refreshes from its own GRAM. */
+bool gfx_suspend(void);
+
+/* Bring the panel back.
+ *
+ * `full_init` re-sends the initialisation sequence. It is not normally needed:
+ * the SH8601 keeps its registers while powered, so only the ESP32 side has to
+ * be rebuilt - and the sequence carries a 120 ms settle that dominates the
+ * cost of a round trip. Pass true only if the panel has actually lost power. */
+bool gfx_resume(bool full_init);
+
 /* Send the finished frame to the panel and wait for the transfer to land.
  * The wait is mandatory - see the notes on asynchronous DMA in the docs. */
 void gfx_present(void);

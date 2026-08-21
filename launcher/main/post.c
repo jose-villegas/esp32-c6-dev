@@ -12,6 +12,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_mac.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -60,12 +61,6 @@ static void report(const char *name, bool ok, post_severity_t severity,
     ESP_LOGI(TAG, "  [%s] %-16s %s", mark, name, detail ? detail : "");
 }
 
-/* The SD result is kept aside so a re-run can carry it forward. Re-testing the
- * card needs SPI2, which the display holds once it is up, so a re-run cannot
- * repeat it - see post_rerun(). */
-static post_result_t sd_result;
-static bool sd_result_valid;
-
 const post_result_t *post_results(void) { return results; }
 int post_result_count(void) { return checks_run < POST_MAX_CHECKS ? checks_run : POST_MAX_CHECKS; }
 int post_failure_count(void) { return checks_failed; }
@@ -86,8 +81,6 @@ void post_run_before_display(void)
      * without tearing it down again. */
     const esp_err_t err = bsp_sdcard_mount();
 
-    sd_result_valid = true;
-
     if (err == ESP_OK && bsp_sdcard != NULL) {
         const uint64_t bytes =
             (uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size;
@@ -96,7 +89,6 @@ void post_run_before_display(void)
         snprintf(detail, sizeof(detail), "%s, %llu MB, mounted and released",
                  bsp_sdcard->cid.name, (unsigned long long)(bytes >> 20));
         report("sd card", true, POST_OPTIONAL, detail);
-        sd_result = results[0];
 
         /* Release it again so the display can have the bus back. */
         bsp_sdcard_unmount();
@@ -105,7 +97,53 @@ void post_run_before_display(void)
         report("sd card", false, POST_OPTIONAL,
                err == ESP_ERR_NOT_FOUND ? "no card inserted"
                                         : "no card / not mountable");
-        sd_result = results[0];
+    }
+}
+
+/* Re-tests the card while the shell is running, by borrowing SPI2 from the
+ * display and giving it straight back.
+ *
+ * This is the experiment the board notes described but had not measured: the
+ * claim was that resuming without re-sending the panel's init sequence costs
+ * single-digit milliseconds. The timings are logged so the note can be
+ * replaced with a fact. */
+static void check_sdcard_live(void)
+{
+    const int64_t t0 = esp_timer_get_time();
+    gfx_suspend();
+    const int64_t t_suspended = esp_timer_get_time();
+
+    const esp_err_t err = bsp_sdcard_mount();
+    char card[40] = "no card";
+    if (err == ESP_OK && bsp_sdcard != NULL) {
+        const uint64_t bytes =
+            (uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size;
+        snprintf(card, sizeof(card), "%s, %llu MB",
+                 bsp_sdcard->cid.name, (unsigned long long)(bytes >> 20));
+        bsp_sdcard_unmount();
+    }
+    const int64_t t_card = esp_timer_get_time();
+
+    /* No full init: the panel never lost power, so only the ESP32 side needs
+     * rebuilding. This is the part worth measuring. */
+    const bool back = gfx_resume(false);
+    const int64_t t_resumed = esp_timer_get_time();
+
+    ESP_LOGI(TAG, "sd round trip: suspend %lld us, card %lld us, resume %lld us",
+             (long long)(t_suspended - t0),
+             (long long)(t_card - t_suspended),
+             (long long)(t_resumed - t_card));
+
+    /* Wider than post_result_t::detail on purpose so the round-trip figure
+     * cannot be the thing that gets cut; report() trims to fit. */
+    char detail[sizeof(card) + 40];
+    snprintf(detail, sizeof(detail), "%s (live, %lld ms round trip)",
+             card, (long long)((t_resumed - t0) / 1000));
+
+    report("sd card", err == ESP_OK, POST_OPTIONAL, detail);
+
+    if (!back) {
+        report("display resume", false, POST_REQUIRED, "panel did not come back");
     }
 }
 
@@ -277,18 +315,11 @@ void post_rerun(void)
 
     ESP_LOGI(TAG, "re-running self test");
 
-    /* Carry the boot SD result forward rather than dropping the row or
-     * pretending it was re-tested. The card and the display cannot both hold
-     * SPI2, and the BSP offers no way to release the display, so this is the
-     * one check a live re-run genuinely cannot repeat. Saying so on screen is
-     * better than a report that looks complete but quietly is not. */
-    if (sd_result_valid) {
-        /* Deliberately wider than post_result_t::detail so appending the
-         * suffix cannot truncate here; report() then trims to fit. */
-        char detail[sizeof(sd_result.detail) + 16];
-        snprintf(detail, sizeof(detail), "%s (at boot)", sd_result.detail);
-        report(sd_result.name, sd_result.ok, sd_result.severity, detail);
-    }
+    /* Now that gfx owns the panel it can be released, so the card really can
+     * be re-tested live: suspend the display, take SPI2, mount, hand the bus
+     * back. The panel goes on showing its last frame throughout, because it
+     * refreshes from its own GRAM without the MCU. */
+    check_sdcard_live();
 
     post_run_after_display();
 }

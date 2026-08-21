@@ -2,8 +2,12 @@
 
 #include <string.h>
 
+#include "driver/spi_master.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
+#include "esp_lcd_sh8601.h"
+#include "esp_timer.h"
+#include "esp_check.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -21,7 +25,32 @@ static const char *TAG = "gfx";
 
 static gfx_color_t *fb;
 static esp_lcd_panel_handle_t panel;
+static esp_lcd_panel_io_handle_t panel_io;
+static bool spi_bus_up;
 static SemaphoreHandle_t strip_sent;
+
+/* Copied from the Waveshare BSP (Apache-2.0, (c) 2026 Waveshare Team), where
+ * it is a private static.
+ *
+ * We need it because gfx brings the panel up itself rather than calling
+ * bsp_display_new(). The BSP offers no way to release the display, and
+ * releasing it is the only way to reach the SD card - the two share SPI2 on
+ * different pins, so only one can hold the bus. Owning the sequence here is
+ * what makes gfx_suspend()/gfx_resume() possible.
+ *
+ * Note command 0x11 (sleep out) carries a 120 ms settle, which dominates the
+ * cost of a full re-initialisation. */
+static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
+    {0x11, (uint8_t[]){0x00}, 0, 120},
+    {0x44, (uint8_t[]){0x01, 0xD1}, 2, 0},
+    {0x35, (uint8_t[]){0x00}, 1, 0},
+    {0x53, (uint8_t[]){0x20}, 1, 10},
+    {0x2A, (uint8_t[]){0x00, 0x00, 0x01, 0x6F}, 4, 0},
+    {0x2B, (uint8_t[]){0x00, 0x00, 0x01, 0xBF}, 4, 0},
+    {0x51, (uint8_t[]){0x00}, 1, 10},
+    {0x29, (uint8_t[]){0x00}, 0, 10},
+    {0x51, (uint8_t[]){0xFF}, 1, 0},
+};
 
 /* Current clip rectangle, as inclusive-exclusive bounds. */
 static struct { int x0, y0, x1, y1; } clip;
@@ -39,6 +68,86 @@ static bool IRAM_ATTR on_strip_sent(esp_lcd_panel_io_handle_t io,
     return woken == pdTRUE;
 }
 
+/* Brings the panel up on SPI2.
+ *
+ * `send_init` chooses between a full initialisation and only re-attaching:
+ * the SH8601 keeps its registers while powered, so after a suspend the panel
+ * is still configured and only the ESP32 side needs rebuilding. Skipping the
+ * command sequence avoids its 120 ms settle. */
+static esp_err_t panel_bring_up(bool send_init)
+{
+    const spi_bus_config_t bus = SH8601_PANEL_BUS_QSPI_CONFIG(
+        BSP_LCD_PCLK, BSP_LCD_DATA0, BSP_LCD_DATA1, BSP_LCD_DATA2,
+        BSP_LCD_DATA3, GFX_WIDTH * STRIP_HEIGHT * sizeof(gfx_color_t));
+
+    esp_err_t err = spi_bus_initialize(BSP_LCD_SPI_NUM, &bus, SPI_DMA_CH_AUTO);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "spi_bus_initialize failed: %s", esp_err_to_name(err));
+        return err;
+    }
+    spi_bus_up = true;
+
+    const esp_lcd_panel_io_spi_config_t io_config =
+        SH8601_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, on_strip_sent, NULL);
+    err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM,
+                                   &io_config, &panel_io);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    sh8601_vendor_config_t vendor = {
+        .init_cmds = lcd_init_cmds,
+        .init_cmds_size = sizeof(lcd_init_cmds) / sizeof(lcd_init_cmds[0]),
+        .flags = { .use_qspi_interface = 1 },
+    };
+    const esp_lcd_panel_dev_config_t panel_config = {
+        .reset_gpio_num = GPIO_NUM_NC,   /* reset is on the IO expander */
+        .rgb_ele_order  = LCD_RGB_ELEMENT_ORDER_RGB,
+        .bits_per_pixel = 16,
+        .vendor_config  = &vendor,
+    };
+    err = esp_lcd_new_panel_sh8601(panel_io, &panel_config, &panel);
+    if (err != ESP_OK) {
+        return err;
+    }
+
+    if (send_init) {
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_reset(panel), TAG, "reset");
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_init(panel), TAG, "init");
+        ESP_RETURN_ON_ERROR(esp_lcd_panel_disp_on_off(panel, true), TAG, "on");
+    }
+    return ESP_OK;
+}
+
+/* Releases SPI2 so something else can use it. The framebuffer is kept: it is
+ * ordinary RAM and has nothing to do with the bus. */
+static void panel_tear_down(void)
+{
+    if (panel != NULL) {
+        esp_lcd_panel_del(panel);
+        panel = NULL;
+    }
+    if (panel_io != NULL) {
+        esp_lcd_panel_io_del(panel_io);
+        panel_io = NULL;
+    }
+    if (spi_bus_up) {
+        spi_bus_free(BSP_LCD_SPI_NUM);
+        spi_bus_up = false;
+    }
+}
+
+bool gfx_suspend(void)
+{
+    panel_tear_down();
+    return true;
+}
+
+bool gfx_resume(bool full_init)
+{
+    return panel_bring_up(full_init) == ESP_OK;
+}
+
 bool gfx_init(void)
 {
     /* Counting, not binary: a whole frame's strips are queued before any is
@@ -50,22 +159,16 @@ bool gfx_init(void)
         return false;
     }
 
-    /* bsp_display_new(), not bsp_display_start(): the latter also starts LVGL,
-     * which would cost tens of KiB we would rather spend on the framebuffer. */
-    esp_lcd_panel_io_handle_t io = NULL;
-    const bsp_display_config_t config = {
-        .max_transfer_sz = GFX_WIDTH * STRIP_HEIGHT * sizeof(gfx_color_t),
-    };
-    if (bsp_display_new(&config, &panel, &io) != ESP_OK) {
-        ESP_LOGE(TAG, "Could not start the display");
+    /* Detect the board first: it initialises I2C and pulses the display and
+     * touch reset lines through the IO expander, which the panel needs before
+     * it will accept anything. */
+    if (bsp_board_detect() == BSP_BOARD_VARIANT_UNKNOWN) {
+        ESP_LOGE(TAG, "Could not identify the board");
         return false;
     }
 
-    const esp_lcd_panel_io_callbacks_t callbacks = {
-        .on_color_trans_done = on_strip_sent,
-    };
-    if (esp_lcd_panel_io_register_event_callbacks(io, &callbacks, NULL) != ESP_OK) {
-        ESP_LOGE(TAG, "Could not register the transfer-complete callback");
+    if (panel_bring_up(true) != ESP_OK) {
+        ESP_LOGE(TAG, "Could not start the display");
         return false;
     }
 

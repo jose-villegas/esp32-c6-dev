@@ -10,10 +10,11 @@
  * what boot found - the point of opening it is usually to see whether something
  * is failing now.
  *
- * One check cannot be repeated: the SD card needs SPI2, which the display holds
- * once it is up, and the BSP exposes no way to release the display. That row is
- * carried forward from boot and marked "(at boot)" so the report never looks
- * more current than it is.
+ * Every check is repeated, including the SD card. That one is interesting: the
+ * card and the display share SPI2 on different pins, so the re-run releases the
+ * panel, mounts the card, and takes the bus back. Nothing is visible on screen
+ * while that happens - the panel goes on refreshing its last frame from its own
+ * GRAM - and the report prints how long the round trip took.
  *===========================================================================*/
 
 #include "../app.h"

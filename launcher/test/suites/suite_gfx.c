@@ -272,6 +272,72 @@ void test_repeated_presents_stay_in_sync(void)
     TEST_PASS();
 }
 
+/* --- suspending the display to share SPI2 ------------------------------- */
+
+/* The display and the SD card are wired to different pins on the one SPI2
+ * controller, so reaching the card means releasing the panel. These cover the
+ * round trip. They can only run on hardware: the whole point is whether real
+ * bus teardown and rebuild leave the driver in a usable state. */
+
+static void test_the_framebuffer_survives_a_suspend(void)
+{
+    fixture();
+
+    /* A recognisable pattern, so this fails loudly if resume were ever to
+     * reallocate rather than reattach. */
+    gfx_color_t *before = gfx_framebuffer();
+    const gfx_color_t marker = gfx_rgb(0x8040C0);
+    gfx_clear(marker);
+
+    TEST_ASSERT_TRUE_MESSAGE(gfx_suspend(), "suspend must succeed");
+    TEST_ASSERT_TRUE_MESSAGE(gfx_resume(false), "resume must bring the panel back");
+
+    TEST_ASSERT_EQUAL_PTR_MESSAGE(before, gfx_framebuffer(),
+        "the framebuffer is plain RAM and must not move across a suspend");
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(marker, gfx_framebuffer()[0],
+        "suspending must not disturb framebuffer contents");
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(marker,
+        gfx_framebuffer()[GFX_WIDTH * GFX_HEIGHT - 1],
+        "suspending must not disturb framebuffer contents");
+}
+
+static void test_the_panel_still_works_after_a_resume(void)
+{
+    fixture();
+
+    TEST_ASSERT_TRUE(gfx_suspend());
+    TEST_ASSERT_TRUE(gfx_resume(false));
+
+    /* If resume left the IO handle or the transfer-done callback unregistered,
+     * this never returns and the board hangs here - which is the correct, loud
+     * outcome rather than a silently dead display. */
+    gfx_clear(gfx_rgb(0x101018));
+    gfx_present();
+    gfx_present();
+    TEST_PASS();
+}
+
+static void test_a_suspend_resume_round_trip_costs_under_a_frame(void)
+{
+    fixture();
+
+    const int64_t start = esp_timer_get_time();
+    TEST_ASSERT_TRUE(gfx_suspend());
+    TEST_ASSERT_TRUE(gfx_resume(false));
+    const int64_t elapsed = esp_timer_get_time() - start;
+
+    ESP_LOGI(TAG, "suspend/resume round trip: %lld us", (long long)elapsed);
+
+    /* Measures ~715 us on hardware. The budget is one 25 ms frame at 40 fps:
+     * the point is not the exact figure but that nobody reintroduces the panel
+     * init sequence. Verified by flipping the argument to gfx_resume(true),
+     * which takes 230 ms and fails this by 321x.
+     * See docs/ESP32-C6-AMOLED-Notes.md. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(25000, (int)elapsed,
+        "a round trip must fit inside one frame - did the init sequence "
+        "get re-sent?");
+}
+
 /* --- suite ------------------------------------------------------------- */
 
 void run_gfx_suite(void)
@@ -293,4 +359,8 @@ void run_gfx_suite(void)
 
     RUN_TEST(test_present_completes);
     RUN_TEST(test_repeated_presents_stay_in_sync);
+
+    RUN_TEST(test_the_framebuffer_survives_a_suspend);
+    RUN_TEST(test_the_panel_still_works_after_a_resume);
+    RUN_TEST(test_a_suspend_resume_round_trip_costs_under_a_frame);
 }

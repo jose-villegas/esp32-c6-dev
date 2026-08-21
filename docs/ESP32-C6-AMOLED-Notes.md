@@ -37,7 +37,7 @@ the firmware probes each of these at boot and prints exactly this table — see
 | IMU | QMI8658 | I2C `0x6b` | accelerometer + gyroscope |
 | Real-time clock | PCF85063 | I2C `0x51` | |
 | Audio codec | ES8311 | I2C, I2S pins 19–23 | speaker + mic; amp enable on expander pin 7 |
-| microSD | — | SPI2, pins 6/10/11/18 | **cannot run while the display is up** |
+| microSD | — | SPI2, pins 6/10/11/18 | shares SPI2 with the display; see [time-multiplexing](#time-multiplexing-the-bus--the-actual-workaround) |
 | Flash | — | SPI0/1 | 16 MB, memory-mapped, never contended |
 | PSRAM | — | — | **none** — the constraint behind most decisions here |
 | Wi-Fi 6 / BLE 5 / 802.15.4 | on-die | — | radios present; Thread and Zigbee capable |
@@ -49,8 +49,9 @@ health check and what the POST is built on.
 
 Both awkward peripherals are genuinely tested rather than assumed:
 
-- **SD card** — probed *before* `gfx_init()`, in the window where SPI2 is still
-  free. That means a real mount, with no teardown and nothing to restore. An
+- **SD card** — at boot, probed *before* `gfx_init()`, in the window where SPI2
+  is still free. A re-run instead suspends the display and takes the bus, which
+  costs under a millisecond. Either way it is a real mount, not an assumption. An
   absent card is reported as optional rather than failing the board. Doing this
   after the display is up would mean dismantling a running panel.
 - **Audio codec** — the ES8311 sits behind the power-amp enable on the IO
@@ -137,7 +138,7 @@ Caveat: mapped reads go through the CPU cache. Sequential access is fast,
 random access thrashes. For texture sampling that argues for a tiled/swizzled
 layout rather than row-major — the same reason GPUs store textures tiled.
 
-### SD card — cannot be used while the display is up
+### SD card — not while the display holds the bus
 
 The BSP refuses outright:
 
@@ -147,6 +148,11 @@ if (lcd_spi_initialized || panel_handle != NULL) {
     return ESP_ERR_INVALID_STATE;
 }
 ```
+
+That guard is about *its* panel, though, not the hardware. `gfx.c` brings the
+panel up itself rather than calling `bsp_display_new()`, so those statics stay
+false and the guard never trips — which is what makes the time-multiplexing
+below possible. See [Owning panel bring-up](#owning-panel-bring-up).
 
 **This is a board wiring decision, not a chip limitation** — worth being precise
 about, because sharing one SPI bus between a display and an SD card is
@@ -203,17 +209,52 @@ around the same hardware.
 
 Because the panel self-refreshes from GRAM, the MCU can stop talking to it and
 the picture persists. So during SD access the screen shows a **frozen frame,
-not black**. The switch should also be cheaper than a cold start: the SH8601
-keeps its register state while powered, so re-initialising the ESP32-side SPI
-bus and panel IO without re-sending the panel init sequence ought to cost
-single-digit milliseconds. *(Estimated, not yet measured — verify before
-relying on it.)*
+not black**.
+
+This is implemented and measured. `gfx_suspend()` releases the panel, the IO
+handle and the SPI bus; `gfx_resume(false)` rebuilds them *without* re-sending
+the panel init sequence, because the SH8601 keeps its registers while powered.
+The Diagnostics app does a full round trip on every entry.
+
+Measured on hardware, six consecutive runs, ±15 µs:
+
+| Step | Cost |
+|---|---|
+| `gfx_suspend()` — panel + IO + bus teardown | **318 µs** |
+| SD probe (no card — the failure path, which times out) | 26.7 ms |
+| `gfx_resume(false)` — rebuild, no init sequence | **605 µs** |
+| **Display round trip** (suspend + resume) | **~0.92 ms** |
+
+The earlier estimate of "single-digit milliseconds" was pessimistic by an order
+of magnitude. The display cost is **sub-millisecond** — under 4% of one 25 ms
+frame at 40 fps, small enough to disappear into a frame's slack.
+
+Skipping the init sequence is exactly why this is cheap, and the gap is far
+wider than the datasheet suggests. Measured by calling `gfx_resume(true)`
+instead:
+
+| | Cost |
+|---|---|
+| `gfx_resume(false)` — reattach only | **715 µs** |
+| `gfx_resume(true)` — full init sequence | **230 ms** |
+
+**321× more expensive.** The `0x11` sleep-out settle accounts for only 120 ms of
+that; the rest is the remaining commands' own delays plus QSPI transaction
+overhead. So pass `full_init = true` only if the panel actually lost power —
+`suite_gfx.c` has a regression test that fails if anyone reintroduces it.
+
+Note also what dominates: the SD layer, not the display, by a factor of thirty.
+So budget the *card* access, not the switch.
 
 | Use case | Verdict |
 |---|---|
 | Audio playback (128 kbps MP3 = 16 KB/s, 32 KB chunks → one switch per ~2 s) | comfortably viable |
 | Level / asset loading between scenes | viable |
-| Per-frame texture streaming | marginal — a stall per frame |
+| Per-frame texture streaming | marginal — but the switch is not what makes it so |
+
+Two things the frozen frame does cost you: no animation and no touch feedback
+for the duration. Under a millisecond that is invisible; across a 27 ms card
+access it is one dropped frame.
 
 One ordering constraint if you build this: mount the SD **before** any other
 SPI traffic. Once a card enters SPI mode it stays there until power-cycled, and
@@ -230,6 +271,48 @@ ESP-IDF's bundled FatFs has `FF_FS_EXFAT 0` — exFAT is compiled out.
 Two more gotchas: `CONFIG_FATFS_LFN_NONE=y` means **8.3 filenames only**
 (`TEXTURE.BIN` fine, `cube_texture_hi.bin` not), and SDSPI runs at
 `SDMMC_FREQ_DEFAULT` = 20 MHz over 1-bit SPI, so expect ~1–2 MB/s.
+
+---
+
+## Owning panel bring-up
+
+`gfx.c` does not call `bsp_display_new()`. It initialises SPI2, the panel IO and
+the SH8601 itself, keeping `bsp_board_detect()` only for variant detection and
+the reset lines on the IO expander.
+
+That is not a preference. The BSP holds `panel_handle`, `io_handle` and
+`lcd_spi_initialized` as private statics and offers **no teardown** — they are
+cleaned up only on its own internal failure path. Since `bsp_sdcard_mount()`
+gates on exactly those, a BSP-owned display can never give the bus back, and
+the card becomes untestable the moment the screen comes up.
+
+Owning bring-up costs one thing: Waveshare's `sh8601_lcd_init_cmds` array is a
+private static too. It is nine commands, Apache-2.0, and is copied into `gfx.c`
+with attribution — the driver's built-in defaults are *not* a substitute, since
+Waveshare tuned `0x44`/`0x53`/`0x51` for this panel.
+
+```mermaid
+flowchart TB
+    subgraph gfx["gfx.c owns the panel"]
+        BD["bsp_board_detect()<br/><i>variant, I2C, reset lines</i>"]
+        BU["panel_bring_up(send_init)"]
+        TD["panel_tear_down()"]
+    end
+
+    BD --> BU
+    BU -->|"spi_bus_initialize<br/>esp_lcd_new_panel_io_spi<br/>esp_lcd_new_panel_sh8601"| UP(("display up<br/>SPI2 held"))
+    UP -->|"gfx_suspend() &nbsp;318 us"| TD
+    TD --> FREE(("SPI2 free<br/><i>panel still showing<br/>its last frame</i>"))
+    FREE -->|"bsp_sdcard_mount()"| FREE
+    FREE -->|"gfx_resume(false) &nbsp;605 us"| BU
+```
+
+The framebuffer is untouched by all of this — it is ordinary RAM and has no
+relationship to the bus, so nothing needs redrawing on resume.
+
+One rule: nothing may call `gfx_present()` between suspend and resume. Today
+that is guaranteed structurally, because the only caller is the shell's frame
+loop and the re-run happens inside it, on the same task.
 
 ---
 
