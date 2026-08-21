@@ -15,11 +15,10 @@
 
 #include "app.h"
 #include "gfx.h"
+#include "touch.h"
 #include "ui_launcher.h"
 
 #include "bsp/esp-bsp.h"
-#include "driver/gpio.h"
-#include "esp_lcd_touch.h"
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
@@ -27,15 +26,23 @@
 
 static const char *TAG = "shell";
 
-/* Chrome drawn over a running app. */
-#define BAR_HEIGHT     40
-#define BAR_RGB        0x161A28
-#define BAR_TEXT_RGB   0xE6EAF2
-#define ACCENT_RGB     0x3DDC97
+/* Leaving an app is a swipe up from the bottom edge, the same gesture the
+ * board's stock firmware used.
+ *
+ * This replaced a small back button in a top bar, which was accurate to aim at
+ * with a mouse and miserable with a fingertip. A gesture has no target to miss:
+ * anywhere along the bottom edge works, it cannot be hit by accident mid-app,
+ * and it gives the app the whole screen back. */
+#define HOME_ZONE_HEIGHT  64    /* how far up from the bottom a swipe may start */
+#define HOME_SWIPE_DIST   90    /* how far it must travel to count */
 
-/* The back control occupies the left end of the bar. Sized generously - a
- * fingertip is far wider than the glyph. */
-#define BACK_WIDTH     72
+/* A thin bar near the bottom hinting the gesture exists, in the manner of a
+ * phone's home indicator. Cheap, unobtrusive, and it does not steal a row of
+ * the app's screen the way a title bar does. */
+#define HOME_HINT_WIDTH   120
+#define HOME_HINT_HEIGHT  4
+#define HOME_HINT_MARGIN  10
+#define HOME_HINT_RGB     0x4A5268
 
 /* --- app registry ------------------------------------------------------- */
 
@@ -48,72 +55,27 @@ const app_t *const app_registry[] = {
 
 const int app_count = (int)(sizeof(app_registry) / sizeof(app_registry[0]));
 
-/* --- touch -------------------------------------------------------------- */
-
-static esp_lcd_touch_handle_t touch;
-static uint32_t touch_errors;
-
-static void read_input(input_t *input, const input_t *previous)
-{
-    esp_lcd_touch_point_data_t point = { 0 };
-    uint8_t count = 0;
-    bool down = false;
-
-    /* Only talk to the controller when it says it has something to report.
-     *
-     * The FT5x06 NACKs register reads while idle, so polling it every frame
-     * produces a failed I2C transaction per frame - and each failure costs a
-     * bus timeout, which stalls the whole loop. The INT line (active low)
-     * exists precisely to signal "data ready"; gating on it is both the
-     * designed behaviour and what keeps the frame loop fast. */
-    const bool data_ready = (touch != NULL) &&
-                            (gpio_get_level(BSP_LCD_TOUCH_INT) == 0);
-
-    if (data_ready) {
-        /* Two calls by design: read_data() pulls a fresh sample from the
-         * controller over I2C, get_data() returns what that sample held. */
-        if (esp_lcd_touch_read_data(touch) == ESP_OK) {
-            down = esp_lcd_touch_get_data(touch, &point, &count, 1) == ESP_OK &&
-                   count > 0;
-        } else {
-            touch_errors++;
-        }
-    }
-
-    input->down = down;
-    /* Keep the last known position on release: the coordinates are no longer
-     * valid once the finger is gone, but UI code needs to know where the
-     * release happened. */
-    input->x = down ? (int)point.x : previous->x;
-    input->y = down ? (int)point.y : previous->y;
-
-    input->pressed  =  down && !previous->down;
-    input->released = !down &&  previous->down;
-}
-
 /* --- chrome ------------------------------------------------------------- */
 
-static void draw_app_bar(const char *name)
+static void draw_home_hint(void)
 {
-    gfx_fill_rect(0, 0, GFX_WIDTH, BAR_HEIGHT, gfx_rgb(BAR_RGB));
-
-    /* A left-pointing chevron, drawn as a stack of blocks - cheaper than
-     * carrying an icon font for one glyph. */
-    const int cx = 26, cy = BAR_HEIGHT / 2;
-    for (int i = 0; i < 8; i++) {
-        gfx_fill_rect(cx + i, cy - i - 1, 3, 2, gfx_rgb(ACCENT_RGB));
-        gfx_fill_rect(cx + i, cy + i - 1, 3, 2, gfx_rgb(ACCENT_RGB));
-    }
-
-    gfx_text(BACK_WIDTH, (BAR_HEIGHT - gfx_text_height()) / 2, name,
-             gfx_rgb(BAR_TEXT_RGB));
+    gfx_fill_rect((GFX_WIDTH - HOME_HINT_WIDTH) / 2,
+                  GFX_HEIGHT - HOME_HINT_MARGIN - HOME_HINT_HEIGHT,
+                  HOME_HINT_WIDTH, HOME_HINT_HEIGHT,
+                  gfx_rgb(HOME_HINT_RGB));
 }
 
-static bool back_was_tapped(const input_t *input)
+/* True when the finger started near the bottom edge and has since travelled
+ * far enough upward.
+ *
+ * Deliberately tested while the finger is still down rather than on release,
+ * so the app closes the moment the gesture is unambiguous - waiting for the
+ * lift makes it feel sluggish. */
+static bool home_gesture_active(const input_t *input)
 {
-    return input->released &&
-           input->x < BACK_WIDTH &&
-           input->y < BAR_HEIGHT;
+    return input->down &&
+           input->press_y >= (GFX_HEIGHT - HOME_ZONE_HEIGHT) &&
+           (input->press_y - input->y) >= HOME_SWIPE_DIST;
 }
 
 /* --- main --------------------------------------------------------------- */
@@ -127,10 +89,7 @@ void app_main(void)
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
     }
 
-    if (bsp_touch_new(NULL, &touch) != ESP_OK) {
-        ESP_LOGW(TAG, "Touch unavailable; the launcher will not be usable");
-        touch = NULL;
-    }
+    touch_start();
 
     ui_launcher_init();
 
@@ -151,8 +110,7 @@ void app_main(void)
             dt_ms = 250;   /* clamp, so a stall does not jump animation */
         }
 
-        const input_t previous = input;
-        read_input(&input, &previous);
+        touch_read(&input);
 
         if (current == NULL) {
             const int chosen = ui_launcher_frame(&input);
@@ -161,28 +119,26 @@ void app_main(void)
                 ESP_LOGI(TAG, "Starting %s", current->name);
                 current->enter();
             }
-        } else if (back_was_tapped(&input)) {
+        } else if (home_gesture_active(&input)) {
             ESP_LOGI(TAG, "Leaving %s", current->name);
             current->exit();
             current = NULL;
-            /* Draw the launcher immediately so the frame we present below is
+            /* Draw the launcher immediately so the frame presented below is
              * the home screen rather than the app's last one. */
             ui_launcher_frame(&input);
         } else {
             current->frame(dt_ms, &input);
-            draw_app_bar(current->name);
+            draw_home_hint();
         }
 
         gfx_present();
 
-        /* Report throughput periodically. Touch errors are counted rather
-         * than logged per occurrence, so a misbehaving controller cannot
-         * flood the console (or slow the loop by logging). */
+        /* Report throughput periodically rather than per frame - logging is
+         * not free, and at 25 fps it would be the loudest thing on the wire. */
         if (++frames % 60 == 0) {
             const int64_t now = esp_timer_get_time();
-            ESP_LOGI(TAG, "%.1f fps | touch errors %u",
-                     60.0 * 1000000.0 / (double)(now - fps_window_start),
-                     (unsigned)touch_errors);
+            ESP_LOGI(TAG, "%.1f fps",
+                     60.0 * 1000000.0 / (double)(now - fps_window_start));
             fps_window_start = now;
         }
 

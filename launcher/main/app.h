@@ -24,7 +24,8 @@ typedef struct {
     bool down;
     bool pressed;
     bool released;
-    int  x, y;
+    int  x, y;              /* current position, or the last one seen */
+    int  press_x, press_y;  /* where the current touch began */
 } input_t;
 
 typedef struct {

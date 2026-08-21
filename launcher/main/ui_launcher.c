@@ -66,22 +66,55 @@ void ui_launcher_init(void)
     ctx.style->title_height = TITLE_HEIGHT;
 }
 
-/* Translate the frame's touch state into the mouse events microui expects.
+/* Translate touch into the mouse events microui expects.
  *
- * A touch screen has no hover: the pointer does not exist until a finger
- * lands. Moving to the touch point in the same frame as the press keeps
- * microui's hit-testing correct, since it resolves hover before click. */
+ * This is the one place where touch and microui genuinely disagree, so it is
+ * worth spelling out. mu_update_control() only establishes hover on a frame
+ * where the button is NOT held:
+ *
+ *     if (mouseover && !ctx->mouse_down) { ctx->hover = id; }
+ *     if (ctx->hover == id) { if (ctx->mouse_pressed) { set_focus(id); } }
+ *
+ * and a control only submits once it has focus. That encodes the mouse
+ * sequence "point at it, then click": hover on one frame, press on the next.
+ *
+ * A touchscreen has no such sequence - the pointer does not exist until a
+ * finger is already down. Sending move and press together means hover is never
+ * set, focus is never taken, and the button never fires.
+ *
+ * So we synthesise the missing frame: on the press, deliver only the position
+ * and hold the button-down for the following frame. That costs one frame of
+ * latency (~40 ms, imperceptible) and makes a tap register every time. */
+static bool press_pending;
+static int  press_x, press_y;
+
 static void feed_input(const input_t *input)
 {
     if (input->pressed) {
-        mu_input_mousemove(&ctx, input->x, input->y);
-        mu_input_mousedown(&ctx, input->x, input->y, MU_MOUSE_LEFT);
-    } else if (input->released) {
-        mu_input_mouseup(&ctx, input->x, input->y, MU_MOUSE_LEFT);
-    } else if (input->down) {
+        /* Frame 1 of the tap: position only, so hover resolves. */
+        press_pending = true;
+        press_x = input->x;
+        press_y = input->y;
+        mu_input_mousemove(&ctx, press_x, press_y);
+        return;
+    }
+
+    if (press_pending) {
+        /* Frame 2: now the press itself lands on a hovered control. */
+        press_pending = false;
+        mu_input_mousemove(&ctx, press_x, press_y);
+        mu_input_mousedown(&ctx, press_x, press_y, MU_MOUSE_LEFT);
+        /* Release immediately. Holding is not meaningful for these controls,
+         * and it keeps a lifted finger from leaving the button stuck down if
+         * the release edge arrives while we are still mid-tap. */
+        mu_input_mouseup(&ctx, press_x, press_y, MU_MOUSE_LEFT);
+        return;
+    }
+
+    if (input->down) {
         mu_input_mousemove(&ctx, input->x, input->y);
     } else {
-        /* Park the pointer off-screen so nothing shows a hover state while
+        /* Park the pointer off-screen so nothing sits in a hover state while
          * no finger is touching. */
         mu_input_mousemove(&ctx, -1, -1);
     }
