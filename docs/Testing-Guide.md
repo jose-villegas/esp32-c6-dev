@@ -10,9 +10,13 @@ Living document: update it when the approach changes.
 ## Running them
 
 ```sh
-./launcher/test/run_tests.sh          # everything
-./launcher/test/run_tests.sh touch    # suites matching "touch"
-./launcher/test/run_tests.sh -q       # summaries only
+./launcher/test/run_tests.sh     # the portable suites, on this machine
+```
+
+The device suites run themselves — flash the firmware and watch the console:
+
+```sh
+./monitor.sh                     # look for SELFTEST_COMPLETE failures=0
 ```
 
 POSIX sh — works under Git Bash or MSYS on Windows and natively on Linux and
@@ -30,17 +34,39 @@ Requires a **host** compiler, not the ESP32 toolchain:
 
 ---
 
-## The one rule: tests run on the host, not the device
+## Two runners, one set of suites
 
-Everything follows from this. A build-and-flash cycle is about ninety seconds;
-the host suite is under a second. Red-green-refactor is not a practice you can
-sustain at ninety seconds a turn — it is the difference between writing tests
-and actually doing TDD.
+The suites in `test/suites/` are compiled into **both** runners. Nothing is
+written twice.
 
-The cost is that **only hardware-free logic can be tested**, which is not a
-limitation so much as a design forcing function. It pushes decisions out of
-hardware-coupled code and into units that can be reasoned about, which is where
-the bugs were anyway.
+```mermaid
+flowchart LR
+    subgraph shared["test/suites/"]
+        S1["suite_touch_fsm.c"]
+        S2["suite_gesture.c"]
+        S3["suite_gfx.c<br/><i>DEVICE_BUILD only</i>"]
+    end
+
+    S1 & S2 --> HOST["test/host_main.c<br/><b>host runner</b><br/>&lt;1 s, run constantly"]
+    S1 & S2 & S3 --> DEV["main/selftest.c<br/><b>runs at boot</b><br/>~580 ms, in the shipped binary"]
+```
+
+**The host runner is the TDD loop.** Under a second, so red-green-refactor is
+actually practical — a ninety-second build-and-flash is not a loop anyone
+sustains. It runs the portable suites only.
+
+**The device run is the guarantee.** It runs *every* suite, including the
+portable ones. That is deliberate: passing on a laptop only proves the logic is
+right on x86, whereas running on-target proves the same source behaves
+identically built by the RISC-V toolchain and executed on this chip.
+
+Critically, **there is no separate test firmware**. The suites ship inside the
+launcher and run from `app_main` before the shell starts, so what gets verified
+is byte-for-byte the binary that ships. A test-only build could drift from
+production; this cannot.
+
+A failing self test is logged, not fatal. A board with a broken clip rect is
+still more useful than a board that refuses to boot.
 
 ---
 
@@ -83,15 +109,15 @@ whole technique:
 
 ```mermaid
 flowchart LR
-    subgraph device["Runs only on the device"]
+    subgraph hw["Hardware-coupled"]
         direction TB
         HW1["touch.c<br/><i>I2C, FreeRTOS task</i>"]
-        HW2["gfx.c<br/><i>panel, DMA</i>"]
-        HW3["ui_launcher.c<br/><i>microui integration</i>"]
-        HW4["main.c<br/><i>frame loop</i>"]
+        HW2["gfx.c<br/><i>panel, DMA</i><br/><b>device suite</b>"]
+        HW3["ui_launcher.c<br/><i>microui</i><br/><i>not covered</i>"]
+        HW4["main.c<br/><i>frame loop</i><br/><i>not covered</i>"]
     end
 
-    subgraph host["Runs anywhere — tested in under a second"]
+    subgraph pure["Pure logic — host AND device"]
         direction TB
         P1["touch_fsm.c<br/><i>samples to events</i>"]
         P2["gesture.c<br/><i>swipe recognition</i>"]
@@ -113,10 +139,13 @@ it.
 
 ## Conventions
 
-**A suite links only its own unit.** `test_foo.c` is compiled against
-`main/foo.c` and nothing else. Adding a suite therefore needs no change to the
-runner — but a suite that needs a second unit is a signal the unit is doing too
-much, so think before working around it.
+**Suites do not own the runner.** No suite defines `setUp`/`tearDown` or calls
+`UNITY_BEGIN`/`UNITY_END`, because several share one binary. Each keeps a
+`fixture()` helper and calls it at the top of every test, so a test never
+inherits state from the one before it.
+
+**A suite exercises one unit.** Needing a second is usually a sign the unit is
+doing too much, so think before working around it.
 
 **Warnings are errors.** A host compiler catches a class of mistake the target
 build will happily miss, and strictness costs nothing in tests.
@@ -183,32 +212,49 @@ because of a real bug:
 - The gesture boundary tests — thresholds that must be forgiving enough to
   trigger with a fingertip and strict enough never to fire during normal use.
 
-A bug found on hardware should become a host test before it is fixed. That is
-the cheapest moment to capture it, and it is the only thing that stops it
-returning.
+A bug found on hardware should become a test before it is fixed — a host one if
+the logic can be extracted, a device one if it genuinely needs the chip. That is
+the cheapest moment to capture it, and the only thing that stops it returning.
 
 ---
 
-## What is deliberately not tested here
+## What the device suite covers, and what is still untested
 
-Anything needing the panel, I2C, DMA or FreeRTOS: `gfx.c`, `touch.c`'s polling
-task, `ui_launcher.c`'s microui integration, and the small3dlib rendering.
-Those are verified by running the firmware and looking at the screen.
+`suite_gfx.c` covers what a host structurally cannot:
 
-That is a real gap, and worth being honest about rather than pretending
-coverage. If it starts to bite, ESP-IDF bundles the same test framework
-(Unity — the ThrowTheSwitch C library, no relation to the game engine) so an
-on-target suite could share the assertion vocabulary. It would run at
-flash speed, so it belongs as a pre-commit check rather than a TDD loop.
+- **Framebuffer read-back** — after `gfx_fill_rect`, count the pixels that
+  actually changed and assert it is exactly `w*h`, with neighbours untouched.
+- **Clipping at every edge**, including rectangles straddling the boundary. If
+  clipping were wrong this would corrupt memory rather than fail politely.
+- **Colour packing** under the target's real endianness and integer promotion.
+- **DMA completion** — `gfx_present()` returning at all is the regression guard
+  for the counting-semaphore deadlock, which was impossible to catch off-device.
+  If it ever regresses the call never returns, boot hangs, and that is the
+  correct, loud outcome.
+
+Still untested: `ui_launcher.c`'s microui integration and the small3dlib
+rendering. Both are verified by running the firmware and looking at the screen.
+Worth being honest about rather than implying coverage we do not have.
+
+The framework is Unity — the ThrowTheSwitch C library, no relation to the game
+engine. The host runner uses a vendored copy; the device uses the one ESP-IDF
+already bundles. Same API, so the suites do not care which they are built
+against.
 
 ---
 
 ## Adding a suite
 
-1. Create `launcher/test/src/test_<unit>.c`.
-2. Provide `setUp()` and `tearDown()` — Unity requires both even if empty.
-3. Write the tests, then a `main()` that calls `UNITY_BEGIN()`, each
-   `RUN_TEST(...)`, and returns `UNITY_END()`.
-4. Run `./launcher/test/run_tests.sh`. It picks the file up automatically and
-   links `main/<unit>.c` by name.
-5. Break the implementation, confirm red, restore.
+1. Create `launcher/test/suites/suite_<name>.c`.
+2. Write the tests, then a `void run_<name>_suite(void)` that calls
+   `RUN_TEST(...)` for each. Do **not** define `setUp`/`tearDown` or call
+   `UNITY_BEGIN`/`UNITY_END` — the runners own those, because several suites
+   share one binary. Give the suite its own `fixture()` helper instead and call
+   it at the top of each test.
+3. Declare it in `test/suites.h`. Guard it with `#ifdef DEVICE_BUILD` if it
+   needs hardware.
+4. Register it: in `test/host_main.c` if portable, and in `main/selftest.c`
+   either way.
+5. Add the source to `main/CMakeLists.txt`, and to `SOURCES` in
+   `test/run_tests.sh` if portable.
+6. Break the implementation, confirm red, restore.

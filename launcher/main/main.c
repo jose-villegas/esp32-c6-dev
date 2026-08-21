@@ -16,6 +16,7 @@
 #include "app.h"
 #include "gesture.h"
 #include "gfx.h"
+#include "selftest.h"
 #include "touch.h"
 #include "ui_launcher.h"
 
@@ -70,6 +71,14 @@ void app_main(void)
         /* Park rather than return - returning from app_main leaves the chip
          * idle and unflashable. */
         while (1) { vTaskDelay(pdMS_TO_TICKS(1000)); }
+    }
+
+    /* Verify the shipped binary before handing the device to the user. Runs
+     * every suite, hardware and portable alike, and costs about half a second.
+     * A failure is logged rather than fatal: a board with a broken clip rect
+     * is still more useful than a board that refuses to boot. */
+    if (selftest_run() != 0) {
+        ESP_LOGE(TAG, "self test reported failures - continuing anyway");
     }
 
     touch_start();
