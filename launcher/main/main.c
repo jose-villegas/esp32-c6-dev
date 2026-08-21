@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include "app.h"
+#include "gesture.h"
 #include "gfx.h"
 #include "touch.h"
 #include "ui_launcher.h"
@@ -27,16 +28,11 @@
 static const char *TAG = "shell";
 
 /* Leaving an app is a swipe up from the bottom edge, the same gesture the
- * board's stock firmware used.
+ * board's stock firmware used. It replaced a small back button, which was fine
+ * to aim at with a mouse and miserable with a fingertip. The recognition
+ * itself lives in gesture.c, where it is covered by host tests.
  *
- * This replaced a small back button in a top bar, which was accurate to aim at
- * with a mouse and miserable with a fingertip. A gesture has no target to miss:
- * anywhere along the bottom edge works, it cannot be hit by accident mid-app,
- * and it gives the app the whole screen back. */
-#define HOME_ZONE_HEIGHT  64    /* how far up from the bottom a swipe may start */
-#define HOME_SWIPE_DIST   90    /* how far it must travel to count */
-
-/* A thin bar near the bottom hinting the gesture exists, in the manner of a
+ * A thin bar near the bottom hinting the gesture exists, in the manner of a
  * phone's home indicator. Cheap, unobtrusive, and it does not steal a row of
  * the app's screen the way a title bar does. */
 #define HOME_HINT_WIDTH   120
@@ -63,19 +59,6 @@ static void draw_home_hint(void)
                   GFX_HEIGHT - HOME_HINT_MARGIN - HOME_HINT_HEIGHT,
                   HOME_HINT_WIDTH, HOME_HINT_HEIGHT,
                   gfx_rgb(HOME_HINT_RGB));
-}
-
-/* True when the finger started near the bottom edge and has since travelled
- * far enough upward.
- *
- * Deliberately tested while the finger is still down rather than on release,
- * so the app closes the moment the gesture is unambiguous - waiting for the
- * lift makes it feel sluggish. */
-static bool home_gesture_active(const input_t *input)
-{
-    return input->down &&
-           input->press_y >= (GFX_HEIGHT - HOME_ZONE_HEIGHT) &&
-           (input->press_y - input->y) >= HOME_SWIPE_DIST;
 }
 
 /* --- main --------------------------------------------------------------- */
@@ -119,7 +102,7 @@ void app_main(void)
                 ESP_LOGI(TAG, "Starting %s", current->name);
                 current->enter();
             }
-        } else if (home_gesture_active(&input)) {
+        } else if (gesture_is_home_swipe(&input, GFX_HEIGHT)) {
             ESP_LOGI(TAG, "Leaving %s", current->name);
             current->exit();
             current = NULL;

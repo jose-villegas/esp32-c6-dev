@@ -1,4 +1,5 @@
 #include "touch.h"
+#include "touch_fsm.h"
 
 #include "bsp/esp-bsp.h"
 #include "driver/gpio.h"
@@ -10,42 +11,26 @@
 
 static const char *TAG = "touch";
 
-/* How long to wait, with the controller reporting nothing, before deciding the
- * finger is gone.
- *
- * The FT5x06's INT line is not a reliable "finger is down" level - it signals
- * "there is fresh data", and it can drop briefly mid-touch. Treating every
- * deassertion as a release makes a held finger flicker, which produces
- * spurious press/release pairs. Requiring a quiet period instead debounces
- * that, at the cost of a few milliseconds of extra latency on release. */
-#define RELEASE_QUIET_MS 60
-
 static esp_lcd_touch_handle_t panel;
+
+/* All the interpretation lives in touch_fsm, which is hardware-free and
+ * covered by host tests. This file is only responsible for getting samples out
+ * of the controller and handing them over. */
+static touch_fsm_t fsm;
 
 /* Shared between the polling task and the render loop. The chip is
  * single-core, so a spinlock-guarded critical section is both correct and
  * essentially free here. */
 static portMUX_TYPE lock = portMUX_INITIALIZER_UNLOCKED;
 
-static struct {
-    bool down;
-    int  x, y;
-    int  press_x, press_y;   /* where the current/last touch began */
-    bool pressed;            /* latched until read */
-    bool released;           /* latched until read */
-} shared;
-
 static void poll_once(void)
 {
-    static int64_t last_seen_us;
-    static bool    was_down;
-
-    bool  have_point = false;
-    int   x = 0, y = 0;
+    bool have_point = false;
+    int  x = 0, y = 0;
 
     /* Only talk to the controller when it says it has something. The FT5x06
      * NACKs register reads while idle, and each failed transaction costs a bus
-     * timeout - polling it blindly at 100 Hz would swamp the system. */
+     * timeout - polling blindly at this rate would swamp the system. */
     if (panel != NULL && gpio_get_level(BSP_LCD_TOUCH_INT) == 0) {
         if (esp_lcd_touch_read_data(panel) == ESP_OK) {
             esp_lcd_touch_point_data_t point = { 0 };
@@ -60,32 +45,10 @@ static void poll_once(void)
     }
 
     const int64_t now_us = esp_timer_get_time();
-    bool down = was_down;
-
-    if (have_point) {
-        down = true;
-        last_seen_us = now_us;
-    } else if (was_down &&
-               (now_us - last_seen_us) > (RELEASE_QUIET_MS * 1000)) {
-        down = false;
-    }
 
     portENTER_CRITICAL(&lock);
-    if (down && !was_down) {
-        shared.pressed  = true;
-        shared.press_x  = x;
-        shared.press_y  = y;
-    } else if (!down && was_down) {
-        shared.released = true;
-    }
-    if (have_point) {
-        shared.x = x;
-        shared.y = y;
-    }
-    shared.down = down;
+    touch_fsm_update(&fsm, have_point, x, y, now_us);
     portEXIT_CRITICAL(&lock);
-
-    was_down = down;
 }
 
 static void touch_task(void *arg)
@@ -101,6 +64,8 @@ static void touch_task(void *arg)
 
 void touch_start(void)
 {
+    touch_fsm_init(&fsm);
+
     if (bsp_touch_new(NULL, &panel) != ESP_OK) {
         ESP_LOGW(TAG, "Touch controller unavailable; input will not work");
         panel = NULL;
@@ -114,16 +79,6 @@ void touch_start(void)
 void touch_read(input_t *out)
 {
     portENTER_CRITICAL(&lock);
-    out->down     = shared.down;
-    out->pressed  = shared.pressed;
-    out->released = shared.released;
-    out->x        = shared.x;
-    out->y        = shared.y;
-    out->press_x  = shared.press_x;
-    out->press_y  = shared.press_y;
-
-    /* Consume the edges so each is reported to exactly one frame. */
-    shared.pressed  = false;
-    shared.released = false;
+    touch_fsm_take(&fsm, out);
     portEXIT_CRITICAL(&lock);
 }
