@@ -273,6 +273,76 @@ void test_repeated_presents_stay_in_sync(void)
     TEST_PASS();
 }
 
+/* --- partial presents --------------------------------------------------- */
+
+/* The panel refreshes from its own GRAM, so a band that is not sent keeps
+ * showing what it last received. These verify the saving is real and measured
+ * on the bus, not merely assumed from the flag bookkeeping. */
+
+static int64_t time_present(void)
+{
+    const int64_t start = esp_timer_get_time();
+    gfx_present();
+    return esp_timer_get_time() - start;
+}
+
+static void test_an_unchanged_frame_costs_almost_nothing(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    const int64_t full = time_present();       /* clear marks everything */
+
+    const int64_t unchanged = time_present();  /* nothing touched since */
+
+    ESP_LOGI(TAG, "present: full %lld us, unchanged %lld us",
+             (long long)full, (long long)unchanged);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)(full / 10), (int)unchanged,
+        "a frame in which nothing changed must skip the bus entirely, not "
+        "resend 322 KiB of identical pixels");
+}
+
+static void test_a_partial_change_costs_less_than_a_full_frame(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    const int64_t full = time_present();
+
+    /* One band of seven. */
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x204060));
+    const int64_t one_band = time_present();
+
+    ESP_LOGI(TAG, "present: full %lld us, one band %lld us",
+             (long long)full, (long long)one_band);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)(full / 2), (int)one_band,
+        "sending one band of seven must cost far less than sending all of "
+        "them - this is the whole point of dirty tracking");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, (int)one_band,
+        "but it must still actually send something");
+}
+
+static void test_drawing_marks_what_it_touched(void)
+{
+    fixture();
+    gfx_clear(gfx_rgb(0x000000));
+    gfx_present();                 /* everything now clean */
+
+    TEST_ASSERT_FALSE_MESSAGE(gfx_region_dirty(0, 0, GFX_WIDTH, GFX_HEIGHT),
+        "a present must clear the dirty state, or every frame sends the whole "
+        "screen for ever");
+
+    gfx_fill_rect(0, 0, 8, 8, gfx_rgb(0xFFFFFF));
+
+    TEST_ASSERT_TRUE_MESSAGE(gfx_region_dirty(0, 0, GFX_WIDTH, 64),
+        "the band that was drawn into must be marked");
+    TEST_ASSERT_FALSE_MESSAGE(
+        gfx_region_dirty(0, GFX_HEIGHT - 64, GFX_WIDTH, 64),
+        "a band nowhere near the drawing must not be");
+}
+
 /* --- suspending the display to share SPI2 ------------------------------- */
 
 /* The display and the SD card are wired to different pins on the one SPI2
@@ -360,6 +430,10 @@ void run_gfx_suite(void)
 
     RUN_TEST(test_present_completes);
     RUN_TEST(test_repeated_presents_stay_in_sync);
+
+    RUN_TEST(test_an_unchanged_frame_costs_almost_nothing);
+    RUN_TEST(test_a_partial_change_costs_less_than_a_full_frame);
+    RUN_TEST(test_drawing_marks_what_it_touched);
 
     RUN_TEST(test_the_framebuffer_survives_a_suspend);
     RUN_TEST(test_the_panel_still_works_after_a_resume);

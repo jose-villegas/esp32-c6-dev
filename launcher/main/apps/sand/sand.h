@@ -34,12 +34,28 @@ typedef struct {
     int      w, h;
     uint32_t rng;        /* xorshift32 state - deterministic, so tests repeat */
     bool     sweep_flip; /* alternates the sweep direction between steps */
+
+    /* Optional, caller-owned, h bytes: which rows changed since it was last
+     * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
+    uint8_t *dirty_rows;
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
 void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed);
 
 void sand_clear(sand_t *s);
+
+/* Record which rows change, into a caller-owned array of `h` bytes.
+ *
+ * Opt-in, because it only pays for itself if someone acts on it. On this board
+ * the caller does: a row that did not change need not be redrawn, and a screen
+ * band containing no changed rows need not be sent to the panel at all - which
+ * is most of a frame's cost. See gfx_mark_dirty().
+ *
+ * Rows are set to 1 and never cleared here; clearing is the caller's job, once
+ * it has acted on them. Everything that can alter a cell marks it: settling,
+ * spawning, sand_set and sand_clear. */
+void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
 
 /* Out-of-bounds reads return a grain, not empty.
  *

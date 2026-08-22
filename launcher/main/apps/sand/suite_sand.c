@@ -313,6 +313,110 @@ static void test_a_grain_in_a_pit_stays_put(void)
     assert_looks_like(after, 8, "a settled heap must stop moving entirely");
 }
 
+/* --- dirty row tracking -------------------------------------------------- */
+
+/* Everything here guards the same property: a row reported CLEAN must be
+ * genuinely unchanged. Getting that wrong does not crash - it leaves stale
+ * pixels on the panel, which is a maddening bug to chase from a photograph. */
+
+static uint8_t dirty[H];
+
+static void dirty_fixture(void)
+{
+    fixture();
+    sand_track_dirty_rows(&s, dirty);
+    memset(dirty, 0, sizeof(dirty));
+}
+
+static void test_a_settled_grid_reports_nothing_dirty(void)
+{
+    dirty_fixture();
+    /* A grain in the corner, blocked on every side it could reach. */
+    sand_set(&s, 0, H - 1, SAND_FIRST_SHADE);
+    memset(dirty, 0, sizeof(dirty));
+
+    for (int i = 0; i < 10; i++) {
+        sand_step(&s, 0, 1, 0);
+    }
+
+    for (int y = 0; y < H; y++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, dirty[y],
+            "nothing moved, so nothing may be reported as needing a redraw - "
+            "otherwise a still screen costs as much as a busy one");
+    }
+}
+
+static void test_a_falling_grain_marks_both_rows_it_touched(void)
+{
+    dirty_fixture();
+    sand_set(&s, 3, 2, SAND_FIRST_SHADE);
+    memset(dirty, 0, sizeof(dirty));
+
+    sand_step(&s, 0, 1, 0);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[2],
+        "the row the grain left changed and must be redrawn");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[3],
+        "so did the row it arrived in");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, dirty[0],
+        "a row nowhere near it did not");
+}
+
+static void test_every_changed_row_is_reported(void)
+{
+    /* The exhaustive version, and the one that actually protects against
+     * stale pixels: run a busy grid, then check the report against a full
+     * before-and-after comparison. */
+    dirty_fixture();
+    for (int y = 1; y < 5; y++) {
+        for (int x = 1; x < 7; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    for (int i = 0; i < 30; i++) {
+        uint8_t before[W * H];
+        memcpy(before, cells, sizeof(before));
+        memset(dirty, 0, sizeof(dirty));
+
+        sand_step(&s, 300, 1000, 40);
+
+        for (int y = 0; y < H; y++) {
+            const bool changed =
+                memcmp(&before[y * W], &cells[y * W], W) != 0;
+            if (changed) {
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[y],
+                    "a row whose contents changed was reported clean, which "
+                    "would leave stale pixels on the panel");
+            }
+        }
+    }
+}
+
+static void test_spawning_marks_the_rows_it_filled(void)
+{
+    dirty_fixture();
+
+    sand_spawn(&s, 4, 4, 1);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[4], "the centre row was filled");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, dirty[0], "a distant row was not");
+}
+
+static void test_tracking_starts_by_assuming_everything_changed(void)
+{
+    fixture();
+    memset(dirty, 0, sizeof(dirty));
+
+    sand_track_dirty_rows(&s, dirty);
+
+    for (int y = 0; y < H; y++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[y],
+            "nothing is known about what is already on screen, so the first "
+            "frame must redraw all of it");
+    }
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -616,6 +720,12 @@ void run_sand_suite(void)
     RUN_TEST(test_a_grain_does_not_fall_through_another);
     RUN_TEST(test_a_grain_slides_off_a_pile);
     RUN_TEST(test_a_grain_in_a_pit_stays_put);
+
+    RUN_TEST(test_a_settled_grid_reports_nothing_dirty);
+    RUN_TEST(test_a_falling_grain_marks_both_rows_it_touched);
+    RUN_TEST(test_every_changed_row_is_reported);
+    RUN_TEST(test_spawning_marks_the_rows_it_filled);
+    RUN_TEST(test_tracking_starts_by_assuming_everything_changed);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);

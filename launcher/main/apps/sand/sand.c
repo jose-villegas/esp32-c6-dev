@@ -73,12 +73,37 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->h          = h;
     s->rng        = seed ? seed : 1u;   /* xorshift is stuck at zero */
     s->sweep_flip = false;
+    s->dirty_rows = NULL;
     sand_clear(s);
+}
+
+/* Marking is a pair because every move touches two rows: the one a grain left
+ * and the one it arrived in. Both are guaranteed in range at every call site -
+ * a move only happens once its destination row has been found to exist. */
+static inline void mark_rows(sand_t *s, int y0, int y1)
+{
+    if (s->dirty_rows != NULL) {
+        s->dirty_rows[y0] = 1;
+        s->dirty_rows[y1] = 1;
+    }
+}
+
+void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
+{
+    s->dirty_rows = rows;
+    if (rows != NULL) {
+        /* Nothing is known about what is already on screen, so assume all of
+         * it needs redrawing once. */
+        memset(rows, 1, (size_t)s->h);
+    }
 }
 
 void sand_clear(sand_t *s)
 {
     memset(s->cells, SAND_EMPTY, (size_t)s->w * (size_t)s->h);
+    if (s->dirty_rows != NULL) {
+        memset(s->dirty_rows, 1, (size_t)s->h);
+    }
 }
 
 uint8_t sand_at(const sand_t *s, int x, int y)
@@ -97,6 +122,7 @@ void sand_set(sand_t *s, int x, int y, uint8_t cell)
         return;
     }
     s->cells[y * s->w + x] = cell;
+    mark_rows(s, y, y);
 }
 
 int sand_count(const sand_t *s)
@@ -128,6 +154,7 @@ int sand_spawn(sand_t *s, int cx, int cy, int radius)
                 continue;   /* never overwrite, so the count cannot drift */
             }
             s->cells[y * s->w + x] = random_shade(s);
+            mark_rows(s, y, y);
             filled++;
         }
     }
@@ -308,6 +335,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
              * single most expensive thing in this loop, and most grains never
              * needed it. */
             if (jostle == 0 && move_to(row, prow, x, x + dx, w, grain)) {
+                mark_rows(s, y, y + dy);
                 continue;
             }
 
@@ -318,12 +346,13 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
 
             uint8_t *first_row,  *second_row;
             int      first_dx,    second_dx;
+            int      first_dy,    second_dy;
             if (r & 1) {
-                first_row  = arow; first_dx  = slide_a[0];
-                second_row = brow; second_dx = slide_b[0];
+                first_row  = arow; first_dx  = slide_a[0]; first_dy  = slide_a[1];
+                second_row = brow; second_dx = slide_b[0]; second_dy = slide_b[1];
             } else {
-                first_row  = brow; first_dx  = slide_b[0];
-                second_row = arow; second_dx = slide_a[0];
+                first_row  = brow; first_dx  = slide_b[0]; first_dy  = slide_b[1];
+                second_row = arow; second_dx = slide_a[0]; second_dy = slide_a[1];
             }
 
             /* Shaking reorders the attempts rather than adding a new move: a
@@ -334,16 +363,19 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
 
             if (!shaken && jostle > 0 &&
                 move_to(row, prow, x, x + dx, w, grain)) {
+                mark_rows(s, y, y + dy);
                 continue;
             }
             if (move_to(row, first_row, x, x + first_dx, w, grain)) {
+                mark_rows(s, y, y + first_dy);
                 continue;
             }
             if (move_to(row, second_row, x, x + second_dx, w, grain)) {
+                mark_rows(s, y, y + second_dy);
                 continue;
             }
-            if (shaken) {
-                move_to(row, prow, x, x + dx, w, grain);
+            if (shaken && move_to(row, prow, x, x + dx, w, grain)) {
+                mark_rows(s, y, y + dy);
             }
         }
     }

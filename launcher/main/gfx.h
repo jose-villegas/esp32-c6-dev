@@ -97,6 +97,36 @@ bool gfx_suspend(void);
  * cost of a round trip. Pass true only if the panel has actually lost power. */
 bool gfx_resume(bool full_init);
 
-/* Send the finished frame to the panel and wait for the transfer to land.
+/*---------------------------------------------------------------------------
+ * Dirty tracking
+ *
+ * gfx_present() sends only the horizontal bands that changed. The panel holds
+ * the rest in its own GRAM, so anything not sent simply stays on screen - and
+ * sending is almost the whole cost of a frame, so this is where the time is.
+ *
+ * Most code never touches any of this. Every gfx_* drawing call marks what it
+ * touched, and gfx_clear() marks the whole screen, so an app that clears and
+ * redraws is correct without knowing dirty tracking exists.
+ *
+ * It matters only for code writing through gfx_framebuffer() directly, which
+ * gfx cannot see. Such code MUST mark what it wrote. Forgetting looks like a
+ * frozen or partially stale screen, not a crash.
+ *-------------------------------------------------------------------------*/
+
+/* Declare that a rectangle of the framebuffer has changed. Tracking is by
+ * full-width band, so x and w are accepted but ignored. */
+void gfx_mark_dirty(int x, int y, int w, int h);
+
+void gfx_mark_all_dirty(void);
+
+/* Whether any band overlapping this rectangle is already going to be sent.
+ *
+ * For overlay content that is identical every frame - the shell's home hint -
+ * this answers "does it need redrawing?". If nothing below it changed, the
+ * pixels are still in the framebuffer and still on the panel, and both the
+ * draw and the transfer can be skipped. */
+bool gfx_region_dirty(int x, int y, int w, int h);
+
+/* Send the changed bands to the panel and wait for the transfers to land.
  * The wait is mandatory - see the notes on asynchronous DMA in the docs. */
 void gfx_present(void);

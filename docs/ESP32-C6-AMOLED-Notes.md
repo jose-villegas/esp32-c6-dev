@@ -547,27 +547,80 @@ and Espressif validate; 80 is undocumented for this panel and was established by
 running it. If a future unit shows tearing, wrong colours or noise, `GFX_QSPI_HZ`
 is the first thing to put back.
 
-### What is left
+### Partial updates: only send the bands that changed
 
 With the clock maxed, the only remaining way to make the blit cheaper is to
-send fewer bytes - **partial updates**. `esp_lcd_panel_draw_bitmap()` takes an
-arbitrary rectangle and sets the panel's address window per call, so a frame
-can send only the bands that changed. Because the framebuffer is full width,
-a full-width band is already contiguous and needs no copy.
+send fewer bytes. `esp_lcd_panel_draw_bitmap()` takes an arbitrary rectangle and
+sets the panel's address window per call, and the panel refreshes from its own
+GRAM - so a band that is not sent simply keeps showing what it last received.
+Because the framebuffer is full width, a full-width band is already contiguous
+and needs no copy.
 
-That pairs exactly with the standard falling-sand optimisation, [dirty rects and
-sleeping chunks](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation),
-as used in Noita: divide the grid into chunks, track which had activity last
-tick, and skip the rest. Settled sand then costs nothing to simulate *and*
-nothing to send, because the same dirty information answers both questions.
+`gfx` tracks a dirty bit per band (7 bands of 64 rows, so one byte). Measured:
 
-Also still untapped: clear only the previous frame's bounding box rather than
-all 165k pixels.
+| Frame content | `gfx_present()` |
+|---|---|
+| Everything changed | 9,880 us |
+| One band of seven | 1,406 us |
+| Nothing changed | **3 us** |
+
+An idle screen now costs essentially nothing, and the sand app swings between
+about 60 fps while pouring and over 200 once the pile settles.
+
+**Nothing had to change in the existing apps.** `gfx_clear()` marks the whole
+screen, and the cube, the launcher and the POST report all clear before drawing
+- so they were correct without knowing dirty tracking existed. The rule only
+bites code writing through `gfx_framebuffer()` directly, which gfx cannot see:
+that code must call `gfx_mark_dirty()`, and forgetting shows up as stale pixels
+rather than a crash.
+
+Two smaller things fell out of it:
+
+- **Marking must be cheap.** `gfx_text_scaled()` calls `gfx_fill_rect()` once
+  per set font pixel, so marking runs thousands of times on a screen of text.
+  Routing that through the public entry point, with its re-clipping and call
+  overhead, cost about 5% of the launcher's framerate; an inlined helper on the
+  already-clipped path fixed it.
+- **The launcher does not benefit.** microui is immediate-mode and clears every
+  frame by design, so it pays the tracking overhead and gets nothing back -
+  about one tick.
+
+On the simulation side the same dirty information answers "what needs
+redrawing" as well as "what needs sending", which is the point of the
+[dirty-rect approach](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation)
+Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered.
+
+### A variable framerate needs a fixed timestep
+
+Worth writing down, because partial updates *created* this problem.
+
+A grain moves one cell per step, so steps-per-second is literally how fast sand
+falls. Stepping once per frame ties that to the framerate - survivable while the
+framerate is flat, and not once it swings between 60 and 230 fps depending on
+how much is moving. Sand would have fallen fastest when least was happening,
+which is exactly backwards.
+
+The fix is the standard accumulator: add the frame's elapsed time to a running
+total, run whole fixed-size steps out of it, carry the remainder. Cap the
+catch-up, or a long frame schedules extra steps that make the next frame longer
+still.
+
+The general lesson: **anything whose rate matters must be driven by elapsed
+time, not by frame count.** The tilt filter already was, for the same reason.
+
+### Still untapped
+
+- Clear only the previous frame's bounding box rather than all 165k pixels.
+- Sleeping chunks in the simulation. The step is 3.2 ms worst case, so this is
+  now the smaller half of the problem.
+- Skipping the launcher's redraw when nothing changed, which would let its bands
+  go unsent too.
 
 Two things NOT worth doing, measured or reasoned:
 
-- **Micro-optimising the simulation further.** At 2.9 ms against a 9.6 ms blit
-  it is no longer the bottleneck.
+- **Micro-optimising the simulation further.** At 3.2 ms worst case, against a
+  blit that is usually now under 2 ms, it is the bottleneck only when the whole
+  screen is moving.
 - **IRAM placement of the hot loops.** Espressif
   [recommends it](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-guides/performance/speed.html)
   for hot functions, and the C6 runs code from a 32 KB read-only flash cache so

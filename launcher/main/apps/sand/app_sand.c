@@ -43,12 +43,30 @@ static const char *TAG = "sand";
  * so this is roughly 8 dps summed across the axes. */
 #define SHAKE_DEADZONE 24
 
+/* The simulation runs at a FIXED rate, independent of the framerate.
+ *
+ * A grain moves one cell per step, so steps-per-second is literally how fast
+ * sand falls. Stepping once per frame tied that to the framerate - which was
+ * survivable while the framerate was flat, and stopped being so the moment
+ * partial presents made it swing between 60 and 230 fps depending on how much
+ * was moving. Sand would have fallen fastest when least was happening.
+ *
+ * 60 Hz is around the fastest that still reads as grains rather than streaks. */
+#define SIM_HZ            60
+#define SIM_STEP_MS       (1000 / SIM_HZ)
+
+/* Never run more than this many steps to catch up after a stall. Without a cap,
+ * a long frame schedules extra steps, which make the next frame longer still -
+ * the classic spiral. Better to let the simulation lose a little time. */
+#define SIM_MAX_CATCHUP   4
+
 /* Gravity is ignored below this fraction of a g, which only happens in free
  * fall or if the sensor drops out. Sand then hangs where it is, which is both
  * correct and a nice thing to discover by throwing the board. */
 #define GRAVITY_DEADZONE (IMU_COUNTS_PER_G / 8)
 
 static uint8_t    *grid;
+static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
 static sand_t      sim;
 static tilt_t      tilt;
 static gfx_color_t palette[SAND_LAST_SHADE + 1];
@@ -58,6 +76,9 @@ static bool        failed;
 static uint32_t frames;
 static int64_t  step_us_total;
 static int64_t  draw_us_total;
+static int64_t  rows_redrawn_total;
+static uint32_t sim_accumulator_ms;
+static int64_t  steps_total;
 
 /*---------------------------------------------------------------------------
  * Sensor axes to screen axes
@@ -103,22 +124,29 @@ static void sand_enter(void)
     frames = 0;
     step_us_total = 0;
     draw_us_total = 0;
+    rows_redrawn_total = 0;
+    sim_accumulator_ms = 0;
+    steps_total = 0;
     failed = false;
 
+    if (dirty_rows == NULL) {
+        dirty_rows = malloc(GRID_H);
+    }
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W * GRID_H);
-        if (grid == NULL) {
-            ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
-                          "largest free block is %u",
-                     GRID_W, GRID_H, GRID_W * GRID_H,
-                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
-            failed = true;
-            return;
-        }
+    }
+    if (grid == NULL || dirty_rows == NULL) {
+        ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
+                      "largest free block is %u",
+                 GRID_W, GRID_H, GRID_W * GRID_H,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        failed = true;
+        return;
     }
 
     build_palette();
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
+    sand_track_dirty_rows(&sim, dirty_rows);
     tilt_reset(&tilt);
 
     if (!imu_init()) {
@@ -141,10 +169,12 @@ static void sand_exit(void)
      * makes, and holding it means re-entry cannot fail because the heap
      * fragmented while something else was running. */
     if (frames > 0) {
-        ESP_LOGI(TAG, "%lu frames, step %lld us avg, draw %lld us avg",
-                 (unsigned long)frames,
+        ESP_LOGI(TAG, "%lu frames, %lld sim steps, step %lld us, draw %lld us, "
+                      "%lld of %d rows redrawn per frame",
+                 (unsigned long)frames, (long long)steps_total,
                  (long long)(step_us_total / frames),
-                 (long long)(draw_us_total / frames));
+                 (long long)(draw_us_total / frames),
+                 (long long)(rows_redrawn_total / frames), GRID_H);
     }
 }
 
@@ -152,14 +182,25 @@ static void sand_exit(void)
  * Drawing
  *-------------------------------------------------------------------------*/
 
-/* Writes every cell, empty ones included, so no separate clear is needed - the
- * background is just the colour of an empty cell. One pass over the grid
- * instead of a full-screen clear plus a sparse overdraw. */
-static void draw_grid(void)
+/* Writes every cell of a row, empty ones included, so no separate clear is
+ * needed - the background is simply the colour of an empty cell.
+ *
+ * Only rows the simulation reported as changed are touched, and each one tells
+ * gfx which band it landed in. A settled pile therefore costs almost nothing
+ * to draw AND almost nothing to send, which is where the real saving is: a
+ * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
+static void draw_dirty_rows(void)
 {
     gfx_color_t *fb = gfx_framebuffer();
+    int redrawn = 0;
 
     for (int cy = 0; cy < GRID_H; cy++) {
+        if (!dirty_rows[cy]) {
+            continue;
+        }
+        dirty_rows[cy] = 0;
+        redrawn++;
+
         const uint8_t *row = &grid[cy * GRID_W];
         gfx_color_t   *out = fb + (cy * CELL) * GFX_WIDTH;
 
@@ -174,7 +215,13 @@ static void draw_grid(void)
                 }
             }
         }
+
+        /* Written through the raw framebuffer, so gfx cannot see it. Saying so
+         * is not optional - a missed mark leaves stale pixels on the panel. */
+        gfx_mark_dirty(0, cy * CELL, GFX_WIDTH, CELL);
     }
+
+    rows_redrawn_total += redrawn;
 }
 
 /*---------------------------------------------------------------------------
@@ -236,11 +283,26 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         last_dy = dy;
     }
 
+    /* Fixed-timestep accumulator: however long the frame took, run whole
+     * simulation steps worth SIM_STEP_MS each and carry the remainder. */
     const int64_t t0 = esp_timer_get_time();
-    sand_step(&sim, gx, gy, jostle);
+
+    sim_accumulator_ms += dt_ms;
+    int steps = (int)(sim_accumulator_ms / SIM_STEP_MS);
+    if (steps > SIM_MAX_CATCHUP) {
+        steps = SIM_MAX_CATCHUP;
+        sim_accumulator_ms = 0;      /* give up on the backlog */
+    } else {
+        sim_accumulator_ms -= (uint32_t)steps * SIM_STEP_MS;
+    }
+
+    for (int i = 0; i < steps; i++) {
+        sand_step(&sim, gx, gy, jostle);
+    }
+    steps_total += steps;
 
     const int64_t t1 = esp_timer_get_time();
-    draw_grid();
+    draw_dirty_rows();
 
     const int64_t t2 = esp_timer_get_time();
     step_us_total += t1 - t0;

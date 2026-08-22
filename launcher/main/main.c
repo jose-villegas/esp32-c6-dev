@@ -86,9 +86,18 @@ static void sort_apps(void)
 
 static void draw_home_hint(void)
 {
-    gfx_fill_rect((GFX_WIDTH - HOME_HINT_WIDTH) / 2,
-                  GFX_HEIGHT - HOME_HINT_MARGIN - HOME_HINT_HEIGHT,
-                  HOME_HINT_WIDTH, HOME_HINT_HEIGHT,
+    const int x = (GFX_WIDTH - HOME_HINT_WIDTH) / 2;
+    const int y = GFX_HEIGHT - HOME_HINT_MARGIN - HOME_HINT_HEIGHT;
+
+    /* Identical every frame, so it only needs redrawing where the app has
+     * already disturbed it. Drawing unconditionally would mark the bottom band
+     * dirty on every frame and force it to be sent - a seventh of the frame's
+     * bus time, spent on pixels that did not change. */
+    if (!gfx_region_dirty(x, y, HOME_HINT_WIDTH, HOME_HINT_HEIGHT)) {
+        return;
+    }
+
+    gfx_fill_rect(x, y, HOME_HINT_WIDTH, HOME_HINT_HEIGHT,
                   gfx_rgb(HOME_HINT_RGB));
 }
 

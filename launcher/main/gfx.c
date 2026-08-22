@@ -55,6 +55,35 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
 /* Current clip rectangle, as inclusive-exclusive bounds. */
 static struct { int x0, y0, x1, y1; } clip;
 
+/* One bit per strip: set means "this band changed and must be sent".
+ *
+ * The panel refreshes from its own GRAM, so anything not sent simply stays on
+ * screen. Sending a whole frame costs 9.6 ms of a ~14 ms budget and is pure
+ * bus time, so skipping unchanged bands is the largest saving available - see
+ * docs/ESP32-C6-AMOLED-Notes.md. STRIP_COUNT is 7, so a byte is plenty. */
+static uint8_t strip_dirty;
+
+/* Marks the bands spanned by an ALREADY-CLIPPED row range.
+ *
+ * Inline and unguarded on purpose. gfx_fill_rect is the workhorse behind text,
+ * and gfx_text_scaled calls it once per set font pixel - so this runs thousands
+ * of times on a screen of text, and routing that through the public
+ * gfx_mark_dirty(), with its re-clipping and its call overhead, cost about 5%
+ * of the launcher's framerate. STRIP_HEIGHT is a power of two, so the divisions
+ * become shifts. */
+static inline void mark_band(int y0, int y1)
+{
+    if (y0 >= y1) {
+        return;
+    }
+    const int first = y0 / STRIP_HEIGHT;
+    const int last  = (y1 - 1) / STRIP_HEIGHT;
+
+    for (int i = first; i <= last; i++) {
+        strip_dirty |= (uint8_t)(1u << i);
+    }
+}
+
 /*---------------------------------------------------------------------------
  * Panel plumbing
  *-------------------------------------------------------------------------*/
@@ -151,6 +180,12 @@ bool gfx_suspend(void)
 
 bool gfx_resume(bool full_init)
 {
+    /* A full re-initialisation reloads the panel's registers and can leave its
+     * GRAM in an unknown state, so nothing may be assumed to still be on
+     * screen. Cheap insurance: one full frame after a resume. */
+    if (full_init) {
+        gfx_mark_all_dirty();
+    }
     return panel_bring_up(full_init) == ESP_OK;
 }
 
@@ -189,6 +224,7 @@ bool gfx_init(void)
     }
 
     gfx_clear_clip();
+    gfx_mark_all_dirty();
 
     ESP_LOGI(TAG, "%dx%d framebuffer, %u bytes, %u bytes of heap still free",
              GFX_WIDTH, GFX_HEIGHT, (unsigned)bytes,
@@ -198,7 +234,62 @@ bool gfx_init(void)
 
 gfx_color_t *gfx_framebuffer(void)
 {
+    /* Deliberately does NOT mark anything dirty. gfx cannot know what a caller
+     * intends to write, and guessing "everything" would silently discard the
+     * saving for the two apps that draw this way. Raw writers call
+     * gfx_mark_dirty() themselves; see the warning on it. */
     return fb;
+}
+
+/*---------------------------------------------------------------------------
+ * Dirty tracking
+ *-------------------------------------------------------------------------*/
+
+void gfx_mark_all_dirty(void)
+{
+    strip_dirty = (uint8_t)((1u << STRIP_COUNT) - 1u);
+}
+
+void gfx_mark_dirty(int x, int y, int w, int h)
+{
+    (void)x;
+    (void)w;   /* strips are full width, so only the rows matter */
+
+    int y0 = y;
+    int y1 = y + h;
+
+    if (y0 < 0) y0 = 0;
+    if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
+    if (y0 >= y1) {
+        return;
+    }
+
+    mark_band(y0, y1);
+}
+
+bool gfx_region_dirty(int x, int y, int w, int h)
+{
+    (void)x;
+    (void)w;
+
+    int y0 = y;
+    int y1 = y + h;
+
+    if (y0 < 0) y0 = 0;
+    if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
+    if (y0 >= y1) {
+        return false;
+    }
+
+    const int first = y0 / STRIP_HEIGHT;
+    const int last  = (y1 - 1) / STRIP_HEIGHT;
+
+    for (int i = first; i <= last; i++) {
+        if (strip_dirty & (1u << i)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /*---------------------------------------------------------------------------
@@ -259,6 +350,11 @@ void gfx_clear(gfx_color_t color)
     for (int i = 0; i < count; i++) {
         words[i] = pair;
     }
+
+    /* Marking the whole screen here is what keeps every existing app working
+     * unchanged: the cube, the launcher and the POST report all clear before
+     * drawing, so they mark everything without knowing dirty tracking exists. */
+    gfx_mark_all_dirty();
 }
 
 void gfx_pixel(int x, int y, gfx_color_t color)
@@ -267,6 +363,7 @@ void gfx_pixel(int x, int y, gfx_color_t color)
         return;
     }
     fb[y * GFX_WIDTH + x] = color;
+    strip_dirty |= (uint8_t)(1u << (y / STRIP_HEIGHT));
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
@@ -284,6 +381,8 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
             *dst++ = color;
         }
     }
+
+    mark_band(y0, y1);   /* already clipped above */
 }
 
 /*---------------------------------------------------------------------------
@@ -348,17 +447,28 @@ void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
 
 void gfx_present(void)
 {
-    for (int y = 0; y < GFX_HEIGHT; y += STRIP_HEIGHT) {
+    int queued = 0;
+
+    for (int i = 0; i < STRIP_COUNT; i++) {
+        if ((strip_dirty & (1u << i)) == 0) {
+            continue;   /* unchanged - the panel is still showing it */
+        }
+        const int y = i * STRIP_HEIGHT;
         esp_lcd_panel_draw_bitmap(panel,
                                   0, y,
                                   GFX_WIDTH, y + STRIP_HEIGHT,
                                   fb + (size_t)y * GFX_WIDTH);
+        queued++;
     }
+
+    strip_dirty = 0;
 
     /* draw_bitmap only QUEUES a DMA transfer that reads out of the
      * framebuffer. Returning before they drain would let the next frame start
-     * overwriting memory still being shifted out to the panel. */
-    for (int i = 0; i < STRIP_COUNT; i++) {
+     * overwriting memory still being shifted out to the panel. Wait for
+     * exactly as many as were queued - waiting for STRIP_COUNT would block
+     * for ever the moment any strip was skipped. */
+    for (int i = 0; i < queued; i++) {
         xSemaphoreTake(strip_sent, portMAX_DELAY);
     }
 }
