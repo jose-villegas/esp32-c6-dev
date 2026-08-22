@@ -21,8 +21,7 @@ int main(void)
 {
     UNITY_BEGIN();
 
-    run_touch_fsm_suite();
-    run_gesture_suite();
+    suites_run_all();
 
     return UNITY_END();
 }

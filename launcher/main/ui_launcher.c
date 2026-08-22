@@ -193,9 +193,9 @@ int ui_launcher_frame(const input_t *input)
         mu_layout_row(&ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
         mu_text(&ctx, "APPS");
 
-        for (int i = 0; i < app_count; i++) {
+        for (int i = 0; i < app_list_count(); i++) {
             mu_layout_row(&ctx, 1, (int[]){ -1 }, ROW_HEIGHT);
-            if (mu_button(&ctx, app_registry[i]->name)) {
+            if (mu_button(&ctx, app_list()[i]->name)) {
                 chosen = i;
             }
         }

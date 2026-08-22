@@ -34,7 +34,7 @@ the firmware probes each of these at boot and prints exactly this table — see
 | Touch | FT5x06 (V1) / CST820 (V2) | I2C `0x38` / `0x15` | which address answers identifies the board revision |
 | IO expander | TCA9554 | I2C `0x20` | drives display and touch reset lines |
 | Power management | AXP2101 | I2C `0x34` | battery charging; the PWR button goes through it |
-| IMU | QMI8658 | I2C `0x6b` | accelerometer + gyroscope |
+| IMU | QMI8658 | I2C `0x6b` | accelerometer + gyroscope; driver in `main/imu.c`, axes below |
 | Real-time clock | PCF85063 | I2C `0x51` | |
 | Audio codec | ES8311 | I2C, I2S pins 19–23 | speaker + mic; amp enable on expander pin 7 |
 | microSD | — | SPI2, pins 6/10/11/18 | shares SPI2 with the display; see [time-multiplexing](#time-multiplexing-the-bus--the-actual-workaround) |
@@ -429,16 +429,90 @@ Two results worth remembering because they contradict the intuitive guess:
   Rasterizing the scene once per strip meant doing it seven times per frame;
   the discarded-pixel path was cheap, but not free.
 
+### The IMU's axes do not match the screen's
+
+`main/imu.c` drives the QMI8658 (WHO_AM_I `0x05` at `0x6b`), configured for
++/-8 g and +/-512 dps, which is where 4096 counts per g and 64 counts per dps
+come from. All six axes come from one twelve-byte burst read at `0x35` - worth
+doing as one transfer, because reading them separately can straddle a sample
+update and produce a vector that never physically existed.
+
+How the chip is soldered relative to the panel is a board fact no datasheet can
+tell you, and the obvious guess is wrong here:
+
+| Screen direction | Sensor axis |
+|---|---|
+| down (+y) | `+ax` |
+| right (+x) | `-ay` |
+
+Mapping X to X and Y to Y makes the sand fall sideways. Determined by tilting
+the board and watching which way it went; the mapping lives in two macros at
+the top of `main/apps/sand/app_sand.c`.
+
+One more distinction that is easy to get wrong: the **accelerometer** senses
+gravity, so it is what tilting changes and what tells you which way is down.
+The **gyroscope** senses rotation *rate*, which is zero however far the board is
+tilted as long as it is held still - it tells you the board is being shaken or
+spun, nothing about orientation. The sand app uses the accelerometer for
+gravity and the gyroscope for how hard to jostle the pile.
+
+### Falling sand: what made it fit
+
+The automaton runs a 184x224 grid (a cell per 2x2 pixels - a cell per pixel
+would be 165 KB of grid, and the framebuffer has already taken 322 of the
+chip's ~424 KB). Worst case is a grid half full of *falling* grains, where every
+one attempts a move; a settled pile is far cheaper.
+
+| Change | Step time |
+|---|---|
+| First working version, -Og | 9035 us |
+| -O2 | 6664 us |
+| Random number moved off the common path | **2857 us** |
+
+3.2x in total, and the second change was worth more than the compiler.
+
+The trick in the last one is worth remembering. The original drew a random
+number for every grain, to decide which way to try sliding - but a grain in
+open air just falls, and never needs it. Trying the gravity-ward move *first*
+and only reaching for the generator when that fails skips it for almost every
+grain. Two supporting changes: the three destination row pointers are computed
+once per row instead of once per grain, and the bounds check became a single
+unsigned compare.
+
 Untapped headroom, in rough order of value: raise the QSPI clock from 40 MHz
 (the SH8601 will likely take 80, halving the blit), and clear only the previous
 frame's bounding box instead of all 165k pixels. Together those put ~24 fps
 within reach without touching the rasterizer.
 
+### The build was on -Og until it was measured
+
+ESP-IDF defaults `CONFIG_COMPILER_OPTIMIZATION` to **Debug (-Og)**, and this
+project sat there without anyone checking. It is the wrong default for a device
+whose every frame is rasterising, cellular automata and pixel loops.
+
+Switching to `CONFIG_COMPILER_OPTIMIZATION_PERF` (-O2):
+
+| | -Og | -O2 |
+|---|---|---|
+| Falling-sand step, 184x224, 10304 grains | 9035 us | **6664 us** |
+| `gfx_present()` | 18683 us | 17602 us |
+| Display suspend/resume round trip | 730 us | 636 us |
+| Shell framerate | 40.0 fps | **43.5 fps** |
+| Image size | 0x5c140 | **0x5ae50** |
+
+Faster *and* smaller, which is not the usual trade — -O2 inlines away enough
+call overhead to more than pay for what it unrolls. `gfx_present()` barely
+moves because it is waiting on DMA, not computing.
+
+Nothing was lost: there is no debugger attached to this board, and the on-device
+suite passes identically at either level.
+
 ### Release and diagnostics run at the same speed
 
 Worth writing down because the first measurement said otherwise. The shell ran
 at **41.7 fps in release and 40.0 fps in diagnostics**, which looks like the
-test code costing ~4%.
+test code costing ~4%. (Those figures are from the -Og era; the conclusion is
+unchanged at -O2, only the numbers moved.)
 
 It is not. Release registers one app and diagnostics registers two, so the two
 builds were drawing a different number of buttons. Registering `app_cube` twice

@@ -1,17 +1,54 @@
-# The firmware proper. Test code is added only when CONFIG_LAUNCHER_SELFTEST is
-# set, so a default build contains none of it - not the suites, not the runner,
-# not the Unity framework.
+# The shell and the board drivers. Apps are NOT listed here - see below.
 set(app_srcs
     "main.c"
     "gfx.c"
     "touch.c"
     "touch_fsm.c"
     "gesture.c"
+    "imu.c"
     "post.c"
     "post_ui.c"
     "ui_launcher.c"
-    "apps/app_cube.c"
 )
+
+# Apps are discovered, not listed.
+#
+# Everything an app owns lives in main/apps/<name>/ - its entry point, any
+# logic of its own, and its test suite. Adding an app means creating the
+# folder; deleting one means deleting the folder. Neither touches this file,
+# and neither touches main.c, because apps register themselves (see app.h).
+#
+# CONFIGURE_DEPENDS makes CMake re-glob when the folder contents change, so a
+# new app is picked up without a manual reconfigure.
+#
+# It cannot be used unconditionally. ESP-IDF evaluates this file twice: once in
+# script mode (cmake -P) to work out component requirements, and once for real.
+# CONFIGURE_DEPENDS is illegal in script mode and hard-errors the configure.
+# The script pass only cares about REQUIRES, so plain globbing is fine there.
+# (This is the same early pass that makes a Kconfig-gated REQUIRES silently
+# fail - see the note on unity below.)
+if(CMAKE_SCRIPT_MODE_FILE)
+    file(GLOB_RECURSE discovered_apps "${CMAKE_CURRENT_LIST_DIR}/apps/*.c")
+else()
+    file(GLOB_RECURSE discovered_apps CONFIGURE_DEPENDS
+         "${CMAKE_CURRENT_LIST_DIR}/apps/*.c")
+endif()
+
+# Test suites are app-owned but must not ship. They are added back below when
+# CONFIG_LAUNCHER_SELFTEST is set.
+set(app_suites ${discovered_apps})
+list(FILTER app_suites INCLUDE REGEX "/suite_[^/]*\\.c$")
+list(FILTER discovered_apps EXCLUDE REGEX "/suite_[^/]*\\.c$")
+
+# Diagnostics is a bench tool, not a feature: it re-runs POST, which cycles the
+# audio rail and drops the display off SPI2 mid-session. Excluded by folder
+# rather than by name so the rule is structural.
+if(NOT CONFIG_LAUNCHER_SELFTEST)
+    list(FILTER discovered_apps EXCLUDE REGEX "/apps/diagnostics/")
+endif()
+
+list(APPEND app_srcs ${discovered_apps})
+
 # post.c reaches for chip identity, flash size, I2C probing and the on-die
 # temperature sensor, so it pulls in more of the platform than the rest.
 set(app_reqs microui small3dlib esp_lcd heap esp_timer
@@ -35,19 +72,32 @@ if(CONFIG_LAUNCHER_SELFTEST)
     # The suites are shared with the host runner - same sources, so what passes
     # on a laptop is the same set of assertions the board makes.
     list(APPEND app_srcs
-        # Bench-only. See the note in main.c's app registry.
-        "apps/app_diagnostics.c"
         "selftest.c"
+        "../test/suites.c"
         "../test/suites/suite_touch_fsm.c"
         "../test/suites/suite_gesture.c"
         "../test/suites/suite_gfx.c"
+        ${app_suites}
     )
 endif()
 
 idf_component_register(
     SRCS ${app_srcs}
-    INCLUDE_DIRS "."
+    INCLUDE_DIRS "." "../test"
     REQUIRES ${app_reqs}
+
+    # Required by self-registration, and easy to get wrong.
+    #
+    # This component becomes libmain.a, and a linker only extracts an archive
+    # member if it resolves an undefined symbol. Nothing references an app by
+    # name any more - that is the entire point - so app_sand.o would never be
+    # extracted, its constructor would never enter .init_array, and the app
+    # would silently vanish from the menu. Not a link error: a smaller binary
+    # and a shorter list.
+    #
+    # WHOLE_ARCHIVE links every member regardless. Section garbage collection
+    # still runs, so genuinely unreachable code is still dropped.
+    WHOLE_ARCHIVE
 )
 
 if(CONFIG_LAUNCHER_SELFTEST)

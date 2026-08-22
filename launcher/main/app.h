@@ -45,6 +45,33 @@ typedef struct {
     void (*exit)(void);
 } app_t;
 
-/* The registry. Adding an app means writing it and adding one entry here. */
-extern const app_t *const app_registry[];
-extern const int app_count;
+/*---------------------------------------------------------------------------
+ * The registry
+ *
+ * Apps register themselves. There is no central list to edit, which is the
+ * point: an app is entirely contained in main/apps/<name>/, and deleting that
+ * folder removes it - source, logic and tests - without touching another file.
+ * The build globs the folder, so even CMakeLists.txt stays untouched.
+ *
+ * APP_REGISTER() places a constructor in .init_array, which the ESP-IDF startup
+ * runs before app_main(). The registry is a fixed array filled in at that
+ * point, so no allocation happens and registration cannot fail at an awkward
+ * time.
+ *
+ * Link order decides .init_array order, which is not something to rely on, so
+ * the shell sorts by name before showing the list.
+ *-------------------------------------------------------------------------*/
+
+#define APP_MAX 16
+
+/* Called by APP_REGISTER before main(). Ignores anything past APP_MAX, having
+ * complained about it. */
+void app_register(const app_t *app);
+
+#define APP_REGISTER(symbol)                                        \
+    __attribute__((constructor))                                    \
+    static void symbol##_register(void) { app_register(&symbol); }
+
+/* Registered apps, sorted by name. Valid from the first line of app_main(). */
+const app_t *const *app_list(void);
+int app_list_count(void);

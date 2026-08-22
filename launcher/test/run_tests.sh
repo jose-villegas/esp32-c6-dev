@@ -49,16 +49,37 @@ fi
 # and strictness costs nothing in tests.
 CFLAGS="-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -g -O1"
 
-# Portable suites and the units they exercise. Hardware suites are absent by
-# design - suite_gfx.c would not compile here, which is the point.
+# The shell's own portable units and their suites. Hardware suites are absent
+# by design - suite_gfx.c would not compile here, which is the point.
 SOURCES="
 $TEST_DIR/host_main.c
+$TEST_DIR/suites.c
 $TEST_DIR/framework/unity.c
 $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
 $MAIN_DIR/touch_fsm.c
 $MAIN_DIR/gesture.c
 "
+
+# App-owned sources, discovered rather than listed, so adding or deleting an
+# app needs no change here.
+#
+# The convention: inside main/apps/<name>/, the file named app_*.c is the
+# hardware-facing entry point - it talks to gfx, the IMU and the frame loop, so
+# it cannot link on a host. Everything else in the folder is portable logic and
+# is compiled in, along with any suite_*.c beside it.
+#
+# That split is not bureaucracy: it is what forces an app's logic to be
+# separable from its wiring, which is the only reason a falling-sand automaton
+# can be tested on a laptop at all.
+for f in "$MAIN_DIR"/apps/*/*.c; do
+    [ -e "$f" ] || continue
+    case "$(basename "$f")" in
+        app_*.c) continue ;;
+    esac
+    SOURCES="$SOURCES
+$f"
+done
 
 mkdir -p "$BUILD_DIR"
 OUT="$BUILD_DIR/host_tests"

@@ -40,12 +40,9 @@ int selftest_run(void)
 
     UNITY_BEGIN();
 
-    /* Portable suites - the same sources the host runner builds. */
-    run_touch_fsm_suite();
-    run_gesture_suite();
-
-    /* Hardware suites - meaningful only here. */
-    run_gfx_suite();
+    /* Every registered suite, portable and hardware alike. Which ones exist
+     * is decided at compile time by what was built in - see suites.h. */
+    suites_run_all();
 
     const int failures = UNITY_END();
     const int64_t elapsed_ms = (esp_timer_get_time() - started) / 1000;

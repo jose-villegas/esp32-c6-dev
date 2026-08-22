@@ -9,3 +9,11 @@ CONFIG_PARTITION_TABLE_CUSTOM=y
 # It also makes the touch task's 100 Hz polling land accurately rather than
 # quantised to the tick.
 CONFIG_FREERTOS_HZ=1000
+
+# -O2 rather than the -Og default.
+#
+# This is a rendering device with no debugger attached: every frame is spent in
+# rasterising, cellular automata and pixel loops, which are exactly what an
+# optimiser helps and exactly what -Og leaves on the table. Measured effect is
+# in docs/ESP32-C6-AMOLED-Notes.md.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

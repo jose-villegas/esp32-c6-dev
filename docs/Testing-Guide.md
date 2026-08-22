@@ -56,8 +56,8 @@ flowchart LR
 actually practical — a ninety-second build-and-flash is not a loop anyone
 sustains. It runs the portable suites only.
 
-**The device run is the guarantee.** It runs *every* suite, including the
-portable ones. That is deliberate: passing on a laptop only proves the logic is
+**The device run is the guarantee.** It runs *every* registered suite, including
+the portable ones. That is deliberate: passing on a laptop only proves the logic is
 right on x86, whereas running on-target proves the same source behaves
 identically built by the RISC-V toolchain and executed on this chip.
 
@@ -336,16 +336,20 @@ against.
 
 ## Adding a suite
 
-1. Create `launcher/test/suites/suite_<name>.c`.
+1. Create the file. A suite for shell code goes in `launcher/test/suites/`; a
+   suite for an app goes **beside the app**, in `main/apps/<name>/`, so it is
+   deleted along with it.
 2. Write the tests, then a `void run_<name>_suite(void)` that calls
    `RUN_TEST(...)` for each. Do **not** define `setUp`/`tearDown` or call
    `UNITY_BEGIN`/`UNITY_END` — the runners own those, because several suites
    share one binary. Give the suite its own `fixture()` helper instead and call
    it at the top of each test.
-3. Declare it in `test/suites.h`. Guard it with `#ifdef DEVICE_BUILD` if it
-   needs hardware.
-4. Register it: in `test/host_main.c` if portable, and in `main/selftest.c`
-   either way.
-5. Add the source to `main/CMakeLists.txt`, and to `SOURCES` in
-   `test/run_tests.sh` if portable.
-6. Break the implementation, confirm red, restore.
+3. Register it from inside itself: `SUITE_REGISTER(run_<name>_suite);`. That is
+   all — there is no list in `suites.h`, no call in `host_main.c` and none in
+   `selftest.c`. App suites are globbed by the build; shell suites are listed in
+   `CMakeLists.txt` and `run_tests.sh`.
+4. Guard anything needing hardware with `#ifdef DEVICE_BUILD`, including its
+   `RUN_TEST` line. A suite can be portable and still have a device-only
+   section — `suite_sand.c` runs its rules on a host and its performance check
+   only on the chip.
+5. Break the implementation, confirm red, restore.

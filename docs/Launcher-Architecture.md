@@ -165,28 +165,60 @@ const app_t app_yours = {
 };
 ```
 
-**2. Register it in `main.c`:**
+**2. Register it — from inside its own file:**
 
 ```c
-extern const app_t app_yours;
-
-const app_t *const app_registry[] = {
-    &app_cube,
-    &app_yours,
-};
+APP_REGISTER(app_yours);
 ```
 
-`app_count` is computed from the array, and the launcher lists it
-automatically.
+That is the whole registration. There is no central list, and **no other file
+needs editing** — not `main.c`, not `CMakeLists.txt`.
 
-**3. Add the source to `main/CMakeLists.txt`.**
+### An app is a folder
 
-**Bench-only apps** go in the `if(CONFIG_LAUNCHER_SELFTEST)` block in the same
-file, with their registry entry wrapped in `#ifdef CONFIG_LAUNCHER_SELFTEST`.
-Diagnostics is the example: it re-runs POST, which cycles the audio rail and
-takes the display off SPI2, so it has no business being reachable in a shipped
-image. See [Testing-Guide](Testing-Guide.md#release-builds-contain-no-test-code)
-— note in particular that `REQUIRES` must **not** be gated this way.
+Everything an app owns lives in `main/apps/<name>/`:
+
+```
+main/apps/sand/
+├── app_sand.c      entry point: gfx, IMU, frame loop  (NOT host-portable)
+├── sand.c          the automaton                       (pure)
+├── sand.h
+└── suite_sand.c    its tests                           (pure + a device block)
+```
+
+Deleting the app is deleting the folder. Its code, its logic and its tests go
+with it, and nothing is left dangling.
+
+Two mechanisms make that true:
+
+- **The build globs `apps/**/*.c`** (with `CONFIGURE_DEPENDS`, so a new folder
+  is picked up without a manual reconfigure).
+- **Apps register themselves.** `APP_REGISTER` emits a constructor into
+  `.init_array`, which ESP-IDF runs before `app_main()`.
+
+The naming convention the host test runner relies on: **`app_*.c` is the
+hardware-facing entry point**, and everything else in the folder is portable
+logic it can compile. That split is not bureaucracy — it is what forces an
+app's logic to be separable from its wiring, and it is the only reason a
+falling-sand automaton can be tested on a laptop.
+
+> **`WHOLE_ARCHIVE` is load-bearing.** The component becomes `libmain.a`, and a
+> linker only extracts an archive member that resolves an undefined symbol.
+> Since nothing references an app by name any more — the entire point — the
+> object would never be extracted, its constructor would never run, and the app
+> would silently vanish from the menu. Not a link error: a smaller binary and a
+> shorter list. This was caught by the release image shrinking *below* its
+> pre-app size.
+
+Menu order is by name. Constructor order follows link order, which is not
+something to depend on, so the shell sorts before showing the list.
+
+**Bench-only apps** live in `apps/diagnostics/`, excluded by folder when
+`CONFIG_LAUNCHER_SELFTEST` is off — structural rather than a name check.
+Diagnostics re-runs POST, which cycles the audio rail and takes the display off
+SPI2, so it has no business being reachable in a shipped image. See
+[Testing-Guide](Testing-Guide.md#release-builds-contain-no-test-code) — note in
+particular that `REQUIRES` must **not** be gated this way.
 
 ### What an app may and may not do
 

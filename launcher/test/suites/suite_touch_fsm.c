@@ -12,6 +12,7 @@
  *===========================================================================*/
 
 #include "unity.h"
+#include "suites.h"
 #include "touch_fsm.h"
 
 /* Time is supplied, never read from a clock, so tests are instant and
@@ -206,3 +207,5 @@ void run_touch_fsm_suite(void)
     RUN_TEST(test_a_full_tap_produces_exactly_one_press_and_one_release);
 
 }
+
+SUITE_REGISTER(run_touch_fsm_suite);

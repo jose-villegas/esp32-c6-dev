@@ -21,6 +21,7 @@
 #include <string.h>
 
 #include "unity.h"
+#include "suites.h"
 
 #include "bsp/esp-bsp.h"
 #include "esp_heap_caps.h"
@@ -364,3 +365,5 @@ void run_gfx_suite(void)
     RUN_TEST(test_the_panel_still_works_after_a_resume);
     RUN_TEST(test_a_suspend_resume_round_trip_costs_under_a_frame);
 }
+
+SUITE_REGISTER(run_gfx_suite);

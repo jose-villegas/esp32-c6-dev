@@ -17,9 +17,9 @@
  * GRAM - and the report prints how long the round trip took.
  *===========================================================================*/
 
-#include "../app.h"
-#include "../gfx.h"
-#include "../post_ui.h"
+#include "../../app.h"
+#include "../../gfx.h"
+#include "../../post_ui.h"
 
 static void diagnostics_enter(void)
 {
@@ -48,3 +48,5 @@ const app_t app_diagnostics = {
     .frame   = diagnostics_frame,
     .exit    = diagnostics_exit,
 };
+
+APP_REGISTER(app_diagnostics);

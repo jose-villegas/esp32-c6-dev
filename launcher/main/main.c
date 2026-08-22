@@ -12,6 +12,7 @@
  *===========================================================================*/
 
 #include <stdint.h>
+#include <string.h>
 
 #include "app.h"
 #include "gesture.h"
@@ -48,24 +49,38 @@ static const char *TAG = "shell";
 
 /* --- app registry ------------------------------------------------------- */
 
-/* Adding an app is: write it, declare it here, add one line to the registry. */
-extern const app_t app_cube;
-#ifdef CONFIG_LAUNCHER_SELFTEST
-extern const app_t app_diagnostics;
-#endif
+/* Filled in before app_main() by the constructors APP_REGISTER() emits. No
+ * app is named here; see app.h for why. */
+static const app_t *apps[APP_MAX];
+static int apps_registered;
 
-const app_t *const app_registry[] = {
-    &app_cube,
-#ifdef CONFIG_LAUNCHER_SELFTEST
-    /* Diagnostics is a bench tool, not a feature. It re-runs POST, which cycles
-     * the audio rail and drops the display off SPI2 mid-session - fine while
-     * debugging, not something to leave reachable in a shipped product. The
-     * boot POST still runs in release; only this way in is compiled out. */
-    &app_diagnostics,
-#endif
-};
+void app_register(const app_t *app)
+{
+    if (apps_registered >= APP_MAX) {
+        ESP_LOGE(TAG, "More than %d apps registered; '%s' was dropped",
+                 APP_MAX, app->name);
+        return;
+    }
+    apps[apps_registered++] = app;
+}
 
-const int app_count = (int)(sizeof(app_registry) / sizeof(app_registry[0]));
+const app_t *const *app_list(void) { return apps; }
+int app_list_count(void) { return apps_registered; }
+
+/* Sorted so the menu order is stable. Without this it follows link order,
+ * which changes when a file is added and makes the list jump around. */
+static void sort_apps(void)
+{
+    for (int i = 1; i < apps_registered; i++) {
+        const app_t *const key = apps[i];
+        int j = i - 1;
+        while (j >= 0 && strcmp(apps[j]->name, key->name) > 0) {
+            apps[j + 1] = apps[j];
+            j--;
+        }
+        apps[j + 1] = key;
+    }
+}
 
 /* --- chrome ------------------------------------------------------------- */
 
@@ -148,8 +163,9 @@ void app_main(void)
     int64_t fps_window_start = previous_us;
     uint32_t frames = 0;
 
+    sort_apps();
     ESP_LOGI(TAG, "Ready, %d app%s registered",
-             app_count, app_count == 1 ? "" : "s");
+             apps_registered, apps_registered == 1 ? "" : "s");
 
     while (1) {
         const int64_t now_us = esp_timer_get_time();
@@ -163,8 +179,8 @@ void app_main(void)
 
         if (current == NULL) {
             const int chosen = ui_launcher_frame(&input);
-            if (chosen >= 0 && chosen < app_count) {
-                current = app_registry[chosen];
+            if (chosen >= 0 && chosen < apps_registered) {
+                current = apps[chosen];
                 ESP_LOGI(TAG, "Starting %s", current->name);
                 current->enter();
             }

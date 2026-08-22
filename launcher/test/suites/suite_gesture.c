@@ -8,6 +8,7 @@
  *===========================================================================*/
 
 #include "unity.h"
+#include "suites.h"
 #include "gesture.h"
 
 #define SCREEN_H 448
@@ -136,3 +137,5 @@ void run_gesture_suite(void)
     RUN_TEST(test_the_distance_threshold_is_inclusive);
 
 }
+
+SUITE_REGISTER(run_gesture_suite);

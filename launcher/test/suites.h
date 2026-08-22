@@ -10,17 +10,28 @@
  * by the RISC-V toolchain and executed on the real chip, which is not something
  * a laptop can vouch for.
  *
- * Suites are portable unless marked otherwise. A portable suite must not
- * include any ESP-IDF or hardware header, so it can link on a host.
+ * Suites REGISTER THEMSELVES with SUITE_REGISTER, so there is no list to keep
+ * in step. That matters most for app-owned suites: a suite living in
+ * main/apps/<name>/ disappears with its app when the folder is deleted, and
+ * nothing else needs editing. See main/app.h for the same pattern applied to
+ * apps themselves.
+ *
+ * A portable suite must not include any ESP-IDF or hardware header, so it can
+ * link on a host. Suites that need the chip are guarded with DEVICE_BUILD and
+ * are simply not compiled into the host runner.
  *===========================================================================*/
 #pragma once
 
-/* Portable: pure logic, runs anywhere. */
-void run_touch_fsm_suite(void);
-void run_gesture_suite(void);
+#define SUITE_MAX 16
 
-/* Device only: needs real framebuffer memory, DMA and I2C. Not compiled into
- * the host runner. */
-#ifdef DEVICE_BUILD
-void run_gfx_suite(void);
-#endif
+typedef void (*suite_fn)(void);
+
+/* Called by SUITE_REGISTER before main(). */
+void suite_register(const char *name, suite_fn fn);
+
+#define SUITE_REGISTER(fn)                                          \
+    __attribute__((constructor))                                    \
+    static void fn##_register(void) { suite_register(#fn, fn); }
+
+/* Runs every registered suite, in name order so the output is stable. */
+void suites_run_all(void);
