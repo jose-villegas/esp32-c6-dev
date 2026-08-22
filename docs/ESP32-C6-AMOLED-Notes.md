@@ -648,13 +648,59 @@ still.
 The general lesson: **anything whose rate matters must be driven by elapsed
 time, not by frame count.** The tilt filter already was, for the same reason.
 
+### Resting sand was the most expensive thing on screen
+
+Adding a lot of sand dropped the framerate even though most of it was sitting
+still - which is backwards, and the profile says why. A settled grain runs the
+*whole* decision path every step to conclude nothing: the gravity-ward move
+fails, a random number is drawn, its load column is walked, and both slides
+fail. A falling grain succeeds on its first attempt and costs a fraction of
+that.
+
+Measured on a host, before any sleeping:
+
+| Grid | Cost per step |
+|---|---|
+| empty | 0.015 ms |
+| settled, half full | 0.163 ms |
+| settled, screen completely full | 0.323 ms |
+| half a screen actively falling | 0.020 ms |
+
+A motionless screen cost **twenty times an empty one**, and sixteen times a
+screen of falling sand.
+
+The fix is the [sleeping-chunk idea](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation)
+from Noita, applied per row rather than per chunk - sand settles in horizontal
+layers, so rows are the natural grain here and the dirty-row machinery already
+existed. A row is skipped once it has been examined with nothing to do, and is
+woken again by any movement in it or either neighbour. A grain can only move
+one row, so nothing further away can change what it is resting on.
+
+On device, a completely full settled grid now costs **15 us per step**, against
+3.9 ms for a screen of falling sand.
+
+**The subtlety that broke the first attempt:** the gravity direction is
+dithered, and the two directions it alternates between do not offer the same
+moves. Straight down allows the slides (-1,+1) and (+1,+1); down-right allows
+(0,+1) and (+1,0), and that last one is purely sideways. A row that had nothing
+to do under one direction may well have somewhere to go under the other, so a
+single "settled" flag froze grains on a slope. The state has to be one bit per
+direction. A test that settles the grid with sleeping on and then re-runs it
+with sleeping off, requiring nothing to move, is what caught it.
+
 ### Still untapped
 
 - Clear only the previous frame's bounding box rather than all 165k pixels.
-- Sleeping chunks in the simulation. The step is 3.2 ms worst case, so this is
-  now the smaller half of the problem.
 - Skipping the launcher's redraw when nothing changed, which would let its bands
   go unsent too.
+
+### A note on measurement noise
+
+`sand_step` measured between 3.2 and 3.9 ms across builds that did not touch
+that code path at all. The ESP32-C6 runs code from a 32 KB read-only flash
+cache, so adding unrelated code shifts the layout and changes the hit rate.
+Treat differences under about 20% as noise unless they reproduce, and leave
+performance assertions enough margin that they are not a coin toss.
 
 Two things NOT worth doing, measured or reasoned:
 

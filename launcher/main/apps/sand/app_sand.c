@@ -74,6 +74,7 @@ static const char *TAG = "sand";
 
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
+static uint8_t    *sleep_rows;   /* GRID_H bytes: which rows can be skipped */
 static sand_t      sim;
 static tilt_t      tilt;
 static gfx_color_t palette[SAND_LAST_SHADE + 1];
@@ -146,10 +147,13 @@ static void sand_enter(void)
     if (dirty_rows == NULL) {
         dirty_rows = malloc(GRID_H);
     }
+    if (sleep_rows == NULL) {
+        sleep_rows = malloc(GRID_H);
+    }
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W * GRID_H);
     }
-    if (grid == NULL || dirty_rows == NULL) {
+    if (grid == NULL || dirty_rows == NULL || sleep_rows == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
                  GRID_W, GRID_H, GRID_W * GRID_H,
@@ -161,6 +165,11 @@ static void sand_enter(void)
     build_palette();
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
     sand_track_dirty_rows(&sim, dirty_rows);
+
+    /* Without this, a screen full of motionless sand is the most expensive
+     * thing the simulation can hold rather than the least - every settled
+     * grain runs the whole decision path each step to conclude nothing. */
+    sand_enable_sleeping(&sim, sleep_rows);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {

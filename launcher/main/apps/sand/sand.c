@@ -74,7 +74,47 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->rng        = seed ? seed : 1u;   /* xorshift is stuck at zero */
     s->sweep_flip = false;
     s->dirty_rows = NULL;
+    s->row_state  = NULL;
+    s->last_load_dx = 0;
+    s->last_load_dy = 0;
     sand_clear(s);
+}
+
+/* Row sleeping state: one bit per gravity direction the row has been examined
+ * under without anything moving.
+ *
+ * Two bits rather than one because the direction is DITHERED - it alternates
+ * between the two that bracket the true angle - and those two do not offer the
+ * same moves. Straight down allows the slides (-1,+1) and (+1,+1); down-right
+ * allows (0,+1) and (+1,0), and that last one is purely sideways. A row that
+ * settled under one direction may well have somewhere to go under the other,
+ * so a single "settled" bit lets grains freeze on a slope.
+ *
+ * That is not a hypothetical: it is what the slope test caught. */
+#define ROW_SETTLED_NEAREST 0x1
+#define ROW_SETTLED_OTHER   0x2
+
+/* Something changed across rows y0..y1, so none of them - nor the rows touching
+ * them - can still be considered settled under any direction. Clearing the
+ * neighbours is what makes a grain notice that its support has moved.
+ *
+ * Written as one clamped range rather than two separate neighbourhoods: a move
+ * spans at most two adjacent rows, so the two overlap almost entirely, and this
+ * is on the hot path. */
+static inline void wake_span(sand_t *s, int y0, int y1)
+{
+    int lo = (y0 < y1 ? y0 : y1) - 1;
+    int hi = (y0 > y1 ? y0 : y1) + 1;
+
+    if (lo < 0) {
+        lo = 0;
+    }
+    if (hi >= s->h) {
+        hi = s->h - 1;
+    }
+    for (int y = lo; y <= hi; y++) {
+        s->row_state[y] = 0;
+    }
 }
 
 /* Marking is a pair because every move touches two rows: the one a grain left
@@ -86,7 +126,24 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
         s->dirty_rows[y0] = 1;
         s->dirty_rows[y1] = 1;
     }
+    if (s->row_state != NULL) {
+        wake_span(s, y0, y1);
+    }
 }
+
+void sand_enable_sleeping(sand_t *s, uint8_t *rows)
+{
+    s->row_state = rows;
+    if (rows != NULL) {
+        /* Nothing is known about the grid yet, so nothing may be assumed
+         * settled. */
+        memset(rows, 0, (size_t)s->h);
+    }
+    s->last_load_dx = 0;
+    s->last_load_dy = 0;
+}
+
+
 
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
 {
@@ -103,6 +160,9 @@ void sand_clear(sand_t *s)
     memset(s->cells, SAND_EMPTY, (size_t)s->w * (size_t)s->h);
     if (s->dirty_rows != NULL) {
         memset(s->dirty_rows, 1, (size_t)s->h);
+    }
+    if (s->row_state != NULL) {
+        memset(s->row_state, 0, (size_t)s->h);
     }
 }
 
@@ -406,6 +466,27 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int *slide_a = ring[(i + 7) & 7];
     const int *slide_b = ring[(i + 1) & 7];
 
+    /* Sleeping. Everything wakes when the gravity direction changes or the grid
+     * is being shaken, because either can free a grain that had nothing to do
+     * with what its neighbours were doing. The NEAREST direction is what is
+     * compared, not the dithered one - that changes almost every step by
+     * design, and comparing it would mean nothing ever slept. */
+    uint8_t settled_bit = 0;   /* zero means sleeping is off entirely */
+    if (s->row_state != NULL) {
+        if (jostle > 0 ||
+            load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
+            /* Either can free a grain that had nothing to do with what its
+             * neighbours were doing, so no row's settled state survives. */
+            memset(s->row_state, 0, (size_t)s->h);
+        }
+        s->last_load_dx = load_dx;
+        s->last_load_dy = load_dy;
+
+        /* Which of the two dithered directions this step is using. */
+        settled_bit = (dx == load_dx && dy == load_dy)
+                    ? ROW_SETTLED_NEAREST : ROW_SETTLED_OTHER;
+    }
+
     /* Whether each slide is driven at all at this tilt. Depends only on the
      * direction, so it is decided once here rather than 41,000 times. */
     const bool slide_a_driven = driven_by_gravity(slide_a[0], slide_a[1], gx, gy);
@@ -442,6 +523,13 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
 
     for (int y = y_from; y != y_to; y += y_step) {
+        /* Already examined under this exact direction with nothing to do, and
+         * nothing has moved next to it since. It cannot have anywhere to go. */
+        if (settled_bit != 0 && (s->row_state[y] & settled_bit)) {
+            continue;
+        }
+        bool moved_here = false;
+
         uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
         /* The three rows a grain in this row can reach. */
@@ -462,6 +550,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
              * needed it. */
             if (jostle == 0 && move_to(row, prow, x, x + dx, w, grain)) {
                 mark_rows(s, y, y + dy);
+                moved_here = true;
                 continue;
             }
 
@@ -495,6 +584,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
             if (!shaken && jostle > 0 &&
                 move_to(row, prow, x, x + dx, w, grain)) {
                 mark_rows(s, y, y + dy);
+                moved_here = true;
                 continue;
             }
 
@@ -508,18 +598,29 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
                 if (first_driven &&
                     move_to(row, first_row, x, x + first_dx, w, grain)) {
                     mark_rows(s, y, y + first_dy);
+                    moved_here = true;
                     continue;
                 }
                 if (second_driven &&
                     move_to(row, second_row, x, x + second_dx, w, grain)) {
                     mark_rows(s, y, y + second_dy);
+                    moved_here = true;
                     continue;
                 }
             }
 
             if (shaken && move_to(row, prow, x, x + dx, w, grain)) {
                 mark_rows(s, y, y + dy);
+                moved_here = true;
             }
         }
+
+        /* Examined, and nothing here could move. Remember that against THIS
+         * direction only - the other one offers different moves. A later row
+         * moving next to this one clears it again, via wake_around(). */
+        if (settled_bit != 0 && !moved_here) {
+            s->row_state[y] |= settled_bit;
+        }
     }
+
 }

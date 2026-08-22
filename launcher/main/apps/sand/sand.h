@@ -38,6 +38,11 @@ typedef struct {
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
     uint8_t *dirty_rows;
+
+    /* Optional, caller-owned, h bytes: which rows are worth looking at at all.
+     * NULL means look at every row, every step. See sand_enable_sleeping(). */
+    uint8_t *row_state;
+    int      last_load_dx, last_load_dy;
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
@@ -56,6 +61,24 @@ void sand_clear(sand_t *s);
  * it has acted on them. Everything that can alter a cell marks it: settling,
  * spawning, sand_set and sand_clear. */
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
+
+/* Let settled rows be skipped entirely, using a caller-owned array of `h`
+ * bytes.
+ *
+ * Without this, resting sand is the MOST expensive thing the simulation can
+ * hold, not the least. A settled grain fails its gravity-ward move, draws a
+ * random number, walks its load column and then fails both slides - the whole
+ * decision path, every step, to conclude nothing. Measured on a host, a screen
+ * full of motionless sand cost twenty times an empty one.
+ *
+ * A row is worth processing only if it, or a row touching it, saw movement on
+ * the previous step: a grain can only move one row, so nothing else can have
+ * changed what any grain in a quiet row is resting on. Spawning, erasing and
+ * sand_set all count as movement, so sand poured onto a sleeping pile wakes it.
+ *
+ * Everything wakes when the gravity direction changes or the grid is shaken,
+ * since either can free a grain that had nothing to do with its neighbours. */
+void sand_enable_sleeping(sand_t *s, uint8_t *rows);
 
 /* Out-of-bounds reads return a grain, not empty.
  *

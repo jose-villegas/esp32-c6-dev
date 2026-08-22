@@ -698,6 +698,170 @@ static void test_a_steep_tilt_does_pour_the_bed(void)
         "past the angle of repose the bed must pour downhill");
 }
 
+/* --- sleeping ------------------------------------------------------------ */
+
+/* The hazard is specific: a row wrongly left asleep leaves a grain hanging
+ * that should have fallen. It does not crash and it does not corrupt anything,
+ * it just quietly stops being sand.
+ *
+ * So the central test does not check which rows were skipped - it checks the
+ * only thing that matters, that nothing was left able to move. Settle the grid
+ * with sleeping on, then run it again with sleeping OFF and require that
+ * nothing at all happens. If sleeping froze something, the second pass frees
+ * it and the grids differ. */
+
+static uint8_t sleep_rows[H];
+
+static void settle_with_sleeping(const char *rows[], int count, int steps,
+                                 int gx, int gy)
+{
+    fixture();
+    sand_enable_sleeping(&s, sleep_rows);
+    load(rows, count);
+
+    for (int i = 0; i < steps; i++) {
+        sand_step(&s, gx, gy, 0);
+    }
+}
+
+static void assert_nothing_left_to_do(int gx, int gy)
+{
+    uint8_t settled[W * H];
+    memcpy(settled, cells, sizeof(settled));
+
+    /* Same grid, same rules, but every row examined every step. */
+    sand_t awake;
+    sand_init(&awake, cells, W, H, 999u);
+    memcpy(cells, settled, sizeof(settled));
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&awake, gx, gy, 0);
+    }
+
+    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(settled, cells, sizeof(settled),
+        "a fully awake simulation found something to move that the sleeping "
+        "one had left alone - which means sleeping froze sand that should "
+        "still have been falling");
+}
+
+static void test_sleeping_leaves_nothing_able_to_move(void)
+{
+    static const char *heap[] = {
+        "...oo...",
+        "...oo...",
+        "...oo...",
+        "...oo...",
+        "........",
+        "........",
+        "........",
+        "........",
+    };
+    settle_with_sleeping(heap, 8, 200, 0, 1000);
+    assert_nothing_left_to_do(0, 1000);
+}
+
+static void test_sleeping_leaves_nothing_able_to_move_on_a_slope(void)
+{
+    /* A tilt exercises the diagonal moves and the dithered direction, which
+     * is where a sweep-order or wake-up mistake would show. */
+    static const char *heap[] = {
+        "..oooo..",
+        "..oooo..",
+        "..oooo..",
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+    };
+    settle_with_sleeping(heap, 8, 300, 1200, 1000);
+    assert_nothing_left_to_do(1200, 1000);
+}
+
+static void test_sand_poured_onto_a_sleeping_pile_still_falls(void)
+{
+    static const char *bed[] = {
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+        "oooooooo",
+    };
+    settle_with_sleeping(bed, 8, 50, 0, 1000);
+
+    /* The bed is now asleep. Drop a grain far above it. */
+    sand_set(&s, 3, 0, SAND_FIRST_SHADE);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 6),
+        "a grain dropped onto a sleeping pile must fall and land on it - if "
+        "adding sand does not wake the rows it passes through, it hangs");
+}
+
+static void test_undermining_a_sleeping_pile_collapses_it(void)
+{
+    static const char *column[] = {
+        "........",
+        "........",
+        "...o....",
+        "...o....",
+        "...o....",
+        "...o....",
+        "...o....",
+        "...o....",
+    };
+    settle_with_sleeping(column, 8, 100, 0, 1000);
+
+    /* Pull the bottom out. Everything above must come down. */
+    sand_erase(&s, 3, 7, 0);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 7),
+        "removing a grain must wake what was resting on it, or the pile hangs "
+        "in the air above a hole");
+}
+
+static void test_turning_the_board_wakes_a_sleeping_pile(void)
+{
+    static const char *bed[] = {
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+        "oooo....",
+        "oooo....",
+    };
+    settle_with_sleeping(bed, 8, 100, 0, 1000);
+
+    /* Now put the board on its side. Nothing has moved, so every row is
+     * asleep - but every grain can now move, and only the change of direction
+     * says so. */
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 1000, 0, 0);
+    }
+
+    int at_right_wall = 0;
+    for (int y = 0; y < H; y++) {
+        if (sand_at(&s, W - 1, y) != SAND_EMPTY) {
+            at_right_wall++;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, at_right_wall,
+        "changing the gravity direction must wake everything - the pile was "
+        "settled for the old direction, not the new one");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -995,15 +1159,19 @@ static void test_shaking_spreads_a_pile_sideways(void)
 #define REAL_W 184
 #define REAL_H 224
 
-/* The step shares a frame with gfx_present(), which alone takes 17.6 ms of a
- * 23 ms frame. That leaves about 5 ms for the simulation and the render
- * together, so half of it is the honest budget for the step on its own.
+/* The worst case: every grain on the screen moving at once.
  *
- * It currently measures ~2.9 ms, so there is real headroom - the number is
- * here to catch a regression, not to be scraped past. Two changes moved it:
- * building at -O2 rather than -Og (9.0 -> 6.7 ms) and taking the RNG out of
- * the common path (6.7 -> 2.9 ms). See docs/ESP32-C6-AMOLED-Notes.md. */
-#define STEP_BUDGET_US 4000
+ * The budget was 4 ms when a frame meant an unconditional 17.6 ms blit and the
+ * simulation had to squeeze in beside it. Partial updates changed that - a
+ * frame now usually sends one or two bands and costs 1-3 ms - so the honest
+ * worst-case frame is step + full redraw + full blit, about 15 ms, or 64 fps
+ * while the entire screen is in motion. 6 ms of that is a fair share.
+ *
+ * Measured between 3.2 and 3.9 ms across builds that did not touch this path,
+ * which is the ESP32-C6's 32 KB flash cache moving under code-layout changes
+ * rather than anything in the algorithm. The margin here has to accommodate
+ * that, or the test becomes a coin toss. */
+#define STEP_BUDGET_US 6000
 
 static void test_a_full_size_step_fits_in_the_frame_budget(void)
 {
@@ -1046,6 +1214,50 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
 }
 #endif /* DEVICE_BUILD */
 
+#ifdef DEVICE_BUILD
+static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
+{
+    /* The user-visible complaint this answers: adding lots of sand dropped the
+     * framerate, even though most of it was just sitting there. */
+    uint8_t *big  = malloc(REAL_W * REAL_H);
+    uint8_t *rows = malloc(REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(rows);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 5u);
+    sand_enable_sleeping(&real, rows);
+
+    /* Every cell full, so nothing can move anywhere. */
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(&real, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    sand_step(&real, 0, 1, 0);          /* one step to notice it is settled */
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 50;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "settled %dx%d grid: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    const int grains = sand_count(&real);
+    free(big);
+    free(rows);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains,
+        "and nothing may have moved");
+    TEST_ASSERT_LESS_THAN_MESSAGE(300, (int)per_step,
+        "sand that is not moving must cost almost nothing - if this fails, "
+        "rows are being examined that had no reason to be");
+}
+#endif /* DEVICE_BUILD */
+
 /* --- suite -------------------------------------------------------------- */
 
 void run_sand_suite(void)
@@ -1083,6 +1295,12 @@ void run_sand_suite(void)
     RUN_TEST(test_spawning_marks_the_rows_it_filled);
     RUN_TEST(test_tracking_starts_by_assuming_everything_changed);
 
+    RUN_TEST(test_sleeping_leaves_nothing_able_to_move);
+    RUN_TEST(test_sleeping_leaves_nothing_able_to_move_on_a_slope);
+    RUN_TEST(test_sand_poured_onto_a_sleeping_pile_still_falls);
+    RUN_TEST(test_undermining_a_sleeping_pile_collapses_it);
+    RUN_TEST(test_turning_the_board_wakes_a_sleeping_pile);
+
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
 
@@ -1105,6 +1323,7 @@ void run_sand_suite(void)
 
 #ifdef DEVICE_BUILD
     RUN_TEST(test_a_full_size_step_fits_in_the_frame_budget);
+    RUN_TEST(test_a_screen_of_settled_sand_costs_almost_nothing);
 #endif
 }
 
