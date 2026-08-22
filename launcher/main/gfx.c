@@ -302,14 +302,7 @@ bool gfx_region_dirty(int x, int y, int w, int h)
  * it for you, but we drive the panel directly. */
 gfx_color_t gfx_rgb(uint32_t rgb)
 {
-    const uint8_t r = (rgb >> 16) & 0xFF;
-    const uint8_t g = (rgb >> 8)  & 0xFF;
-    const uint8_t b =  rgb        & 0xFF;
-
-    const uint16_t packed = (uint16_t)(((r & 0xF8) << 8) |
-                                       ((g & 0xFC) << 3) |
-                                       ( b        >> 3));
-    return (gfx_color_t)((packed >> 8) | (packed << 8));
+    return GFX_RGB(rgb);
 }
 
 /*---------------------------------------------------------------------------

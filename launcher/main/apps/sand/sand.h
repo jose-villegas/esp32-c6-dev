@@ -19,17 +19,23 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "material.h"
 #include "rng.h"
 
-/* A cell is one byte: empty, or a grain carrying a shade.
+/* A cell is one byte - material in the high nibble, variant in the low one.
+ * See material.h, which owns the encoding and the properties.
  *
- * The shade travels with the grain rather than being derived from position,
- * which matters more than it sounds - position-derived colour makes a moving
- * pile shimmer, because each grain changes colour as it falls. */
-#define SAND_EMPTY        0
-#define SAND_SHADE_COUNT  6
-#define SAND_FIRST_SHADE  1
-#define SAND_LAST_SHADE   (SAND_FIRST_SHADE + SAND_SHADE_COUNT - 1)
+ * The variant travels with the cell rather than being derived from position,
+ * which matters more than it sounds: position-derived colour makes a moving
+ * pile shimmer, because each grain changes colour as it falls.
+ *
+ * These names are kept because most of this module's tests are about sand
+ * specifically, and "SAND_FIRST_SHADE" reads better in them than a CELL_MAKE
+ * incantation. */
+#define SAND_EMPTY        CELL_EMPTY
+#define SAND_SHADE_COUNT  MATERIAL_VARIANTS
+#define SAND_FIRST_SHADE  CELL_MAKE(MAT_SAND, 0)
+#define SAND_LAST_SHADE   CELL_MAKE(MAT_SAND, MATERIAL_VARIANTS - 1)
 
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
@@ -84,21 +90,24 @@ void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
  * since either can free a grain that had nothing to do with its neighbours. */
 void sand_enable_sleeping(sand_t *s, uint8_t *rows);
 
-/* Out-of-bounds reads return a grain, not empty.
+/* Out-of-bounds reads return STONE, not empty.
  *
  * That is deliberate: it makes the walls solid for free, so the movement code
- * never needs a bounds check before asking what is in the next cell. */
-uint8_t sand_at(const sand_t *s, int x, int y);
+ * never needs a bounds check before asking what is in the next cell. Stone
+ * specifically, rather than any old occupied value, because the walls must also
+ * be too dense to displace - otherwise a heavy material would sink through the
+ * floor. */
+cell_t sand_at(const sand_t *s, int x, int y);
 
 /* Ignores out-of-bounds writes. */
-void sand_set(sand_t *s, int x, int y, uint8_t cell);
+void sand_set(sand_t *s, int x, int y, cell_t cell);
 
 int sand_count(const sand_t *s);
 
-/* Fill a disc with grains of random shade. Returns how many cells it filled,
- * which is less than the disc's area when it overlaps the edge or existing
- * grains. */
-int sand_spawn(sand_t *s, int cx, int cy, int radius);
+/* Fill a disc with `material`, at random variants. Returns how many cells it
+ * filled, which is less than the disc's area when it overlaps the edge or
+ * anything already there. */
+int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material);
 
 /* Remove every grain in a disc. Returns how many it removed.
  *
@@ -132,7 +141,7 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  * still visibly creeps. */
 #define SAND_LOAD_CAP 5
 
-/* How many grains are stacked directly against gravity above the one at (x, y),
+/* How many cells are stacked directly against gravity above the one at (x, y),
  * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.
  *
  * Exposed because it is the whole of the friction model and is worth pinning
@@ -156,8 +165,14 @@ int sand_load_above(const sand_t *s, int x, int y, int dx, int dy);
  *
  * Off by default because most tests want to say "a grain falls one cell per
  * step" and mean it. The randomness is an aesthetic choice, so the caller
- * makes it. */
+ * makes it.
+ *
+ * Pass SAND_SCATTER_PER_MATERIAL to use each material's own figure from the
+ * table instead of one value for everything - which is what the app wants,
+ * since water and sand do not disperse alike. Any other value overrides all of
+ * them, which is what a test wants. */
 void sand_set_scatter(sand_t *s, int chance);
+#define SAND_SCATTER_PER_MATERIAL (-1)
 
 /* Advance one frame.
  *

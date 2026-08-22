@@ -49,14 +49,18 @@ static const char *TAG = "sand";
 #define POUR_HZ       60
 #define POUR_STEP_MS  (1000 / POUR_HZ)
 
-/* The eraser is wider than the pour. Removing sand is a corrective action and
- * wants to feel broad; pouring wants to feel placed. */
+/* The eraser is wider than the pour. Removing material is a corrective action
+ * and wants to feel broad; pouring wants to feel placed. */
 #define ERASE_RADIUS 8
 
-/* How often a falling grain lags or drifts instead of falling straight, in
- * 256ths. Enough to break the lockstep and let a stream disperse; low enough
- * that sand still falls rather than mills about. */
-#define SAND_SCATTER 40
+/* What the finger puts down, cycled by the PWR button.
+ *
+ * A list rather than the material enum itself, because the eraser belongs in
+ * the same cycle and is not a material. Stands in until the palette overlay -
+ * without some way to choose, water and stone exist but cannot be reached. */
+static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE };
+#define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
+#define BRUSH_ERASE BRUSH_COUNT
 
 /* How long the mode label stays up after the PWR button is pressed. Long
  * enough to read without hurrying, short enough not to sit over the sand. */
@@ -97,9 +101,8 @@ static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
 static uint8_t    *sleep_rows;   /* GRID_H bytes: which rows can be skipped */
 static sand_t      sim;
 static tilt_t      tilt;
-static gfx_color_t palette[SAND_LAST_SHADE + 1];
 static bool        failed;
-static bool        erasing;          /* PWR toggles pour and erase */
+static int         brush;            /* index into brushes, or BRUSH_ERASE */
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
 /* Rolling averages, purely for the log line. */
@@ -138,21 +141,6 @@ static int64_t  steps_total;
  * Setup
  *-------------------------------------------------------------------------*/
 
-static void build_palette(void)
-{
-    /* Six shades from a warm mid-tone to a pale highlight. Sand read as a flat
-     * colour block until the range was widened this far - individual grains are
-     * only 2 px, so the contrast between them has to do the work. */
-    static const uint32_t shades[SAND_SHADE_COUNT] = {
-        0xB07430, 0xC08840, 0xD09A4C, 0xDCA85C, 0xE8BA72, 0xF2CE90,
-    };
-
-    palette[SAND_EMPTY] = gfx_rgb(0x0A0C14);
-    for (int i = 0; i < SAND_SHADE_COUNT; i++) {
-        palette[SAND_FIRST_SHADE + i] = gfx_rgb(shades[i]);
-    }
-}
-
 static void sand_enter(void)
 {
     frames = 0;
@@ -162,7 +150,7 @@ static void sand_enter(void)
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
     steps_total = 0;
-    erasing = false;
+    brush = 0;
     label_left_ms = 0;
     failed = false;
 
@@ -184,12 +172,12 @@ static void sand_enter(void)
         return;
     }
 
-    build_palette();
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
-    /* Falling sand looks like a rigid block without this: every grain in open
-     * air takes the same move on the same step, so a poured blob keeps its
-     * shape all the way down. See sand_set_scatter(). */
-    sand_set_scatter(&sim, SAND_SCATTER);
+    /* Falling material looks like a rigid block without this: everything in
+     * open air takes the same move on the same step, so a poured blob keeps
+     * its shape all the way down. Per-material, because water and sand do not
+     * disperse alike. */
+    sand_set_scatter(&sim, SAND_SCATTER_PER_MATERIAL);
 
     sand_track_dirty_rows(&sim, dirty_rows);
 
@@ -207,7 +195,7 @@ static void sand_enter(void)
 
     /* A starting heap, so the app is doing something the moment it opens
      * rather than presenting an empty screen and no clue what to do. */
-    sand_spawn(&sim, GRID_W / 2, GRID_H / 4, GRID_W / 5);
+    sand_spawn(&sim, GRID_W / 2, GRID_H / 4, GRID_W / 5, MAT_SAND);
 
     ESP_LOGI(TAG, "%d x %d grid, %d bytes, %d px cells",
              GRID_W, GRID_H, GRID_W * GRID_H, CELL);
@@ -242,6 +230,12 @@ static void sand_exit(void)
 static void draw_dirty_rows(void)
 {
     gfx_color_t *fb = gfx_framebuffer();
+
+    /* 256 entries in flash, indexed by the raw cell byte: no material lookup,
+     * no shade arithmetic, no colour conversion. Cheaper than the seven-entry
+     * table this used to build in RAM, and it costs no RAM at all. */
+    const gfx_color_t *pal = material_palette();
+
     int redrawn = 0;
 
     for (int cy = 0; cy < GRID_H; cy++) {
@@ -255,7 +249,7 @@ static void draw_dirty_rows(void)
         gfx_color_t   *out = fb + (cy * CELL) * GFX_WIDTH;
 
         for (int cx = 0; cx < GRID_W; cx++) {
-            const gfx_color_t c = palette[row[cx]];
+            const gfx_color_t c = pal[row[cx]];
             gfx_color_t *p = out + cx * CELL;
 
             /* CELL is a compile-time constant, so these unroll away. */
@@ -285,7 +279,10 @@ static void draw_dirty_rows(void)
  * a diagonal tilt picks whichever quarter it is nearest. */
 static void draw_mode_label(int gx, int gy)
 {
-    const char *text = erasing ? "ERASE" : "POUR";
+    /* The material's own name, so the label says what the finger will do
+     * rather than merely that the mode changed. */
+    const char *text = (brush == BRUSH_ERASE) ? "ERASE"
+                                              : materials[brushes[brush]].name;
     const int   len  = (int)strlen(text);
     const int   span = len * 8 * LABEL_SCALE;
     const int   tall = 8 * LABEL_SCALE;
@@ -318,9 +315,15 @@ static void draw_mode_label(int gx, int gy)
         }
     }
 
-    gfx_text_turned(x, y, text,
-                    gfx_rgb(erasing ? 0xFF8A5C : 0x9BE8C0),
-                    LABEL_SCALE, turn);
+    /* Coloured as the material itself, read straight out of the palette, so
+     * the label needs no colour table of its own and cannot disagree with what
+     * is about to come out of the finger. */
+    const gfx_color_t ink =
+        (brush == BRUSH_ERASE)
+            ? gfx_rgb(0xFF8A5C)
+            : material_palette()[CELL_MAKE(brushes[brush], 13)];
+
+    gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
 
 /*---------------------------------------------------------------------------
@@ -365,9 +368,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     /* --- pour, or erase --- */
     if (input->power.pressed) {
-        erasing = !erasing;
+        brush = (brush + 1) % (BRUSH_COUNT + 1);
         label_left_ms = LABEL_MS;
-        ESP_LOGI(TAG, "%s mode", erasing ? "erase" : "pour");
+        ESP_LOGI(TAG, "brush: %s",
+                 brush == BRUSH_ERASE ? "erase" : materials[brushes[brush]].name);
     }
 
     /* The grid under the label has to be redrawn every frame the label is up,
@@ -396,10 +400,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         const int cx = input->x / CELL;
         const int cy = input->y / CELL;
         for (int i = 0; i < applications; i++) {
-            if (erasing) {
+            if (brush == BRUSH_ERASE) {
                 sand_erase(&sim, cx, cy, ERASE_RADIUS);
             } else {
-                sand_spawn(&sim, cx, cy, POUR_RADIUS);
+                sand_spawn(&sim, cx, cy, POUR_RADIUS, brushes[brush]);
             }
         }
     } else {

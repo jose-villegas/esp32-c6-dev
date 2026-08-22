@@ -15,6 +15,7 @@
 #include <stdbool.h>
 
 #include "bsp/esp-bsp.h"
+#include "gfx_color.h"
 
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
@@ -41,15 +42,15 @@
 #define GFX_CHAR_W      (8 * GFX_GLYPH_SCALE)
 #define GFX_CHAR_H      (8 * GFX_GLYPH_SCALE)
 
-/* A packed, panel-ready pixel. Produced by gfx_rgb(), stored in the
- * framebuffer, never inspected by callers. */
-typedef uint16_t gfx_color_t;
-
 /* Brings up the panel and allocates the framebuffer.
  * Returns false if either fails; the reason is logged. */
 bool gfx_init(void);
 
-/* Convert 0xRRGGBB to the panel's pixel format. */
+/* Convert 0xRRGGBB to the panel's pixel format.
+ *
+ * GFX_RGB in gfx_color.h does the same thing in a constant expression, which
+ * is what lets a colour table live in flash rather than RAM. Both go through
+ * one definition, so they cannot drift apart. */
 gfx_color_t gfx_rgb(uint32_t rgb);
 
 /* Direct access, for renderers that write pixels in bulk (the 3D rasterizer
