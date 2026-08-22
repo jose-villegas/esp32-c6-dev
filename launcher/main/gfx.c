@@ -87,8 +87,14 @@ static esp_err_t panel_bring_up(bool send_init)
     }
     spi_bus_up = true;
 
-    const esp_lcd_panel_io_spi_config_t io_config =
+    esp_lcd_panel_io_spi_config_t io_config =
         SH8601_PANEL_IO_QSPI_CONFIG(BSP_LCD_CS, on_strip_sent, NULL);
+
+    /* The macro defaults to 40 MHz, which is what the vendor driver validates.
+     * gfx_present() measured 17.6 ms at that rate against a theoretical 16.5,
+     * so the frame is 94% bus-bound - the clock is the whole cost, and doubling
+     * it is the only change that halves it. See GFX_QSPI_HZ in gfx.h. */
+    io_config.pclk_hz = GFX_QSPI_HZ;
     err = esp_lcd_new_panel_io_spi((esp_lcd_spi_bus_handle_t)BSP_LCD_SPI_NUM,
                                    &io_config, &panel_io);
     if (err != ESP_OK) {

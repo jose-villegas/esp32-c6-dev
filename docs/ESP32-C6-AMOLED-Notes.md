@@ -421,6 +421,10 @@ GPU:
 
 The blit works out to ~13 MB/s effective over QSPI at 40 MHz.
 
+Those cube figures predate two changes and are kept as a record of the starting
+point: the build now uses -O2 rather than -Og, and the QSPI clock is 80 MHz
+rather than 40, which roughly halves the blit row. See below.
+
 Two results worth remembering because they contradict the intuitive guess:
 
 - **Double-buffering the strips changed nothing** (11.1 → 10.7 fps). DMA was
@@ -479,10 +483,55 @@ grain. Two supporting changes: the three destination row pointers are computed
 once per row instead of once per grain, and the bounds check became a single
 unsigned compare.
 
-Untapped headroom, in rough order of value: raise the QSPI clock from 40 MHz
-(the SH8601 will likely take 80, halving the blit), and clear only the previous
-frame's bounding box instead of all 165k pixels. Together those put ~24 fps
-within reach without touching the rasterizer.
+### The blit is bus-bound, and the clock was half what it could be
+
+The most useful number here. One frame is 322 KiB over four QSPI lanes, and at
+40 MHz `gfx_present()` measured **17.6 ms against a theoretical 16.5** - 94% of
+the bus's peak. That settles a question worth settling: the blit is *purely*
+bandwidth-bound. No amount of CPU optimisation touches it. Only two things can:
+send fewer bytes, or clock the bus faster.
+
+The vendor driver defaults to 40 MHz, and `SH8601_PANEL_IO_QSPI_CONFIG` bakes
+that in. The panel runs happily at 80:
+
+| | 40 MHz | 80 MHz |
+|---|---|---|
+| `gfx_present()` | 17,602 us | **9,600 us** |
+| Shell framerate | 43.5 fps | **70.0 fps** |
+
+**80 MHz is the ESP32-C6's ceiling** for general-purpose SPI, so this lever is
+now fully spent. Set by `GFX_QSPI_HZ` in `gfx.h`.
+
+Be honest about what this is: an **overclock**. 40 MHz is the figure Waveshare
+and Espressif validate; 80 is undocumented for this panel and was established by
+running it. If a future unit shows tearing, wrong colours or noise, `GFX_QSPI_HZ`
+is the first thing to put back.
+
+### What is left
+
+With the clock maxed, the only remaining way to make the blit cheaper is to
+send fewer bytes - **partial updates**. `esp_lcd_panel_draw_bitmap()` takes an
+arbitrary rectangle and sets the panel's address window per call, so a frame
+can send only the bands that changed. Because the framebuffer is full width,
+a full-width band is already contiguous and needs no copy.
+
+That pairs exactly with the standard falling-sand optimisation, [dirty rects and
+sleeping chunks](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation),
+as used in Noita: divide the grid into chunks, track which had activity last
+tick, and skip the rest. Settled sand then costs nothing to simulate *and*
+nothing to send, because the same dirty information answers both questions.
+
+Also still untapped: clear only the previous frame's bounding box rather than
+all 165k pixels.
+
+Two things NOT worth doing, measured or reasoned:
+
+- **Micro-optimising the simulation further.** At 2.9 ms against a 9.6 ms blit
+  it is no longer the bottleneck.
+- **IRAM placement of the hot loops.** Espressif
+  [recommends it](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-guides/performance/speed.html)
+  for hot functions, and the C6 runs code from a 32 KB read-only flash cache so
+  it would help something - but not the part of the frame that actually costs.
 
 ### The build was on -Og until it was measured
 

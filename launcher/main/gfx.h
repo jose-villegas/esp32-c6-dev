@@ -19,6 +19,22 @@
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
 
+/* QSPI clock for the panel.
+ *
+ * Sending one frame is 322 KiB over four lanes, and gfx_present() measures at
+ * 94% of the theoretical rate - so this number, and only this number, sets how
+ * long a frame takes to reach the screen:
+ *
+ *     40 MHz -> 16.5 ms theoretical, 17.6 ms measured
+ *     80 MHz ->  8.2 ms theoretical
+ *
+ * The vendor driver defaults to 40 MHz and that is the figure Waveshare and
+ * Espressif validate. 80 MHz is within what the ESP32-C6's general-purpose SPI
+ * can produce, but it is beyond what anyone documents for this panel, so it is
+ * an overclock: if the display shows tearing, wrong colours or noise, this is
+ * the first thing to put back. */
+#define GFX_QSPI_HZ (80 * 1000 * 1000)
+
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
  * 368-wide panel. Text metrics elsewhere must agree with these. */
 #define GFX_GLYPH_SCALE 2
