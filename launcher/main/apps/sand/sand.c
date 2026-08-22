@@ -574,6 +574,34 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     }
     s->sweep_flip = !s->sweep_flip;
 
+    /* Which way a liquid spreads: PERPENDICULAR TO GRAVITY, not across the
+     * screen.
+     *
+     * "Along the surface" only means screen-horizontal while gravity points
+     * straight down. Tilt the board and the surface tilts with it, so spreading
+     * along a screen row is spreading in the wrong direction - which is why
+     * water in a tilted basin behaved like a powder, heaping against the low
+     * wall instead of pouring over the lip.
+     *
+     * Of the two perpendiculars, only the one the sweep has ALREADY passed can
+     * be used. A perpendicular move keeps a cell at the same depth, so moving
+     * into ground not yet visited would let one drop travel several cells in a
+     * single step and empty a basin in one frame. */
+    const int *perp = NULL;
+    {
+        const int *const options[2] = { ring[(i + 2) & 7], ring[(i + 6) & 7] };
+        for (int k = 0; k < 2; k++) {
+            const int px = options[k][0];
+            const int py = options[k][1];
+            const bool swept = (py != 0) ? (py * y_step < 0)
+                                         : (px * x_step < 0);
+            if (swept) {
+                perp = options[k];
+                break;
+            }
+        }
+    }
+
     const int w = s->w;
 
     for (int y = y_from; y != y_to; y += y_step) {
@@ -746,8 +774,9 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
              * let one drop travel several cells in a single step, draining a
              * pool sideways in one frame. The sweep alternates, so both
              * directions remain available, just not at once. */
-            if (mat->kind == KIND_LIQUID) {
-                const int back = -x_step;
+            if (mat->kind == KIND_LIQUID && perp != NULL) {
+                const int px = perp[0];
+                const int py = perp[1];
 
                 /* Under pressure it spreads regardless: that is what makes a
                  * column collapse and run along a flat floor. */
@@ -767,23 +796,48 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
                  * The scan stops at anything solid, so water cannot see past a
                  * wall, and it only ever moves ONE cell - it is looking for a
                  * reason to go, not travelling the whole way at once. */
-                if (!go) {
-                    for (int k = 1; k <= SAND_LIQUID_REACH; k++) {
-                        const int sx = x + back * k;
-                        if ((unsigned)sx >= (unsigned)w ||
-                            !CELL_IS_EMPTY(row[sx])) {
-                            break;
-                        }
-                        if (cell_open(prow, sx + dx, w, density)) {
-                            go = true;
-                            break;
-                        }
+                /* How far it could travel, and whether there is lower ground
+                 * in that direction.
+                 *
+                 * Anything solid ends the search: water cannot see past a
+                 * wall, and off the grid reads as stone so the edges stop it
+                 * too. */
+                int reach = 0;
+                for (int k = 1; k <= SAND_LIQUID_REACH; k++) {
+                    const int sx = x + px * k;
+                    const int sy = y + py * k;
+
+                    if (!CELL_IS_EMPTY(sand_at(s, sx, sy))) {
+                        break;
+                    }
+                    reach = k;
+                    if (can_enter(density, sand_at(s, sx + dx, sy + dy))) {
+                        go = true;    /* somewhere lower - go all the way */
+                        break;
                     }
                 }
 
-                if (go && move_to(row, row, x, x + back, w, grain, density)) {
-                    mark_rows(s, y, y);
-                    moved_here = true;
+                /* SEVERAL CELLS AT ONCE, not one.
+                 *
+                 * Spreading a single cell per step is far slower than water
+                 * arrives from a finger, so a mound piles up under the pour and
+                 * only levels long after - which reads as water behaving like a
+                 * powder. Real water disperses fast.
+                 *
+                 * It is safe precisely because the direction is the one the
+                 * sweep has already passed: every cell along the path has been
+                 * processed this step, so nothing can be moved twice however
+                 * far it travels. Going the other way, even one cell, could
+                 * not. */
+                if (go && reach > 0) {
+                    const int tx = x + px * reach;
+                    const int ty = y + py * reach;
+                    uint8_t *across = (py == 0) ? row : dest_row(s, ty);
+
+                    if (move_to(row, across, x, tx, w, grain, density)) {
+                        mark_rows(s, y, ty);
+                        moved_here = true;
+                    }
                 }
             }
         }

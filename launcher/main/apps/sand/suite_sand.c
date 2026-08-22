@@ -1292,6 +1292,162 @@ static void test_water_poured_into_a_basin_reaches_both_ends(void)
         "the pressure rule has been made too strict to flow at all");
 }
 
+/* A basin needs room around it, so these get a grid of their own. */
+#define POUR_W 18
+#define POUR_H 14
+static uint8_t pour_cells[POUR_W * POUR_H];
+static sand_t  pour;
+
+/* An open-topped stone basin, filled with water and settled level. */
+static void build_full_basin(void)
+{
+    sand_init(&pour, pour_cells, POUR_W, POUR_H, 9u);
+
+    for (int y = POUR_H - 6; y < POUR_H; y++) {
+        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, 8));
+    }
+    for (int x = 5; x < 13; x++) {
+        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, 8));
+    }
+    for (int y = POUR_H - 4; y < POUR_H - 1; y++) {
+        for (int x = 6; x < 12; x++) {
+            sand_set(&pour, x, y, CELL_MAKE(MAT_WATER, 8));
+        }
+    }
+    for (int i = 0; i < 200; i++) {
+        sand_step(&pour, 0, 1000, 0);
+    }
+}
+
+static int material_in_basin(material_id_t m)
+{
+    int n = 0;
+    for (int y = POUR_H - 6; y < POUR_H - 1; y++) {
+        for (int x = 6; x < 12; x++) {
+            if (CELL_MATERIAL(sand_at(&pour, x, y)) == m) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+static void test_a_tipped_basin_pours_its_water_out(void)
+{
+    /* The reported behaviour: tilting the board poured some of the water and
+     * then stopped, leaving a lump sitting in the basin like sand.
+     *
+     * The cause was that a liquid spread along a SCREEN row, which is only
+     * "along the surface" while gravity points straight down. Tilted, water
+     * could no longer level in its own frame, so it heaped against the low
+     * wall instead of running over the lip. */
+    build_full_basin();
+    TEST_ASSERT_GREATER_THAN_MESSAGE(10, material_in_basin(MAT_WATER),
+        "the basin must actually be full to begin with");
+
+    /* Tipped hard to the right - far past any angle of repose. */
+    for (int i = 0; i < 600; i++) {
+        sand_step(&pour, 1000, 300, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, material_in_basin(MAT_WATER),
+        "held on its side, a basin of water must empty - water has no angle "
+        "of repose, so anything left behind is it behaving like a powder");
+}
+
+static void test_a_tipped_basin_keeps_its_sand(void)
+{
+    /* The control, and the reason the last test means anything: sand tipped
+     * the same way must NOT all run out. If both emptied, the test above would
+     * be measuring gravity rather than the difference between a liquid and a
+     * powder. */
+    sand_init(&pour, pour_cells, POUR_W, POUR_H, 9u);
+    for (int y = POUR_H - 6; y < POUR_H; y++) {
+        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, 8));
+    }
+    for (int x = 5; x < 13; x++) {
+        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, 8));
+    }
+    for (int y = POUR_H - 4; y < POUR_H - 1; y++) {
+        for (int x = 6; x < 12; x++) {
+            sand_set(&pour, x, y, CELL_MAKE(MAT_SAND, 8));
+        }
+    }
+    for (int i = 0; i < 200; i++) {
+        sand_step(&pour, 0, 1000, 0);
+    }
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&pour, 1000, 300, 0);
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, material_in_basin(MAT_SAND),
+        "sand has friction and an angle of repose, so a tipped basin must "
+        "keep some of it");
+}
+
+/* Wide enough that a puddle has somewhere to go. On a grid the pour can fill,
+ * water and sand both end up "full" and the comparison measures nothing. */
+#define WIDE_W 32
+#define WIDE_H 20
+static uint8_t wide_cells[WIDE_W * WIDE_H];
+static sand_t  wide;
+
+/* How tall a heap the same pour leaves, in cells above the floor. */
+static int poured_height(material_id_t m)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+
+    /* Measured shortly after the pour, not once everything has long since
+     * settled. The mound is a TRANSIENT - water arriving faster than it can
+     * flow away - and given hundreds of idle steps even a crawl levels out,
+     * so a late measurement passes happily while the screen looks wrong. */
+    for (int i = 0; i < 60; i++) {
+        if (i < 20) {
+            sand_spawn(&wide, WIDE_W / 2, 1, 2, m);
+        }
+        sand_step(&wide, 0, 1000, 0);
+    }
+
+    for (int y = 0; y < WIDE_H; y++) {
+        for (int x = 0; x < WIDE_W; x++) {
+            if (!CELL_IS_EMPTY(sand_at(&wide, x, y))) {
+                return WIDE_H - y;
+            }
+        }
+    }
+    return 0;
+}
+
+static void test_water_puddles_where_sand_heaps(void)
+{
+    /* The reported behaviour: water poured from a finger built a mound
+     * instead of spreading out.
+     *
+     * Two causes, and the second is the interesting one. Water had no way to
+     * level in a tilted frame, and - even level - it spread only ONE cell per
+     * step, which is far slower than a finger delivers. The mound was the
+     * pour outrunning the flow.
+     *
+     * Sand is the control. If both heaped, or neither did, this would be
+     * measuring the pour rather than the difference between a liquid and a
+     * powder. */
+    const int water = poured_height(MAT_WATER);
+    const int sand  = poured_height(MAT_SAND);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(4, sand,
+        "sand must build a real heap, or there is nothing to compare against");
+    /* Measures 4 against sand's 8 - half the height, and about as flat as the
+     * volume allows. Stated as a ratio rather than an absolute so the test
+     * survives tuning the pour, and loose enough that it is guarding against a
+     * mound rather than pinning an exact shape. */
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(sand / 2, water,
+        "water poured from one spot must end up far flatter than the same "
+        "sand - a liquid has no angle of repose and should not build a mound");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -1755,6 +1911,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_drop_resting_on_a_pool_comes_to_rest);
     RUN_TEST(test_water_under_weight_still_spreads);
     RUN_TEST(test_water_poured_into_a_basin_reaches_both_ends);
+    RUN_TEST(test_a_tipped_basin_pours_its_water_out);
+    RUN_TEST(test_a_tipped_basin_keeps_its_sand);
+    RUN_TEST(test_water_puddles_where_sand_heaps);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
