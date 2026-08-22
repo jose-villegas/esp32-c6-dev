@@ -8,6 +8,7 @@ set(app_srcs
     "imu.c"
     "post.c"
     "post_ui.c"
+    "ui.c"
     "ui_launcher.c"
 )
 
@@ -77,6 +78,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_touch_fsm.c"
         "../test/suites/suite_gesture.c"
         "../test/suites/suite_gfx.c"
+        "../test/suites/suite_ui.c"
         ${app_suites}
     )
 endif()

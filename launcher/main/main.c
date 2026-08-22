@@ -20,6 +20,7 @@
 #include "post.h"
 #include "post_ui.h"
 #include "touch.h"
+#include "ui.h"
 #include "ui_launcher.h"
 
 #if CONFIG_LAUNCHER_SELFTEST
@@ -197,6 +198,9 @@ void app_main(void)
             ESP_LOGI(TAG, "Leaving %s", current->name);
             current->exit();
             current = NULL;
+            /* The app's output is still in the framebuffer, so the launcher
+             * must repaint even though its own description has not changed. */
+            ui_invalidate();
             /* Draw the launcher immediately so the frame presented below is
              * the home screen rather than the app's last one. */
             ui_launcher_frame(&input);
@@ -207,13 +211,19 @@ void app_main(void)
 
         gfx_present();
 
-        /* Report throughput periodically rather than per frame - logging is
-         * not free, and at 25 fps it would be the loudest thing on the wire. */
-        if (++frames % 60 == 0) {
-            const int64_t now = esp_timer_get_time();
+        /* Report throughput on a TIMER, not every N frames.
+         *
+         * Every-60-frames was fine while a frame cost 25 ms. Now that an idle
+         * launcher repaints nothing and runs at the tick ceiling, 60 frames is
+         * 60 ms - and a log line is several milliseconds of UART, so the
+         * measurement would be throttling the thing it measures. */
+        frames++;
+        const int64_t since_report = now_us - fps_window_start;
+        if (since_report >= 1500000) {
             ESP_LOGI(TAG, "%.1f fps",
-                     60.0 * 1000000.0 / (double)(now - fps_window_start));
-            fps_window_start = now;
+                     (double)frames * 1000000.0 / (double)since_report);
+            frames = 0;
+            fps_window_start = now_us;
         }
 
         /* Yield so the idle task can feed the watchdog. */

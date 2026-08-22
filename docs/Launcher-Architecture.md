@@ -220,6 +220,75 @@ SPI2, so it has no business being reachable in a shipped image. See
 [Testing-Guide](Testing-Guide.md#release-builds-contain-no-test-code) — note in
 particular that `REQUIRES` must **not** be gated this way.
 
+### Drawing a UI, in the shell or in an app
+
+`main/ui.c` owns the microui integration; `ui_launcher.c` is just one caller.
+An app builds a UI the same way:
+
+```c
+mu_Context *ctx = ui_context();
+
+ui_begin(input);
+if (mu_begin_window_ex(ctx, "Settings", rect, opts)) {
+    if (mu_button(ctx, "Clear")) { ... }
+    mu_end_window(ctx);
+}
+ui_end(UI_NO_BACKGROUND);   /* draw over the app instead of clearing */
+```
+
+That gets the touch handling - which is not obvious, see the comment on
+`feed_input()` - and the repaint logic below, for free.
+
+#### Immediate mode versus dirty bands
+
+These fight, and the fight would have hit apps, not just the launcher.
+Immediate mode rebuilds and repaints the UI every frame, which means clearing
+every frame, which marks every band dirty and forces a full 9.6 ms transfer -
+discarding the saving that partial updates exist to provide.
+
+The resolution: an immediate-mode UI is **rebuilt** every frame but not
+necessarily **changed**. microui's command list is a complete description of
+the output, so two frames that hash the same *are* the same picture.
+
+A retained-mode engine knows what changed because changing it is an explicit
+act - you mutate a node, it marks its canvas dirty. Immediate mode throws that
+signal away by construction, so we recover it from the other end: compare
+output where an engine compares intent. Same destination, opposite direction.
+
+#### One window is one canvas
+
+The canvas split comes free with it. microui already groups commands by root
+container, each with its own rect, so each window is hashed, repainted and
+band-marked on its own. A live readout in one window does not force a static
+toolbar in another to repaint - which is the point of splitting canvases at
+all.
+
+```mermaid
+flowchart TB
+    BUILD["ui_end()"] --> HASH["hash each window's<br/>command range"]
+    HASH --> CMP{"differs from<br/>last paint?"}
+    CMP -->|no| DIRTY{"its bands already<br/>dirty underneath?"}
+    CMP -->|yes| PAINT["repaint this canvas"]
+    DIRTY -->|no| SKIP(("skip<br/><i>no draw, no transfer</i>"))
+    DIRTY -->|yes| PAINT
+    PAINT --> OVER["also repaint any<br/>window above it<br/>that overlaps"]
+```
+
+Two rules that have to be respected:
+
+- **Painter's order.** Windows are drawn back to front, so repainting one means
+  repainting anything above it that overlaps, or the repaint erases what was on
+  top.
+- **`ui_invalidate()`.** If something replaced the screen in a way `ui_end()`
+  cannot detect - returning to the launcher after an app has been running - the
+  UI must be told its pixels are gone. Otherwise it compares an unchanged
+  command list, skips, and leaves the app's last frame on screen.
+
+Measured: an idle launcher went from 66.7 fps to the 1 kHz tick ceiling,
+because it now paints and sends nothing at all. `test/suites/suite_ui.c` covers
+the independence claim directly - it builds two windows, changes one, and
+asserts the other's bands stay clean.
+
 ### What an app may and may not do
 
 | | |
