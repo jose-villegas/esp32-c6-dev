@@ -42,6 +42,13 @@ typedef struct {
     int      w, h;
     rng_t    rng;        /* seeded explicitly, so every run repeats exactly */
     bool     sweep_flip; /* alternates the sweep direction between steps */
+    bool     liquid_flip;/* alternates which way liquids share sideways */
+
+    /* Whether the grid might hold any liquid at all. Conservative: set the
+     * moment a liquid is placed, and only ever cleared by a pass that has
+     * looked everywhere and found none. When it is false the whole cross-flow
+     * pass is skipped, so a screen of sand never pays for water. */
+    bool     may_have_liquid;
 
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
@@ -141,13 +148,37 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  * still visibly creeps. */
 #define SAND_LOAD_CAP 5
 
-/* How far a liquid looks along its own surface for somewhere lower to go.
+/* How far along its own surface a liquid will look for somewhere shallower to
+ * send mass.
  *
- * This is what lets a pool level rather than heaping where it landed: a cell
- * with nothing pressing on it still moves if lower ground is within sight.
- * Larger reaches level faster and cost more, and only liquids that can neither
- * fall nor slide ever pay it. */
-#define SAND_LIQUID_REACH 8
+ * Everything else about a liquid is strictly local, and this deliberately is
+ * not. It has to be: a local rule moves information one cell per step, so
+ * levelling a pool 184 cells wide by neighbour-to-neighbour diffusion alone
+ * takes tens of thousands of steps. Measured, a real-width pool was still six
+ * cells proud after five thousand. That is not a flaw in the rule, it is the
+ * bound on any rule of that shape.
+ *
+ * Real water levels quickly because pressure travels through it far faster
+ * than water does. This is the cheap stand-in for that, and it is why every
+ * falling-sand game has some version of it.
+ *
+ * Flow stops at anything that is not the same liquid, so it cannot reach
+ * through a wall, and a settled pool finds nothing to do and goes to sleep -
+ * which is what keeps the search off the bill.
+ *
+ * KEEP IT SHORT. Mass handed to a cell eight away skips everything in
+ * between, so water disappears from one place and reappears in another - and
+ * since the direction alternates every step, it slops straight back the next.
+ * At thirty-two that read as great waves surging across the screen and pours
+ * flinging themselves sideways before collapsing into specks. Measured on a
+ * real-width pool, the levelling barely suffers for the reduction:
+ *
+ *      sight 4  -> 1.6 cells out of level
+ *      sight 8  -> 0.8
+ *      sight 16 -> 0.5
+ *      sight 32 -> 0.2, and looks wrong while it gets there
+ */
+#define SAND_LIQUID_SIGHT 8
 
 /* How many cells are stacked directly against gravity above the one at (x, y),
  * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.

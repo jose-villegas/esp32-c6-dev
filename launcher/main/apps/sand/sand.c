@@ -38,6 +38,11 @@ static const int ring[8][2] = {
 
 static cell_t random_cell(sand_t *s, material_id_t material)
 {
+    /* A liquid's variant is an amount, not a shade, so a fresh cell is a full
+     * one. Giving it a random level would be pouring random quantities. */
+    if (materials[material].kind == KIND_LIQUID) {
+        return CELL_MAKE(material, MASS_MAX);
+    }
     return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
 }
 
@@ -62,6 +67,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->h          = h;
     rng_seed(&s->rng, seed);
     s->sweep_flip = false;
+    s->liquid_flip = false;
+    s->may_have_liquid = false;
     s->dirty_rows = NULL;
     s->row_state  = NULL;
     s->last_load_dx = 0;
@@ -83,6 +90,15 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
  * That is not a hypothetical: it is what the slope test caught. */
 #define ROW_SETTLED_NEAREST 0x1
 #define ROW_SETTLED_OTHER   0x2
+
+/* Set by the liquid pass on a row it has scanned and found no liquid in, so it
+ * need not walk that row again.
+ *
+ * Safe because it is cleared by ANY change to the row - mark_rows() wipes the
+ * whole byte through wake_span(), and every write to a cell goes through
+ * mark_rows(). So the flag can only ever be stale in the harmless direction:
+ * a row that has just gained liquid has already had it cleared. */
+#define ROW_NO_LIQUID       0x4
 
 /* Something changed across rows y0..y1, so none of them - nor the rows touching
  * them - can still be considered settled under any direction. Clearing the
@@ -174,6 +190,10 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         return;
     }
     s->cells[y * s->w + x] = cell;
+    if (!CELL_IS_EMPTY(cell) &&
+        materials[CELL_MATERIAL(cell)].kind == KIND_LIQUID) {
+        s->may_have_liquid = true;
+    }
     mark_rows(s, y, y);
 }
 
@@ -204,6 +224,9 @@ int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material)
             }
             if (s->cells[y * s->w + x] != SAND_EMPTY) {
                 continue;   /* never overwrite, so the count cannot drift */
+            }
+            if (materials[material].kind == KIND_LIQUID) {
+                s->may_have_liquid = true;
             }
             s->cells[y * s->w + x] = random_cell(s, material);
             mark_rows(s, y, y);
@@ -459,6 +482,28 @@ static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density)
            can_enter(density, row[nx]);
 }
 
+/* Add `amount` of `id` to a cell that is either empty or already that same
+ * material. Mass is only ever moved, never made: every caller subtracts the
+ * same figure from somewhere else in the same breath. */
+static inline void pour_into(cell_t *dst, uint8_t id, int amount)
+{
+    const int had = CELL_IS_EMPTY(*dst) ? 0 : CELL_VARIANT(*dst);
+
+    *dst = CELL_MAKE(id, had + amount);
+}
+
+/* How much of `id` a cell will accept, 0 if it holds something else. */
+static inline int room_in(cell_t c, uint8_t id)
+{
+    if (CELL_IS_EMPTY(c)) {
+        return MASS_MAX;
+    }
+    if (CELL_MATERIAL(c) != id) {
+        return 0;
+    }
+    return MASS_MAX - CELL_VARIANT(c);
+}
+
 /* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
  *
  * A NULL row or an out-of-range column is a wall, so both simply fail. The
@@ -484,6 +529,212 @@ static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
     to_row[nx]  = mover;
     from_row[x] = displaced;
     return true;
+}
+
+/* Liquid cross-flow, as a second sweep with its own direction.
+ *
+ * WHY IT CANNOT LIVE IN THE MAIN LOOP
+ *
+ * Every move in the main sweep is gravity-ward, so sweeping against gravity
+ * guarantees a cell's destination has already been visited and nothing can be
+ * moved twice. Once gravity is tilted that pins the sweep on BOTH axes - and
+ * then, of the two directions across the flow, only the one the sweep has
+ * already passed is ever safe to use.
+ *
+ * Water could therefore cross a slope one way and never back. A tilted pool
+ * did not level at all: it walked into the low corner and set there in steps.
+ * Measured, a 45-degree pool sat at a spread of 525 units and had not improved
+ * three thousand steps later. Tilting the board back releases it, which reads
+ * convincingly like stored momentum and is nothing of the sort - it is the
+ * gravity direction changing, and with it which way water is allowed to move.
+ *
+ * A separate pass has its own order, so it can be swept whichever way suits
+ * the direction it is using, and that direction alternates every step. It only
+ * ever moves liquid across the flow, so it cannot disturb anything the first
+ * pass concluded.
+ */
+static void equalise_liquids(sand_t *s, const int *perp, int sight,
+                             int dx, int dy)
+{
+    bool found_any = false;
+
+    const int px = perp[0];
+    const int py = perp[1];
+    const int w  = s->w;
+    const int h  = s->h;
+
+    /* Which materials are liquid, as a bitmask over the nibble.
+     *
+     * This pass has to look at every cell, and asking materials[id].kind is a
+     * read from a table in flash - a likely cache miss, per cell, per step.
+     * Measured, that alone put a screen of motionless SAND from 17 us to five
+     * and a half milliseconds. Sixteen bits in a register answers the same
+     * question for nothing. */
+    uint16_t is_liquid = 0;
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        if (materials[m].kind == KIND_LIQUID) {
+            is_liquid |= (uint16_t)(1u << m);
+        }
+    }
+
+    /* Swept so that whatever is being given to has already been visited. */
+    const int y_from = (py > 0) ? h - 1 : 0;
+    const int y_to   = (py > 0) ? -1    : h;
+    const int y_step = (py > 0) ? -1    : 1;
+
+    const int x_from = (px > 0) ? w - 1 : 0;
+    const int x_to   = (px > 0) ? -1    : w;
+    const int x_step = (px > 0) ? -1    : 1;
+
+    for (int y = y_from; y != y_to; y += y_step) {
+        /* Known dry, and nothing has touched it since. */
+        if (s->row_state != NULL && (s->row_state[y] & ROW_NO_LIQUID)) {
+            continue;
+        }
+
+        uint8_t *row = s->cells + (size_t)y * (size_t)w;
+        bool any_liquid = false;
+        bool touched = false;
+
+        for (int x = x_from; x != x_to; x += x_step) {
+            const cell_t c = row[x];
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+
+            const uint8_t id = CELL_MATERIAL(c);
+            if (((is_liquid >> id) & 1u) == 0) {
+                continue;
+            }
+            any_liquid = true;
+            found_any  = true;
+
+            const int mass = CELL_VARIANT(c);
+
+            /* Falling water does not spread. If there is somewhere to fall,
+             * it will go there and nothing needs deciding here.
+             *
+             * One comparison, and it is what makes an avalanche affordable:
+             * while a body of water is collapsing almost every cell has room
+             * beneath it, so almost every cell leaves at this line instead of
+             * searching along a surface it does not yet have. */
+            {
+                const int fx = x + dx;
+                const int fy = y + dy;
+                if ((unsigned)fx < (unsigned)w && (unsigned)fy < (unsigned)h) {
+                    const cell_t below = s->cells[(size_t)fy * w + fx];
+                    if (CELL_IS_EMPTY(below) ||
+                        (CELL_MATERIAL(below) == id &&
+                         CELL_VARIANT(below) < MASS_MAX)) {
+                        continue;
+                    }
+                }
+            }
+
+            /* Nothing to give unless the cell right beside it is lower.
+             *
+             * This is what keeps the search off the bill. Inside a body of
+             * water every neighbour holds the same amount, so the overwhelming
+             * majority of cells answer in one comparison instead of walking
+             * thirty-two. Only the cells along an imbalance look further - and
+             * they are the only ones with anywhere to send anything.
+             *
+             * Nothing is lost by it. A flat stretch of water needs no flow;
+             * where it ends, the cells there do the work, and the dip they
+             * leave behind draws the next ones after it. */
+            {
+                const int nx = x + px;
+                const int ny = y + py;
+
+                if ((unsigned)nx >= (unsigned)w ||
+                    (unsigned)ny >= (unsigned)h) {
+                    continue;
+                }
+                const cell_t n = s->cells[(size_t)ny * w + nx];
+                if (!CELL_IS_EMPTY(n)) {
+                    if (CELL_MATERIAL(n) != id ||
+                        CELL_VARIANT(n) >= mass) {
+                        continue;
+                    }
+                }
+            }
+
+            int lowest = mass;
+            int at = 0;
+
+            /* The shallowest place it can reach. Flow stops at anything that
+             * is not this same liquid, so it cannot reach through a wall. */
+            for (int k = 1; k <= sight; k++) {
+                const int sx = x + px * k;
+                const int sy = y + py * k;
+
+                if ((unsigned)sx >= (unsigned)w ||
+                    (unsigned)sy >= (unsigned)h) {
+                    break;
+                }
+                const cell_t o = s->cells[(size_t)sy * w + sx];
+                int there;
+
+                if (CELL_IS_EMPTY(o)) {
+                    there = 0;
+                } else if (CELL_MATERIAL(o) == id) {
+                    there = CELL_VARIANT(o);
+                } else {
+                    break;
+                }
+
+                if (there < lowest) {
+                    lowest = there;
+                    at = k;
+                    if (there == 0) {
+                        break;      /* nothing is lower than dry */
+                    }
+                }
+            }
+
+            /* Half the difference. Handing over everything would only move the
+             * imbalance rather than settle it - the two would trade places for
+             * ever. */
+            const int give = (mass - lowest) / 2;
+            if (at > 0 && give > 0) {
+                const int tx = x + px * at;
+                const int ty = y + py * at;
+
+                pour_into(&s->cells[(size_t)ty * w + tx], id, give);
+                row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give)
+                                           : CELL_EMPTY;
+
+                /* Marking is deferred when the flow stays inside one row,
+                 * which is every orientation where gravity has no sideways
+                 * component - much the commonest case. mark_rows() rewrites
+                 * several bytes of row state, and doing that per transfer
+                 * rather than per row was most of what this pass cost. */
+                if (py == 0) {
+                    touched = true;
+                } else {
+                    mark_rows(s, y, ty);
+                }
+            }
+        }
+
+        if (touched) {
+            mark_rows(s, y, y);
+        }
+
+        /* Nothing liquid in the whole row - say so, and skip it next time.
+         * Written after mark_rows may have cleared the byte, so a row that
+         * received liquid during this very pass is not wrongly marked dry. */
+        if (!any_liquid && s->row_state != NULL) {
+            s->row_state[y] |= ROW_NO_LIQUID;
+        }
+    }
+
+    /* Looked everywhere and found none, so stop looking until some is placed.
+     * Only valid because a full sweep happened - rows skipped by ROW_NO_LIQUID
+     * were themselves proved dry by an earlier sweep. */
+    if (!found_any) {
+        s->may_have_liquid = false;
+    }
 }
 
 void sand_step(sand_t *s, int gx, int gy, int jostle)
@@ -587,20 +838,10 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * be used. A perpendicular move keeps a cell at the same depth, so moving
      * into ground not yet visited would let one drop travel several cells in a
      * single step and empty a basin in one frame. */
-    const int *perp = NULL;
-    {
-        const int *const options[2] = { ring[(i + 2) & 7], ring[(i + 6) & 7] };
-        for (int k = 0; k < 2; k++) {
-            const int px = options[k][0];
-            const int py = options[k][1];
-            const bool swept = (py != 0) ? (py * y_step < 0)
-                                         : (px * x_step < 0);
-            if (swept) {
-                perp = options[k];
-                break;
-            }
-        }
-    }
+    /* Both directions across the flow. The main sweep can safely use neither -
+     * see equalise_liquids(), which is where they are used. */
+    const int *const perp_a = ring[(i + 2) & 7];
+    const int *const perp_b = ring[(i + 6) & 7];
 
     const int w = s->w;
 
@@ -641,6 +882,77 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
             const uint8_t mat_id  = CELL_MATERIAL(grain);
             const uint8_t density = mat->density;
             const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
+
+            /*---------------------------------------------------------------
+             * Liquids: move an AMOUNT between touching cells.
+             *
+             * Nothing here looks further than one cell in any direction, and
+             * that is the whole point. A cell that is either full or empty
+             * cannot split, so a full one beside an empty one has no legal
+             * move and a wide pool sets into a staircase - a real fixed point
+             * of any local rule, which is why the previous version had to go
+             * hunting up to forty-eight cells along the surface for somewhere
+             * lower. Carrying an amount instead, the same pair becomes 15 and
+             * 0, settles to 8 and 7, and the difference spreads outward a
+             * neighbour at a time until the surface is level.
+             *
+             * Two rules, in order: fill the cell below, then share what is
+             * left with the one beside it.
+             *-------------------------------------------------------------*/
+            if (mat->kind == KIND_LIQUID) {
+                int mass = CELL_VARIANT(grain);
+                bool moved = false;
+
+                /* DOWN first, so a liquid falls before it spreads. */
+                const int bx = x + dx;
+                if (prow != NULL && (unsigned)bx < (unsigned)w) {
+                    const int room = room_in(prow[bx], mat_id);
+                    const int give = mass < room ? mass : room;
+                    if (give > 0) {
+                        pour_into(&prow[bx], mat_id, give);
+                        mass -= give;
+                        mark_rows(s, y, y + dy);
+                        moved = true;
+                    }
+                }
+
+                /* Then DOWN THE SLOPE, both ways.
+                 *
+                 * Still only immediate neighbours, and still gravity-ward, so
+                 * they carry the same guarantee the fall does. Leaving these
+                 * out was a real mistake: without them water on a slope can
+                 * only shuffle sideways and then fall, so a mound collapses at
+                 * the speed of diffusion - a dome was still 7 cells proud
+                 * after five thousand steps. Running down the slope directly
+                 * is what makes it settle in a moment instead. */
+                for (int d = 0; d < 2 && mass > 0; d++) {
+                    const int *slide = (d == 0) ? slide_a : slide_b;
+                    uint8_t *srow = dest_row(s, y + slide[1]);
+                    const int sx = x + slide[0];
+
+                    if (srow == NULL || (unsigned)sx >= (unsigned)w) {
+                        continue;
+                    }
+                    const int room = room_in(srow[sx], mat_id);
+                    const int give = mass < room ? mass : room;
+                    if (give > 0) {
+                        pour_into(&srow[sx], mat_id, give);
+                        mass -= give;
+                        mark_rows(s, y, y + slide[1]);
+                        moved = true;
+                    }
+                }
+
+                /* Nothing left means no cell left. Written as CELL_EMPTY
+                 * rather than a zero variant, which would leave the material
+                 * nibble claiming an occupied cell holding nothing. */
+                row[x] = (mass > 0) ? CELL_MAKE(mat_id, mass) : CELL_EMPTY;
+
+                if (moved) {
+                    moved_here = true;
+                }
+                continue;
+            }
 
             /* The common case by a wide margin - on a screen of falling sand
              * almost every grain simply moves the way gravity points. Taking it
@@ -750,96 +1062,6 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
                 continue;
             }
 
-            /* A liquid that can go neither down nor diagonally still has to
-             * find its own level, so it tries straight across.
-             *
-             * ONLY UNDER PRESSURE - something has to be resting on it.
-             *
-             * That is hydrostatic pressure, and leaving it out is what made
-             * settled water behave like slime: a drop lying on a full pool has
-             * nowhere to fall, finds air beside it, and slides sideways every
-             * single step. Since the sweep direction alternates, it slid left,
-             * then right, then left, wandering across the surface for ever
-             * instead of coming to rest.
-             *
-             * With the test, a drop with nothing on top of it has no reason to
-             * move and simply becomes part of the surface, while water with
-             * weight above it still spreads - which is the behaviour that
-             * makes a liquid fill a flat-bottomed container rather than
-             * standing in a column.
-             *
-             * The move is also only ever made AGAINST the sweep, into the
-             * column just visited. A sideways move stays in the same row, so
-             * going the other way would land in a cell not yet processed and
-             * let one drop travel several cells in a single step, draining a
-             * pool sideways in one frame. The sweep alternates, so both
-             * directions remain available, just not at once. */
-            if (mat->kind == KIND_LIQUID && perp != NULL) {
-                const int px = perp[0];
-                const int py = perp[1];
-
-                /* Under pressure it spreads regardless: that is what makes a
-                 * column collapse and run along a flat floor. */
-                bool go = load > 0;
-
-                /* Otherwise it moves only if there is somewhere LOWER within
-                 * reach along the surface.
-                 *
-                 * Both halves are needed. Without the pressure test, a drop
-                 * lying on a full pool slides sideways every step and - since
-                 * the sweep direction alternates - wanders left and right for
-                 * ever instead of coming to rest. Without this scan, water
-                 * poured into a basin heaps up in the corner it landed in and
-                 * never levels, because the cells on top of the heap have
-                 * nothing pressing on them and so never move.
-                 *
-                 * The scan stops at anything solid, so water cannot see past a
-                 * wall, and it only ever moves ONE cell - it is looking for a
-                 * reason to go, not travelling the whole way at once. */
-                /* How far it could travel, and whether there is lower ground
-                 * in that direction.
-                 *
-                 * Anything solid ends the search: water cannot see past a
-                 * wall, and off the grid reads as stone so the edges stop it
-                 * too. */
-                int reach = 0;
-                for (int k = 1; k <= SAND_LIQUID_REACH; k++) {
-                    const int sx = x + px * k;
-                    const int sy = y + py * k;
-
-                    if (!CELL_IS_EMPTY(sand_at(s, sx, sy))) {
-                        break;
-                    }
-                    reach = k;
-                    if (can_enter(density, sand_at(s, sx + dx, sy + dy))) {
-                        go = true;    /* somewhere lower - go all the way */
-                        break;
-                    }
-                }
-
-                /* SEVERAL CELLS AT ONCE, not one.
-                 *
-                 * Spreading a single cell per step is far slower than water
-                 * arrives from a finger, so a mound piles up under the pour and
-                 * only levels long after - which reads as water behaving like a
-                 * powder. Real water disperses fast.
-                 *
-                 * It is safe precisely because the direction is the one the
-                 * sweep has already passed: every cell along the path has been
-                 * processed this step, so nothing can be moved twice however
-                 * far it travels. Going the other way, even one cell, could
-                 * not. */
-                if (go && reach > 0) {
-                    const int tx = x + px * reach;
-                    const int ty = y + py * reach;
-                    uint8_t *across = (py == 0) ? row : dest_row(s, ty);
-
-                    if (move_to(row, across, x, tx, w, grain, density)) {
-                        mark_rows(s, y, ty);
-                        moved_here = true;
-                    }
-                }
-            }
         }
 
         /* Examined, and nothing here could move. Remember that against THIS
@@ -850,4 +1072,12 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
         }
     }
 
+    /* Then let liquids share sideways, in their own pass and alternating which
+     * way each step - so a tilted pool levels both ways instead of walking
+     * into one corner. See equalise_liquids(). */
+    if (s->may_have_liquid) {
+        equalise_liquids(s, s->liquid_flip ? perp_a : perp_b,
+                         SAND_LIQUID_SIGHT, dx, dy);
+        s->liquid_flip = !s->liquid_flip;
+    }
 }

@@ -16,9 +16,17 @@
  *
  * WHAT THE LOW NIBBLE MEANS DEPENDS ON THE MATERIAL
  *
- * For a stable material it is a SHADE, so a pile has texture rather than
- * reading as one flat block of colour. For a transient one - fire, steam - it
- * is instead LIFE REMAINING, counting down to nothing.
+ * For a powder it is a SHADE, so a pile has texture rather than reading as one
+ * flat block of colour. For a LIQUID it is a FILL LEVEL, 1 to 15 - how much
+ * water is in that cell. For a transient material - fire, steam - it will be
+ * LIFE REMAINING, counting down to nothing.
+ *
+ * The fill level is what lets water level itself using nothing but its
+ * immediate neighbours. A cell that is either full or empty cannot split, so a
+ * full cell beside an empty one has no legal move and a wide pool freezes into
+ * a staircase - that is a genuine fixed point of any local rule, not a bug in
+ * one. Give the cell an amount and the same pair becomes 15 and 0, averages to
+ * 8 and 7, and the difference spreads outward one neighbour at a time.
  *
  * That overlap is deliberate. Transient materials are exactly the ones that
  * need per-cell state, and per-cell state is the one thing there is no room
@@ -55,6 +63,11 @@ typedef uint8_t cell_t;
 #define CELL_IS_EMPTY(c)    (((c) & 0xF0) == 0)
 
 #define MATERIAL_VARIANTS   16
+
+/* A liquid cell holds between 1 and 15. Zero is not a very empty cell - it is
+ * no cell at all, and must be written as CELL_EMPTY, or the material nibble
+ * leaves an occupied cell holding nothing. */
+#define MASS_MAX 15
 
 /*---------------------------------------------------------------------------
  * Materials

@@ -28,12 +28,14 @@ const material_t materials[MATERIAL_MAX] = {
         .name    = "Water",
         .kind    = KIND_LIQUID,
         .density = 30,       /* lighter than sand, so sand sinks through it */
-        /* No load ever holds water in place, and it has no angle of repose:
-         * between them, those two numbers are the whole difference between a
-         * liquid and a powder. */
+
+        /* Unused by a liquid: it does not slide, pile or scatter, it flows
+         * between neighbours as an amount. Left at the values that mean "no
+         * resistance", so that anything reading them generically still gets a
+         * sensible answer. */
         .slip    = 255,
         .repose  = 0,
-        .scatter = 24,
+        .scatter = 0,
     },
 
     [MAT_STONE] = {
@@ -96,7 +98,7 @@ const material_t materials[MATERIAL_MAX] = {
 static const gfx_color_t palette[256] = {
     SHADES(0x0A0C14, 0x0A0C14),   /* empty - the background */
     SHADES(0xB07430, 0xF2CE90),   /* sand  */
-    SHADES(0x1B4F8C, 0x4FA3D9),   /* water */
+    SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
     SHADES(0x4A4F5A, 0x767D8C),   /* stone */
     UNUSED, UNUSED, UNUSED, UNUSED,
     UNUSED, UNUSED, UNUSED, UNUSED,
