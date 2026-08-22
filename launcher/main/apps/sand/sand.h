@@ -73,15 +73,49 @@ int sand_count(const sand_t *s);
  * grains. */
 int sand_spawn(sand_t *s, int cx, int cy, int radius);
 
+/* FRICTION
+ *
+ * A grain is held in place by the weight of whatever is stacked on top of it.
+ * Without modelling that, the bottom of a pile slides as freely as the top -
+ * a whole floor of sand skating sideways on the faintest tilt, because nothing
+ * in the rules knows it is buried.
+ *
+ * Real granular friction is subtle (the load on a deep grain does not grow
+ * without limit - the Janssen effect - and the angle of repose depends on grain
+ * shape). None of that is needed here. What is needed is that burial resists
+ * sliding, and that shaking overcomes it.
+ *
+ * So: a grain counts how many grains are stacked directly against gravity above
+ * it, and that count halves its chance of making a SLIDE move. Falling is never
+ * affected - if the cell gravity-ward is empty, the grain falls whatever is on
+ * top of it, which is what "unsupported" means. */
+
+/* Chance in 256 that a grain with exactly one grain above it may still slide.
+ * Halves for each additional grain, so a pile locks up quickly with depth. */
+#define SAND_SLIP_CHANCE 96
+
+/* Beyond this much load a grain cannot slide at all. Without a hard floor the
+ * chance only ever approaches zero, and at 60 steps a second "almost never"
+ * still visibly creeps. */
+#define SAND_LOAD_CAP 5
+
+/* How many grains are stacked directly against gravity above the one at (x, y),
+ * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.
+ *
+ * Exposed because it is the whole of the friction model and is worth pinning
+ * down on its own - in particular that off the grid counts as open sky rather
+ * than as load, which sand_at's solid-walls convention would get backwards. */
+int sand_load_above(const sand_t *s, int x, int y, int dx, int dy);
+
 /* Advance one frame.
  *
- * (gx, gy) is a gravity vector in any units - only its direction matters, and
- * it is quantised to one of eight. A zero vector means free fall, where
- * nothing settles and so nothing moves.
+ * (gx, gy) is a gravity vector in any units - only its direction matters. A
+ * zero vector means free fall, where nothing settles and so nothing moves.
  *
- * `jostle` is 0-255, how hard the device is being shaken. It makes grains
- * prefer sliding sideways over falling straight down, which flattens a pile
- * the way shaking a real one does. */
+ * `jostle` is 0-255, how hard the device is being shaken. It does two things,
+ * both of which real shaking does: it makes grains prefer sliding sideways over
+ * falling straight down, and it overrides friction, fluidising a pile that
+ * would otherwise be locked solid. */
 void sand_step(sand_t *s, int gx, int gy, int jostle);
 
 /* The eight-way quantisation: the NEAREST of the eight directions.

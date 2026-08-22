@@ -204,6 +204,90 @@ static inline uint8_t *dest_row(const sand_t *s, int y)
     return s->cells + (size_t)y * (size_t)s->w;
 }
 
+/* How many grains are stacked directly against gravity above this one, capped.
+ *
+ * Note this does NOT use sand_at(), which reports out-of-bounds as occupied so
+ * that the walls are solid for free. That convention is exactly wrong here: a
+ * grain resting against the ceiling would count as buried and lock up, when in
+ * fact nothing is on top of it at all. Off the grid is open sky. */
+int sand_load_above(const sand_t *s, int x, int y, int dx, int dy)
+{
+    int n  = 0;
+    int cx = x - dx;
+    int cy = y - dy;
+
+    while (n < SAND_LOAD_CAP) {
+        if (cx < 0 || cx >= s->w || cy < 0 || cy >= s->h) {
+            break;
+        }
+        if (s->cells[cy * s->w + cx] == SAND_EMPTY) {
+            break;
+        }
+        n++;
+        cx -= dx;
+        cy -= dy;
+    }
+    return n;
+}
+
+/* Chance in 256 that a loaded grain may still slide sideways.
+ *
+ * A surface grain is free. Each grain above halves the chance, and past the cap
+ * it is nil. Shaking overrides the lot - a shaken pile flows regardless of how
+ * deeply buried its grains are, which is the whole reason shaking a jar of
+ * sand levels it. */
+static int slide_chance(int load, int jostle)
+{
+    if (load == 0) {
+        return 256;
+    }
+
+    const int chance = (load >= SAND_LOAD_CAP)
+                     ? 0
+                     : (SAND_SLIP_CHANCE >> (load - 1));
+
+    return chance > jostle ? chance : jostle;
+}
+
+/* Whether a grain may slide in direction (mx, my) at all, given gravity.
+ *
+ * This is the OTHER half of friction, and the half that burial cannot supply.
+ * A single layer of sand on a floor has nothing on top of it, so load-based
+ * friction leaves it free - and it would still skate sideways on the faintest
+ * tilt, which is exactly the complaint.
+ *
+ * The physical rule is the one for a block on an incline: it stays put until
+ * the slope exceeds the friction angle, tan(theta) > mu. Written in terms of a
+ * candidate move, the move descends by (m . g) and travels across the slope by
+ * |m x g|, so it is only driven if
+ *
+ *     descent > mu * lateral
+ *
+ * At zero tilt that permits a diagonal topple (descent and lateral both one,
+ * and mu is under one) while forbidding a purely sideways shuffle (descent
+ * zero). Sideways only becomes possible once the board is tilted past the
+ * friction angle - which is what makes tilting the device feel like tipping
+ * sand rather than dragging it.
+ *
+ * Depends only on the direction, not the grain, so sand_step works it out once
+ * per step for each of the two slides. */
+static bool driven_by_gravity(int mx, int my, int gx, int gy)
+{
+    const int descent = mx * gx + my * gy;
+    if (descent <= 0) {
+        return false;              /* uphill, or across a level slope */
+    }
+
+    int lateral = mx * gy - my * gx;
+    if (lateral < 0) {
+        lateral = -lateral;
+    }
+
+    /* mu = 0.7, an angle of repose of about 35 degrees - dry sand. Kept as a
+     * ratio so this stays in integers. */
+    return (int64_t)descent * 10 > (int64_t)lateral * 7;
+}
+
 /* How strongly the true angle leans toward the diagonal, as 0-256.
  *
  * `r` is the ratio of the smaller component to the larger, scaled to 0-256, so
@@ -277,6 +361,17 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     int dx, dy;
     sand_gravity_direction_dithered(s, gx, gy, &dx, &dy);
 
+    /* Load is measured against the NEAREST direction, not the dithered one.
+     *
+     * How much weight is on a grain is a property of the pile; it cannot change
+     * because of which way this particular step happened to round. Using the
+     * dithered direction looks up-and-left on the diagonal steps, which reads
+     * empty above a vertical column - so a buried grain was treated as a free
+     * surface grain roughly one step in eight, which is more than enough to
+     * walk the base of a pile sideways. */
+    int load_dx, load_dy;
+    sand_gravity_direction(gx, gy, &load_dx, &load_dy);
+
     if (dx == 0 && dy == 0) {
         return;   /* free fall: no down, so nothing settles */
     }
@@ -284,6 +379,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int i = ring_index(dx, dy);
     const int *slide_a = ring[(i + 7) & 7];
     const int *slide_b = ring[(i + 1) & 7];
+
+    /* Whether each slide is driven at all at this tilt. Depends only on the
+     * direction, so it is decided once here rather than 41,000 times. */
+    const bool slide_a_driven = driven_by_gravity(slide_a[0], slide_a[1], gx, gy);
+    const bool slide_b_driven = driven_by_gravity(slide_b[0], slide_b[1], gx, gy);
 
     /* Sweep AGAINST the direction of travel, on both axes.
      *
@@ -347,12 +447,17 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
             uint8_t *first_row,  *second_row;
             int      first_dx,    second_dx;
             int      first_dy,    second_dy;
+            bool     first_driven, second_driven;
             if (r & 1) {
                 first_row  = arow; first_dx  = slide_a[0]; first_dy  = slide_a[1];
+                first_driven = slide_a_driven;
                 second_row = brow; second_dx = slide_b[0]; second_dy = slide_b[1];
+                second_driven = slide_b_driven;
             } else {
                 first_row  = brow; first_dx  = slide_b[0]; first_dy  = slide_b[1];
+                first_driven = slide_b_driven;
                 second_row = arow; second_dx = slide_a[0]; second_dy = slide_a[1];
+                second_driven = slide_a_driven;
             }
 
             /* Shaking reorders the attempts rather than adding a new move: a
@@ -366,14 +471,26 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
                 mark_rows(s, y, y + dy);
                 continue;
             }
-            if (move_to(row, first_row, x, x + first_dx, w, grain)) {
-                mark_rows(s, y, y + first_dy);
-                continue;
+
+            /* Friction, and only on the slides. The grain could not fall, so
+             * whether it may SHUFFLE depends on what is sitting on it. Reached
+             * only once the gravity-ward move has already failed, so a grain in
+             * open air never pays for this. */
+            const int allowance =
+                slide_chance(sand_load_above(s, x, y, load_dx, load_dy), jostle);
+            if (allowance >= 256 || (int)((r >> 16) & 0xFF) < allowance) {
+                if (first_driven &&
+                    move_to(row, first_row, x, x + first_dx, w, grain)) {
+                    mark_rows(s, y, y + first_dy);
+                    continue;
+                }
+                if (second_driven &&
+                    move_to(row, second_row, x, x + second_dx, w, grain)) {
+                    mark_rows(s, y, y + second_dy);
+                    continue;
+                }
             }
-            if (move_to(row, second_row, x, x + second_dx, w, grain)) {
-                mark_rows(s, y, y + second_dy);
-                continue;
-            }
+
             if (shaken && move_to(row, prow, x, x + dx, w, grain)) {
                 mark_rows(s, y, y + dy);
             }

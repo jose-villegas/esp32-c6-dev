@@ -626,6 +626,54 @@ Two things NOT worth doing, measured or reasoned:
   for hot functions, and the C6 runs code from a 32 KB read-only flash cache so
   it would help something - but not the part of the frame that actually costs.
 
+### Falling sand needs two kinds of friction, not one
+
+The symptom was a floor of sand skating sideways on the faintest tilt. The
+cause was that nothing in the rules distinguished "this grain is being poured"
+from "this grain is being dragged".
+
+**The angle of repose** is the one that fixes the reported behaviour. A grain
+on a slope stays put until the slope exceeds the friction angle - the block on
+an incline, `tan(theta) > mu`. Restated for a candidate move, which descends by
+`m . g` and travels across the slope by `|m x g|`, it may only move when
+
+    descent > mu * lateral
+
+with `mu = 0.7`, about 35 degrees, which is dry sand. At zero tilt that permits
+a diagonal topple while forbidding a purely sideways shuffle, and sideways only
+becomes possible once the board is genuinely tipped. That is the difference
+between sand tipping and sand being dragged.
+
+It costs nothing: the test depends only on the direction, so it is evaluated
+twice per step rather than per grain.
+
+**Burial** is the second, and is what makes a deep bed behave differently from
+a thin one. A grain counts how many grains are stacked against gravity above
+it, and each one halves its chance of sliding; past five it cannot slide at
+all. Falling is never affected - an unsupported grain drops whatever is on top
+of it, which is what unsupported means.
+
+Measured, pouring a bed down a slope well past the friction angle:
+
+| Bed depth | Base ends at (with burial) | (without) |
+|---|---|---|
+| 4 rows | x = 3.0 | x = 8.1 |
+| 1 row | x = 10.0 | x = 10.0 |
+
+Burial moves the deep bed a long way and the thin bed not at all, which is
+exactly the distinction it exists to draw.
+
+One subtlety worth keeping. Load must be measured against the NEAREST gravity
+direction, not the dithered one. The dithered direction looks up-and-left on
+its diagonal steps, which reads empty above a vertical column - so a buried
+grain was treated as a free surface grain about one step in eight, which is
+more than enough to walk the base of a pile sideways. How much weight rests on
+a grain is a property of the pile, not of how a particular frame rounded.
+
+Deliberately not modelled: drag. Grains move one cell per step with no
+acceleration, which would need per-grain velocity and therefore per-grain
+memory, and at 60 simulation steps a second the difference is not visible.
+
 ### The build was on -Og until it was measured
 
 ESP-IDF defaults `CONFIG_COMPILER_OPTIMIZATION` to **Debug (-Og)**, and this

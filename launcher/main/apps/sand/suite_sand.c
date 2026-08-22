@@ -417,6 +417,287 @@ static void test_tracking_starts_by_assuming_everything_changed(void)
     }
 }
 
+/* --- friction ------------------------------------------------------------ */
+
+/* The behaviour these exist for: a floor of sand that skated sideways on the
+ * faintest tilt, because nothing in the rules knew the bottom layer was
+ * carrying everything above it. */
+
+static void test_load_counts_the_grains_stacked_above(void)
+{
+    fixture();
+    for (int y = 3; y < H; y++) {
+        sand_set(&s, 2, y, SAND_FIRST_SHADE);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(4, sand_load_above(&s, 2, H - 1, 0, 1),
+        "the bottom of a five-grain column carries the other four");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_load_above(&s, 2, 3, 0, 1),
+        "the top of it carries nothing");
+}
+
+static void test_load_stops_at_a_gap(void)
+{
+    fixture();
+    sand_set(&s, 2, 7, SAND_FIRST_SHADE);
+    sand_set(&s, 2, 6, SAND_FIRST_SHADE);
+    /* row 5 left empty */
+    sand_set(&s, 2, 4, SAND_FIRST_SHADE);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_load_above(&s, 2, 7, 0, 1),
+        "weight is carried through contact - a grain across a gap rests on "
+        "something else, not on this one");
+}
+
+static void test_open_sky_is_not_load(void)
+{
+    fixture();
+    sand_set(&s, 2, 0, SAND_FIRST_SHADE);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_load_above(&s, 2, 0, 0, 1),
+        "a grain against the top edge carries nothing - off the grid is open "
+        "sky, even though sand_at reports it as solid so the walls work");
+}
+
+static void test_load_is_measured_against_gravity(void)
+{
+    fixture();
+    for (int x = 0; x < 4; x++) {
+        sand_set(&s, x, 3, SAND_FIRST_SHADE);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(3, sand_load_above(&s, 3, 3, 1, 0),
+        "with gravity to the right, the grains to the LEFT are the ones "
+        "bearing down");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_load_above(&s, 3, 3, 0, 1),
+        "and none of them are above it");
+}
+
+static void test_a_buried_grain_will_not_slide(void)
+{
+    /* One step at a time from a fresh grid, so the grain under test is always
+     * fully buried when it is considered - the sweep reaches the bottom row
+     * first, before anything above it has had a chance to erode.
+     *
+     * Repeated rather than run once because the decision is probabilistic:
+     * a single pass could pass by luck. */
+    static const char *bed[] = {
+        "........",
+        "........",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+    };
+
+    for (int trial = 0; trial < 200; trial++) {
+        /* A DIFFERENT seed each trial. The dithered direction only lands on
+         * the diagonal - the case that used to let the base walk sideways -
+         * some steps, so 200 identically-seeded trials would all replay the
+         * same one and prove nothing. */
+        sand_init(&s, cells, W, H, 7000u + (uint32_t)trial);
+        load(bed, 8);
+        sand_step(&s, 300, 1000, 0);
+
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 2, 7),
+            "the bottom of a loaded column must stay put - it is holding the "
+            "rest of the column up, and a floor that slides on the faintest "
+            "tilt is what a frictionless model looks like");
+    }
+}
+
+static void test_a_surface_grain_still_slides(void)
+{
+    fixture();
+    /* Same column, but this looks at the TOP grain, which carries nothing.
+     * Friction must not turn the pile into a solid block. */
+    static const char *before[] = {
+        "........",
+        "........",
+        "........",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+    };
+    load(before, 8);
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 300, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 2, 3),
+        "an unloaded grain on top of a column must still topple off, or a "
+        "pile can never reach its angle of repose");
+}
+
+static void test_friction_never_stops_a_grain_falling(void)
+{
+    fixture();
+    /* Buried under four grains, but with nothing underneath. Whatever is on
+     * top of it, an unsupported grain falls - that is what unsupported means. */
+    for (int y = 0; y < 5; y++) {
+        sand_set(&s, 3, y, SAND_FIRST_SHADE);
+    }
+
+    sand_step(&s, 0, 1, 0);
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 5),
+        "friction applies to sliding, never to falling");
+}
+
+static void test_shaking_overcomes_friction(void)
+{
+    fixture();
+    static const char *before[] = {
+        "........",
+        "........",
+        "........",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+        "..o.....",
+    };
+    load(before, 8);
+    const int before_count = sand_count(&s);
+
+    /* Shaken hard, the same column that stays put above must spread. Shaking a
+     * jar of sand levels it; that is friction being overcome, not absent. */
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1, 255);
+    }
+
+    int bottom_row = 0;
+    for (int x = 0; x < W; x++) {
+        if (sand_at(&s, x, H - 1) != SAND_EMPTY) {
+            bottom_row++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, bottom_row,
+        "shaking must fluidise the pile and spread it along the floor");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before_count, sand_count(&s),
+        "and must still conserve grains");
+}
+
+/* Where the sand is, left to right, summed - a single number that moves if the
+ * bed migrates even by one grain. */
+static long centre_of_mass_x(void)
+{
+    long total = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (sand_at(&s, x, y) != SAND_EMPTY) {
+                total += x;
+            }
+        }
+    }
+    return total;
+}
+
+static void test_a_flat_bed_does_not_slide_on_a_slight_tilt(void)
+{
+    /* THE reported behaviour: a floor of sand skating sideways on gyro input.
+     *
+     * Deliberately ONE grain deep, so there is no load anywhere and burial
+     * cannot be what holds it. Only the angle of repose can - a bed on a floor
+     * tilted well below the friction angle must not move at all.
+     *
+     * Room on both sides to slide into, so staying put is a real result. */
+    for (int trial = 0; trial < 20; trial++) {
+        sand_init(&s, cells, W, H, 31u + (uint32_t)trial);
+        for (int x = 2; x < 6; x++) {
+            sand_set(&s, x, H - 1, SAND_FIRST_SHADE);
+        }
+        const long before = centre_of_mass_x();
+
+        /* About 14 degrees - a tilt you would not expect to pour sand. */
+        for (int i = 0; i < 200; i++) {
+            sand_step(&s, 250, 1000, 0);
+        }
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE((int)before, (int)centre_of_mass_x(),
+            "a flat bed must not migrate at a tilt below the angle of repose "
+            "- sand tips, it does not get dragged");
+    }
+}
+
+/* A bigger grid, because depth is the whole variable here and eight rows is
+ * not enough to have a deep bed and somewhere for it to go. */
+#define BIG_W 16
+#define BIG_H 12
+static uint8_t big_cells[BIG_W * BIG_H];
+static sand_t  big;
+
+/* Pours a bed `rows` deep down a steep tilt and reports how far its trailing
+ * edge ends up. */
+static int settled_base_x(int rows, uint32_t seed)
+{
+    sand_init(&big, big_cells, BIG_W, BIG_H, seed);
+    for (int y = BIG_H - rows; y < BIG_H; y++) {
+        for (int x = 2; x < 8; x++) {
+            sand_set(&big, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    for (int i = 0; i < 120; i++) {
+        sand_step(&big, 1200, 1000, 0);   /* well past the angle of repose */
+    }
+    for (int x = 0; x < BIG_W; x++) {
+        if (sand_at(&big, x, BIG_H - 1) != SAND_EMPTY) {
+            return x;
+        }
+    }
+    return BIG_W;
+}
+
+static void test_a_deep_bed_is_harder_to_move_than_a_thin_one(void)
+{
+    /* Burial, as distinct from the angle of repose. Past the friction angle
+     * both beds pour - but the deep one is carrying its own weight, so its
+     * base should be left behind while the thin one slides away entirely.
+     *
+     * Averaged over several seeds: the decision is probabilistic, and a single
+     * run of either could land anywhere. */
+    const int trials = 12;
+    long deep = 0;
+    long thin = 0;
+
+    for (int t = 0; t < trials; t++) {
+        deep += settled_base_x(4, 101u + (uint32_t)t);
+        thin += settled_base_x(1, 101u + (uint32_t)t);
+    }
+
+    const int deep_base = (int)(deep / trials);
+    const int thin_base = (int)(thin / trials);
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(4, thin_base - deep_base,
+        "a bed four deep must leave its base far further back than a bed one "
+        "deep - without load-based friction both slide away together, which "
+        "is the difference between sand and a sheet of it");
+}
+
+static void test_a_steep_tilt_does_pour_the_bed(void)
+{
+    /* The other side of the same rule: past the friction angle it MUST move,
+     * or the sand is glued down rather than resting. About 50 degrees. */
+    fixture();
+    for (int x = 2; x < 6; x++) {
+        sand_set(&s, x, H - 1, SAND_FIRST_SHADE);
+    }
+    const long before = centre_of_mass_x();
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 1200, 1000, 0);
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE((int)before, (int)centre_of_mass_x(),
+        "past the angle of repose the bed must pour downhill");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -720,6 +1001,18 @@ void run_sand_suite(void)
     RUN_TEST(test_a_grain_does_not_fall_through_another);
     RUN_TEST(test_a_grain_slides_off_a_pile);
     RUN_TEST(test_a_grain_in_a_pit_stays_put);
+
+    RUN_TEST(test_load_counts_the_grains_stacked_above);
+    RUN_TEST(test_load_stops_at_a_gap);
+    RUN_TEST(test_open_sky_is_not_load);
+    RUN_TEST(test_load_is_measured_against_gravity);
+    RUN_TEST(test_a_buried_grain_will_not_slide);
+    RUN_TEST(test_a_surface_grain_still_slides);
+    RUN_TEST(test_friction_never_stops_a_grain_falling);
+    RUN_TEST(test_shaking_overcomes_friction);
+    RUN_TEST(test_a_flat_bed_does_not_slide_on_a_slight_tilt);
+    RUN_TEST(test_a_steep_tilt_does_pour_the_bed);
+    RUN_TEST(test_a_deep_bed_is_harder_to_move_than_a_thin_one);
 
     RUN_TEST(test_a_settled_grid_reports_nothing_dirty);
     RUN_TEST(test_a_falling_grain_marks_both_rows_it_touched);
