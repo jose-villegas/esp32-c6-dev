@@ -53,14 +53,23 @@ static const char *TAG = "sand";
  * and wants to feel broad; pouring wants to feel placed. */
 #define ERASE_RADIUS 8
 
-/* What the finger puts down, cycled by the PWR button.
+/* What the finger puts down.
  *
- * A list rather than the material enum itself, because the eraser belongs in
- * the same cycle and is not a material. Stands in until the palette overlay -
- * without some way to choose, water and stone exist but cannot be reached. */
+ * BOOT cycles the material and PWR toggles the eraser, rather than putting the
+ * eraser in the cycle. Two reasons, and both are about which button does what:
+ *
+ *   BOOT is a plain GPIO with no side effects, so it is the safe one to press
+ *   repeatedly. A LONG press on PWR cuts power at the PMU - that is hardware
+ *   and firmware cannot override it - which is a poor property for the control
+ *   used most often.
+ *
+ *   Keeping erase out of the cycle means returning from it lands back on the
+ *   material already chosen, instead of walking through all of them.
+ *
+ * A stand-in until the palette overlay; without some way to choose, water and
+ * stone exist and cannot be reached. */
 static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
-#define BRUSH_ERASE BRUSH_COUNT
 
 /* How long the mode label stays up after the PWR button is pressed. Long
  * enough to read without hurrying, short enough not to sit over the sand. */
@@ -102,7 +111,8 @@ static uint8_t    *sleep_rows;   /* GRID_H bytes: which rows can be skipped */
 static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
-static int         brush;            /* index into brushes, or BRUSH_ERASE */
+static int         brush;            /* index into brushes - BOOT cycles it */
+static bool        erasing;          /* PWR toggles it, independently */
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
 /* Rolling averages, purely for the log line. */
@@ -151,6 +161,7 @@ static void sand_enter(void)
     pour_accumulator_ms = 0;
     steps_total = 0;
     brush = 0;
+    erasing = false;
     label_left_ms = 0;
     failed = false;
 
@@ -280,9 +291,8 @@ static void draw_dirty_rows(void)
 static void draw_mode_label(int gx, int gy)
 {
     /* The material's own name, so the label says what the finger will do
-     * rather than merely that the mode changed. */
-    const char *text = (brush == BRUSH_ERASE) ? "ERASE"
-                                              : materials[brushes[brush]].name;
+     * rather than merely that something changed. */
+    const char *text = erasing ? "ERASE" : materials[brushes[brush]].name;
     const int   len  = (int)strlen(text);
     const int   span = len * 8 * LABEL_SCALE;
     const int   tall = 8 * LABEL_SCALE;
@@ -319,9 +329,8 @@ static void draw_mode_label(int gx, int gy)
      * the label needs no colour table of its own and cannot disagree with what
      * is about to come out of the finger. */
     const gfx_color_t ink =
-        (brush == BRUSH_ERASE)
-            ? gfx_rgb(0xFF8A5C)
-            : material_palette()[CELL_MAKE(brushes[brush], 13)];
+        erasing ? gfx_rgb(0xFF8A5C)
+                : material_palette()[CELL_MAKE(brushes[brush], 13)];
 
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
@@ -367,11 +376,18 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     }
 
     /* --- pour, or erase --- */
-    if (input->power.pressed) {
-        brush = (brush + 1) % (BRUSH_COUNT + 1);
+    if (input->boot.pressed) {
+        brush = (brush + 1) % BRUSH_COUNT;
+        erasing = false;      /* choosing a material means you want to place it */
         label_left_ms = LABEL_MS;
+    }
+    if (input->power.pressed) {
+        erasing = !erasing;
+        label_left_ms = LABEL_MS;
+    }
+    if (input->boot.pressed || input->power.pressed) {
         ESP_LOGI(TAG, "brush: %s",
-                 brush == BRUSH_ERASE ? "erase" : materials[brushes[brush]].name);
+                 erasing ? "erase" : materials[brushes[brush]].name);
     }
 
     /* The grid under the label has to be redrawn every frame the label is up,
@@ -400,7 +416,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         const int cx = input->x / CELL;
         const int cy = input->y / CELL;
         for (int i = 0; i < applications; i++) {
-            if (brush == BRUSH_ERASE) {
+            if (erasing) {
                 sand_erase(&sim, cx, cy, ERASE_RADIUS);
             } else {
                 sand_spawn(&sim, cx, cy, POUR_RADIUS, brushes[brush]);
