@@ -852,6 +852,69 @@ static void test_spawning_onto_existing_grains_does_not_double_count(void)
         "and must not change the grid");
 }
 
+static void test_erase_removes_a_disc(void)
+{
+    fixture();
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    const int removed = sand_erase(&s, 4, 4, 2);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, removed, "an erase must remove grains");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 4),
+        "the centre is inside the disc");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 0, 0),
+        "a corner far outside the radius must be untouched");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W * H - removed, sand_count(&s),
+        "the reported count must match what actually left the grid");
+}
+
+static void test_erasing_empty_space_removes_nothing(void)
+{
+    fixture();
+
+    const int removed = sand_erase(&s, 4, 4, 3);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, removed,
+        "erasing an empty area must report nothing removed, or the count "
+        "drifts the same way a double-counting spawn would");
+}
+
+static void test_erase_is_clipped_to_the_grid(void)
+{
+    fixture();
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    const int removed = sand_erase(&s, 0, 0, 3);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, removed, "the on-grid part must go");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W * H - removed, sand_count(&s),
+        "cells off the grid must not be counted as removed");
+}
+
+static void test_erase_marks_the_rows_it_emptied(void)
+{
+    dirty_fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 4, SAND_FIRST_SHADE);
+    }
+    memset(dirty, 0, sizeof(dirty));
+
+    sand_erase(&s, 4, 4, 1);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[4],
+        "a row a grain was removed from has changed and must be redrawn - "
+        "otherwise the erased sand stays visible on the panel");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, dirty[0], "a distant row has not");
+}
+
 static void test_spawned_grains_use_the_full_range_of_shades(void)
 {
     fixture();
@@ -1031,6 +1094,11 @@ void run_sand_suite(void)
     RUN_TEST(test_spawn_is_clipped_to_the_grid);
     RUN_TEST(test_spawning_onto_existing_grains_does_not_double_count);
     RUN_TEST(test_spawned_grains_use_the_full_range_of_shades);
+
+    RUN_TEST(test_erase_removes_a_disc);
+    RUN_TEST(test_erasing_empty_space_removes_nothing);
+    RUN_TEST(test_erase_is_clipped_to_the_grid);
+    RUN_TEST(test_erase_marks_the_rows_it_emptied);
 
     RUN_TEST(test_nothing_moves_in_free_fall);
     RUN_TEST(test_shaking_spreads_a_pile_sideways);

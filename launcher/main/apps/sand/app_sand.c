@@ -17,6 +17,7 @@
  *===========================================================================*/
 
 #include <stdlib.h>
+#include <string.h>
 
 #include "esp_heap_caps.h"
 #include "esp_log.h"
@@ -37,6 +38,17 @@ static const char *TAG = "sand";
 /* How big a blob each touched frame drops, in cells. Large enough that a tap
  * is clearly a handful of sand rather than a speck. */
 #define POUR_RADIUS 5
+
+/* The eraser is wider than the pour. Removing sand is a corrective action and
+ * wants to feel broad; pouring wants to feel placed. */
+#define ERASE_RADIUS 8
+
+/* How long the mode label stays up after the PWR button is pressed. Long
+ * enough to read without hurrying, short enough not to sit over the sand. */
+#define LABEL_MS 1800
+
+#define LABEL_MARGIN 18
+#define LABEL_SCALE   2
 
 /* Below this the sensor is being held still enough that the reading is noise,
  * and letting noise through makes a settled pile fizz. One count is 1/64 dps,
@@ -66,6 +78,8 @@ static sand_t      sim;
 static tilt_t      tilt;
 static gfx_color_t palette[SAND_LAST_SHADE + 1];
 static bool        failed;
+static bool        erasing;          /* PWR toggles pour and erase */
+static uint32_t    label_left_ms;    /* countdown for the mode label */
 
 /* Rolling averages, purely for the log line. */
 static uint32_t frames;
@@ -125,6 +139,8 @@ static void sand_enter(void)
     rows_redrawn_total = 0;
     sim_accumulator_q8 = 0;
     steps_total = 0;
+    erasing = false;
+    label_left_ms = 0;
     failed = false;
 
     if (dirty_rows == NULL) {
@@ -222,6 +238,55 @@ static void draw_dirty_rows(void)
     rows_redrawn_total += redrawn;
 }
 
+/* Draws the mode label against whichever edge is currently UP.
+ *
+ * Up is the opposite of gravity, so the label follows the device rather than
+ * the screen: turn the board on its side and the label moves to what is now
+ * the top, and turns with it so it still reads the right way up. Anything else
+ * looks like a bug the moment the device is not held upright.
+ *
+ * Snapped to one of four, because the font can only be turned in quarters -
+ * a diagonal tilt picks whichever quarter it is nearest. */
+static void draw_mode_label(int gx, int gy)
+{
+    const char *text = erasing ? "ERASE" : "POUR";
+    const int   len  = (int)strlen(text);
+    const int   span = len * 8 * LABEL_SCALE;
+    const int   tall = 8 * LABEL_SCALE;
+
+    /* Which edge is up. Compare magnitudes rather than an angle: whichever
+     * component of gravity dominates names the axis, and its sign the edge. */
+    const int ax = gx < 0 ? -gx : gx;
+    const int ay = gy < 0 ? -gy : gy;
+
+    int x, y, turn;
+    if (ay >= ax) {
+        if (gy >= 0) {
+            turn = 0;                                  /* down is down */
+            x = (GFX_WIDTH - span) / 2;
+            y = LABEL_MARGIN;
+        } else {
+            turn = 2;                                  /* board upside down */
+            x = (GFX_WIDTH + span) / 2 - 8 * LABEL_SCALE;
+            y = GFX_HEIGHT - LABEL_MARGIN - tall;
+        }
+    } else {
+        if (gx >= 0) {
+            turn = 3;                                  /* down is to the right */
+            x = LABEL_MARGIN;
+            y = (GFX_HEIGHT + span) / 2 - 8 * LABEL_SCALE;
+        } else {
+            turn = 1;                                  /* down is to the left */
+            x = GFX_WIDTH - LABEL_MARGIN - tall;
+            y = (GFX_HEIGHT - span) / 2;
+        }
+    }
+
+    gfx_text_turned(x, y, text,
+                    gfx_rgb(erasing ? 0xFF8A5C : 0x9BE8C0),
+                    LABEL_SCALE, turn);
+}
+
 /*---------------------------------------------------------------------------
  * Frame
  *-------------------------------------------------------------------------*/
@@ -257,9 +322,31 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         jostle = shake > SHAKE_DEADZONE ? shake : 0;
     }
 
-    /* --- pour --- */
+    /* --- pour, or erase --- */
+    if (input->power.pressed) {
+        erasing = !erasing;
+        label_left_ms = LABEL_MS;
+        ESP_LOGI(TAG, "%s mode", erasing ? "erase" : "pour");
+    }
+
+    /* The grid under the label has to be redrawn every frame the label is up,
+     * including the frame it expires - that last redraw is what actually wipes
+     * it off. Marking bands dirty is not enough on its own: the sand only
+     * repaints rows the simulation changed, so without this the label would
+     * leave a hole in the pile. */
+    if (label_left_ms > 0) {
+        label_left_ms = (dt_ms >= label_left_ms) ? 0 : (label_left_ms - dt_ms);
+        memset(dirty_rows, 1, (size_t)GRID_H);
+    }
+
     if (input->down) {
-        sand_spawn(&sim, input->x / CELL, input->y / CELL, POUR_RADIUS);
+        const int cx = input->x / CELL;
+        const int cy = input->y / CELL;
+        if (erasing) {
+            sand_erase(&sim, cx, cy, ERASE_RADIUS);
+        } else {
+            sand_spawn(&sim, cx, cy, POUR_RADIUS);
+        }
     }
 
     /* Log the direction whenever the NEAREST of the eight changes. Quiet when
@@ -304,6 +391,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     const int64_t t1 = esp_timer_get_time();
     draw_dirty_rows();
+
+    /* On top of the sand, so it is never painted over. */
+    if (label_left_ms > 0) {
+        draw_mode_label(gx, gy);
+    }
 
     const int64_t t2 = esp_timer_get_time();
     step_us_total += t1 - t0;

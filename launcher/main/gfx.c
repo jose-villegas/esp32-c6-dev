@@ -413,11 +413,30 @@ void gfx_text(int x, int y, const char *text, gfx_color_t color)
 void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
                      int scale)
 {
+    gfx_text_turned(x, y, text, color, scale, 0);
+}
+
+void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
+                     int scale, int quarter_turns)
+{
     if (scale < 1) {
         scale = 1;
     }
 
-    for (const char *p = text; *p != '\0'; p++, x += 8 * scale) {
+    const int turn = ((quarter_turns % 4) + 4) % 4;
+    const int cell = 8 * scale;
+
+    /* Which way the string advances from one glyph to the next. */
+    static const int advance[4][2] = {
+        {  1,  0 },   /* upright:        left to right */
+        {  0,  1 },   /* quarter turn:   top to bottom */
+        { -1,  0 },   /* upside down:    right to left */
+        {  0, -1 },   /* three quarters: bottom to top */
+    };
+
+    for (const char *p = text; *p != '\0'; p++,
+         x += advance[turn][0] * cell, y += advance[turn][1] * cell) {
+
         const unsigned char ch = (unsigned char)*p;
         if (ch >= 128) {
             continue;   /* font covers ASCII only */
@@ -433,8 +452,20 @@ void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
                 if (!(bits & (1 << col))) {
                     continue;
                 }
+
+                /* Rotate the pixel within its own 8x8 cell. The cell keeps its
+                 * origin at (x, y) whichever way it is turned, so the advance
+                 * above is the only thing that differs between rotations. */
+                int px, py;
+                switch (turn) {
+                case 1:  px = 7 - row; py = col;     break;
+                case 2:  px = 7 - col; py = 7 - row; break;
+                case 3:  px = row;     py = 7 - col; break;
+                default: px = col;     py = row;     break;
+                }
+
                 /* One font pixel becomes a scale x scale square. */
-                gfx_fill_rect(x + col * scale, y + row * scale,
+                gfx_fill_rect(x + px * scale, y + py * scale,
                               scale, scale, color);
             }
         }

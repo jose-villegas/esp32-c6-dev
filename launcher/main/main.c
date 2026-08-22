@@ -19,6 +19,7 @@
 #include "gfx.h"
 #include "post.h"
 #include "post_ui.h"
+#include "buttons.h"
 #include "touch.h"
 #include "ui.h"
 #include "ui_launcher.h"
@@ -164,6 +165,7 @@ void app_main(void)
 #endif
 
     touch_start();
+    buttons_start();
 
     ui_launcher_init();
 
@@ -186,6 +188,7 @@ void app_main(void)
         }
 
         touch_read(&input);
+        buttons_read(&input.boot, &input.power);
 
         if (current == NULL) {
             const int chosen = ui_launcher_frame(&input);

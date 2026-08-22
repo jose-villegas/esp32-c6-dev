@@ -161,6 +161,32 @@ int sand_spawn(sand_t *s, int cx, int cy, int radius)
     return filled;
 }
 
+int sand_erase(sand_t *s, int cx, int cy, int radius)
+{
+    int removed = 0;
+    const int r2 = radius * radius;
+
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy > r2) {
+                continue;
+            }
+            const int x = cx + dx;
+            const int y = cy + dy;
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
+                continue;
+            }
+            if (s->cells[y * s->w + x] == SAND_EMPTY) {
+                continue;   /* already empty, so nothing changed here */
+            }
+            s->cells[y * s->w + x] = SAND_EMPTY;
+            mark_rows(s, y, y);
+            removed++;
+        }
+    }
+    return removed;
+}
+
 /*---------------------------------------------------------------------------
  * Movement
  *-------------------------------------------------------------------------*/

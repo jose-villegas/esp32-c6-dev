@@ -41,6 +41,8 @@ the firmware probes each of these at boot and prints exactly this table — see
 | Flash | — | SPI0/1 | 16 MB, memory-mapped, never contended |
 | PSRAM | — | — | **none** — the constraint behind most decisions here |
 | Wi-Fi 6 / BLE 5 / 802.15.4 | on-die | — | radios present; Thread and Zigbee capable |
+| BOOT button | — | GPIO 9, pull-up | active low, bounces; also the flashing button |
+| PWR button | via AXP2101 | I2C `0x34` | not wired to the SoC at all — see below |
 | Temperature sensor | on-die | — | reads ~31 °C idle |
 
 All the I2C parts share one bus (port 0, SDA 8, SCL 7), so a single probe per
@@ -458,6 +460,44 @@ gravity, so it is what tilting changes and what tells you which way is down.
 The **gyroscope** senses rotation *rate*, which is zero however far the board is
 tilted as long as it is held still - it tells you the board is being shaken or
 spun, nothing about orientation.
+
+### The two buttons are not the same kind of device
+
+Worth separating, because a single "read the button" abstraction over them
+would be a lie.
+
+**BOOT** is a plain GPIO — pin 9, pulled up, shorted to ground when pressed, so
+low means down. It is a *level*, and being a mechanical contact it bounces on
+both make and break: read naively, one press becomes several. `button_fsm.c`
+debounces it (pure, host-tested, 25 ms) into press and release edges.
+
+**PWR is not connected to the SoC.** It goes to the AXP2101 power-management
+chip, so there is no pin to read. The PMU debounces in hardware and latches a
+completed *event* in an interrupt-status register, which has to be fetched over
+the shared I2C bus and then cleared. It is an event, not a level — reporting a
+`down` state for it would be fiction.
+
+The registers, from the X-Powers datasheet:
+
+| | |
+|---|---|
+| Enable | `0x41` (INTEN2), bit 3 = power key short press |
+| Status | `0x49` (INTSTS2), same bit |
+| Clear | write a **one** back to the bit |
+
+Two traps in that. Clearing is write-one, not write-zero — the intuitive
+"write 0 to clear" leaves the flag set and the button appears stuck down
+forever. And clearing with `0xFF` would wipe every other latched event
+(charging, battery insertion) that something else may care about, so clear only
+the bit you consumed.
+
+A **long** press is the PMU's own power-off. That is hardware and firmware
+cannot override it.
+
+Both arrive through `input_t` alongside touch, so an app never polls anything
+itself. Polling runs at 50 Hz in its own task, deliberately decoupled from the
+render loop — which now reaches 1000 fps and would hammer the shared I2C bus if
+it read the PMU per frame.
 
 ### Raw sensor readings feel rigid, and it is not the sensor's fault
 

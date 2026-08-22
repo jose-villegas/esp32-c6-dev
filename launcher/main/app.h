@@ -15,6 +15,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "buttons.h"
+
 /* Touch state for the current frame.
  *
  * `pressed` and `released` are edges (true only on the frame the transition
@@ -26,6 +28,12 @@ typedef struct {
     bool released;
     int  x, y;              /* current position, or the last one seen */
     int  press_x, press_y;  /* where the current touch began */
+
+    /* The two physical buttons, delivered the same way touch is so an app
+     * never has to poll anything itself. See buttons.h - PWR is an event from
+     * the power-management chip, so only its `pressed` edge is meaningful. */
+    button_t boot;
+    button_t power;
 } input_t;
 
 typedef struct {

@@ -71,6 +71,18 @@ void gfx_text(int x, int y, const char *text, gfx_color_t color);
 void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
                      int scale);
 
+/* Same, turned in 90-degree steps: 0 is upright, 1 reads top-to-bottom, 2 is
+ * upside down, 3 reads bottom-to-top.
+ *
+ * (x, y) is where the first glyph's cell begins, and the string runs away from
+ * it in whichever direction the rotation implies.
+ *
+ * Exists because "the top of the screen" stops meaning the top edge once the
+ * device is turned - a label placed against the up-edge of a sideways board
+ * reads sideways unless it is turned with it. */
+void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
+                     int scale, int quarter_turns);
+
 /* Text metrics. Kept here so the UI layer and the renderer cannot disagree. */
 int gfx_text_width(const char *text, int len);
 int gfx_text_height(void);

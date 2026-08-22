@@ -4,6 +4,8 @@ set(app_srcs
     "gfx.c"
     "touch.c"
     "touch_fsm.c"
+    "button_fsm.c"
+    "buttons.c"
     "gesture.c"
     "imu.c"
     "post.c"
@@ -77,6 +79,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites.c"
         "../test/suites/suite_touch_fsm.c"
         "../test/suites/suite_gesture.c"
+        "../test/suites/suite_button_fsm.c"
         "../test/suites/suite_gfx.c"
         "../test/suites/suite_ui.c"
         ${app_suites}

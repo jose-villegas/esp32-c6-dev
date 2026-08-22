@@ -73,6 +73,12 @@ int sand_count(const sand_t *s);
  * grains. */
 int sand_spawn(sand_t *s, int cx, int cy, int radius);
 
+/* Remove every grain in a disc. Returns how many it removed.
+ *
+ * The exact mirror of sand_spawn, down to reporting a count that only includes
+ * cells it actually changed - so neither can quietly drift the grain total. */
+int sand_erase(sand_t *s, int cx, int cy, int radius);
+
 /* FRICTION
  *
  * A grain is held in place by the weight of whatever is stacked on top of it.

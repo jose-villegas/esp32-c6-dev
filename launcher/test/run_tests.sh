@@ -57,8 +57,10 @@ $TEST_DIR/suites.c
 $TEST_DIR/framework/unity.c
 $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
+$TEST_DIR/suites/suite_button_fsm.c
 $MAIN_DIR/touch_fsm.c
 $MAIN_DIR/gesture.c
+$MAIN_DIR/button_fsm.c
 "
 
 # App-owned sources, discovered rather than listed, so adding or deleting an
