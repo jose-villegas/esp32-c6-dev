@@ -774,6 +774,42 @@ but rotation alone keeps the magnitude at 1 g, so genuine turning stays trusted
 while handling fails the magnitude test. The two cases are separated, so
 responding quickly to real rotation is safe.
 
+### Rotating is not shaking, and the gyroscope cannot tell you which
+
+These want opposite responses - a turn should be followed, a shake should
+fluidise the pile - so telling them apart matters. The obvious sensor is the
+wrong one.
+
+Reading "shaken" off the gyroscope means every deliberate turn of the device
+registers as a hard shake. In the sand app that unlocked friction *and* made
+every grain prefer to slide sideways, so rotating the board threw the sand at
+the walls. Logged while a board was merely being held and tilted, a
+gyro-derived shake level sat between 160 and 255 out of 255 - effectively
+pinned, the whole time.
+
+Shaking means **accelerating** the device back and forth, and that is the
+accelerometer's business. A smooth rotation keeps the magnitude at exactly 1 g
+however fast it turns; shaking swings it far away. So the shake level is
+derived from how far the magnitude departs from 1 g - the same quantity the
+trust gate above already computes, read for its size rather than for which side
+of a boundary it falls on.
+
+The gyroscope keeps its honest job: saying when the board is genuinely turning,
+which is what the filter's time constant responds to. Both sensors are used,
+each for the question it can actually answer.
+
+Two things this cost, worth knowing:
+
+- **A rotation test has to preserve magnitude.** Sweeping `(k, ONE_G - k)` is
+  not a rotation - it shrinks the vector to 0.71 g in the middle and reads as
+  the device being dropped. Built from the 3-4-5 triangle instead, so the
+  components stay exact in integers.
+- **Shake smoothing must not be conditioned on the position filter priming.**
+  A sample violent enough to be shaking is exactly one the trust gate rejects,
+  so the position filter may never prime while the board is being shaken -
+  tying the two together left the shake level unsmoothed and snapping to zero
+  the instant the board was set down.
+
 ### A flat device, and why the simulation needs a throttle
 
 Lying on a table, gravity points into the screen and the in-plane component
@@ -801,8 +837,10 @@ deliberately held stale, so the flow rate has to be zeroed explicitly rather
 than inferred.
 
 Still not modelled: per-grain drag. Grains have no individual velocity, which
-would need per-grain memory. Scaling the whole simulation rate turns out to
-cover what that would have bought.
+would need per-grain memory. Scaling the whole simulation rate covers what it
+would have bought, and the catch-up cap (2 steps per frame) is the speed limit
+- a grain moves one cell per step, so that cap *is* the maximum distance
+anything can travel between two things the eye sees.
 
 ### The build was on -Og until it was measured
 

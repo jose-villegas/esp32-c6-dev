@@ -15,6 +15,34 @@ static int magnitude_2d(int x, int y)
     return hi + (lo * 2) / 5;
 }
 
+/* Integer square root, by binary search over the bits. Needed because shaking
+ * is measured as a DISTANCE from one g, and a distance cannot be compared in
+ * squared space - unlike the trust gate, which only asks which side of a
+ * boundary a value falls. Runs once per frame. */
+static int32_t isqrt64(int64_t v)
+{
+    if (v <= 0) {
+        return 0;
+    }
+
+    int64_t root = 0;
+    int64_t bit  = 1ll << 46;      /* highest power of four below the range */
+
+    while (bit > v) {
+        bit >>= 2;
+    }
+    while (bit != 0) {
+        if (v >= root + bit) {
+            v    -= root + bit;
+            root  = (root >> 1) + bit;
+        } else {
+            root >>= 1;
+        }
+        bit >>= 2;
+    }
+    return (int32_t)root;
+}
+
 /* Compared as squares, so no root is needed and the percentages stay exact.
  * int64 because three squared sensor readings overflow 32 bits, and this runs
  * once per frame where the width costs nothing. */
@@ -40,6 +68,7 @@ void tilt_reset(tilt_t *t, int counts_per_g)
 {
     t->gx_q8        = 0;
     t->gy_q8        = 0;
+    t->shake_q8     = 0;
     t->counts_per_g = counts_per_g > 0 ? counts_per_g : 1;
     t->primed       = false;
     t->free_fall    = false;
@@ -63,8 +92,52 @@ static int32_t approach(int32_t current_q8, int target, int tau_ms, uint32_t dt_
     return current_q8 + (int32_t)(delta / (int64_t)(tau_ms + (int)dt_ms));
 }
 
-void tilt_update(tilt_t *t, int gx, int gy, int gz, int shake, uint32_t dt_ms)
+/* How far this sample departs from rest, as 0-255.
+ *
+ * At rest the magnitude is exactly one g whatever the orientation, so anything
+ * left over is the device being moved rather than turned. That is what shaking
+ * is, and it is why the gyroscope is the wrong instrument for it: a smooth
+ * rotation keeps the magnitude at one g and reads as nothing. */
+static int shake_from_sample(const tilt_t *t, int gx, int gy, int gz)
 {
+    const int64_t mag2 = (int64_t)gx * gx + (int64_t)gy * gy + (int64_t)gz * gz;
+    const int32_t mag  = isqrt64(mag2);
+
+    int32_t departure = mag - t->counts_per_g;
+    if (departure < 0) {
+        departure = -departure;
+    }
+
+    const int32_t full = (t->counts_per_g * TILT_SHAKE_FULL_PCT) / 100;
+    const int32_t level = (int32_t)(((int64_t)departure * 255) / full);
+
+    return level > 255 ? 255 : (int)level;
+}
+
+void tilt_update(tilt_t *t, int gx, int gy, int gz, int rotation,
+                 uint32_t dt_ms)
+{
+    /* Worked out before anything else returns early. A sample rejected by the
+     * trust gate below is precisely a sample where the device is being thrown
+     * around, which is exactly the sample that has the most to say about how
+     * hard it is being shaken. */
+    {
+        const int32_t target = (int32_t)shake_from_sample(t, gx, gy, gz) * Q;
+        const uint32_t step  = dt_ms > TILT_MAX_DT_MS ? TILT_MAX_DT_MS : dt_ms;
+
+        /* Deliberately not conditioned on t->primed. A sample violent enough
+         * to be shaking is exactly one the trust gate below rejects, so the
+         * position filter may never prime at all while the board is being
+         * shaken - tying the two together left shake unsmoothed and snapping
+         * to zero the instant the board was set down. */
+        if (step == 0) {
+            /* no time passed, so nothing to integrate */
+        } else {
+            t->shake_q8 += (int32_t)(((int64_t)(target - t->shake_q8) * step) /
+                                     (TILT_SHAKE_TAU_MS + (int)step));
+        }
+    }
+
     /* Free fall first: it is the one case where the right answer is to stop
      * rather than to estimate. Checked before the trust gate, which would
      * otherwise reject it as just another untrustworthy reading. */
@@ -96,10 +169,10 @@ void tilt_update(tilt_t *t, int gx, int gy, int gz, int shake, uint32_t dt_ms)
         dt_ms = TILT_MAX_DT_MS;
     }
 
-    if (shake < 0) {
-        shake = 0;
-    } else if (shake > 255) {
-        shake = 255;
+    if (rotation < 0) {
+        rotation = 0;
+    } else if (rotation > 255) {
+        rotation = 255;
     }
 
     /* Interpolate the time constant itself. Still hands get heavy smoothing, a
@@ -110,7 +183,7 @@ void tilt_update(tilt_t *t, int gx, int gy, int gz, int shake, uint32_t dt_ms)
      * Safe only because the trust gate above has already thrown out the samples
      * where "moving" meant "being shoved" rather than "being turned". */
     const int tau = TILT_TAU_STILL_MS -
-                    ((TILT_TAU_STILL_MS - TILT_TAU_MOVING_MS) * shake) / 255;
+                    ((TILT_TAU_STILL_MS - TILT_TAU_MOVING_MS) * rotation) / 255;
 
     t->gx_q8 = approach(t->gx_q8, gx, tau, dt_ms);
     t->gy_q8 = approach(t->gy_q8, gy, tau, dt_ms);
@@ -131,6 +204,13 @@ int tilt_strength(const tilt_t *t)
     const int scaled = (int)(((int64_t)mag * 256) / t->counts_per_g);
 
     return scaled > 256 ? 256 : scaled;
+}
+
+int tilt_shake(const tilt_t *t)
+{
+    const int level = t->shake_q8 / Q;
+
+    return level < 0 ? 0 : (level > 255 ? 255 : level);
 }
 
 bool tilt_in_free_fall(const tilt_t *t) { return t->free_fall; }

@@ -156,16 +156,16 @@ bool imu_read(imu_sample_t *out)
     return true;
 }
 
-int imu_shake_level(const imu_sample_t *s)
+int imu_rotation_level(const imu_sample_t *s)
 {
     /* Sum of absolute rates rather than a true vector magnitude: it needs no
-     * square root, and for "how hard is this being shaken" the difference is
-     * not perceptible. */
+     * square root, and for "how fast is this turning" the difference is not
+     * perceptible. */
     const int gx = s->gx < 0 ? -s->gx : s->gx;
     const int gy = s->gy < 0 ? -s->gy : s->gy;
     const int gz = s->gz < 0 ? -s->gz : s->gz;
 
-    /* About 300 dps summed across the axes reads as fully shaken - brisk, but
+    /* About 300 dps summed across the axes reads as fully turning - brisk, but
      * reachable with a flick of the wrist. */
     const int total = (gx + gy + gz) / IMU_COUNTS_PER_DPS;
     const int level = total * 255 / 300;

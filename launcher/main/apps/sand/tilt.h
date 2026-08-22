@@ -48,6 +48,24 @@
  *    barely used, because the flow rate approaching zero is what makes it
  *    meaningless in the first place.
  *
+ * 4. ROTATING IS NOT SHAKING.  These want opposite responses - a turn should
+ *    be followed, a shake should fluidise the pile - so telling them apart
+ *    matters, and the obvious sensor is the wrong one.
+ *
+ *    Reading "shaken" off the gyroscope means every deliberate turn of the
+ *    device reads as a hard shake, which unlocks friction and throws the sand
+ *    at the walls. Measured while a board was merely being held and tilted, a
+ *    gyro-derived shake level sat between 160 and 255 out of 255.
+ *
+ *    Shaking means ACCELERATING the device back and forth, and that is the
+ *    accelerometer's business: rotating smoothly keeps the magnitude at 1 g,
+ *    while shaking swings it far away. So tilt_shake() is derived from how far
+ *    the magnitude departs from 1 g - the same quantity the trust gate above
+ *    already computes, read for its size rather than its plausibility.
+ *
+ *    The gyroscope keeps its honest job of saying when the board is genuinely
+ *    turning, which is what the filter's time constant responds to.
+ *
  * Genuine free fall is different from all of the above and is reported
  * separately: there the TOTAL magnitude collapses, nothing is holding the sand
  * up, and it should hang.
@@ -82,11 +100,23 @@
 #define TILT_TRUST_HI_PCT    130
 #define TILT_FREE_FALL_PCT    30
 
+/* How much linear acceleration counts as fully shaken, as a percentage of one
+ * g. Half a g of departure from rest is a brisk shake and not something a hand
+ * produces by accident. */
+#define TILT_SHAKE_FULL_PCT   50
+
+/* Shaking is smoothed too, over about this long, so a shake carries for a
+ * moment rather than flickering off between strokes. */
+#define TILT_SHAKE_TAU_MS    120
+
 typedef struct {
     /* Smoothed in-plane gravity, in input units scaled by 256. The extra bits
      * matter: without them a slow tilt loses its fractional part every frame
      * and the filter creeps in visible steps. */
     int32_t gx_q8, gy_q8;
+
+    /* Smoothed shake level, 0-255 scaled by 256. */
+    int32_t shake_q8;
 
     int     counts_per_g;
     bool    primed;
@@ -103,10 +133,14 @@ void tilt_reset(tilt_t *t, int counts_per_g);
  * screen - needed only for the magnitude, but needed: without it a flat device
  * looks identical to free fall.
  *
- * `shake` is 0-255 from the gyroscope; `dt_ms` is the time since the previous
- * call. The first sample after a reset is adopted exactly, so the sand does not
+ * `rotation` is 0-255 from the GYROSCOPE - how fast the board is turning. It
+ * only sets how quickly the filter tracks; it is deliberately not what shaking
+ * is read from. `dt_ms` is the time since the previous call.
+ *
+ * The first sample after a reset is adopted exactly, so the sand does not
  * visibly swing into place when the app opens. */
-void tilt_update(tilt_t *t, int gx, int gy, int gz, int shake, uint32_t dt_ms);
+void tilt_update(tilt_t *t, int gx, int gy, int gz, int rotation,
+                 uint32_t dt_ms);
 
 /* The direction sand should flow, in input units. */
 int tilt_x(const tilt_t *t);
@@ -119,6 +153,10 @@ int tilt_y(const tilt_t *t);
  * at full speed; laid flat it coasts to a stop instead of freezing mid-frame.
  * Zero in free fall, where nothing is driving anything. */
 int tilt_strength(const tilt_t *t);
+
+/* How hard the device is being shaken, 0-255, from linear acceleration rather
+ * than rotation. Turning the board smoothly reads as nothing at all. */
+int tilt_shake(const tilt_t *t);
 
 /* True when nothing is supporting the device. The caller should stop the
  * simulation: in free fall sand does not settle, it hangs. */

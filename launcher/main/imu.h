@@ -45,9 +45,14 @@ bool imu_ready(void);
 /* Reads all six axes. Returns false on a bus error, leaving `out` untouched. */
 bool imu_read(imu_sample_t *out);
 
-/* How hard the board is being shaken, as 0-255, from the gyroscope's total
- * rotation rate. Saturates, so a violent shake reads 255 rather than wrapping.
+/* How fast the board is TURNING, as 0-255, from the gyroscope's total rotation
+ * rate. Saturates, so a violent spin reads 255 rather than wrapping.
+ *
+ * Named for what it measures, because the obvious misreading is expensive.
+ * This is NOT how hard the board is being shaken: a smooth rotation pins it at
+ * maximum while nothing is being shaken at all. Shaking means accelerating the
+ * device, which is the accelerometer's business - see tilt_shake().
  *
  * Deliberately not a filter or a gesture detector - it is a magnitude, and the
- * caller decides what counts as "hard". */
-int imu_shake_level(const imu_sample_t *s);
+ * caller decides what counts as "fast". */
+int imu_rotation_level(const imu_sample_t *s);

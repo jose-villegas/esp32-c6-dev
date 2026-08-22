@@ -284,8 +284,95 @@ static void test_free_fall_stops_the_flow_even_on_a_stale_estimate(void)
         "sand keeps pouring all the way down");
 }
 
+/* --- rotating is not shaking --------------------------------------------- */
+
+static void test_turning_the_board_does_not_read_as_shaking(void)
+{
+    /* The reported bug. Rotating the device threw the sand at the walls,
+     * because "shaken" was read off the gyroscope - so every deliberate turn
+     * unlocked friction and made every grain prefer to slide sideways.
+     *
+     * A turn keeps the magnitude at one g however fast it is, so the sample
+     * says plainly that nothing is being shaken. The gyro is pinned at maximum
+     * here to make the point. */
+    /* A REAL rotation, which keeps the magnitude at exactly one g. Built from
+     * the 3-4-5 triangle so the components are exact in integers - a naive
+     * sweep like (k, ONE_G - k) is not a rotation at all, it shrinks the vector
+     * to 0.71 g in the middle and would read as being dropped. */
+    static const int unit[][2] = {
+        {    0,  1000 }, {  600,   800 }, {  800,   600 }, { 1000,     0 },
+        {  800,  -600 }, {  600,  -800 }, {    0, -1000 }, { -600,  -800 },
+        { -800,  -600 }, {-1000,     0 }, { -800,   600 }, { -600,   800 },
+    };
+    const int turns = (int)(sizeof(unit) / sizeof(unit[0]));
+
+    fixture();
+    for (int i = 0; i < 48; i++) {
+        const int *u = unit[i % turns];
+        tilt_update(&t, (ONE_G * u[0]) / 1000, (ONE_G * u[1]) / 1000,
+                    0, 255, 14);     /* gyro pinned at maximum throughout */
+    }
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(40, tilt_shake(&t),
+        "turning the board is not shaking it - reading shake off the gyro is "
+        "what threw the sand at the walls every time the device was rotated");
+}
+
+static void test_shaking_registers_as_shaking(void)
+{
+    fixture();
+
+    /* Yanked back and forth: the magnitude swings far from one g, which is
+     * the definition of being accelerated rather than turned. */
+    for (int i = 0; i < 40; i++) {
+        const int extra = (i & 1) ? ONE_G : -ONE_G / 2;
+        tilt_update(&t, extra, ONE_G, 0, 0, 14);
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(120, tilt_shake(&t),
+        "real shaking must still fluidise the pile, or shaking it level stops "
+        "working");
+}
+
+static void test_a_still_board_is_not_shaking(void)
+{
+    fixture();
+    hold(0, ONE_G, 0, 14, 500);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(16, tilt_shake(&t),
+        "a board sitting still must read as completely unshaken, or friction "
+        "is quietly disabled the whole time");
+}
+
+static void test_shaking_fades_rather_than_switching_off(void)
+{
+    fixture();
+    for (int i = 0; i < 30; i++) {
+        tilt_update(&t, (i & 1) ? ONE_G : -ONE_G, ONE_G, 0, 0, 14);
+    }
+    const int during = tilt_shake(&t);
+    TEST_ASSERT_GREATER_THAN(100, during);
+
+    /* Put it down. It must not snap to zero on the first still sample - a
+     * shake should carry for a moment rather than flicker between strokes. */
+    tilt_update(&t, 0, ONE_G, 0, 0, 14);
+    const int just_after = tilt_shake(&t);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(during, just_after, "it must decay");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(during / 2, just_after,
+        "but not collapse in one frame");
+
+    hold(0, ONE_G, 0, 14, 800);
+    TEST_ASSERT_LESS_THAN_MESSAGE(16, tilt_shake(&t), "and settle to nothing");
+}
+
 void run_tilt_suite(void)
 {
+    RUN_TEST(test_turning_the_board_does_not_read_as_shaking);
+    RUN_TEST(test_shaking_registers_as_shaking);
+    RUN_TEST(test_a_still_board_is_not_shaking);
+    RUN_TEST(test_shaking_fades_rather_than_switching_off);
+
     RUN_TEST(test_a_shove_is_not_mistaken_for_gravity);
     RUN_TEST(test_an_honest_reading_is_still_followed);
     RUN_TEST(test_free_fall_is_reported_rather_than_estimated);

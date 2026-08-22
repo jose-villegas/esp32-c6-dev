@@ -50,10 +50,10 @@ static const char *TAG = "sand";
 #define LABEL_MARGIN 18
 #define LABEL_SCALE   2
 
-/* Below this the sensor is being held still enough that the reading is noise,
- * and letting noise through makes a settled pile fizz. One count is 1/64 dps,
- * so this is roughly 8 dps summed across the axes. */
-#define SHAKE_DEADZONE 24
+/* Below this the board is being held still enough that the reading is noise,
+ * and letting noise through means friction is quietly unlocked the whole time
+ * the app is open. */
+#define SHAKE_DEADZONE 40
 
 /* The simulation runs at a FIXED rate, independent of the framerate.
  *
@@ -67,10 +67,15 @@ static const char *TAG = "sand";
 #define SIM_HZ            60
 #define SIM_STEP_MS       (1000 / SIM_HZ)
 
-/* Never run more than this many steps to catch up after a stall. Without a cap,
- * a long frame schedules extra steps, which make the next frame longer still -
- * the classic spiral. Better to let the simulation lose a little time. */
-#define SIM_MAX_CATCHUP   4
+/* Never run more than this many steps to catch up after a stall.
+ *
+ * Two jobs. It stops the classic spiral, where a long frame schedules extra
+ * steps that make the next frame longer still. And it caps how far a grain can
+ * travel between two things the eye sees: a grain moves one cell per step, so
+ * this IS the speed limit, and four cells in a frame is enough to read as a
+ * jump rather than as movement. Better to let the simulation lose a little
+ * time than to teleport the sand. */
+#define SIM_MAX_CATCHUP   2
 
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
@@ -316,18 +321,23 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     imu_sample_t sample = { 0 };
     if (imu_ready() && imu_read(&sample)) {
-        const int shake = imu_shake_level(&sample);
+        /* The GYROSCOPE says how fast the board is turning, which is all it is
+         * used for: it sets how quickly the filter tracks a genuine
+         * reorientation. It is deliberately not what shaking is read from -
+         * see tilt.h, and the note on rotating not being shaking. */
+        const int rotation = imu_rotation_level(&sample);
 
         /* Smooth the raw vector before anything looks at it, and hand tilt the
          * through-screen axis too: without it a device lying on a table is
-         * indistinguishable from one in free fall. See tilt.h. */
+         * indistinguishable from one in free fall. */
         tilt_update(&tilt, GRAVITY_SCREEN_X(&sample), GRAVITY_SCREEN_Y(&sample),
-                    sample.az, shake, dt_ms);
+                    sample.az, rotation, dt_ms);
 
         gx   = tilt_x(&tilt);
         gy   = tilt_y(&tilt);
         flow = tilt_strength(&tilt);
 
+        const int shake = tilt_shake(&tilt);
         jostle = shake > SHAKE_DEADZONE ? shake : 0;
     }
 
