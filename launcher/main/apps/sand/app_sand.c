@@ -60,11 +60,6 @@ static const char *TAG = "sand";
  * the classic spiral. Better to let the simulation lose a little time. */
 #define SIM_MAX_CATCHUP   4
 
-/* Gravity is ignored below this fraction of a g, which only happens in free
- * fall or if the sensor drops out. Sand then hangs where it is, which is both
- * correct and a nice thing to discover by throwing the board. */
-#define GRAVITY_DEADZONE (IMU_COUNTS_PER_G / 8)
-
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
 static sand_t      sim;
@@ -77,7 +72,10 @@ static uint32_t frames;
 static int64_t  step_us_total;
 static int64_t  draw_us_total;
 static int64_t  rows_redrawn_total;
-static uint32_t sim_accumulator_ms;
+/* Accumulated simulation time, in milliseconds scaled by 256. Scaled because
+ * the flow rate is a fraction and a whole millisecond is too coarse a unit to
+ * carry it - rounding to whole ms would make a slow flow stutter or stop. */
+static uint32_t sim_accumulator_q8;
 static int64_t  steps_total;
 
 /*---------------------------------------------------------------------------
@@ -125,7 +123,7 @@ static void sand_enter(void)
     step_us_total = 0;
     draw_us_total = 0;
     rows_redrawn_total = 0;
-    sim_accumulator_ms = 0;
+    sim_accumulator_q8 = 0;
     steps_total = 0;
     failed = false;
 
@@ -147,7 +145,7 @@ static void sand_enter(void)
     build_palette();
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
     sand_track_dirty_rows(&sim, dirty_rows);
-    tilt_reset(&tilt);
+    tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {
         /* Not fatal. Without a sensor the gravity vector is a constant, so the
@@ -236,29 +234,25 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         return;
     }
 
-    /* --- where is down? --- */
+    /* --- where is down, and how hard? --- */
     int gx = 0;
     int gy = IMU_COUNTS_PER_G;   /* the no-sensor fallback: straight down */
+    int flow = 256;              /* ... at full speed */
     int jostle = 0;
 
     imu_sample_t sample = { 0 };
     if (imu_ready() && imu_read(&sample)) {
         const int shake = imu_shake_level(&sample);
 
-        /* Smooth the raw vector before anything looks at it. The gyro's shake
-         * level drives how hard: still hands get heavy smoothing, a genuine
-         * tilt gets tracked. See tilt.h. */
+        /* Smooth the raw vector before anything looks at it, and hand tilt the
+         * through-screen axis too: without it a device lying on a table is
+         * indistinguishable from one in free fall. See tilt.h. */
         tilt_update(&tilt, GRAVITY_SCREEN_X(&sample), GRAVITY_SCREEN_Y(&sample),
-                    shake, dt_ms);
+                    sample.az, shake, dt_ms);
 
-        gx = tilt_x(&tilt);
-        gy = tilt_y(&tilt);
-
-        const int magnitude = (gx < 0 ? -gx : gx) + (gy < 0 ? -gy : gy);
-        if (magnitude < GRAVITY_DEADZONE) {
-            gx = 0;
-            gy = 0;      /* free fall - sand_step leaves everything hanging */
-        }
+        gx   = tilt_x(&tilt);
+        gy   = tilt_y(&tilt);
+        flow = tilt_strength(&tilt);
 
         jostle = shake > SHAKE_DEADZONE ? shake : 0;
     }
@@ -283,17 +277,24 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         last_dy = dy;
     }
 
-    /* Fixed-timestep accumulator: however long the frame took, run whole
-     * simulation steps worth SIM_STEP_MS each and carry the remainder. */
+    /* Fixed-timestep accumulator, with the rate scaled by how hard gravity is
+     * pulling in the plane of the screen.
+     *
+     * A grain moves one cell per step whatever gravity is doing, so steps per
+     * second IS the speed of the sand. Scaling them by tilt is what gives the
+     * simulation a throttle instead of an on/off switch: laid flat it coasts to
+     * a stop over a moment rather than freezing between one frame and the next.
+     * It is also the real behaviour, since a grain on a tray tilted by theta is
+     * driven by g*sin(theta). */
     const int64_t t0 = esp_timer_get_time();
 
-    sim_accumulator_ms += dt_ms;
-    int steps = (int)(sim_accumulator_ms / SIM_STEP_MS);
+    sim_accumulator_q8 += dt_ms * (uint32_t)flow;
+    int steps = (int)(sim_accumulator_q8 / (SIM_STEP_MS * 256));
     if (steps > SIM_MAX_CATCHUP) {
         steps = SIM_MAX_CATCHUP;
-        sim_accumulator_ms = 0;      /* give up on the backlog */
+        sim_accumulator_q8 = 0;      /* give up on the backlog */
     } else {
-        sim_accumulator_ms -= (uint32_t)steps * SIM_STEP_MS;
+        sim_accumulator_q8 -= (uint32_t)steps * SIM_STEP_MS * 256;
     }
 
     for (int i = 0; i < steps; i++) {

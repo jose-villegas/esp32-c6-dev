@@ -670,9 +670,53 @@ grain was treated as a free surface grain about one step in eight, which is
 more than enough to walk the base of a pile sideways. How much weight rests on
 a grain is a property of the pile, not of how a particular frame rounded.
 
-Deliberately not modelled: drag. Grains move one cell per step with no
-acceleration, which would need per-grain velocity and therefore per-grain
-memory, and at 60 simulation steps a second the difference is not visible.
+### An accelerometer does not measure gravity
+
+It measures gravity plus whatever else is accelerating the device, and a single
+reading cannot separate them. Pick the board up and the reading is mostly the
+lift - which is what made the sand lurch sideways whenever it was handled.
+
+The usable half-answer: at rest the magnitude is exactly 1 g. A sample whose
+magnitude is far from 1 g is *known* to be contaminated, even though a clean one
+cannot be proven honest. Those are ignored and the previous estimate held. Wide
+bounds (0.7 g to 1.3 g), because rejecting a good sample costs a few
+milliseconds of staleness and accepting a bad one throws sand across the screen.
+
+This is also what makes the gyro-adaptive smoothing sound. Tracking *faster*
+while the board moves would be exactly wrong if "moving" meant "being shoved" -
+but rotation alone keeps the magnitude at 1 g, so genuine turning stays trusted
+while handling fails the magnitude test. The two cases are separated, so
+responding quickly to real rotation is safe.
+
+### A flat device, and why the simulation needs a throttle
+
+Lying on a table, gravity points into the screen and the in-plane component
+really is zero. Sand *should* stop - on a level tray it does - but it stopped
+between one frame and the next, which reads as a crash rather than as settling.
+
+The cause was not the sensor. **A grain moves one cell per step however strong
+gravity is**, so the simulation had exactly two speeds: full and stopped. Sand
+poured at the same rate down a 5-degree slope as a vertical one.
+
+`tilt_strength()` supplies the missing dimension - how much of a g lies in the
+plane, which is sin of the tilt - and the frame loop scales its step rate by it.
+That is the actual physics (a grain on a tray is driven by `g·sin(theta)`), and
+it means tipping the device flat brings the sand smoothly to rest.
+
+It also disposes of an ill-conditioning problem quietly. Near flat, the flow
+direction is the ratio of two noise values and is meaningless - but it is also
+barely used, because the rate approaching zero is precisely what makes it
+meaningless.
+
+Free fall is a separate state, and needs the through-screen axis to detect: a
+device lying flat and a device in free fall have *identical* in-plane readings,
+and only the total magnitude tells them apart. In free fall the estimate is
+deliberately held stale, so the flow rate has to be zeroed explicitly rather
+than inferred.
+
+Still not modelled: per-grain drag. Grains have no individual velocity, which
+would need per-grain memory. Scaling the whole simulation rate turns out to
+cover what that would have bought.
 
 ### The build was on -Og until it was measured
 
