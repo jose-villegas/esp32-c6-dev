@@ -177,6 +177,54 @@ static inline uint8_t *dest_row(const sand_t *s, int y)
     return s->cells + (size_t)y * (size_t)s->w;
 }
 
+/* How strongly the true angle leans toward the diagonal, as 0-256.
+ *
+ * `r` is the ratio of the smaller component to the larger, scaled to 0-256, so
+ * it runs from 0 on an axis to 256 at 45 degrees. What we want is the angle's
+ * position in that range, which is atan(r/256) / 45deg - and that is NOT r
+ * itself: at 22.5 degrees r is 106, not 128.
+ *
+ * The correction is Rajan's approximation, atan(x) ~= x*pi/4 + 0.273*x*(1-x),
+ * rearranged and scaled. 0.3477 * 256 = 89. It lands within a degree across the
+ * whole range, which is far finer than anything visible in falling sand. */
+static int diagonal_weight(int r)
+{
+    return r + ((89 * r * (256 - r)) >> 16);
+}
+
+void sand_gravity_direction_dithered(sand_t *s, int gx, int gy,
+                                     int *dx, int *dy)
+{
+    const int ax = gx < 0 ? -gx : gx;
+    const int ay = gy < 0 ? -gy : gy;
+
+    if (ax == 0 && ay == 0) {
+        *dx = 0;
+        *dy = 0;
+        return;
+    }
+
+    const int sx = gx > 0 ? 1 : (gx < 0 ? -1 : 0);
+    const int sy = gy > 0 ? 1 : (gy < 0 ? -1 : 0);
+
+    const int lo = ax < ay ? ax : ay;
+    const int hi = ax < ay ? ay : ax;
+
+    /* hi is non-zero here, since not both components are zero. */
+    const int r = (int)(((int64_t)lo * 256) / hi);
+
+    if ((int)(next_random(s) & 0xFF) < diagonal_weight(r)) {
+        *dx = sx;              /* the diagonal between the two axes */
+        *dy = sy;
+    } else if (ax > ay) {
+        *dx = sx;              /* the dominant axis */
+        *dy = 0;
+    } else {
+        *dx = 0;
+        *dy = sy;
+    }
+}
+
 /* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
  *
  * A NULL row or an out-of-range column is a wall, so both simply fail. The
@@ -196,8 +244,11 @@ static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
 
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
+    /* Dithered rather than nearest, so a tilt between two of the eight
+     * directions flows at its true angle instead of snapping. Costs one random
+     * number per STEP - not per grain - so it is free at this scale. */
     int dx, dy;
-    sand_gravity_direction(gx, gy, &dx, &dy);
+    sand_gravity_direction_dithered(s, gx, gy, &dx, &dy);
 
     if (dx == 0 && dy == 0) {
         return;   /* free fall: no down, so nothing settles */

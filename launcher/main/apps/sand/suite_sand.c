@@ -113,6 +113,86 @@ static void test_no_gravity_has_no_direction(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, dy, "a zero vector has no direction");
 }
 
+/* --- dithering the direction -------------------------------------------- */
+
+/* Runs `trials` steps at one gravity angle and reports how many of them chose
+ * the diagonal. */
+static int diagonal_share(int gx, int gy, int trials)
+{
+    fixture();
+    int diagonals = 0;
+    for (int i = 0; i < trials; i++) {
+        int dx, dy;
+        sand_gravity_direction_dithered(&s, gx, gy, &dx, &dy);
+        if (dx != 0 && dy != 0) {
+            diagonals++;
+        }
+    }
+    return diagonals;
+}
+
+static void test_an_exactly_aligned_direction_is_never_dithered(void)
+{
+    /* The whole simulation would become non-deterministic if it were. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, diagonal_share(0, 1000, 500),
+        "straight down must always be straight down");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, diagonal_share(1000, 0, 500),
+        "straight right must always be straight right");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(500, diagonal_share(1000, 1000, 500),
+        "an exact 45 degrees must always be the diagonal");
+}
+
+static void test_an_intermediate_angle_uses_both_neighbours(void)
+{
+    /* This is the point of the whole exercise: 22.5 degrees is not down and is
+     * not down-right, so it must be some of each. */
+    const int share = diagonal_share(414, 1000, 1000);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(200, share,
+        "a half-way tilt must use the diagonal a substantial fraction of the "
+        "time, or it has snapped to the nearest of eight");
+    TEST_ASSERT_LESS_THAN_MESSAGE(800, share,
+        "and must still fall straight down a substantial fraction of the time");
+}
+
+static void test_the_average_direction_tracks_the_true_angle(void)
+{
+    /* The dithering is only worth anything if the proportion is right, not
+     * merely non-zero. tan(22.5 deg) = 0.414, so this input is 22.5 degrees off
+     * vertical - exactly half way to the diagonal, so about half the steps. */
+    const int share = diagonal_share(414, 1000, 2000);
+
+    TEST_ASSERT_INT_WITHIN_MESSAGE(160, 1000, share,
+        "22.5 degrees must come out near a 50/50 mix");
+
+    /* And a slight tilt must stay mostly vertical, or the sand leans when the
+     * board looks level. tan(10 deg) = 0.176 -> about 22% diagonal. */
+    const int slight = diagonal_share(176, 1000, 2000);
+    TEST_ASSERT_INT_WITHIN_MESSAGE(160, 440, slight,
+        "a 10 degree tilt must be mostly straight down");
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(slight, share,
+        "a larger tilt must use the diagonal more often than a smaller one");
+}
+
+static void test_dithering_still_conserves_grains(void)
+{
+    fixture();
+    for (int y = 1; y < 4; y++) {
+        for (int x = 1; x < 6; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    const int expected = sand_count(&s);
+
+    /* An awkward angle, so the direction changes from step to step. */
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 300, 1000, 0);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+            "a dithered direction must not break the sweep-order guarantee");
+    }
+}
+
 /* --- falling ------------------------------------------------------------ */
 
 static void test_a_grain_falls_one_cell_per_step(void)
@@ -525,6 +605,11 @@ void run_sand_suite(void)
     RUN_TEST(test_gravity_quantises_to_eight_directions);
     RUN_TEST(test_a_slight_tilt_still_reads_as_straight_down);
     RUN_TEST(test_no_gravity_has_no_direction);
+
+    RUN_TEST(test_an_exactly_aligned_direction_is_never_dithered);
+    RUN_TEST(test_an_intermediate_angle_uses_both_neighbours);
+    RUN_TEST(test_the_average_direction_tracks_the_true_angle);
+    RUN_TEST(test_dithering_still_conserves_grains);
 
     RUN_TEST(test_a_grain_falls_one_cell_per_step);
     RUN_TEST(test_a_grain_rests_on_the_floor);

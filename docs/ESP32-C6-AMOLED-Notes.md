@@ -457,8 +457,48 @@ One more distinction that is easy to get wrong: the **accelerometer** senses
 gravity, so it is what tilting changes and what tells you which way is down.
 The **gyroscope** senses rotation *rate*, which is zero however far the board is
 tilted as long as it is held still - it tells you the board is being shaken or
-spun, nothing about orientation. The sand app uses the accelerometer for
-gravity and the gyroscope for how hard to jostle the pile.
+spun, nothing about orientation.
+
+### Raw sensor readings feel rigid, and it is not the sensor's fault
+
+Feeding raw accelerometer output straight into anything feels bad, in two
+distinct ways that need two distinct fixes. Worth separating, because fixing
+only one leaves it feeling broken in the other.
+
+**Noise and abruptness.** The sensor reports a few hundred counts of jitter on
+a board sitting still, and a real tilt arrives as a step change. The fix is an
+exponential moving average - a lerp toward the reading rather than a jump to it
+(`main/apps/sand/tilt.c`). Two details matter more than the lerp:
+
+- Define it by a **time constant**, not a per-frame fraction. "Move 10% each
+  frame" changes meaning the moment the framerate does, and this project's has
+  already gone 25 -> 43 -> 70 fps.
+- Make it **adaptive using the gyroscope**. Heavy smoothing feels laggy when
+  the board is genuinely moving; light smoothing feels noisy when it is not.
+  The gyro reports rotation rate, which is near zero whenever the board is held
+  still no matter how far it is tilted - so it says exactly when to stop
+  smoothing and start tracking. Here the time constant slides from 260 ms when
+  still to 40 ms when moving.
+
+  This is the honest reason to read the gyro at all: it answers a question the
+  accelerometer structurally cannot.
+
+**Quantisation.** The second cause, and the larger one. Grains move to one of
+eight neighbours, so a single simulation step can never express "17 degrees off
+vertical" - and snapping to the nearest of eight makes a slow tilt arrive in
+45-degree jerks. No amount of filtering helps: the filter output was already
+smooth, and the quantiser threw that away.
+
+The fix is to move the quantisation into **time**, where there is room for it.
+Pick between the two directions bracketing the true angle each step, weighted by
+the angle: at 17 degrees, about 62% of frames fall straight down and 38%
+down-right. At 70 fps the eye integrates that into continuous flow. Exactly
+dithering a colour ramp, applied to a direction, and it costs one random number
+per step rather than per grain.
+
+Getting the weight right needs `atan`, since at 22.5 degrees the component ratio
+is 0.414 rather than 0.5. Rajan's approximation covers it in integers to within
+a degree.
 
 ### Falling sand: what made it fit
 

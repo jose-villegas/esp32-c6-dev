@@ -26,6 +26,7 @@
 #include "../../gfx.h"
 #include "../../imu.h"
 #include "sand.h"
+#include "tilt.h"
 
 static const char *TAG = "sand";
 
@@ -49,6 +50,7 @@ static const char *TAG = "sand";
 
 static uint8_t    *grid;
 static sand_t      sim;
+static tilt_t      tilt;
 static gfx_color_t palette[SAND_LAST_SHADE + 1];
 static bool        failed;
 
@@ -117,6 +119,7 @@ static void sand_enter(void)
 
     build_palette();
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
+    tilt_reset(&tilt);
 
     if (!imu_init()) {
         /* Not fatal. Without a sensor the gravity vector is a constant, so the
@@ -180,8 +183,6 @@ static void draw_grid(void)
 
 static void sand_frame(uint32_t dt_ms, const input_t *input)
 {
-    (void)dt_ms;
-
     if (failed) {
         gfx_clear(gfx_rgb(0x1A0C0C));
         gfx_text(20, GFX_HEIGHT / 2, "no memory for the grid", gfx_rgb(0xFF5C5C));
@@ -195,8 +196,16 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     imu_sample_t sample = { 0 };
     if (imu_ready() && imu_read(&sample)) {
-        gx = GRAVITY_SCREEN_X(&sample);
-        gy = GRAVITY_SCREEN_Y(&sample);
+        const int shake = imu_shake_level(&sample);
+
+        /* Smooth the raw vector before anything looks at it. The gyro's shake
+         * level drives how hard: still hands get heavy smoothing, a genuine
+         * tilt gets tracked. See tilt.h. */
+        tilt_update(&tilt, GRAVITY_SCREEN_X(&sample), GRAVITY_SCREEN_Y(&sample),
+                    shake, dt_ms);
+
+        gx = tilt_x(&tilt);
+        gy = tilt_y(&tilt);
 
         const int magnitude = (gx < 0 ? -gx : gx) + (gy < 0 ? -gy : gy);
         if (magnitude < GRAVITY_DEADZONE) {
@@ -204,7 +213,6 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             gy = 0;      /* free fall - sand_step leaves everything hanging */
         }
 
-        const int shake = imu_shake_level(&sample);
         jostle = shake > SHAKE_DEADZONE ? shake : 0;
     }
 
@@ -213,15 +221,17 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         sand_spawn(&sim, input->x / CELL, input->y / CELL, POUR_RADIUS);
     }
 
-    /* Log the direction whenever it changes. Quiet when the board is still,
-     * and it is what the axis mapping above was verified against: tilt the
-     * board and the logged direction must match the way it is leaning. */
+    /* Log the direction whenever the NEAREST of the eight changes. Quiet when
+     * the board is still, and it is what the axis mapping above was verified
+     * against. The simulation itself uses the dithered direction, which changes
+     * every frame by design and would be useless to log. */
     static int last_dx = 99, last_dy = 99;
     int dx, dy;
     sand_gravity_direction(gx, gy, &dx, &dy);
     if (dx != last_dx || dy != last_dy) {
-        ESP_LOGI(TAG, "down is (%+d,%+d)  accel raw (%+6d,%+6d,%+6d)  shake %d",
-                 dx, dy, sample.ax, sample.ay, sample.az, jostle);
+        ESP_LOGI(TAG, "down is (%+d,%+d)  smoothed (%+6d,%+6d)  "
+                      "raw (%+6d,%+6d)  shake %d",
+                 dx, dy, gx, gy, sample.ax, sample.ay, jostle);
         last_dx = dx;
         last_dy = dy;
     }
