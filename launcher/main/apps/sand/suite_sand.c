@@ -1208,6 +1208,90 @@ static void test_water_can_be_held_by_a_stone_basin(void)
         "a wall");
 }
 
+static void test_a_drop_resting_on_a_pool_comes_to_rest(void)
+{
+    /* The reported behaviour: settled water crept about like slime, a lump
+     * sliding over the surface instead of becoming part of it.
+     *
+     * A drop with nothing on top of it has no weight pressing it anywhere, so
+     * it must simply stop. Without the pressure test it slides sideways every
+     * step - and since the sweep direction alternates, it slid left, right,
+     * left, wandering the surface for ever. */
+    fixture();
+    for (int y = 4; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, WATER);
+        }
+    }
+    sand_set(&s, 3, 3, WATER);       /* one drop, on top, nothing above it */
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* Checked one step at a time, not by comparing two distant snapshots.
+     * The wandering is an OSCILLATION - the sweep direction alternates, so a
+     * loose drop slides left, then right, and lands back where it started
+     * every second step. Comparing step 40 against step 80 sees no difference
+     * at all and passes a bug that is plainly visible on screen. */
+    uint8_t settled[W * H];
+    for (int i = 0; i < 5; i++) {
+        memcpy(settled, cells, sizeof(settled));
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_MEMORY_MESSAGE(settled, cells, sizeof(settled),
+            "water with nothing resting on it must come to a complete stop - "
+            "sliding about on a level surface is what made it look like slime");
+    }
+}
+
+static void test_water_under_weight_still_spreads(void)
+{
+    /* The other half, and the one a careless fix breaks: water DOES have to
+     * spread, or it stands in a column on a flat floor and stops behaving
+     * like a liquid at all. What makes it spread is the weight above it. */
+    fixture();
+    for (int y = 2; y < H; y++) {
+        sand_set(&s, 3, y, WATER);   /* a column standing on the floor */
+    }
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int on_the_floor = 0;
+    for (int x = 0; x < W; x++) {
+        if (CELL_MATERIAL(sand_at(&s, x, H - 1)) == MAT_WATER) {
+            on_the_floor++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, on_the_floor,
+        "a column of water must collapse and run along the floor - the cells "
+        "underneath have the whole column pressing on them");
+}
+
+static void test_water_poured_into_a_basin_reaches_both_ends(void)
+{
+    /* End to end: dropped in one corner, it must find the far side. */
+    fixture();
+    for (int y = H - 3; y < H; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, W - 1, y, STONE);
+    }
+    for (int y = 0; y < 6; y++) {
+        sand_set(&s, 1, y, WATER);
+    }
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&s, W - 2, H - 1)),
+        "water poured in at one end must travel to the other - if it cannot, "
+        "the pressure rule has been made too strict to flow at all");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -1668,6 +1752,9 @@ void run_sand_suite(void)
     RUN_TEST(test_water_finds_its_own_level);
     RUN_TEST(test_a_powder_still_holds_a_heap);
     RUN_TEST(test_water_can_be_held_by_a_stone_basin);
+    RUN_TEST(test_a_drop_resting_on_a_pool_comes_to_rest);
+    RUN_TEST(test_water_under_weight_still_spreads);
+    RUN_TEST(test_water_poured_into_a_basin_reaches_both_ends);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);

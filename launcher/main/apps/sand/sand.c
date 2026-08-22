@@ -699,9 +699,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
              * whether it may SHUFFLE depends on what is sitting on it. Reached
              * only once the gravity-ward move has already failed, so a grain in
              * open air never pays for this. */
-            const int allowance =
-                slide_chance(mat, sand_load_above(s, x, y, load_dx, load_dy),
-                             jostle);
+            const int load = sand_load_above(s, x, y, load_dx, load_dy);
+            const int allowance = slide_chance(mat, load, jostle);
             if (allowance >= 256 || (int)((r >> 16) & 0xFF) < allowance) {
                 if (first_driven &&
                     move_to(row, first_row, x, x + first_dx, w, grain, density)) {
@@ -726,15 +725,63 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
             /* A liquid that can go neither down nor diagonally still has to
              * find its own level, so it tries straight across.
              *
-             * Only ever AGAINST the sweep - into the column just visited. A
-             * sideways move stays in the same row, so moving the other way
-             * would land in a cell not yet processed and let the same drop
-             * travel several cells in one step, draining a pool sideways in a
-             * single frame. The sweep direction alternates between steps, so
-             * both directions are still available, just not at once. */
+             * ONLY UNDER PRESSURE - something has to be resting on it.
+             *
+             * That is hydrostatic pressure, and leaving it out is what made
+             * settled water behave like slime: a drop lying on a full pool has
+             * nowhere to fall, finds air beside it, and slides sideways every
+             * single step. Since the sweep direction alternates, it slid left,
+             * then right, then left, wandering across the surface for ever
+             * instead of coming to rest.
+             *
+             * With the test, a drop with nothing on top of it has no reason to
+             * move and simply becomes part of the surface, while water with
+             * weight above it still spreads - which is the behaviour that
+             * makes a liquid fill a flat-bottomed container rather than
+             * standing in a column.
+             *
+             * The move is also only ever made AGAINST the sweep, into the
+             * column just visited. A sideways move stays in the same row, so
+             * going the other way would land in a cell not yet processed and
+             * let one drop travel several cells in a single step, draining a
+             * pool sideways in one frame. The sweep alternates, so both
+             * directions remain available, just not at once. */
             if (mat->kind == KIND_LIQUID) {
                 const int back = -x_step;
-                if (move_to(row, row, x, x + back, w, grain, density)) {
+
+                /* Under pressure it spreads regardless: that is what makes a
+                 * column collapse and run along a flat floor. */
+                bool go = load > 0;
+
+                /* Otherwise it moves only if there is somewhere LOWER within
+                 * reach along the surface.
+                 *
+                 * Both halves are needed. Without the pressure test, a drop
+                 * lying on a full pool slides sideways every step and - since
+                 * the sweep direction alternates - wanders left and right for
+                 * ever instead of coming to rest. Without this scan, water
+                 * poured into a basin heaps up in the corner it landed in and
+                 * never levels, because the cells on top of the heap have
+                 * nothing pressing on them and so never move.
+                 *
+                 * The scan stops at anything solid, so water cannot see past a
+                 * wall, and it only ever moves ONE cell - it is looking for a
+                 * reason to go, not travelling the whole way at once. */
+                if (!go) {
+                    for (int k = 1; k <= SAND_LIQUID_REACH; k++) {
+                        const int sx = x + back * k;
+                        if ((unsigned)sx >= (unsigned)w ||
+                            !CELL_IS_EMPTY(row[sx])) {
+                            break;
+                        }
+                        if (cell_open(prow, sx + dx, w, density)) {
+                            go = true;
+                            break;
+                        }
+                    }
+                }
+
+                if (go && move_to(row, row, x, x + back, w, grain, density)) {
                     mark_rows(s, y, y);
                     moved_here = true;
                 }

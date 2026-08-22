@@ -141,6 +141,14 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  * still visibly creeps. */
 #define SAND_LOAD_CAP 5
 
+/* How far a liquid looks along its own surface for somewhere lower to go.
+ *
+ * This is what lets a pool level rather than heaping where it landed: a cell
+ * with nothing pressing on it still moves if lower ground is within sight.
+ * Larger reaches level faster and cost more, and only liquids that can neither
+ * fall nor slide ever pay it. */
+#define SAND_LIQUID_REACH 8
+
 /* How many cells are stacked directly against gravity above the one at (x, y),
  * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.
  *
