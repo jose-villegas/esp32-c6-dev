@@ -806,20 +806,27 @@ static void test_sand_poured_onto_a_sleeping_pile_still_falls(void)
 
 static void test_undermining_a_sleeping_pile_collapses_it(void)
 {
-    static const char *column[] = {
+    /* A bed spanning the full width, so the walls hold it and it is genuinely
+     * settled. A bare column is not: its sides are open, so grains slide off
+     * it as it stands there, and what the test found underneath depended on
+     * the exact random sequence rather than on the rule being tested. */
+    static const char *bed[] = {
         "........",
         "........",
-        "...o....",
-        "...o....",
-        "...o....",
-        "...o....",
-        "...o....",
-        "...o....",
+        "........",
+        "........",
+        "........",
+        "oooooooo",
+        "oooooooo",
+        "oooooooo",
     };
-    settle_with_sleeping(column, 8, 100, 0, 1000);
+    settle_with_sleeping(bed, 8, 100, 0, 1000);
 
-    /* Pull the bottom out. Everything above must come down. */
+    /* Pull one grain out from underneath. What was resting on it must come
+     * down, which means the erase has to have woken the rows around it. */
     sand_erase(&s, 3, 7, 0);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 7),
+        "the hole must actually have been made");
 
     for (int i = 0; i < 20; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -860,6 +867,120 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, at_right_wall,
         "changing the gravity direction must wake everything - the pile was "
         "settled for the old direction, not the new one");
+}
+
+/* --- scatter -------------------------------------------------------------- */
+
+/* Measures how wide a falling stream has become, in occupied columns. */
+static int occupied_columns(void)
+{
+    int n = 0;
+    for (int x = 0; x < W; x++) {
+        for (int y = 0; y < H; y++) {
+            if (sand_at(&s, x, y) != SAND_EMPTY) {
+                n++;
+                break;
+            }
+        }
+    }
+    return n;
+}
+
+static void test_falling_is_exact_when_scatter_is_off(void)
+{
+    fixture();
+    sand_set(&s, 3, 0, SAND_FIRST_SHADE);
+
+    sand_step(&s, 0, 1, 0);
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 1),
+        "with scatter off a grain in open air falls exactly one cell per step "
+        "- the randomness is opt-in so that a test can say this and mean it");
+}
+
+static void test_scatter_spreads_a_falling_stream(void)
+{
+    /* The reported problem: a poured blob kept its shape all the way down,
+     * because every grain in open air took the same move on the same step. */
+    int narrow = 0;
+    int spread = 0;
+
+    for (int trial = 0; trial < 8; trial++) {
+        sand_init(&s, cells, W, H, 400u + (uint32_t)trial);
+        sand_set(&s, 3, 0, SAND_FIRST_SHADE);
+        sand_set(&s, 3, 1, SAND_FIRST_SHADE);
+        sand_set(&s, 3, 2, SAND_FIRST_SHADE);
+        for (int i = 0; i < 4; i++) {
+            sand_step(&s, 0, 1, 0);
+        }
+        narrow += occupied_columns();
+
+        sand_init(&s, cells, W, H, 400u + (uint32_t)trial);
+        sand_set_scatter(&s, 128);      /* exaggerated, so the effect is clear */
+        sand_set(&s, 3, 0, SAND_FIRST_SHADE);
+        sand_set(&s, 3, 1, SAND_FIRST_SHADE);
+        sand_set(&s, 3, 2, SAND_FIRST_SHADE);
+        for (int i = 0; i < 4; i++) {
+            sand_step(&s, 0, 1, 0);
+        }
+        spread += occupied_columns();
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(8, narrow,
+        "without scatter the stream stays exactly one column wide");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(narrow, spread,
+        "with scatter it must disperse - that is the whole point");
+}
+
+static void test_scatter_conserves_grains(void)
+{
+    fixture();
+    sand_set_scatter(&s, 128);
+    for (int y = 0; y < 3; y++) {
+        for (int x = 2; x < 6; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    const int expected = sand_count(&s);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1, 0);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+            "scatter only ever chooses between moves that were already legal, "
+            "so it cannot create or lose a grain");
+    }
+}
+
+static void test_a_lagging_grain_is_not_left_asleep(void)
+{
+    /* The dangerous interaction. A scattered grain sometimes declines a move
+     * it could have made - and a row where nothing moved looks exactly like a
+     * settled row. Get this wrong and grains hang in mid-air for ever. */
+    for (int trial = 0; trial < 24; trial++) {
+        sand_init(&s, cells, W, H, 800u + (uint32_t)trial);
+        sand_enable_sleeping(&s, sleep_rows);
+        sand_set_scatter(&s, 200);          /* lags constantly */
+        sand_set(&s, 3, 0, SAND_FIRST_SHADE);
+
+        for (int i = 0; i < 200; i++) {
+            sand_step(&s, 0, 1, 0);
+        }
+
+        /* Scanned across the whole grid, not just the column it started in:
+         * scatter drifts sideways as well as lagging, so where it lands is
+         * not the question. Whether it landed at all is. */
+        int lowest = -1;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (sand_at(&s, x, y) != SAND_EMPTY) {
+                    lowest = y;
+                }
+            }
+        }
+        TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, lowest,
+            "a grain that chose to lag must still reach the floor - if a lag "
+            "lets its row fall asleep, it hangs in the air for ever");
+    }
 }
 
 /* --- conservation ------------------------------------------------------- */
@@ -1294,6 +1415,11 @@ void run_sand_suite(void)
     RUN_TEST(test_every_changed_row_is_reported);
     RUN_TEST(test_spawning_marks_the_rows_it_filled);
     RUN_TEST(test_tracking_starts_by_assuming_everything_changed);
+
+    RUN_TEST(test_falling_is_exact_when_scatter_is_off);
+    RUN_TEST(test_scatter_spreads_a_falling_stream);
+    RUN_TEST(test_scatter_conserves_grains);
+    RUN_TEST(test_a_lagging_grain_is_not_left_asleep);
 
     RUN_TEST(test_sleeping_leaves_nothing_able_to_move);
     RUN_TEST(test_sleeping_leaves_nothing_able_to_move_on_a_slope);

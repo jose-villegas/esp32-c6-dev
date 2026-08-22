@@ -688,6 +688,43 @@ single "settled" flag froze grains on a slope. The state has to be one bit per
 direction. A test that settles the grid with sleeping on and then re-runs it
 with sleeping off, requiring nothing to move, is what caught it.
 
+### Falling sand looked like a falling brick
+
+Every grain in open air took the same move on the same step, so a poured blob
+kept its shape all the way down and landed as a blob. Real sand disperses,
+because no two grains fall at quite the same rate or in quite the same line.
+
+`sand_set_scatter()` gives a falling grain a small chance of doing something
+other than falling straight: either **lagging** a step, which spreads the
+stream vertically, or **drifting** to one side, which spreads it horizontally.
+Neither invents a move that was not already legal, so it cannot push a grain
+through a wall or into another grain.
+
+Two things worth keeping in mind:
+
+- **It is off by default.** Most tests want to say "a grain falls one cell per
+  step" and mean it exactly. The randomness is an aesthetic choice, so the app
+  makes it rather than the simulation assuming it.
+- **A lag must still count as activity.** A grain that *chose* not to move
+  looks identical to a settled grain, so without care the sleeping optimisation
+  puts its row to sleep and strands it in mid-air for ever. Caught by a test
+  that turns scatter up to 200/256 and requires the grain to reach the floor
+  anyway; confirmed to go red when the flag is removed.
+
+### Anything with a rate must be driven by elapsed time
+
+A third instance of the same bug, found by the framerate swinging after partial
+updates landed. Pouring spawned sand once per **frame**, so holding a finger
+down delivered three times as much sand when the screen was quiet as when it
+was busy - and the sand arrived faster than the simulation could move it,
+piling up under the finger. Now on its own fixed-rate accumulator at 60 Hz.
+
+The list of things that have needed this: the tilt filter's smoothing, the
+simulation's step rate, and now the pour rate. The rule is worth stating
+plainly - **if it has a rate, drive it from `dt_ms`, never from frame count** -
+because each time it has been missed the symptom looked like something else
+entirely.
+
 ### Still untapped
 
 - Clear only the previous frame's bounding box rather than all 165k pixels.

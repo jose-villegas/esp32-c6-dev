@@ -39,9 +39,24 @@ static const char *TAG = "sand";
  * is clearly a handful of sand rather than a speck. */
 #define POUR_RADIUS 5
 
+/* Pouring runs at a fixed rate too, for the same reason the simulation does.
+ *
+ * Spawning once per FRAME made the pour rate follow the framerate - and since
+ * partial updates the framerate swings between 60 and over 200 depending on
+ * how much is moving. Holding a finger down delivered three times as much sand
+ * when the screen was quiet, and the sand arrived faster than the simulation
+ * could move it, piling up under the finger. */
+#define POUR_HZ       60
+#define POUR_STEP_MS  (1000 / POUR_HZ)
+
 /* The eraser is wider than the pour. Removing sand is a corrective action and
  * wants to feel broad; pouring wants to feel placed. */
 #define ERASE_RADIUS 8
+
+/* How often a falling grain lags or drifts instead of falling straight, in
+ * 256ths. Enough to break the lockstep and let a stream disperse; low enough
+ * that sand still falls rather than mills about. */
+#define SAND_SCATTER 40
 
 /* How long the mode label stays up after the PWR button is pressed. Long
  * enough to read without hurrying, short enough not to sit over the sand. */
@@ -96,6 +111,7 @@ static int64_t  rows_redrawn_total;
  * the flow rate is a fraction and a whole millisecond is too coarse a unit to
  * carry it - rounding to whole ms would make a slow flow stutter or stop. */
 static uint32_t sim_accumulator_q8;
+static uint32_t pour_accumulator_ms;
 static int64_t  steps_total;
 
 /*---------------------------------------------------------------------------
@@ -144,6 +160,7 @@ static void sand_enter(void)
     draw_us_total = 0;
     rows_redrawn_total = 0;
     sim_accumulator_q8 = 0;
+    pour_accumulator_ms = 0;
     steps_total = 0;
     erasing = false;
     label_left_ms = 0;
@@ -169,6 +186,11 @@ static void sand_enter(void)
 
     build_palette();
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
+    /* Falling sand looks like a rigid block without this: every grain in open
+     * air takes the same move on the same step, so a poured blob keeps its
+     * shape all the way down. See sand_set_scatter(). */
+    sand_set_scatter(&sim, SAND_SCATTER);
+
     sand_track_dirty_rows(&sim, dirty_rows);
 
     /* Without this, a screen full of motionless sand is the most expensive
@@ -359,13 +381,29 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     }
 
     if (input->down) {
+        pour_accumulator_ms += dt_ms;
+
+        /* Capped rather than looped to exhaustion: after a long frame the
+         * backlog is dropped instead of dumping a pile in one go. */
+        int applications = (int)(pour_accumulator_ms / POUR_STEP_MS);
+        if (applications > SIM_MAX_CATCHUP) {
+            applications = SIM_MAX_CATCHUP;
+            pour_accumulator_ms = 0;
+        } else {
+            pour_accumulator_ms -= (uint32_t)applications * POUR_STEP_MS;
+        }
+
         const int cx = input->x / CELL;
         const int cy = input->y / CELL;
-        if (erasing) {
-            sand_erase(&sim, cx, cy, ERASE_RADIUS);
-        } else {
-            sand_spawn(&sim, cx, cy, POUR_RADIUS);
+        for (int i = 0; i < applications; i++) {
+            if (erasing) {
+                sand_erase(&sim, cx, cy, ERASE_RADIUS);
+            } else {
+                sand_spawn(&sim, cx, cy, POUR_RADIUS);
+            }
         }
+    } else {
+        pour_accumulator_ms = 0;
     }
 
     /* Log the direction whenever the NEAREST of the eight changes. Quiet when

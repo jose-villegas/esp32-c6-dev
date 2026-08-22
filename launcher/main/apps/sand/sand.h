@@ -19,6 +19,8 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "rng.h"
+
 /* A cell is one byte: empty, or a grain carrying a shade.
  *
  * The shade travels with the grain rather than being derived from position,
@@ -32,7 +34,7 @@
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
-    uint32_t rng;        /* xorshift32 state - deterministic, so tests repeat */
+    rng_t    rng;        /* seeded explicitly, so every run repeats exactly */
     bool     sweep_flip; /* alternates the sweep direction between steps */
 
     /* Optional, caller-owned, h bytes: which rows changed since it was last
@@ -43,6 +45,8 @@ typedef struct {
      * NULL means look at every row, every step. See sand_enable_sleeping(). */
     uint8_t *row_state;
     int      last_load_dx, last_load_dy;
+
+    int      scatter;   /* see sand_set_scatter() */
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
@@ -135,6 +139,25 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  * down on its own - in particular that off the grid counts as open sky rather
  * than as load, which sand_at's solid-walls convention would get backwards. */
 int sand_load_above(const sand_t *s, int x, int y, int dx, int dy);
+
+/* How often a grain falling through open air does something other than fall
+ * straight down, as a chance in 256. Zero, the default, makes falling exactly
+ * deterministic.
+ *
+ * Without it, a falling stream is a rigid block: every grain in open air takes
+ * the same move on the same step, so a poured blob keeps its shape all the way
+ * down and lands as a blob. Real sand disperses, because no two grains fall at
+ * quite the same rate or in quite the same line.
+ *
+ * A scattered grain either lags a step - which spreads the stream vertically -
+ * or drifts to one side, which spreads it horizontally. Neither invents a move
+ * that was not already legal, so nothing here can push a grain through a wall
+ * or into another grain.
+ *
+ * Off by default because most tests want to say "a grain falls one cell per
+ * step" and mean it. The randomness is an aesthetic choice, so the caller
+ * makes it. */
+void sand_set_scatter(sand_t *s, int chance);
 
 /* Advance one frame.
  *

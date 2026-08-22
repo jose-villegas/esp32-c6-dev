@@ -35,21 +35,9 @@ static const int ring[8][2] = {
 #define AXIS_NUM 29
 #define AXIS_DEN 12
 
-/* xorshift32. Deterministic given a seed, which is what makes a test like
- * "shaking flattens a pile" reproducible rather than flaky. */
-static uint32_t next_random(sand_t *s)
-{
-    uint32_t x = s->rng;
-    x ^= x << 13;
-    x ^= x >> 17;
-    x ^= x << 5;
-    s->rng = x;
-    return x;
-}
-
 static uint8_t random_shade(sand_t *s)
 {
-    return (uint8_t)(SAND_FIRST_SHADE + (next_random(s) % SAND_SHADE_COUNT));
+    return (uint8_t)(SAND_FIRST_SHADE + rng_below(&s->rng, SAND_SHADE_COUNT));
 }
 
 static int ring_index(int dx, int dy)
@@ -71,12 +59,13 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->cells      = cells;
     s->w          = w;
     s->h          = h;
-    s->rng        = seed ? seed : 1u;   /* xorshift is stuck at zero */
+    rng_seed(&s->rng, seed);
     s->sweep_flip = false;
     s->dirty_rows = NULL;
     s->row_state  = NULL;
     s->last_load_dx = 0;
     s->last_load_dy = 0;
+    s->scatter      = 0;
     sand_clear(s);
 }
 
@@ -410,7 +399,7 @@ void sand_gravity_direction_dithered(sand_t *s, int gx, int gy,
     /* hi is non-zero here, since not both components are zero. */
     const int r = (int)(((int64_t)lo * 256) / hi);
 
-    if ((int)(next_random(s) & 0xFF) < diagonal_weight(r)) {
+    if (rng_chance(&s->rng, diagonal_weight(r))) {
         *dx = sx;              /* the diagonal between the two axes */
         *dy = sy;
     } else if (ax > ay) {
@@ -420,6 +409,21 @@ void sand_gravity_direction_dithered(sand_t *s, int gx, int gy,
         *dx = 0;
         *dy = sy;
     }
+}
+
+void sand_set_scatter(sand_t *s, int chance)
+{
+    s->scatter = chance < 0 ? 0 : (chance > 255 ? 255 : chance);
+}
+
+/* Whether a cell exists and is empty, without moving anything into it.
+ *
+ * Needed so scatter can be decided ONLY for grains that could actually fall.
+ * Drawing a random number for every grain regardless would undo the single
+ * biggest saving in this loop - see the note on the common path below. */
+static inline bool cell_free(const uint8_t *row, int nx, int w)
+{
+    return row != NULL && (unsigned)nx < (unsigned)w && row[nx] == SAND_EMPTY;
 }
 
 /* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
@@ -547,17 +551,53 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
              * almost every grain simply moves the way gravity points. Taking it
              * before drawing a random number matters: the generator was the
              * single most expensive thing in this loop, and most grains never
-             * needed it. */
-            if (jostle == 0 && move_to(row, prow, x, x + dx, w, grain)) {
-                mark_rows(s, y, y + dy);
-                moved_here = true;
-                continue;
+             * needed it.
+             *
+             * Scatter only applies to a grain that could fall, and is only
+             * asked about once that is established, so a blocked grain still
+             * costs nothing extra here. */
+            if (jostle == 0) {
+                if (s->scatter != 0 && cell_free(prow, x + dx, w)) {
+                    const uint32_t r = rng_next(&s->rng);
+
+                    if ((int)(r & 0xFF) < s->scatter) {
+                        /* Drift: sideways as well as down, if that way is
+                         * open. Spreads the stream horizontally. */
+                        if ((r & 0x100) == 0) {
+                            const bool pick_a = (r & 0x200) != 0;
+                            uint8_t  *drow = pick_a ? arow : brow;
+                            const int ddx  = pick_a ? slide_a[0] : slide_b[0];
+                            const int ddy  = pick_a ? slide_a[1] : slide_b[1];
+
+                            if (move_to(row, drow, x, x + ddx, w, grain)) {
+                                mark_rows(s, y, y + ddy);
+                                moved_here = true;
+                                continue;
+                            }
+                        }
+
+                        /* Lag: nothing at all this step, so the grains around
+                         * it pull ahead and the stream spreads vertically.
+                         *
+                         * The row is still counted as busy. A grain that CHOSE
+                         * not to move is not a settled grain, and letting the
+                         * row sleep here would strand it in mid-air. */
+                        moved_here = true;
+                        continue;
+                    }
+                }
+
+                if (move_to(row, prow, x, x + dx, w, grain)) {
+                    mark_rows(s, y, y + dy);
+                    moved_here = true;
+                    continue;
+                }
             }
 
             /* Blocked, or being shaken. Now the order of the two slides has to
              * be decided, and without randomising it the sand develops a
              * visible grain with everything leaning the same way. */
-            const uint32_t r = next_random(s);
+            const uint32_t r = rng_next(&s->rng);
 
             uint8_t *first_row,  *second_row;
             int      first_dx,    second_dx;
