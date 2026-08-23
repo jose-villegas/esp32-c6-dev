@@ -266,6 +266,64 @@ within one file is. Confirmed on device rather than assumed: the
 frame-budget tests above are what would have caught it if splitting the
 file had cost anything.
 
+## The sweep and the cross-flow pass, broken down further
+
+134 and 85 are still well over Sonar's *default* line, which is 15, not the
+25 used above - that line only ever applied to the standalone check, not to
+what the project actually holds itself to. Both functions were later broken
+down the same way again, one level deeper: nested per-cell and per-row logic
+pulled into small named functions, until every function in `main/` scored 15
+or under (`sand_step()` itself: 6; `equalise_liquids()`: 13).
+
+The main sweep, per grain:
+
+```mermaid
+flowchart TB
+    STEP["sand_step()"] --> ROW["step_one_row()<br/><i>once per row, gravity-ward order</i>"]
+    ROW --> GRAIN["step_one_grain()<br/><i>once per grain in the row</i>"]
+
+    GRAIN -->|"static or gas"| SKIP(("nothing to do"))
+    GRAIN -->|"liquid"| LIQ["move_liquid_grain()<br/><i>sand_liquid.c</i>"]
+    GRAIN -->|"powder, unblocked"| FALL["try_fall_or_scatter()"]
+    GRAIN -->|"blocked, or shaken"| SLIDE["try_slide()"]
+
+    FALL --> SCATTER["try_scatter()<br/><i>drift sideways, or lag</i>"]
+    FALL -.->|"fall itself blocked"| SLIDE
+
+    SLIDE --> ORDER["pick_slide_order()<br/><i>which side goes first</i>"]
+    SLIDE --> PAIR["try_slide_pair()<br/><i>friction, then either slide</i>"]
+```
+
+The cross-flow pass, per liquid cell:
+
+```mermaid
+flowchart TB
+    LIQSTEP["sand_step_liquids()<br/><i>after the main sweep finishes</i>"] --> EQ["equalise_liquids()"]
+    LIQSTEP --> REB["rebound_wall()<br/><i>x4, one per wall</i>"]
+
+    EQ --> EROW["equalise_one_row()<br/><i>once per row that holds liquid</i>"]
+    EROW --> ECELL["equalise_one_cell()<br/><i>once per liquid cell</i>"]
+
+    ECELL --> ROOM["has_room_below()<br/><i>the common case - falls in the<br/>main sweep instead, nothing to do here</i>"]
+    ECELL --> LOWER["neighbour_is_lower()<br/><i>next commonest - level already</i>"]
+    ECELL --> FIND["find_shallowest()<br/><i>only reached along a real imbalance</i>"]
+
+    REB --> RCELL["rebound_one_cell()<br/><i>once per cell along the wall</i>"]
+    RCELL --> KICK["rebound_kick()"]
+```
+
+**The extraction was not free.** `has_room_below()`,
+`neighbour_is_lower()`, `find_shallowest()`, `equalise_one_cell()` and
+`give_mass()` are all on the per-cell path above, and none of them were
+marked `inline` when they were pulled out - unlike `pour_into()`/`room_in()`,
+the pair already living in that file. A full screen of water went from the
+~15 ms in the table above to 18 ms against its 16 ms budget, caught directly
+by `test_a_screen_of_water_fits_in_the_frame_budget` on device, not
+noticed by eye. Marking those five `inline` restored it. The lesson from
+the file split above held a second time: a call this hot has to be
+confirmed on device, not assumed free because the source now reads as
+several small functions instead of one large one.
+
 ---
 
 ## Related
