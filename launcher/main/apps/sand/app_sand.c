@@ -12,8 +12,13 @@
  * takes 322 KB of the chip's ~424 KB there is nowhere near that left, so a cell
  * is a square block of CELL x CELL pixels. At CELL = 2 the grid is 184 x 224,
  * or 41 KB, which fits comfortably and still looks like grains rather than
- * bricks. CELL must divide both 368 and 448, so the usable values are 2, 4, 8
- * and 16.
+ * bricks.
+ *
+ * CELL need not divide 368 or 448 evenly - GRID_W/GRID_H floor, so a
+ * remainder just leaves an unredrawn margin at most CELL-1 px wide along the
+ * right and bottom edges, not an out-of-bounds write. It does divide evenly
+ * at 2, 4, 8 and 16, which is why those are the values with no margin at
+ * all.
  *===========================================================================*/
 
 #include <stdlib.h>

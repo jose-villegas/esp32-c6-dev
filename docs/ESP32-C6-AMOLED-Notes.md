@@ -730,29 +730,52 @@ entirely.
 Rendering ideas raised and reasoned through, deliberately not built yet -
 kept here so the reasoning survives to whoever picks one up.
 
-- **A 2D dirty bounding box, sent per row instead of per strip.**
-  `esp_lcd_panel_draw_bitmap()` takes one flat buffer per call with no
-  stride parameter, so a full-width band is contiguous in the framebuffer
-  for free but an arbitrary sub-rectangle is not - its rows are separated
-  by whatever the row stride leaves outside the rectangle. A single row's
-  sub-range, though, is already contiguous (`fb + y*GFX_WIDTH + x`, the
-  same trick this file already uses everywhere), so a tracked (min x, max
-  x, min y, max y) box could be sent as one `draw_bitmap()` call per row
-  inside it - no copy, more and smaller QSPI transactions instead of one
-  big one. `gfx_present()` already queues every strip's transfer before
-  waiting on any of their semaphores (see the loop in "Partial updates"
-  above), so this would not add a wait per row - Espressif's own docs put
-  DMA descriptor setup at **~2 us per transaction**, small next to what a
-  narrow pour (~20 px of 368) currently wastes sending at full width.
-  Unmeasured: worth prototyping and comparing against the current strips
-  on a real narrow pour before committing to it.
-- **A smaller `STRIP_HEIGHT`.** The 64 px bands were sized for an exact
-  7-way split of 448, not for dirty granularity. A shorter band still
-  needs no copy - any full-width vertical range is contiguous - so this is
-  the cheap half of the idea above: finer vertical skipping, more
-  potential transactions, no new addressing scheme. Would compound with
-  the bounding-box idea rather than replace it, tightening the vertical
-  dimension of what gets sent while the box tightens the horizontal.
+- ~~A 2D dirty bounding box, sent per row instead of per strip.~~ **Tried,
+  measured, does not pay off - kept for the reasoning, not as a next step.**
+  The theory: `esp_lcd_panel_draw_bitmap()` takes one flat buffer per call
+  with no stride parameter, so a full-width band is contiguous in the
+  framebuffer for free but an arbitrary sub-rectangle is not; a single
+  row's sub-range, though, is already contiguous (`fb + y*GFX_WIDTH + x`),
+  so a tracked (min x, max x, min y, max y) box could be sent as one
+  `draw_bitmap()` call per row inside it - no copy needed - and
+  `gfx_present()` already queues every strip's transfer before waiting on
+  any of their semaphores, so this should not have added a wait per row.
+  Espressif's docs put DMA descriptor setup at ~2 us per transaction,
+  which is what the estimate was built on.
+
+  Built and measured directly (`test_a_narrow_change_costs_less_than_a_full_band`
+  in `suite_gfx.c`, since reverted): a 20 px-wide strip sent one row at a
+  time across a 64-row band cost **7,567 us**, against **1,407 us** for the
+  same band sent as a single full-width call - **5.4x slower**, not
+  faster. `7567 / 64 rows` is almost exactly 118 us/transaction, which
+  means the real, measured fixed cost per `draw_bitmap()` call is roughly
+  **59x higher** than the ~2 us figure the estimate used. That 2 us covers
+  only DMA descriptor linking; it does not cover whatever the rest of
+  `esp_lcd_panel_io_tx_color()` and the SPI master driver's transaction
+  setup actually costs per call on this chip. Confirmed by feel on device
+  too: a narrow single-finger pour was visibly choppier with this path
+  active, matching the number.
+
+  The conclusion generalises past this one threshold: at ~118 us/call, any
+  design that trades "send fewer bytes" for "make more `draw_bitmap()`
+  calls" needs the call count itself to be very small - rough breakeven
+  against one 1,407 us full-band call is somewhere under a dozen calls,
+  not the up-to-64 a per-row scheme can reach. A version gated on the
+  *number of individually dirty rows* rather than pixel width might still
+  clear that bar in a genuinely sparse case, but it was not judged worth
+  the added correctness surface (the row-span bookkeeping, the semaphore
+  resize, the union logic to avoid leaving stale pixels behind) for a
+  narrower win than originally hoped.
+- **A smaller `STRIP_HEIGHT`.** Still open, but re-read against the
+  ~118 us/transaction figure above rather than the original 2 us guess:
+  the 64 px bands were sized for an exact 7-way split of 448, not for
+  dirty granularity, and a shorter band still needs no copy - any
+  full-width vertical range is contiguous. Unlike the per-row idea, this
+  does not multiply transaction count without bound; it only helps when
+  the active *vertical* range is smaller than the new, shorter band, and
+  can lose when an active range straddles two shorter bands that a single
+  taller one would have covered in one call. Only worth trying with real
+  numbers either side of that trade, not assumed.
 - **A tiled (swizzled) framebuffer - parked on purpose, not a next step.**
   Store pixels in fixed NxN tile order instead of scanline order, so a
   whole tile - not just one row of it - is a single contiguous run and
@@ -766,9 +789,11 @@ kept here so the reasoning survives to whoever picks one up.
   with one multiply-add assuming scanline order. Tiled storage replaces
   that with a permanent tile-index-plus-offset computation on every draw
   call, system-wide, to buy a transfer-side win only the sand app's dirty
-  pattern would exploit. Worth it only if the two ideas above turn out to
-  be bottlenecked on something tiling would fix and they are not - measure
-  those first.
+  pattern would exploit. The ~118 us/transaction figure above cuts the
+  other way for this one too, if it is ever revisited: it only pays off
+  with tiles large enough to keep the transaction count low, same
+  constraint that just sank the per-row idea - many small tiles would
+  reintroduce exactly the problem tiling was meant to solve.
 - Clear only the previous frame's bounding box rather than all 165k pixels.
 - Skipping the launcher's redraw when nothing changed, which would let its bands
   go unsent too.
