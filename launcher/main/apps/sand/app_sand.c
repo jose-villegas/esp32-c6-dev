@@ -352,14 +352,18 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     int gy = IMU_COUNTS_PER_G;   /* the no-sensor fallback: straight down */
     int flow = 256;              /* ... at full speed */
     int jostle = 0;
+    int rotation = 0;
 
     imu_sample_t sample = { 0 };
     if (imu_ready() && imu_read(&sample)) {
-        /* The GYROSCOPE says how fast the board is turning, which is all it is
-         * used for: it sets how quickly the filter tracks a genuine
-         * reorientation. It is deliberately not what shaking is read from -
-         * see tilt.h, and the note on rotating not being shaking. */
-        const int rotation = imu_rotation_level(&sample);
+        /* The GYROSCOPE says how fast the board is turning. It sets how
+         * quickly the tilt filter tracks a genuine reorientation, and - raw,
+         * unlike everything that filter smooths - it is also what tells the
+         * sand how hard it is currently being flicked; see sand_set_flick()
+         * and the comment above SAND_REBOUND_GAIN in sand.h. It is
+         * deliberately not what shaking is read from - see tilt.h, and the
+         * note on rotating not being shaking. */
+        rotation = imu_rotation_level(&sample);
 
         /* Smooth the raw vector before anything looks at it, and hand tilt the
          * through-screen axis too: without it a device lying on a table is
@@ -461,12 +465,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         sim_accumulator_q8 -= (uint32_t)steps * SIM_STEP_MS * 256;
     }
 
+    sand_set_flick(&sim, rotation);
     for (int i = 0; i < steps; i++) {
         sand_step(&sim, gx, gy, jostle);
     }
     steps_total += steps;
 
     const int64_t t1 = esp_timer_get_time();
+
     draw_dirty_rows();
 
     /* On top of the sand, so it is never painted over. */

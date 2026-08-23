@@ -8,9 +8,16 @@
  * models them explicitly.
  *
  * The one subtlety is sweep order - see the comment on sand_step().
+ *
+ * A liquid's DOWN-AND-SLIDE movement is here too, in move_liquid_grain() -
+ * called from the same sweep, because it obeys the same gravity-ward
+ * guarantee every other move in this file does. Everything else about a
+ * liquid - the two things that are NOT gravity-ward - lives in
+ * sand_liquid.c. See sand_priv.h for why they need to share a few small
+ * helpers, and sand_step_liquids() for where the two meet.
  *===========================================================================*/
 
-#include "sand.h"
+#include "sand_priv.h"
 
 #include <string.h>
 
@@ -92,6 +99,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->dir_x_q8 = 0;
     s->dir_y_q8 = 0;
     s->mom_primed = false;
+    s->flick = 0;
     sand_clear(s);
 }
 
@@ -109,51 +117,11 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
 #define ROW_SETTLED_NEAREST 0x1
 #define ROW_SETTLED_OTHER   0x2
 
-/* Set by the liquid pass on a row it has scanned and found no liquid in, so it
- * need not walk that row again.
- *
- * Safe because it is cleared by ANY change to the row - mark_rows() wipes the
- * whole byte through wake_span(), and every write to a cell goes through
- * mark_rows(). So the flag can only ever be stale in the harmless direction:
- * a row that has just gained liquid has already had it cleared. */
-#define ROW_NO_LIQUID       0x4
-
-/* Something changed across rows y0..y1, so none of them - nor the rows touching
- * them - can still be considered settled under any direction. Clearing the
- * neighbours is what makes a grain notice that its support has moved.
- *
- * Written as one clamped range rather than two separate neighbourhoods: a move
- * spans at most two adjacent rows, so the two overlap almost entirely, and this
- * is on the hot path. */
-static inline void wake_span(sand_t *s, int y0, int y1)
-{
-    int lo = (y0 < y1 ? y0 : y1) - 1;
-    int hi = (y0 > y1 ? y0 : y1) + 1;
-
-    if (lo < 0) {
-        lo = 0;
-    }
-    if (hi >= s->h) {
-        hi = s->h - 1;
-    }
-    for (int y = lo; y <= hi; y++) {
-        s->row_state[y] = 0;
-    }
-}
-
-/* Marking is a pair because every move touches two rows: the one a grain left
- * and the one it arrived in. Both are guaranteed in range at every call site -
- * a move only happens once its destination row has been found to exist. */
-static inline void mark_rows(sand_t *s, int y0, int y1)
-{
-    if (s->dirty_rows != NULL) {
-        s->dirty_rows[y0] = 1;
-        s->dirty_rows[y1] = 1;
-    }
-    if (s->row_state != NULL) {
-        wake_span(s, y0, y1);
-    }
-}
+/* wake_span() and mark_rows() are shared with sand_liquid.c and live in
+ * sand_priv.h now - see the comment there for why they are `static inline`
+ * in a header rather than ordinary functions declared extern. ROW_NO_LIQUID,
+ * the third bit in this same byte, is sand_liquid.c's own and is defined
+ * there, next to the only pass that reads it. */
 
 void sand_enable_sleeping(sand_t *s, uint8_t *rows)
 {
@@ -310,18 +278,7 @@ void sand_gravity_direction(int gx, int gy, int *dx, int *dy)
     }
 }
 
-/* The row a move would land in, or NULL if that is off the grid.
- *
- * Worked out once per row rather than once per grain: every grain in a row
- * shares the same three destination rows, so the vertical bounds check is done
- * 224 times per step instead of 41,216 times. */
-static inline uint8_t *dest_row(const sand_t *s, int y)
-{
-    if (y < 0 || y >= s->h) {
-        return NULL;
-    }
-    return s->cells + (size_t)y * (size_t)s->w;
-}
+/* dest_row() is shared with sand_liquid.c and lives in sand_priv.h now. */
 
 /* How many grains are stacked directly against gravity above this one, capped.
  *
@@ -500,27 +457,9 @@ static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density)
            can_enter(density, row[nx]);
 }
 
-/* Add `amount` of `id` to a cell that is either empty or already that same
- * material. Mass is only ever moved, never made: every caller subtracts the
- * same figure from somewhere else in the same breath. */
-static inline void pour_into(cell_t *dst, uint8_t id, int amount)
-{
-    const int had = CELL_IS_EMPTY(*dst) ? 0 : CELL_VARIANT(*dst);
-
-    *dst = CELL_MAKE(id, had + amount);
-}
-
-/* How much of `id` a cell will accept, 0 if it holds something else. */
-static inline int room_in(cell_t c, uint8_t id)
-{
-    if (CELL_IS_EMPTY(c)) {
-        return MASS_MAX;
-    }
-    if (CELL_MATERIAL(c) != id) {
-        return 0;
-    }
-    return MASS_MAX - CELL_VARIANT(c);
-}
+/* pour_into() and room_in() moved to sand_liquid.c - sand.c's own movement
+ * never splits a grain, so nothing here needed them once the liquid branch
+ * did. */
 
 /* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
  *
@@ -549,276 +488,6 @@ static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
     return true;
 }
 
-/* Liquid cross-flow, as a second sweep with its own direction.
- *
- * WHY IT CANNOT LIVE IN THE MAIN LOOP
- *
- * Every move in the main sweep is gravity-ward, so sweeping against gravity
- * guarantees a cell's destination has already been visited and nothing can be
- * moved twice. Once gravity is tilted that pins the sweep on BOTH axes - and
- * then, of the two directions across the flow, only the one the sweep has
- * already passed is ever safe to use.
- *
- * Water could therefore cross a slope one way and never back. A tilted pool
- * did not level at all: it walked into the low corner and set there in steps.
- * Measured, a 45-degree pool sat at a spread of 525 units and had not improved
- * three thousand steps later. Tilting the board back releases it, which reads
- * convincingly like stored momentum and is nothing of the sort - it is the
- * gravity direction changing, and with it which way water is allowed to move.
- *
- * A separate pass has its own order, so it can be swept whichever way suits
- * the direction it is using, and that direction alternates every step. It only
- * ever moves liquid across the flow, so it cannot disturb anything the first
- * pass concluded.
- */
-static void equalise_liquids(sand_t *s, const int *perp, int sight,
-                             int dx, int dy)
-{
-    bool found_any = false;
-
-    const int px = perp[0];
-    const int py = perp[1];
-    const int w  = s->w;
-    const int h  = s->h;
-
-    /* Which materials are liquid, as a bitmask over the nibble.
-     *
-     * This pass has to look at every cell, and asking materials[id].kind is a
-     * read from a table in flash - a likely cache miss, per cell, per step.
-     * Measured, that alone put a screen of motionless SAND from 17 us to five
-     * and a half milliseconds. Sixteen bits in a register answers the same
-     * question for nothing. */
-    uint16_t is_liquid = 0;
-    for (int m = 0; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind == KIND_LIQUID) {
-            is_liquid |= (uint16_t)(1u << m);
-        }
-    }
-
-    /* Swept so that whatever is being given to has already been visited. */
-    const int y_from = (py > 0) ? h - 1 : 0;
-    const int y_to   = (py > 0) ? -1    : h;
-    const int y_step = (py > 0) ? -1    : 1;
-
-    const int x_from = (px > 0) ? w - 1 : 0;
-    const int x_to   = (px > 0) ? -1    : w;
-    const int x_step = (px > 0) ? -1    : 1;
-
-    for (int y = y_from; y != y_to; y += y_step) {
-        /* Known dry, and nothing has touched it since. */
-        if (s->row_state != NULL && (s->row_state[y] & ROW_NO_LIQUID)) {
-            continue;
-        }
-
-        uint8_t *row = s->cells + (size_t)y * (size_t)w;
-        bool any_liquid = false;
-        bool touched = false;
-
-        for (int x = x_from; x != x_to; x += x_step) {
-            const cell_t c = row[x];
-            if (CELL_IS_EMPTY(c)) {
-                continue;
-            }
-
-            const uint8_t id = CELL_MATERIAL(c);
-            if (((is_liquid >> id) & 1u) == 0) {
-                continue;
-            }
-            any_liquid = true;
-            found_any  = true;
-
-            const int mass = CELL_VARIANT(c);
-
-            /* Falling water does not spread. If there is somewhere to fall,
-             * it will go there and nothing needs deciding here.
-             *
-             * One comparison, and it is what makes an avalanche affordable:
-             * while a body of water is collapsing almost every cell has room
-             * beneath it, so almost every cell leaves at this line instead of
-             * searching along a surface it does not yet have. */
-            {
-                const int fx = x + dx;
-                const int fy = y + dy;
-                if ((unsigned)fx < (unsigned)w && (unsigned)fy < (unsigned)h) {
-                    const cell_t below = s->cells[(size_t)fy * w + fx];
-                    if (CELL_IS_EMPTY(below) ||
-                        (CELL_MATERIAL(below) == id &&
-                         CELL_VARIANT(below) < MASS_MAX)) {
-                        continue;
-                    }
-                }
-            }
-
-            /* Nothing to give unless the cell right beside it is lower.
-             *
-             * This is what keeps the search off the bill. Inside a body of
-             * water every neighbour holds the same amount, so the overwhelming
-             * majority of cells answer in one comparison instead of walking
-             * thirty-two. Only the cells along an imbalance look further - and
-             * they are the only ones with anywhere to send anything.
-             *
-             * Nothing is lost by it. A flat stretch of water needs no flow;
-             * where it ends, the cells there do the work, and the dip they
-             * leave behind draws the next ones after it. */
-            {
-                const int nx = x + px;
-                const int ny = y + py;
-
-                if ((unsigned)nx >= (unsigned)w ||
-                    (unsigned)ny >= (unsigned)h) {
-                    continue;
-                }
-                const cell_t n = s->cells[(size_t)ny * w + nx];
-                if (!CELL_IS_EMPTY(n)) {
-                    if (CELL_MATERIAL(n) != id ||
-                        CELL_VARIANT(n) >= mass) {
-                        continue;
-                    }
-                }
-            }
-
-            int lowest = mass;
-            int at = 0;
-
-            /* The shallowest place it can reach. Flow stops at anything that
-             * is not this same liquid, so it cannot reach through a wall. */
-            for (int k = 1; k <= sight; k++) {
-                const int sx = x + px * k;
-                const int sy = y + py * k;
-
-                if ((unsigned)sx >= (unsigned)w ||
-                    (unsigned)sy >= (unsigned)h) {
-                    break;
-                }
-                const cell_t o = s->cells[(size_t)sy * w + sx];
-                int there;
-
-                if (CELL_IS_EMPTY(o)) {
-                    there = 0;
-                } else if (CELL_MATERIAL(o) == id) {
-                    there = CELL_VARIANT(o);
-                } else {
-                    break;
-                }
-
-                if (there < lowest) {
-                    lowest = there;
-                    at = k;
-                    if (there == 0) {
-                        break;      /* nothing is lower than dry */
-                    }
-                }
-            }
-
-            /* Half the difference. Handing over everything would only move the
-             * imbalance rather than settle it - the two would trade places for
-             * ever. */
-            const int give = (mass - lowest) / 2;
-            if (at > 0 && give > 0) {
-                const int tx = x + px * at;
-                const int ty = y + py * at;
-
-                pour_into(&s->cells[(size_t)ty * w + tx], id, give);
-                row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give)
-                                           : CELL_EMPTY;
-
-                /* Marking is deferred when the flow stays inside one row,
-                 * which is every orientation where gravity has no sideways
-                 * component - much the commonest case. mark_rows() rewrites
-                 * several bytes of row state, and doing that per transfer
-                 * rather than per row was most of what this pass cost. */
-                if (py == 0) {
-                    touched = true;
-                } else {
-                    mark_rows(s, y, ty);
-                }
-            }
-        }
-
-        if (touched) {
-            mark_rows(s, y, y);
-        }
-
-        /* Nothing liquid in the whole row - say so, and skip it next time.
-         * Written after mark_rows may have cleared the byte, so a row that
-         * received liquid during this very pass is not wrongly marked dry. */
-        if (!any_liquid && s->row_state != NULL) {
-            s->row_state[y] |= ROW_NO_LIQUID;
-        }
-    }
-
-    /* Looked everywhere and found none, so stop looking until some is placed.
-     * Only valid because a full sweep happened - rows skipped by ROW_NO_LIQUID
-     * were themselves proved dry by an earlier sweep. */
-    if (!found_any) {
-        s->may_have_liquid = false;
-    }
-}
-
-/* One wall's share of the rebound splash - see SAND_REBOUND_GAIN.
- *
- * `edge` is the column (for a left/right wall) or row (top/bottom) that
- * touches the wall; `count` is how many cells run along it; `to` is the
- * one-cell step into the grid, away from the wall. `push_q8` is how hard
- * momentum is currently driving INTO this particular wall - already resolved
- * to a single non-negative number by the caller, since each wall only cares
- * about one sign of one axis.
- *
- * Every source cell here is unique to this wall and every destination is one
- * fixed step inward, so no two transfers this call can ever touch the same
- * cell - unlike equalise_liquids, this needs no sweep order at all. */
-static void rebound_wall(sand_t *s, int edge, int count, int to,
-                         bool vertical, int push_q8, uint16_t is_liquid)
-{
-    if (push_q8 <= SAND_REBOUND_THRESHOLD) {
-        return;
-    }
-    int kick = ((push_q8 - SAND_REBOUND_THRESHOLD) * SAND_REBOUND_GAIN) >> 8;
-    if (kick > SAND_REBOUND_MAX) {
-        kick = SAND_REBOUND_MAX;
-    }
-    if (kick <= 0) {
-        return;
-    }
-
-    const int w = s->w;
-
-    for (int i = 0; i < count; i++) {
-        const int x = vertical ? edge : i;
-        const int y = vertical ? i : edge;
-
-        const size_t at = (size_t)y * (size_t)w + (size_t)x;
-        const cell_t c = s->cells[at];
-        if (CELL_IS_EMPTY(c)) {
-            continue;
-        }
-        const uint8_t id = CELL_MATERIAL(c);
-        if (((is_liquid >> id) & 1u) == 0) {
-            continue;
-        }
-
-        const int nx = vertical ? x + to : x;
-        const int ny = vertical ? y      : y + to;
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)s->h) {
-            continue;
-        }
-
-        const int mass = CELL_VARIANT(c);
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        const int room = room_in(s->cells[nat], id);
-        const int give = kick < mass ? kick : mass;
-        const int moved = give < room ? give : room;
-        if (moved <= 0) {
-            continue;
-        }
-
-        pour_into(&s->cells[nat], id, moved);
-        s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
-                                          : CELL_EMPTY;
-        mark_rows(s, y, ny);
-    }
-}
-
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Momentum: how hard gravity's direction turned since last step, decayed
@@ -836,12 +505,30 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
             const int32_t ux = (int32_t)(((int64_t)gx * 256) / len);
             const int32_t uy = (int32_t)(((int64_t)gy * 256) / len);
 
-            if (s->mom_primed) {
-                s->mom_x_q8 += ux - s->dir_x_q8;
-                s->mom_y_q8 += uy - s->dir_y_q8;
-            } else {
-                s->mom_primed = true;
+            if (s->mom_primed && s->flick > 0) {
+                /* Which way it turned, from the smoothed direction - a step
+                 * or two late, but the right way eventually. Renormalised to
+                 * a unit vector so a turn too small for the smoothing to
+                 * have caught up on yet still points somewhere definite,
+                 * rather than contributing almost nothing just because the
+                 * filter has not finished moving.
+                 *
+                 * HOW FAR comes from the gyroscope, not from how big this
+                 * renormalised step is - see the comment above
+                 * SAND_REBOUND_GAIN for why the delta itself is the wrong
+                 * thing to scale by. */
+                const int32_t tx = ux - s->dir_x_q8;
+                const int32_t ty = uy - s->dir_y_q8;
+                const int tlen = vec_len_approx((int)tx, (int)ty);
+
+                if (tlen > 0) {
+                    s->mom_x_q8 += (int32_t)((((int64_t)tx * 256 / tlen) *
+                                              s->flick) >> 8);
+                    s->mom_y_q8 += (int32_t)((((int64_t)ty * 256 / tlen) *
+                                              s->flick) >> 8);
+                }
             }
+            s->mom_primed = true;
             s->dir_x_q8 = ux;
             s->dir_y_q8 = uy;
         }
@@ -998,72 +685,13 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
             const uint8_t density = mat->density;
             const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
 
-            /*---------------------------------------------------------------
-             * Liquids: move an AMOUNT between touching cells.
-             *
-             * Nothing here looks further than one cell in any direction, and
-             * that is the whole point. A cell that is either full or empty
-             * cannot split, so a full one beside an empty one has no legal
-             * move and a wide pool sets into a staircase - a real fixed point
-             * of any local rule, which is why the previous version had to go
-             * hunting up to forty-eight cells along the surface for somewhere
-             * lower. Carrying an amount instead, the same pair becomes 15 and
-             * 0, settles to 8 and 7, and the difference spreads outward a
-             * neighbour at a time until the surface is level.
-             *
-             * Two rules, in order: fill the cell below, then share what is
-             * left with the one beside it.
-             *-------------------------------------------------------------*/
+            /* Liquids move an AMOUNT rather than a whole grain - see
+             * move_liquid_grain() in sand_liquid.c, and sand_step_liquids()
+             * below for the rest of a liquid's behaviour, which is NOT
+             * gravity-ward and so cannot join this sweep. */
             if (mat->kind == KIND_LIQUID) {
-                int mass = CELL_VARIANT(grain);
-                bool moved = false;
-
-                /* DOWN first, so a liquid falls before it spreads. */
-                const int bx = x + dx;
-                if (prow != NULL && (unsigned)bx < (unsigned)w) {
-                    const int room = room_in(prow[bx], mat_id);
-                    const int give = mass < room ? mass : room;
-                    if (give > 0) {
-                        pour_into(&prow[bx], mat_id, give);
-                        mass -= give;
-                        mark_rows(s, y, y + dy);
-                        moved = true;
-                    }
-                }
-
-                /* Then DOWN THE SLOPE, both ways.
-                 *
-                 * Still only immediate neighbours, and still gravity-ward, so
-                 * they carry the same guarantee the fall does. Leaving these
-                 * out was a real mistake: without them water on a slope can
-                 * only shuffle sideways and then fall, so a mound collapses at
-                 * the speed of diffusion - a dome was still 7 cells proud
-                 * after five thousand steps. Running down the slope directly
-                 * is what makes it settle in a moment instead. */
-                for (int d = 0; d < 2 && mass > 0; d++) {
-                    const int *slide = (d == 0) ? slide_a : slide_b;
-                    uint8_t *srow = dest_row(s, y + slide[1]);
-                    const int sx = x + slide[0];
-
-                    if (srow == NULL || (unsigned)sx >= (unsigned)w) {
-                        continue;
-                    }
-                    const int room = room_in(srow[sx], mat_id);
-                    const int give = mass < room ? mass : room;
-                    if (give > 0) {
-                        pour_into(&srow[sx], mat_id, give);
-                        mass -= give;
-                        mark_rows(s, y, y + slide[1]);
-                        moved = true;
-                    }
-                }
-
-                /* Nothing left means no cell left. Written as CELL_EMPTY
-                 * rather than a zero variant, which would leave the material
-                 * nibble claiming an occupied cell holding nothing. */
-                row[x] = (mass > 0) ? CELL_MAKE(mat_id, mass) : CELL_EMPTY;
-
-                if (moved) {
+                if (move_liquid_grain(s, row, prow, x, y, dx, dy,
+                                      slide_a, slide_b, grain, mat_id)) {
                     moved_here = true;
                 }
                 continue;
@@ -1187,34 +815,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
         }
     }
 
-    /* Then let liquids share sideways, in their own pass and alternating which
-     * way each step - so a tilted pool levels both ways instead of walking
-     * into one corner. See equalise_liquids(). */
-    if (s->may_have_liquid) {
-        equalise_liquids(s, s->liquid_flip ? perp_a : perp_b,
-                         SAND_LIQUID_SIGHT, dx, dy);
-        s->liquid_flip = !s->liquid_flip;
-
-        /* And let a hard flick splash liquid back off whichever wall it just
-         * turned into. Four walls, but each is a no-op below its own
-         * threshold, so this costs nothing on the vastly more common calm
-         * step - see SAND_REBOUND_GAIN. */
-        if (SAND_REBOUND_GAIN != 0) {
-            uint16_t is_liquid = 0;
-            for (int m = 0; m < MATERIAL_MAX; m++) {
-                if (materials[m].kind == KIND_LIQUID) {
-                    is_liquid |= (uint16_t)(1u << m);
-                }
-            }
-
-            rebound_wall(s, 0,        s->h, 1,  true,
-                        (int)-s->mom_x_q8, is_liquid);   /* left wall   */
-            rebound_wall(s, s->w - 1, s->h, -1, true,
-                        (int) s->mom_x_q8, is_liquid);   /* right wall  */
-            rebound_wall(s, 0,        s->w, 1,  false,
-                        (int)-s->mom_y_q8, is_liquid);   /* top wall    */
-            rebound_wall(s, s->h - 1, s->w, -1, false,
-                        (int) s->mom_y_q8, is_liquid);   /* bottom wall */
-        }
-    }
+    /* Everything about a liquid that is NOT gravity-ward: cross-flow, and
+     * the wall-rebound splash on top of it. See sand_step_liquids() in
+     * sand_liquid.c. */
+    sand_step_liquids(s, perp_a, perp_b, dx, dy);
 }

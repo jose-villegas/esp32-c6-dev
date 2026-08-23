@@ -57,6 +57,7 @@ typedef struct {
     int32_t  mom_x_q8, mom_y_q8;
     int32_t  dir_x_q8, dir_y_q8;
     bool     mom_primed;
+    int      flick;      /* 0-255, see sand_set_flick() */
 
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
@@ -207,6 +208,22 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  * already allocated - see the memory budget note in material.h. One shared
  * vector costs nothing measurable and produces the same visible effect, since
  * the whole board is being shaken together, not grain by grain.
+ *
+ * THE DIRECTION AND THE SPEED COME FROM DIFFERENT PLACES, ON PURPOSE
+ *
+ * (gx, gy) is already smoothed before it ever reaches here - it has to be, or
+ * every grain would jitter with the sensor's noise. That smoothing is exactly
+ * what makes it the wrong thing to measure SPEED from: an exponential filter
+ * can only close a fraction of the gap to a new reading each step, so its own
+ * frame-to-frame delta is capped by the filter's time constant rather than by
+ * how fast the device actually moved. Turning that up just makes ordinary
+ * tilting cross the threshold too.
+ *
+ * So direction still comes from (gx, gy) - which way it turned is a question
+ * the smoothed signal answers just fine, a step or two late. HOW FAR to push
+ * comes from sand_set_flick() instead: the caller's own gyroscope reading,
+ * which was never run through that filter and exists for exactly this. See
+ * sand_set_flick().
  */
 
 /* How much of a step's turn survives to the next one, out of 256. Higher
@@ -226,6 +243,23 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
 /* However hard the flick, no more than this much mass moves per cell per
  * step - it is a splash, not a teleport. */
 #define SAND_REBOUND_MAX          6
+
+/* How hard the device is being turned RIGHT NOW, 0-255 - not jostle (linear
+ * shake) and not derived from (gx, gy) (smoothed, and rate-limited by that
+ * smoothing - see the comment above). Meant to be read straight from a
+ * gyroscope once a frame and handed in here unchanged; sand_step() uses it to
+ * scale the wall-rebound kick, and nothing else. Not sticky: whatever was set
+ * last is what the next sand_step() sees, so a caller with nothing to report
+ * should pass 0 rather than assume it decays on its own. Defaults to 0, so a
+ * caller that never calls this sees no rebound at all, ever. */
+void sand_set_flick(sand_t *s, int flick);
+
+/* The momentum vector as it stands after the last sand_step(), Q8 fixed
+ * point. Read-only, and not needed for the simulation itself - it exists so
+ * a caller can watch what real handling actually does to it, which is the
+ * only honest way to calibrate SAND_REBOUND_THRESHOLD against a device
+ * rather than a synthetic test. */
+void sand_momentum(const sand_t *s, int32_t *mx_q8, int32_t *my_q8);
 
 /* How many cells are stacked directly against gravity above the one at (x, y),
  * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.

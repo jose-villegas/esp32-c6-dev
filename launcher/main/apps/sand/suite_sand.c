@@ -1597,7 +1597,13 @@ static void test_a_hard_flick_kicks_water_off_the_wall_it_just_hit(void)
      * gravity's own perpendicular is vertical, so ordinary cross-flow cannot
      * reach a neighbouring COLUMN either. With no randomness and no ordinary
      * path into column 1 at all, water arriving there can only be the
-     * rebound - there is nothing else it could be. */
+     * rebound - there is nothing else it could be.
+     *
+     * Both leave sand_set_flick() at its default of zero except on the one
+     * step meant to be a flick: the gyroscope has nothing to say about a
+     * turn that never happened, and the momentum arithmetic must not invent
+     * one on its own just because the smoothed direction eventually moved -
+     * see the comment above SAND_REBOUND_GAIN. */
     sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
     sand_init(&reb_b, reb_cells_b, REB_W, REB_H, 1u);
 
@@ -1608,6 +1614,8 @@ static void test_a_hard_flick_kicks_water_off_the_wall_it_just_hit(void)
     fill_left_wall_column(&reb_b);
 
     sand_step(&reb_a, -1000, 0, 0);   /* gradual: already pointed this way */
+
+    sand_set_flick(&reb_b, 255);      /* the gyroscope says: a hard flick */
     sand_step(&reb_b, -1000, 0, 0);   /* flicked: a full reversal onto the wall */
 
     const long gradual_col1 = mass_in_column(&reb_a, 1, MAT_WATER);
@@ -1619,6 +1627,29 @@ static void test_a_hard_flick_kicks_water_off_the_wall_it_just_hit(void)
     TEST_ASSERT_GREATER_THAN_MESSAGE(gradual_col1, flicked_col1,
         "a hard flick onto a wall the water is already resting against must "
         "kick some of it back into the grid");
+}
+
+static void test_a_reversal_without_a_flick_signal_still_does_not_rebound(void)
+{
+    /* The whole reason sand_set_flick() exists: (gx, gy) is smoothed, so a
+     * caller could always manufacture a large frame-to-frame turn just by
+     * reporting a sudden change of mind about where gravity points, with no
+     * device motion behind it at all. If the turn's own size were what
+     * triggered the rebound, this would be indistinguishable from a real
+     * flick and the effect would fire on command rather than on speed.
+     *
+     * Same full reversal as the test above, but with nothing set into
+     * sand_set_flick() - the caller reporting no motion. It must produce
+     * exactly the same nothing that a steady gravity does. */
+    sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
+
+    sand_step(&reb_a, 1000, 0, 0);     /* primed pointing right */
+    fill_left_wall_column(&reb_a);
+    sand_step(&reb_a, -1000, 0, 0);    /* the same reversal - but no flick set */
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mass_in_column(&reb_a, 1, MAT_WATER),
+        "a direction change with no reported flick must not rebound, however "
+        "large the change - only sand_set_flick() may trigger this");
 }
 
 /* --- conservation ------------------------------------------------------- */
@@ -2141,6 +2172,7 @@ void run_sand_suite(void)
     RUN_TEST(test_water_puddles_where_sand_heaps);
     RUN_TEST(test_a_large_body_of_water_levels);
     RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
+    RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
