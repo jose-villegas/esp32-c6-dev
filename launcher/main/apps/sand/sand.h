@@ -237,12 +237,22 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
 
 /* Mass kicked off a wall per cell per step, per unit of turn past the
  * threshold. Zero disables the whole effect with no other change needed -
- * the momentum is still tracked, but nothing ever reads it. */
-#define SAND_REBOUND_GAIN         3
+ * the momentum is still tracked, but nothing ever reads it.
+ *
+ * Calibrated against a real capture, not guessed: a genuine flick on this
+ * board measured 162-737 past the threshold, but MOST of that range sits at
+ * the low end (162-350) - so the previous value of 3 gave a typical flick a
+ * kick of only 1-2 out of 15, barely visible. 8 puts a typical flick's kick
+ * in the 4-6 range instead; only the hardest flicks in the sample now reach
+ * SAND_REBOUND_MAX on their own. */
+#define SAND_REBOUND_GAIN         8
 
 /* However hard the flick, no more than this much mass moves per cell per
- * step - it is a splash, not a teleport. */
-#define SAND_REBOUND_MAX          6
+ * step - it is a splash, not a teleport. Raised alongside the gain above so
+ * the hardest flicks in the same capture (up to 737 past the threshold)
+ * still read as visibly stronger than a merely brisk one, rather than both
+ * capping out at the same number. */
+#define SAND_REBOUND_MAX         10
 
 /* How hard the device is being turned RIGHT NOW, 0-255 - not jostle (linear
  * shake) and not derived from (gx, gy) (smoothed, and rate-limited by that
