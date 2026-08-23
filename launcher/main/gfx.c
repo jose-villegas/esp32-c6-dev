@@ -63,7 +63,45 @@ static struct { int x0, y0, x1, y1; } clip;
  * docs/ESP32-C6-AMOLED-Notes.md. STRIP_COUNT is 7, so a byte is plenty. */
 static uint8_t strip_dirty;
 
-/* Marks the bands spanned by an ALREADY-CLIPPED row range.
+/* Per strip, the (x0,x1) x (y0,y1) box actually known to be dirty this frame -
+ * PROTOTYPE, see docs/ESP32-C6-AMOLED-Notes.md's "Still untapped" for the
+ * reasoning. y0/y1 are absolute panel rows, not strip-relative.
+ *
+ * Two dimensions, not one, on purpose: a box narrow only in x helps a
+ * vertical fall and does nothing once gravity points sideways, where the
+ * same amount of moving sand is wide and short instead - see the "quad"
+ * discussion in the notes. Tracking both makes the box orientation-agnostic.
+ *
+ * Anything that marks a strip dirty without knowing which pixels changed
+ * (mark_band(), below) has to claim the whole strip, full width and full
+ * height, or a caller that really did only touch a few pixels could leave
+ * someone else's stale pixels unsent beside them. Only gfx_mark_dirty() -
+ * used by callers that DO know a real box - is allowed to narrow it, and
+ * narrowing is always a min/max union against whatever is already there,
+ * never an overwrite: that is what makes the two ways of marking a strip
+ * order-independent within one frame, whichever runs first. */
+static int strip_x0[STRIP_COUNT];
+static int strip_x1[STRIP_COUNT];
+static int strip_y0[STRIP_COUNT];
+static int strip_y1[STRIP_COUNT];
+
+/* Scratch space for packing a strip's dirty box edge-to-edge before sending
+ * it as one draw_bitmap() call - see gfx_present(). Bounded by AREA, not by
+ * width alone: a box has to stay small in total pixels to be worth the
+ * gather, however it is shaped, so a tall sliver and a wide sliver are both
+ * eligible on the same terms. Anything bigger is sent as the full strip
+ * instead, the same as before any of this existed.
+ *
+ * Allocated with MALLOC_CAP_DMA, same as `fb` below - a plain static array
+ * is only guaranteed the alignment its element type needs (2 bytes for
+ * uint16_t), not whatever the GDMA engine actually requires. A source buffer
+ * the DMA can't read cleanly does not fail loudly; it reads back subtly
+ * wrong, which is a much worse failure to chase. */
+#define GATHER_MAX_PIXELS (128 * 64)
+static gfx_color_t *gather_buf;
+
+/* Marks the bands spanned by an ALREADY-CLIPPED row range, full width and
+ * full strip height.
  *
  * Inline and unguarded on purpose. gfx_fill_rect is the workhorse behind text,
  * and gfx_text_scaled calls it once per set font pixel - so this runs thousands
@@ -81,6 +119,10 @@ static inline void mark_band(int y0, int y1)
 
     for (int i = first; i <= last; i++) {
         strip_dirty |= (uint8_t)(1u << i);
+        strip_x0[i] = 0;
+        strip_x1[i] = GFX_WIDTH;
+        strip_y0[i] = i * STRIP_HEIGHT;
+        strip_y1[i] = (i + 1) * STRIP_HEIGHT;
     }
 }
 
@@ -223,6 +265,14 @@ bool gfx_init(void)
         return false;
     }
 
+    const size_t gather_bytes = (size_t)GATHER_MAX_PIXELS * sizeof(gfx_color_t);
+    gather_buf = heap_caps_malloc(gather_bytes, MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+    if (gather_buf == NULL) {
+        ESP_LOGE(TAG, "Could not allocate %u byte gather buffer",
+                 (unsigned)gather_bytes);
+        return false;
+    }
+
     gfx_clear_clip();
     gfx_mark_all_dirty();
 
@@ -248,23 +298,66 @@ gfx_color_t *gfx_framebuffer(void)
 void gfx_mark_all_dirty(void)
 {
     strip_dirty = (uint8_t)((1u << STRIP_COUNT) - 1u);
+    for (int i = 0; i < STRIP_COUNT; i++) {
+        strip_x0[i] = 0;
+        strip_x1[i] = GFX_WIDTH;
+        strip_y0[i] = i * STRIP_HEIGHT;
+        strip_y1[i] = (i + 1) * STRIP_HEIGHT;
+    }
 }
 
+/* Unions (x0,x1) into strip i's box directly - the call's x-range needs no
+ * clipping to the strip, unlike y, since a strip already spans the full
+ * width. */
+static inline void union_strip_x(int i, int x0, int x1)
+{
+    if (x0 < strip_x0[i]) { strip_x0[i] = x0; }
+    if (x1 > strip_x1[i]) { strip_x1[i] = x1; }
+}
+
+/* Unions the part of (y0,y1) that falls within strip i's own band - the
+ * call's y-range may span several strips, or only part of one, so what
+ * belongs to strip i is the intersection with its band, not the call's
+ * range as a whole. */
+static inline void union_strip_y(int i, int y0, int y1)
+{
+    const int band_y0 = i * STRIP_HEIGHT;
+    const int band_y1 = band_y0 + STRIP_HEIGHT;
+    const int part_y0 = (y0 > band_y0) ? y0 : band_y0;
+    const int part_y1 = (y1 < band_y1) ? y1 : band_y1;
+    if (part_y0 < strip_y0[i]) { strip_y0[i] = part_y0; }
+    if (part_y1 > strip_y1[i]) { strip_y1[i] = part_y1; }
+}
+
+/* Unlike mark_band(), this one knows a real box - callers that draw a
+ * shape smaller than a whole strip can say so, in either dimension, and
+ * gfx_present() may then send only that box instead of the whole band.
+ * Still safe if a caller passes the full width and a whole strip's height
+ * like the old callers all did: that just claims the whole strip, same as
+ * before this existed. */
 void gfx_mark_dirty(int x, int y, int w, int h)
 {
-    (void)x;
-    (void)w;   /* strips are full width, so only the rows matter */
-
+    int x0 = x;
+    int x1 = x + w;
     int y0 = y;
     int y1 = y + h;
 
+    if (x0 < 0) x0 = 0;
+    if (x1 > GFX_WIDTH) x1 = GFX_WIDTH;
     if (y0 < 0) y0 = 0;
     if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
-    if (y0 >= y1) {
+    if (x0 >= x1 || y0 >= y1) {
         return;
     }
 
-    mark_band(y0, y1);
+    const int first = y0 / STRIP_HEIGHT;
+    const int last  = (y1 - 1) / STRIP_HEIGHT;
+
+    for (int i = first; i <= last; i++) {
+        strip_dirty |= (uint8_t)(1u << i);
+        union_strip_x(i, x0, x1);
+        union_strip_y(i, y0, y1);
+    }
 }
 
 bool gfx_region_dirty(int x, int y, int w, int h)
@@ -356,7 +449,7 @@ void gfx_pixel(int x, int y, gfx_color_t color)
         return;
     }
     fb[y * GFX_WIDTH + x] = color;
-    strip_dirty |= (uint8_t)(1u << (y / STRIP_HEIGHT));
+    mark_band(y, y + 1);
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
@@ -476,6 +569,91 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
  * Present
  *-------------------------------------------------------------------------*/
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Outlines whichever rectangle is about to be sent, one row and one column
+ * of pixels deep - shows exactly which segments of the strip/gather split
+ * are triggering an update on a real interaction, and which path each one
+ * took, rather than only in a synthetic test. Dev builds only: this writes
+ * directly into what gets sent, which is the point, but has no business in
+ * a shipped image.
+ *
+ * `stride` is the buffer's own row length, not the rectangle's width - for
+ * gather_buf the two are the same (tightly packed to `w`), for `fb` they
+ * are not (always GFX_WIDTH, regardless of how much of that row changed). */
+static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
+                             gfx_color_t colour)
+{
+    for (int col = 0; col < w; col++) {
+        buf[col] = colour;
+        buf[(size_t)(h - 1) * stride + col] = colour;
+    }
+    for (int row = 0; row < h; row++) {
+        buf[(size_t)row * stride] = colour;
+        buf[(size_t)row * stride + (w - 1)] = colour;
+    }
+}
+#endif
+
+/* Sends strip i's dirty box gathered, if it is small enough in total pixels
+ * to be worth packing - however it is shaped, tall-and-narrow or
+ * wide-and-short alike - or the whole strip otherwise. Returns true if a
+ * full-width transfer was QUEUED but not yet waited on (batched with the
+ * caller's others), false if a gathered transfer was sent and already
+ * waited on before returning. */
+static bool send_one_strip(int i, int *queued)
+{
+    const int y  = i * STRIP_HEIGHT;
+    const int x0 = strip_x0[i];
+    const int x1 = strip_x1[i];
+    const int y0 = strip_y0[i];
+    const int y1 = strip_y1[i];
+    const int w  = x1 - x0;
+    const int h  = y1 - y0;
+
+    if (w <= 0 || h <= 0 || (size_t)w * (size_t)h > GATHER_MAX_PIXELS) {
+#if CONFIG_LAUNCHER_DEVELOPMENT
+        /* Cyan: this strip went out full width - either genuinely too big
+         * a box to gather, or nothing narrower was ever tracked for it. */
+        mark_rect_border(fb + (size_t)y * GFX_WIDTH, GFX_WIDTH,
+                         GFX_WIDTH, STRIP_HEIGHT, gfx_rgb(0x00FFFF));
+#endif
+        esp_lcd_panel_draw_bitmap(panel, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
+                                  fb + (size_t)y * GFX_WIDTH);
+        return true;
+    }
+
+    /* gather_buf is shared and about to be overwritten, so every transfer
+     * queued so far - not just the most recent one - must actually have
+     * finished reading out of it first. strip_sent is a plain counter with
+     * no identity attached to which transfer signalled it, so taking it
+     * once here is not the same as waiting for THIS gather specifically:
+     * whichever transfer happens to finish first satisfies whichever
+     * Take() runs first, and an earlier still-batched full-width send
+     * finishing first would let this proceed while the previous gather's
+     * own transfer was still in flight. Draining exactly `*queued` of them
+     * first empties the queue, so the one Take() after this gather's own
+     * draw_bitmap() is unambiguously waiting for it - SPI transactions on
+     * one device complete in the order they were queued, so nothing else
+     * can be outstanding at that point. */
+    for (int j = 0; j < *queued; j++) {
+        xSemaphoreTake(strip_sent, portMAX_DELAY);
+    }
+    *queued = 0;
+
+    for (int row = 0; row < h; row++) {
+        memcpy(gather_buf + (size_t)row * w,
+              fb + (size_t)(y0 + row) * GFX_WIDTH + x0,
+              (size_t)w * sizeof(gfx_color_t));
+    }
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    /* Magenta: this strip went out gathered, at its real box. */
+    mark_rect_border(gather_buf, w, w, h, gfx_rgb(0xFF00FF));
+#endif
+    esp_lcd_panel_draw_bitmap(panel, x0, y0, x1, y1, gather_buf);
+    xSemaphoreTake(strip_sent, portMAX_DELAY);
+    return false;
+}
+
 void gfx_present(void)
 {
     int queued = 0;
@@ -484,12 +662,17 @@ void gfx_present(void)
         if ((strip_dirty & (1u << i)) == 0) {
             continue;   /* unchanged - the panel is still showing it */
         }
-        const int y = i * STRIP_HEIGHT;
-        esp_lcd_panel_draw_bitmap(panel,
-                                  0, y,
-                                  GFX_WIDTH, y + STRIP_HEIGHT,
-                                  fb + (size_t)y * GFX_WIDTH);
-        queued++;
+
+        if (send_one_strip(i, &queued)) {
+            queued++;
+        }
+
+        /* Next frame's gfx_mark_dirty() calls union against this, so it has
+         * to start from "nothing yet" rather than keep growing forever. */
+        strip_x0[i] = GFX_WIDTH;
+        strip_x1[i] = 0;
+        strip_y0[i] = i * STRIP_HEIGHT + STRIP_HEIGHT;
+        strip_y1[i] = i * STRIP_HEIGHT;
     }
 
     strip_dirty = 0;
@@ -497,8 +680,8 @@ void gfx_present(void)
     /* draw_bitmap only QUEUES a DMA transfer that reads out of the
      * framebuffer. Returning before they drain would let the next frame start
      * overwriting memory still being shifted out to the panel. Wait for
-     * exactly as many as were queued - waiting for STRIP_COUNT would block
-     * for ever the moment any strip was skipped. */
+     * exactly as many full-width sends were queued - a gathered strip was
+     * already waited on above, so it must not be counted again here. */
     for (int i = 0; i < queued; i++) {
         xSemaphoreTake(strip_sent, portMAX_DELAY);
     }

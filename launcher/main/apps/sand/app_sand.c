@@ -113,6 +113,13 @@ static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE };
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
 static uint8_t    *sleep_rows;   /* GRID_H bytes: which rows can be skipped */
+
+/* GRID_H entries each: the pixel x-range a row's material occupied the last
+ * time it was drawn - GFX_WIDTH/0 (empty range) if none. Kept so a row whose
+ * content just vanished still sends far enough to clear its old pixels; see
+ * draw_dirty_rows(). */
+static uint16_t   *row_x0;
+static uint16_t   *row_x1;
 static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
@@ -184,13 +191,33 @@ static void sand_enter(void)
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W * GRID_H);
     }
-    if (grid == NULL || dirty_rows == NULL || sleep_rows == NULL) {
+    if (row_x0 == NULL) {
+        row_x0 = malloc(GRID_H * sizeof(*row_x0));
+    }
+    if (row_x1 == NULL) {
+        row_x1 = malloc(GRID_H * sizeof(*row_x1));
+    }
+    if (grid == NULL || dirty_rows == NULL || sleep_rows == NULL ||
+        row_x0 == NULL || row_x1 == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
                  GRID_W, GRID_H, GRID_W * GRID_H,
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         failed = true;
         return;
+    }
+
+    /* Full width, not empty: nothing clears the framebuffer on entry, so
+     * whatever the launcher (or a previous app) left behind is still
+     * sitting in it. Seeding "previous" as the whole row forces the first
+     * dirty pass over each row to send full width regardless of how little
+     * of it the fresh grid actually occupies - the same guarantee the old
+     * unconditional-full-width send gave for free. Only once a row has
+     * genuinely been redrawn does its real, narrower extent become trusted
+     * enough to send instead. */
+    for (int i = 0; i < GRID_H; i++) {
+        row_x0[i] = 0;
+        row_x1[i] = GFX_WIDTH;
     }
 
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
@@ -250,6 +277,39 @@ static void sand_exit(void)
  * gfx which band it landed in. A settled pile therefore costs almost nothing
  * to draw AND almost nothing to send, which is where the real saving is: a
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
+/* Draws one row, empty cells included, and reports the pixel x-range that
+ * currently holds material - GFX_WIDTH/0 (an empty range) if none does. */
+static void draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
+                         int *x0, int *x1)
+{
+    const uint8_t *row = &grid[cy * GRID_W];
+    gfx_color_t   *out = fb + (cy * CELL) * GFX_WIDTH;
+
+    int min_cx = GRID_W;
+    int max_cx = -1;
+
+    for (int cx = 0; cx < GRID_W; cx++) {
+        const uint8_t cell = row[cx];
+        const gfx_color_t c = pal[cell];
+        gfx_color_t *p = out + cx * CELL;
+
+        /* CELL is a compile-time constant, so these unroll away. */
+        for (int dy = 0; dy < CELL; dy++) {
+            for (int dx = 0; dx < CELL; dx++) {
+                p[dy * GFX_WIDTH + dx] = c;
+            }
+        }
+
+        if (cell != SAND_EMPTY) {
+            if (cx < min_cx) { min_cx = cx; }
+            max_cx = cx;
+        }
+    }
+
+    *x0 = (max_cx >= 0) ? min_cx * CELL       : GFX_WIDTH;
+    *x1 = (max_cx >= 0) ? (max_cx + 1) * CELL : 0;
+}
+
 static void draw_dirty_rows(void)
 {
     gfx_color_t *fb = gfx_framebuffer();
@@ -271,24 +331,21 @@ static void draw_dirty_rows(void)
         redrawn++;
 #endif
 
-        const uint8_t *row = &grid[cy * GRID_W];
-        gfx_color_t   *out = fb + (cy * CELL) * GFX_WIDTH;
+        int cur_x0, cur_x1;
+        draw_one_row(fb, pal, cy, &cur_x0, &cur_x1);
 
-        for (int cx = 0; cx < GRID_W; cx++) {
-            const gfx_color_t c = pal[row[cx]];
-            gfx_color_t *p = out + cx * CELL;
-
-            /* CELL is a compile-time constant, so these unroll away. */
-            for (int dy = 0; dy < CELL; dy++) {
-                for (int dx = 0; dx < CELL; dx++) {
-                    p[dy * GFX_WIDTH + dx] = c;
-                }
-            }
-        }
+        /* Sent range is unioned against what this row occupied last time it
+         * was drawn, not just what it occupies now - a cell that just
+         * emptied still has to be sent once so its old pixels are cleared. */
+        const int send_x0 = (row_x0[cy] < cur_x0) ? row_x0[cy] : cur_x0;
+        const int send_x1 = (row_x1[cy] > cur_x1) ? row_x1[cy] : cur_x1;
 
         /* Written through the raw framebuffer, so gfx cannot see it. Saying so
          * is not optional - a missed mark leaves stale pixels on the panel. */
-        gfx_mark_dirty(0, cy * CELL, GFX_WIDTH, CELL);
+        gfx_mark_dirty(send_x0, cy * CELL, send_x1 - send_x0, CELL);
+
+        row_x0[cy] = (uint16_t)cur_x0;
+        row_x1[cy] = (uint16_t)cur_x1;
     }
 
 #if CONFIG_LAUNCHER_DEVELOPMENT

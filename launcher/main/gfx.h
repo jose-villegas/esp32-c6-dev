@@ -34,7 +34,7 @@
  * can produce, but it is beyond what anyone documents for this panel, so it is
  * an overclock: if the display shows tearing, wrong colours or noise, this is
  * the first thing to put back. */
-#define GFX_QSPI_HZ (80 * 1000 * 1000)
+#define GFX_QSPI_HZ (40 * 1000 * 1000)
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
  * 368-wide panel. Text metrics elsewhere must agree with these. */

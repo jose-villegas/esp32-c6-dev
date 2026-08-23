@@ -324,6 +324,80 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
         "but it must still actually send something");
 }
 
+/* PROTOTYPE: measures the gather-copy path in gfx_present() - a strip whose
+ * real dirty width is only a fraction of the band, written directly (not
+ * through gfx_fill_rect(), which always claims the whole band via
+ * mark_band() regardless of what it drew - see its comment). See
+ * docs/ESP32-C6-AMOLED-Notes.md's "Still untapped" for why this exists. */
+static void test_a_narrow_change_costs_less_than_a_full_band(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();   /* drain: everything now clean */
+
+    /* One full band, the existing fast path. */
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x204060));
+    const int64_t full_band = time_present();
+
+    /* A narrow strip within a band, written directly and marked with its
+     * real bounds - what draw_dirty_rows() actually does for a small pour. */
+    gfx_color_t *fb = gfx_framebuffer();
+    const int w = 20;
+    for (int y = 0; y < 64; y++) {
+        for (int x = 0; x < w; x++) {
+            fb[y * GFX_WIDTH + x] = gfx_rgb(0x204060);
+        }
+    }
+    gfx_mark_dirty(0, 0, w, 64);
+    const int64_t narrow = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, %d px wide (gathered) %lld us",
+             (long long)full_band, w, (long long)narrow);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)full_band, (int)narrow,
+        "a strip a fraction of the band's width must cost less than "
+        "claiming the whole band, or the gather-copy path is not paying "
+        "for itself");
+}
+
+/* PROTOTYPE: the box is bounded by area, not width alone, specifically so a
+ * wide-but-short change gathers as cheaply as a narrow-but-tall one - tilt
+ * the board so gravity points sideways and a falling stream is wide and
+ * short instead of narrow and tall, and a width-only bound would give it no
+ * benefit at all. See docs/ESP32-C6-AMOLED-Notes.md's "Still untapped". */
+static void test_a_short_wide_change_costs_less_than_a_full_band(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();
+
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x602040));
+    const int64_t full_band = time_present();
+
+    /* Wide but short: most of the band's width, a sliver of its height -
+     * the shape a sideways-falling stream leaves behind. */
+    gfx_color_t *fb = gfx_framebuffer();
+    const int w = 300;
+    const int h = 8;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            fb[y * GFX_WIDTH + x] = gfx_rgb(0x602040);
+        }
+    }
+    gfx_mark_dirty(0, 0, w, h);
+    const int64_t wide = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, %dx%d px (gathered) %lld us",
+             (long long)full_band, w, h, (long long)wide);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)full_band, (int)wide,
+        "a box short enough in height must cost less than claiming the "
+        "whole band, even at most of its width - orientation must not "
+        "matter to whether gathering pays off");
+}
+
 static void test_drawing_marks_what_it_touched(void)
 {
     fixture();
@@ -433,6 +507,8 @@ void run_gfx_suite(void)
 
     RUN_TEST(test_an_unchanged_frame_costs_almost_nothing);
     RUN_TEST(test_a_partial_change_costs_less_than_a_full_frame);
+    RUN_TEST(test_a_narrow_change_costs_less_than_a_full_band);
+    RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);
     RUN_TEST(test_drawing_marks_what_it_touched);
 
     RUN_TEST(test_the_framebuffer_survives_a_suspend);
