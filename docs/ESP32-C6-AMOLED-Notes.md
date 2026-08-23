@@ -727,6 +727,48 @@ entirely.
 
 ### Still untapped
 
+Rendering ideas raised and reasoned through, deliberately not built yet -
+kept here so the reasoning survives to whoever picks one up.
+
+- **A 2D dirty bounding box, sent per row instead of per strip.**
+  `esp_lcd_panel_draw_bitmap()` takes one flat buffer per call with no
+  stride parameter, so a full-width band is contiguous in the framebuffer
+  for free but an arbitrary sub-rectangle is not - its rows are separated
+  by whatever the row stride leaves outside the rectangle. A single row's
+  sub-range, though, is already contiguous (`fb + y*GFX_WIDTH + x`, the
+  same trick this file already uses everywhere), so a tracked (min x, max
+  x, min y, max y) box could be sent as one `draw_bitmap()` call per row
+  inside it - no copy, more and smaller QSPI transactions instead of one
+  big one. `gfx_present()` already queues every strip's transfer before
+  waiting on any of their semaphores (see the loop in "Partial updates"
+  above), so this would not add a wait per row - Espressif's own docs put
+  DMA descriptor setup at **~2 us per transaction**, small next to what a
+  narrow pour (~20 px of 368) currently wastes sending at full width.
+  Unmeasured: worth prototyping and comparing against the current strips
+  on a real narrow pour before committing to it.
+- **A smaller `STRIP_HEIGHT`.** The 64 px bands were sized for an exact
+  7-way split of 448, not for dirty granularity. A shorter band still
+  needs no copy - any full-width vertical range is contiguous - so this is
+  the cheap half of the idea above: finer vertical skipping, more
+  potential transactions, no new addressing scheme. Would compound with
+  the bounding-box idea rather than replace it, tightening the vertical
+  dimension of what gets sent while the box tightens the horizontal.
+- **A tiled (swizzled) framebuffer - parked on purpose, not a next step.**
+  Store pixels in fixed NxN tile order instead of scanline order, so a
+  whole tile - not just one row of it - is a single contiguous run and
+  transfers with no copy and one `draw_bitmap()` call, the property a
+  full-width strip already gets today. Real, standard technique (GPU
+  texture memory does the same thing), and with power-of-two tile
+  dimensions the address math is shifts, same trick as `STRIP_HEIGHT`.
+  Parked because `gfx.c` owns the framebuffer for the *whole device*, not
+  just the sand app - every `gfx_fill_rect()`, every glyph, the cube
+  renderer, and `ui.c`'s canvas painting all currently address a pixel
+  with one multiply-add assuming scanline order. Tiled storage replaces
+  that with a permanent tile-index-plus-offset computation on every draw
+  call, system-wide, to buy a transfer-side win only the sand app's dirty
+  pattern would exploit. Worth it only if the two ideas above turn out to
+  be bottlenecked on something tiling would fix and they are not - measure
+  those first.
 - Clear only the previous frame's bounding box rather than all 165k pixels.
 - Skipping the launcher's redraw when nothing changed, which would let its bands
   go unsent too.
@@ -930,6 +972,22 @@ moves because it is waiting on DMA, not computing.
 
 Nothing was lost: there is no debugger attached to this board, and the on-device
 suite passes identically at either level.
+
+**This regressed silently, and was caught late.** The committed `sdkconfig`
+drifted back to `CONFIG_COMPILER_OPTIMIZATION_DEBUG` at some point after the
+numbers above were taken - `sdkconfig.defaults` kept saying `PERF`, but a
+generated file already checked into git is not re-derived from its defaults
+just because they changed, so nothing forced the two back into agreement.
+Every plain `idf.py build` since then shipped at -Og again, undetected
+because the diagnostics variant regenerates its own `sdkconfig` from the
+defaults on every build and so never drifted - it kept measuring the -O2
+numbers this doc assumed, while the actual release image quietly did not.
+Found while device-verifying an unrelated refactor; fixed by deleting the
+stale file and letting `idf.py reconfigure` rebuild it from the defaults.
+Worth remembering on its own: a generated file checked into git can go
+stale exactly like this, silently, with no diff pointing at it - the fix
+is to occasionally check what is actually committed rather than trust that
+it was once right.
 
 ### Release and diagnostics run at the same speed
 
