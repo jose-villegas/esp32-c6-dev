@@ -1,3 +1,7 @@
+### Python
+__pycache__/
+*.pyc
+
 ### C
 # Object files
 *.o
@@ -75,6 +79,10 @@ build.*/
 managed_components/
 dependencies.lock
 sdkconfig.old
+
+# idf.py clang-check output - see launcher/.clang-tidy
+warnings.txt
+html_report/
 
 ### Windows
 # Windows thumbnail cache files
