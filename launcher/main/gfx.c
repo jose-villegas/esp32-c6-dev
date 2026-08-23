@@ -688,7 +688,8 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
  * queued, so nothing else can be outstanding at that point. Safe to call
  * more than once per row for the same reason: each call leaves the queue
  * empty again before returning. */
-static void gather_and_send(int x0, int y0, int x1, int y1, int *queued,
+static void gather_and_send(int x0, int y0, int x1, int y1, int row,
+                            int run_start, int run_end, int *queued,
                             gfx_color_t border)
 {
     const int w = x1 - x0;
@@ -699,17 +700,31 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int *queued,
     }
     *queued = 0;
 
-    for (int row = 0; row < h; row++) {
-        memcpy(gather_buf + (size_t)row * w,
-              fb + (size_t)(y0 + row) * GFX_WIDTH + x0,
+    for (int r = 0; r < h; r++) {
+        memcpy(gather_buf + (size_t)r * w,
+              fb + (size_t)(y0 + r) * GFX_WIDTH + x0,
               (size_t)w * sizeof(gfx_color_t));
     }
 #if CONFIG_LAUNCHER_DEVELOPMENT
     if (debug_overlay_on) {
-        mark_rect_border(gather_buf, w, w, h, border);
+        /* One border per cell in the run, at that cell's own tight bounds -
+         * never around the merged box as a whole. cell_x0/x1/y0/y1 are
+         * already clipped to their own cell's column and row (see
+         * union_cell_x/union_cell_y), so a border built from them can never
+         * land on the fixed line shared with a neighbouring cell the way a
+         * single border around the merged box could - it only ever draws
+         * inside the cell it belongs to. */
+        for (int col = run_start; col < run_end; col++) {
+            const int idx = row * GRID_COLS + col;
+            gfx_color_t *at = gather_buf +
+                             (size_t)(cell_y0[idx] - y0) * w +
+                             (cell_x0[idx] - x0);
+            mark_rect_border(at, w, cell_x1[idx] - cell_x0[idx],
+                             cell_y1[idx] - cell_y0[idx], border);
+        }
     }
 #else
-    (void)border;
+    (void)row; (void)run_start; (void)run_end; (void)border;
 #endif
     esp_lcd_panel_draw_bitmap(panel, x0, y0, x1, y1, gather_buf);
     xSemaphoreTake(strip_sent, portMAX_DELAY);
@@ -831,10 +846,11 @@ static void send_one_row(int row, int *queued)
         }
     }
 
-    /* Yellow: one box per contiguous run of dirty columns. */
+    /* Yellow: one box per contiguous run of dirty columns - still one
+     * transaction even when the overlay splits its border per cell. */
     for (int r = 0; r < n; r++) {
-        gather_and_send(box_x0[r], box_y0[r], box_x1[r], box_y1[r], queued,
-                        gfx_rgb(0xFFFF00));
+        gather_and_send(box_x0[r], box_y0[r], box_x1[r], box_y1[r], row,
+                        run_start[r], run_end[r], queued, gfx_rgb(0xFFFF00));
     }
 }
 
