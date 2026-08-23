@@ -52,7 +52,7 @@ this, not a tour. Start wherever your question is:
 |---|---|
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | How the shell and its apps fit together; the three rules that shape everything; how to add an app; why the UI toolkit is microui, not LVGL. |
 | [`docs/Sand-Simulation.md`](docs/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
-| [`docs/ESP32-C6-AMOLED-Notes.md`](docs/ESP32-C6-AMOLED-Notes.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. |
+| [`docs/Notes/`](docs/Notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | How the host and on-device test suites work, and why release builds carry none of the test code. |
 
 ## Status

@@ -400,5 +400,5 @@ against.
   folder layout the app-suite convention above assumes.
 - `docs/Sand-Simulation.md` — `suite_sand.c` is the largest suite in this
   codebase; this is what it is actually testing.
-- `docs/ESP32-C6-AMOLED-Notes.md` — the hardware constraints behind the
-  device-only performance tests.
+- `docs/Notes/` — the hardware constraints behind the device-only
+  performance tests. Start at `docs/Notes/README.md`.

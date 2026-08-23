@@ -56,15 +56,15 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
 static struct { int x0, y0, x1, y1; } clip;
 
 /* The screen as a fixed grid of cells, ROWS tall bands x COLS wide columns -
- * PROTOTYPE, see docs/ESP32-C6-AMOLED-Notes.md's "Still untapped" for the
- * reasoning. Both dimensions are a fixed partition now, not just rows with
- * an adaptive box inside: two separate clusters of activity in the same row
+ * see docs/Notes/Display-and-Rendering.md's "Partial updates" for the
+ * reasoning. Both dimensions are a fixed partition, not just rows with an
+ * adaptive box inside: two separate clusters of activity in the same row
  * but different columns get to skip the gap between them instead of one
  * box being forced to span both. 368 / 4 = 92 and 448 / 64 = 7, both exact.
  *
  * One bit per cell: set means "this cell changed and must be considered for
  * sending". The panel refreshes from its own GRAM, so anything not sent
- * simply stays on screen - see docs/ESP32-C6-AMOLED-Notes.md. */
+ * simply stays on screen - see docs/Notes/Display-and-Rendering.md. */
 #define GRID_COLS  4
 #define COL_WIDTH  (GFX_WIDTH / GRID_COLS)
 #define CELL_COUNT (STRIP_COUNT * GRID_COLS)

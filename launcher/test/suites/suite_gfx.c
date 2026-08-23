@@ -328,7 +328,8 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
  * real dirty width is only a fraction of the band, written directly (not
  * through gfx_fill_rect(), which always claims the whole band via
  * mark_band() regardless of what it drew - see its comment). See
- * docs/ESP32-C6-AMOLED-Notes.md's "Still untapped" for why this exists. */
+ * docs/Notes/Display-and-Rendering.md's "Still untapped" for why this
+ * exists. */
 static void test_a_narrow_change_costs_less_than_a_full_band(void)
 {
     fixture();
@@ -361,11 +362,12 @@ static void test_a_narrow_change_costs_less_than_a_full_band(void)
         "for itself");
 }
 
-/* PROTOTYPE: the box is bounded by area, not width alone, specifically so a
+/* The box is bounded by area, not width alone, specifically so a
  * wide-but-short change gathers as cheaply as a narrow-but-tall one - tilt
  * the board so gravity points sideways and a falling stream is wide and
  * short instead of narrow and tall, and a width-only bound would give it no
- * benefit at all. See docs/ESP32-C6-AMOLED-Notes.md's "Still untapped". */
+ * benefit at all. See docs/Notes/Display-and-Rendering.md's "Still
+ * untapped". */
 static void test_a_short_wide_change_costs_less_than_a_full_band(void)
 {
     fixture();
@@ -398,12 +400,12 @@ static void test_a_short_wide_change_costs_less_than_a_full_band(void)
         "matter to whether gathering pays off");
 }
 
-/* PROTOTYPE: two small clusters in the same band but opposite corners -
- * each cheap enough on its own to gather independently, which is the point:
- * this is the case a single adaptive box per strip cannot help with at
- * all, since a box spanning both would cover nearly the whole band for no
- * reason. Two separate pools settling in the same horizontal band, say.
- * See docs/ESP32-C6-AMOLED-Notes.md's "Still untapped". */
+/* Two small clusters in the same band but opposite corners - each cheap
+ * enough on its own to gather independently, which is the point: this is
+ * the case a single adaptive box per strip cannot help with at all, since
+ * a box spanning both would cover nearly the whole band for no reason. Two
+ * separate pools settling in the same horizontal band, say. See
+ * docs/Notes/Display-and-Rendering.md's "Still untapped". */
 static void test_two_far_corners_cost_less_than_a_full_band(void)
 {
     fixture();
@@ -525,7 +527,7 @@ static void test_a_suspend_resume_round_trip_costs_under_a_frame(void)
      * the point is not the exact figure but that nobody reintroduces the panel
      * init sequence. Verified by flipping the argument to gfx_resume(true),
      * which takes 230 ms and fails this by 321x.
-     * See docs/ESP32-C6-AMOLED-Notes.md. */
+     * See docs/Notes/Board-and-Memory.md's "Time-multiplexing the bus". */
     TEST_ASSERT_LESS_THAN_MESSAGE(25000, (int)elapsed,
         "a round trip must fit inside one frame - did the init sequence "
         "get re-sent?");

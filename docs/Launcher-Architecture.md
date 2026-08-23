@@ -342,7 +342,7 @@ the same direction once put next to each other:
 
 **The memory budget has no room for it.** There is no PSRAM - the whole
 budget is ~424 KiB of internal SRAM, and the framebuffer alone is 322 KiB of
-that (see `docs/ESP32-C6-AMOLED-Notes.md`). LVGL costs roughly **67 KiB**
+that (see `docs/Notes/Board-and-Memory.md`). LVGL costs roughly **67 KiB**
 before a single widget is allocated - about 16% of the entire chip's memory
 gone before drawing anything. microui needed patching too (upstream sizes
 `mu_Context` for desktop, 256 KiB for the command list alone), but that is a
@@ -414,8 +414,9 @@ requires nothing new, but reworking input handling means preserving this.
 
 ## Related
 
-- `docs/ESP32-C6-AMOLED-Notes.md` — the hardware constraints underneath all of
-  this: memory budget, panel gotchas, touch quirks, flashing and recovery.
+- `docs/Notes/` — the hardware constraints underneath all of this: memory
+  budget, panel gotchas, touch quirks, flashing and recovery. Start at
+  `docs/Notes/README.md`.
 - `docs/Sand-Simulation.md` — the falling-sand app in depth: materials, the
   water model, momentum, and why its liquid logic is its own file.
 - `docs/Testing-Guide.md` — how to test any of it.
