@@ -126,8 +126,9 @@ bool gfx_resume(bool full_init);
  * frozen or partially stale screen, not a crash.
  *-------------------------------------------------------------------------*/
 
-/* Declare that a rectangle of the framebuffer has changed. Tracking is by
- * full-width band, so x and w are accepted but ignored. */
+/* Declare that a rectangle of the framebuffer has changed. Tracked as a real
+ * box per grid cell, not just which cell - a caller that knows it only
+ * touched part of a cell may end up sending less than the whole thing. */
 void gfx_mark_dirty(int x, int y, int w, int h);
 
 void gfx_mark_all_dirty(void);
@@ -143,3 +144,11 @@ bool gfx_region_dirty(int x, int y, int w, int h);
 /* Send the changed bands to the panel and wait for the transfers to land.
  * The wait is mandatory - see the notes on asynchronous DMA in the docs. */
 void gfx_present(void);
+
+/* Runtime toggle for the grid dirty-region overlay - see gfx_present()'s
+ * mark_rect_border(). Off by default even in a development build: it draws
+ * directly over real content, so it should be opted into, not always on.
+ * The overlay itself compiles out of a release build entirely regardless
+ * of this flag; toggling it there is a harmless no-op. */
+void gfx_set_debug_overlay(bool on);
+bool gfx_debug_overlay(void);

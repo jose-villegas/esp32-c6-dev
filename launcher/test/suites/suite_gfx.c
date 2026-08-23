@@ -398,6 +398,54 @@ static void test_a_short_wide_change_costs_less_than_a_full_band(void)
         "matter to whether gathering pays off");
 }
 
+/* PROTOTYPE: two small clusters in the same band but opposite corners -
+ * each cheap enough on its own to gather independently, which is the point:
+ * this is the case a single adaptive box per strip cannot help with at
+ * all, since a box spanning both would cover nearly the whole band for no
+ * reason. Two separate pools settling in the same horizontal band, say.
+ * See docs/ESP32-C6-AMOLED-Notes.md's "Still untapped". */
+static void test_two_far_corners_cost_less_than_a_full_band(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();
+
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x206020));
+    const int64_t full_band = time_present();
+
+    gfx_color_t *fb = gfx_framebuffer();
+    const int size = 15;
+
+    /* Top-left corner. */
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            fb[y * GFX_WIDTH + x] = gfx_rgb(0x206020);
+        }
+    }
+    gfx_mark_dirty(0, 0, size, size);
+
+    /* Bottom-right corner - a different row range within the same band, a
+     * different column, nothing in between touched. */
+    const int y0 = 64 - size;
+    const int x0 = GFX_WIDTH - size;
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            fb[(y0 + y) * GFX_WIDTH + x0 + x] = gfx_rgb(0x206020);
+        }
+    }
+    gfx_mark_dirty(x0, y0, size, size);
+
+    const int64_t two_corners = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, two %dx%d corners %lld us",
+             (long long)full_band, size, size, (long long)two_corners);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)full_band, (int)two_corners,
+        "two small, far-apart clusters sent independently together must "
+        "still cost less than the whole band");
+}
+
 static void test_drawing_marks_what_it_touched(void)
 {
     fixture();
@@ -509,6 +557,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_partial_change_costs_less_than_a_full_frame);
     RUN_TEST(test_a_narrow_change_costs_less_than_a_full_band);
     RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);
+    RUN_TEST(test_two_far_corners_cost_less_than_a_full_band);
     RUN_TEST(test_drawing_marks_what_it_touched);
 
     RUN_TEST(test_the_framebuffer_survives_a_suspend);

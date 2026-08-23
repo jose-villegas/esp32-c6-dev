@@ -567,10 +567,21 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * including the frame it expires - that last redraw is what actually wipes
      * it off. Marking bands dirty is not enough on its own: the sand only
      * repaints rows the simulation changed, so without this the label would
-     * leave a hole in the pile. */
+     * leave a hole in the pile.
+     *
+     * draw_dirty_rows() alone is not enough either, now that it sends each
+     * row only as wide as the sand actually occupies: a row with no sand
+     * at all - exactly where a label drawn over clear screen sits - has
+     * nothing to gather and nothing gets sent, so the cleared framebuffer
+     * never reaches the panel and the label's old pixels are left stuck.
+     * gfx_mark_dirty() does not know about the label either - it is drawn
+     * through gfx_pixel(), a separate path draw_dirty_rows() has no view
+     * into - so the fix is to just claim the whole screen outright on this
+     * one frame rather than trust either path to infer it. */
     if (label_left_ms > 0) {
         label_left_ms = (dt_ms >= label_left_ms) ? 0 : (label_left_ms - dt_ms);
         memset(dirty_rows, 1, (size_t)GRID_H);
+        gfx_mark_dirty(0, 0, GFX_WIDTH, GFX_HEIGHT);
     }
 
     handle_pour_input(input, dt_ms);
