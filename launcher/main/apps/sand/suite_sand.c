@@ -1549,6 +1549,78 @@ static void test_a_large_body_of_water_levels(void)
         "because it had finished");
 }
 
+/* --- momentum: the wall-rebound splash ----------------------------------- */
+
+#define REB_W 6
+#define REB_H 4
+static uint8_t reb_cells_a[REB_W * REB_H];
+static uint8_t reb_cells_b[REB_W * REB_H];
+static sand_t  reb_a, reb_b;
+
+static long mass_in_column(const sand_t *g, int x, material_id_t m)
+{
+    long total = 0;
+    for (int y = 0; y < REB_H; y++) {
+        const cell_t c = sand_at(g, x, y);
+        if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == (uint8_t)m) {
+            total += CELL_VARIANT(c);
+        }
+    }
+    return total;
+}
+
+/* Only the wall column, so the interior one stays empty - room the rebound
+ * needs somewhere to deposit into. */
+static void fill_left_wall_column(sand_t *g)
+{
+    for (int y = 0; y < REB_H; y++) {
+        sand_set(g, 0, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+}
+
+static void test_a_hard_flick_kicks_water_off_the_wall_it_just_hit(void)
+{
+    /* The reported wish: a wave that has just piled against a wall should
+     * bounce off it a little, rather than simply sitting there the way a
+     * steady tilt to the same angle leaves it.
+     *
+     * Both pools are primed pointing a different way, THEN filled with water
+     * against the left wall, THEN stepped once more with gravity pointing
+     * left - so the water itself never experiences its priming direction at
+     * all, and the two setups differ in exactly one thing: which way
+     * momentum was already pointing when that final step landed.
+     *
+     * Gravity is kept exactly horizontal throughout, which matters beyond
+     * tidiness: it is what makes the comparison exact rather than merely
+     * probable. Off-axis gravity dithers between two of the eight directions
+     * at random (see sand_gravity_direction_dithered), and horizontal
+     * gravity's own perpendicular is vertical, so ordinary cross-flow cannot
+     * reach a neighbouring COLUMN either. With no randomness and no ordinary
+     * path into column 1 at all, water arriving there can only be the
+     * rebound - there is nothing else it could be. */
+    sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
+    sand_init(&reb_b, reb_cells_b, REB_W, REB_H, 1u);
+
+    sand_step(&reb_a, -1000, 0, 0);   /* primed pointing left, same as below */
+    sand_step(&reb_b,  1000, 0, 0);   /* primed pointing right - away from it */
+
+    fill_left_wall_column(&reb_a);
+    fill_left_wall_column(&reb_b);
+
+    sand_step(&reb_a, -1000, 0, 0);   /* gradual: already pointed this way */
+    sand_step(&reb_b, -1000, 0, 0);   /* flicked: a full reversal onto the wall */
+
+    const long gradual_col1 = mass_in_column(&reb_a, 1, MAT_WATER);
+    const long flicked_col1 = mass_in_column(&reb_b, 1, MAT_WATER);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, gradual_col1,
+        "sanity check on the test itself: gravity that was already pointing "
+        "into the wall must produce no momentum and therefore no rebound");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(gradual_col1, flicked_col1,
+        "a hard flick onto a wall the water is already resting against must "
+        "kick some of it back into the grid");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -2068,6 +2140,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_tipped_basin_keeps_its_sand);
     RUN_TEST(test_water_puddles_where_sand_heaps);
     RUN_TEST(test_a_large_body_of_water_levels);
+    RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);

@@ -50,6 +50,14 @@ typedef struct {
      * pass is skipped, so a screen of sand never pays for water. */
     bool     may_have_liquid;
 
+    /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
+     * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
+     * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised
+     * gravity direction, kept only to measure the turn against. */
+    int32_t  mom_x_q8, mom_y_q8;
+    int32_t  dir_x_q8, dir_y_q8;
+    bool     mom_primed;
+
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
     uint8_t *dirty_rows;
@@ -179,6 +187,45 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  *      sight 32 -> 0.2, and looks wrong while it gets there
  */
 #define SAND_LIQUID_SIGHT 8
+
+/* THE WALL-REBOUND SPLASH
+ *
+ * Everything above reacts to where gravity POINTS. Nothing reacts to how fast
+ * it is CHANGING - so flicking the board hard and a slow tilt to the same
+ * angle look identical once settled, and a wave that has just piled against a
+ * wall has no reason to do anything but sit there.
+ *
+ * A real wave hitting a wall bounces some of itself back. The cheap stand-in:
+ * track a bulk momentum vector from how much gravity's direction has turned,
+ * step over step - not from where it points, which is already fully handled
+ * above. When that turn is large and pointed into a wall, cells touching that
+ * wall kick a little mass back into the grid; the kick fades as the turn
+ * fades, over a few steps.
+ *
+ * Deliberately not a per-cell velocity: that would be another byte per cell,
+ * 41 KB against the ~90 KB actually free once the grid and its row state are
+ * already allocated - see the memory budget note in material.h. One shared
+ * vector costs nothing measurable and produces the same visible effect, since
+ * the whole board is being shaken together, not grain by grain.
+ */
+
+/* How much of a step's turn survives to the next one, out of 256. Higher
+ * lingers longer. */
+#define SAND_MOMENTUM_DECAY     220
+
+/* Below this much accumulated turn (Q8 units - 256 is a full quarter-turn in
+ * one step) no wall reacts at all. Ordinary tilting, even briskly, stays under
+ * this; it takes an actual flick to cross it. */
+#define SAND_REBOUND_THRESHOLD  160
+
+/* Mass kicked off a wall per cell per step, per unit of turn past the
+ * threshold. Zero disables the whole effect with no other change needed -
+ * the momentum is still tracked, but nothing ever reads it. */
+#define SAND_REBOUND_GAIN         3
+
+/* However hard the flick, no more than this much mass moves per cell per
+ * step - it is a splash, not a teleport. */
+#define SAND_REBOUND_MAX          6
 
 /* How many cells are stacked directly against gravity above the one at (x, y),
  * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.

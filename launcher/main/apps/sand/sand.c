@@ -56,6 +56,19 @@ static int ring_index(int dx, int dy)
     return 0;   /* unreachable for a unit direction */
 }
 
+/* |v| without a square root, to about 4%: the larger component plus two fifths
+ * of the smaller. The same approximation tilt.c uses for the same reason - it
+ * only has to be good enough to normalise a direction, not exact. */
+static int vec_len_approx(int x, int y)
+{
+    const int ax = x < 0 ? -x : x;
+    const int ay = y < 0 ? -y : y;
+    const int hi = ax > ay ? ax : ay;
+    const int lo = ax > ay ? ay : ax;
+
+    return hi + (lo * 2) / 5;
+}
+
 /*---------------------------------------------------------------------------
  * Grid access
  *-------------------------------------------------------------------------*/
@@ -74,6 +87,11 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->last_load_dx = 0;
     s->last_load_dy = 0;
     s->scatter      = 0;
+    s->mom_x_q8 = 0;
+    s->mom_y_q8 = 0;
+    s->dir_x_q8 = 0;
+    s->dir_y_q8 = 0;
+    s->mom_primed = false;
     sand_clear(s);
 }
 
@@ -737,8 +755,105 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
     }
 }
 
+/* One wall's share of the rebound splash - see SAND_REBOUND_GAIN.
+ *
+ * `edge` is the column (for a left/right wall) or row (top/bottom) that
+ * touches the wall; `count` is how many cells run along it; `to` is the
+ * one-cell step into the grid, away from the wall. `push_q8` is how hard
+ * momentum is currently driving INTO this particular wall - already resolved
+ * to a single non-negative number by the caller, since each wall only cares
+ * about one sign of one axis.
+ *
+ * Every source cell here is unique to this wall and every destination is one
+ * fixed step inward, so no two transfers this call can ever touch the same
+ * cell - unlike equalise_liquids, this needs no sweep order at all. */
+static void rebound_wall(sand_t *s, int edge, int count, int to,
+                         bool vertical, int push_q8, uint16_t is_liquid)
+{
+    if (push_q8 <= SAND_REBOUND_THRESHOLD) {
+        return;
+    }
+    int kick = ((push_q8 - SAND_REBOUND_THRESHOLD) * SAND_REBOUND_GAIN) >> 8;
+    if (kick > SAND_REBOUND_MAX) {
+        kick = SAND_REBOUND_MAX;
+    }
+    if (kick <= 0) {
+        return;
+    }
+
+    const int w = s->w;
+
+    for (int i = 0; i < count; i++) {
+        const int x = vertical ? edge : i;
+        const int y = vertical ? i : edge;
+
+        const size_t at = (size_t)y * (size_t)w + (size_t)x;
+        const cell_t c = s->cells[at];
+        if (CELL_IS_EMPTY(c)) {
+            continue;
+        }
+        const uint8_t id = CELL_MATERIAL(c);
+        if (((is_liquid >> id) & 1u) == 0) {
+            continue;
+        }
+
+        const int nx = vertical ? x + to : x;
+        const int ny = vertical ? y      : y + to;
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)s->h) {
+            continue;
+        }
+
+        const int mass = CELL_VARIANT(c);
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const int room = room_in(s->cells[nat], id);
+        const int give = kick < mass ? kick : mass;
+        const int moved = give < room ? give : room;
+        if (moved <= 0) {
+            continue;
+        }
+
+        pour_into(&s->cells[nat], id, moved);
+        s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
+                                          : CELL_EMPTY;
+        mark_rows(s, y, ny);
+    }
+}
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
+    /* Momentum: how hard gravity's direction turned since last step, decayed
+     * so a single flick fades over a few frames rather than lingering or
+     * accumulating without bound under sustained shaking. Based on the RAW
+     * direction, not the dithered or nearest one - both are quantised for the
+     * grid's benefit and neither is a fair measure of how fast the input
+     * itself is actually moving. */
+    {
+        s->mom_x_q8 = (int32_t)(((int64_t)s->mom_x_q8 * SAND_MOMENTUM_DECAY) >> 8);
+        s->mom_y_q8 = (int32_t)(((int64_t)s->mom_y_q8 * SAND_MOMENTUM_DECAY) >> 8);
+
+        const int len = vec_len_approx(gx, gy);
+        if (len > 0) {
+            const int32_t ux = (int32_t)(((int64_t)gx * 256) / len);
+            const int32_t uy = (int32_t)(((int64_t)gy * 256) / len);
+
+            if (s->mom_primed) {
+                s->mom_x_q8 += ux - s->dir_x_q8;
+                s->mom_y_q8 += uy - s->dir_y_q8;
+            } else {
+                s->mom_primed = true;
+            }
+            s->dir_x_q8 = ux;
+            s->dir_y_q8 = uy;
+        }
+
+        /* Capped so a long spell of shaking cannot ratchet this past what any
+         * single flick could ever produce. */
+        if (s->mom_x_q8 >  1024) { s->mom_x_q8 =  1024; }
+        if (s->mom_x_q8 < -1024) { s->mom_x_q8 = -1024; }
+        if (s->mom_y_q8 >  1024) { s->mom_y_q8 =  1024; }
+        if (s->mom_y_q8 < -1024) { s->mom_y_q8 = -1024; }
+    }
+
     /* Dithered rather than nearest, so a tilt between two of the eight
      * directions flows at its true angle instead of snapping. Costs one random
      * number per STEP - not per grain - so it is free at this scale. */
@@ -1079,5 +1194,27 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
         equalise_liquids(s, s->liquid_flip ? perp_a : perp_b,
                          SAND_LIQUID_SIGHT, dx, dy);
         s->liquid_flip = !s->liquid_flip;
+
+        /* And let a hard flick splash liquid back off whichever wall it just
+         * turned into. Four walls, but each is a no-op below its own
+         * threshold, so this costs nothing on the vastly more common calm
+         * step - see SAND_REBOUND_GAIN. */
+        if (SAND_REBOUND_GAIN != 0) {
+            uint16_t is_liquid = 0;
+            for (int m = 0; m < MATERIAL_MAX; m++) {
+                if (materials[m].kind == KIND_LIQUID) {
+                    is_liquid |= (uint16_t)(1u << m);
+                }
+            }
+
+            rebound_wall(s, 0,        s->h, 1,  true,
+                        (int)-s->mom_x_q8, is_liquid);   /* left wall   */
+            rebound_wall(s, s->w - 1, s->h, -1, true,
+                        (int) s->mom_x_q8, is_liquid);   /* right wall  */
+            rebound_wall(s, 0,        s->w, 1,  false,
+                        (int)-s->mom_y_q8, is_liquid);   /* top wall    */
+            rebound_wall(s, s->h - 1, s->w, -1, false,
+                        (int) s->mom_y_q8, is_liquid);   /* bottom wall */
+        }
     }
 }
