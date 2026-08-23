@@ -70,6 +70,15 @@ static struct { int x0, y0, x1, y1; } clip;
 #define CELL_COUNT (STRIP_COUNT * GRID_COLS)
 static uint32_t cell_dirty;
 
+/* Set once gfx_mark_all_dirty() has run this frame, cleared alongside
+ * cell_dirty in gfx_present(). Every cell is already claimed at that point,
+ * so any further mark_band()/gfx_mark_dirty() call this frame can only ever
+ * repeat work already done - real for an app that clears then draws many
+ * small primitives on top (microui, the cube renderer): each one otherwise
+ * pays the per-cell intersection math for a result gfx_clear() already
+ * decided. */
+static bool all_dirty;
+
 /* Per cell, the (x0,x1) x (y0,y1) box actually known to be dirty this frame,
  * in absolute panel pixels, not cell-relative.
  *
@@ -117,7 +126,7 @@ static gfx_color_t *gather_buf;
  * become shifts. */
 static inline void mark_band(int y0, int y1)
 {
-    if (y0 >= y1) {
+    if (all_dirty || y0 >= y1) {
         return;
     }
     const int first = y0 / STRIP_HEIGHT;
@@ -313,6 +322,10 @@ gfx_color_t *gfx_framebuffer(void)
 
 void gfx_mark_all_dirty(void)
 {
+    if (all_dirty) {
+        return;
+    }
+    all_dirty = true;
     cell_dirty = (CELL_COUNT >= 32) ? 0xFFFFFFFFu : (1u << CELL_COUNT) - 1u;
     for (int row = 0; row < STRIP_COUNT; row++) {
         for (int col = 0; col < GRID_COLS; col++) {
@@ -358,6 +371,10 @@ static inline void union_cell_y(int idx, int y0, int y1, int row)
  * cell in the row, same as before this existed. */
 void gfx_mark_dirty(int x, int y, int w, int h)
 {
+    if (all_dirty) {
+        return;
+    }
+
     int x0 = x;
     int x1 = x + w;
     int y0 = y;
@@ -883,6 +900,7 @@ void gfx_present(void)
     }
 
     cell_dirty = 0;
+    all_dirty = false;
 
     /* draw_bitmap only QUEUES a DMA transfer that reads out of the
      * framebuffer. Returning before they drain would let the next frame start
