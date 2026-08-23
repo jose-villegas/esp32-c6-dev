@@ -45,7 +45,18 @@
  * gets proportionally cheaper at a faster clock while the fixed per-
  * transaction cost does not, so the gather-vs-fallback thresholds below
  * are tuned for 40 MHz specifically and would need re-measuring, not just
- * reused, if this ever moves again. */
+ * reused, if this ever moves again.
+ *
+ * An in-between clock is not on the table, so do not spend time on that
+ * idea if 80 MHz is ever revisited. GPSPI2's clock is derived from an
+ * 80 MHz source with an integer pre/n divider (spi_ll_master_cal_clock() in
+ * the IDF's spi_ll.h): a request over 60 MHz uses the source directly at
+ * 80, and a request at or under 60 MHz is bound by the divider search's
+ * n >= 2 floor to at most 80/2 = 40. 60 MHz specifically was tried and
+ * measured byte-identical to plain 40 - it silently landed on the 40 MHz
+ * divider, not a real intermediate rate, because 60 is on the low side of
+ * that 60 MHz boundary. Every value in this range resolves to one of
+ * exactly two clocks. */
 #define GFX_QSPI_HZ (40 * 1000 * 1000)
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a

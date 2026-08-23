@@ -423,9 +423,11 @@ GPU:
 
 The blit works out to ~13 MB/s effective over QSPI at 40 MHz.
 
-Those cube figures predate two changes and are kept as a record of the starting
-point: the build now uses -O2 rather than -Og, and the QSPI clock is 80 MHz
-rather than 40, which roughly halves the blit row. See below.
+Those cube figures predate a build-flag change and are kept as a record of the
+starting point: the build now uses -O2 rather than -Og. An 80 MHz QSPI clock
+was also tried twice since - it would roughly halve the blit row, but both
+times introduced real pixel corruption on device and was reverted; see
+"The blit is bus-bound" below for why.
 
 Two results worth remembering because they contradict the intuitive guess:
 
@@ -572,31 +574,88 @@ bandwidth-bound. No amount of CPU optimisation touches it. Only two things can:
 send fewer bytes, or clock the bus faster.
 
 The vendor driver defaults to 40 MHz, and `SH8601_PANEL_IO_QSPI_CONFIG` bakes
-that in. The panel runs happily at 80:
+that in. The panel runs at 80 without complaint on the surface:
 
 | | 40 MHz | 80 MHz |
 |---|---|---|
-| `gfx_present()` | 17,602 us | **9,600 us** |
-| Shell framerate | 43.5 fps | **70.0 fps** |
+| `gfx_present()` | 17,602 us | 9,600 us |
+| Shell framerate | 43.5 fps | 70.0 fps |
 
-**80 MHz is the ESP32-C6's ceiling** for general-purpose SPI, so this lever is
-now fully spent. Set by `GFX_QSPI_HZ` in `gfx.h`.
+Tempting, and tried twice - but **80 MHz is not actually usable on this panel**,
+and both attempts ended the same way: small, corner-shaped pixel corruption on
+real hardware, disappearing when the exact same region was redrawn a moment
+later. Not corrupted data at rest, in other words - a transient race that a
+retry always won.
 
-Be honest about what this is: an **overclock**. 40 MHz is the figure Waveshare
-and Espressif validate; 80 is undocumented for this panel and was established by
-running it. If a future unit shows tearing, wrong colours or noise, `GFX_QSPI_HZ`
-is the first thing to put back.
+The first time was during the per-row prototype below; reverted along with
+that idea, so the clock was not the obvious suspect yet. The second time was
+after the grid-and-gathered-runs design (see "Partial updates" below) had
+fully replaced it and settled - re-tried specifically on the theory that the
+*old* artifacts might have been an artefact of that abandoned prototype's own
+transfer pattern rather than the clock. They were not: the same corner
+corruption came back on the new, unrelated design too, which rules out
+"it was that one prototype" and points at the bus margin itself.
+
+**Root cause, as far as it has been pinned down:** the vendor SH8601 driver's
+`draw_bitmap()` (`esp_lcd_sh8601.c`) sends three separate QSPI transactions per
+call, not one - `LCD_CMD_CASET` (column window), then `LCD_CMD_RASET` (row
+window), then `LCD_CMD_RAMWR` with the pixel data. The panel has to latch both
+address-window commands into its internal counters before the pixel burst
+starts writing into the right place; a corner-shaped corruption is exactly
+what a race between "counters settled" and "burst started" looks like - only
+the first pixels written land wrong. At 80 MHz there is measurably less time
+between the address commands and the burst for that latch to complete.
+
+This also explains why the *first* prototype tripped over it and the original,
+fixed-full-band-only design never had: the old design called `draw_bitmap()`
+at most 7 times a frame, always with the same handful of fixed windows. Both
+newer designs call it far more often, with a window that changes shape and
+position every time - more rolls of the same rare, clock-margin-dependent
+dice, not a different or worse bug. The race is native to running this panel
+at 80 MHz at all; a higher transaction count just makes it easier to observe.
+
+A synthetic cost independently regressed at 80 MHz too, for an unrelated
+reason worth keeping in mind if this is ever revisited: gathering two small,
+far-apart regions instead of sending the whole band costs about 1,916 us at
+either clock, because that cost is almost entirely the *fixed* per-transaction
+overhead above, not bandwidth - two gathers means two CASET/RASET/RAMWR
+triples, largely clock-independent. The full band it is being compared
+against, by contrast, **is** bandwidth-bound and drops from 3,405 us to about
+1,405 us at 80 MHz. So the same gather that comfortably wins at 40 MHz
+(1,916 < 3,405) loses at 80 (1,916 > 1,405) - not because gathering got worse,
+but because the alternative it is competing against got proportionally
+cheaper. `GATHER_MAX_PIXELS` and the run-merging thresholds in `gfx.c` are
+tuned against the 40 MHz numbers; they would need re-measuring, not just
+reusing, if the clock ever changes.
+
+**Settled on 40 MHz.** Set by `GFX_QSPI_HZ` in `gfx.h`, along with this
+history - read the comment there before trying 80 again.
+
+An in-between clock looked like the obvious next thing to try - more margin
+than 80, still faster than 40 - and is exactly what 60 MHz was tried as. It
+is not available on this chip. GPSPI2's clock is derived from an 80 MHz
+source through an integer `pre`/`n` divider
+(`spi_ll_master_cal_clock()` in the IDF's `spi_ll.h`): a request over 60 MHz
+uses that 80 MHz source directly, and anything at or under 60 MHz is bound
+by the divider search's `n >= 2` floor to at most `80/2 = 40`. There is no
+integer divider that lands near 60 - the 60 MHz request measured
+byte-identical to plain 40, including matching millisecond-since-boot log
+timestamps across independent reboots, because it silently *was* plain 40.
+Every achievable value in this range is one of exactly two clocks; there is
+no third option to chase here.
 
 ### Partial updates: only send the bands that changed
 
-With the clock maxed, the only remaining way to make the blit cheaper is to
+With the clock settled, the only remaining way to make the blit cheaper is to
 send fewer bytes. `esp_lcd_panel_draw_bitmap()` takes an arbitrary rectangle and
 sets the panel's address window per call, and the panel refreshes from its own
-GRAM - so a band that is not sent simply keeps showing what it last received.
-Because the framebuffer is full width, a full-width band is already contiguous
-and needs no copy.
+GRAM - so anything not sent simply keeps showing what it last received.
 
-`gfx` tracks a dirty bit per band (7 bands of 64 rows, so one byte). Measured:
+This went through three designs before settling. The first, simplest one - a
+dirty *bit* per 64-row band, sending a band whole or not at all - shipped
+first. Its numbers, for reference (measured at 80 MHz, the clock in use at
+the time - not the 40 MHz everything below this point was measured at, so
+do not compare these two tables against each other directly):
 
 | Frame content | `gfx_present()` |
 |---|---|
@@ -604,8 +663,73 @@ and needs no copy.
 | One band of seven | 1,406 us |
 | Nothing changed | **3 us** |
 
-An idle screen now costs essentially nothing, and the sand app swings between
-about 60 fps while pouring and over 200 once the pile settles.
+That was strips-only: real savings only along one axis. Rotate the device and
+whichever axis used to be "narrow" becomes "tall", and every band ends up
+touched regardless of how little actually changed - the strips never adapt to
+orientation. A per-row-transfer prototype (send only a strip's real width, one
+`draw_bitmap()` call per row) was tried next to fix that and measured **5.4x
+slower**, not faster - the real fixed cost of a QSPI transaction on this chip
+turned out to be about 118 us, roughly 59x the ~2 us DMA-descriptor-only figure
+an estimate had assumed. See "Still untapped" below for that finding kept in
+full, since the number it established shaped everything after it.
+
+**What actually shipped:** the screen is a fixed 7×4 grid - 64-row bands the
+same as before, now also split into `GRID_COLS = 4` columns of 92 px each -
+28 cells in total. Each cell tracks a real `(x0,x1)×(y0,y1)` box, not just a
+bit, via `gfx_mark_dirty()`; a caller that only touched part of a cell sends
+only that part. Within one row, contiguous dirty *columns* merge into a single
+gathered transfer (`collect_dirty_runs()`/`run_box()` in `gfx.c`) - adjacent
+activity pays the ~118 us fixed cost once, not once per cell, while two
+genuinely separate dirty regions in the same row still skip the untouched
+middle between them rather than being forced into one box that spans it. If
+any single run's box grows past `GATHER_MAX_PIXELS` (128×64), the *whole row*
+falls back to one full-width send instead of a partial gather plus a
+full-width send double-covering part of it.
+
+This is the fix for the strips-only problem above: a grid has no privileged
+axis, so a device rotation does not leave one direction permanently unable to
+benefit the way pure horizontal strips did. Is it actually a win, though, and
+not just a better-reasoned design? Measured directly, same session, same
+40 MHz clock throughout, so this table and the "one band" cost it is compared
+against are directly comparable to each other in a way the historical table
+above is not:
+
+| Change shape | `gfx_present()` | vs. one full band (3,405 us) |
+|---|---|---|
+| 20 px-wide strip, single cell | 747 us | 4.6x cheaper |
+| 300×8 px, spans all 4 columns, one merged run | 591 us | 5.8x cheaper |
+| Two 15×15 px, opposite corners, two separate runs | 1,916 us | 1.8x cheaper |
+
+The comparison is a fair one, not a favourable framing: the strips-only design
+had no move for any of these three shapes *except* sending the full band -
+whatever changed within a 64-row strip, the whole strip went out, because a
+bit has no notion of "how much". So "one full band" here is not a strawman,
+it is genuinely what the predecessor design would have cost for the exact
+same three changes. All three beat it, including the two-corners case, where
+two independent gathers still cost less than resending the whole thing despite
+paying the fixed per-transaction cost twice - the grid design is a measured
+win over strips-only, not just an orientation-independence argument on paper.
+
+(The two-corners comparison specifically flips at 80 MHz - 1,916 us either
+way, since it is fixed-overhead-bound, against a full band that drops to
+about 1,405 us - but that is the clock margin problem covered above, not a
+property of the grid design itself.)
+
+Two bugs surfaced by this that are worth remembering if the design is ever
+touched again:
+
+- **The gather buffer needs `MALLOC_CAP_DMA`.** A plain `static` array only
+  guarantees the alignment its element type needs, not what the GDMA engine
+  actually requires - a source buffer it cannot read cleanly does not fail
+  loudly, it reads back subtly wrong. Allocated the same way as the real
+  framebuffer now.
+- **The completion semaphore has no identity.** `strip_sent` is a plain
+  counting semaphore; a `Take()` right after queuing a gather can be satisfied
+  by *any* transfer that happens to finish first, not necessarily that
+  gather's own - including an unrelated, already-queued full-width send.
+  Fixed by draining every outstanding queued transfer before a gather touches
+  the shared buffer, relying on same-device SPI transactions completing in
+  the order they were queued.
 
 **Nothing had to change in the existing apps.** `gfx_clear()` marks the whole
 screen, and the cube, the launcher and the POST report all clear before drawing
@@ -629,6 +753,18 @@ On the simulation side the same dirty information answers "what needs
 redrawing" as well as "what needs sending", which is the point of the
 [dirty-rect approach](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation)
 Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered.
+
+**A development-only visualizer** makes this concrete on real hardware
+instead of only in synthetic tests: `gfx_set_debug_overlay(true)` (a checkbox
+on the Diagnostics app's second page, BOOT to reach it) outlines whichever
+cells are actually being sent each frame - yellow for a gathered run, cyan for
+a full-row fallback, each cell bordered at its own tight bounds rather than
+one box drawn around a whole merged run, so a border can never land on the
+fixed line shared with a neighbouring cell. Declared only under
+`CONFIG_LAUNCHER_DEVELOPMENT`, in both the header and the implementation - not
+just compiled out of a release build, but undefined there: a caller outside a
+development-only file that forgets to guard a call to it fails to compile
+rather than silently doing nothing.
 
 ### A variable framerate needs a fixed timestep
 
@@ -730,8 +866,19 @@ entirely.
 Rendering ideas raised and reasoned through, deliberately not built yet -
 kept here so the reasoning survives to whoever picks one up.
 
-- ~~A 2D dirty bounding box, sent per row instead of per strip.~~ **Tried,
-  measured, does not pay off - kept for the reasoning, not as a next step.**
+- ~~A 2D dirty bounding box, sent per row instead of per strip.~~ **This
+  specific prototype does not pay off - kept for the reasoning, not as a
+  next step.** A *different* 2D design, built afterward with this finding in
+  hand, did ship - see "Partial updates" above for the grid-and-gathered-runs
+  design that replaced plain strips. The difference is call count: this
+  prototype could reach up to 64 `draw_bitmap()` calls for one band, which
+  the ~118 us/call figure below rules out categorically; the shipped design
+  bounds a row to at most `GRID_COLS/2` gathered calls (2, here) by merging
+  adjacent dirty columns into one transfer first and falling back to a
+  single full-width send whenever a run would still be too big to be worth
+  gathering - it never reaches for "one call per dirty unit" the way this
+  one did.
+
   The theory: `esp_lcd_panel_draw_bitmap()` takes one flat buffer per call
   with no stride parameter, so a full-width band is contiguous in the
   framebuffer for free but an arbitrary sub-rectangle is not; a single
@@ -766,16 +913,35 @@ kept here so the reasoning survives to whoever picks one up.
   the added correctness surface (the row-span bookkeeping, the semaphore
   resize, the union logic to avoid leaving stale pixels behind) for a
   narrower win than originally hoped.
-- **A smaller `STRIP_HEIGHT`.** Still open, but re-read against the
-  ~118 us/transaction figure above rather than the original 2 us guess:
-  the 64 px bands were sized for an exact 7-way split of 448, not for
-  dirty granularity, and a shorter band still needs no copy - any
-  full-width vertical range is contiguous. Unlike the per-row idea, this
-  does not multiply transaction count without bound; it only helps when
-  the active *vertical* range is smaller than the new, shorter band, and
-  can lose when an active range straddles two shorter bands that a single
-  taller one would have covered in one call. Only worth trying with real
-  numbers either side of that trade, not assumed.
+- **A smaller `STRIP_HEIGHT`.** Still open. The *horizontal* equivalent of
+  this - splitting each band into narrower columns - already shipped as
+  `GRID_COLS`; this is the same idea for the vertical axis, unexplored so
+  far because `GRID_COLS` alone was enough to fix strips-only design's real
+  problem (no benefit after a device rotation). Re-read against the
+  ~118 us/transaction figure rather than the original 2 us guess: a shorter
+  band still needs no copy - any full-width vertical range stays contiguous
+  - and does not multiply transaction count the way the per-row idea did,
+  since it changes the grid's fixed shape rather than adding a call per
+  dirty unit. It only helps when the active vertical range is smaller than
+  the new, shorter band, and can lose when an active range straddles two
+  shorter bands that a single taller one would have covered in one call.
+  Only worth trying with real numbers either side of that trade, not
+  assumed.
+- **A quadtree, subdividing further than the fixed 7x4 grid.** Raised, not
+  yet built or measured. The open question is whether it earns its keep
+  against the grid's *worst* case rather than its best: with the screen
+  mostly or fully occupied - a full pour, a settled screen mid-collapse -
+  a quadtree has nothing coarse-grained left to skip and pays real
+  traversal/bookkeeping cost the flat grid does not, so it could plausibly
+  come out *behind* the current design exactly when the current design is
+  already cheapest to fall back on the whole row. Where it could still win
+  is the opposite case: a small amount of activity inside an otherwise idle
+  screen, where a quadtree could stop descending into whole idle subtrees
+  that the current fixed 92x64 cells cannot subdivide any further - the
+  gfx send path being the heaviest single cost on screen (see "Measured
+  performance" above) is what would make even a small win there worth
+  having. Not started: needs the worst case measured first, since a design
+  that loses there is not a net win no matter how well it does elsewhere.
 - **A tiled (swizzled) framebuffer - parked on purpose, not a next step.**
   Store pixels in fixed NxN tile order instead of scanline order, so a
   whole tile - not just one row of it - is a single contiguous run and
