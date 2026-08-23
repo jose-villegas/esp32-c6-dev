@@ -739,15 +739,44 @@ cache, so adding unrelated code shifts the layout and changes the hit rate.
 Treat differences under about 20% as noise unless they reproduce, and leave
 performance assertions enough margin that they are not a coin toss.
 
-Two things NOT worth doing, measured or reasoned:
+One thing worth being precise about, because it is easy to reach for
+instinctively and does not apply on this chip: **there is no data cache in
+front of RAM here.** The 32 KB cache above is an *instruction* cache for code
+and constants running from flash-mapped `.text`/`.rodata` - it is why the
+material table and the colour palette are `const` (see `material.h`), and it
+is the whole reason the IRAM finding below measured nothing. The simulation
+grid itself lives in DIRAM (plain heap SRAM) with no cache tier above it -
+SRAM access already runs at the speed a cache would give on a bigger CPU, so
+"lay the grid out for better cache hits" has nothing to bite on here. The only
+way to go faster on the RAM side is to touch fewer bytes per step, which is
+what the row-sleeping and `ROW_NO_LIQUID` skips already do.
 
-- **Micro-optimising the simulation further.** At 3.2 ms worst case, against a
-  blit that is usually now under 2 ms, it is the bottleneck only when the whole
-  screen is moving.
+**LP SRAM is not a faster tier either, in case that is ever tempting.**
+Checked directly against Espressif's own docs rather than assumed: the 16 KB
+LP SRAM region is "slightly slower to access" than regular DIRAM from the
+main CPU, and exists for deep-sleep wake stubs, not as a performance
+resource. Moving hot data there would be a regression, not a gain - and since
+DIRAM sits at ~80% free, there is no capacity pressure to move anything cold
+there either.
+
+Two things NOT worth doing, measured or reasoned - true when written, no
+longer entirely true for the first one, which is why it is worth restating
+rather than deleting:
+
+- ~~Micro-optimising the simulation further. At 3.2 ms worst case, against a
+  blit that is usually now under 2 ms, it is the bottleneck only when the
+  whole screen is moving.~~ **No longer holds.** That was sand alone, before
+  water existed as a material. Measured since: `sand_step` (powder) ~5.5-6 ms
+  worst case, but the liquid cross-flow and rebound pass now costs up to
+  ~15 ms against its own 16 ms budget - water, not sand, is the actual
+  bottleneck whenever a body of it is moving. If more simulation performance
+  is worth chasing, that pass is where it is.
 - **IRAM placement of the hot loops.** Espressif
   [recommends it](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-guides/performance/speed.html)
   for hot functions, and the C6 runs code from a 32 KB read-only flash cache so
   it would help something - but not the part of the frame that actually costs.
+  Still holds: this is about the *code* cache, unaffected by which function
+  in `sand.c` happens to be hottest this month.
 
 ### Falling sand needs two kinds of friction, not one
 
