@@ -4,3 +4,11 @@ CheckOptions:
     value:           '1'
   - key:             readability-function-cognitive-complexity.DescribeBasicIncrements
     value:           'true'
+  # Without this, ESP-IDF's own logging macros dominate the score: ESP_LOGE
+  # expands to a hidden if/else-if chain internally (see esp_log.h), so a
+  # function that logs a few times scores in the hundreds regardless of its
+  # own control flow - measured directly, imu_init() read as 153 versus a
+  # hand-count of ~9 for what is actually written in main/imu.c. That is
+  # ESP-IDF's macro internals, not this codebase's complexity.
+  - key:             readability-function-cognitive-complexity.IgnoreMacros
+    value:           'true'

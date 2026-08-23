@@ -409,6 +409,41 @@ void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
     gfx_text_turned(x, y, text, color, scale, 0);
 }
 
+/* Where one font pixel at (row, col) within its own 8x8 cell lands once
+ * rotated by `turn` quarter-turns. The cell keeps its origin at (x, y)
+ * whichever way it is turned - only the string's advance direction differs
+ * between rotations, not this. Drawn as a scale x scale square. */
+static void draw_rotated_font_pixel(int x, int y, int row, int col,
+                                    int scale, int turn, gfx_color_t color)
+{
+    int px, py;
+    switch (turn) {
+    case 1:  px = 7 - row; py = col;     break;
+    case 2:  px = 7 - col; py = 7 - row; break;
+    case 3:  px = row;     py = 7 - col; break;
+    default: px = col;     py = row;     break;
+    }
+    gfx_fill_rect(x + px * scale, y + py * scale, scale, scale, color);
+}
+
+static void draw_glyph_turned(int x, int y, unsigned char ch,
+                              gfx_color_t color, int scale, int turn)
+{
+    const char *glyph = font8x8_basic[ch];
+
+    for (int row = 0; row < 8; row++) {
+        const unsigned char bits = (unsigned char)glyph[row];
+        if (bits == 0) {
+            continue;
+        }
+        for (int col = 0; col < 8; col++) {
+            if (bits & (1 << col)) {
+                draw_rotated_font_pixel(x, y, row, col, scale, turn, color);
+            }
+        }
+    }
+}
+
 void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
                      int scale, int quarter_turns)
 {
@@ -431,36 +466,8 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
          x += advance[turn][0] * cell, y += advance[turn][1] * cell) {
 
         const unsigned char ch = (unsigned char)*p;
-        if (ch >= 128) {
-            continue;   /* font covers ASCII only */
-        }
-        const char *glyph = font8x8_basic[ch];
-
-        for (int row = 0; row < 8; row++) {
-            const unsigned char bits = (unsigned char)glyph[row];
-            if (bits == 0) {
-                continue;
-            }
-            for (int col = 0; col < 8; col++) {
-                if (!(bits & (1 << col))) {
-                    continue;
-                }
-
-                /* Rotate the pixel within its own 8x8 cell. The cell keeps its
-                 * origin at (x, y) whichever way it is turned, so the advance
-                 * above is the only thing that differs between rotations. */
-                int px, py;
-                switch (turn) {
-                case 1:  px = 7 - row; py = col;     break;
-                case 2:  px = 7 - col; py = 7 - row; break;
-                case 3:  px = row;     py = 7 - col; break;
-                default: px = col;     py = row;     break;
-                }
-
-                /* One font pixel becomes a scale x scale square. */
-                gfx_fill_rect(x + px * scale, y + py * scale,
-                              scale, scale, color);
-            }
+        if (ch < 128) {   /* font covers ASCII only */
+            draw_glyph_turned(x, y, ch, color, scale, turn);
         }
     }
 }

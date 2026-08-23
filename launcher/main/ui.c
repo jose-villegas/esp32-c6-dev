@@ -240,16 +240,11 @@ static bool rects_overlap(mu_Rect a, mu_Rect b)
            a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
-bool ui_end(uint32_t background_rgb)
+/* Which canvases changed. Also repaint one whose bands are already dirty:
+ * something has drawn underneath it this frame, so its pixels are gone
+ * however unchanged its own description is. */
+static void mark_changed_canvases(int n, bool *repaint)
 {
-    mu_end(&ctx);
-
-    const int n = ctx.root_list.idx;
-    bool repaint[MU_ROOTLIST_SIZE] = { false };
-
-    /* Which canvases changed. Also repaint one whose bands are already dirty:
-     * something has drawn underneath it this frame, so its pixels are gone
-     * however unchanged its own description is. */
     for (int i = 0; i < n && i < MU_ROOTLIST_SIZE; i++) {
         const mu_Container *cnt = ctx.root_list.items[i];
         const int slot = (int)(cnt - ctx.containers);
@@ -263,10 +258,13 @@ bool ui_end(uint32_t background_rgb)
             repaint[i] = true;
         }
     }
+}
 
-    /* Painter's order: repainting a canvas erases whatever was drawn on top of
-     * it, so everything above it that overlaps has to go again too. root_list
-     * is sorted back to front by mu_end(). */
+/* Painter's order: repainting a canvas erases whatever was drawn on top of
+ * it, so everything above it that overlaps has to go again too. root_list is
+ * sorted back to front by mu_end(). */
+static void propagate_repaint_over_overlaps(int n, bool *repaint)
+{
     for (int i = 0; i < n && i < MU_ROOTLIST_SIZE; i++) {
         if (!repaint[i]) {
             continue;
@@ -279,7 +277,11 @@ bool ui_end(uint32_t background_rgb)
             }
         }
     }
+}
 
+static bool repaint_marked_canvases(int n, const bool *repaint,
+                                    uint32_t background_rgb)
+{
     bool drew = false;
 
     for (int i = 0; i < n && i < MU_ROOTLIST_SIZE; i++) {
@@ -303,6 +305,19 @@ bool ui_end(uint32_t background_rgb)
         }
         drew = true;
     }
+    return drew;
+}
+
+bool ui_end(uint32_t background_rgb)
+{
+    mu_end(&ctx);
+
+    const int n = ctx.root_list.idx;
+    bool repaint[MU_ROOTLIST_SIZE] = { false };
+
+    mark_changed_canvases(n, repaint);
+    propagate_repaint_over_overlaps(n, repaint);
+    const bool drew = repaint_marked_canvases(n, repaint, background_rgb);
 
     invalidated = false;
     return drew;

@@ -250,8 +250,7 @@ static void draw_dirty_rows(void)
     gfx_color_t *fb = gfx_framebuffer();
 
     /* 256 entries in flash, indexed by the raw cell byte: no material lookup,
-     * no shade arithmetic, no colour conversion. Cheaper than the seven-entry
-     * table this used to build in RAM, and it costs no RAM at all. */
+     * no shade arithmetic, no colour conversion, and no RAM. */
     const gfx_color_t *pal = material_palette();
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
@@ -352,47 +351,47 @@ static void draw_mode_label(int gx, int gy)
  * Frame
  *-------------------------------------------------------------------------*/
 
-static void sand_frame(uint32_t dt_ms, const input_t *input)
+/* Where is down, and how hard? The GYROSCOPE says how fast the board is
+ * turning. It sets how quickly the tilt filter tracks a genuine
+ * reorientation, and - raw, unlike everything that filter smooths - it is
+ * also what tells the sand how hard it is currently being flicked; see
+ * sand_set_flick() and the comment above SAND_REBOUND_GAIN in sand.h. It is
+ * deliberately not what shaking is read from - see tilt.h, and the note on
+ * rotating not being shaking.
+ *
+ * Falls back to straight down at full speed when there is no sensor. */
+static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
+                               int *gy, int *flow, int *jostle,
+                               int *rotation)
 {
-    if (failed) {
-        gfx_clear(gfx_rgb(0x1A0C0C));
-        gfx_text(20, GFX_HEIGHT / 2, "no memory for the grid", gfx_rgb(0xFF5C5C));
+    *gx = 0;
+    *gy = IMU_COUNTS_PER_G;
+    *flow = 256;
+    *jostle = 0;
+    *rotation = 0;
+
+    if (!imu_ready() || !imu_read(sample)) {
         return;
     }
 
-    /* --- where is down, and how hard? --- */
-    int gx = 0;
-    int gy = IMU_COUNTS_PER_G;   /* the no-sensor fallback: straight down */
-    int flow = 256;              /* ... at full speed */
-    int jostle = 0;
-    int rotation = 0;
+    *rotation = imu_rotation_level(sample);
 
-    imu_sample_t sample = { 0 };
-    if (imu_ready() && imu_read(&sample)) {
-        /* The GYROSCOPE says how fast the board is turning. It sets how
-         * quickly the tilt filter tracks a genuine reorientation, and - raw,
-         * unlike everything that filter smooths - it is also what tells the
-         * sand how hard it is currently being flicked; see sand_set_flick()
-         * and the comment above SAND_REBOUND_GAIN in sand.h. It is
-         * deliberately not what shaking is read from - see tilt.h, and the
-         * note on rotating not being shaking. */
-        rotation = imu_rotation_level(&sample);
+    /* Smooth the raw vector before anything looks at it, and hand tilt the
+     * through-screen axis too: without it a device lying on a table is
+     * indistinguishable from one in free fall. */
+    tilt_update(&tilt, GRAVITY_SCREEN_X(sample), GRAVITY_SCREEN_Y(sample),
+                sample->az, *rotation, dt_ms);
 
-        /* Smooth the raw vector before anything looks at it, and hand tilt the
-         * through-screen axis too: without it a device lying on a table is
-         * indistinguishable from one in free fall. */
-        tilt_update(&tilt, GRAVITY_SCREEN_X(&sample), GRAVITY_SCREEN_Y(&sample),
-                    sample.az, rotation, dt_ms);
+    *gx   = tilt_x(&tilt);
+    *gy   = tilt_y(&tilt);
+    *flow = tilt_strength(&tilt);
 
-        gx   = tilt_x(&tilt);
-        gy   = tilt_y(&tilt);
-        flow = tilt_strength(&tilt);
+    const int shake = tilt_shake(&tilt);
+    *jostle = shake > SHAKE_DEADZONE ? shake : 0;
+}
 
-        const int shake = tilt_shake(&tilt);
-        jostle = shake > SHAKE_DEADZONE ? shake : 0;
-    }
-
-    /* --- pour, or erase --- */
+static void handle_brush_input(const input_t *input)
+{
     if (input->boot.pressed) {
         brush = (brush + 1) % BRUSH_COUNT;
         erasing = false;      /* choosing a material means you want to place it */
@@ -406,71 +405,70 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         ESP_LOGI(TAG, "brush: %s",
                  erasing ? "erase" : materials[brushes[brush]].name);
     }
+}
 
-    /* The grid under the label has to be redrawn every frame the label is up,
-     * including the frame it expires - that last redraw is what actually wipes
-     * it off. Marking bands dirty is not enough on its own: the sand only
-     * repaints rows the simulation changed, so without this the label would
-     * leave a hole in the pile. */
-    if (label_left_ms > 0) {
-        label_left_ms = (dt_ms >= label_left_ms) ? 0 : (label_left_ms - dt_ms);
-        memset(dirty_rows, 1, (size_t)GRID_H);
-    }
-
-    if (input->down) {
-        pour_accumulator_ms += dt_ms;
-
-        /* Capped rather than looped to exhaustion: after a long frame the
-         * backlog is dropped instead of dumping a pile in one go. */
-        int applications = (int)(pour_accumulator_ms / POUR_STEP_MS);
-        if (applications > SIM_MAX_CATCHUP) {
-            applications = SIM_MAX_CATCHUP;
-            pour_accumulator_ms = 0;
-        } else {
-            pour_accumulator_ms -= (uint32_t)applications * POUR_STEP_MS;
-        }
-
-        const int cx = input->x / CELL;
-        const int cy = input->y / CELL;
-        for (int i = 0; i < applications; i++) {
-            if (erasing) {
-                sand_erase(&sim, cx, cy, ERASE_RADIUS);
-            } else {
-                sand_spawn(&sim, cx, cy, POUR_RADIUS, brushes[brush]);
-            }
-        }
-    } else {
+/* Capped rather than looped to exhaustion: after a long frame the backlog is
+ * dropped instead of dumping a pile in one go. */
+static void handle_pour_input(const input_t *input, uint32_t dt_ms)
+{
+    if (!input->down) {
         pour_accumulator_ms = 0;
+        return;
     }
 
-    /* Log the direction whenever the NEAREST of the eight changes. Quiet when
-     * the board is still, and it is what the axis mapping above was verified
-     * against. The simulation itself uses the dithered direction, which changes
-     * every frame by design and would be useless to log. */
+    pour_accumulator_ms += dt_ms;
+
+    int applications = (int)(pour_accumulator_ms / POUR_STEP_MS);
+    if (applications > SIM_MAX_CATCHUP) {
+        applications = SIM_MAX_CATCHUP;
+        pour_accumulator_ms = 0;
+    } else {
+        pour_accumulator_ms -= (uint32_t)applications * POUR_STEP_MS;
+    }
+
+    const int cx = input->x / CELL;
+    const int cy = input->y / CELL;
+    for (int i = 0; i < applications; i++) {
+        if (erasing) {
+            sand_erase(&sim, cx, cy, ERASE_RADIUS);
+        } else {
+            sand_spawn(&sim, cx, cy, POUR_RADIUS, brushes[brush]);
+        }
+    }
+}
+
+/* Logs the direction whenever the NEAREST of the eight changes. Quiet when
+ * the board is still, and it is what the axis mapping above was verified
+ * against. The simulation itself uses the dithered direction, which changes
+ * every frame by design and would be useless to log. */
+static void log_direction_change(int gx, int gy, int jostle,
+                                 const imu_sample_t *sample)
+{
     static int last_dx = 99, last_dy = 99;
     int dx, dy;
     sand_gravity_direction(gx, gy, &dx, &dy);
-    if (dx != last_dx || dy != last_dy) {
-        ESP_LOGI(TAG, "down is (%+d,%+d)  smoothed (%+6d,%+6d)  "
-                      "raw (%+6d,%+6d)  shake %d",
-                 dx, dy, gx, gy, sample.ax, sample.ay, jostle);
-        last_dx = dx;
-        last_dy = dy;
+    if (dx == last_dx && dy == last_dy) {
+        return;
     }
+    ESP_LOGI(TAG, "down is (%+d,%+d)  smoothed (%+6d,%+6d)  "
+                  "raw (%+6d,%+6d)  shake %d",
+             dx, dy, gx, gy, sample->ax, sample->ay, jostle);
+    last_dx = dx;
+    last_dy = dy;
+}
 
-    /* Fixed-timestep accumulator, with the rate scaled by how hard gravity is
-     * pulling in the plane of the screen.
-     *
-     * A grain moves one cell per step whatever gravity is doing, so steps per
-     * second IS the speed of the sand. Scaling them by tilt is what gives the
-     * simulation a throttle instead of an on/off switch: laid flat it coasts to
-     * a stop over a moment rather than freezing between one frame and the next.
-     * It is also the real behaviour, since a grain on a tray tilted by theta is
-     * driven by g*sin(theta). */
-#if CONFIG_LAUNCHER_DEVELOPMENT
-    const int64_t t0 = esp_timer_get_time();
-#endif
-
+/* Fixed-timestep accumulator, with the rate scaled by how hard gravity is
+ * pulling in the plane of the screen.
+ *
+ * A grain moves one cell per step whatever gravity is doing, so steps per
+ * second IS the speed of the sand. Scaling them by tilt is what gives the
+ * simulation a throttle instead of an on/off switch: laid flat it coasts to
+ * a stop over a moment rather than freezing between one frame and the next.
+ * It is also the real behaviour, since a grain on a tray tilted by theta is
+ * driven by g*sin(theta). */
+static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
+                          uint32_t dt_ms)
+{
     sim_accumulator_q8 += dt_ms * (uint32_t)flow;
     int steps = (int)(sim_accumulator_q8 / (SIM_STEP_MS * 256));
     if (steps > SIM_MAX_CATCHUP) {
@@ -484,9 +482,45 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     for (int i = 0; i < steps; i++) {
         sand_step(&sim, gx, gy, jostle);
     }
-
 #if CONFIG_LAUNCHER_DEVELOPMENT
     steps_total += steps;
+#endif
+}
+
+static void sand_frame(uint32_t dt_ms, const input_t *input)
+{
+    if (failed) {
+        gfx_clear(gfx_rgb(0x1A0C0C));
+        gfx_text(20, GFX_HEIGHT / 2, "no memory for the grid", gfx_rgb(0xFF5C5C));
+        return;
+    }
+
+    int gx, gy, flow, jostle, rotation;
+    imu_sample_t sample = { 0 };
+    read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
+
+    handle_brush_input(input);
+
+    /* The grid under the label has to be redrawn every frame the label is up,
+     * including the frame it expires - that last redraw is what actually wipes
+     * it off. Marking bands dirty is not enough on its own: the sand only
+     * repaints rows the simulation changed, so without this the label would
+     * leave a hole in the pile. */
+    if (label_left_ms > 0) {
+        label_left_ms = (dt_ms >= label_left_ms) ? 0 : (label_left_ms - dt_ms);
+        memset(dirty_rows, 1, (size_t)GRID_H);
+    }
+
+    handle_pour_input(input, dt_ms);
+    log_direction_change(gx, gy, jostle, &sample);
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    const int64_t t0 = esp_timer_get_time();
+#endif
+
+    run_sim_steps(gx, gy, jostle, flow, rotation, dt_ms);
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();
 #endif
 

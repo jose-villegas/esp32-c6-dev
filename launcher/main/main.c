@@ -127,6 +127,53 @@ static void show_post_failures(void)
 
 /* --- main --------------------------------------------------------------- */
 
+/* Whichever of the launcher or the current app owns this frame, and the
+ * transitions between them: choosing an app from the launcher, or swiping
+ * home to leave one. */
+static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
+{
+    if (*current == NULL) {
+        const int chosen = ui_launcher_frame(input);
+        if (chosen >= 0 && chosen < apps_registered) {
+            *current = apps[chosen];
+            ESP_LOGI(TAG, "Starting %s", (*current)->name);
+            (*current)->enter();
+        }
+        return;
+    }
+
+    if (gesture_is_home_swipe(input, GFX_HEIGHT)) {
+        ESP_LOGI(TAG, "Leaving %s", (*current)->name);
+        (*current)->exit();
+        *current = NULL;
+        /* The app's output is still in the framebuffer, so the launcher must
+         * repaint even though its own description has not changed. */
+        ui_invalidate();
+        /* Draw it immediately, so the frame presented below is the home
+         * screen rather than the app's last one. */
+        ui_launcher_frame(input);
+        return;
+    }
+
+    (*current)->frame(dt_ms, input);
+    draw_home_hint();
+}
+
+/* Report throughput on a TIMER, not every N frames: an idle launcher repaints
+ * nothing and runs at the tick ceiling, so counting frames alone lets the
+ * report interval swing with load - and a log line costs several
+ * milliseconds of UART, enough to throttle the very thing it is measuring. */
+static void report_fps(int64_t now_us, int64_t *window_start, uint32_t *frames)
+{
+    (*frames)++;
+    const int64_t since = now_us - *window_start;
+    if (since >= 1500000) {
+        ESP_LOGI(TAG, "%.1f fps", (double)*frames * 1000000.0 / (double)since);
+        *frames = 0;
+        *window_start = now_us;
+    }
+}
+
 void app_main(void)
 {
     /* Before the display: the SD card shares SPI2 with the panel, so this is
@@ -190,44 +237,10 @@ void app_main(void)
         touch_read(&input);
         buttons_read(&input.boot, &input.power);
 
-        if (current == NULL) {
-            const int chosen = ui_launcher_frame(&input);
-            if (chosen >= 0 && chosen < apps_registered) {
-                current = apps[chosen];
-                ESP_LOGI(TAG, "Starting %s", current->name);
-                current->enter();
-            }
-        } else if (gesture_is_home_swipe(&input, GFX_HEIGHT)) {
-            ESP_LOGI(TAG, "Leaving %s", current->name);
-            current->exit();
-            current = NULL;
-            /* The app's output is still in the framebuffer, so the launcher
-             * must repaint even though its own description has not changed. */
-            ui_invalidate();
-            /* Draw the launcher immediately so the frame presented below is
-             * the home screen rather than the app's last one. */
-            ui_launcher_frame(&input);
-        } else {
-            current->frame(dt_ms, &input);
-            draw_home_hint();
-        }
+        step_app(&current, &input, dt_ms);
 
         gfx_present();
-
-        /* Report throughput on a TIMER, not every N frames.
-         *
-         * Every-60-frames was fine while a frame cost 25 ms. Now that an idle
-         * launcher repaints nothing and runs at the tick ceiling, 60 frames is
-         * 60 ms - and a log line is several milliseconds of UART, so the
-         * measurement would be throttling the thing it measures. */
-        frames++;
-        const int64_t since_report = now_us - fps_window_start;
-        if (since_report >= 1500000) {
-            ESP_LOGI(TAG, "%.1f fps",
-                     (double)frames * 1000000.0 / (double)since_report);
-            frames = 0;
-            fps_window_start = now_us;
-        }
+        report_fps(now_us, &fps_window_start, &frames);
 
         /* Yield so the idle task can feed the watchdog. */
         vTaskDelay(1);

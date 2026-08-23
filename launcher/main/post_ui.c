@@ -35,11 +35,26 @@
 #define DETAIL_X      NAME_X
 #define DETAIL_COLS   ((GFX_WIDTH - DETAIL_X - MARGIN) / GLYPH_W)
 
+/* How much of `text` fits on one line of `columns` width, breaking at the
+ * last space that still fits - or the whole line, if no such space exists.
+ * That fallback is a hard break for a single token longer than the line, so
+ * a pathological string still renders rather than looping forever. */
+static int line_break_length(const char *text, int columns)
+{
+    const int len = (int)strlen(text);
+    if (len <= columns) {
+        return len;
+    }
+
+    int brk = columns;
+    while (brk > 0 && text[brk] != ' ') {
+        brk--;
+    }
+    return brk > 0 ? brk : columns;
+}
+
 /* Draws `text` across as many lines as it needs, breaking at spaces, and
- * returns the y below the last line.
- *
- * Falls back to a hard break for a single token longer than the line, so a
- * pathological string still renders rather than looping forever. */
+ * returns the y below the last line. */
 static int draw_wrapped(int x, int y, int columns, const char *text,
                         gfx_color_t colour)
 {
@@ -56,18 +71,7 @@ static int draw_wrapped(int x, int y, int columns, const char *text,
             break;
         }
 
-        int take = (int)strlen(text);
-        if (take > columns) {
-            /* Step back to the last space that still fits. */
-            take = columns;
-            int brk = take;
-            while (brk > 0 && text[brk] != ' ') {
-                brk--;
-            }
-            if (brk > 0) {
-                take = brk;
-            }
-        }
+        const int take = line_break_length(text, columns);
 
         memcpy(line, text, (size_t)take);
         line[take] = '\0';

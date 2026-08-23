@@ -205,9 +205,9 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  *
  * Deliberately not a per-cell velocity: that would be another byte per cell,
  * 41 KB against the ~90 KB actually free once the grid and its row state are
- * already allocated - see the memory budget note in material.h. One shared
- * vector costs nothing measurable and produces the same visible effect, since
- * the whole board is being shaken together, not grain by grain.
+ * allocated. One shared vector costs nothing measurable and produces the
+ * same visible effect, since the whole board is being shaken together, not
+ * grain by grain.
  *
  * THE DIRECTION AND THE SPEED COME FROM DIFFERENT PLACES, ON PURPOSE
  *

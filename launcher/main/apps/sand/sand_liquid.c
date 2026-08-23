@@ -72,6 +72,23 @@ static inline int room_in(cell_t c, uint8_t id)
  * The one piece of liquid movement inside the main sweep.
  *-------------------------------------------------------------------------*/
 
+/* Give up to `mass` of `mat_id` to the cell at column `tx` of `to_row`, if it
+ * exists and has room. Returns how much it actually took. */
+static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
+                            int mass, uint8_t mat_id, int y, int ty)
+{
+    if (to_row == NULL || (unsigned)tx >= (unsigned)w) {
+        return 0;
+    }
+    const int room = room_in(to_row[tx], mat_id);
+    const int give = mass < room ? mass : room;
+    if (give > 0) {
+        pour_into(&to_row[tx], mat_id, give);
+        mark_rows(s, y, ty);
+    }
+    return give;
+}
+
 /* Liquids: move an AMOUNT between touching cells.
  *
  * Nothing here looks further than one cell in any direction, and that is the
@@ -97,16 +114,10 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     bool moved = false;
 
     /* DOWN first, so a liquid falls before it spreads. */
-    const int bx = x + dx;
-    if (prow != NULL && (unsigned)bx < (unsigned)w) {
-        const int room = room_in(prow[bx], mat_id);
-        const int give = mass < room ? mass : room;
-        if (give > 0) {
-            pour_into(&prow[bx], mat_id, give);
-            mass -= give;
-            mark_rows(s, y, y + dy);
-            moved = true;
-        }
+    const int down = give_mass(s, prow, x + dx, w, mass, mat_id, y, y + dy);
+    mass -= down;
+    if (down > 0) {
+        moved = true;
     }
 
     /* Then DOWN THE SLOPE, both ways.
@@ -120,17 +131,10 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     for (int d = 0; d < 2 && mass > 0; d++) {
         const int *slide = (d == 0) ? slide_a : slide_b;
         uint8_t *srow = dest_row(s, y + slide[1]);
-        const int sx = x + slide[0];
-
-        if (srow == NULL || (unsigned)sx >= (unsigned)w) {
-            continue;
-        }
-        const int room = room_in(srow[sx], mat_id);
-        const int give = mass < room ? mass : room;
-        if (give > 0) {
-            pour_into(&srow[sx], mat_id, give);
-            mass -= give;
-            mark_rows(s, y, y + slide[1]);
+        const int given = give_mass(s, srow, x + slide[0], w, mass, mat_id,
+                                    y, y + slide[1]);
+        mass -= given;
+        if (given > 0) {
             moved = true;
         }
     }
@@ -168,6 +172,169 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
  * ever moves liquid across the flow, so it cannot disturb anything the first
  * pass concluded.
  */
+/* Falling water does not spread: if this cell has somewhere to fall THIS
+ * step, that fall will happen in the main sweep and cross-flow has nothing
+ * to decide. One comparison, and it is what makes an avalanche affordable -
+ * while a body of water is collapsing almost every cell has room beneath
+ * it, so almost every cell leaves right here instead of searching along a
+ * surface it does not yet have. */
+static inline bool has_room_below(const sand_t *s, int x, int y, int dx,
+                                  int dy, uint8_t id)
+{
+    const int fx = x + dx;
+    const int fy = y + dy;
+    if ((unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
+        return false;
+    }
+    const cell_t below = s->cells[(size_t)fy * (size_t)s->w + (size_t)fx];
+    return CELL_IS_EMPTY(below) ||
+           (CELL_MATERIAL(below) == id && CELL_VARIANT(below) < MASS_MAX);
+}
+
+/* Whether the immediate neighbour along (px, py) is lower. This is what
+ * keeps the search off the bill: inside a body of water every neighbour
+ * holds the same amount, so the overwhelming majority of cells answer here
+ * in one comparison instead of walking the full sight distance. Only the
+ * cells along a real imbalance look further, and those are the only ones
+ * with anywhere to send anything. */
+static inline bool neighbour_is_lower(const sand_t *s, int x, int y, int px,
+                                      int py, uint8_t id, int mass)
+{
+    const int nx = x + px;
+    const int ny = y + py;
+    if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h) {
+        return false;
+    }
+    const cell_t n = s->cells[(size_t)ny * (size_t)s->w + (size_t)nx];
+    return CELL_IS_EMPTY(n) || (CELL_MATERIAL(n) == id && CELL_VARIANT(n) < mass);
+}
+
+/* The shallowest place this liquid can reach along (px, py), within `sight`
+ * cells, and how many steps away it is. Flow stops at anything that is not
+ * the same liquid, so it cannot reach through a wall. */
+static inline void find_shallowest(const sand_t *s, int x, int y, int px,
+                                   int py, int sight, uint8_t id, int mass,
+                                   int *lowest, int *at)
+{
+    *lowest = mass;
+    *at = 0;
+
+    for (int k = 1; k <= sight; k++) {
+        const int sx = x + px * k;
+        const int sy = y + py * k;
+
+        if ((unsigned)sx >= (unsigned)s->w || (unsigned)sy >= (unsigned)s->h) {
+            break;
+        }
+        const cell_t o = s->cells[(size_t)sy * (size_t)s->w + (size_t)sx];
+        int there;
+
+        if (CELL_IS_EMPTY(o)) {
+            there = 0;
+        } else if (CELL_MATERIAL(o) == id) {
+            there = CELL_VARIANT(o);
+        } else {
+            break;
+        }
+
+        if (there < *lowest) {
+            *lowest = there;
+            *at = k;
+            if (there == 0) {
+                break;      /* nothing is lower than dry */
+            }
+        }
+    }
+}
+
+/* One cell's share of cross-flow. Returns whether it gave anything, and
+ * whether that transfer stayed inside this row (so the caller can defer
+ * marking it, rather than paying for a full mark_rows() per transfer). */
+static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
+                                     int px, int py, int dx, int dy,
+                                     int sight, uint8_t id, int mass,
+                                     bool *stayed_in_row)
+{
+    if (has_room_below(s, x, y, dx, dy, id)) {
+        return false;
+    }
+    if (!neighbour_is_lower(s, x, y, px, py, id, mass)) {
+        return false;
+    }
+
+    int lowest, at;
+    find_shallowest(s, x, y, px, py, sight, id, mass, &lowest, &at);
+
+    /* Half the difference. Handing over everything would only move the
+     * imbalance rather than settle it - the two would trade places for
+     * ever. */
+    const int give = (mass - lowest) / 2;
+    if (at == 0 || give <= 0) {
+        return false;
+    }
+
+    const int tx = x + px * at;
+    const int ty = y + py * at;
+    const int w  = s->w;
+
+    pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
+    row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give) : CELL_EMPTY;
+
+    *stayed_in_row = (py == 0);
+    if (!*stayed_in_row) {
+        mark_rows(s, y, ty);
+    }
+    return true;
+}
+
+/* One row's share of cross-flow. Returns whether it held any liquid, which
+ * the caller needs in order to know whether the whole pass found anything. */
+static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
+                             int x_step, int px, int py, int dx, int dy,
+                             int sight, uint16_t is_liquid)
+{
+    uint8_t *row = s->cells + (size_t)y * (size_t)w;
+    bool any_liquid = false;
+    bool touched = false;
+
+    for (int x = x_from; x != x_to; x += x_step) {
+        const cell_t c = row[x];
+        if (CELL_IS_EMPTY(c)) {
+            continue;
+        }
+
+        const uint8_t id = CELL_MATERIAL(c);
+        if (((is_liquid >> id) & 1u) == 0) {
+            continue;
+        }
+        any_liquid = true;
+
+        bool stayed_in_row = false;
+        if (equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
+                              CELL_VARIANT(c), &stayed_in_row) &&
+            stayed_in_row) {
+            /* Marking is deferred when the flow stays inside one row, which
+             * is every orientation where gravity has no sideways component
+             * - much the commonest case. mark_rows() rewrites several bytes
+             * of row state, and doing that per transfer rather than per row
+             * was most of what this pass cost. */
+            touched = true;
+        }
+    }
+
+    if (touched) {
+        mark_rows(s, y, y);
+    }
+
+    /* Nothing liquid in this row - say so, and skip it next time. Written
+     * after mark_rows may have cleared the byte, so a row that received
+     * liquid during this very pass is not wrongly marked dry. */
+    if (!any_liquid && s->row_state != NULL) {
+        s->row_state[y] |= ROW_NO_LIQUID;
+    }
+    return any_liquid;
+}
+
 static void equalise_liquids(sand_t *s, const int *perp, int sight,
                              int dx, int dy)
 {
@@ -194,141 +361,9 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
         if (s->row_state != NULL && (s->row_state[y] & ROW_NO_LIQUID)) {
             continue;
         }
-
-        uint8_t *row = s->cells + (size_t)y * (size_t)w;
-        bool any_liquid = false;
-        bool touched = false;
-
-        for (int x = x_from; x != x_to; x += x_step) {
-            const cell_t c = row[x];
-            if (CELL_IS_EMPTY(c)) {
-                continue;
-            }
-
-            const uint8_t id = CELL_MATERIAL(c);
-            if (((is_liquid >> id) & 1u) == 0) {
-                continue;
-            }
-            any_liquid = true;
-            found_any  = true;
-
-            const int mass = CELL_VARIANT(c);
-
-            /* Falling water does not spread. If there is somewhere to fall,
-             * it will go there and nothing needs deciding here.
-             *
-             * One comparison, and it is what makes an avalanche affordable:
-             * while a body of water is collapsing almost every cell has room
-             * beneath it, so almost every cell leaves at this line instead of
-             * searching along a surface it does not yet have. */
-            {
-                const int fx = x + dx;
-                const int fy = y + dy;
-                if ((unsigned)fx < (unsigned)w && (unsigned)fy < (unsigned)h) {
-                    const cell_t below = s->cells[(size_t)fy * w + fx];
-                    if (CELL_IS_EMPTY(below) ||
-                        (CELL_MATERIAL(below) == id &&
-                         CELL_VARIANT(below) < MASS_MAX)) {
-                        continue;
-                    }
-                }
-            }
-
-            /* Nothing to give unless the cell right beside it is lower.
-             *
-             * This is what keeps the search off the bill. Inside a body of
-             * water every neighbour holds the same amount, so the overwhelming
-             * majority of cells answer in one comparison instead of walking
-             * thirty-two. Only the cells along an imbalance look further - and
-             * they are the only ones with anywhere to send anything.
-             *
-             * Nothing is lost by it. A flat stretch of water needs no flow;
-             * where it ends, the cells there do the work, and the dip they
-             * leave behind draws the next ones after it. */
-            {
-                const int nx = x + px;
-                const int ny = y + py;
-
-                if ((unsigned)nx >= (unsigned)w ||
-                    (unsigned)ny >= (unsigned)h) {
-                    continue;
-                }
-                const cell_t n = s->cells[(size_t)ny * w + nx];
-                if (!CELL_IS_EMPTY(n)) {
-                    if (CELL_MATERIAL(n) != id ||
-                        CELL_VARIANT(n) >= mass) {
-                        continue;
-                    }
-                }
-            }
-
-            int lowest = mass;
-            int at = 0;
-
-            /* The shallowest place it can reach. Flow stops at anything that
-             * is not this same liquid, so it cannot reach through a wall. */
-            for (int k = 1; k <= sight; k++) {
-                const int sx = x + px * k;
-                const int sy = y + py * k;
-
-                if ((unsigned)sx >= (unsigned)w ||
-                    (unsigned)sy >= (unsigned)h) {
-                    break;
-                }
-                const cell_t o = s->cells[(size_t)sy * w + sx];
-                int there;
-
-                if (CELL_IS_EMPTY(o)) {
-                    there = 0;
-                } else if (CELL_MATERIAL(o) == id) {
-                    there = CELL_VARIANT(o);
-                } else {
-                    break;
-                }
-
-                if (there < lowest) {
-                    lowest = there;
-                    at = k;
-                    if (there == 0) {
-                        break;      /* nothing is lower than dry */
-                    }
-                }
-            }
-
-            /* Half the difference. Handing over everything would only move the
-             * imbalance rather than settle it - the two would trade places for
-             * ever. */
-            const int give = (mass - lowest) / 2;
-            if (at > 0 && give > 0) {
-                const int tx = x + px * at;
-                const int ty = y + py * at;
-
-                pour_into(&s->cells[(size_t)ty * w + tx], id, give);
-                row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give)
-                                           : CELL_EMPTY;
-
-                /* Marking is deferred when the flow stays inside one row,
-                 * which is every orientation where gravity has no sideways
-                 * component - much the commonest case. mark_rows() rewrites
-                 * several bytes of row state, and doing that per transfer
-                 * rather than per row was most of what this pass cost. */
-                if (py == 0) {
-                    touched = true;
-                } else {
-                    mark_rows(s, y, ty);
-                }
-            }
-        }
-
-        if (touched) {
-            mark_rows(s, y, y);
-        }
-
-        /* Nothing liquid in the whole row - say so, and skip it next time.
-         * Written after mark_rows may have cleared the byte, so a row that
-         * received liquid during this very pass is not wrongly marked dry. */
-        if (!any_liquid && s->row_state != NULL) {
-            s->row_state[y] |= ROW_NO_LIQUID;
+        if (equalise_one_row(s, y, w, x_from, x_to, x_step, px, py, dx, dy,
+                             sight, is_liquid)) {
+            found_any = true;
         }
     }
 
@@ -352,55 +387,68 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
  * Every source cell here is unique to this wall and every destination is one
  * fixed step inward, so no two transfers this call can ever touch the same
  * cell - unlike equalise_liquids, this needs no sweep order at all. */
+/* How much mass one cell's share of the splash moves, or 0 if the push is
+ * not hard enough to count as a flick at all. */
+static inline int rebound_kick(int push_q8)
+{
+    if (push_q8 <= SAND_REBOUND_THRESHOLD) {
+        return 0;
+    }
+    const int raw = ((push_q8 - SAND_REBOUND_THRESHOLD) * SAND_REBOUND_GAIN) >> 8;
+    return raw < SAND_REBOUND_MAX ? raw : SAND_REBOUND_MAX;
+}
+
+/* One cell's share of the splash: kick up to `kick` mass from (x, y) into
+ * the cell `to` steps away from the wall, if (x, y) holds a liquid and that
+ * destination exists. */
+static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
+                                    bool vertical, int kick,
+                                    uint16_t is_liquid)
+{
+    const int w = s->w;
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const cell_t c = s->cells[at];
+    if (CELL_IS_EMPTY(c)) {
+        return;
+    }
+    const uint8_t id = CELL_MATERIAL(c);
+    if (((is_liquid >> id) & 1u) == 0) {
+        return;
+    }
+
+    const int nx = vertical ? x + to : x;
+    const int ny = vertical ? y      : y + to;
+    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)s->h) {
+        return;
+    }
+
+    const int mass = CELL_VARIANT(c);
+    const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+    const int room = room_in(s->cells[nat], id);
+    const int give = kick < mass ? kick : mass;
+    const int moved = give < room ? give : room;
+    if (moved <= 0) {
+        return;
+    }
+
+    pour_into(&s->cells[nat], id, moved);
+    s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
+                                      : CELL_EMPTY;
+    mark_rows(s, y, ny);
+}
+
 static void rebound_wall(sand_t *s, int edge, int count, int to,
                          bool vertical, int push_q8, uint16_t is_liquid)
 {
-    if (push_q8 <= SAND_REBOUND_THRESHOLD) {
-        return;
-    }
-    int kick = ((push_q8 - SAND_REBOUND_THRESHOLD) * SAND_REBOUND_GAIN) >> 8;
-    if (kick > SAND_REBOUND_MAX) {
-        kick = SAND_REBOUND_MAX;
-    }
+    const int kick = rebound_kick(push_q8);
     if (kick <= 0) {
         return;
     }
 
-    const int w = s->w;
-
     for (int i = 0; i < count; i++) {
         const int x = vertical ? edge : i;
         const int y = vertical ? i : edge;
-
-        const size_t at = (size_t)y * (size_t)w + (size_t)x;
-        const cell_t c = s->cells[at];
-        if (CELL_IS_EMPTY(c)) {
-            continue;
-        }
-        const uint8_t id = CELL_MATERIAL(c);
-        if (((is_liquid >> id) & 1u) == 0) {
-            continue;
-        }
-
-        const int nx = vertical ? x + to : x;
-        const int ny = vertical ? y      : y + to;
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)s->h) {
-            continue;
-        }
-
-        const int mass = CELL_VARIANT(c);
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        const int room = room_in(s->cells[nat], id);
-        const int give = kick < mass ? kick : mass;
-        const int moved = give < room ? give : room;
-        if (moved <= 0) {
-            continue;
-        }
-
-        pour_into(&s->cells[nat], id, moved);
-        s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
-                                          : CELL_EMPTY;
-        mark_rows(s, y, ny);
+        rebound_one_cell(s, x, y, to, vertical, kick, is_liquid);
     }
 }
 

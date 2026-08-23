@@ -21,6 +21,8 @@
 
 #include <string.h>
 
+#include "intmath.h"
+
 
 /* The eight directions, in ring order, so that the two neighbours of any
  * direction are simply the entries either side of it. That is what lets the
@@ -61,19 +63,6 @@ static int ring_index(int dx, int dy)
         }
     }
     return 0;   /* unreachable for a unit direction */
-}
-
-/* |v| without a square root, to about 4%: the larger component plus two fifths
- * of the smaller. The same approximation tilt.c uses for the same reason - it
- * only has to be good enough to normalise a direction, not exact. */
-static int vec_len_approx(int x, int y)
-{
-    const int ax = x < 0 ? -x : x;
-    const int ay = y < 0 ? -y : y;
-    const int hi = ax > ay ? ax : ay;
-    const int lo = ax > ay ? ay : ax;
-
-    return hi + (lo * 2) / 5;
 }
 
 /*---------------------------------------------------------------------------
@@ -193,6 +182,24 @@ int sand_count(const sand_t *s)
     return n;
 }
 
+/* Attempt to place `material` at (x, y). Returns whether it did - off the
+ * grid or already occupied is not an error, just nothing to do. */
+static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
+{
+    if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
+        return false;
+    }
+    if (s->cells[y * s->w + x] != SAND_EMPTY) {
+        return false;   /* never overwrite, so the count cannot drift */
+    }
+    if (materials[material].kind == KIND_LIQUID) {
+        s->may_have_liquid = true;
+    }
+    s->cells[y * s->w + x] = random_cell(s, material);
+    mark_rows(s, y, y);
+    return true;
+}
+
 int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material)
 {
     int filled = 0;
@@ -203,20 +210,9 @@ int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material)
             if (dx * dx + dy * dy > r2) {
                 continue;
             }
-            const int x = cx + dx;
-            const int y = cy + dy;
-            if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
-                continue;
+            if (try_spawn_one(s, cx + dx, cy + dy, material)) {
+                filled++;
             }
-            if (s->cells[y * s->w + x] != SAND_EMPTY) {
-                continue;   /* never overwrite, so the count cannot drift */
-            }
-            if (materials[material].kind == KIND_LIQUID) {
-                s->may_have_liquid = true;
-            }
-            s->cells[y * s->w + x] = random_cell(s, material);
-            mark_rows(s, y, y);
-            filled++;
         }
     }
     return filled;
@@ -252,19 +248,31 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
  * Movement
  *-------------------------------------------------------------------------*/
 
+/* The sign/magnitude split both gravity_direction functions below start
+ * with. Returns false for a zero vector, in which case the direction is
+ * undefined and the caller must stop rather than divide by it. */
+static bool gravity_axes(int gx, int gy, int *ax, int *ay, int *sx, int *sy)
+{
+    *ax = im_abs(gx);
+    *ay = im_abs(gy);
+
+    if (*ax == 0 && *ay == 0) {
+        return false;
+    }
+
+    *sx = im_sign(gx);
+    *sy = im_sign(gy);
+    return true;
+}
+
 void sand_gravity_direction(int gx, int gy, int *dx, int *dy)
 {
-    const int ax = gx < 0 ? -gx : gx;
-    const int ay = gy < 0 ? -gy : gy;
-
-    if (ax == 0 && ay == 0) {
+    int ax, ay, sx, sy;
+    if (!gravity_axes(gx, gy, &ax, &ay, &sx, &sy)) {
         *dx = 0;
         *dy = 0;
         return;
     }
-
-    const int sx = gx > 0 ? 1 : (gx < 0 ? -1 : 0);
-    const int sy = gy > 0 ? 1 : (gy < 0 ? -1 : 0);
 
     if (ay * AXIS_DEN > ax * AXIS_NUM) {
         *dx = 0;         /* within 22.5 deg of vertical */
@@ -387,17 +395,12 @@ static int diagonal_weight(int r)
 void sand_gravity_direction_dithered(sand_t *s, int gx, int gy,
                                      int *dx, int *dy)
 {
-    const int ax = gx < 0 ? -gx : gx;
-    const int ay = gy < 0 ? -gy : gy;
-
-    if (ax == 0 && ay == 0) {
+    int ax, ay, sx, sy;
+    if (!gravity_axes(gx, gy, &ax, &ay, &sx, &sy)) {
         *dx = 0;
         *dy = 0;
         return;
     }
-
-    const int sx = gx > 0 ? 1 : (gx < 0 ? -1 : 0);
-    const int sy = gy > 0 ? 1 : (gy < 0 ? -1 : 0);
 
     const int lo = ax < ay ? ax : ay;
     const int hi = ax < ay ? ay : ax;
@@ -488,58 +491,381 @@ static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
     return true;
 }
 
+/* How hard gravity's direction turned since last step, decayed so a single
+ * flick fades over a few frames rather than lingering or accumulating
+ * without bound under sustained shaking. Based on the RAW direction, not
+ * the dithered or nearest one - both are quantised for the grid's benefit
+ * and neither is a fair measure of how fast the input itself is actually
+ * moving. Called once a step, not once a cell, so this carries none of the
+ * inlining concerns the per-grain helpers below do. */
+static void update_momentum(sand_t *s, int gx, int gy)
+{
+    s->mom_x_q8 = (int32_t)(((int64_t)s->mom_x_q8 * SAND_MOMENTUM_DECAY) >> 8);
+    s->mom_y_q8 = (int32_t)(((int64_t)s->mom_y_q8 * SAND_MOMENTUM_DECAY) >> 8);
+
+    const int len = im_len(gx, gy);
+    if (len > 0) {
+        const int32_t ux = (int32_t)(((int64_t)gx * 256) / len);
+        const int32_t uy = (int32_t)(((int64_t)gy * 256) / len);
+
+        if (s->mom_primed && s->flick > 0) {
+            /* Which way it turned, from the smoothed direction - a step or
+             * two late, but the right way eventually. Renormalised to a
+             * unit vector so a turn too small for the smoothing to have
+             * caught up on yet still points somewhere definite, rather than
+             * contributing almost nothing just because the filter has not
+             * finished moving.
+             *
+             * HOW FAR comes from the gyroscope, not from how big this
+             * renormalised step is - see the comment above
+             * SAND_REBOUND_GAIN for why the delta itself is the wrong thing
+             * to scale by. */
+            const int32_t tx = ux - s->dir_x_q8;
+            const int32_t ty = uy - s->dir_y_q8;
+            const int tlen = im_len((int)tx, (int)ty);
+
+            if (tlen > 0) {
+                s->mom_x_q8 += (int32_t)((((int64_t)tx * 256 / tlen) *
+                                          s->flick) >> 8);
+                s->mom_y_q8 += (int32_t)((((int64_t)ty * 256 / tlen) *
+                                          s->flick) >> 8);
+            }
+        }
+        s->mom_primed = true;
+        s->dir_x_q8 = ux;
+        s->dir_y_q8 = uy;
+    }
+
+    /* Capped so a long spell of shaking cannot ratchet this past what any
+     * single flick could ever produce. */
+    if (s->mom_x_q8 >  1024) { s->mom_x_q8 =  1024; }
+    if (s->mom_x_q8 < -1024) { s->mom_x_q8 = -1024; }
+    if (s->mom_y_q8 >  1024) { s->mom_y_q8 =  1024; }
+    if (s->mom_y_q8 < -1024) { s->mom_y_q8 = -1024; }
+}
+
+/* Whether each slide is driven at this tilt, for each material - depends
+ * only on the direction and the material's angle of repose, so it is worked
+ * out once per step for all sixteen materials rather than recomputed for
+ * every one of 41,000 cells. */
+static void compute_driven(bool driven[MATERIAL_MAX][2], const int *slide_a,
+                           const int *slide_b, int gx, int gy)
+{
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        const int repose = materials[m].repose;
+        driven[m][0] = driven_by_gravity(slide_a[0], slide_a[1], gx, gy, repose);
+        driven[m][1] = driven_by_gravity(slide_b[0], slide_b[1], gx, gy, repose);
+    }
+}
+
+/* Which column order to sweep this step, against the direction of travel -
+ * see the comment on sand_step() for why that direction matters. Alternates
+ * when gravity has no horizontal component, so piles do not lean
+ * consistently one way. */
+static void sweep_x_order(sand_t *s, int dx, int *x_from, int *x_to, int *x_step)
+{
+    if (dx > 0) {
+        *x_from = s->w - 1; *x_to = -1;   *x_step = -1;
+    } else if (dx < 0) {
+        *x_from = 0;        *x_to = s->w; *x_step = 1;
+    } else if (s->sweep_flip) {
+        *x_from = s->w - 1; *x_to = -1;   *x_step = -1;
+    } else {
+        *x_from = 0;        *x_to = s->w; *x_step = 1;
+    }
+    s->sweep_flip = !s->sweep_flip;
+}
+
+/* One grain's turn: try to fall, then the two slides either side of it, with
+ * friction and shaking deciding whether the slides are allowed at all.
+ * Returns whether it did anything - moved, or (for a scattering grain)
+ * deliberately did not, which the caller must still count as activity so
+ * the row does not sleep on a grain mid-air.
+ *
+ * Marked `static`, not `inline`: this is too large for that to be a useful
+ * hint at this build's optimisation level, so the call it costs per grain
+ * is a real cost - confirmed against the frame-budget tests on device
+ * rather than assumed away. */
+/* The common case by a wide margin - on a screen of falling sand almost every
+ * grain simply moves the way gravity points. Taking it before drawing a
+ * random number matters: the generator was the single most expensive thing
+ * in this loop, and most grains never needed it.
+ *
+ * Only called when jostle == 0: scatter only applies to a grain that could
+ * fall, and a shaken grain has to reach the slide logic in try_slide()
+ * regardless of whether the plain fall is open. */
+/* Whether a scattering grain drifted, lagged, or the scatter roll simply did
+ * not apply - in every one of those cases the grain is spoken for, so the
+ * caller must not also attempt a plain fall on it. */
+static bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
+                        uint8_t *brow, int x, int y, int w, int dx,
+                        const int *slide_a, const int *slide_b, cell_t grain,
+                        uint8_t density, int scatter)
+{
+    if (scatter == 0 || !cell_open(prow, x + dx, w, density)) {
+        return false;
+    }
+
+    const uint32_t r = rng_next(&s->rng);
+    if ((int)(r & 0xFF) >= scatter) {
+        return false;
+    }
+
+    /* Drift: sideways as well as down, if that way is open. Spreads the
+     * stream horizontally. Blocked or not chosen, it lags instead: nothing
+     * at all this step, so the grains around it pull ahead and the stream
+     * spreads vertically.
+     *
+     * Either way still counts as activity. A grain that CHOSE not to move is
+     * not a settled grain, and letting the row sleep here would strand it in
+     * mid-air. */
+    if ((r & 0x100) == 0) {
+        const bool pick_a = (r & 0x200) != 0;
+        uint8_t  *drow = pick_a ? arow : brow;
+        const int ddx  = pick_a ? slide_a[0] : slide_b[0];
+        const int ddy  = pick_a ? slide_a[1] : slide_b[1];
+
+        if (move_to(row, drow, x, x + ddx, w, grain, density)) {
+            mark_rows(s, y, y + ddy);
+        }
+    }
+    return true;
+}
+
+static bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
+                                uint8_t *arow, uint8_t *brow, int x, int y,
+                                int w, int dx, int dy, const int *slide_a,
+                                const int *slide_b, cell_t grain,
+                                uint8_t density, int scatter)
+{
+    if (try_scatter(s, row, prow, arow, brow, x, y, w, dx, slide_a, slide_b,
+                    grain, density, scatter)) {
+        return true;
+    }
+
+    if (move_to(row, prow, x, x + dx, w, grain, density)) {
+        mark_rows(s, y, y + dy);
+        return true;
+    }
+    return false;
+}
+
+/* Which of the two slides to try first, and which second - without
+ * randomising it the sand develops a visible grain with everything leaning
+ * the same way. */
+static void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
+                             const int *slide_a, const int *slide_b,
+                             uint8_t mat_id, bool driven[MATERIAL_MAX][2],
+                             uint8_t **first_row, int *first_dx,
+                             int *first_dy, bool *first_driven,
+                             uint8_t **second_row, int *second_dx,
+                             int *second_dy, bool *second_driven)
+{
+    if (r & 1) {
+        *first_row  = arow; *first_dx  = slide_a[0]; *first_dy  = slide_a[1];
+        *first_driven = driven[mat_id][0];
+        *second_row = brow; *second_dx = slide_b[0]; *second_dy = slide_b[1];
+        *second_driven = driven[mat_id][1];
+    } else {
+        *first_row  = brow; *first_dx  = slide_b[0]; *first_dy  = slide_b[1];
+        *first_driven = driven[mat_id][1];
+        *second_row = arow; *second_dx = slide_a[0]; *second_dy = slide_a[1];
+        *second_driven = driven[mat_id][0];
+    }
+}
+
+/* Friction, and only on the slides. The grain could not fall, so whether it
+ * may SHUFFLE depends on what is sitting on it. Reached only once the
+ * gravity-ward move has already failed, so a grain in open air never pays
+ * for this. */
+static bool try_slide_pair(sand_t *s, uint8_t *row, int x, int y, int w,
+                           cell_t grain, uint8_t density,
+                           const material_t *mat, int load_dx, int load_dy,
+                           int jostle, uint32_t r, uint8_t *first_row,
+                           int first_dx, int first_dy, bool first_driven,
+                           uint8_t *second_row, int second_dx, int second_dy,
+                           bool second_driven)
+{
+    const int load = sand_load_above(s, x, y, load_dx, load_dy);
+    const int allowance = slide_chance(mat, load, jostle);
+    if (allowance < 256 && (int)((r >> 16) & 0xFF) >= allowance) {
+        return false;
+    }
+
+    if (first_driven &&
+        move_to(row, first_row, x, x + first_dx, w, grain, density)) {
+        mark_rows(s, y, y + first_dy);
+        return true;
+    }
+    if (second_driven &&
+        move_to(row, second_row, x, x + second_dx, w, grain, density)) {
+        mark_rows(s, y, y + second_dy);
+        return true;
+    }
+    return false;
+}
+
+/* Blocked, or being shaken. */
+static bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
+                      uint8_t *brow, int x, int y, int w, int dx, int dy,
+                      const int *slide_a, const int *slide_b, int load_dx,
+                      int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+                      uint8_t density, const material_t *mat,
+                      bool driven[MATERIAL_MAX][2])
+{
+    const uint32_t r = rng_next(&s->rng);
+
+    uint8_t *first_row,  *second_row;
+    int      first_dx,    second_dx;
+    int      first_dy,    second_dy;
+    bool     first_driven, second_driven;
+    pick_slide_order(r, arow, brow, slide_a, slide_b, mat_id, driven,
+                     &first_row, &first_dx, &first_dy, &first_driven,
+                     &second_row, &second_dx, &second_dy, &second_driven);
+
+    /* Shaking reorders the attempts rather than adding a new move: a shaken
+     * grain prefers to spread sideways before it drops. Every destination
+     * stays inside the already-swept half, so the no-double-move guarantee
+     * above still holds. */
+    const bool shaken = jostle > 0 && (int)((r >> 8) & 0xFF) < jostle;
+
+    if (!shaken && jostle > 0 &&
+        move_to(row, prow, x, x + dx, w, grain, density)) {
+        mark_rows(s, y, y + dy);
+        return true;
+    }
+
+    if (try_slide_pair(s, row, x, y, w, grain, density, mat, load_dx,
+                       load_dy, jostle, r, first_row, first_dx, first_dy,
+                       first_driven, second_row, second_dx, second_dy,
+                       second_driven)) {
+        return true;
+    }
+
+    if (shaken && move_to(row, prow, x, x + dx, w, grain, density)) {
+        mark_rows(s, y, y + dy);
+        return true;
+    }
+
+    return false;
+}
+
+static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
+                           uint8_t *arow, uint8_t *brow, int x, int y, int w,
+                           int dx, int dy, const int *slide_a,
+                           const int *slide_b, int load_dx, int load_dy,
+                           int jostle, bool driven[MATERIAL_MAX][2])
+{
+    const cell_t grain = row[x];
+    const material_t *mat = material_of(grain);
+    if (mat->kind == KIND_STATIC || mat->kind == KIND_GAS) {
+        /* Static never moves, so it costs a single comparison - which is
+         * what makes a wall of stone free to have on screen.
+         *
+         * Gas is skipped for now rather than mishandled. Rising means
+         * moving AGAINST the sweep, into cells not yet visited, which would
+         * let it move several times in one step and teleport to the
+         * ceiling. Doing it properly needs a second, downward sweep for
+         * rising materials; there is nothing that rises yet. */
+        return false;
+    }
+
+    const uint8_t mat_id  = CELL_MATERIAL(grain);
+    const uint8_t density = mat->density;
+
+    /* Liquids move an AMOUNT rather than a whole grain - see
+     * move_liquid_grain() in sand_liquid.c, and sand_step_liquids() below
+     * for the rest of a liquid's behaviour, which is NOT gravity-ward and
+     * so cannot join this sweep. */
+    if (mat->kind == KIND_LIQUID) {
+        return move_liquid_grain(s, row, prow, x, y, dx, dy,
+                                 slide_a, slide_b, grain, mat_id);
+    }
+
+    if (jostle == 0) {
+        const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
+        if (try_fall_or_scatter(s, row, prow, arow, brow, x, y, w, dx, dy,
+                                slide_a, slide_b, grain, density, scatter)) {
+            return true;
+        }
+    }
+
+    return try_slide(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
+                     slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                     density, mat, driven);
+}
+
+/* Sleeping is off entirely when row_state does not exist. Otherwise, wakes
+ * every row when the grid is being shaken or the settle-relevant direction
+ * has changed underneath it - either can free a grain that had nothing to do
+ * with what its neighbours were doing, so no row's settled state survives -
+ * and returns which of the two dithered directions this step is using, so a
+ * row can be marked settled against the right one.
+ *
+ * The NEAREST direction is what is compared, not the dithered one - that
+ * changes almost every step by design, and comparing it would mean nothing
+ * ever slept. */
+static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
+                                   int load_dx, int load_dy)
+{
+    if (s->row_state == NULL) {
+        return 0;
+    }
+
+    if (jostle > 0 ||
+        load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
+        memset(s->row_state, 0, (size_t)s->h);
+    }
+    s->last_load_dx = load_dx;
+    s->last_load_dy = load_dy;
+
+    return (dx == load_dx && dy == load_dy)
+         ? ROW_SETTLED_NEAREST : ROW_SETTLED_OTHER;
+}
+
+/* One row of the gravity sweep. Skipped entirely once settled: already
+ * examined under this exact direction with nothing to do, and nothing has
+ * moved next to it since, so it cannot have anywhere to go. */
+static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
+                         const int *slide_a, const int *slide_b, int x_from,
+                         int x_to, int x_step, int load_dx, int load_dy,
+                         int jostle, uint8_t settled_bit,
+                         bool driven[MATERIAL_MAX][2])
+{
+    if (settled_bit != 0 && (s->row_state[y] & settled_bit)) {
+        return;
+    }
+    bool moved_here = false;
+
+    uint8_t *row = s->cells + (size_t)y * (size_t)w;
+
+    /* The three rows a grain in this row can reach. */
+    uint8_t *prow = dest_row(s, y + dy);
+    uint8_t *arow = dest_row(s, y + slide_a[1]);
+    uint8_t *brow = dest_row(s, y + slide_b[1]);
+
+    for (int x = x_from; x != x_to; x += x_step) {
+        if (CELL_IS_EMPTY(row[x])) {
+            continue;
+        }
+        if (step_one_grain(s, row, prow, arow, brow, x, y, w, dx, dy,
+                           slide_a, slide_b, load_dx, load_dy, jostle,
+                           driven)) {
+            moved_here = true;
+        }
+    }
+
+    /* Remember against THIS direction only - the other one offers different
+     * moves. A later row moving next to this one clears it again, via
+     * wake_around(). */
+    if (settled_bit != 0 && !moved_here) {
+        s->row_state[y] |= settled_bit;
+    }
+}
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
-    /* Momentum: how hard gravity's direction turned since last step, decayed
-     * so a single flick fades over a few frames rather than lingering or
-     * accumulating without bound under sustained shaking. Based on the RAW
-     * direction, not the dithered or nearest one - both are quantised for the
-     * grid's benefit and neither is a fair measure of how fast the input
-     * itself is actually moving. */
-    {
-        s->mom_x_q8 = (int32_t)(((int64_t)s->mom_x_q8 * SAND_MOMENTUM_DECAY) >> 8);
-        s->mom_y_q8 = (int32_t)(((int64_t)s->mom_y_q8 * SAND_MOMENTUM_DECAY) >> 8);
-
-        const int len = vec_len_approx(gx, gy);
-        if (len > 0) {
-            const int32_t ux = (int32_t)(((int64_t)gx * 256) / len);
-            const int32_t uy = (int32_t)(((int64_t)gy * 256) / len);
-
-            if (s->mom_primed && s->flick > 0) {
-                /* Which way it turned, from the smoothed direction - a step
-                 * or two late, but the right way eventually. Renormalised to
-                 * a unit vector so a turn too small for the smoothing to
-                 * have caught up on yet still points somewhere definite,
-                 * rather than contributing almost nothing just because the
-                 * filter has not finished moving.
-                 *
-                 * HOW FAR comes from the gyroscope, not from how big this
-                 * renormalised step is - see the comment above
-                 * SAND_REBOUND_GAIN for why the delta itself is the wrong
-                 * thing to scale by. */
-                const int32_t tx = ux - s->dir_x_q8;
-                const int32_t ty = uy - s->dir_y_q8;
-                const int tlen = vec_len_approx((int)tx, (int)ty);
-
-                if (tlen > 0) {
-                    s->mom_x_q8 += (int32_t)((((int64_t)tx * 256 / tlen) *
-                                              s->flick) >> 8);
-                    s->mom_y_q8 += (int32_t)((((int64_t)ty * 256 / tlen) *
-                                              s->flick) >> 8);
-                }
-            }
-            s->mom_primed = true;
-            s->dir_x_q8 = ux;
-            s->dir_y_q8 = uy;
-        }
-
-        /* Capped so a long spell of shaking cannot ratchet this past what any
-         * single flick could ever produce. */
-        if (s->mom_x_q8 >  1024) { s->mom_x_q8 =  1024; }
-        if (s->mom_x_q8 < -1024) { s->mom_x_q8 = -1024; }
-        if (s->mom_y_q8 >  1024) { s->mom_y_q8 =  1024; }
-        if (s->mom_y_q8 < -1024) { s->mom_y_q8 = -1024; }
-    }
+    update_momentum(s, gx, gy);
 
     /* Dithered rather than nearest, so a tilt between two of the eight
      * directions flows at its true angle instead of snapping. Costs one random
@@ -566,38 +892,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int *slide_a = ring[(i + 7) & 7];
     const int *slide_b = ring[(i + 1) & 7];
 
-    /* Sleeping. Everything wakes when the gravity direction changes or the grid
-     * is being shaken, because either can free a grain that had nothing to do
-     * with what its neighbours were doing. The NEAREST direction is what is
-     * compared, not the dithered one - that changes almost every step by
-     * design, and comparing it would mean nothing ever slept. */
-    uint8_t settled_bit = 0;   /* zero means sleeping is off entirely */
-    if (s->row_state != NULL) {
-        if (jostle > 0 ||
-            load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
-            /* Either can free a grain that had nothing to do with what its
-             * neighbours were doing, so no row's settled state survives. */
-            memset(s->row_state, 0, (size_t)s->h);
-        }
-        s->last_load_dx = load_dx;
-        s->last_load_dy = load_dy;
+    const uint8_t settled_bit = compute_settled_bit(s, jostle, dx, dy,
+                                                    load_dx, load_dy);
 
-        /* Which of the two dithered directions this step is using. */
-        settled_bit = (dx == load_dx && dy == load_dy)
-                    ? ROW_SETTLED_NEAREST : ROW_SETTLED_OTHER;
-    }
-
-    /* Whether each slide is driven at this tilt, for each material.
-     *
-     * It depends only on the direction and the material's angle of repose, so
-     * it is worked out once per step for all of them - sixteen booleans -
-     * rather than recomputed for every one of 41,000 cells. */
     bool driven[MATERIAL_MAX][2];
-    for (int m = 0; m < MATERIAL_MAX; m++) {
-        const int repose = materials[m].repose;
-        driven[m][0] = driven_by_gravity(slide_a[0], slide_a[1], gx, gy, repose);
-        driven[m][1] = driven_by_gravity(slide_b[0], slide_b[1], gx, gy, repose);
-    }
+    compute_driven(driven, slide_a, slide_b, gx, gy);
 
     /* Sweep AGAINST the direction of travel, on both axes.
      *
@@ -611,52 +910,20 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int y_step = (dy > 0) ? -1       : 1;
 
     int x_from, x_to, x_step;
-    if (dx > 0) {
-        x_from = s->w - 1; x_to = -1;   x_step = -1;
-    } else if (dx < 0) {
-        x_from = 0;        x_to = s->w; x_step = 1;
-    } else {
-        /* Gravity has no horizontal component, so either order is correct.
-         * Alternating between steps keeps piles from leaning consistently one
-         * way, which a fixed order makes surprisingly obvious. */
-        if (s->sweep_flip) {
-            x_from = s->w - 1; x_to = -1;   x_step = -1;
-        } else {
-            x_from = 0;        x_to = s->w; x_step = 1;
-        }
-    }
-    s->sweep_flip = !s->sweep_flip;
+    sweep_x_order(s, dx, &x_from, &x_to, &x_step);
 
     /* Which way a liquid spreads: PERPENDICULAR TO GRAVITY, not across the
-     * screen.
+     * screen - tilt the board and the surface tilts with it, so spreading
+     * along a screen row spreads in the wrong direction once tilted.
      *
-     * "Along the surface" only means screen-horizontal while gravity points
-     * straight down. Tilt the board and the surface tilts with it, so spreading
-     * along a screen row is spreading in the wrong direction - which is why
-     * water in a tilted basin behaved like a powder, heaping against the low
-     * wall instead of pouring over the lip.
+     * Both directions across the flow, not just the one the sweep already
+     * passed - the main sweep can safely use neither, see equalise_liquids().
      *
-     * Of the two perpendiculars, only the one the sweep has ALREADY passed can
-     * be used. A perpendicular move keeps a cell at the same depth, so moving
-     * into ground not yet visited would let one drop travel several cells in a
-     * single step and empty a basin in one frame. */
-    /* Both directions across the flow. The main sweep can safely use neither -
-     * see equalise_liquids(), which is where they are used.
-     *
-     * Taken from the NEAREST direction, not the dithered one - the same
-     * reasoning as load_dx/load_dy above, and it matters more here than it
-     * does there. Off-axis gravity dithers between two octants almost every
-     * step by design, which would make this axis itself change almost every
-     * step too - and equalise_liquids() searches whole cell-runs along it, so
-     * a resting pool that was level along one axis and re-evaluated along a
-     * DIFFERENT one the very next step can read as wildly out of balance,
-     * moving half a settled body of water in a single step and its opposite
-     * the step after. Measured: whole rows swinging between full and half
-     * mass and back, which is exactly the flicker this was reported as -
-     * water that looked settled visibly changing colour and settling again.
-     * The nearest direction only changes when the tilt itself genuinely
-     * does, so the axis a resting pool is judged against stays put along
-     * with it. */
+     * Taken from the NEAREST direction, not the dithered one, for the same
+     * reason load_dx/load_dy is above: the dithered direction changes almost
+     * every step once off axis, and a resting pool judged against a
+     * constantly-changing axis reads as unbalanced when it is not - see
+     * test_a_settled_pool_does_not_flicker. */
     const int i_stable = ring_index(load_dx, load_dy);
     const int *const perp_a = ring[(i_stable + 2) & 7];
     const int *const perp_b = ring[(i_stable + 6) & 7];
@@ -664,171 +931,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
 
     for (int y = y_from; y != y_to; y += y_step) {
-        /* Already examined under this exact direction with nothing to do, and
-         * nothing has moved next to it since. It cannot have anywhere to go. */
-        if (settled_bit != 0 && (s->row_state[y] & settled_bit)) {
-            continue;
-        }
-        bool moved_here = false;
-
-        uint8_t *row = s->cells + (size_t)y * (size_t)w;
-
-        /* The three rows a grain in this row can reach. */
-        uint8_t *prow = dest_row(s, y + dy);
-        uint8_t *arow = dest_row(s, y + slide_a[1]);
-        uint8_t *brow = dest_row(s, y + slide_b[1]);
-
-        for (int x = x_from; x != x_to; x += x_step) {
-            const cell_t grain = row[x];
-            if (CELL_IS_EMPTY(grain)) {
-                continue;
-            }
-
-            const material_t *mat = material_of(grain);
-            if (mat->kind == KIND_STATIC || mat->kind == KIND_GAS) {
-                /* Static never moves, so it costs a single comparison - which
-                 * is what makes a wall of stone free to have on screen.
-                 *
-                 * Gas is skipped for now rather than mishandled. Rising means
-                 * moving AGAINST the sweep, into cells not yet visited, which
-                 * would let it move several times in one step and teleport to
-                 * the ceiling. Doing it properly needs a second, downward sweep
-                 * for rising materials; there is nothing that rises yet. */
-                continue;
-            }
-
-            const uint8_t mat_id  = CELL_MATERIAL(grain);
-            const uint8_t density = mat->density;
-            const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
-
-            /* Liquids move an AMOUNT rather than a whole grain - see
-             * move_liquid_grain() in sand_liquid.c, and sand_step_liquids()
-             * below for the rest of a liquid's behaviour, which is NOT
-             * gravity-ward and so cannot join this sweep. */
-            if (mat->kind == KIND_LIQUID) {
-                if (move_liquid_grain(s, row, prow, x, y, dx, dy,
-                                      slide_a, slide_b, grain, mat_id)) {
-                    moved_here = true;
-                }
-                continue;
-            }
-
-            /* The common case by a wide margin - on a screen of falling sand
-             * almost every grain simply moves the way gravity points. Taking it
-             * before drawing a random number matters: the generator was the
-             * single most expensive thing in this loop, and most grains never
-             * needed it.
-             *
-             * Scatter only applies to a grain that could fall, and is only
-             * asked about once that is established, so a blocked grain still
-             * costs nothing extra here. */
-            if (jostle == 0) {
-                if (scatter != 0 && cell_open(prow, x + dx, w, density)) {
-                    const uint32_t r = rng_next(&s->rng);
-
-                    if ((int)(r & 0xFF) < scatter) {
-                        /* Drift: sideways as well as down, if that way is
-                         * open. Spreads the stream horizontally. */
-                        if ((r & 0x100) == 0) {
-                            const bool pick_a = (r & 0x200) != 0;
-                            uint8_t  *drow = pick_a ? arow : brow;
-                            const int ddx  = pick_a ? slide_a[0] : slide_b[0];
-                            const int ddy  = pick_a ? slide_a[1] : slide_b[1];
-
-                            if (move_to(row, drow, x, x + ddx, w, grain, density)) {
-                                mark_rows(s, y, y + ddy);
-                                moved_here = true;
-                                continue;
-                            }
-                        }
-
-                        /* Lag: nothing at all this step, so the grains around
-                         * it pull ahead and the stream spreads vertically.
-                         *
-                         * The row is still counted as busy. A grain that CHOSE
-                         * not to move is not a settled grain, and letting the
-                         * row sleep here would strand it in mid-air. */
-                        moved_here = true;
-                        continue;
-                    }
-                }
-
-                if (move_to(row, prow, x, x + dx, w, grain, density)) {
-                    mark_rows(s, y, y + dy);
-                    moved_here = true;
-                    continue;
-                }
-            }
-
-            /* Blocked, or being shaken. Now the order of the two slides has to
-             * be decided, and without randomising it the sand develops a
-             * visible grain with everything leaning the same way. */
-            const uint32_t r = rng_next(&s->rng);
-
-            uint8_t *first_row,  *second_row;
-            int      first_dx,    second_dx;
-            int      first_dy,    second_dy;
-            bool     first_driven, second_driven;
-            if (r & 1) {
-                first_row  = arow; first_dx  = slide_a[0]; first_dy  = slide_a[1];
-                first_driven = driven[mat_id][0];
-                second_row = brow; second_dx = slide_b[0]; second_dy = slide_b[1];
-                second_driven = driven[mat_id][1];
-            } else {
-                first_row  = brow; first_dx  = slide_b[0]; first_dy  = slide_b[1];
-                first_driven = driven[mat_id][1];
-                second_row = arow; second_dx = slide_a[0]; second_dy = slide_a[1];
-                second_driven = driven[mat_id][0];
-            }
-
-            /* Shaking reorders the attempts rather than adding a new move: a
-             * shaken grain prefers to spread sideways before it drops. Every
-             * destination stays inside the already-swept half, so the
-             * no-double-move guarantee above still holds. */
-            const bool shaken = jostle > 0 && (int)((r >> 8) & 0xFF) < jostle;
-
-            if (!shaken && jostle > 0 &&
-                move_to(row, prow, x, x + dx, w, grain, density)) {
-                mark_rows(s, y, y + dy);
-                moved_here = true;
-                continue;
-            }
-
-            /* Friction, and only on the slides. The grain could not fall, so
-             * whether it may SHUFFLE depends on what is sitting on it. Reached
-             * only once the gravity-ward move has already failed, so a grain in
-             * open air never pays for this. */
-            const int load = sand_load_above(s, x, y, load_dx, load_dy);
-            const int allowance = slide_chance(mat, load, jostle);
-            if (allowance >= 256 || (int)((r >> 16) & 0xFF) < allowance) {
-                if (first_driven &&
-                    move_to(row, first_row, x, x + first_dx, w, grain, density)) {
-                    mark_rows(s, y, y + first_dy);
-                    moved_here = true;
-                    continue;
-                }
-                if (second_driven &&
-                    move_to(row, second_row, x, x + second_dx, w, grain, density)) {
-                    mark_rows(s, y, y + second_dy);
-                    moved_here = true;
-                    continue;
-                }
-            }
-
-            if (shaken && move_to(row, prow, x, x + dx, w, grain, density)) {
-                mark_rows(s, y, y + dy);
-                moved_here = true;
-                continue;
-            }
-
-        }
-
-        /* Examined, and nothing here could move. Remember that against THIS
-         * direction only - the other one offers different moves. A later row
-         * moving next to this one clears it again, via wake_around(). */
-        if (settled_bit != 0 && !moved_here) {
-            s->row_state[y] |= settled_bit;
-        }
+        step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_from, x_to, x_step,
+                    load_dx, load_dy, jostle, settled_bit, driven);
     }
 
     /* Everything about a liquid that is NOT gravity-ward: cross-flow, and
