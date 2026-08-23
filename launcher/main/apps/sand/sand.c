@@ -641,9 +641,25 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * into ground not yet visited would let one drop travel several cells in a
      * single step and empty a basin in one frame. */
     /* Both directions across the flow. The main sweep can safely use neither -
-     * see equalise_liquids(), which is where they are used. */
-    const int *const perp_a = ring[(i + 2) & 7];
-    const int *const perp_b = ring[(i + 6) & 7];
+     * see equalise_liquids(), which is where they are used.
+     *
+     * Taken from the NEAREST direction, not the dithered one - the same
+     * reasoning as load_dx/load_dy above, and it matters more here than it
+     * does there. Off-axis gravity dithers between two octants almost every
+     * step by design, which would make this axis itself change almost every
+     * step too - and equalise_liquids() searches whole cell-runs along it, so
+     * a resting pool that was level along one axis and re-evaluated along a
+     * DIFFERENT one the very next step can read as wildly out of balance,
+     * moving half a settled body of water in a single step and its opposite
+     * the step after. Measured: whole rows swinging between full and half
+     * mass and back, which is exactly the flicker this was reported as -
+     * water that looked settled visibly changing colour and settling again.
+     * The nearest direction only changes when the tilt itself genuinely
+     * does, so the axis a resting pool is judged against stays put along
+     * with it. */
+    const int i_stable = ring_index(load_dx, load_dy);
+    const int *const perp_a = ring[(i_stable + 2) & 7];
+    const int *const perp_b = ring[(i_stable + 6) & 7];
 
     const int w = s->w;
 

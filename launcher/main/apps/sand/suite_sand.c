@@ -1549,6 +1549,65 @@ static void test_a_large_body_of_water_levels(void)
         "because it had finished");
 }
 
+static void test_a_settled_pool_does_not_flicker(void)
+{
+    /* The reported bug: water that looked finished settling kept visibly
+     * flashing between shades and back - which is exactly what it looks
+     * like when a large amount of mass swings from one cell to another and
+     * back, since colour is read straight off fill level.
+     *
+     * Reproduced with gravity held slightly OFF axis, not straight down.
+     * Exactly (0, 1000) never dithers at all - see
+     * sand_gravity_direction_dithered() - so a test using it could never
+     * catch a bug that only shows up once dithering is active, which real
+     * handling almost always has: a hand is never perfectly level either.
+     *
+     * The cause was equalise_liquids()'s cross-flow axis being taken from
+     * the DITHERED direction, which by design changes between two octants
+     * almost every step once off axis - so the axis a "is this level"
+     * search runs along changed out from under it constantly, and a pool
+     * level along one axis can read as wildly unbalanced along the other. */
+    const int gx = 60, gy = 1000;
+
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    for (int i = 0; i < 30; i++) {
+        sand_spawn(&wide, WIDE_W / 2, 1, 3, MAT_WATER);
+        sand_step(&wide, gx, gy, 0);
+    }
+    for (int i = 0; i < 600; i++) {
+        sand_step(&wide, gx, gy, 0);
+    }
+
+    /* Once settled, no single step may move much mass at all. The bug moved
+     * roughly half the deepest column's worth in one step, then its
+     * opposite the step after; this bounds it far below that, loose enough
+     * to tolerate an unevenly-divisible remainder still finding its exact
+     * rest spot at the surface. */
+    uint8_t prev[WIDE_W * WIDE_H];
+    memcpy(prev, wide_cells, sizeof(prev));
+
+    long worst_churn = 0;
+    for (int i = 0; i < 200; i++) {
+        sand_step(&wide, gx, gy, 0);
+
+        long churn = 0;
+        for (int c = 0; c < WIDE_W * WIDE_H; c++) {
+            const int a = CELL_IS_EMPTY(prev[c])       ? 0 : CELL_VARIANT(prev[c]);
+            const int b = CELL_IS_EMPTY(wide_cells[c]) ? 0 : CELL_VARIANT(wide_cells[c]);
+            churn += (a > b) ? (a - b) : (b - a);
+        }
+        if (churn > worst_churn) {
+            worst_churn = churn;
+        }
+        memcpy(prev, wide_cells, sizeof(prev));
+    }
+
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(4 * MASS_MAX, worst_churn,
+        "a settled pool must not swing large amounts of mass around once "
+        "level - the reported symptom was water that looked settled "
+        "visibly changing colour and resettling, over and over");
+}
+
 /* --- momentum: the wall-rebound splash ----------------------------------- */
 
 #define REB_W 6
@@ -2171,6 +2230,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_tipped_basin_keeps_its_sand);
     RUN_TEST(test_water_puddles_where_sand_heaps);
     RUN_TEST(test_a_large_body_of_water_levels);
+    RUN_TEST(test_a_settled_pool_does_not_flicker);
     RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
     RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
 
