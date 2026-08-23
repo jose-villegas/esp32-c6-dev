@@ -182,4 +182,14 @@ void gfx_present(void);
 #if CONFIG_LAUNCHER_DEVELOPMENT
 void gfx_set_debug_overlay(bool on);
 bool gfx_debug_overlay(void);
+
+/* A second, independent layer on top of the overlay above: draws the fixed
+ * leaf-grid boundaries (see gfx_dirty.h) inside whatever box a gathered
+ * send actually covers, in green, so the finer subdivision underneath a
+ * yellow box is visible on real hardware rather than only in
+ * suite_gfx_dirty.c. Has no effect unless gfx_debug_overlay() is also on -
+ * it refines what the overlay shows, it is not a mode of its own. Same
+ * undefined-outside-development reasoning as the toggle above. */
+void gfx_set_leaf_overlay(bool on);
+bool gfx_debug_leaf_overlay(void);
 #endif

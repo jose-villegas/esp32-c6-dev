@@ -451,6 +451,13 @@ static bool debug_overlay_on;
 void gfx_set_debug_overlay(bool on) { debug_overlay_on = on; }
 bool gfx_debug_overlay(void) { return debug_overlay_on; }
 
+/* Same story as debug_overlay_on above - see gfx_set_leaf_overlay()'s own
+ * comment in gfx.h for what this actually draws. */
+static bool leaf_overlay_on;
+
+void gfx_set_leaf_overlay(bool on) { leaf_overlay_on = on; }
+bool gfx_debug_leaf_overlay(void) { return leaf_overlay_on; }
+
 /* Outlines whichever rectangle is about to be sent, one row and one column
  * of pixels deep - shows exactly which segments of the strip/gather split
  * are triggering an update on a real interaction, and which path each one
@@ -471,6 +478,37 @@ static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
     for (int row = 0; row < h; row++) {
         buf[(size_t)row * stride] = colour;
         buf[(size_t)row * stride + (w - 1)] = colour;
+    }
+}
+
+/* Draws a thin line at every LEAF_W/LEAF_H boundary strictly inside
+ * [x0,x0+w) x [y0,y0+h) of `buf` (stride `stride`) - the fixed leaf
+ * subdivision (gfx_dirty.h) underneath whatever box actually got sent,
+ * without touching the box's own outer border (mark_rect_border() already
+ * owns that pixel). `x0`/`y0` are the box's absolute panel position,
+ * needed to find where the fixed boundaries - always at multiples of
+ * LEAF_W/LEAF_H - fall relative to this buffer's own local origin.
+ *
+ * Only ever called from gather_and_send(), never send_full_row(): a full-
+ * row fallback only happens when a run was not leaf-eligible or its best
+ * split still exceeded the gather budget, so there is nothing this could
+ * show there that would not be misleading - the whole point is to show
+ * where refinement *could* subdivide, and cyan means it already could
+ * not. */
+static void mark_leaf_grid(gfx_color_t *buf, int stride, int w, int h,
+                           int x0, int y0, gfx_color_t colour)
+{
+    for (int lx = ((x0 / LEAF_W) + 1) * LEAF_W; lx < x0 + w; lx += LEAF_W) {
+        const int col = lx - x0;
+        for (int row = 0; row < h; row++) {
+            buf[(size_t)row * stride + col] = colour;
+        }
+    }
+    for (int ly = ((y0 / LEAF_H) + 1) * LEAF_H; ly < y0 + h; ly += LEAF_H) {
+        const int row = ly - y0;
+        for (int col = 0; col < w; col++) {
+            buf[(size_t)row * stride + col] = colour;
+        }
     }
 }
 
@@ -571,6 +609,9 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
             mark_rect_border(at, w, cell_x1[idx] - cell_x0[idx],
                              cell_y1[idx] - cell_y0[idx], border);
         }
+    }
+    if (debug_overlay_on && leaf_overlay_on) {
+        mark_leaf_grid(gather_buf, w, w, h, x0, y0, gfx_rgb(0x00FF00));
     }
 #else
     (void)row; (void)run_start; (void)run_end; (void)refined; (void)border;
