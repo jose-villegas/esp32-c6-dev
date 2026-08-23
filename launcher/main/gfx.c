@@ -597,17 +597,15 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
  * Present
  *-------------------------------------------------------------------------*/
 
-/* Runtime state for the overlay below - kept outside the #if so the public
- * getter/setter always exist and a caller (the Diagnostics app) never has
- * to know whether this is a development build. Only ever read inside
- * CONFIG_LAUNCHER_DEVELOPMENT code, so it costs nothing in a release build
- * beyond one unused byte. */
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Runtime state for the overlay below. Declared only in this block, same as
+ * the getter/setter that touch it - see the "why not always compiled"
+ * comment on their declaration in gfx.h. */
 static bool debug_overlay_on;
 
 void gfx_set_debug_overlay(bool on) { debug_overlay_on = on; }
 bool gfx_debug_overlay(void) { return debug_overlay_on; }
 
-#if CONFIG_LAUNCHER_DEVELOPMENT
 /* Outlines whichever rectangle is about to be sent, one row and one column
  * of pixels deep - shows exactly which segments of the strip/gather split
  * are triggering an update on a real interaction, and which path each one

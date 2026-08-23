@@ -33,7 +33,19 @@
  * Espressif validate. 80 MHz is within what the ESP32-C6's general-purpose SPI
  * can produce, but it is beyond what anyone documents for this panel, so it is
  * an overclock: if the display shows tearing, wrong colours or noise, this is
- * the first thing to put back. */
+ * the first thing to put back.
+ *
+ * Re-measured at 80 MHz again after the move to the per-cell grid and
+ * gathered runs, on the theory that a settled render path might not hit
+ * the same margin the old prototype did. It still does: the same small,
+ * corner-shaped pixel artifacts came back, so this is not a transfer-
+ * pattern-specific problem - it is this panel's real ceiling on this bus.
+ * A synthetic timing test also regressed at 80 MHz for an unrelated
+ * reason (test_two_far_corners_cost_less_than_a_full_band): a full band
+ * gets proportionally cheaper at a faster clock while the fixed per-
+ * transaction cost does not, so the gather-vs-fallback thresholds below
+ * are tuned for 40 MHz specifically and would need re-measuring, not just
+ * reused, if this ever moves again. */
 #define GFX_QSPI_HZ (40 * 1000 * 1000)
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
@@ -148,7 +160,15 @@ void gfx_present(void);
 /* Runtime toggle for the grid dirty-region overlay - see gfx_present()'s
  * mark_rect_border(). Off by default even in a development build: it draws
  * directly over real content, so it should be opted into, not always on.
- * The overlay itself compiles out of a release build entirely regardless
- * of this flag; toggling it there is a harmless no-op. */
+ *
+ * Declared only under CONFIG_LAUNCHER_DEVELOPMENT on purpose: a debug knob
+ * a release build can still call, quietly doing nothing, is a debug knob
+ * a caller can forget to guard. Calling this from a file that is not
+ * itself development-only should fail to compile, not silently no-op -
+ * the Diagnostics app that owns the checkbox for this is already excluded
+ * from a non-development build entirely (see main/CMakeLists.txt), so it
+ * sees these declarations exactly when it is allowed to. */
+#if CONFIG_LAUNCHER_DEVELOPMENT
 void gfx_set_debug_overlay(bool on);
 bool gfx_debug_overlay(void);
+#endif
