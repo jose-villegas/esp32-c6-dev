@@ -3,4 +3,9 @@
 # Used by test/run_device_tests.sh, which builds it into its own directory so
 # it never overwrites the normal build. Not for shipping - the suites draw to
 # the panel and add test code to the image.
+#
+# CONFIG_LAUNCHER_DEVELOPMENT is implied by SELFTEST (see Kconfig.projbuild)
+# and is set here too only so this file is honest about what it builds at a
+# glance, without having to know that relationship.
 CONFIG_LAUNCHER_SELFTEST=y
+CONFIG_LAUNCHER_DEVELOPMENT=y

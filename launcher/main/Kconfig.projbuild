@@ -1,8 +1,43 @@
 menu "Launcher"
 
+    choice LAUNCHER_BUILD_TYPE
+        prompt "Build type"
+        default LAUNCHER_RELEASE
+        help
+            What this build is for. Exactly one of these is ever true, so
+            code can check CONFIG_LAUNCHER_DEVELOPMENT and know it means
+            "not a release build" - not "development, or maybe something
+            else nobody has named yet."
+
+        config LAUNCHER_RELEASE
+            bool "Release"
+            help
+                The product, and nothing else. No test suites, no profiling
+                counters, no logging meant to be read over a serial console.
+                This project does not do telemetry - nobody downstream is
+                ever reading those numbers - so anything a developer alone
+                would want is pure cost here: flash for the strings, cycles
+                for the bookkeeping, for output that helps nobody. None of
+                it ships in this build.
+
+        config LAUNCHER_DEVELOPMENT
+            bool "Development"
+            help
+                Turns on everything meant for someone AT the device or
+                watching its serial console while working on it - frame
+                timing, step counters, that kind of thing. Guard code with
+                CONFIG_LAUNCHER_DEVELOPMENT, not CONFIG_LAUNCHER_SELFTEST,
+                unless what it is actually gating is the test suites
+                themselves - see LAUNCHER_SELFTEST below, which selects this
+                automatically. Turn this on by itself for a build that wants
+                the profiling and logging without the test suites too.
+
+    endchoice
+
     config LAUNCHER_SELFTEST
         bool "Include the on-device test suites"
         default n
+        select LAUNCHER_DEVELOPMENT
         help
             Compiles the test suites into the firmware and runs them at boot,
             before the shell starts.

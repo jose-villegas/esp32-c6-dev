@@ -84,6 +84,44 @@ drops the display off SPI2 mid-session. Reasonable while debugging, not
 something to leave reachable in a shipped product. The boot POST still runs in
 release — only this way *in* is compiled out.
 
+### Development-only instrumentation is its own flag, not SELFTEST
+
+`CONFIG_LAUNCHER_SELFTEST` answers "does this build carry the test suites."
+It does not answer "is this a development build" — that is a broader
+question, and `CONFIG_LAUNCHER_DEVELOPMENT` answers it instead.
+
+This project does not do telemetry. Nobody downstream ever reads a frame
+counter or a step-timing average; the only audience for that kind of number
+is a developer at the device or watching its serial console while working on
+it. So anything built purely for that audience — rolling averages, per-frame
+timers, a summary logged on exit — is pure cost in a release image: flash for
+the strings and the accounting, cycles for the bookkeeping, for output that
+helps nobody. It gets guarded by `CONFIG_LAUNCHER_DEVELOPMENT`, the same way
+test code is guarded by `CONFIG_LAUNCHER_SELFTEST` — see `app_sand.c`'s frame
+timing for the pattern.
+
+The two are related but not the same flag, because they answer different
+questions and can genuinely diverge:
+
+- `LAUNCHER_SELFTEST` `select`s `LAUNCHER_DEVELOPMENT` — a build carrying the
+  test suites is a development build by definition, so turning on SELFTEST
+  turns on DEVELOPMENT for free.
+- The reverse is not forced. A build can want the profiling and logging
+  without the test suites — watching real frame timings without also paying
+  for Unity and the suites' own footprint.
+
+Both live under one Kconfig `choice` (`main/Kconfig.projbuild`) alongside
+`LAUNCHER_RELEASE`, so exactly one is ever true and neither is "off by
+omission." Checking `CONFIG_LAUNCHER_DEVELOPMENT` means "not a release
+build," not "development, or maybe some other thing nobody named yet."
+
+**The rule going forward:** guard anything whose only reader is a developer —
+a log line, a rolling average, a debug overlay — with
+`CONFIG_LAUNCHER_DEVELOPMENT`. Guard the test suites themselves, and anything
+that only makes sense alongside them, with `CONFIG_LAUNCHER_SELFTEST`. Neither
+belongs ungated, and neither belongs gated on the other one just because they
+currently happen to travel together in `build.diag/`.
+
 ### The Kconfig trap in REQUIRES
 
 One thing must **not** be gated on `CONFIG_LAUNCHER_SELFTEST`: the `unity`

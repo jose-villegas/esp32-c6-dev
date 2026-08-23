@@ -115,17 +115,20 @@ static int         brush;            /* index into brushes - BOOT cycles it */
 static bool        erasing;          /* PWR toggles it, independently */
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
-/* Rolling averages, purely for the log line. */
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Rolling averages, purely for the log line - a release build has nobody
+ * watching the serial console to read them, so it carries none of this. */
 static uint32_t frames;
 static int64_t  step_us_total;
 static int64_t  draw_us_total;
 static int64_t  rows_redrawn_total;
+static int64_t  steps_total;
+#endif
 /* Accumulated simulation time, in milliseconds scaled by 256. Scaled because
  * the flow rate is a fraction and a whole millisecond is too coarse a unit to
  * carry it - rounding to whole ms would make a slow flow stutter or stop. */
 static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
-static int64_t  steps_total;
 
 /*---------------------------------------------------------------------------
  * Sensor axes to screen axes
@@ -153,13 +156,15 @@ static int64_t  steps_total;
 
 static void sand_enter(void)
 {
+#if CONFIG_LAUNCHER_DEVELOPMENT
     frames = 0;
     step_us_total = 0;
     draw_us_total = 0;
     rows_redrawn_total = 0;
+    steps_total = 0;
+#endif
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
-    steps_total = 0;
     brush = 0;
     erasing = false;
     label_left_ms = 0;
@@ -217,6 +222,7 @@ static void sand_exit(void)
     /* The grid is kept between visits: it is the largest allocation the app
      * makes, and holding it means re-entry cannot fail because the heap
      * fragmented while something else was running. */
+#if CONFIG_LAUNCHER_DEVELOPMENT
     if (frames > 0) {
         ESP_LOGI(TAG, "%lu frames, %lld sim steps, step %lld us, draw %lld us, "
                       "%lld of %d rows redrawn per frame",
@@ -225,6 +231,7 @@ static void sand_exit(void)
                  (long long)(draw_us_total / frames),
                  (long long)(rows_redrawn_total / frames), GRID_H);
     }
+#endif
 }
 
 /*---------------------------------------------------------------------------
@@ -247,14 +254,18 @@ static void draw_dirty_rows(void)
      * table this used to build in RAM, and it costs no RAM at all. */
     const gfx_color_t *pal = material_palette();
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
     int redrawn = 0;
+#endif
 
     for (int cy = 0; cy < GRID_H; cy++) {
         if (!dirty_rows[cy]) {
             continue;
         }
         dirty_rows[cy] = 0;
+#if CONFIG_LAUNCHER_DEVELOPMENT
         redrawn++;
+#endif
 
         const uint8_t *row = &grid[cy * GRID_W];
         gfx_color_t   *out = fb + (cy * CELL) * GFX_WIDTH;
@@ -276,7 +287,9 @@ static void draw_dirty_rows(void)
         gfx_mark_dirty(0, cy * CELL, GFX_WIDTH, CELL);
     }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
     rows_redrawn_total += redrawn;
+#endif
 }
 
 /* Draws the mode label against whichever edge is currently UP.
@@ -454,7 +467,9 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * a stop over a moment rather than freezing between one frame and the next.
      * It is also the real behaviour, since a grain on a tray tilted by theta is
      * driven by g*sin(theta). */
+#if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t0 = esp_timer_get_time();
+#endif
 
     sim_accumulator_q8 += dt_ms * (uint32_t)flow;
     int steps = (int)(sim_accumulator_q8 / (SIM_STEP_MS * 256));
@@ -469,9 +484,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     for (int i = 0; i < steps; i++) {
         sand_step(&sim, gx, gy, jostle);
     }
-    steps_total += steps;
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    steps_total += steps;
     const int64_t t1 = esp_timer_get_time();
+#endif
 
     draw_dirty_rows();
 
@@ -480,10 +497,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         draw_mode_label(gx, gy);
     }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t2 = esp_timer_get_time();
     step_us_total += t1 - t0;
     draw_us_total += t2 - t1;
     frames++;
+#endif
 }
 
 const app_t app_sand = {
