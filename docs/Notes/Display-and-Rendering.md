@@ -307,6 +307,102 @@ just compiled out of a release build, but undefined there: a caller outside a
 development-only file that forgets to guard a call to it fails to compile
 rather than silently doing nothing.
 
+### A second, finer level underneath the grid
+
+Subdividing further than the 7x4 grid - floated as "a quadtree" - is now
+built, not just reasoned about: each cell also carries a fixed 4x4 grid of
+`LEAF_W x LEAF_H` (23x16 px) leaves, one bit each, geometry derived
+arithmetically rather than stored (a leaf is already small enough that
+tracking a tighter box inside one buys nothing). Two levels, not three:
+`92`'s only useful factor pair is `4*23`, and 23 is prime, so a third level
+does not divide cleanly.
+
+The worst-case worry that made this seem risky did not hold up once
+measured directly (not just reasoned about): `send_full_row()` only queues
+a transfer, `gfx_present()` waits once at the end, not once per row, so
+CPU-side decision work for one row overlaps with the DMA transfer already
+in flight for a previous one. Injecting a synthetic, deliberately generous
+1 ms busy-wait before every one of the 7 rows' sends - 7 ms total if it
+behaved serially - only added 1,000 us to a full worst-case frame
+(17,825 us -> 18,825 us). Six of the seven rows' injected cost vanished
+into DMA overlap entirely; only the first row, with nothing queued yet to
+hide behind, paid its cost directly. That leaves real margin - a genuine
+tree walk over a few dozen nodes is microseconds, not milliseconds - for
+whatever the leaf layer's own bookkeeping costs.
+
+**What it is for:** `gfx_mark_dirty()`'s cell-level tracking already keeps
+a tight box, but only as tight as the *one* box a caller hands it - it has
+no way to know about a gap the caller never mentioned. `send_one_row()`
+now tries, before the existing `GATHER_MAX_PIXELS` full-row fallback:
+narrow a run's box further via the leaf layer if none of its cells are at
+their full coarse extent (the same "was this touched by `mark_band()`"
+test `gfx_mark_dirty()`'s own comment already relies on), re-validate each
+resulting split against the gather budget (a wide run with a small gap can
+still split into pieces individually too big for `gather_buf`'s fixed
+allocation - skipping that check is a buffer overflow risk, not a
+graceful degradation), and fall back to the coarse box - exactly today's
+behaviour - whenever there is nothing safe or worthwhile to split on. A
+new device test (`test_two_marks_in_one_cell_cost_less_than_the_coarse_box`
+in `suite_gfx.c`) proves the case a cell-level run alone cannot: two 10x10
+marks 65 px apart inside one 92 px cell measured **1,960 us against
+3,405 us** for the coarse box spanning both.
+
+**`mark_band()`'s cheap path is untouched by any of this** - it never
+reads or writes the leaf state, so an app that clears and redraws the
+whole screen (microui, the cube) pays nothing extra. Only `gfx_mark_dirty()`
+- the tight-box path - ever engages the leaf layer, which is the literal
+form the "should be optional" requirement took: not a runtime toggle, an
+architectural split between the two existing entry points.
+
+**Consumers stay unaware the split exists.** `gfx_mark_dirty()`,
+`gfx_mark_all_dirty()` and `gfx_region_dirty()` keep their exact names and
+signatures; the actual tracking state and logic moved into
+`main/gfx_dirty.h`, and `gfx.c` implements the three public functions as
+thin wrappers around it. That header is deliberately *not* a matching
+`.c`/`.h` pair despite being the natural first instinct: `mark_band()` sits
+on `gfx_fill_rect()`/`gfx_pixel()`'s hot path (`gfx_text_scaled()` calls it
+once per set font pixel), and routing it through a real cross-translation-
+unit call once already cost about 5% of the launcher's framerate - the
+regression this project measured and fixed once, earlier in this same
+section. A separate `.c` file would put it right back behind exactly that
+kind of call. Keeping `gfx_dirty.h` header-only and `static` (matching
+`mark_band()`'s own pre-existing style) means `gfx.c` gets everything
+inlined into its own translation unit exactly as before, while a host test
+file gets its own fully independent copy just by including the header
+directly - no separate object to link, no ESP-IDF dependency to satisfy.
+`test/suites/suite_gfx_dirty.c` covers the geometry and bitmask logic this
+way - leaf boundary math, run-collection edge cases, the gather-budget
+rejection path - none of which was reachable from a host before.
+
+**One real, currently-latent beneficiary: `app_sand.c`.** The concrete
+case this was built for - two separated blobs of sand inside one grid row
+- was traced back further than `gfx.c`: `draw_one_row()` used to compute
+one `(min_cx, max_cx)` span per row, so two genuinely separate blobs
+already arrived at `gfx_mark_dirty()` merged, with the gap between them,
+before the leaf layer ever got a chance to see it. Fixed by extracting the
+run-finding and previous/current reconciliation into
+`main/apps/sand/row_runs.c`/`.h` (a portable sibling of `sand.c`/`tilt.c`,
+not a special case wired into `gfx.c`) - `find_row_runs()` mirrors
+`gfx.c`'s own `collect_runs_from_mask()`, and `row_runs_reconcile()`
+generalises the old single-range previous/current union to a small diff
+between two short run lists: a current run absorbs every previous run it
+overlaps, and a previous run nothing current overlaps still gets its own
+send range, so a blob splitting, merging, or vanishing entirely can never
+leave stale pixels behind. Covered by 14 adversarial host tests in
+`suite_row_runs.c` - a blob splitting into two, two blobs merging into
+one, a blob vanishing, a new blob appearing in what used to be a gap -
+since this is the highest-risk part of the whole change: getting it wrong
+is a real, visible bug (stale pixels), not a missed optimisation.
+
+Once `app_sand.c` reports its own per-row runs, each individual run it
+hands to `gfx_mark_dirty()` is already gap-free by construction, so the
+leaf layer typically ends up a no-op for sand specifically - the measured
+win above comes from `app_sand.c` finally calling `gfx.c`'s *existing*
+cell-level run-merging correctly (once per run, not once per whole row),
+not from the new leaf layer. The leaf layer's own value is the general,
+caller-invisible capability: it stands ready for any future caller that
+does not do its own run-detection, which was the actual point.
+
 ### Still untapped
 
 Rendering ideas raised and reasoned through, deliberately not built yet -
@@ -373,21 +469,26 @@ kept here so the reasoning survives to whoever picks one up.
   shorter bands that a single taller one would have covered in one call.
   Only worth trying with real numbers either side of that trade, not
   assumed.
-- **A quadtree, subdividing further than the fixed 7x4 grid.** Raised, not
-  yet built or measured. The open question is whether it earns its keep
-  against the grid's *worst* case rather than its best: with the screen
-  mostly or fully occupied - a full pour, a settled screen mid-collapse -
-  a quadtree has nothing coarse-grained left to skip and pays real
-  traversal/bookkeeping cost the flat grid does not, so it could plausibly
-  come out *behind* the current design exactly when the current design is
-  already cheapest to fall back on the whole row. Where it could still win
-  is the opposite case: a small amount of activity inside an otherwise idle
-  screen, where a quadtree could stop descending into whole idle subtrees
-  that the current fixed 92x64 cells cannot subdivide any further - the
-  gfx send path being the heaviest single cost on screen (see "Measured
-  performance" above) is what would make even a small win there worth
-  having. Not started: needs the worst case measured first, since a design
-  that loses there is not a net win no matter how well it does elsewhere.
+- **Vertical leaf refinement.** The leaf layer described above (see "A
+  second, finer level underneath the grid") only narrows the x-range of a
+  run; the y-range stays the run's existing tight `cell_y0`/`cell_y1`
+  union, which is already exact for the sand app's real 2px-tall rows -
+  the case it was built for. `leaf_dirty` is a genuinely 2D array, so a
+  future pass could OR fewer leaf-rows together (or none) to split
+  vertically too, without any data-structure change - only a new send-side
+  function. Not started: no concrete motivating case has needed it yet.
+- **A debug-overlay toggle showing the leaf grid itself.** Raised, not
+  built. The existing overlay (see above) shows which cells were actually
+  sent each frame; a second, separate toggle showing the static 16x28 leaf
+  boundaries - or which individual leaves are dirty - would make the finer
+  subdivision visible on real hardware the same way the cell-level
+  yellow/cyan overlay already does, rather than only in the synthetic
+  `suite_gfx.c` test and the host-side `suite_gfx_dirty.c` suite.
+- **`LEAF_REFINE_MAX_RUNS` and `ROW_MAX_RUNS` (row_runs.h) are both 2,
+  unmeasured.** Same status `GATHER_MAX_PIXELS` had before it was tuned
+  against real numbers - a reasonable starting guess, not yet checked
+  against real device traces to see whether raising either cap would
+  catch cases currently falling back to a coarser send.
 - **Fixing 80 MHz at the driver level, instead of just not using it.**
   Raised, not started. The corner-shaped corruption traced back to
   `panel_sh8601_draw_bitmap()` in

@@ -31,6 +31,7 @@
 #include "../../app.h"
 #include "../../gfx.h"
 #include "../../imu.h"
+#include "row_runs.h"
 #include "sand.h"
 #include "tilt.h"
 
@@ -114,12 +115,17 @@ static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
 static uint8_t    *sleep_rows;   /* GRID_H bytes: which rows can be skipped */
 
-/* GRID_H entries each: the pixel x-range a row's material occupied the last
- * time it was drawn - GFX_WIDTH/0 (empty range) if none. Kept so a row whose
- * content just vanished still sends far enough to clear its old pixels; see
- * draw_dirty_rows(). */
-static uint16_t   *row_x0;
-static uint16_t   *row_x1;
+/* Up to ROW_MAX_RUNS (row_runs.h) separate cell-index ranges per row - not
+ * pixel ranges, and not a single min/max span - recording where a row's
+ * material sat the last time it was drawn, so a run whose content just
+ * vanished still sends far enough to clear its old pixels, and two
+ * genuinely separate blobs in one row keep being sent separately instead
+ * of one box spanning the gap between them. See row_runs.h. GRID_H *
+ * ROW_MAX_RUNS entries each; row_run_n[cy] says how many of a row's
+ * ROW_MAX_RUNS slots are actually in use. */
+static uint16_t   *row_run_x0;
+static uint16_t   *row_run_x1;
+static uint8_t    *row_run_n;
 static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
@@ -191,14 +197,17 @@ static void sand_enter(void)
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W * GRID_H);
     }
-    if (row_x0 == NULL) {
-        row_x0 = malloc(GRID_H * sizeof(*row_x0));
+    if (row_run_x0 == NULL) {
+        row_run_x0 = malloc(GRID_H * ROW_MAX_RUNS * sizeof(*row_run_x0));
     }
-    if (row_x1 == NULL) {
-        row_x1 = malloc(GRID_H * sizeof(*row_x1));
+    if (row_run_x1 == NULL) {
+        row_run_x1 = malloc(GRID_H * ROW_MAX_RUNS * sizeof(*row_run_x1));
+    }
+    if (row_run_n == NULL) {
+        row_run_n = malloc(GRID_H * sizeof(*row_run_n));
     }
     if (grid == NULL || dirty_rows == NULL || sleep_rows == NULL ||
-        row_x0 == NULL || row_x1 == NULL) {
+        row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
                  GRID_W, GRID_H, GRID_W * GRID_H,
@@ -209,15 +218,16 @@ static void sand_enter(void)
 
     /* Full width, not empty: nothing clears the framebuffer on entry, so
      * whatever the launcher (or a previous app) left behind is still
-     * sitting in it. Seeding "previous" as the whole row forces the first
-     * dirty pass over each row to send full width regardless of how little
-     * of it the fresh grid actually occupies - the same guarantee the old
-     * unconditional-full-width send gave for free. Only once a row has
-     * genuinely been redrawn does its real, narrower extent become trusted
-     * enough to send instead. */
+     * sitting in it. Seeding "previous" as one run spanning the whole row
+     * forces the first dirty pass over each row to send full width
+     * regardless of how little of it the fresh grid actually occupies -
+     * the same guarantee the old unconditional-full-width send gave for
+     * free. Only once a row has genuinely been redrawn does its real,
+     * narrower extent become trusted enough to send instead. */
     for (int i = 0; i < GRID_H; i++) {
-        row_x0[i] = 0;
-        row_x1[i] = GFX_WIDTH;
+        row_run_x0[i * ROW_MAX_RUNS] = 0;
+        row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)GRID_W;
+        row_run_n[i] = 1;
     }
 
     sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
@@ -277,20 +287,13 @@ static void sand_exit(void)
  * gfx which band it landed in. A settled pile therefore costs almost nothing
  * to draw AND almost nothing to send, which is where the real saving is: a
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
-/* Draws one row, empty cells included, and reports the pixel x-range that
- * currently holds material - GFX_WIDTH/0 (an empty range) if none does. */
-static void draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
-                         int *x0, int *x1)
+static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
+                      const uint8_t *row)
 {
-    const uint8_t *row = &grid[cy * GRID_W];
-    gfx_color_t   *out = fb + (cy * CELL) * GFX_WIDTH;
-
-    int min_cx = GRID_W;
-    int max_cx = -1;
+    gfx_color_t *out = fb + (cy * CELL) * GFX_WIDTH;
 
     for (int cx = 0; cx < GRID_W; cx++) {
-        const uint8_t cell = row[cx];
-        const gfx_color_t c = pal[cell];
+        const gfx_color_t c = pal[row[cx]];
         gfx_color_t *p = out + cx * CELL;
 
         /* CELL is a compile-time constant, so these unroll away. */
@@ -299,15 +302,35 @@ static void draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
                 p[dy * GFX_WIDTH + dx] = c;
             }
         }
+    }
+}
 
-        if (cell != SAND_EMPTY) {
-            if (cx < min_cx) { min_cx = cx; }
-            max_cx = cx;
-        }
+/* Draws one row, empty cells included, and reports up to ROW_MAX_RUNS
+ * cell-index ranges (not pixel ranges) that currently hold material - see
+ * row_runs.h for why multiple runs, and row_runs_find()/
+ * row_runs_span_fallback() for the mechanism. */
+static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
+                        uint16_t *cur_x0, uint16_t *cur_x1)
+{
+    const uint8_t *row = &grid[cy * GRID_W];
+
+    paint_row(fb, pal, cy, row);
+
+    int run_x0[ROW_MAX_RUNS], run_x1[ROW_MAX_RUNS];
+    const int n = row_runs_find(row, GRID_W, SAND_EMPTY, run_x0, run_x1);
+    if (n < 0) {
+        int x0, x1;
+        row_runs_span_fallback(row, GRID_W, SAND_EMPTY, &x0, &x1);
+        cur_x0[0] = (uint16_t)x0;
+        cur_x1[0] = (uint16_t)x1;
+        return 1;
     }
 
-    *x0 = (max_cx >= 0) ? min_cx * CELL       : GFX_WIDTH;
-    *x1 = (max_cx >= 0) ? (max_cx + 1) * CELL : 0;
+    for (int i = 0; i < n; i++) {
+        cur_x0[i] = (uint16_t)run_x0[i];
+        cur_x1[i] = (uint16_t)run_x1[i];
+    }
+    return n;
 }
 
 static void draw_dirty_rows(void)
@@ -331,21 +354,31 @@ static void draw_dirty_rows(void)
         redrawn++;
 #endif
 
-        int cur_x0, cur_x1;
-        draw_one_row(fb, pal, cy, &cur_x0, &cur_x1);
+        uint16_t cur_x0[ROW_MAX_RUNS], cur_x1[ROW_MAX_RUNS];
+        const int cur_n = draw_one_row(fb, pal, cy, cur_x0, cur_x1);
 
-        /* Sent range is unioned against what this row occupied last time it
-         * was drawn, not just what it occupies now - a cell that just
-         * emptied still has to be sent once so its old pixels are cleared. */
-        const int send_x0 = (row_x0[cy] < cur_x0) ? row_x0[cy] : cur_x0;
-        const int send_x1 = (row_x1[cy] > cur_x1) ? row_x1[cy] : cur_x1;
+        uint16_t *prev_x0 = &row_run_x0[cy * ROW_MAX_RUNS];
+        uint16_t *prev_x1 = &row_run_x1[cy * ROW_MAX_RUNS];
+        const int prev_n = row_run_n[cy];
 
-        /* Written through the raw framebuffer, so gfx cannot see it. Saying so
-         * is not optional - a missed mark leaves stale pixels on the panel. */
-        gfx_mark_dirty(send_x0, cy * CELL, send_x1 - send_x0, CELL);
+        uint16_t send_x0[2 * ROW_MAX_RUNS], send_x1[2 * ROW_MAX_RUNS];
+        const int send_n = row_runs_reconcile(cur_x0, cur_x1, cur_n, prev_x0,
+                                              prev_x1, prev_n, send_x0,
+                                              send_x1);
 
-        row_x0[cy] = (uint16_t)cur_x0;
-        row_x1[cy] = (uint16_t)cur_x1;
+        /* Written through the raw framebuffer, so gfx cannot see it. Saying
+         * so is not optional - a missed mark leaves stale pixels on the
+         * panel. */
+        for (int i = 0; i < send_n; i++) {
+            gfx_mark_dirty(send_x0[i] * CELL, cy * CELL,
+                          (send_x1[i] - send_x0[i]) * CELL, CELL);
+        }
+
+        for (int i = 0; i < cur_n; i++) {
+            prev_x0[i] = cur_x0[i];
+            prev_x1[i] = cur_x1[i];
+        }
+        row_run_n[cy] = (uint8_t)cur_n;
     }
 
 #if CONFIG_LAUNCHER_DEVELOPMENT

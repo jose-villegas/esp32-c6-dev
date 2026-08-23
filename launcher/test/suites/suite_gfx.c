@@ -448,6 +448,49 @@ static void test_two_far_corners_cost_less_than_a_full_band(void)
         "still cost less than the whole band");
 }
 
+/* Two small marks inside the SAME 92px cell, far enough apart to leave a
+ * real gap between them - the shape only leaf refinement can split on.
+ * test_two_far_corners above lands in different CELLS, which
+ * collect_dirty_runs() alone already separates without any help from the
+ * leaf layer; this test is the one that actually exercises it. See
+ * docs/Notes/Display-and-Rendering.md's "Still untapped". */
+static void test_two_marks_in_one_cell_cost_less_than_the_coarse_box(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();
+
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x406020));
+    const int64_t full_band = time_present();
+
+    gfx_color_t *fb = gfx_framebuffer();
+    const int size = 10;
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            fb[y * GFX_WIDTH + (5 + x)] = gfx_rgb(0x406020);
+        }
+    }
+    gfx_mark_dirty(5, 0, size, size);
+
+    for (int y = 0; y < size; y++) {
+        for (int x = 0; x < size; x++) {
+            fb[y * GFX_WIDTH + (70 + x)] = gfx_rgb(0x406020);
+        }
+    }
+    gfx_mark_dirty(70, 0, size, size);
+
+    const int64_t two_marks = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, two marks in one cell %lld us",
+             (long long)full_band, (long long)two_marks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)full_band, (int)two_marks,
+        "two small marks separated by a real gap inside one cell must cost "
+        "less than sending the coarse box spanning both");
+}
+
 static void test_drawing_marks_what_it_touched(void)
 {
     fixture();
@@ -560,6 +603,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_narrow_change_costs_less_than_a_full_band);
     RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);
     RUN_TEST(test_two_far_corners_cost_less_than_a_full_band);
+    RUN_TEST(test_two_marks_in_one_cell_cost_less_than_the_coarse_box);
     RUN_TEST(test_drawing_marks_what_it_touched);
 
     RUN_TEST(test_the_framebuffer_survives_a_suspend);

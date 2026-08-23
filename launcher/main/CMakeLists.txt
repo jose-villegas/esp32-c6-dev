@@ -82,6 +82,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_button_fsm.c"
         "../test/suites/suite_rng.c"
         "../test/suites/suite_gfx.c"
+        "../test/suites/suite_gfx_dirty.c"
         "../test/suites/suite_ui.c"
         ${app_suites}
     )

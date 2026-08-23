@@ -1,4 +1,5 @@
 #include "gfx.h"
+#include "gfx_dirty.h"
 
 #include <string.h>
 
@@ -15,11 +16,12 @@
 
 #include "font8x8_basic.h"
 
-/* The frame is sent in full-width bands. Full width matters: it makes each
- * band a contiguous run inside the framebuffer, so the DMA reads it in place
- * with no copy. 448 / 64 = 7 bands exactly. */
-#define STRIP_HEIGHT 64
-#define STRIP_COUNT  (GFX_HEIGHT / STRIP_HEIGHT)
+/* gfx_dirty.h cannot include gfx.h (it must stay ESP-IDF-free to compile on
+ * a host), so it carries its own GFX_DIRTY_WIDTH/HEIGHT literals instead of
+ * gfx.h's BSP-derived GFX_WIDTH/HEIGHT. This is what keeps the two from
+ * silently drifting apart if the board's resolution ever changes. */
+_Static_assert(GFX_WIDTH == GFX_DIRTY_WIDTH && GFX_HEIGHT == GFX_DIRTY_HEIGHT,
+              "gfx_dirty.h's screen dimensions must match gfx.h's");
 
 static const char *TAG = "gfx";
 
@@ -55,94 +57,17 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
 /* Current clip rectangle, as inclusive-exclusive bounds. */
 static struct { int x0, y0, x1, y1; } clip;
 
-/* The screen as a fixed grid of cells, ROWS tall bands x COLS wide columns -
- * see docs/Notes/Display-and-Rendering.md's "Partial updates" for the
- * reasoning. Both dimensions are a fixed partition, not just rows with an
- * adaptive box inside: two separate clusters of activity in the same row
- * but different columns get to skip the gap between them instead of one
- * box being forced to span both. 368 / 4 = 92 and 448 / 64 = 7, both exact.
- *
- * One bit per cell: set means "this cell changed and must be considered for
- * sending". The panel refreshes from its own GRAM, so anything not sent
- * simply stays on screen - see docs/Notes/Display-and-Rendering.md. */
-#define GRID_COLS  4
-#define COL_WIDTH  (GFX_WIDTH / GRID_COLS)
-#define CELL_COUNT (STRIP_COUNT * GRID_COLS)
-static uint32_t cell_dirty;
-
-/* Set once gfx_mark_all_dirty() has run this frame, cleared alongside
- * cell_dirty in gfx_present(). Every cell is already claimed at that point,
- * so any further mark_band()/gfx_mark_dirty() call this frame can only ever
- * repeat work already done - real for an app that clears then draws many
- * small primitives on top (microui, the cube renderer): each one otherwise
- * pays the per-cell intersection math for a result gfx_clear() already
- * decided. */
-static bool all_dirty;
-
-/* Per cell, the (x0,x1) x (y0,y1) box actually known to be dirty this frame,
- * in absolute panel pixels, not cell-relative.
- *
- * Anything that marks a row dirty without knowing which pixels changed
- * (mark_band(), below) has to claim every cell in that row, each full width
- * for its own column, or a caller that really did only touch a few pixels
- * could leave someone else's stale pixels unsent beside them. Only
- * gfx_mark_dirty() - used by callers that DO know a real box - is allowed
- * to narrow a cell, and narrowing is always a min/max union against
- * whatever is already there, never an overwrite: that is what makes the
- * two ways of marking a cell order-independent within one frame, whichever
- * runs first. */
-static int cell_x0[CELL_COUNT];
-static int cell_x1[CELL_COUNT];
-static int cell_y0[CELL_COUNT];
-static int cell_y1[CELL_COUNT];
-
 /* Scratch space for packing one gathered run's box edge-to-edge before
  * sending it as one draw_bitmap() call - see gather_and_send(). Bounded by
- * AREA, not by width alone: a run of several adjacent dirty columns can be
- * wide but short (gravity pointing sideways) as easily as one column tall
- * and narrow, and both are eligible on the same terms - see send_one_row().
- * A run bigger than this is not worth gathering at all, at which point the
- * row is sent whole instead.
+ * GATHER_MAX_PIXELS (gfx_dirty.h) - a run bigger than that is not worth
+ * gathering at all, at which point the row is sent whole instead.
  *
  * Allocated with MALLOC_CAP_DMA, same as `fb` below - a plain static array
  * is only guaranteed the alignment its element type needs (2 bytes for
  * uint16_t), not whatever the GDMA engine actually requires. A source buffer
  * the DMA can't read cleanly does not fail loudly; it reads back subtly
  * wrong, which is a much worse failure to chase. */
-#define GATHER_MAX_PIXELS (128 * 64)
 static gfx_color_t *gather_buf;
-
-/* Marks every cell spanned by an ALREADY-CLIPPED row range, full width and
- * full strip height - mark_band() gets no x information at all, so every
- * column in the affected rows has to be assumed dirty across its own full
- * width, which collectively covers the row exactly as the old per-strip
- * version did.
- *
- * Inline and unguarded on purpose. gfx_fill_rect is the workhorse behind text,
- * and gfx_text_scaled calls it once per set font pixel - so this runs thousands
- * of times on a screen of text, and routing that through the public
- * gfx_mark_dirty(), with its re-clipping and its call overhead, cost about 5%
- * of the launcher's framerate. STRIP_HEIGHT is a power of two, so the divisions
- * become shifts. */
-static inline void mark_band(int y0, int y1)
-{
-    if (all_dirty || y0 >= y1) {
-        return;
-    }
-    const int first = y0 / STRIP_HEIGHT;
-    const int last  = (y1 - 1) / STRIP_HEIGHT;
-
-    for (int row = first; row <= last; row++) {
-        for (int col = 0; col < GRID_COLS; col++) {
-            const int idx = row * GRID_COLS + col;
-            cell_dirty |= (1u << idx);
-            cell_x0[idx] = col * COL_WIDTH;
-            cell_x1[idx] = (col + 1) * COL_WIDTH;
-            cell_y0[idx] = row * STRIP_HEIGHT;
-            cell_y1[idx] = (row + 1) * STRIP_HEIGHT;
-        }
-    }
-}
 
 /*---------------------------------------------------------------------------
  * Panel plumbing
@@ -320,114 +245,17 @@ gfx_color_t *gfx_framebuffer(void)
  * Dirty tracking
  *-------------------------------------------------------------------------*/
 
-void gfx_mark_all_dirty(void)
-{
-    if (all_dirty) {
-        return;
-    }
-    all_dirty = true;
-    cell_dirty = (CELL_COUNT >= 32) ? 0xFFFFFFFFu : (1u << CELL_COUNT) - 1u;
-    for (int row = 0; row < STRIP_COUNT; row++) {
-        for (int col = 0; col < GRID_COLS; col++) {
-            const int idx = row * GRID_COLS + col;
-            cell_x0[idx] = col * COL_WIDTH;
-            cell_x1[idx] = (col + 1) * COL_WIDTH;
-            cell_y0[idx] = row * STRIP_HEIGHT;
-            cell_y1[idx] = (row + 1) * STRIP_HEIGHT;
-        }
-    }
-}
-
-/* Unions the part of (x0,x1) that falls within cell idx's own column - the
- * call's x-range may span several columns, or only part of one, so what
- * belongs to this cell is the intersection with its column, not the call's
- * range as a whole. */
-static inline void union_cell_x(int idx, int x0, int x1, int col)
-{
-    const int col_x0 = col * COL_WIDTH;
-    const int col_x1 = col_x0 + COL_WIDTH;
-    const int part_x0 = (x0 > col_x0) ? x0 : col_x0;
-    const int part_x1 = (x1 < col_x1) ? x1 : col_x1;
-    if (part_x0 < cell_x0[idx]) { cell_x0[idx] = part_x0; }
-    if (part_x1 > cell_x1[idx]) { cell_x1[idx] = part_x1; }
-}
-
-/* Same as union_cell_x(), for the part of (y0,y1) within cell idx's row. */
-static inline void union_cell_y(int idx, int y0, int y1, int row)
-{
-    const int row_y0 = row * STRIP_HEIGHT;
-    const int row_y1 = row_y0 + STRIP_HEIGHT;
-    const int part_y0 = (y0 > row_y0) ? y0 : row_y0;
-    const int part_y1 = (y1 < row_y1) ? y1 : row_y1;
-    if (part_y0 < cell_y0[idx]) { cell_y0[idx] = part_y0; }
-    if (part_y1 > cell_y1[idx]) { cell_y1[idx] = part_y1; }
-}
-
-/* Unlike mark_band(), this one knows a real box - callers that draw a
- * shape smaller than a whole cell can say so, in either dimension, and
- * gfx_present() may then send only what actually changed instead of a
- * whole row. Still safe if a caller passes the full width and a whole
- * strip's height like the old callers all did: that just claims every
- * cell in the row, same as before this existed. */
-void gfx_mark_dirty(int x, int y, int w, int h)
-{
-    if (all_dirty) {
-        return;
-    }
-
-    int x0 = x;
-    int x1 = x + w;
-    int y0 = y;
-    int y1 = y + h;
-
-    if (x0 < 0) x0 = 0;
-    if (x1 > GFX_WIDTH) x1 = GFX_WIDTH;
-    if (y0 < 0) y0 = 0;
-    if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
-    if (x0 >= x1 || y0 >= y1) {
-        return;
-    }
-
-    const int row_first = y0 / STRIP_HEIGHT;
-    const int row_last  = (y1 - 1) / STRIP_HEIGHT;
-    const int col_first = x0 / COL_WIDTH;
-    const int col_last  = (x1 - 1) / COL_WIDTH;
-
-    for (int row = row_first; row <= row_last; row++) {
-        for (int col = col_first; col <= col_last; col++) {
-            const int idx = row * GRID_COLS + col;
-            cell_dirty |= (1u << idx);
-            union_cell_x(idx, x0, x1, col);
-            union_cell_y(idx, y0, y1, row);
-        }
-    }
-}
-
+/* The actual tracking - state, geometry and the grid/leaf logic - lives in
+ * gfx_dirty.h as a header-only module (see its own file comment for why:
+ * mark_band() must stay inlinable into this translation unit). These three
+ * are thin wrappers so gfx.h's public API keeps its existing names and
+ * every other file in the project stays unaware the split exists. */
+void gfx_mark_all_dirty(void) { dirty_mark_all(); }
+void gfx_mark_dirty(int x, int y, int w, int h) { dirty_mark(x, y, w, h); }
 bool gfx_region_dirty(int x, int y, int w, int h)
 {
-    (void)x;
-    (void)w;
-
-    int y0 = y;
-    int y1 = y + h;
-
-    if (y0 < 0) y0 = 0;
-    if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
-    if (y0 >= y1) {
-        return false;
-    }
-
-    const int first = y0 / STRIP_HEIGHT;
-    const int last  = (y1 - 1) / STRIP_HEIGHT;
-
-    for (int row = first; row <= last; row++) {
-        for (int col = 0; col < GRID_COLS; col++) {
-            if (cell_dirty & (1u << (row * GRID_COLS + col))) {
-                return true;
-            }
-        }
-    }
-    return false;
+    (void)x; (void)w;
+    return dirty_region_dirty(y, h);
 }
 
 /*---------------------------------------------------------------------------
@@ -704,8 +532,8 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
  * more than once per row for the same reason: each call leaves the queue
  * empty again before returning. */
 static void gather_and_send(int x0, int y0, int x1, int y1, int row,
-                            int run_start, int run_end, int *queued,
-                            gfx_color_t border)
+                            int run_start, int run_end, bool refined,
+                            int *queued, gfx_color_t border)
 {
     const int w = x1 - x0;
     const int h = y1 - y0;
@@ -721,7 +549,13 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
               (size_t)w * sizeof(gfx_color_t));
     }
 #if CONFIG_LAUNCHER_DEVELOPMENT
-    if (debug_overlay_on) {
+    if (debug_overlay_on && refined) {
+        /* A leaf-refined split is already the tight unit sent - unlike a
+         * cell-run gather, it does not necessarily span whole cells, so
+         * bordering per cell below would draw outside what was actually
+         * sent. One border around the whole packed box instead. */
+        mark_rect_border(gather_buf, w, w, h, border);
+    } else if (debug_overlay_on) {
         /* One border per cell in the run, at that cell's own tight bounds -
          * never around the merged box as a whole. cell_x0/x1/y0/y1 are
          * already clipped to their own cell's column and row (see
@@ -739,7 +573,7 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
         }
     }
 #else
-    (void)row; (void)run_start; (void)run_end; (void)border;
+    (void)row; (void)run_start; (void)run_end; (void)refined; (void)border;
 #endif
     esp_lcd_panel_draw_bitmap(panel, x0, y0, x1, y1, gather_buf);
     xSemaphoreTake(strip_sent, portMAX_DELAY);
@@ -787,51 +621,30 @@ static void send_full_row(int row, int *queued)
     (*queued)++;
 }
 
-/* Collects row's dirty columns into contiguous runs - [start,end) column
- * ranges - so cells that are actually adjacent merge into one transaction
- * instead of paying per-transaction overhead once per cell, while a
- * genuine gap of clean columns between two dirty regions keeps them
- * separate rather than gathering a box that spans the untouched middle for
- * no reason. GRID_COLS columns bound this at GRID_COLS/2 runs at most - a
- * run needs at least one gap column to separate it from the next. */
-static int collect_dirty_runs(int row, int *run_start, int *run_end)
-{
-    int n = 0;
-    int col = 0;
+/* collect_runs_from_mask(), collect_dirty_runs(), run_is_leaf_eligible(),
+ * leaf_mask_for_run(), refine_run(), plan_run() and run_box() all now live
+ * in gfx_dirty.h, alongside the state they operate on - see its file
+ * comment for why the split is header-only rather than a separate .c. */
 
-    while (col < GRID_COLS) {
-        if ((cell_dirty & (1u << (row * GRID_COLS + col))) == 0) {
-            col++;
-            continue;
-        }
-        run_start[n] = col;
-        while (col < GRID_COLS &&
-              (cell_dirty & (1u << (row * GRID_COLS + col)))) {
-            col++;
-        }
-        run_end[n] = col;
-        n++;
+/* Sends one dirty run - either as up to LEAF_REFINE_MAX_RUNS leaf-refined
+ * pieces, tighter than the run's own coarse box, or as that coarse box
+ * whole when refinement found nothing safe or worth splitting on. Yellow
+ * either way - both are still "this got gathered and sent", just at
+ * different granularity; see gather_and_send()'s overlay comment for how
+ * the border itself differs. */
+static void send_run(int row, int run_start, int run_end, int box_x0,
+                     int box_x1, int box_y0, int box_y1, int split_n,
+                     const int *split_x0, const int *split_x1, int *queued)
+{
+    if (split_n == 0) {
+        gather_and_send(box_x0, box_y0, box_x1, box_y1, row, run_start,
+                        run_end, false, queued, gfx_rgb(0xFFFF00));
+        return;
     }
-    return n;
-}
 
-/* The union box across columns [start,end) of row - every column in a
- * contiguous run is already confirmed dirty, so this only needs to widen,
- * never test. */
-static void run_box(int row, int start, int end, int *x0, int *x1, int *y0,
-                    int *y1)
-{
-    *x0 = GFX_WIDTH;
-    *x1 = 0;
-    *y0 = row * STRIP_HEIGHT + STRIP_HEIGHT;
-    *y1 = row * STRIP_HEIGHT;
-
-    for (int col = start; col < end; col++) {
-        const int idx = row * GRID_COLS + col;
-        if (cell_x0[idx] < *x0) { *x0 = cell_x0[idx]; }
-        if (cell_x1[idx] > *x1) { *x1 = cell_x1[idx]; }
-        if (cell_y0[idx] < *y0) { *y0 = cell_y0[idx]; }
-        if (cell_y1[idx] > *y1) { *y1 = cell_y1[idx]; }
+    for (int i = 0; i < split_n; i++) {
+        gather_and_send(split_x0[i], box_y0, split_x1[i], box_y1, row,
+                        run_start, run_end, true, queued, gfx_rgb(0xFFFF00));
     }
 }
 
@@ -840,32 +653,40 @@ static void run_box(int row, int start, int end, int *x0, int *x1, int *y0,
  * per-transaction cost dwarfs what a merged box carries extra, but a
  * genuine gap of clean columns between two separate features keeps them
  * as independent sends rather than one box spanning the untouched middle.
- * Falls back to the row whole if any run turns out too big to be worth
- * gathering, rather than mixing a partial gather with a full-width send -
- * which would resend that part twice. */
+ * Falls back to the row whole if any run (or any leaf-refined split of
+ * one) turns out too big to be worth gathering, rather than mixing a
+ * partial gather with a full-width send - which would resend that part
+ * twice. */
 static void send_one_row(int row, int *queued)
 {
     int run_start[GRID_COLS], run_end[GRID_COLS];
     int box_x0[GRID_COLS], box_x1[GRID_COLS];
     int box_y0[GRID_COLS], box_y1[GRID_COLS];
+    int split_n[GRID_COLS];
+    int split_x0[GRID_COLS][LEAF_REFINE_MAX_RUNS];
+    int split_x1[GRID_COLS][LEAF_REFINE_MAX_RUNS];
     const int n = collect_dirty_runs(row, run_start, run_end);
 
     for (int r = 0; r < n; r++) {
         run_box(row, run_start[r], run_end[r], &box_x0[r], &box_x1[r],
                &box_y0[r], &box_y1[r]);
-        const size_t area = (size_t)(box_x1[r] - box_x0[r]) *
-                            (size_t)(box_y1[r] - box_y0[r]);
-        if (area > GATHER_MAX_PIXELS) {
-            send_full_row(row, queued);
-            return;
+        split_n[r] = plan_run(row, run_start[r], run_end[r], box_y0[r],
+                              box_y1[r], split_x0[r], split_x1[r]);
+
+        if (split_n[r] == 0) {
+            const size_t area = (size_t)(box_x1[r] - box_x0[r]) *
+                                (size_t)(box_y1[r] - box_y0[r]);
+            if (area > GATHER_MAX_PIXELS) {
+                send_full_row(row, queued);
+                return;
+            }
         }
     }
 
-    /* Yellow: one box per contiguous run of dirty columns - still one
-     * transaction even when the overlay splits its border per cell. */
     for (int r = 0; r < n; r++) {
-        gather_and_send(box_x0[r], box_y0[r], box_x1[r], box_y1[r], row,
-                        run_start[r], run_end[r], queued, gfx_rgb(0xFFFF00));
+        send_run(row, run_start[r], run_end[r], box_x0[r], box_x1[r],
+                box_y0[r], box_y1[r], split_n[r], split_x0[r], split_x1[r],
+                queued);
     }
 }
 
@@ -874,33 +695,15 @@ void gfx_present(void)
     int queued = 0;
 
     for (int row = 0; row < STRIP_COUNT; row++) {
-        bool row_dirty = false;
-        for (int col = 0; col < GRID_COLS; col++) {
-            if (cell_dirty & (1u << (row * GRID_COLS + col))) {
-                row_dirty = true;
-                break;
-            }
-        }
-        if (!row_dirty) {
+        if (!dirty_row_is_dirty(row)) {
             continue;   /* unchanged - the panel is still showing it */
         }
 
         send_one_row(row, &queued);
-
-        /* Next frame's gfx_mark_dirty() calls union against this, so each
-         * cell has to start from "nothing yet" rather than keep growing
-         * forever. */
-        for (int col = 0; col < GRID_COLS; col++) {
-            const int idx = row * GRID_COLS + col;
-            cell_x0[idx] = (col + 1) * COL_WIDTH;
-            cell_x1[idx] = col * COL_WIDTH;
-            cell_y0[idx] = row * STRIP_HEIGHT + STRIP_HEIGHT;
-            cell_y1[idx] = row * STRIP_HEIGHT;
-        }
+        dirty_row_sent(row);
     }
 
-    cell_dirty = 0;
-    all_dirty = false;
+    dirty_frame_sent();
 
     /* draw_bitmap only QUEUES a DMA transfer that reads out of the
      * framebuffer. Returning before they drain would let the next frame start

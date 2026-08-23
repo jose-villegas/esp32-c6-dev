@@ -51,6 +51,11 @@ CFLAGS="-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -g -O1"
 
 # The shell's own portable units and their suites. Hardware suites are absent
 # by design - suite_gfx.c would not compile here, which is the point.
+#
+# gfx_dirty.h has no matching .c: it is header-only by necessity (see its
+# own file comment - mark_band() has to stay inlinable into gfx.c), so
+# suite_gfx_dirty.c pulls in its own copy of the whole thing just by
+# including the header, with nothing extra to add to SOURCES for it.
 SOURCES="
 $TEST_DIR/host_main.c
 $TEST_DIR/suites.c
@@ -59,6 +64,7 @@ $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
 $TEST_DIR/suites/suite_button_fsm.c
 $TEST_DIR/suites/suite_rng.c
+$TEST_DIR/suites/suite_gfx_dirty.c
 $MAIN_DIR/touch_fsm.c
 $MAIN_DIR/gesture.c
 $MAIN_DIR/button_fsm.c
