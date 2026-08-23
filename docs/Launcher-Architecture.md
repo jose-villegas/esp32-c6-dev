@@ -180,11 +180,18 @@ Everything an app owns lives in `main/apps/<name>/`:
 
 ```
 main/apps/sand/
-├── app_sand.c      entry point: gfx, IMU, frame loop  (NOT host-portable)
-├── sand.c          the automaton                       (pure)
-├── sand.h
-└── suite_sand.c    its tests                           (pure + a device block)
+├── app_sand.c      entry point: gfx, IMU, frame loop        (NOT host-portable)
+├── material.c/.h   what a cell is made of                    (pure, const data)
+├── tilt.c/.h       accelerometer -> steering direction        (pure)
+├── sand.c/.h       the automaton: grid, movement, friction     (pure)
+├── sand_liquid.c   cross-flow levelling, the wall-rebound splash (pure)
+├── sand_priv.h     small inline helpers shared by the two .c files above
+└── suite_sand.c    its tests                                (pure + a device block)
 ```
+
+See `docs/Sand-Simulation.md` for how the pieces above fit together - the
+material system, the water model, and why the liquid logic is split into its
+own file.
 
 Deleting the app is deleting the folder. Its code, its logic and its tests go
 with it, and nothing is left dangling.
@@ -321,6 +328,55 @@ release needs a 60 ms quiet period because INT means "data ready" rather than
 
 ---
 
+## Why microui, not LVGL
+
+LVGL is present in the build - it is a transitive dependency of the Waveshare
+BSP package, `main/idf_component.yml` pulls that in for the display and touch
+drivers - but nothing here calls into it. `gfx.c` drives the panel directly
+(`esp_lcd_new_panel_sh8601`, not `bsp_display_new()`/`bsp_display_start()`),
+so it never runs; confirmed rather than assumed by checking the linked
+binary, which carries zero `lv_*` symbols.
+
+Three constraints, all already documented elsewhere in this project, point
+the same direction once put next to each other:
+
+**The memory budget has no room for it.** There is no PSRAM - the whole
+budget is ~424 KiB of internal SRAM, and the framebuffer alone is 322 KiB of
+that (see `docs/ESP32-C6-AMOLED-Notes.md`). LVGL costs roughly **67 KiB**
+before a single widget is allocated - about 16% of the entire chip's memory
+gone before drawing anything. microui needed patching too (upstream sizes
+`mu_Context` for desktop, 256 KiB for the command list alone), but that is a
+one-time struct-layout edit down to a small fixed size, not a standing tax
+on every frame the way a persistent widget tree and style system are.
+
+**This device runs apps that own their entire framebuffer.** The falling-sand
+simulation and the cube renderer each drive the panel directly, on their own
+schedule, with no widget tree in between. A retained-mode toolkit wants to
+own the display and the refresh cycle - exactly what those apps already do
+for themselves. microui's command-list model asks for nothing: it turns a UI
+description into a list of rectangles, text and icons once a frame, and
+whoever is drawing paints that list whenever they like, into whatever they
+like. It composes with an app that owns its own frame loop; a retained-mode
+toolkit would compete with it for the same job.
+
+**The whole render pipeline here is built around skipping unchanged frames**,
+because a full transfer costs ~9.6 ms and most frames do not need one. An
+immediate-mode command list is exactly the shape that trick needs - see
+[Immediate mode versus dirty bands](#immediate-mode-versus-dirty-bands)
+below for the mechanism. LVGL has its own separate invalidation and redraw
+system, built around owning the display - adopting it would mean reconciling
+two damage-tracking systems, or replacing the one already built for every
+other app, rather than reusing it for free.
+
+**The real cost, for balance:** microui encodes a mouse's interaction model
+(point, then click), and a touchscreen cannot produce that sequence - the
+pointer does not exist until a finger is already down. Every control needs a
+synthesised hover frame to compensate, costing one frame (~24 ms) of input
+latency on every tap. That friction is specific to picking an immediate-mode,
+mouse-shaped toolkit; a touch-native widget system would not have it. It was
+worth paying given the three constraints above, but it is a real trade-off,
+not a free win.
+
 ## The microui integration
 
 microui is immediate-mode and draws nothing itself: each frame it turns the UI
@@ -360,4 +416,6 @@ requires nothing new, but reworking input handling means preserving this.
 
 - `docs/ESP32-C6-AMOLED-Notes.md` — the hardware constraints underneath all of
   this: memory budget, panel gotchas, touch quirks, flashing and recovery.
+- `docs/Sand-Simulation.md` — the falling-sand app in depth: materials, the
+  water model, momentum, and why its liquid logic is its own file.
 - `docs/Testing-Guide.md` — how to test any of it.

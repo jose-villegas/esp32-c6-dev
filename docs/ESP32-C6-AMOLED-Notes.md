@@ -1030,3 +1030,13 @@ Console output reaches the USB CDC port because
 console is UART0 on GPIO 16/17. The `GPIO 17 and 16 are used as console UART
 I/O pins` line in every boot log refers to that primary, and is not evidence
 that USB logging is off.
+
+---
+
+## Related
+
+- `docs/Launcher-Architecture.md` — how the shell and its apps are built on
+  top of the hardware facts above.
+- `docs/Sand-Simulation.md` — the falling-sand app, whose performance
+  numbers and memory choices are shaped directly by the constraints here.
+- `docs/Testing-Guide.md` — how any of this gets verified on real hardware.

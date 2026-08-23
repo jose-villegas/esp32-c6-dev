@@ -391,3 +391,14 @@ against.
    section — `suite_sand.c` runs its rules on a host and its performance check
    only on the chip.
 5. Break the implementation, confirm red, restore.
+
+---
+
+## Related
+
+- `docs/Launcher-Architecture.md` — how an app plugs into the shell, and the
+  folder layout the app-suite convention above assumes.
+- `docs/Sand-Simulation.md` — `suite_sand.c` is the largest suite in this
+  codebase; this is what it is actually testing.
+- `docs/ESP32-C6-AMOLED-Notes.md` — the hardware constraints behind the
+  device-only performance tests.
