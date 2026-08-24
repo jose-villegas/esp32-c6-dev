@@ -1171,6 +1171,159 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
         "levelling silently stops partway across");
 }
 
+/* At the real screen size, SAND_BLOCK_W/H (16x64) do NOT evenly divide
+ * 184x224 - the last block-column is 8 cells wide instead of 16, and the
+ * last block-row is 32 cells tall instead of 64. No other test in this
+ * file uses a grid shaped like that - every other sleeping/locality test
+ * picks dimensions that are exact multiples of the block size, on
+ * purpose, to keep the ASCII fixtures small. That gap is real: it is
+ * exactly what let a division-free block-index rewrite pass every other
+ * test in this file while still producing bad indices (and a real-
+ * device crash) once grains actually reached the screen's true edges.
+ * This drives grains into every block edge - including the two partial
+ * ones - under every gravity direction the dithering can produce. */
+#define STRESS_W 184
+#define STRESS_H 224
+#define STRESS_BLOCK_COLS ((STRESS_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define STRESS_BLOCK_ROWS ((STRESS_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+
+static void test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks(void)
+{
+    uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
+    uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
+    uint8_t *rows   = malloc((size_t)STRESS_H);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(rows);
+
+    sand_t stress;
+    sand_init(&stress, cells, STRESS_W, STRESS_H, 4242u);
+    sand_enable_sleeping(&stress, blocks, rows);
+
+    /* A checkerboard over the whole grid, including the last column and
+     * last row exactly - the two partial blocks - not just somewhere
+     * comfortably inside a full one. */
+    for (int y = 0; y < STRESS_H; y++) {
+        for (int x = 0; x < STRESS_W; x++) {
+            if (((x + y) & 1) == 0) {
+                sand_set(&stress, x, y, SAND_FIRST_SHADE);
+            }
+        }
+    }
+    const int grains = sand_count(&stress);
+
+    /* Every axis-aligned and diagonal direction in turn, a handful of
+     * steps each - straight down first (settles against the real bottom
+     * edge, y=223, the partial last block-row), then every other ring
+     * direction, so both slide directions and the fall direction all
+     * get to touch x=183 and y=223 (and 0/0) from every angle, not just
+     * straight down. Gravity's own dithering already mixes two ring
+     * directions per call; cycling the requested direction across all
+     * eight on top of that is what reaches the corners specifically.
+     * Kept short deliberately: a full checkerboard fill is the single
+     * most expensive occupancy shape there is (see the frame-budget
+     * tests), and this ran long enough at 30 steps/direction to trip the
+     * device's 5s task watchdog - the point here is edge coverage, not
+     * a long-running soak, so a handful of steps per direction is
+     * plenty to touch every edge at least once. */
+    const int gx[] = { 0, 100, 100, 100, 0, -100, -100, -100 };
+    const int gy[] = { 100, 100, 0, -100, -100, -100, 0, 100 };
+    for (int dir = 0; dir < 8; dir++) {
+        for (int i = 0; i < 5; i++) {
+            sand_step(&stress, gx[dir], gy[dir], 0);
+        }
+    }
+    /* A hard shake at the end, the same jostle path the flip/undermining
+     * tests use - it is what reaches try_slide()'s jostle-fall calls,
+     * the two mark_move_in_block() sites the direction cycle above does
+     * not otherwise exercise. */
+    for (int i = 0; i < 3; i++) {
+        sand_step(&stress, 0, 100, 200);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&stress),
+        "grains must still be conserved after being driven through every "
+        "block edge at the real screen's true, non-block-multiple size");
+
+    free(cells);
+    free(blocks);
+    free(rows);
+}
+
+/* A closer reproduction of the device test that actually crashed
+ * (test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget,
+ * DEVICE_BUILD-only so it never runs here) - a centred pile that reaches
+ * the real bottom edge (y=223, the partial 32-tall last block-row) but
+ * not either x edge, fully settled under pure-vertical gravity first,
+ * then a single outright reversal - not the gradual eight-direction
+ * cycle above, which never fully settles before changing direction. */
+static void test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size(void)
+{
+    uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
+    uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
+    uint8_t *rows   = malloc((size_t)STRESS_H);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(rows);
+
+    sand_t real;
+    sand_init(&real, cells, STRESS_W, STRESS_H, 13u);
+    sand_enable_sleeping(&real, blocks, rows);
+
+    for (int y = STRESS_H / 2; y < STRESS_H; y++) {
+        for (int x = STRESS_W / 4; x < (STRESS_W * 3) / 4; x++) {
+            sand_set(&real, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    const int grains = sand_count(&real);
+
+    for (int i = 0; i < 300; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    for (int i = 0; i < 20; i++) {
+        sand_step(&real, 0, -1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real),
+        "flipping gravity must conserve grains too");
+
+    free(cells);
+    free(blocks);
+    free(rows);
+}
+
+/* Same idea, reproducing test_a_screen_of_water_fits_in_the_frame_budget
+ * instead (also DEVICE_BUILD-only) - liquid's move_liquid_grain()/
+ * block_coord() path is untested by the two tests above, which only
+ * ever place plain sand. */
+static void test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size(void)
+{
+    uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
+    uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
+    uint8_t *rows   = malloc((size_t)STRESS_H);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(rows);
+
+    sand_t real;
+    sand_init(&real, cells, STRESS_W, STRESS_H, 11u);
+    sand_enable_sleeping(&real, blocks, rows);
+
+    for (int y = 0; y < STRESS_H / 2; y++) {
+        for (int x = STRESS_W / 4; x < (STRESS_W * 3) / 4; x++) {
+            sand_set(&real, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    free(cells);
+    free(blocks);
+    free(rows);
+}
+
 /* --- scatter -------------------------------------------------------------- */
 
 /* Measures how wide a falling stream has become, in occupied columns. */
@@ -2587,6 +2740,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_block_wakes_when_disturbed_diagonally);
     RUN_TEST(test_sideways_tilt_wakes_only_the_disturbed_column);
     RUN_TEST(test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range);
+    RUN_TEST(test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks);
+    RUN_TEST(test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size);
+    RUN_TEST(test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size);
 
     RUN_TEST(test_a_cell_carries_both_material_and_variant);
     RUN_TEST(test_stone_never_moves);

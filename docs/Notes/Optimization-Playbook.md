@@ -50,6 +50,20 @@ once and seeing an improvement tells you *one of them* mattered, not which.
 It is tempting to combine fixes to save round-trips; do the round-trips
 instead, or you will ship a fix for the wrong thing.
 
+**Corollary: don't filter a diagnostic capture before you've read it
+once.** A device crash was first captured through a command piped to
+`grep -E "FAILED|FAIL:"`, to keep the terminal output short - which
+silently discarded every line that did not match, including the actual
+panic diagnostics (a watchdog-trigger warning, in that case) that would
+have explained what happened. The filtered capture left nothing to go on
+but a mangled line and a fresh boot banner, which read like a mysterious
+crash; the full, unfiltered capture on a retry showed a normal
+completion with no crash at all, settling in seconds a question the
+filtered version could not answer no matter how long it was stared at.
+Grep the *saved* output after the fact, as many times as needed - never
+the live stream on the one run that might explain a failure, since
+there is no way to know in advance which line that will be.
+
 ---
 
 ## Know what kind of memory you actually have
@@ -193,6 +207,18 @@ enough range information to prove it itself. Confirmed worth doing here, but
 modest on its own (roughly 1.6 ms out of a much larger gap) — worth
 applying, but not a substitute for finding the actual dominant cost.
 
+**This is not a one-off — check every call site with the same shape, not
+just the one that got measured first.** The same bug, on the same kind of
+compile-time-constant power-of-two divisor, turned up twice more in this
+codebase after the finding above: once in a function on a much hotter
+path (called once per grain move rather than once per frame), where it
+cost nearly double — ~2.7-3.1 ms on its own — and once in a much colder
+one (once per row), where it was still worth the one-line fix but barely
+measurable. A function being "already optimized" for one cost does not
+mean a sibling call site sharing the same divisor and the same
+plain-`int` parameter got the same treatment — grep for the pattern
+across the file, not just the function that was being profiled.
+
 ---
 
 ## A coarse skip-structure needs a shape that matches the actual work
@@ -222,6 +248,41 @@ boundary that could react" cheaply, and only doing the expensive real work
 if that first check says yes, was a bigger win than making the expensive
 work itself faster — because the cheap check is what runs the overwhelming
 majority of the time.
+
+---
+
+## A change proven safe is not the same as a change proven fast
+
+A tempting shortcut once a coarse, conservative version of some check
+already exists elsewhere in the codebase: reuse it somewhere hotter,
+reasoning that "it can only ever do *more* than the precise version, so
+it cannot introduce a correctness bug" — and stopping there, treating
+that reasoning as if it settled the performance question too. It does
+not. A change that is a provable superset of the correct behaviour (wakes
+at least everything the precise version would have, checks at least
+everything that needed checking, re-examines at least everything that
+changed) can only fail in the *safe* direction — but "safe direction" and
+"cheap direction" are different axes, and proving one proves nothing
+about the other.
+
+Concretely: a coarse, always-expand-by-one-unit wake call already existed
+and was already trusted (used once per batch of changes elsewhere in the
+same codebase). Reusing it to replace many precise, individually-checked
+calls with one coarse call per batch was reasoned through carefully
+first — the coarse version is a strict superset of the precise one, so
+nothing could be left incorrectly unwoken. That reasoning was entirely
+correct, and the change still made every real-hardware measurement worse,
+not better, including regressing a benchmark that had been comfortably
+passing. The coarse call's unconditional over-approximation cost more
+(in needless re-examination of things that did not actually need it)
+than the precise per-call overhead it removed.
+
+**The rule this leaves behind: "provably cannot be wrong" is a
+correctness argument, not a performance one — always measure the
+performance question separately, on the real target, even when the
+safety argument is airtight.** It is tempting to skip the measurement
+step precisely *because* the safety reasoning feels rigorous; that
+rigor is exactly what makes it easy to stop one step too early.
 
 ---
 

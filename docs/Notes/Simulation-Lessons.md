@@ -189,11 +189,14 @@ rather than deleting:
   not exist yet when the above was written: water-collapse 22788 us,
   gravity-flip (a big settled pile, gravity reversed outright - the real
   worst case pouring and tilting produces, not the old single-material
-  numbers above) 15733 us. Both still over budget, both real regression
+  numbers above) 15733 us. ~~Both still over budget, both real regression
   guards in `suite_sand.c` now, and both improved substantially without yet
   being solved - there is more here if anyone picks it back up, and the
   section below is the place to start rather than re-deriving the same
-  three ruled-out theories again.
+  three ruled-out theories again.~~ Moved further still, and picked back up
+  twice more since - see "A guard chain can cost more than what it
+  guards" for the latest numbers (13053/19562-19703 us) and a dead end
+  worth not re-trying.
 - **IRAM placement of the hot loops.** Espressif
   [recommends it](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-guides/performance/speed.html)
   for hot functions, and the C6 runs code from a 32 KB read-only flash cache so
@@ -364,9 +367,156 @@ same problem can simply have moved rather than disappeared.
 Net result of the whole investigation: full-occupancy passing again,
 settled-screen 613 us -> 319 us (still over a 300 us budget), water-collapse
 30454 us -> 22788 us (still over 16000 us), gravity-flip 17666 us -> 15733 us
-(still over 8000 us). All four are real, load-bearing regression guards now
+(still over 8000 us). ~~All four are real, load-bearing regression guards now
 (`suite_sand.c`'s frame-budget tests), not fixed - there is more here if
-anyone picks this back up.
+anyone picks this back up.~~ Picked back up - see "A guard chain can cost
+more than what it guards" below for the next round, and its current numbers.
+
+---
+
+## A guard chain can cost more than what it guards
+
+Continuing directly from the section above (same two failing benchmarks,
+same tests, no new scenario). The proposal on the table was amortising
+neighbour-wake checking across frames - skip it on alternating steps, the
+same shape of idea as row-sleeping itself. Before designing that, the
+same "measure by deleting" discipline used throughout this file was
+applied to the proposal's own premise first: stub `wake_blocks_points()`
+into an unconditional no-op (`TEMPORARY EXPERIMENT`, reverted after
+reading the number) and see whether neighbour-wake checking was even a
+meaningful share of the 15733/22789 us total. It was - more than half:
+flip dropped to 8153 us, water to under 16000 us, just from removing the
+function entirely. Isolating further (stub only the
+`point_reach()`/bounding-box-clear half, keep everything else) showed
+that was NOT where the removed time went - only ~1.85 ms of flip's drop
+and ~0.88 ms of water's came from that half. The rest was the ten-
+condition "is this the common, nothing-to-do case" guard chain sitting
+above it, paid on **every single grain move**, whether or not the move
+ever turned out to need a neighbour woken.
+
+That guard chain computes four block indices by dividing `x`/`y` by
+`SAND_BLOCK_W`/`SAND_BLOCK_H` - both compile-time-constant powers of two,
+and both plain `int`. The same bug as the division lesson in
+[Optimization-Playbook.md](Optimization-Playbook.md): the values are
+always non-negative grid coordinates in practice, but the compiler cannot
+prove that from a plain `int` parameter, so it falls back to signed
+division's round-toward-zero correction sequence instead of a shift. An
+unsigned cast at the one call site (`wake_blocks_points()`) recovered
+~2.7-3.1 ms on its own, no correctness change - real, isolated, and
+committed on its own. The same bug, same fix, was sitting a second place
+too - `equalise_one_row()`'s own `wake_blocks_range()` call, dividing the
+same way - fixed alongside it for consistency, though its blast radius is
+far smaller (once per row, not once per grain).
+
+**The frame-split idea itself turned out to have a real correctness
+trap**, found before any code was written for it, not after:
+`wake_blocks_points()` only ever fires when a grain actually moves - it
+is event-driven, not polled. A "skip" frame that lets a boundary-crossing
+move go unchecked has no guaranteed retry, because the grain that made
+that move very often settles immediately and never moves again. Skip the
+check on exactly the step where that happens, and the neighbour that
+should have woken never learns it needs to - not delayed by a frame,
+*stuck asleep indefinitely* - which is precisely the failure
+`test_undermining_a_sleeping_pile_collapses_it` exists to catch. A safe
+version needs real "guaranteed eventual delivery" machinery (a pending-
+recheck list that survives even if the triggering grain never moves
+again), which is real complexity for an unproven win - banked rather than
+built.
+
+**The safer alternative tried instead, and why it lost anyway.** Rather
+than deferring checks across frames, batch several checks within the
+*same* step: accumulate the block-index bounding box of every grain move
+within one block's row-sweep, and issue ONE `wake_blocks_range()` call at
+the end instead of paying the guard chain once per grain - exactly the
+pattern `equalise_one_row()` already uses for liquid cross-flow. This is
+provably safe in the sense that matters most: `wake_blocks_range()`
+always expands its given range by one block in every direction,
+unconditionally, so the union of several moves' ranges is a strict
+superset of what checking each one precisely would have woken. It cannot
+leave anything incorrectly asleep - only, possibly, wake a neighbour that
+did not strictly need it. That "only, possibly" turned out to be the
+whole story: measured on device, it made every number worse, not better
+- flip 13053 us -> 17254 us, water 19703 us -> 20332 us, and it even
+regressed `test_a_full_size_step_fits_in_the_frame_budget`, a benchmark
+that had been passing. The coarse, unconditional block-neighbourhood
+expansion was re-examining settled neighbours often enough to cost more
+than the guard-chain evaluations it removed - the exact same
+coarse-skip-structure failure mode the original row-to-block rewrite
+exists to fix, just relocated from "the tracking unit is too coarse" to
+"the wake radius is too coarse." Reverted in full; only the unrelated
+division fix survived from that attempt.
+
+**The lesson worth keeping separate from every inlining/division fix
+above:** those were all *safe by construction and fast by measurement* -
+free wins, no tradeoff to weigh. This one was reasoned to be safe (a
+monotonic superset can't under-wake) and still lost, because safety and
+speed are different axes. A change that can only be *correct* is not
+automatically a change that is *fast* - the reasoning that rules out one
+failure mode (stuck-asleep grains) says nothing about the other
+(needless re-examination), and only measuring both settles it. Current
+committed numbers: flip 13053 us (still over an 8000 us budget), water
+19562-19703 us (still over 16000 us). The frame-split-with-a-real-safety-
+net idea is still open and unbuilt if anyone picks it back up; the
+batched-range approach above is a dead end at this block size and should
+not be re-tried without a new idea for why it would come out differently.
+
+**A third attempt, tried next because it looked strictly safer than
+both the temporal idea and the batching one: eliminate the division
+entirely, rather than cheapen it or batch it.** `step_one_block()` is
+called once per `(row, block-column)` pair, so its own block indices are
+loop-known constants, not something that needs re-deriving from raw x/y
+by division at all - and a grain moves at most one cell per step, so the
+destination's block only ever differs from the source's when the source
+was already sitting on that block's edge in the direction taken, a
+comparison against already-known local coordinates rather than a fresh
+derivation. Threaded the sweep's own `bx`/`by` down to a new
+`mark_move_in_block()`, sharing the exact same guard-chain/`point_reach()`
+logic as before via an extracted `wake_blocks_core()` - nothing about
+*what* got checked changed, only how the inputs were computed. No
+coarsening, no superset argument needed at all: this should have been
+strictly safer than the batching attempt.
+
+It measured *worse* on real hardware anyway - flip 13053 us -> 14479-
+14480 us, water 19703 us -> 21889 us, and it regressed
+`test_a_full_size_step_fits_in_the_frame_budget` from passing to failing
+at ~8097-8098 us, consistent across two separate device runs. The first
+of those runs also appeared to crash the board (a `FAIL` message cut off
+mid-line with no newline, followed by a fresh `ESP-ROM:` boot banner) -
+serious enough to stop and investigate properly rather than push through.
+Three targeted host reproductions (grains driven into every real block
+edge at the true 184x224 screen size - a genuine coverage gap this
+investigation found: every prior host test used grid dimensions that are
+exact multiples of the block size, so the two partial edge blocks the
+real screen actually has, at the bottom and right, had never been
+exercised by anything) with active bounds assertions on every block index
+this path could produce found nothing wrong. **The crash did not
+reproduce on a second, identical device run either** - which means it
+was never actually confirmed as a bug in this code at all, only
+correlated with it once.
+
+**The real lesson of this attempt was about the diagnostic tooling, not
+the block-index math.** The first capture had been piped through
+`grep -E "FAILED|FAIL:"` to keep the output short - which silently
+discarded exactly the lines that would have explained what happened,
+including (found on retry) `task_wdt: Task watchdog got triggered`
+warnings from the new host-reproduction tests themselves running too
+long on-device (250 `sand_step()` calls on a full-checkerboard 184x224
+grid, comfortably over the 5-second watchdog window at this
+implementation's per-step cost - fixed separately by cutting the test
+down to 43 steps, plenty to still touch every edge). **Filtering a
+diagnostic capture to "just the part I think I need" can discard the
+one line that would have explained the failure** - the same principle as
+not reasoning about where the time goes instead of measuring it, applied
+to reading crash output instead of profiling numbers. The full,
+unfiltered capture is what eventually showed a normal completion with no
+crash at all on the second run, which is what settled the question this
+attempt could not settle on its own.
+
+Reverted in full a second time - two confirmed-worse device measurements
+is reason enough regardless of the unresolved crash. What survived: the
+three new host tests exercising the real, non-block-multiple screen size
+(a permanent, useful regression guard independent of this specific
+attempt), and the tooling lesson above.
 
 ---
 
