@@ -161,73 +161,100 @@ static inline bool cell_occupied(const sand_t *s, int x, int y)
     return s->cells[(size_t)y * (size_t)s->w + (size_t)x] != SAND_EMPTY;
 }
 
-/* Which blocks touched cell (x,y) - in block (bx,by), local position
- * (lx,ly) within it - requires waking: its own block always (written into
- * the four out-parameters as [bx,bx] by [by,by] to start), widened to
- * include an edge-adjacent neighbour only if that neighbour's shared-
- * boundary cell is actually occupied. This is exact, not a heuristic: the
- * automaton's
- * whole rule is strictly local - a grain only ever moves to an
- * immediately adjacent cell - so nothing further into a neighbour block
- * could possibly react to a move touching (x,y) unless a cell directly
- * touching (x,y) has something in it. An empty neighbour cell means
- * nothing to wake, however close (x,y) sits to the boundary.
+/* Whether reaching into block (nbx,nby) - to clear its settled bits -
+ * is worth the read needed to decide, given the one cell (cx,cy) that
+ * would justify it if occupied (see point_reach()'s own comment for why
+ * a single cell is enough).
  *
- * This is what makes a free-falling grain scattering through open space -
- * the common case right after a hard tilt or gravity flip, before a pile
- * has had a chance to reform - cheap again: it crosses block boundaries
- * constantly, but almost never lands next to anything, so almost none of
- * those crossings wake a neighbour. A grain sliding within a dense,
- * settling pile, where a boundary cell usually does have an occupied
- * neighbour, keeps paying for the real wake it needs.
+ * Checks the CANDIDATE'S OWN state first: if it is already awake (its
+ * settled bits already 0), reaching it costs nothing extra regardless -
+ * the caller's settled-bit clear is already a no-op - so there is
+ * nothing to gain by reading grid cells to decide, and this returns true
+ * immediately without doing so. Only a genuinely SETTLED neighbour needs
+ * the occupancy read, since that is the only case where waking it
+ * unnecessarily would cost anything.
  *
- * A true corner - (x,y) on both axes' edges at once - is checked as one
- * unit against all three of its non-owned neighbour cells (both
- * orthogonal ones and the diagonal), not as two independent per-axis
- * checks: a grain can rest diagonally against a corner with both
- * orthogonal neighbours empty, so ANDing two independent axis checks
- * would miss exactly that case - see
- * test_a_block_wakes_when_disturbed_diagonally, which exists to catch
- * it. */
+ * This is what makes the busiest moment in the simulation cheap: right
+ * after a jostle or gravity flip, compute_settled_bit() resets every
+ * block's settled bits to 0 in one memset, so for the first several
+ * steps afterwards - exactly the chaotic, everything-scattering phase a
+ * pour-then-flip produces - almost every neighbour this function is
+ * asked about is already awake, and the occupancy read underneath never
+ * runs at all. */
+__attribute__((always_inline))
+static inline bool should_wake_neighbor(const sand_t *s, int nbx, int nby,
+                                        int cx, int cy)
+{
+    if ((s->block_state[nby * s->block_cols + nbx] &
+        (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) == 0) {
+        return true;
+    }
+    return cell_occupied(s, cx, cy);
+}
 
 /* One axis' worth of point_reach()'s edge check - split out purely to
  * keep that function's own complexity down, not because this is reused
  * beyond its two call sites there (once for x, once for y). Forced
- * inline: this and reach_corner()/cell_occupied() sit on the hottest
- * path in the simulation (every grain move), and a real call here -
- * rather than the compiler folding it into point_reach() - measured as a
- * real cost on top of the reads themselves. */
+ * inline: this and its neighbours sit on the hottest path in the
+ * simulation (every grain move), and a real call here - rather than the
+ * compiler folding it into point_reach() - measured as a real cost on
+ * top of the reads themselves. */
 __attribute__((always_inline))
-static inline void reach_axis(const sand_t *s, int lo_cx, int lo_cy,
-                              int hi_cx, int hi_cy, int b, bool at_lo,
-                              bool at_hi, int *lo, int *hi)
+static inline void reach_axis(const sand_t *s, int nb_bx_lo, int nb_by_lo,
+                              int nb_bx_hi, int nb_by_hi, int lo_cx,
+                              int lo_cy, int hi_cx, int hi_cy, int b,
+                              bool at_lo, bool at_hi, int *lo, int *hi)
 {
-    if (at_lo && cell_occupied(s, lo_cx, lo_cy)) {
+    if (at_lo && should_wake_neighbor(s, nb_bx_lo, nb_by_lo, lo_cx, lo_cy)) {
         *lo = b - 1;
     }
-    if (at_hi && cell_occupied(s, hi_cx, hi_cy)) {
+    if (at_hi && should_wake_neighbor(s, nb_bx_hi, nb_by_hi, hi_cx, hi_cy)) {
         *hi = b + 1;
     }
 }
 
 /* The true-corner case of point_reach()'s edge check, split out for the
- * same reason as reach_axis() above. Forced inline, same reason too. */
+ * same reason as reach_axis() above. Forced inline, same reason too.
+ *
+ * A true corner - (x,y) on both axes' edges at once - is checked as one
+ * unit against all three of the diagonal neighbour's justifying cells
+ * (both orthogonal ones and the diagonal itself), not as two independent
+ * per-axis checks: a grain can rest diagonally against a corner with
+ * both orthogonal neighbours empty, so ANDing two independent axis
+ * checks would miss exactly that case - see
+ * test_a_block_wakes_when_disturbed_diagonally, which exists to catch
+ * it. */
 __attribute__((always_inline))
 static inline void reach_corner(const sand_t *s, int x, int y, int bx,
                                 int by, bool at_lo_x, bool at_lo_y,
                                 int *lo_x, int *hi_x, int *lo_y, int *hi_y)
 {
-    const int nx = at_lo_x ? x - 1 : x + 1;
-    const int ny = at_lo_y ? y - 1 : y + 1;
+    const int nbx = at_lo_x ? bx - 1 : bx + 1;
+    const int nby = at_lo_y ? by - 1 : by + 1;
+    const int nx  = at_lo_x ? x - 1  : x + 1;
+    const int ny  = at_lo_y ? y - 1  : y + 1;
 
-    if (!cell_occupied(s, nx, y) && !cell_occupied(s, x, ny) &&
-        !cell_occupied(s, nx, ny)) {
+    bool wake;
+    if ((s->block_state[nby * s->block_cols + nbx] &
+        (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) == 0) {
+        wake = true;
+    } else {
+        wake = cell_occupied(s, nx, y) || cell_occupied(s, x, ny) ||
+               cell_occupied(s, nx, ny);
+    }
+    if (!wake) {
         return;
     }
     if (at_lo_x) { *lo_x = bx - 1; } else { *hi_x = bx + 1; }
     if (at_lo_y) { *lo_y = by - 1; } else { *hi_y = by + 1; }
 }
 
+/* Which blocks touched cell (x,y) - in block (bx,by), local position
+ * (lx,ly) within it - requires waking: its own block always (written into
+ * the four out-parameters as [bx,bx] by [by,by] to start), widened to
+ * include an edge-adjacent neighbour only if reaching it is worth doing -
+ * see should_wake_neighbor() and reach_corner() above for what that
+ * means. */
 static inline void point_reach(const sand_t *s, int x, int y, int bx, int by,
                                int lx, int ly, int *lo_x, int *hi_x,
                                int *lo_y, int *hi_y)
@@ -246,10 +273,12 @@ static inline void point_reach(const sand_t *s, int x, int y, int bx, int by,
         return;
     }
     if (on_x_edge) {
-        reach_axis(s, x - 1, y, x + 1, y, bx, at_lo_x, at_hi_x, lo_x, hi_x);
+        reach_axis(s, bx - 1, by, bx + 1, by, x - 1, y, x + 1, y, bx,
+                  at_lo_x, at_hi_x, lo_x, hi_x);
     }
     if (on_y_edge) {
-        reach_axis(s, x, y - 1, x, y + 1, by, at_lo_y, at_hi_y, lo_y, hi_y);
+        reach_axis(s, bx, by - 1, bx, by + 1, x, y - 1, x, y + 1, by,
+                  at_lo_y, at_hi_y, lo_y, hi_y);
     }
 }
 
