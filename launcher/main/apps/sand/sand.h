@@ -37,6 +37,18 @@
 #define SAND_FIRST_SHADE  CELL_MAKE(MAT_SAND, 0)
 #define SAND_LAST_SHADE   CELL_MAKE(MAT_SAND, MATERIAL_VARIANTS - 1)
 
+/* Cells per block, on each axis, for the settled-block tracking behind
+ * sand_enable_sleeping() - see the comment there. A tunable, like LEAF_SUB
+ * in gfx_dirty.h: needs real-device measurement before it's treated as
+ * settled. 8 is a starting point - at the shipped 184x224 grid it gives
+ * 23x28 = 644 blocks, comfortably small, and roughly the width of a
+ * single pour (POUR_RADIUS=5 in app_sand.c), so a pour's active blocks
+ * don't drag much of a settled pile awake through neighbour-wake
+ * expansion, while per-row block-column bookkeeping stays cheap. 4 and 16
+ * are the other values worth trying during tuning. */
+#define SAND_BLOCK_W 8
+#define SAND_BLOCK_H 8
+
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
@@ -63,9 +75,20 @@ typedef struct {
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
     uint8_t *dirty_rows;
 
-    /* Optional, caller-owned, h bytes: which rows are worth looking at at all.
-     * NULL means look at every row, every step. See sand_enable_sleeping(). */
+    /* Optional, caller-owned, h bytes: which rows sand_liquid.c's cross-flow
+     * pass can skip as already proven dry (ROW_NO_LIQUID). NULL means look
+     * at every row, every step. See sand_enable_sleeping(). */
     uint8_t *row_state;
+
+    /* Optional, caller-owned, block_cols*block_rows bytes: which blocks of
+     * the grid are worth looking at at all. NULL means look at every
+     * block, every step - the main sweep always walks the grid in blocks
+     * of SAND_BLOCK_W x SAND_BLOCK_H (see step_one_row()), whether or not
+     * this is set, so block_cols/block_rows are always real, sand_init()-
+     * derived values, never zero. See sand_enable_sleeping(). */
+    uint8_t *block_state;
+    int      block_cols, block_rows;   /* set once, by sand_init() */
+
     int      last_load_dx, last_load_dy;
 
     int      scatter;   /* see sand_set_scatter() */
@@ -88,8 +111,7 @@ void sand_clear(sand_t *s);
  * spawning, sand_set and sand_clear. */
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
 
-/* Let settled rows be skipped entirely, using a caller-owned array of `h`
- * bytes.
+/* Let settled BLOCKS and dry-of-liquid ROWS be skipped entirely.
  *
  * Without this, resting sand is the MOST expensive thing the simulation can
  * hold, not the least. A settled grain fails its gravity-ward move, draws a
@@ -97,14 +119,36 @@ void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
  * decision path, every step, to conclude nothing. Measured on a host, a screen
  * full of motionless sand cost twenty times an empty one.
  *
- * A row is worth processing only if it, or a row touching it, saw movement on
- * the previous step: a grain can only move one row, so nothing else can have
- * changed what any grain in a quiet row is resting on. Spawning, erasing and
- * sand_set all count as movement, so sand poured onto a sleeping pile wakes it.
+ * `blocks` is caller-owned, ceil(w/SAND_BLOCK_W) * ceil(h/SAND_BLOCK_H)
+ * bytes - one settled flag per SAND_BLOCK_W x SAND_BLOCK_H block of the
+ * grid. A block is worth processing only if it, or a block touching it,
+ * saw movement on the previous step: a grain can only move one cell, so
+ * nothing else can have changed what any grain in a quiet block is resting
+ * on. Spawning, erasing and sand_set all count as movement, so sand poured
+ * onto a sleeping pile wakes the blocks it lands in. Block-shaped rather
+ * than row-shaped, unlike an earlier version of this: a whole row forced a
+ * settled grain to pay full per-grain cost merely for sharing a row with
+ * something active elsewhere on it, and row-shaped wake propagation only
+ * ever reached vertically, which stopped meaning much once gravity tilted
+ * towards horizontal and most movement became sideways within a row.
+ *
+ * `rows` is caller-owned, `h` bytes - used only to let sand_liquid.c's
+ * cross-flow pass skip a row already proven to hold no liquid at all (see
+ * ROW_NO_LIQUID in sand_liquid.c); unrelated to grain settling now.
+ *
+ * Either buffer may be NULL independently, disabling just that half.
  *
  * Everything wakes when the gravity direction changes or the grid is shaken,
  * since either can free a grain that had nothing to do with its neighbours. */
-void sand_enable_sleeping(sand_t *s, uint8_t *rows);
+void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows);
+
+/* Diagnostic only: whether block (bx, by) - in SAND_BLOCK_W x SAND_BLOCK_H
+ * units, not pixels or cells - is currently settled under either dithered
+ * direction. The bit layout behind this is private to sand.c/sand_priv.h;
+ * this exists only so a caller instrumenting real-device performance (see
+ * app_sand.c's count_awake()) can ask the question without reaching into
+ * it. Always false if block-sleeping was never enabled. */
+bool sand_block_settled(const sand_t *s, int bx, int by);
 
 /* Out-of-bounds reads return STONE, not empty.
  *

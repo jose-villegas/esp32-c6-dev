@@ -41,6 +41,12 @@ static const char *TAG = "sand";
 #define GRID_W  (GFX_WIDTH  / CELL)
 #define GRID_H  (GFX_HEIGHT / CELL)
 
+/* Duplicated rather than shared: sand.h has no business knowing the screen
+ * size, so it cannot expose a ready-made block-count for this specific
+ * grid - see sand_enable_sleeping()'s own comment. */
+#define BLOCK_COLS ((GRID_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define BLOCK_ROWS ((GRID_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+
 /* How big a blob each touched frame drops, in cells. Large enough that a tap
  * is clearly a handful of sand rather than a speck. */
 #define POUR_RADIUS 5
@@ -113,7 +119,9 @@ static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE };
 
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
-static uint8_t    *sleep_rows;   /* GRID_H bytes: which rows can be skipped */
+static uint8_t    *sleep_rows;   /* GRID_H bytes: dry-of-liquid rows to skip */
+static uint8_t    *sleep_blocks; /* BLOCK_COLS*BLOCK_ROWS bytes: settled
+                                   * blocks to skip - see sand_enable_sleeping() */
 
 /* Up to ROW_MAX_RUNS (row_runs.h) separate cell-index ranges per row - not
  * pixel ranges, and not a single min/max span - recording where a row's
@@ -141,6 +149,38 @@ static int64_t  step_us_total;
 static int64_t  draw_us_total;
 static int64_t  rows_redrawn_total;
 static int64_t  steps_total;
+
+/* TEMPORARY: splits the same step/draw timing by whether a pour was
+ * actually happening this frame, printed periodically rather than only on
+ * exit - checking a specific claim (pouring costs more than a full board
+ * moving under tilt alone) that the whole-session average above cannot
+ * distinguish, since a real test session mixes both. Remove once answered
+ * either way. */
+static int64_t  pour_step_us_total, pour_draw_us_total;
+static uint32_t pour_frames;
+static int64_t  idle_step_us_total, idle_draw_us_total;
+static uint32_t idle_frames;
+static int64_t  split_log_at_us;
+
+/* TEMPORARY, alongside the above: how many of BLOCK_COLS*BLOCK_ROWS blocks
+ * are actually awake (!sand_block_settled(), about to be examined at full
+ * cost) right after a step - originally how many of GRID_H ROWS, back when
+ * sleeping was row-shaped: that first round of capture showed the awake-row
+ * count staying flat (or falling) while step cost kept climbing anyway,
+ * which is what motivated replacing row-shaped sleeping with the
+ * block-shaped scheme in sand.c - see sand_enable_sleeping(). Kept at block
+ * granularity now to confirm that fix actually holds under the same test
+ * (pour into a growing pile). */
+static int64_t  pour_awake_total, idle_awake_total;
+
+/* TEMPORARY, alongside the above: how many occupied cells sit inside those
+ * awake blocks. The row-shaped measurement above is what pointed at the
+ * real mechanism: step_one_row() walks every occupied cell in a row (now
+ * block) it doesn't skip outright, not a fixed cost per awake unit, so a
+ * wider pile made each awake row more expensive without needing more of
+ * them to be awake - this is the number that confirmed it then, and checks
+ * the block-shaped fix now. */
+static int64_t  pour_awake_cells_total, idle_awake_cells_total;
 #endif
 /* Accumulated simulation time, in milliseconds scaled by 256. Scaled because
  * the flow rate is a fraction and a whole millisecond is too coarse a unit to
@@ -180,6 +220,17 @@ static void sand_enter(void)
     draw_us_total = 0;
     rows_redrawn_total = 0;
     steps_total = 0;
+    pour_step_us_total = 0;
+    pour_draw_us_total = 0;
+    pour_frames = 0;
+    idle_step_us_total = 0;
+    idle_draw_us_total = 0;
+    idle_frames = 0;
+    pour_awake_total = 0;
+    idle_awake_total = 0;
+    pour_awake_cells_total = 0;
+    idle_awake_cells_total = 0;
+    split_log_at_us = esp_timer_get_time() + 2000000;
 #endif
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
@@ -194,6 +245,9 @@ static void sand_enter(void)
     if (sleep_rows == NULL) {
         sleep_rows = malloc(GRID_H);
     }
+    if (sleep_blocks == NULL) {
+        sleep_blocks = malloc((size_t)BLOCK_COLS * BLOCK_ROWS);
+    }
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W * GRID_H);
     }
@@ -207,6 +261,7 @@ static void sand_enter(void)
         row_run_n = malloc(GRID_H * sizeof(*row_run_n));
     }
     if (grid == NULL || dirty_rows == NULL || sleep_rows == NULL ||
+        sleep_blocks == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
@@ -242,7 +297,7 @@ static void sand_enter(void)
     /* Without this, a screen full of motionless sand is the most expensive
      * thing the simulation can hold rather than the least - every settled
      * grain runs the whole decision path each step to conclude nothing. */
-    sand_enable_sleeping(&sim, sleep_rows);
+    sand_enable_sleeping(&sim, sleep_blocks, sleep_rows);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {
@@ -582,6 +637,112 @@ static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
 #endif
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* TEMPORARY - counts how many of BLOCK_COLS*BLOCK_ROWS blocks are awake
+ * (not sand_block_settled(), about to be examined at full cost) right
+ * now, and how many occupied cells sit inside those awake blocks
+ * specifically - the count that actually drives step_one_row()'s cost,
+ * since it walks every occupied cell in a block it doesn't skip outright
+ * rather than paying one fixed cost per awake block. Must be called after
+ * a step. Superseded the row version of this same diagnostic once
+ * sleeping itself became block-shaped - see sand_enable_sleeping(). */
+/* How many occupied cells sit in block (bx,by)'s own clipped span - split
+ * out of count_awake() below purely to keep that loop's own complexity
+ * down, not because this is reused elsewhere. */
+static int count_occupied_in_block(int bx, int by)
+{
+    const int x0 = bx * SAND_BLOCK_W;
+    const int x1 = (x0 + SAND_BLOCK_W < GRID_W) ? x0 + SAND_BLOCK_W : GRID_W;
+    const int y0 = by * SAND_BLOCK_H;
+    const int y1 = (y0 + SAND_BLOCK_H < GRID_H) ? y0 + SAND_BLOCK_H : GRID_H;
+
+    int cells = 0;
+    for (int y = y0; y < y1; y++) {
+        const uint8_t *row = &grid[(size_t)y * GRID_W];
+        for (int x = x0; x < x1; x++) {
+            if (row[x] != SAND_EMPTY) {
+                cells++;
+            }
+        }
+    }
+    return cells;
+}
+
+static void count_awake(int *out_blocks, int *out_cells)
+{
+    int blocks = 0, cells = 0;
+    for (int by = 0; by < BLOCK_ROWS; by++) {
+        for (int bx = 0; bx < BLOCK_COLS; bx++) {
+            if (sand_block_settled(&sim, bx, by)) {
+                continue;
+            }
+            blocks++;
+            cells += count_occupied_in_block(bx, by);
+        }
+    }
+    *out_blocks = blocks;
+    *out_cells  = cells;
+}
+
+/* TEMPORARY - see the pour_step_us_total etc. declarations above. Buckets
+ * this frame's already-measured step/draw cost, and how many rows (and
+ * occupied cells within them) were awake, by whether a pour was actually
+ * happening, and logs both rolling averages every ~2s so the two can be
+ * compared directly from one test session (pour for a bit, then just tilt
+ * for a bit) rather than only ever seeing one whole-session average that
+ * mixes both. */
+static void track_pour_split(const input_t *input, int64_t step_us,
+                             int64_t draw_us, int awake_blocks, int awake_cells,
+                             int64_t now)
+{
+    if (input->down && !erasing) {
+        pour_step_us_total += step_us;
+        pour_draw_us_total += draw_us;
+        pour_awake_total += awake_blocks;
+        pour_awake_cells_total += awake_cells;
+        pour_frames++;
+    } else {
+        idle_step_us_total += step_us;
+        idle_draw_us_total += draw_us;
+        idle_awake_total += awake_blocks;
+        idle_awake_cells_total += awake_cells;
+        idle_frames++;
+    }
+
+    if (now < split_log_at_us) {
+        return;
+    }
+    if (pour_frames > 0) {
+        const int64_t blocks = pour_awake_total / pour_frames;
+        const int64_t cells  = pour_awake_cells_total / pour_frames;
+        ESP_LOGI(TAG, "POURING:     %lu frames, step %lld us, draw %lld us, "
+                      "%lld of %d blocks awake, %lld cells/awake block",
+                 (unsigned long)pour_frames,
+                 (long long)(pour_step_us_total / pour_frames),
+                 (long long)(pour_draw_us_total / pour_frames),
+                 (long long)blocks, BLOCK_COLS * BLOCK_ROWS,
+                 (long long)(blocks > 0 ? cells / blocks : 0));
+    }
+    if (idle_frames > 0) {
+        const int64_t blocks = idle_awake_total / idle_frames;
+        const int64_t cells  = idle_awake_cells_total / idle_frames;
+        ESP_LOGI(TAG, "NOT POURING: %lu frames, step %lld us, draw %lld us, "
+                      "%lld of %d blocks awake, %lld cells/awake block",
+                 (unsigned long)idle_frames,
+                 (long long)(idle_step_us_total / idle_frames),
+                 (long long)(idle_draw_us_total / idle_frames),
+                 (long long)blocks, BLOCK_COLS * BLOCK_ROWS,
+                 (long long)(blocks > 0 ? cells / blocks : 0));
+    }
+    pour_step_us_total = pour_draw_us_total = 0;
+    idle_step_us_total = idle_draw_us_total = 0;
+    pour_awake_total = idle_awake_total = 0;
+    pour_awake_cells_total = idle_awake_cells_total = 0;
+    pour_frames = idle_frames = 0;
+    split_log_at_us = now + 2000000;
+}
+#endif
+
 static void sand_frame(uint32_t dt_ms, const input_t *input)
 {
     if (failed) {
@@ -628,6 +789,8 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();
+    int awake_blocks, awake_cells;
+    count_awake(&awake_blocks, &awake_cells);
 #endif
 
     draw_dirty_rows();
@@ -642,6 +805,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     step_us_total += t1 - t0;
     draw_us_total += t2 - t1;
     frames++;
+    track_pour_split(input, t1 - t0, t2 - t1, awake_blocks, awake_cells, t2);
 #endif
 }
 

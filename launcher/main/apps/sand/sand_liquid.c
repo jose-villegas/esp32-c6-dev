@@ -21,11 +21,14 @@
  *
  * Safe because it is cleared by ANY change to the row - mark_rows() wipes the
  * whole byte through wake_span(), and every write to a cell goes through
- * mark_rows(). So the flag can only ever be stale in the harmless direction:
- * a row that has just gained liquid has already had it cleared.
+ * mark_rows() (directly, or via mark_move(), which calls it). So the flag
+ * can only ever be stale in the harmless direction: a row that has just
+ * gained liquid has already had it cleared.
  *
- * 0x4, not 0x1 or 0x2: sand.c's own ROW_SETTLED_NEAREST and ROW_SETTLED_OTHER
- * live in the same byte, one per file, and must not collide. */
+ * row_state carries only this one bit now - the settling bits that used to
+ * share the byte (sand.c's ROW_SETTLED_NEAREST/OTHER) moved to their own,
+ * block-shaped array, block_state (see BLOCK_SETTLED_NEAREST/OTHER in
+ * sand_priv.h) - so there is nothing left in row_state to collide with. */
 #define ROW_NO_LIQUID 0x4
 
 /* Which materials are liquid, as a bitmask over the nibble.
@@ -73,7 +76,17 @@ static inline int room_in(cell_t c, uint8_t id)
  *-------------------------------------------------------------------------*/
 
 /* Give up to `mass` of `mat_id` to the cell at column `tx` of `to_row`, if it
- * exists and has room. Returns how much it actually took. */
+ * exists and has room. Returns how much it actually took.
+ *
+ * Row-shaped bookkeeping only (mark_rows(), not mark_move()) - the block
+ * wake is deliberately NOT done per transfer here. move_liquid_grain()
+ * below can call this up to three times for one grain (down, then both
+ * slides), and doing a full block-wake on every one of those was most of a
+ * measured ~10ms/step regression on a screen-wide water collapse: it
+ * consolidates all of one grain's transfers into a single wake instead -
+ * see the comment there. mark_rows() itself stays cheap enough (two byte
+ * writes, a three-row clear) that calling it up to three times is fine;
+ * it's wake_blocks_points()'s bounding-box loop that isn't. */
 static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
                             int mass, uint8_t mat_id, int y, int ty)
 {
@@ -103,7 +116,25 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * Two rules, in order: fill the cell below, then share what is left with the
  * one beside it. Called from sand_step()'s own sweep - not a pass of its
  * own - because both of those are gravity-ward, and only the main sweep's
- * order guarantees a destination has not been visited yet. */
+ * order guarantees a destination has not been visited yet.
+ *
+ * The block wake for everything this call touches happens ONCE, at the
+ * end, over the bounding box of every destination that actually received
+ * mass (see give_mass()'s comment for why) - not once per give_mass()
+ * call. The box is small regardless: every destination is one cell away
+ * from (x,y), so it is at most 3 cells wide and 2 tall. */
+/* Widens the box [*min_x,*max_x]x[*min_y,*max_y] to also cover (x,y) -
+ * split out of move_liquid_grain() below purely to keep its own
+ * complexity down, not because this is reused elsewhere. */
+static inline void union_point(int x, int y, int *min_x, int *max_x,
+                               int *min_y, int *max_y)
+{
+    if (x < *min_x) { *min_x = x; }
+    if (x > *max_x) { *max_x = x; }
+    if (y < *min_y) { *min_y = y; }
+    if (y > *max_y) { *max_y = y; }
+}
+
 bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        int x, int y, int dx, int dy,
                        const int *slide_a, const int *slide_b,
@@ -112,12 +143,15 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const int w = s->w;
     int mass = CELL_VARIANT(grain);
     bool moved = false;
+    int min_tx = x, max_tx = x, min_ty = y, max_ty = y;
 
     /* DOWN first, so a liquid falls before it spreads. */
-    const int down = give_mass(s, prow, x + dx, w, mass, mat_id, y, y + dy);
+    const int tx0 = x + dx, ty0 = y + dy;
+    const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
     mass -= down;
     if (down > 0) {
         moved = true;
+        union_point(tx0, ty0, &min_tx, &max_tx, &min_ty, &max_ty);
     }
 
     /* Then DOWN THE SLOPE, both ways.
@@ -131,11 +165,12 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     for (int d = 0; d < 2 && mass > 0; d++) {
         const int *slide = (d == 0) ? slide_a : slide_b;
         uint8_t *srow = dest_row(s, y + slide[1]);
-        const int given = give_mass(s, srow, x + slide[0], w, mass, mat_id,
-                                    y, y + slide[1]);
+        const int tx = x + slide[0], ty = y + slide[1];
+        const int given = give_mass(s, srow, tx, w, mass, mat_id, y, ty);
         mass -= given;
         if (given > 0) {
             moved = true;
+            union_point(tx, ty, &min_tx, &max_tx, &min_ty, &max_ty);
         }
     }
 
@@ -143,6 +178,10 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * zero variant, which would leave the material nibble claiming an
      * occupied cell holding nothing. */
     row[x] = (mass > 0) ? CELL_MAKE(mat_id, mass) : CELL_EMPTY;
+
+    if (moved) {
+        wake_blocks_points(s, min_tx, min_ty, max_tx, max_ty);
+    }
     return moved;
 }
 
@@ -249,11 +288,15 @@ static inline void find_shallowest(const sand_t *s, int x, int y, int px,
 
 /* One cell's share of cross-flow. Returns whether it gave anything, and
  * whether that transfer stayed inside this row (so the caller can defer
- * marking it, rather than paying for a full mark_rows() per transfer). */
+ * marking it, rather than paying for a full mark_rows() per transfer).
+ * When it did stay in the row, `*touched_x` is set to the destination
+ * column - the caller accumulates these into a range so the deferred wake
+ * can still narrow which blocks it touches, rather than waking the row's
+ * whole width. */
 static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
                                      int px, int py, int dx, int dy,
                                      int sight, uint8_t id, int mass,
-                                     bool *stayed_in_row)
+                                     bool *stayed_in_row, int *touched_x)
 {
     if (has_room_below(s, x, y, dx, dy, id)) {
         return false;
@@ -281,8 +324,67 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give) : CELL_EMPTY;
 
     *stayed_in_row = (py == 0);
-    if (!*stayed_in_row) {
-        mark_rows(s, y, ty);
+    if (*stayed_in_row) {
+        *touched_x = tx;
+    } else {
+        mark_move(s, x, y, tx, ty);
+    }
+    return true;
+}
+
+/* Widens [*x0,*x1] to also cover [lo,hi], or adopts it as the first range
+ * seen if `*touched` was not already set - split out of
+ * equalise_one_row()'s loop below purely to keep that loop's own
+ * complexity down, not because this is reused elsewhere. */
+static inline void union_touched_x(bool *touched, int *x0, int *x1,
+                                   int lo, int hi)
+{
+    if (!*touched || lo < *x0) {
+        *x0 = lo;
+    }
+    if (!*touched || hi > *x1) {
+        *x1 = hi;
+    }
+    *touched = true;
+}
+
+/* One cell's contribution to a row's cross-flow pass: whether it holds a
+ * tracked liquid, and folding any same-row transfer into the touched-x
+ * range the row is accumulating (see union_touched_x() and the comment on
+ * deferred marking below). Split out of equalise_one_row()'s loop purely
+ * to keep that loop's own complexity down, not because this is reused
+ * elsewhere. */
+static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
+                                         int px, int py, int dx, int dy,
+                                         int sight, uint16_t is_liquid,
+                                         bool *touched, int *touched_x0,
+                                         int *touched_x1)
+{
+    const cell_t c = row[x];
+    if (CELL_IS_EMPTY(c)) {
+        return false;
+    }
+    const uint8_t id = CELL_MATERIAL(c);
+    if (((is_liquid >> id) & 1u) == 0) {
+        return false;
+    }
+
+    bool stayed_in_row = false;
+    int  tx = 0;
+    if (equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
+                          CELL_VARIANT(c), &stayed_in_row, &tx) &&
+        stayed_in_row) {
+        /* Marking is deferred when the flow stays inside one row, which is
+         * every orientation where gravity has no sideways component - much
+         * the commonest case. mark_rows() rewrites several bytes of row
+         * state, and doing that per transfer rather than per row was most
+         * of what this pass cost. The touched x range is kept so the
+         * deferred block wake in equalise_one_row() can still narrow to
+         * where the row's flow actually happened, rather than waking the
+         * whole row's width of blocks - both the source column x and the
+         * destination tx changed, so both bound the range. */
+        union_touched_x(touched, touched_x0, touched_x1,
+                       x < tx ? x : tx, x > tx ? x : tx);
     }
     return true;
 }
@@ -296,34 +398,20 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
     bool any_liquid = false;
     bool touched = false;
+    int  touched_x0 = 0, touched_x1 = 0;
 
     for (int x = x_from; x != x_to; x += x_step) {
-        const cell_t c = row[x];
-        if (CELL_IS_EMPTY(c)) {
-            continue;
-        }
-
-        const uint8_t id = CELL_MATERIAL(c);
-        if (((is_liquid >> id) & 1u) == 0) {
-            continue;
-        }
-        any_liquid = true;
-
-        bool stayed_in_row = false;
-        if (equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
-                              CELL_VARIANT(c), &stayed_in_row) &&
-            stayed_in_row) {
-            /* Marking is deferred when the flow stays inside one row, which
-             * is every orientation where gravity has no sideways component
-             * - much the commonest case. mark_rows() rewrites several bytes
-             * of row state, and doing that per transfer rather than per row
-             * was most of what this pass cost. */
-            touched = true;
+        if (equalise_one_row_cell(s, row, x, y, px, py, dx, dy, sight,
+                                  is_liquid, &touched, &touched_x0,
+                                  &touched_x1)) {
+            any_liquid = true;
         }
     }
 
     if (touched) {
         mark_rows(s, y, y);
+        wake_blocks_range(s, touched_x0 / SAND_BLOCK_W, y / SAND_BLOCK_H,
+                   touched_x1 / SAND_BLOCK_W, y / SAND_BLOCK_H);
     }
 
     /* Nothing liquid in this row - say so, and skip it next time. Written
@@ -434,7 +522,7 @@ static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
     pour_into(&s->cells[nat], id, moved);
     s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
                                       : CELL_EMPTY;
-    mark_rows(s, y, ny);
+    mark_move(s, x, y, nx, ny);
 }
 
 static void rebound_wall(sand_t *s, int edge, int count, int to,

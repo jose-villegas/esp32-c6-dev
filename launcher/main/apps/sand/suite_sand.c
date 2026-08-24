@@ -711,12 +711,15 @@ static void test_a_steep_tilt_does_pour_the_bed(void)
  * it and the grids differ. */
 
 static uint8_t sleep_rows[H];
+#define BLOCK_COLS ((W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define BLOCK_ROWS ((H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+static uint8_t sleep_blocks[BLOCK_COLS * BLOCK_ROWS];
 
 static void settle_with_sleeping(const char *rows[], int count, int steps,
                                  int gx, int gy)
 {
     fixture();
-    sand_enable_sleeping(&s, sleep_rows);
+    sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
     load(rows, count);
 
     for (int i = 0; i < steps; i++) {
@@ -869,6 +872,234 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
         "settled for the old direction, not the new one");
 }
 
+/* --- 2D block locality -----------------------------------------------------
+ *
+ * Sleeping used to be row-shaped: one settled bit per whole row, so a
+ * resting region only stayed asleep if the ENTIRE row it sat in was quiet.
+ * These tests exercise what that shape could not: genuine locality in both
+ * directions, not just in y, and regardless of which way gravity points -
+ * the specific case measured on real hardware (a pour keeping a whole row
+ * awake, even where most of it was long settled) and the specific reason a
+ * row-shaped scheme cannot fix it even in principle (wake propagation only
+ * ever reached vertically, which stops meaning much once gravity tilts
+ * towards horizontal). A grid of its own: 3x3 SAND_BLOCK_W x SAND_BLOCK_H
+ * blocks, enough room for "far apart" to mean something. */
+
+#define LOC_W (SAND_BLOCK_W * 3)
+#define LOC_H (SAND_BLOCK_H * 3)
+static uint8_t loc_cells[LOC_W * LOC_H];
+#define LOC_BLOCK_COLS ((LOC_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define LOC_BLOCK_ROWS ((LOC_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+static uint8_t loc_sleep_blocks[LOC_BLOCK_COLS * LOC_BLOCK_ROWS];
+static uint8_t loc_sleep_rows[LOC_H];
+static sand_t  loc;
+
+static void loc_fixture(void)
+{
+    sand_init(&loc, loc_cells, LOC_W, LOC_H, 555u);
+    sand_enable_sleeping(&loc, loc_sleep_blocks, loc_sleep_rows);
+}
+
+static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_each_other(void)
+{
+    loc_fixture();
+
+    /* A small heap, settled on the floor in the leftmost block-column. */
+    for (int x = 0; x < SAND_BLOCK_W; x++) {
+        sand_set(&loc, x, LOC_H - 1, SAND_FIRST_SHADE);
+    }
+    for (int i = 0; i < 100; i++) {
+        sand_step(&loc, 0, 1000, 0);
+    }
+
+    uint8_t left_before[SAND_BLOCK_W * LOC_H];
+    for (int y = 0; y < LOC_H; y++) {
+        for (int x = 0; x < SAND_BLOCK_W; x++) {
+            left_before[y * SAND_BLOCK_W + x] = sand_at(&loc, x, y);
+        }
+    }
+
+    /* A stream, falling in the rightmost block-column - two block-columns
+     * away, but landing in the SAME row the heap rests in. A row-shaped
+     * scheme could not tell these apart: the whole row would be forced
+     * awake by the stream, heap included. */
+    for (int i = 0; i < 40; i++) {
+        sand_set(&loc, LOC_W - 1, 0, SAND_FIRST_SHADE);
+        sand_step(&loc, 0, 1000, 0);
+    }
+
+    bool left_unchanged = true;
+    for (int y = 0; y < LOC_H && left_unchanged; y++) {
+        for (int x = 0; x < SAND_BLOCK_W; x++) {
+            if (sand_at(&loc, x, y) != left_before[y * SAND_BLOCK_W + x]) {
+                left_unchanged = false;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(left_unchanged,
+        "a settled heap must stay undisturbed while an unrelated stream "
+        "falls far away in the same row band - block-shaped sleeping must "
+        "keep the two apart, which is exactly what a row-shaped scheme "
+        "could not do");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, LOC_W - 1, LOC_H - 1),
+        "the stream itself must actually have landed, or this test would "
+        "pass for the wrong reason - nothing moving at all");
+}
+
+static void test_a_block_wakes_when_disturbed_diagonally(void)
+{
+    loc_fixture();
+
+    /* A grain at (8,15) - the last row of block(1,1) and the first column
+     * of block-column 1 - fully boxed in on its only three legal moves:
+     * straight down and both diagonals. */
+    sand_set(&loc, 8, 15, SAND_FIRST_SHADE);
+    sand_set(&loc, 8, 16, CELL_MAKE(MAT_STONE, 8));    /* blocks the fall */
+    sand_set(&loc, 9, 16, CELL_MAKE(MAT_STONE, 8));    /* blocks down-right */
+    sand_set(&loc, 7, 16, CELL_MAKE(MAT_STONE, 8));    /* blocks down-left */
+    /* Once (7,16) is freed and the grain slides there, it must stop -
+     * otherwise it keeps sliding on its own three legal moves from its new
+     * position, and the test would be checking the wrong cell. */
+    sand_set(&loc, 7, 17, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 6, 17, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 8, 17, CELL_MAKE(MAT_STONE, 8));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&loc, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE, sand_at(&loc, 8, 15),
+        "the grain must still be boxed in and asleep before the test begins,"
+        " or freeing the down-left slide below proves nothing");
+
+    /* Free the down-left slide - at (7,16), block(0,2): differs from the
+     * grain's own block(1,1) in BOTH x and y, a true diagonal neighbour,
+     * not the orthogonal case an easy bug could special-case by mistake. */
+    sand_erase(&loc, 7, 16, 0);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&loc, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&loc, 8, 15),
+        "the grain must have left its old cell");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, 7, 16),
+        "and taken the newly-freed diagonal slide - if the wake only "
+        "reached orthogonal neighbours, the grain's own block would still "
+        "be asleep and it would still be sitting at (8,15)");
+}
+
+static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
+{
+    loc_fixture();
+
+    /* Two grains in the same row, far apart in x - which is now the
+     * direction of travel, gravity pointing straight right - each boxed in
+     * by three stone blockers covering its only three legal moves. */
+    sand_set(&loc, 2, 10, SAND_FIRST_SHADE);
+    sand_set(&loc, 3, 10, CELL_MAKE(MAT_STONE, 8));    /* blocks the fall */
+    sand_set(&loc, 3, 11, CELL_MAKE(MAT_STONE, 8));    /* blocks down-right slide */
+    sand_set(&loc, 3, 9,  CELL_MAKE(MAT_STONE, 8));    /* blocks up-right slide */
+    /* Once (3,10) is freed and the grain moves there, it must stop, or it
+     * keeps sliding diagonally from its new position and the test would
+     * be checking the wrong cell. */
+    sand_set(&loc, 4, 10, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 4, 11, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 4, 9,  CELL_MAKE(MAT_STONE, 8));
+
+    sand_set(&loc, 18, 10, SAND_FIRST_SHADE);
+    sand_set(&loc, 19, 10, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 19, 11, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 19, 9,  CELL_MAKE(MAT_STONE, 8));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&loc, 1000, 0, 0);
+    }
+
+    uint8_t right_before[8 * 4];   /* a small window around the right grain */
+    for (int y = 8; y < 12; y++) {
+        for (int x = 16; x < 24; x++) {
+            right_before[(y - 8) * 8 + (x - 16)] = sand_at(&loc, x, y);
+        }
+    }
+
+    /* Free only the left grain's fall. */
+    sand_erase(&loc, 3, 10, 0);
+    for (int i = 0; i < 20; i++) {
+        sand_step(&loc, 1000, 0, 0);
+    }
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, 3, 10),
+        "freeing the left grain's fall, under gravity now pointing along x, "
+        "must let it actually move there - proving the wake reached along "
+        "the now-primary direction of travel, not just vertically the way "
+        "the old row-shaped scheme's wake_span() only ever did");
+
+    bool right_unchanged = true;
+    for (int y = 8; y < 12 && right_unchanged; y++) {
+        for (int x = 16; x < 24; x++) {
+            if (sand_at(&loc, x, y) != right_before[(y - 8) * 8 + (x - 16)]) {
+                right_unchanged = false;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(right_unchanged,
+        "a disturbance far along x must not reach a settled grain two "
+        "block-columns away in the same row, even though x is now the "
+        "primary direction of travel - locality must hold on that axis "
+        "too, not only in y");
+}
+
+/* A basin wide enough to span several block-columns, so water poured in at
+ * one end and the far wall it must reach are genuinely in different
+ * blocks - the direct regression guard for equalise_one_row()'s touched-x
+ * range accumulation (see the comment there): getting that range wrong by
+ * under-waking would show up here as water that stops levelling partway
+ * across. */
+#define POOL_W (SAND_BLOCK_W * 2)
+#define POOL_H 16
+static uint8_t pool_cells[POOL_W * POOL_H];
+#define POOL_BLOCK_COLS ((POOL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define POOL_BLOCK_ROWS ((POOL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+static uint8_t pool_sleep_blocks[POOL_BLOCK_COLS * POOL_BLOCK_ROWS];
+static uint8_t pool_sleep_rows[POOL_H];
+static sand_t  pool;
+
+static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(void)
+{
+    /* End to end, same shape as test_water_poured_into_a_basin_reaches_
+     * both_ends, just wide enough to span several block-columns and with
+     * block-sleeping turned on - that test leaves it off. Walls at both
+     * edges, water dropped in near the left one. */
+    sand_init(&pool, pool_cells, POOL_W, POOL_H, 77u);
+    sand_enable_sleeping(&pool, pool_sleep_blocks, pool_sleep_rows);
+
+    for (int y = POOL_H - 3; y < POOL_H; y++) {
+        sand_set(&pool, 0, y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pool, POOL_W - 1, y, CELL_MAKE(MAT_STONE, 8));
+    }
+    /* Twice the column height the original, narrower basin test used - a
+     * wider floor needs proportionally more total mass to reach the far
+     * wall at all, independent of any sleeping/wake question: the same
+     * gap shows up with sleeping off, on this engine's known integer-
+     * diffusion limits (see SAND_LIQUID_SIGHT's own comment). */
+    for (int y = 0; y < 12; y++) {
+        sand_set(&pool, 1, y, CELL_MAKE(MAT_WATER, 8));
+    }
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&pool, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&pool, POOL_W - 2, POOL_H - 1)),
+        "water poured in at one end must still reach the far end with "
+        "block-sleeping on - if equalise_one_row()'s deferred wake under-"
+        "ranges what it touches, the far blocks never wake back up and "
+        "levelling silently stops partway across");
+}
+
 /* --- scatter -------------------------------------------------------------- */
 
 /* Measures how wide a falling stream has become, in occupied columns. */
@@ -958,7 +1189,7 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
      * settled row. Get this wrong and grains hang in mid-air for ever. */
     for (int trial = 0; trial < 24; trial++) {
         sand_init(&s, cells, W, H, 800u + (uint32_t)trial);
-        sand_enable_sleeping(&s, sleep_rows);
+        sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
         sand_set_scatter(&s, 200);          /* lags constantly */
         sand_set(&s, 3, 0, SAND_FIRST_SHADE);
 
@@ -2007,6 +2238,8 @@ static void test_shaking_spreads_a_pile_sideways(void)
  * business knowing the screen size - see the note at the top of sand.h. */
 #define REAL_W 184
 #define REAL_H 224
+#define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
 /* The worst case: every cell on the screen moving at once.
  *
@@ -2074,14 +2307,16 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
     /* Measured separately from sand, because water takes an entirely different
      * path through the step - and the one part of it that is not local, the
      * search across the flow, runs per cell. Something has to watch that. */
-    uint8_t *big  = malloc(REAL_W * REAL_H);
-    uint8_t *rows = malloc(REAL_H);
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *rows   = malloc(REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(rows);
+    TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 11u);
-    sand_enable_sleeping(&real, rows);
+    sand_enable_sleeping(&real, blocks, rows);
 
     /* Half a screen of water, dropped in as an uneven slab so it is genuinely
      * flowing rather than already settled - the expensive case. */
@@ -2103,6 +2338,7 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 
     free(big);
     free(rows);
+    free(blocks);
 
     /* Water gets a budget of its own, and a larger one, because it genuinely
      * does more: it moves an amount rather than a cell, and it takes a second
@@ -2127,14 +2363,16 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 {
     /* The user-visible complaint this answers: adding lots of sand dropped the
      * framerate, even though most of it was just sitting there. */
-    uint8_t *big  = malloc(REAL_W * REAL_H);
-    uint8_t *rows = malloc(REAL_H);
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *rows   = malloc(REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(rows);
+    TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 5u);
-    sand_enable_sleeping(&real, rows);
+    sand_enable_sleeping(&real, blocks, rows);
 
     /* Every cell full, so nothing can move anywhere. */
     for (int y = 0; y < REAL_H; y++) {
@@ -2157,12 +2395,73 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
     const int grains = sand_count(&real);
     free(big);
     free(rows);
+    free(blocks);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains,
         "and nothing may have moved");
     TEST_ASSERT_LESS_THAN_MESSAGE(300, (int)per_step,
         "sand that is not moving must cost almost nothing - if this fails, "
         "rows are being examined that had no reason to be");
+}
+
+static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(void)
+{
+    /* The real worst case pouring produces, not a synthetic one: a user
+     * pours a big pile, it settles and sleeps (as it does in normal use -
+     * sleeping is on here, exactly like app_sand.c runs it), and then the
+     * device gets tilted hard enough to reverse gravity outright. Every
+     * block must wake at once - this is the scenario the whole block-grid
+     * design exists to keep affordable, not the synthetic all-cells-full
+     * or checkerboard-falling grids the other frame-budget tests use. */
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *rows   = malloc(REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(rows);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 13u);
+    sand_enable_sleeping(&real, blocks, rows);
+
+    /* A big pour: the middle half of the screen's width, filled from the
+     * floor up to half the screen's height - wide enough to span many
+     * block-columns, deliberately not the whole grid. */
+    for (int y = REAL_H / 2; y < REAL_H; y++) {
+        for (int x = REAL_W / 4; x < (REAL_W * 3) / 4; x++) {
+            sand_set(&real, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    const int grains = sand_count(&real);
+
+    /* Let it fully settle first - every block should go to sleep, the
+     * same state a real pile reaches between pours. */
+    for (int i = 0; i < 300; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    /* Flip - straight up instead of straight down. */
+    const int64_t start = esp_timer_get_time();
+    const int steps = 20;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, -1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "gravity flip on a %d-grain pile, %dx%d: %lld us "
+                             "per step", grains, REAL_W, REAL_H,
+             (long long)per_step);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real),
+        "flipping gravity must conserve grains too");
+
+    free(big);
+    free(rows);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(STEP_BUDGET_US, (int)per_step,
+        "reversing gravity on a settled pile must still fit in a frame or "
+        "two - this is the real worst case pouring and tilting produces");
 }
 #endif /* DEVICE_BUILD */
 
@@ -2213,6 +2512,10 @@ void run_sand_suite(void)
     RUN_TEST(test_sand_poured_onto_a_sleeping_pile_still_falls);
     RUN_TEST(test_undermining_a_sleeping_pile_collapses_it);
     RUN_TEST(test_turning_the_board_wakes_a_sleeping_pile);
+    RUN_TEST(test_two_separate_active_spots_in_the_same_block_row_do_not_wake_each_other);
+    RUN_TEST(test_a_block_wakes_when_disturbed_diagonally);
+    RUN_TEST(test_sideways_tilt_wakes_only_the_disturbed_column);
+    RUN_TEST(test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range);
 
     RUN_TEST(test_a_cell_carries_both_material_and_variant);
     RUN_TEST(test_stone_never_moves);
@@ -2257,6 +2560,7 @@ void run_sand_suite(void)
 #ifdef DEVICE_BUILD
     RUN_TEST(test_a_full_size_step_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_settled_sand_costs_almost_nothing);
+    RUN_TEST(test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
 #endif
 }

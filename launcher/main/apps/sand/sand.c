@@ -80,6 +80,14 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->may_have_liquid = false;
     s->dirty_rows = NULL;
     s->row_state  = NULL;
+    s->block_state = NULL;
+    /* Computed here, unconditionally, rather than only when sleeping is
+     * enabled: the main sweep always walks block-columns (see
+     * step_one_row()), whether or not block_state exists, so block_cols/
+     * block_rows must be real grid-derived values from the start - never
+     * zero, which would make that walk cover nothing. */
+    s->block_cols  = (w + SAND_BLOCK_W - 1) / SAND_BLOCK_W;
+    s->block_rows  = (h + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
     s->last_load_dx = 0;
     s->last_load_dy = 0;
     s->scatter      = 0;
@@ -92,39 +100,38 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     sand_clear(s);
 }
 
-/* Row sleeping state: one bit per gravity direction the row has been examined
- * under without anything moving.
- *
- * Two bits rather than one because the direction is DITHERED - it alternates
- * between the two that bracket the true angle - and those two do not offer the
- * same moves. Straight down allows the slides (-1,+1) and (+1,+1); down-right
- * allows (0,+1) and (+1,0), and that last one is purely sideways. A row that
- * settled under one direction may well have somewhere to go under the other,
- * so a single "settled" bit lets grains freeze on a slope.
- *
- * That is not a hypothetical: it is what the slope test caught. */
-#define ROW_SETTLED_NEAREST 0x1
-#define ROW_SETTLED_OTHER   0x2
+/* wake_span()/wake_blocks_point()/wake_blocks_range() and mark_rows()/
+ * mark_move() are shared with
+ * sand_liquid.c and live in sand_priv.h now - see the comment there for
+ * why they are `static inline` in a header rather than ordinary functions
+ * declared extern. BLOCK_SETTLED_NEAREST/OTHER/ACTIVE (block_state) and
+ * ROW_NO_LIQUID (row_state, sand_liquid.c's own) live there too, next to
+ * the code that reads them. */
 
-/* wake_span() and mark_rows() are shared with sand_liquid.c and live in
- * sand_priv.h now - see the comment there for why they are `static inline`
- * in a header rather than ordinary functions declared extern. ROW_NO_LIQUID,
- * the third bit in this same byte, is sand_liquid.c's own and is defined
- * there, next to the only pass that reads it. */
-
-void sand_enable_sleeping(sand_t *s, uint8_t *rows)
+void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows)
 {
-    s->row_state = rows;
-    if (rows != NULL) {
+    s->block_state = blocks;
+    if (blocks != NULL) {
         /* Nothing is known about the grid yet, so nothing may be assumed
          * settled. */
+        memset(blocks, 0, (size_t)s->block_cols * (size_t)s->block_rows);
+    }
+    s->row_state = rows;
+    if (rows != NULL) {
         memset(rows, 0, (size_t)s->h);
     }
     s->last_load_dx = 0;
     s->last_load_dy = 0;
 }
 
-
+bool sand_block_settled(const sand_t *s, int bx, int by)
+{
+    if (s->block_state == NULL) {
+        return false;
+    }
+    return (s->block_state[by * s->block_cols + bx] &
+           (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
+}
 
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
 {
@@ -144,6 +151,9 @@ void sand_clear(sand_t *s)
     }
     if (s->row_state != NULL) {
         memset(s->row_state, 0, (size_t)s->h);
+    }
+    if (s->block_state != NULL) {
+        memset(s->block_state, 0, (size_t)s->block_cols * (size_t)s->block_rows);
     }
 }
 
@@ -169,7 +179,7 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         materials[CELL_MATERIAL(cell)].kind == KIND_LIQUID) {
         s->may_have_liquid = true;
     }
-    mark_rows(s, y, y);
+    mark_move(s, x, y, x, y);
 }
 
 int sand_count(const sand_t *s)
@@ -196,7 +206,7 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
         s->may_have_liquid = true;
     }
     s->cells[y * s->w + x] = random_cell(s, material);
-    mark_rows(s, y, y);
+    mark_move(s, x, y, x, y);
     return true;
 }
 
@@ -237,7 +247,7 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
                 continue;   /* already empty, so nothing changed here */
             }
             s->cells[y * s->w + x] = SAND_EMPTY;
-            mark_rows(s, y, y);
+            mark_move(s, x, y, x, y);
             removed++;
         }
     }
@@ -561,19 +571,26 @@ static void compute_driven(bool driven[MATERIAL_MAX][2], const int *slide_a,
 /* Which column order to sweep this step, against the direction of travel -
  * see the comment on sand_step() for why that direction matters. Alternates
  * when gravity has no horizontal component, so piles do not lean
- * consistently one way. */
-static void sweep_x_order(sand_t *s, int dx, int *x_from, int *x_to, int *x_step)
+ * consistently one way.
+ *
+ * Only the step direction comes out now, not a from/to range: since the
+ * sweep walks block-columns (see step_one_row()/block_x_order()), each
+ * block works out its own cell range from x_step and its own bounds, so a
+ * single row-wide from/to pair has no reader left. */
+static int sweep_x_order(sand_t *s, int dx)
 {
+    int x_step;
     if (dx > 0) {
-        *x_from = s->w - 1; *x_to = -1;   *x_step = -1;
+        x_step = -1;
     } else if (dx < 0) {
-        *x_from = 0;        *x_to = s->w; *x_step = 1;
+        x_step = 1;
     } else if (s->sweep_flip) {
-        *x_from = s->w - 1; *x_to = -1;   *x_step = -1;
+        x_step = -1;
     } else {
-        *x_from = 0;        *x_to = s->w; *x_step = 1;
+        x_step = 1;
     }
     s->sweep_flip = !s->sweep_flip;
+    return x_step;
 }
 
 /* One grain's turn: try to fall, then the two slides either side of it, with
@@ -626,7 +643,7 @@ static bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
         const int ddy  = pick_a ? slide_a[1] : slide_b[1];
 
         if (move_to(row, drow, x, x + ddx, w, grain, density)) {
-            mark_rows(s, y, y + ddy);
+            mark_move(s, x, y, x + ddx, y + ddy);
         }
     }
     return true;
@@ -644,7 +661,7 @@ static bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
     }
 
     if (move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_rows(s, y, y + dy);
+        mark_move(s, x, y, x + dx, y + dy);
         return true;
     }
     return false;
@@ -694,12 +711,12 @@ static bool try_slide_pair(sand_t *s, uint8_t *row, int x, int y, int w,
 
     if (first_driven &&
         move_to(row, first_row, x, x + first_dx, w, grain, density)) {
-        mark_rows(s, y, y + first_dy);
+        mark_move(s, x, y, x + first_dx, y + first_dy);
         return true;
     }
     if (second_driven &&
         move_to(row, second_row, x, x + second_dx, w, grain, density)) {
-        mark_rows(s, y, y + second_dy);
+        mark_move(s, x, y, x + second_dx, y + second_dy);
         return true;
     }
     return false;
@@ -731,7 +748,7 @@ static bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
 
     if (!shaken && jostle > 0 &&
         move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_rows(s, y, y + dy);
+        mark_move(s, x, y, x + dx, y + dy);
         return true;
     }
 
@@ -743,7 +760,7 @@ static bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
     }
 
     if (shaken && move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_rows(s, y, y + dy);
+        mark_move(s, x, y, x + dx, y + dy);
         return true;
     }
 
@@ -795,71 +812,157 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                      density, mat, driven);
 }
 
-/* Sleeping is off entirely when row_state does not exist. Otherwise, wakes
- * every row when the grid is being shaken or the settle-relevant direction
+/* Sleeping is off entirely when block_state does not exist. Otherwise, wakes
+ * every block when the grid is being shaken or the settle-relevant direction
  * has changed underneath it - either can free a grain that had nothing to do
- * with what its neighbours were doing, so no row's settled state survives -
+ * with what its neighbours were doing, so no block's settled state survives -
  * and returns which of the two dithered directions this step is using, so a
- * row can be marked settled against the right one.
+ * block can be marked settled against the right one.
  *
  * The NEAREST direction is what is compared, not the dithered one - that
  * changes almost every step by design, and comparing it would mean nothing
- * ever slept. */
+ * ever slept.
+ *
+ * Also clears BLOCK_ACTIVE for every block, every step (unless the full
+ * reset above already did): that bit gets set fresh as this step's sweep
+ * and liquid pass touch blocks, and is read once, at the very end of
+ * sand_step(), to decide which blocks earned the settled bit this step -
+ * see the finalisation pass there. */
 static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
                                    int load_dx, int load_dy)
 {
-    if (s->row_state == NULL) {
+    if (s->block_state == NULL) {
         return 0;
     }
 
+    const int n = s->block_cols * s->block_rows;
     if (jostle > 0 ||
         load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
-        memset(s->row_state, 0, (size_t)s->h);
+        memset(s->block_state, 0, (size_t)n);
+    } else {
+        for (int i = 0; i < n; i++) {
+            s->block_state[i] &= (uint8_t)~BLOCK_ACTIVE;
+        }
     }
     s->last_load_dx = load_dx;
     s->last_load_dy = load_dy;
 
     return (dx == load_dx && dy == load_dy)
-         ? ROW_SETTLED_NEAREST : ROW_SETTLED_OTHER;
+         ? BLOCK_SETTLED_NEAREST : BLOCK_SETTLED_OTHER;
 }
 
-/* One row of the gravity sweep. Skipped entirely once settled: already
- * examined under this exact direction with nothing to do, and nothing has
- * moved next to it since, so it cannot have anywhere to go. */
-static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
-                         const int *slide_a, const int *slide_b, int x_from,
-                         int x_to, int x_step, int load_dx, int load_dy,
-                         int jostle, uint8_t settled_bit,
-                         bool driven[MATERIAL_MAX][2])
+/* Which way to step through a row's blocks, mirroring sweep_x_order()'s
+ * cell-level x_from/x_to/x_step - derived from x_step's sign rather than
+ * computed independently, since the cell order within a row is already
+ * decided once per sand_step() call and the block order must agree with
+ * it (a block swept back-to-front while its cells go front-to-back would
+ * not change correctness, since each block's own cell loop is still self-
+ * consistent, but would visit blocks in a confusing order for no reason -
+ * kept aligned for clarity, not because it is load-bearing). */
+static void block_x_order(int block_cols, int x_step, int *bx_from,
+                          int *bx_to, int *bx_step)
 {
-    if (settled_bit != 0 && (s->row_state[y] & settled_bit)) {
-        return;
+    if (x_step > 0) {
+        *bx_from = 0;            *bx_to = block_cols; *bx_step = 1;
+    } else {
+        *bx_from = block_cols - 1; *bx_to = -1;        *bx_step = -1;
     }
+}
+
+/* Everything step_one_block() needs that stays the same across every
+ * block-column in one row's sweep, bundled into one struct and passed by
+ * pointer - so the hot per-block call only needs two arguments (this and
+ * bx) rather than the dozen-plus that would otherwise have to go through
+ * argument registers, or the stack once they run out. Measured to matter:
+ * with the flat parameter list, forcing every block-column in a full-grid
+ * sweep through a real call (instead of a skip) regressed the full-
+ * occupancy frame budget by several hundred microseconds on real
+ * hardware - RISC-V has 8 argument registers and the flat version needed
+ * 18. */
+typedef struct {
+    sand_t     *s;
+    uint8_t    *row, *prow, *arow, *brow;
+    int         y, w, dx, dy, x_step;
+    const int  *slide_a, *slide_b;
+    int         load_dx, load_dy, jostle;
+    int         by;
+    bool      (*driven)[2];
+} sweep_ctx_t;
+
+/* One block's x-span within one row of the gravity sweep - the unit
+ * step_one_row() below can skip entirely when settled. Marks the block
+ * BLOCK_ACTIVE the moment anything in it moves, for compute_settled_bit()'s
+ * later finalisation pass to read; does nothing if block_state does not
+ * exist (sleeping disabled), since then there is nothing to mark. */
+static void step_one_block(const sweep_ctx_t *ctx, int bx)
+{
+    int lo = bx * SAND_BLOCK_W;
+    int hi = lo + SAND_BLOCK_W;
+    if (hi > ctx->w) {
+        hi = ctx->w;
+    }
+
+    int cx_from, cx_to;
+    if (ctx->x_step > 0) {
+        cx_from = lo;     cx_to = hi;
+    } else {
+        cx_from = hi - 1; cx_to = lo - 1;
+    }
+
     bool moved_here = false;
-
-    uint8_t *row = s->cells + (size_t)y * (size_t)w;
-
-    /* The three rows a grain in this row can reach. */
-    uint8_t *prow = dest_row(s, y + dy);
-    uint8_t *arow = dest_row(s, y + slide_a[1]);
-    uint8_t *brow = dest_row(s, y + slide_b[1]);
-
-    for (int x = x_from; x != x_to; x += x_step) {
-        if (CELL_IS_EMPTY(row[x])) {
+    for (int x = cx_from; x != cx_to; x += ctx->x_step) {
+        if (CELL_IS_EMPTY(ctx->row[x])) {
             continue;
         }
-        if (step_one_grain(s, row, prow, arow, brow, x, y, w, dx, dy,
-                           slide_a, slide_b, load_dx, load_dy, jostle,
-                           driven)) {
+        if (step_one_grain(ctx->s, ctx->row, ctx->prow, ctx->arow, ctx->brow,
+                           x, ctx->y, ctx->w, ctx->dx, ctx->dy, ctx->slide_a,
+                           ctx->slide_b, ctx->load_dx, ctx->load_dy,
+                           ctx->jostle, ctx->driven)) {
             moved_here = true;
         }
     }
 
-    /* Remember against THIS direction only - the other one offers different
-     * moves. A later row moving next to this one clears it again, via
-     * wake_around(). */
-    if (settled_bit != 0 && !moved_here) {
-        s->row_state[y] |= settled_bit;
+    if (moved_here && ctx->s->block_state != NULL) {
+        ctx->s->block_state[ctx->by * ctx->s->block_cols + bx] |= BLOCK_ACTIVE;
+    }
+}
+
+/* One row of the gravity sweep, walked by block-column rather than by
+ * cell: a block whose settled bit is already set for this step's direction
+ * is skipped entirely - none of its cells are even read - since it was
+ * already examined under this exact direction with nothing to do, and
+ * nothing has moved next to it since, so it cannot have anywhere to go.
+ * When sleeping is disabled (block_state is NULL), settled_bit is always 0
+ * (see compute_settled_bit()), so the skip check never fires and every
+ * block still gets walked - the same total work as a flat per-cell walk,
+ * just partitioned into SAND_BLOCK_W-wide chunks. */
+static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
+                         const int *slide_a, const int *slide_b, int x_step,
+                         int load_dx, int load_dy, int jostle,
+                         uint8_t settled_bit, bool driven[MATERIAL_MAX][2])
+{
+    sweep_ctx_t ctx = {
+        .s = s,
+        .row  = s->cells + (size_t)y * (size_t)w,
+        .prow = dest_row(s, y + dy),
+        .arow = dest_row(s, y + slide_a[1]),
+        .brow = dest_row(s, y + slide_b[1]),
+        .y = y, .w = w, .dx = dx, .dy = dy, .x_step = x_step,
+        .slide_a = slide_a, .slide_b = slide_b,
+        .load_dx = load_dx, .load_dy = load_dy, .jostle = jostle,
+        .by = y / SAND_BLOCK_H,
+        .driven = driven,
+    };
+
+    int bx_from, bx_to, bx_step;
+    block_x_order(s->block_cols, x_step, &bx_from, &bx_to, &bx_step);
+
+    for (int bx = bx_from; bx != bx_to; bx += bx_step) {
+        if (settled_bit != 0 &&
+            (s->block_state[ctx.by * s->block_cols + bx] & settled_bit)) {
+            continue;
+        }
+        step_one_block(&ctx, bx);
     }
 }
 
@@ -909,8 +1012,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int y_to   = (dy > 0) ? -1       : s->h;
     const int y_step = (dy > 0) ? -1       : 1;
 
-    int x_from, x_to, x_step;
-    sweep_x_order(s, dx, &x_from, &x_to, &x_step);
+    const int x_step = sweep_x_order(s, dx);
 
     /* Which way a liquid spreads: PERPENDICULAR TO GRAVITY, not across the
      * screen - tilt the board and the surface tilts with it, so spreading
@@ -931,12 +1033,32 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int w = s->w;
 
     for (int y = y_from; y != y_to; y += y_step) {
-        step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_from, x_to, x_step,
+        step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
                     load_dx, load_dy, jostle, settled_bit, driven);
     }
 
     /* Everything about a liquid that is NOT gravity-ward: cross-flow, and
      * the wall-rebound splash on top of it. See sand_step_liquids() in
-     * sand_liquid.c. */
+     * sand_liquid.c. Run before finalising which blocks get to sleep below,
+     * since a cross-flow or rebound move can still touch a block the main
+     * sweep left quiet - BLOCK_ACTIVE has to reflect the WHOLE step, not
+     * just the sweep's share of it. */
     sand_step_liquids(s, perp_a, perp_b, dx, dy);
+
+    /* Finalise this step's settling: a block only earns the settled bit if
+     * nothing marked it BLOCK_ACTIVE anywhere in the step just finished -
+     * neither the sweep above nor the liquid pass. Deferred to here, once,
+     * rather than decided per-row as the old row-shaped design could:
+     * a block spans SAND_BLOCK_H rows, each swept by a separate
+     * step_one_row() call, so whether anything moved in it cannot be known
+     * until every row belonging to it has been visited - which, for a
+     * block, only happens once across this entire sweep. */
+    if (s->block_state != NULL) {
+        const int n = s->block_cols * s->block_rows;
+        for (int i = 0; i < n; i++) {
+            if (!(s->block_state[i] & BLOCK_ACTIVE)) {
+                s->block_state[i] |= settled_bit;
+            }
+        }
+    }
 }
