@@ -52,6 +52,13 @@ static cell_t random_cell(sand_t *s, material_id_t material)
     if (materials[material].kind == KIND_LIQUID) {
         return CELL_MAKE(material, MASS_MAX);
     }
+    /* A transient material's variant is life remaining, not a shade either -
+     * see material.h's top comment and the `decay` field it documents.
+     * Fresh gas starts at full life so it fades from vivid to gone, rather
+     * than spawning already partway decayed. */
+    if (materials[material].decay != 0) {
+        return CELL_MAKE(material, MATERIAL_VARIANTS - 1);
+    }
     return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
 }
 
@@ -77,7 +84,9 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     rng_seed(&s->rng, seed);
     s->sweep_flip = false;
     s->liquid_flip = false;
+    s->gas_flip   = false;
     s->may_have_liquid = false;
+    s->may_have_gas    = false;
     s->dirty_rows = NULL;
     s->row_state  = NULL;
     s->block_state = NULL;
@@ -91,6 +100,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->last_load_dx = 0;
     s->last_load_dy = 0;
     s->scatter      = 0;
+    s->decay        = 0;
+    s->buoyancy     = 255;  /* full speed by default - see sand_set_buoyancy() */
     s->mom_x_q8 = 0;
     s->mom_y_q8 = 0;
     s->dir_x_q8 = 0;
@@ -178,6 +189,9 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
     if (!CELL_IS_EMPTY(cell) &&
         materials[CELL_MATERIAL(cell)].kind == KIND_LIQUID) {
         s->may_have_liquid = true;
+    } else if (!CELL_IS_EMPTY(cell) &&
+              materials[CELL_MATERIAL(cell)].kind == KIND_GAS) {
+        s->may_have_gas = true;
     }
     mark_move(s, x, y, x, y);
 }
@@ -204,6 +218,8 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     }
     if (materials[material].kind == KIND_LIQUID) {
         s->may_have_liquid = true;
+    } else if (materials[material].kind == KIND_GAS) {
+        s->may_have_gas = true;
     }
     s->cells[y * s->w + x] = random_cell(s, material);
     mark_move(s, x, y, x, y);
@@ -324,68 +340,15 @@ int sand_load_above(const sand_t *s, int x, int y, int dx, int dy)
     return n;
 }
 
-/* Chance in 256 that a loaded grain may still slide sideways.
- *
- * A surface grain is free. Each grain above halves the chance, and past the cap
- * it is nil. Shaking overrides the lot - a shaken pile flows regardless of how
- * deeply buried its grains are, which is the whole reason shaking a jar of
- * sand levels it. */
-static int slide_chance(const material_t *m, int load, int jostle)
-{
-    /* A material whose slip is 255 is never held by load at all. That is most
-     * of what separates a liquid from a powder: water at the bottom of a deep
-     * pool carries just as much weight as sand at the bottom of a dune, and
-     * flows anyway. */
-    if (load == 0 || m->slip >= 255) {
-        return 256;
-    }
+/* slide_chance() moved to sand_priv.h (still static inline), alongside the
+ * rest of the grain-movement primitive stack it is part of - see that
+ * header's own comment above can_enter() for why. */
 
-    const int chance = (load >= SAND_LOAD_CAP) ? 0 : (m->slip >> (load - 1));
-
-    return chance > jostle ? chance : jostle;
-}
-
-/* Whether a grain may slide in direction (mx, my) at all, given gravity.
- *
- * This is the OTHER half of friction, and the half that burial cannot supply.
- * A single layer of sand on a floor has nothing on top of it, so load-based
- * friction leaves it free - and it would still skate sideways on the faintest
- * tilt, which is exactly the complaint.
- *
- * The physical rule is the one for a block on an incline: it stays put until
- * the slope exceeds the friction angle, tan(theta) > mu. Written in terms of a
- * candidate move, the move descends by (m . g) and travels across the slope by
- * |m x g|, so it is only driven if
- *
- *     descent > mu * lateral
- *
- * At zero tilt that permits a diagonal topple (descent and lateral both one,
- * and mu is under one) while forbidding a purely sideways shuffle (descent
- * zero). Sideways only becomes possible once the board is tilted past the
- * friction angle - which is what makes tilting the device feel like tipping
- * sand rather than dragging it.
- *
- * Depends only on the direction, not the grain, so sand_step works it out once
- * per step for each of the two slides. */
-static bool driven_by_gravity(int mx, int my, int gx, int gy, int repose)
-{
-    const int descent = mx * gx + my * gy;
-    if (descent <= 0) {
-        return false;              /* uphill, or across a level slope */
-    }
-    if (repose == 0) {
-        return true;               /* no friction angle at all - a liquid */
-    }
-
-    int lateral = mx * gy - my * gx;
-    if (lateral < 0) {
-        lateral = -lateral;
-    }
-
-    /* `repose` is mu times ten, so 7 is the ~35 degrees of dry sand. Kept as
-     * a ratio so this stays in integers. */
-    return (int64_t)descent * 10 > (int64_t)lateral * repose;
-}
+/* driven_by_gravity() - whether a grain may slide in direction (mx, my) at
+ * all, given gravity and its material's angle of repose - moved to
+ * sand_priv.h (still static inline) since sand_gas.c needs it too, to
+ * build its own driven[][] table against a reversed gravity vector. See
+ * its comment there for the physics and the full reasoning for the move. */
 
 /* How strongly the true angle leans toward the diagonal, as 0-256.
  *
@@ -442,64 +405,30 @@ void sand_set_scatter(sand_t *s, int chance)
     }
 }
 
-/* Whether `mover` may occupy the cell currently holding `target`.
- *
- * Empty space always yields. Anything else yields only to something denser,
- * which is how sand sinks through water while water cannot push its way back
- * up through sand. Static materials never yield whatever the arithmetic says,
- * so a wall stays a wall. */
-static inline bool can_enter(uint8_t mover_density, cell_t target)
+void sand_set_decay(sand_t *s, int chance)
 {
-    if (CELL_IS_EMPTY(target)) {
-        return true;
+    if (chance < 0) {
+        s->decay = SAND_DECAY_PER_MATERIAL;
+    } else {
+        s->decay = chance > 255 ? 255 : chance;
     }
-
-    const material_t *t = material_of(target);
-
-    return t->kind != KIND_STATIC && mover_density > t->density;
 }
 
-/* Whether a cell exists and can be entered, without moving anything into it.
- *
- * Needed so scatter can be decided ONLY for cells that could actually fall.
- * Drawing a random number for every cell regardless would undo the single
- * biggest saving in this loop - see the note on the common path below. */
-static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density)
+void sand_set_buoyancy(sand_t *s, int chance)
 {
-    return row != NULL && (unsigned)nx < (unsigned)w &&
-           can_enter(density, row[nx]);
-}
-
-/* pour_into() and room_in() moved to sand_liquid.c - sand.c's own movement
- * never splits a grain, so nothing here needed them once the liquid branch
- * did. */
-
-/* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
- *
- * A NULL row or an out-of-range column is a wall, so both simply fail. The
- * single unsigned comparison catches nx < 0 as well, by wrapping it to a huge
- * value - the usual trick, worth it in a loop this hot. */
-static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
-                           int x, int nx, int w, cell_t mover, uint8_t density)
-{
-    if (to_row == NULL || (unsigned)nx >= (unsigned)w ||
-        !can_enter(density, to_row[nx])) {
-        return false;
+    if (chance < 0) {
+        s->buoyancy = SAND_BUOYANCY_PER_MATERIAL;
+    } else {
+        s->buoyancy = chance > 255 ? 255 : chance;
     }
-
-    /* A SWAP, not an overwrite. Where the target was empty this is exactly the
-     * old behaviour; where it held something lighter, that lighter thing takes
-     * the vacated cell and is displaced upward.
-     *
-     * Safe with respect to sweep order: the displaced cell lands in the very
-     * cell being processed, which the sweep has just finished with, so it
-     * cannot move a second time this step. */
-    const cell_t displaced = to_row[nx];
-
-    to_row[nx]  = mover;
-    from_row[x] = displaced;
-    return true;
 }
+
+/* can_enter()/cell_open()/move_to() moved to sand_priv.h (still
+ * static inline) - see that header's own comment for why the whole
+ * grain-movement primitive stack lives there now. pour_into()/room_in()
+ * are the liquid-specific siblings and stayed in sand_liquid.c; sand.c's
+ * own movement never splits a grain, so nothing here needed them once
+ * the liquid branch did. */
 
 /* How hard gravity's direction turned since last step, decayed so a single
  * flick fades over a few frames rather than lingering or accumulating
@@ -593,179 +522,15 @@ static int sweep_x_order(sand_t *s, int dx)
     return x_step;
 }
 
-/* One grain's turn: try to fall, then the two slides either side of it, with
- * friction and shaking deciding whether the slides are allowed at all.
- * Returns whether it did anything - moved, or (for a scattering grain)
- * deliberately did not, which the caller must still count as activity so
- * the row does not sleep on a grain mid-air.
- *
- * Marked `static`, not `inline`: this is too large for that to be a useful
- * hint at this build's optimisation level, so the call it costs per grain
- * is a real cost - confirmed against the frame-budget tests on device
- * rather than assumed away. */
-/* The common case by a wide margin - on a screen of falling sand almost every
- * grain simply moves the way gravity points. Taking it before drawing a
- * random number matters: the generator was the single most expensive thing
- * in this loop, and most grains never needed it.
- *
- * Only called when jostle == 0: scatter only applies to a grain that could
- * fall, and a shaken grain has to reach the slide logic in try_slide()
- * regardless of whether the plain fall is open. */
-/* Whether a scattering grain drifted, lagged, or the scatter roll simply did
- * not apply - in every one of those cases the grain is spoken for, so the
- * caller must not also attempt a plain fall on it. */
-static bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
-                        uint8_t *brow, int x, int y, int w, int dx,
-                        const int *slide_a, const int *slide_b, cell_t grain,
-                        uint8_t density, int scatter)
-{
-    if (scatter == 0 || !cell_open(prow, x + dx, w, density)) {
-        return false;
-    }
-
-    const uint32_t r = rng_next(&s->rng);
-    if ((int)(r & 0xFF) >= scatter) {
-        return false;
-    }
-
-    /* Drift: sideways as well as down, if that way is open. Spreads the
-     * stream horizontally. Blocked or not chosen, it lags instead: nothing
-     * at all this step, so the grains around it pull ahead and the stream
-     * spreads vertically.
-     *
-     * Either way still counts as activity. A grain that CHOSE not to move is
-     * not a settled grain, and letting the row sleep here would strand it in
-     * mid-air. */
-    if ((r & 0x100) == 0) {
-        const bool pick_a = (r & 0x200) != 0;
-        uint8_t  *drow = pick_a ? arow : brow;
-        const int ddx  = pick_a ? slide_a[0] : slide_b[0];
-        const int ddy  = pick_a ? slide_a[1] : slide_b[1];
-
-        if (move_to(row, drow, x, x + ddx, w, grain, density)) {
-            mark_rows(s, y, y + ddy);
-        }
-    }
-    return true;
-}
-
-static bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
-                                uint8_t *arow, uint8_t *brow, int x, int y,
-                                int w, int dx, int dy, const int *slide_a,
-                                const int *slide_b, cell_t grain,
-                                uint8_t density, int scatter)
-{
-    if (try_scatter(s, row, prow, arow, brow, x, y, w, dx, slide_a, slide_b,
-                    grain, density, scatter)) {
-        return true;
-    }
-
-    if (move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_rows(s, y, y + dy);
-        return true;
-    }
-    return false;
-}
-
-/* Which of the two slides to try first, and which second - without
- * randomising it the sand develops a visible grain with everything leaning
- * the same way. */
-static void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
-                             const int *slide_a, const int *slide_b,
-                             uint8_t mat_id, bool driven[MATERIAL_MAX][2],
-                             uint8_t **first_row, int *first_dx,
-                             int *first_dy, bool *first_driven,
-                             uint8_t **second_row, int *second_dx,
-                             int *second_dy, bool *second_driven)
-{
-    if (r & 1) {
-        *first_row  = arow; *first_dx  = slide_a[0]; *first_dy  = slide_a[1];
-        *first_driven = driven[mat_id][0];
-        *second_row = brow; *second_dx = slide_b[0]; *second_dy = slide_b[1];
-        *second_driven = driven[mat_id][1];
-    } else {
-        *first_row  = brow; *first_dx  = slide_b[0]; *first_dy  = slide_b[1];
-        *first_driven = driven[mat_id][1];
-        *second_row = arow; *second_dx = slide_a[0]; *second_dy = slide_a[1];
-        *second_driven = driven[mat_id][0];
-    }
-}
-
-/* Friction, and only on the slides. The grain could not fall, so whether it
- * may SHUFFLE depends on what is sitting on it. Reached only once the
- * gravity-ward move has already failed, so a grain in open air never pays
- * for this. */
-static bool try_slide_pair(sand_t *s, uint8_t *row, int x, int y, int w,
-                           cell_t grain, uint8_t density,
-                           const material_t *mat, int load_dx, int load_dy,
-                           int jostle, uint32_t r, uint8_t *first_row,
-                           int first_dx, int first_dy, bool first_driven,
-                           uint8_t *second_row, int second_dx, int second_dy,
-                           bool second_driven)
-{
-    const int load = sand_load_above(s, x, y, load_dx, load_dy);
-    const int allowance = slide_chance(mat, load, jostle);
-    if (allowance < 256 && (int)((r >> 16) & 0xFF) >= allowance) {
-        return false;
-    }
-
-    if (first_driven &&
-        move_to(row, first_row, x, x + first_dx, w, grain, density)) {
-        mark_rows(s, y, y + first_dy);
-        return true;
-    }
-    if (second_driven &&
-        move_to(row, second_row, x, x + second_dx, w, grain, density)) {
-        mark_rows(s, y, y + second_dy);
-        return true;
-    }
-    return false;
-}
-
-/* Blocked, or being shaken. */
-static bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
-                      uint8_t *brow, int x, int y, int w, int dx, int dy,
-                      const int *slide_a, const int *slide_b, int load_dx,
-                      int load_dy, int jostle, cell_t grain, uint8_t mat_id,
-                      uint8_t density, const material_t *mat,
-                      bool driven[MATERIAL_MAX][2])
-{
-    const uint32_t r = rng_next(&s->rng);
-
-    uint8_t *first_row,  *second_row;
-    int      first_dx,    second_dx;
-    int      first_dy,    second_dy;
-    bool     first_driven, second_driven;
-    pick_slide_order(r, arow, brow, slide_a, slide_b, mat_id, driven,
-                     &first_row, &first_dx, &first_dy, &first_driven,
-                     &second_row, &second_dx, &second_dy, &second_driven);
-
-    /* Shaking reorders the attempts rather than adding a new move: a shaken
-     * grain prefers to spread sideways before it drops. Every destination
-     * stays inside the already-swept half, so the no-double-move guarantee
-     * above still holds. */
-    const bool shaken = jostle > 0 && (int)((r >> 8) & 0xFF) < jostle;
-
-    if (!shaken && jostle > 0 &&
-        move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_rows(s, y, y + dy);
-        return true;
-    }
-
-    if (try_slide_pair(s, row, x, y, w, grain, density, mat, load_dx,
-                       load_dy, jostle, r, first_row, first_dx, first_dy,
-                       first_driven, second_row, second_dx, second_dy,
-                       second_driven)) {
-        return true;
-    }
-
-    if (shaken && move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_rows(s, y, y + dy);
-        return true;
-    }
-
-    return false;
-}
+/* try_scatter()/pick_slide_order()/try_slide_pair(), and the _impl forms
+ * of try_fall_or_scatter()/try_slide() - one grain's whole turn: try to
+ * fall, then the two slides either side of it, with friction and shaking
+ * deciding whether the slides are allowed at all - all moved to
+ * sand_priv.h (still static inline). See that header's own comment above
+ * try_fall_or_scatter_impl() for the measured reason, and for why the
+ * ordinary (non-inline) try_fall_or_scatter()/try_slide() sand_gas.c
+ * actually calls are defined below instead, alongside step_one_grain()
+ * rather than in the header. */
 
 static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                            uint8_t *arow, uint8_t *brow, int x, int y, int w,
@@ -779,11 +544,12 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         /* Static never moves, so it costs a single comparison - which is
          * what makes a wall of stone free to have on screen.
          *
-         * Gas is skipped for now rather than mishandled. Rising means
-         * moving AGAINST the sweep, into cells not yet visited, which would
-         * let it move several times in one step and teleport to the
-         * ceiling. Doing it properly needs a second, downward sweep for
-         * rising materials; there is nothing that rises yet. */
+         * Gas is skipped here for the same reason liquid's cross-flow is:
+         * rising means moving AGAINST this sweep's own direction, into
+         * cells not yet visited, which would let it move several times in
+         * one step and teleport to the ceiling. Handled by its own pass,
+         * sand_step_gas() in sand_gas.c, called from sand_step() after
+         * this sweep finishes. */
         return false;
     }
 
@@ -801,15 +567,49 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
 
     if (jostle == 0) {
         const int scatter = (s->scatter >= 0) ? s->scatter : mat->scatter;
-        if (try_fall_or_scatter(s, row, prow, arow, brow, x, y, w, dx, dy,
-                                slide_a, slide_b, grain, density, scatter)) {
+        /* _impl, called directly, not the ordinary try_fall_or_scatter()
+         * below - this is the hottest call site in the whole simulation,
+         * and it needs to stay inlined. See sand_priv.h's own comment
+         * above try_fall_or_scatter_impl() for why there are two forms
+         * of this function at all. */
+        if (try_fall_or_scatter_impl(s, row, prow, arow, brow, x, y, w, dx,
+                                     dy, slide_a, slide_b, grain, density,
+                                     scatter)) {
             return true;
         }
     }
 
-    return try_slide(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
-                     slide_b, load_dx, load_dy, jostle, grain, mat_id,
-                     density, mat, driven);
+    return try_slide_impl(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
+                          slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                          density, mat, driven);
+}
+
+/* The ordinary, non-inline forms - see sand_priv.h's own comment above
+ * try_fall_or_scatter_impl() for why these exist alongside the inline
+ * versions step_one_grain() calls directly above. sand_gas.c calls
+ * these, not the _impl versions, so gas movement costs one ordinary
+ * function call rather than a second full inlined copy of this chain. */
+bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
+                         uint8_t *arow, uint8_t *brow, int x, int y,
+                         int w, int dx, int dy, const int *slide_a,
+                         const int *slide_b, cell_t grain,
+                         uint8_t density, int scatter)
+{
+    return try_fall_or_scatter_impl(s, row, prow, arow, brow, x, y, w, dx,
+                                    dy, slide_a, slide_b, grain, density,
+                                    scatter);
+}
+
+bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
+               uint8_t *brow, int x, int y, int w, int dx, int dy,
+               const int *slide_a, const int *slide_b, int load_dx,
+               int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+               uint8_t density, const material_t *mat,
+               bool driven[MATERIAL_MAX][2])
+{
+    return try_slide_impl(s, row, prow, arow, brow, x, y, w, dx, dy, slide_a,
+                          slide_b, load_dx, load_dy, jostle, grain, mat_id,
+                          density, mat, driven);
 }
 
 /* Sleeping is off entirely when block_state does not exist. Otherwise, wakes
@@ -1076,6 +876,26 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * sweep left quiet - BLOCK_ACTIVE has to reflect the WHOLE step, not
      * just the sweep's share of it. */
     sand_step_liquids(s, perp_a, perp_b, dx, dy);
+
+    /* Same reasoning, same slot, for gas: rising is not gravity-ward, so it
+     * cannot join the main sweep either - see sand_step_gas()'s own
+     * comment in sand_priv.h. Order relative to sand_step_liquids() above
+     * does not matter; both must finish before finalize_settling() does.
+     *
+     * Checked here rather than left to sand_step_gas()'s own early
+     * return, unlike sand_step_liquids() just above - a deliberate,
+     * measured asymmetry: this call site is reached on every step of
+     * every test in the suite (sand_step_liquids() always was too, and
+     * its own equivalent check was never worth revisiting), and skipping
+     * the call outright avoids marshalling all nine arguments for a
+     * function that would immediately return anyway on every step no
+     * gas has ever touched. Small - most of the small residual cost
+     * measured after fixing the two real regressions above is flash
+     * layout, not this call - but genuinely free to take. */
+    if (s->may_have_gas) {
+        sand_step_gas(s, gx, gy, dx, dy, slide_a, slide_b, perp_a, perp_b,
+                     load_dx, load_dy, x_step, jostle);
+    }
 
     finalize_settling(s, settled_bit);
 }

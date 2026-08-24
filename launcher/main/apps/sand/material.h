@@ -78,6 +78,7 @@ typedef enum {
     MAT_SAND,
     MAT_WATER,
     MAT_STONE,
+    MAT_GAS,
     MAT_COUNT
 } material_id_t;
 
@@ -135,6 +136,24 @@ typedef struct {
     /* Chance in 256 that a falling cell lags or drifts rather than falling
      * straight, so a stream disperses instead of descending as a block. */
     uint8_t scatter;
+
+    /* Chance in 256, per step, that a grain's LIFE REMAINING (the variant
+     * nibble, for a transient material - see this file's top comment) ticks
+     * down by one. Zero means immortal: CELL_VARIANT keeps meaning whatever
+     * it means for that material's kind instead (a shade, or a liquid's fill
+     * level), and nothing ever clears the cell on its own. A material with
+     * decay != 0 gates variant-as-life, not its kind - a future transient
+     * material of a different kind could reuse this without a second field. */
+    uint8_t decay;
+
+    /* Chance in 256, per step, that a gas grain attempts its spontaneous
+     * rise/slide at all - see sand_gas.c's step_one_gas_grain(). 255 rises
+     * every step it can, exactly like sand falls; lower values sit still
+     * on the steps the roll misses, for a slower, lazier drift. Ignored
+     * while jostled (jostle != 0) - shaking bypasses this the same way it
+     * bypasses slide_chance()'s own resistance. Meaningless outside a gas
+     * pass, so every other material leaves it at zero. */
+    uint8_t buoyancy;
 
     /* Cold: for the UI, never touched by the simulation. Last, so it cannot
      * push the movement fields out of the first cache line. */

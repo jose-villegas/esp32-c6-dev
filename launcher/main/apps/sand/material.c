@@ -47,7 +47,52 @@ const material_t materials[MATERIAL_MAX] = {
         .scatter = 0,
     },
 
-    /* Slots 4-15 are unused and left zeroed except for these, which make an
+    [MAT_GAS] = {
+        .name    = "Gas",
+        .kind    = KIND_GAS,
+        .density = 10,       /* between empty (0) and water (30), so sand and
+                               * water sinking through it in the main sweep
+                               * displace it automatically - not sensitive,
+                               * anywhere from about 1 to 25 works the same */
+
+        /* Same "no resistance" values as water, and for the same reason:
+         * gas rises and slides via sand's own try_fall_or_scatter()/
+         * try_slide() (see sand_gas.c), inverted, and a real angle of
+         * repose or load resistance would stop it from spreading at all,
+         * the opposite of what it is for. */
+        .slip    = 255,
+        .repose  = 0,
+        .scatter = 120,      /* well above sand's 40 - a visibly turbulent,
+                               * wispy rise rather than a rigid column */
+
+        .decay   = 32,        /* 15 ticks needed to clear a fresh grain,
+                               * 256/32 = 8 steps average between ticks -
+                               * ~120 steps, around 2 seconds at this app's
+                               * ~60fps step rate. Gas is whole-grain, not
+                               * mass-based, so it cannot thin out a
+                               * saturated pocket the way water levels one
+                               * (see sand_gas.c); decaying away is what
+                               * keeps a held-down pour from just piling
+                               * solid forever, on top of making it look
+                               * like a gas instead of an immortal block.
+                               * Starting point, not final - tune on device
+                               * like every other constant here. */
+
+        .buoyancy = 96,        /* ~2.7 steps average between rises - was 32
+                               * (~8 steps average), measured on device as
+                               * too sluggish to read as rising at all.
+                               * Visibly slower than sand's instant
+                               * one-cell-per-step, without reading as
+                               * stuck. Life ticks every step regardless of
+                               * whether this roll succeeds (see
+                               * tick_gas_decay() in sand_gas.c), so
+                               * slowing the rise does not also stretch the
+                               * lifetime. Starting point, not final - tune
+                               * on device like every other constant
+                               * here. */
+    },
+
+    /* Slots 5-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
     [MAT_COUNT ... MATERIAL_MAX - 1] = {
@@ -100,9 +145,10 @@ static const gfx_color_t palette[256] = {
     SHADES(0xB07430, 0xF2CE90),   /* sand  */
     SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
     SHADES(0x4A4F5A, 0x767D8C),   /* stone */
+    SHADES(0x445544, 0xC8E8B8),   /* gas   */
     UNUSED, UNUSED, UNUSED, UNUSED,
     UNUSED, UNUSED, UNUSED, UNUSED,
-    UNUSED, UNUSED, UNUSED, UNUSED,
+    UNUSED, UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

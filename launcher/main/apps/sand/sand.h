@@ -62,7 +62,7 @@
  * budget nothing but 32x64 actually clears, and the case this project's
  * very first documented lesson exists for (a resting pile costing 20x an
  * empty grid) - not because the other two numbers do not matter. See
- * docs/Notes/Simulation-Lessons.md for the full sweep methodology and the
+ * docs/Sand/Simulation-Lessons.md for the full sweep methodology and the
  * two real bugs (a device-only stack overflow, two test fixtures broken
  * by this same tuning) it surfaced along the way. */
 #define SAND_BLOCK_W 32
@@ -74,12 +74,20 @@ typedef struct {
     rng_t    rng;        /* seeded explicitly, so every run repeats exactly */
     bool     sweep_flip; /* alternates the sweep direction between steps */
     bool     liquid_flip;/* alternates which way liquids share sideways */
+    bool     gas_flip;   /* same idea as liquid_flip, for sand_step_gas()'s
+                           * own spread pass - kept separate so gas's
+                           * alternation isn't coupled to whether water also
+                           * moved this step */
 
     /* Whether the grid might hold any liquid at all. Conservative: set the
      * moment a liquid is placed, and only ever cleared by a pass that has
      * looked everywhere and found none. When it is false the whole cross-flow
      * pass is skipped, so a screen of sand never pays for water. */
     bool     may_have_liquid;
+
+    /* Same idea as may_have_liquid, for gas - see sand_step_gas() in
+     * sand_gas.c. */
+    bool     may_have_gas;
 
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
@@ -111,6 +119,8 @@ typedef struct {
     int      last_load_dx, last_load_dy;
 
     int      scatter;   /* see sand_set_scatter() */
+    int      decay;     /* see sand_set_decay() */
+    int      buoyancy;  /* see sand_set_buoyancy() */
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
@@ -252,6 +262,17 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  */
 #define SAND_LIQUID_SIGHT 8
 
+/* Same idea as SAND_LIQUID_SIGHT, for sand_step_gas()'s own spread pass
+ * (sand_gas.c) - how far along the perpendicular a gas grain will look
+ * for an empty cell to hop into. Deliberately wider than water's 8, not
+ * just mirrored: gas is meant to disperse noticeably faster/further than
+ * water levels, and given both use the same equalise_*() mechanism this
+ * is the one parameter that actually encodes that difference. 16 is
+ * SAND_LIQUID_SIGHT's own measured data's last "still fine" point before
+ * 32 - not yet measured for gas specifically; tune once real numbers
+ * exist, same as every other constant on this page. */
+#define SAND_GAS_SIGHT 16
+
 /* THE WALL-REBOUND SPLASH
  *
  * Everything above reacts to where gravity POINTS. Nothing reacts to how fast
@@ -366,6 +387,37 @@ int sand_load_above(const sand_t *s, int x, int y, int dx, int dy);
  * them, which is what a test wants. */
 void sand_set_scatter(sand_t *s, int chance);
 #define SAND_SCATTER_PER_MATERIAL (-1)
+
+/* How often a transient material's life ticks down by one, as a chance in
+ * 256 - see material.h's `decay` field. Zero, the default, makes every
+ * material immortal regardless of what the table says, for the same reason
+ * scatter defaults off: most tests want to place gas and reason about it
+ * without a background chance of it quietly vanishing out from under them
+ * (test_gas_grain_count_is_conserved is exactly that kind of test).
+ *
+ * Pass SAND_DECAY_PER_MATERIAL to use each material's own figure from the
+ * table instead - what the app wants, since only a transient material
+ * should ever fade. Any other value overrides all of them, which is what a
+ * test that specifically wants to watch something decay wants instead. */
+void sand_set_decay(sand_t *s, int chance);
+#define SAND_DECAY_PER_MATERIAL (-1)
+
+/* How often a gas grain attempts its spontaneous rise/slide at all, as a
+ * chance in 256 - see material.h's `buoyancy` field. 255, the default,
+ * makes gas rise exactly one cell per step it can, the same deterministic
+ * guarantee sand's own fall makes - most tests that place a gas grain and
+ * step once want to reason about exactly where it lands, the same reason
+ * scatter defaults off (test_gas_rises_straight_up_under_ordinary_gravity
+ * is exactly that kind of test, which is why this is NOT off by default
+ * the way scatter and decay are - "off" for a rise-gate means "never
+ * rises", the opposite of a safe default here).
+ *
+ * Pass SAND_BUOYANCY_PER_MATERIAL to use each material's own figure from
+ * the table instead - what the app wants, for gas's actual lazy drift.
+ * Any other value overrides all of them, which is what a test that
+ * specifically wants to watch that drift wants instead. */
+void sand_set_buoyancy(sand_t *s, int chance);
+#define SAND_BUOYANCY_PER_MATERIAL (-1)
 
 /* Advance one frame.
  *

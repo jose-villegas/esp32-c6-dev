@@ -155,7 +155,7 @@ static inline void wake_blocks_range(sand_t *s, int bx0, int by0, int bx1,
  * this step - the pull-based replacement for the old per-move push
  * mechanism (wake_blocks_points()/point_reach()/reach_axis()/
  * reach_corner()/should_wake_neighbor()/cell_occupied(), all removed;
- * see docs/Notes/Simulation-Lessons.md for the two failed attempts at
+ * see docs/Sand/Simulation-Lessons.md for the two failed attempts at
  * cheapening that mechanism that led here instead).
  *
  * Called once per block per step, from sand_step()'s own finalisation
@@ -278,3 +278,370 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
  * gravity's own dithered direction this step. */
 void sand_step_liquids(sand_t *s, const int *perp_a, const int *perp_b,
                        int dx, int dy);
+
+/* Defined in sand_gas.c: a gas grain's whole step - rising (reusing
+ * try_fall_or_scatter()/try_slide() below, direction-inverted) then
+ * perpendicular spread (mirroring sand_step_liquids()'s cross-flow, but
+ * whole-grain instead of mass-based). Called once from sand_step(), after
+ * sand_step_liquids() and before finalize_settling() - same slot, same
+ * reason: BLOCK_ACTIVE has to reflect the whole step. Every argument here
+ * is something sand_step() already computed for the main sweep/liquid
+ * pass; this negates whatever needs negating internally rather than
+ * recomputing from scratch. */
+void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
+                   const int *slide_a, const int *slide_b,
+                   const int *perp_a, const int *perp_b,
+                   int load_dx, int load_dy, int x_step, int jostle);
+
+/* The whole grain-movement primitive stack - try_fall_or_scatter() and
+ * try_slide(), and everything they call - moved here from sand.c, still
+ * `static inline`, for the same reason dest_row()/mark_rows() above are:
+ * both sit on the hottest path there is, called once per grain per step
+ * for every powder cell.
+ *
+ * Getting this right took three attempts, each one measured on device,
+ * not assumed - see docs/Sand/Simulation-Lessons.md for the full numbers:
+ *
+ * 1. Just remove `static` from try_fall_or_scatter()/try_slide() so
+ *    sand_gas.c could call them, leaving everything else static in
+ *    sand.c. Regressed the flip/water frame-budget tests by ~26%,
+ *    exactly reproducible, even though neither test ever places a gas
+ *    cell: turning a `static` function called once per grain into an
+ *    ordinary extern one is enough, on its own, to stop the compiler
+ *    inlining it into step_one_grain()'s dispatch, which that call site
+ *    had been relying on.
+ * 2. Move the WHOLE chain here as `static inline`, so both sand.c and
+ *    sand_gas.c get their own independently inlinable copy - exactly the
+ *    pattern this header already uses for dest_row()/mark_rows(). Fixed
+ *    flip/water back to baseline, but grew sand_step_gas() to ~3.9 KB
+ *    (bigger than sand_step() itself, from carrying a full second copy
+ *    of this chain) and THAT regressed the worst-case, sleeping-off
+ *    test_a_full_size_step_fits_in_the_frame_budget from ~7000us to over
+ *    15000us - exactly reproducible too, and again without that test
+ *    ever placing a gas cell. Flash footprint, not runtime gas activity,
+ *    was the cost both times.
+ * 3. What actually shipped: try_fall_or_scatter_impl()/try_slide_impl()
+ *    stay `static inline` here, but only step_one_grain() in sand.c
+ *    calls them directly - keeping the main sweep's hot path fully
+ *    inlined, exactly as it always was. sand_gas.c instead calls the
+ *    ordinary, non-inline try_fall_or_scatter()/try_slide() defined once
+ *    in sand.c (declared below) - genuine functions that each wrap one
+ *    of the _impl versions exactly once, so the shared logic exists in
+ *    flash as at most two copies (the inlined one in sand_step(), and
+ *    the one real out-of-line copy sand_gas.c calls into) rather than a
+ *    third, duplicated one growing inside sand_step_gas() itself. Fixed
+ *    both regressions at once. */
+
+/* Whether `mover` may occupy the cell currently holding `target`.
+ *
+ * Empty space always yields. Anything else yields only to something denser,
+ * which is how sand sinks through water while water cannot push its way back
+ * up through sand. Static materials never yield whatever the arithmetic says,
+ * so a wall stays a wall. */
+static inline bool can_enter(uint8_t mover_density, cell_t target)
+{
+    if (CELL_IS_EMPTY(target)) {
+        return true;
+    }
+
+    const material_t *t = material_of(target);
+
+    return t->kind != KIND_STATIC && mover_density > t->density;
+}
+
+/* Whether a cell exists and can be entered, without moving anything into it.
+ *
+ * Needed so scatter can be decided ONLY for cells that could actually fall.
+ * Drawing a random number for every cell regardless would undo the single
+ * biggest saving in this loop - see the note on the common path below. */
+static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density)
+{
+    return row != NULL && (unsigned)nx < (unsigned)w &&
+           can_enter(density, row[nx]);
+}
+
+/* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
+ *
+ * A NULL row or an out-of-range column is a wall, so both simply fail. The
+ * single unsigned comparison catches nx < 0 as well, by wrapping it to a huge
+ * value - the usual trick, worth it in a loop this hot. */
+static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
+                           int x, int nx, int w, cell_t mover, uint8_t density)
+{
+    if (to_row == NULL || (unsigned)nx >= (unsigned)w ||
+        !can_enter(density, to_row[nx])) {
+        return false;
+    }
+
+    /* A SWAP, not an overwrite. Where the target was empty this is exactly the
+     * old behaviour; where it held something lighter, that lighter thing takes
+     * the vacated cell and is displaced upward.
+     *
+     * Safe with respect to sweep order: the displaced cell lands in the very
+     * cell being processed, which the sweep has just finished with, so it
+     * cannot move a second time this step. */
+    const cell_t displaced = to_row[nx];
+
+    to_row[nx]  = mover;
+    from_row[x] = displaced;
+    return true;
+}
+
+/* Chance in 256 that a loaded grain may still slide sideways.
+ *
+ * A surface grain is free. Each grain above halves the chance, and past the cap
+ * it is nil. Shaking overrides the lot - a shaken pile flows regardless of how
+ * deeply buried its grains are, which is the whole reason shaking a jar of
+ * sand levels it. */
+static inline int slide_chance(const material_t *m, int load, int jostle)
+{
+    /* A material whose slip is 255 is never held by load at all. That is most
+     * of what separates a liquid from a powder: water at the bottom of a deep
+     * pool carries just as much weight as sand at the bottom of a dune, and
+     * flows anyway. */
+    if (load == 0 || m->slip >= 255) {
+        return 256;
+    }
+
+    const int chance = (load >= SAND_LOAD_CAP) ? 0 : (m->slip >> (load - 1));
+
+    return chance > jostle ? chance : jostle;
+}
+
+/* The common case by a wide margin - on a screen of falling sand almost every
+ * grain simply moves the way gravity points. Taking it before drawing a
+ * random number matters: the generator was the single most expensive thing
+ * in this loop, and most grains never needed it.
+ *
+ * Only called when jostle == 0: scatter only applies to a grain that could
+ * fall, and a shaken grain has to reach the slide logic in try_slide()
+ * regardless of whether the plain fall is open.
+ *
+ * Whether a scattering grain drifted, lagged, or the scatter roll simply did
+ * not apply - in every one of those cases the grain is spoken for, so the
+ * caller must not also attempt a plain fall on it. */
+static inline bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
+                               uint8_t *arow, uint8_t *brow, int x, int y,
+                               int w, int dx, const int *slide_a,
+                               const int *slide_b, cell_t grain,
+                               uint8_t density, int scatter)
+{
+    if (scatter == 0 || !cell_open(prow, x + dx, w, density)) {
+        return false;
+    }
+
+    const uint32_t r = rng_next(&s->rng);
+    if ((int)(r & 0xFF) >= scatter) {
+        return false;
+    }
+
+    /* Drift: sideways as well as down, if that way is open. Spreads the
+     * stream horizontally. Blocked or not chosen, it lags instead: nothing
+     * at all this step, so the grains around it pull ahead and the stream
+     * spreads vertically.
+     *
+     * Either way still counts as activity. A grain that CHOSE not to move is
+     * not a settled grain, and letting the row sleep here would strand it in
+     * mid-air. */
+    if ((r & 0x100) == 0) {
+        const bool pick_a = (r & 0x200) != 0;
+        uint8_t  *drow = pick_a ? arow : brow;
+        const int ddx  = pick_a ? slide_a[0] : slide_b[0];
+        const int ddy  = pick_a ? slide_a[1] : slide_b[1];
+
+        if (move_to(row, drow, x, x + ddx, w, grain, density)) {
+            mark_rows(s, y, y + ddy);
+        }
+    }
+    return true;
+}
+
+/* Named _impl, not called directly outside this header: step_one_grain()
+ * in sand.c calls this inline version straight, so the main sweep's own
+ * call site stays fully inlined. sand_gas.c instead calls the real,
+ * ordinary try_fall_or_scatter()/try_slide() defined in sand.c (declared
+ * further down) - a single genuine function, wrapping this same inline
+ * body ONCE, rather than sand_gas.c inlining a second full copy of it.
+ * Measured why this split exists: giving sand_step_gas() its own fully
+ * inlined copy of the whole chain (the first version of this fix) grew it
+ * to ~3.9 KB - bigger than sand_step() itself - and that alone was enough
+ * to regress test_a_full_size_step_fits_in_the_frame_budget from ~7000us
+ * to over 15000us, reproduced exactly across captures, even though that
+ * test never places a single gas cell. One ordinary function call from
+ * sand_gas.c costs far less than carrying a second copy of this code in
+ * flash at all. See docs/Sand/Simulation-Lessons.md for the full story. */
+static inline bool try_fall_or_scatter_impl(sand_t *s, uint8_t *row,
+                                            uint8_t *prow, uint8_t *arow,
+                                            uint8_t *brow, int x, int y,
+                                            int w, int dx, int dy,
+                                            const int *slide_a,
+                                            const int *slide_b, cell_t grain,
+                                            uint8_t density, int scatter)
+{
+    if (try_scatter(s, row, prow, arow, brow, x, y, w, dx, slide_a, slide_b,
+                    grain, density, scatter)) {
+        return true;
+    }
+
+    if (move_to(row, prow, x, x + dx, w, grain, density)) {
+        mark_rows(s, y, y + dy);
+        return true;
+    }
+    return false;
+}
+
+/* Which of the two slides to try first, and which second - without
+ * randomising it the sand develops a visible grain with everything leaning
+ * the same way. */
+static inline void pick_slide_order(uint32_t r, uint8_t *arow, uint8_t *brow,
+                                    const int *slide_a, const int *slide_b,
+                                    uint8_t mat_id, bool driven[MATERIAL_MAX][2],
+                                    uint8_t **first_row, int *first_dx,
+                                    int *first_dy, bool *first_driven,
+                                    uint8_t **second_row, int *second_dx,
+                                    int *second_dy, bool *second_driven)
+{
+    if (r & 1) {
+        *first_row  = arow; *first_dx  = slide_a[0]; *first_dy  = slide_a[1];
+        *first_driven = driven[mat_id][0];
+        *second_row = brow; *second_dx = slide_b[0]; *second_dy = slide_b[1];
+        *second_driven = driven[mat_id][1];
+    } else {
+        *first_row  = brow; *first_dx  = slide_b[0]; *first_dy  = slide_b[1];
+        *first_driven = driven[mat_id][1];
+        *second_row = arow; *second_dx = slide_a[0]; *second_dy = slide_a[1];
+        *second_driven = driven[mat_id][0];
+    }
+}
+
+/* Friction, and only on the slides. The grain could not fall, so whether it
+ * may SHUFFLE depends on what is sitting on it. Reached only once the
+ * gravity-ward move has already failed, so a grain in open air never pays
+ * for this. */
+static inline bool try_slide_pair(sand_t *s, uint8_t *row, int x, int y, int w,
+                                  cell_t grain, uint8_t density,
+                                  const material_t *mat, int load_dx,
+                                  int load_dy, int jostle, uint32_t r,
+                                  uint8_t *first_row, int first_dx,
+                                  int first_dy, bool first_driven,
+                                  uint8_t *second_row, int second_dx,
+                                  int second_dy, bool second_driven)
+{
+    const int load = sand_load_above(s, x, y, load_dx, load_dy);
+    const int allowance = slide_chance(mat, load, jostle);
+    if (allowance < 256 && (int)((r >> 16) & 0xFF) >= allowance) {
+        return false;
+    }
+
+    if (first_driven &&
+        move_to(row, first_row, x, x + first_dx, w, grain, density)) {
+        mark_rows(s, y, y + first_dy);
+        return true;
+    }
+    if (second_driven &&
+        move_to(row, second_row, x, x + second_dx, w, grain, density)) {
+        mark_rows(s, y, y + second_dy);
+        return true;
+    }
+    return false;
+}
+
+/* Blocked, or being shaken. _impl for the same reason
+ * try_fall_or_scatter_impl() is - see its own comment above. */
+static inline bool try_slide_impl(sand_t *s, uint8_t *row, uint8_t *prow,
+                                  uint8_t *arow, uint8_t *brow, int x, int y,
+                                  int w, int dx, int dy, const int *slide_a,
+                                  const int *slide_b, int load_dx,
+                                  int load_dy, int jostle, cell_t grain,
+                                  uint8_t mat_id, uint8_t density,
+                                  const material_t *mat,
+                                  bool driven[MATERIAL_MAX][2])
+{
+    const uint32_t r = rng_next(&s->rng);
+
+    uint8_t *first_row,  *second_row;
+    int      first_dx,    second_dx;
+    int      first_dy,    second_dy;
+    bool     first_driven, second_driven;
+    pick_slide_order(r, arow, brow, slide_a, slide_b, mat_id, driven,
+                     &first_row, &first_dx, &first_dy, &first_driven,
+                     &second_row, &second_dx, &second_dy, &second_driven);
+
+    /* Shaking reorders the attempts rather than adding a new move: a shaken
+     * grain prefers to spread sideways before it drops. Every destination
+     * stays inside the already-swept half, so the no-double-move guarantee
+     * above still holds. */
+    const bool shaken = jostle > 0 && (int)((r >> 8) & 0xFF) < jostle;
+
+    if (!shaken && jostle > 0 &&
+        move_to(row, prow, x, x + dx, w, grain, density)) {
+        mark_rows(s, y, y + dy);
+        return true;
+    }
+
+    if (try_slide_pair(s, row, x, y, w, grain, density, mat, load_dx,
+                       load_dy, jostle, r, first_row, first_dx, first_dy,
+                       first_driven, second_row, second_dx, second_dy,
+                       second_driven)) {
+        return true;
+    }
+
+    if (shaken && move_to(row, prow, x, x + dx, w, grain, density)) {
+        mark_rows(s, y, y + dy);
+        return true;
+    }
+
+    return false;
+}
+
+/* Ordinary, non-inline functions, defined once in sand.c, each wrapping
+ * one of the _impl versions above exactly once - what sand_gas.c calls
+ * instead of the inline versions directly. See this header's own top
+ * comment (above try_fall_or_scatter_impl()) for why: giving
+ * sand_step_gas() its own fully inlined copy of this chain measured a
+ * real, exactly-reproducible regression on a worst-case frame-budget
+ * test that never even places a gas cell - flash footprint, not runtime
+ * gas activity, was the cost. One ordinary function call from sand_gas.c
+ * is far cheaper than that second copy. */
+bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
+                         uint8_t *arow, uint8_t *brow, int x, int y,
+                         int w, int dx, int dy, const int *slide_a,
+                         const int *slide_b, cell_t grain,
+                         uint8_t density, int scatter);
+
+bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
+               uint8_t *brow, int x, int y, int w, int dx, int dy,
+               const int *slide_a, const int *slide_b, int load_dx,
+               int load_dy, int jostle, cell_t grain, uint8_t mat_id,
+               uint8_t density, const material_t *mat,
+               bool driven[MATERIAL_MAX][2]);
+
+/* Whether a grain may slide in direction (mx, my) at all, given gravity
+ * (gx, gy) and its material's angle of repose. Moved here from sand.c
+ * (still `static inline`, so it stays free to call inside the main
+ * sweep's own hot loop) because sand_gas.c needs it too, to build its own
+ * driven[][] table against the REVERSED gravity vector - reusing the
+ * main sweep's own driven[][] (built against the forward vector) would
+ * make every gas slide's descent dot-product come out negative, since
+ * gas's slide vectors point away from real gravity by construction. See
+ * sand_gas.c's own comment for the full reasoning. */
+static inline bool driven_by_gravity(int mx, int my, int gx, int gy,
+                                     int repose)
+{
+    const int descent = mx * gx + my * gy;
+    if (descent <= 0) {
+        return false;              /* uphill, or across a level slope */
+    }
+    if (repose == 0) {
+        return true;               /* no friction angle at all - a liquid */
+    }
+
+    int lateral = mx * gy - my * gx;
+    if (lateral < 0) {
+        lateral = -lateral;
+    }
+
+    /* `repose` is mu times ten, so 7 is the ~35 degrees of dry sand. Kept as
+     * a ratio so this stays in integers. */
+    return (int64_t)descent * 10 > (int64_t)lateral * repose;
+}

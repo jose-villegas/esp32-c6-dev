@@ -80,7 +80,7 @@ static const char *TAG = "sand";
  *
  * A stand-in until the palette overlay; without some way to choose, water and
  * stone exist and cannot be reached. */
-static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE };
+static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE, MAT_GAS };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
 /* How long the mode label stays up after the PWR button is pressed. Long
@@ -291,6 +291,13 @@ static void sand_enter(void)
      * its shape all the way down. Per-material, because water and sand do not
      * disperse alike. */
     sand_set_scatter(&sim, SAND_SCATTER_PER_MATERIAL);
+    /* Per-material, same reasoning as scatter above - only a transient
+     * material (currently just gas) has a nonzero figure in the table, so
+     * this is a no-op for sand, water and stone. */
+    sand_set_decay(&sim, SAND_DECAY_PER_MATERIAL);
+    /* Per-material too - only gas has a figure below full speed, so this
+     * is a no-op for sand, water and stone. */
+    sand_set_buoyancy(&sim, SAND_BUOYANCY_PER_MATERIAL);
 
     sand_track_dirty_rows(&sim, dirty_rows);
 

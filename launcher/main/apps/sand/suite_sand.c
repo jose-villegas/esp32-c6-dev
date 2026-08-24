@@ -1486,6 +1486,7 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
 #define WATER CELL_MAKE(MAT_WATER, 8)
 #define STONE CELL_MAKE(MAT_STONE, 8)
 #define SAND  CELL_MAKE(MAT_SAND,  8)
+#define GAS   CELL_MAKE(MAT_GAS,   8)
 
 /* Total AMOUNT of a material, not the number of cells holding it.
  *
@@ -2205,6 +2206,276 @@ static void test_a_reversal_without_a_flick_signal_still_does_not_rebound(void)
         "large the change - only sand_set_flick() may trigger this");
 }
 
+/* --- gas ------------------------------------------------------------------ */
+
+static void test_gas_rises_straight_up_under_ordinary_gravity(void)
+{
+    fixture();
+    sand_set(&s, 3, H - 1, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS,
+        CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "with ordinary gravity pointing down, gas moves up - the opposite "
+        "direction from every other material");
+}
+
+static void test_gas_falls_when_the_board_is_inverted(void)
+{
+    fixture();
+    sand_set(&s, 3, 0, GAS);
+
+    sand_step(&s, 0, -1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS,
+        CELL_MATERIAL(sand_at(&s, 3, 1)),
+        "gas always moves AGAINST gravity, whatever direction that "
+        "currently is - inverted gravity means gas falls, not a hardcoded "
+        "upward move");
+}
+
+static void test_gas_rises_diagonally_under_tilted_gravity(void)
+{
+    fixture();
+    sand_set(&s, 5, H - 1, GAS);
+
+    for (int i = 0; i < 3; i++) {
+        sand_step(&s, 1000, 1000, 0);
+    }
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_GAS,
+        CELL_MATERIAL(sand_at(&s, 5, H - 1)),
+        "the grain must have left its starting cell");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS,
+        CELL_MATERIAL(sand_at(&s, 2, H - 4)),
+        "with gravity down-and-right, anti-gravity is up-and-left - three "
+        "steps of (-1,-1) should land it exactly three columns left and "
+        "three rows up from where it started");
+}
+
+static void test_gas_is_blocked_by_a_stone_ceiling(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 0, STONE);
+    }
+    sand_set(&s, 3, H - 1, GAS);
+
+    for (int i = 0; i < 50; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* Once blocked from rising further, a lone grain with open space on
+     * both sides is free to drift sideways along the row (equalise_gas()
+     * has no reason to keep it in its starting column - the same is true
+     * of a single isolated liquid grain). So the real invariant to check
+     * is not "still at column 3", it is "the ceiling was never displaced,
+     * and the grain is still one row below it, not through it". */
+    for (int x = 0; x < W; x++) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+            CELL_MATERIAL(sand_at(&s, x, 0)),
+            "a solid ceiling with no gap must never be displaced");
+    }
+
+    bool found_gas_below_ceiling = false;
+    for (int x = 0; x < W; x++) {
+        if (CELL_MATERIAL(sand_at(&s, x, 1)) == MAT_GAS) {
+            found_gas_below_ceiling = true;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(found_gas_below_ceiling,
+        "gas must stop right below a sealed ceiling, not pass through it");
+}
+
+static void test_gas_disperses_across_a_ceiling(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 0, STONE);
+    }
+    for (int y = 0; y < H; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, W - 1, y, STONE);
+    }
+    /* Four grains stacked in one column - gas cannot rise through gas
+     * (same density, can_enter() requires strictly denser), so once the
+     * first reaches the ceiling the rest are blocked from stacking through
+     * it too. Whether they disperse sideways instead, or just pile up
+     * behind the leader, is exactly what this test checks. */
+    for (int y = H - 4; y < H; y++) {
+        sand_set(&s, W / 2, y, GAS);
+    }
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int occupied_columns = 0;
+    for (int x = 1; x < W - 1; x++) {
+        for (int y = 1; y < H; y++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_GAS) {
+                occupied_columns++;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, occupied_columns,
+        "four gas grains trapped under a ceiling must end up spread across "
+        "more than the one column they rose in, or the perpendicular "
+        "spread pass (equalise_gas()) is missing or broken");
+}
+
+static void test_sand_sinks_through_gas(void)
+{
+    fixture();
+    for (int y = 4; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, GAS);
+        }
+    }
+    sand_set(&s, 3, 3, SAND);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "sand is denser than gas, so it must sink all the way through "
+        "rather than float on it");
+}
+
+static void test_water_sinks_through_gas(void)
+{
+    fixture();
+    for (int y = 4; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, GAS);
+        }
+    }
+    sand_set(&s, 3, 3, WATER);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "water is denser than gas too, so it must sink through it the same "
+        "way sand does");
+}
+
+static void test_gas_grain_count_is_conserved(void)
+{
+    fixture();
+    for (int y = 1; y < 4; y++) {
+        for (int x = 1; x < 6; x++) {
+            sand_set(&s, x, y, GAS);
+        }
+    }
+    const int expected = sand_count(&s);
+    TEST_ASSERT_EQUAL_INT(15, expected);
+
+    static const int dirs[8][2] = {
+        {0,1}, {1,1}, {1,0}, {1,-1}, {0,-1}, {-1,-1}, {-1,0}, {-1,1},
+    };
+    for (int d = 0; d < 8; d++) {
+        for (int i = 0; i < 20; i++) {
+            sand_step(&s, dirs[d][0], dirs[d][1], 0);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+                "a step must conserve gas grains in every gravity "
+                "direction, the same as it does for sand");
+        }
+    }
+}
+
+static void test_rising_gas_wakes_the_blocks_it_passes_through(void)
+{
+    fixture();
+    sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
+    sand_set(&s, 3, H - 1, GAS);
+
+    /* Straight, unchanging gravity - every step but the first is steady
+     * state, so a block that stops earning BLOCK_ACTIVE from the gas pass
+     * would start reporting settled almost immediately, well before the
+     * grain actually runs out of places to rise to. */
+    for (int i = 0; i < H - 1; i++) {
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_FALSE_MESSAGE(sand_block_settled(&s, 0, 0),
+            "the block must not be marked settled while a gas grain inside "
+            "it is still actively rising step after step - that can only "
+            "happen if the gas pass forgot to wake the block it just moved "
+            "in");
+    }
+}
+
+static void test_gas_scatter_can_be_disabled(void)
+{
+    fixture();
+    sand_set_scatter(&s, 0);
+    sand_set(&s, 3, H - 1, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "with scatter off, gas rises exactly one cell per step in a "
+        "straight line - the same guarantee sand's own fall makes");
+}
+
+static void test_gas_decays_and_disappears_over_time(void)
+{
+    fixture();
+    /* Off by default (see test_gas_grain_count_is_conserved, which relies
+     * on exactly that) - forced to 100% here for a fast, exact test rather
+     * than waiting out the real material figure's low per-step odds. */
+    sand_set_decay(&s, 255);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, H - 1, 0, MAT_GAS),
+        "setup: exactly one gas grain placed");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1,
+        CELL_VARIANT(sand_at(&s, 3, H - 1)),
+        "a freshly spawned gas grain must start at full life, not a random "
+        "shade - random_cell() special-cases a decaying material the same "
+        "way it already does a liquid's fill level");
+
+    /* At a forced 100% chance, life ticks down by exactly one per step -
+     * gone on the step that takes it from 1 to 0, so full life takes
+     * exactly that many steps to clear. */
+    for (int i = 0; i < MATERIAL_VARIANTS - 1; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "gas must decay away to nothing given enough time - unlike every "
+        "other material, whose grain count is conserved forever (see "
+        "test_gas_grain_count_is_conserved)");
+}
+
+static void test_gas_decaying_away_marks_its_row_dirty(void)
+{
+    dirty_fixture();
+    sand_set_decay(&s, 255);
+    sand_set_buoyancy(&s, 0);   /* stay put, so the vanish lands at a
+                                 * known row instead of wherever it drifted */
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 4, 0, MAT_GAS),
+        "setup: exactly one gas grain placed");
+    memset(dirty, 0, sizeof(dirty));
+
+    for (int i = 0; i < MATERIAL_VARIANTS - 1; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "setup: the grain must have decayed away by now");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[4],
+        "the row a gas grain decayed away in must be marked dirty, or its "
+        "last colour stays on the panel forever after the cell itself is "
+        "already empty - tick_gas_decay()'s vanish branch must call "
+        "mark_rows() the same way its tick-down branch already does");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -2802,6 +3073,19 @@ void run_sand_suite(void)
     RUN_TEST(test_a_settled_pool_does_not_flicker);
     RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
     RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
+
+    RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
+    RUN_TEST(test_gas_falls_when_the_board_is_inverted);
+    RUN_TEST(test_gas_rises_diagonally_under_tilted_gravity);
+    RUN_TEST(test_gas_is_blocked_by_a_stone_ceiling);
+    RUN_TEST(test_gas_disperses_across_a_ceiling);
+    RUN_TEST(test_sand_sinks_through_gas);
+    RUN_TEST(test_water_sinks_through_gas);
+    RUN_TEST(test_gas_grain_count_is_conserved);
+    RUN_TEST(test_rising_gas_wakes_the_blocks_it_passes_through);
+    RUN_TEST(test_gas_scatter_can_be_disabled);
+    RUN_TEST(test_gas_decays_and_disappears_over_time);
+    RUN_TEST(test_gas_decaying_away_marks_its_row_dirty);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
