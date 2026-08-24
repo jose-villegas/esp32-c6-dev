@@ -1324,6 +1324,70 @@ static void test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_th
     free(rows);
 }
 
+/* A mass wake (jostle, or gravity-direction change) resets every block
+ * at once - the single most expensive step the simulation pays,
+ * confirmed on real hardware. compute_settled_bit()'s staggered release
+ * (BLOCK_STAGGER_HOLD) spreads that across a few steps instead: block-
+ * row 0 releases immediately, every row after it one per step. Checked
+ * directly against sand_block_staggered() rather than inferred from
+ * grain positions - a settled pile's own physics already makes its
+ * most-buried region the last to move regardless of staggering, which
+ * would confound a position-based check with the mechanism actually
+ * being tested. */
+static void test_flipping_gravity_stages_the_release_across_block_rows(void)
+{
+    uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
+    uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
+    uint8_t *rows   = malloc((size_t)STRESS_H);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(rows);
+
+    sand_t stress;
+    sand_init(&stress, cells, STRESS_W, STRESS_H, 321u);
+    sand_enable_sleeping(&stress, blocks, rows);
+
+    TEST_ASSERT_TRUE_MESSAGE(STRESS_BLOCK_ROWS > 1,
+        "this test needs a grid tall enough to span more than one "
+        "block-row, or staggering never engages at all");
+
+    for (int y = 0; y < STRESS_H / 2; y++) {
+        for (int x = STRESS_W / 4; x < (STRESS_W * 3) / 4; x++) {
+            sand_set(&stress, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    for (int i = 0; i < 60; i++) {
+        sand_step(&stress, 0, 1000, 0);
+    }
+
+    /* The flip itself - triggers the full reset and holds every row but
+     * 0. Row 0 must be released already; every other row must not be. */
+    sand_step(&stress, 0, -1000, 0);
+
+    TEST_ASSERT_FALSE_MESSAGE(sand_block_staggered(&stress, 0, 0),
+        "block-row 0 must release immediately, not wait its turn");
+    for (int by = 1; by < STRESS_BLOCK_ROWS; by++) {
+        TEST_ASSERT_TRUE_MESSAGE(sand_block_staggered(&stress, 0, by),
+            "every row but 0 must start held right after the flip");
+    }
+
+    /* One more step per remaining row - each should release exactly one
+     * additional row, in order, never skipping or double-releasing. */
+    for (int by = 1; by < STRESS_BLOCK_ROWS; by++) {
+        sand_step(&stress, 0, -1000, 0);
+        TEST_ASSERT_FALSE_MESSAGE(sand_block_staggered(&stress, 0, by),
+            "this row's turn has come - it must be released by now");
+        for (int later = by + 1; later < STRESS_BLOCK_ROWS; later++) {
+            TEST_ASSERT_TRUE_MESSAGE(sand_block_staggered(&stress, 0, later),
+                "a later row must not release early, ahead of its turn");
+        }
+    }
+
+    free(cells);
+    free(blocks);
+    free(rows);
+}
+
 /* --- scatter -------------------------------------------------------------- */
 
 /* Measures how wide a falling stream has become, in occupied columns. */
@@ -2552,13 +2616,26 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 
     const int64_t start = esp_timer_get_time();
     const int steps = 20;
+    int64_t worst = 0;
     for (int i = 0; i < steps; i++) {
+        const int64_t step_start = esp_timer_get_time();
         sand_step(&real, 0, 1000, 0);
+        const int64_t step_us = esp_timer_get_time() - step_start;
+        if (step_us > worst) {
+            worst = step_us;
+        }
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step",
-             REAL_W, REAL_H, (long long)per_step);
+    /* Average alongside worst-single-step: staggering a mass wake across
+     * several steps (BLOCK_STAGGER_HOLD, sand.c) does not change the
+     * average - the same total work still happens somewhere in this
+     * window - only the worst step, which the average alone cannot show.
+     * No budget asserted on this yet; establishing what it actually is,
+     * before and after, is the point for now. */
+    ESP_LOGI("device_tests", "water flowing on %dx%d: %lld us per step, "
+             "%lld us worst step", REAL_W, REAL_H, (long long)per_step,
+             (long long)worst);
 
     free(big);
     free(rows);
@@ -2667,14 +2744,23 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
     /* Flip - straight up instead of straight down. */
     const int64_t start = esp_timer_get_time();
     const int steps = 20;
+    int64_t worst = 0;
     for (int i = 0; i < steps; i++) {
+        const int64_t step_start = esp_timer_get_time();
         sand_step(&real, 0, -1000, 0);
+        const int64_t step_us = esp_timer_get_time() - step_start;
+        if (step_us > worst) {
+            worst = step_us;
+        }
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
+    /* See test_a_screen_of_water_fits_in_the_frame_budget's comment on
+     * why the worst step is logged alongside the average - this is the
+     * one staggering (BLOCK_STAGGER_HOLD, sand.c) actually targets. */
     ESP_LOGI("device_tests", "gravity flip on a %d-grain pile, %dx%d: %lld us "
-                             "per step", grains, REAL_W, REAL_H,
-             (long long)per_step);
+                             "per step, %lld us worst step", grains, REAL_W,
+             REAL_H, (long long)per_step, (long long)worst);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(grains, sand_count(&real),
         "flipping gravity must conserve grains too");
@@ -2743,6 +2829,7 @@ void run_sand_suite(void)
     RUN_TEST(test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks);
     RUN_TEST(test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size);
     RUN_TEST(test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size);
+    RUN_TEST(test_flipping_gravity_stages_the_release_across_block_rows);
 
     RUN_TEST(test_a_cell_carries_both_material_and_variant);
     RUN_TEST(test_stone_never_moves);

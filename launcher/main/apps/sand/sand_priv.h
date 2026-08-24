@@ -90,11 +90,33 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
  * under one may not be settled under the other. BLOCK_ACTIVE is transient,
  * cleared at the start of every sand_step() and finalised into the settled
  * bits at the very end - see compute_settled_bit() and the finalisation
- * pass in sand_step(), both in sand.c. All three fit in one byte
- * (block_state has no other bits to share with, unlike row_state). */
+ * pass in sand_step(), both in sand.c.
+ *
+ * BLOCK_STAGGER_HOLD: a block whose settled bits are already 0 (known to
+ * need re-examining) but is deliberately not being walked yet - waiting
+ * for its block-row's turn in the staggered release that follows a mass
+ * wake (a jostle or gravity-direction change, which resets every block
+ * at once). Spreads the single most expensive step after a big
+ * disturbance across a few steps instead of paying it all at once - see
+ * compute_settled_bit()'s own comment. All four bits fit in one byte
+ * (block_state has no other bits to share with, unlike row_state).
+ *
+ * MEASURED TRADE-OFF, confirmed by direct interactive testing (not just
+ * the synthetic device tests): flip's worst single step genuinely beats
+ * the pre-staggering average, a real improvement. Water's worst step
+ * does not improve, and a fully settled/idle screen gets measurably
+ * worse (re-examining a whole released block-row of packed, maximally-
+ * buried sand is expensive even when nothing moves) - net negative
+ * there, with nothing to offset it. Kept on its own branch rather than
+ * merged, for exactly that reason - not a blanket win. See docs/Notes/
+ * Simulation-Lessons.md's "The fifth attempt" section for the full
+ * numbers and the (unconfirmed) live-accelerometer risk this was
+ * originally suspected of, before direct device testing did not
+ * reproduce it. */
 #define BLOCK_SETTLED_NEAREST 0x1
 #define BLOCK_SETTLED_OTHER   0x2
 #define BLOCK_ACTIVE          0x4
+#define BLOCK_STAGGER_HOLD    0x8
 
 static inline int block_of(const sand_t *s, int x, int y)
 {

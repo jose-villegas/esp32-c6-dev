@@ -90,6 +90,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->block_rows  = (h + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
     s->last_load_dx = 0;
     s->last_load_dy = 0;
+    s->stagger_rows_remaining = 0;
     s->scatter      = 0;
     s->mom_x_q8 = 0;
     s->mom_y_q8 = 0;
@@ -122,6 +123,7 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows)
     }
     s->last_load_dx = 0;
     s->last_load_dy = 0;
+    s->stagger_rows_remaining = 0;
 }
 
 bool sand_block_settled(const sand_t *s, int bx, int by)
@@ -131,6 +133,14 @@ bool sand_block_settled(const sand_t *s, int bx, int by)
     }
     return (s->block_state[by * s->block_cols + bx] &
            (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
+}
+
+bool sand_block_staggered(const sand_t *s, int bx, int by)
+{
+    if (s->block_state == NULL) {
+        return false;
+    }
+    return (s->block_state[by * s->block_cols + bx] & BLOCK_STAGGER_HOLD) != 0;
 }
 
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
@@ -155,6 +165,7 @@ void sand_clear(sand_t *s)
     if (s->block_state != NULL) {
         memset(s->block_state, 0, (size_t)s->block_cols * (size_t)s->block_rows);
     }
+    s->stagger_rows_remaining = 0;
 }
 
 cell_t sand_at(const sand_t *s, int x, int y)
@@ -812,6 +823,45 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                      density, mat, driven);
 }
 
+/* Sets BLOCK_STAGGER_HOLD on every block outside row 0, right after a
+ * mass wake's full reset - split out of compute_settled_bit() purely to
+ * keep its own complexity down. Row 0 stays released immediately (always,
+ * regardless of gravity's actual sign - simplest to implement and
+ * correctness-independent, since a held block is only ever delayed, never
+ * incorrectly skipped forever; see BLOCK_STAGGER_HOLD's own comment).
+ * s->stagger_rows_remaining then tracks how many more rows still need
+ * releasing, one per subsequent step - see release_next_stagger_row(). */
+static void hold_non_leading_rows(sand_t *s)
+{
+    for (int by = 1; by < s->block_rows; by++) {
+        for (int bx = 0; bx < s->block_cols; bx++) {
+            s->block_state[by * s->block_cols + bx] |= BLOCK_STAGGER_HOLD;
+        }
+    }
+    s->stagger_rows_remaining = (uint8_t)(s->block_rows - 1);
+}
+
+/* Releases the next held block-row, one per call - compute_settled_bit()
+ * calls this once every non-reset step until stagger_rows_remaining
+ * reaches 0, so every row is fully released within block_rows - 1 steps
+ * of the triggering mass wake, unconditionally, regardless of activity
+ * elsewhere. That bound is what makes staggering safe: a held block's
+ * grains simply do not move on steps where they are held, not stuck
+ * forever - the same "eventual, guaranteed within N steps" shape as
+ * any_neighbor_active()'s own one-step bound, just wider. */
+static void release_next_stagger_row(sand_t *s)
+{
+    if (s->stagger_rows_remaining == 0) {
+        return;
+    }
+    const int by = s->block_rows - s->stagger_rows_remaining;
+    for (int bx = 0; bx < s->block_cols; bx++) {
+        s->block_state[by * s->block_cols + bx] &=
+            (uint8_t)~BLOCK_STAGGER_HOLD;
+    }
+    s->stagger_rows_remaining--;
+}
+
 /* Sleeping is off entirely when block_state does not exist. Otherwise, wakes
  * every block when the grid is being shaken or the settle-relevant direction
  * has changed underneath it - either can free a grain that had nothing to do
@@ -827,7 +877,17 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
  * reset above already did): that bit gets set fresh as this step's sweep
  * and liquid pass touch blocks, and is read once, at the very end of
  * sand_step(), to decide which blocks earned the settled bit this step -
- * see the finalisation pass there. */
+ * see the finalisation pass there.
+ *
+ * A full reset is also a mass wake - every block becomes eligible for a
+ * full walk on the exact same step, which is the single most expensive
+ * step the simulation ever pays (confirmed on real hardware: this is what
+ * dominates the flip/water frame-budget benchmarks). hold_non_leading_rows()
+ * spreads that release across a few steps instead - see its own comment,
+ * and release_next_stagger_row()'s, for why this cannot strand a grain.
+ * Measured trade-off, not a blanket win - see BLOCK_STAGGER_HOLD's own
+ * comment in sand_priv.h for the numbers and why this stays on its own
+ * branch rather than merged. */
 static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
                                    int load_dx, int load_dy)
 {
@@ -839,10 +899,12 @@ static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
     if (jostle > 0 ||
         load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
         memset(s->block_state, 0, (size_t)n);
+        hold_non_leading_rows(s);
     } else {
         for (int i = 0; i < n; i++) {
             s->block_state[i] &= (uint8_t)~BLOCK_ACTIVE;
         }
+        release_next_stagger_row(s);
     }
     s->last_load_dx = load_dx;
     s->last_load_dy = load_dy;
@@ -958,9 +1020,16 @@ static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
     block_x_order(s->block_cols, x_step, &bx_from, &bx_to, &bx_step);
 
     for (int bx = bx_from; bx != bx_to; bx += bx_step) {
-        if (settled_bit != 0 &&
-            (s->block_state[ctx.by * s->block_cols + bx] & settled_bit)) {
-            continue;
+        if (settled_bit != 0) {
+            const uint8_t block_bits =
+                s->block_state[ctx.by * s->block_cols + bx];
+            /* Settled under this step's direction, or held back for its
+             * block-row's turn after a mass wake (BLOCK_STAGGER_HOLD -
+             * see compute_settled_bit()) - either way, nothing here gets
+             * walked this step. */
+            if ((block_bits & settled_bit) || (block_bits & BLOCK_STAGGER_HOLD)) {
+                continue;
+            }
         }
         step_one_block(&ctx, bx);
     }
@@ -976,7 +1045,13 @@ static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
  * SAND_BLOCK_H rows, each swept by a separate step_one_row() call, so
  * whether anything moved in it cannot be known until every row
  * belonging to it has been visited - which, for a block, only happens
- * once across the entire sweep. */
+ * once across the entire sweep.
+ *
+ * A block still held back by BLOCK_STAGGER_HOLD (compute_settled_bit())
+ * is never eligible to earn the settled bit here, whatever
+ * any_neighbor_active() says - its cells have not been examined at all
+ * yet this wake event, so settling it now would leave it skipped even
+ * after its hold releases, silently undoing the stagger's own bound. */
 static void finalize_settling(sand_t *s, uint8_t settled_bit)
 {
     if (s->block_state == NULL) {
@@ -985,7 +1060,7 @@ static void finalize_settling(sand_t *s, uint8_t settled_bit)
     for (int by = 0; by < s->block_rows; by++) {
         for (int bx = 0; bx < s->block_cols; bx++) {
             const int i = by * s->block_cols + bx;
-            if (s->block_state[i] & BLOCK_ACTIVE) {
+            if (s->block_state[i] & (BLOCK_ACTIVE | BLOCK_STAGGER_HOLD)) {
                 continue;
             }
             if (any_neighbor_active(s, bx, by)) {

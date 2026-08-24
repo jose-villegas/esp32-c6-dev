@@ -91,6 +91,13 @@ typedef struct {
 
     int      last_load_dx, last_load_dy;
 
+    /* How many more steps compute_settled_bit() (sand.c) still has to
+     * release a block-row of BLOCK_STAGGER_HOLD (sand_priv.h) after a
+     * mass-wake (a jostle or gravity-direction change resets every
+     * block at once). 0 means no stagger in progress - every row
+     * already released, or none ever held. */
+    uint8_t  stagger_rows_remaining;
+
     int      scatter;   /* see sand_set_scatter() */
 } sand_t;
 
@@ -149,6 +156,16 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows);
  * app_sand.c's count_awake()) can ask the question without reaching into
  * it. Always false if block-sleeping was never enabled. */
 bool sand_block_settled(const sand_t *s, int bx, int by);
+
+/* Diagnostic only, same rules as sand_block_settled() above: whether
+ * block (bx, by) is currently held back from a mass-wake's staggered
+ * release (BLOCK_STAGGER_HOLD - see compute_settled_bit()'s comment in
+ * sand.c). Exists so a test can confirm the stagger mechanism itself
+ * engaged and released on schedule, rather than inferring it indirectly
+ * from grain positions, which a settled pile's own physics can
+ * confound (the most-buried region is naturally the last to move
+ * regardless of staggering). */
+bool sand_block_staggered(const sand_t *s, int bx, int by);
 
 /* Out-of-bounds reads return STONE, not empty.
  *

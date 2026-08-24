@@ -607,6 +607,100 @@ that resistance is itself information: it may be evidence the path
 should not exist in that shape at all, not that the next attempt needs
 to be cleverer.
 
+## The fifth attempt: reshaping when work happens, not how much
+
+With the pull-based mechanism in place, two more diagnostic bypasses
+(both temporary, both reverted, correctness-unsafe by design) confirmed
+the remaining flip/water cost was genuine physics, not overhead: the
+burial-depth friction loop (`sand_load_above()`) and the neighbour-wake
+propagation `any_neighbor_active()` correctly triggers both turned out
+to be necessary work, not incidental cost - bypassing either broke
+something real (a settled pile that never re-settles; an avalanche that
+never reaches its neighbours) rather than just running faster.
+
+That left reshaping *when* the unavoidable work happens rather than
+reducing how much of it there is. `compute_settled_bit()`'s full reset
+on a jostle or gravity-direction change makes every block eligible for
+a full walk on the exact same step - almost certainly the single most
+expensive step in the whole flip/water measurement. The idea: stagger
+that release across a few steps (a new `BLOCK_STAGGER_HOLD` bit, released
+one block-row at a time, bounded and unconditional so nothing could be
+stranded - the settled-bit clear itself stayed atomic and immediate,
+only *walking* the newly-eligible blocks was delayed). Correctly
+recognised going in that this could not move the existing average-based
+frame-budget tests (same total work, just spread across more of a fixed
+step count) - the actual target was the single worst step, which needed
+new instrumentation to even see.
+
+**It measured as a real, if mixed, win on the synthetic device tests** -
+flip's average dropped 9638us -> 8343us and its worst step (9333us) came
+in *under* the old average; water's average dropped slightly (16540us ->
+16135us) but its worst step (17662us) went *up*. The real problem showed
+up on `test_a_screen_of_settled_sand_costs_almost_nothing`: 334us -> 1307us,
+a 4x regression on a test whose entire job is catching exactly this
+class of mistake. A host-side diagnostic (reproducing the same scenario
+fast, without a device flash) confirmed there was no logic bug - the
+stagger released cleanly, exactly on schedule, fully draining in three
+steps and staying drained. The mechanism worked exactly as designed. The
+design itself was the problem: releasing a whole block-row at once (12
+blocks, ~12,300 cells at the real screen size) means re-examining that
+much *densely packed, maximally-buried* sand even when nothing there
+will ever move - and per this file's very first lesson, that is the
+single most expensive category of cell to examine. Three such releases,
+even spread thin across fifty measured steps, were enough to blow a
+300us budget by 4x.
+
+**A device got genuinely unresponsive around this same point in the
+session** - the sand app would not reliably open, and boot grew visibly
+slower. Reverted immediately and reflashed `build.release` to get a
+working device back before investigating further, which was the right
+call given the severity, but the *cause* turned out not to be what it
+looked like in the moment. The suspect at the time was live accelerometer
+noise flipping the nearest gravity direction almost every step, each
+flip re-triggering a fresh staggered release before the previous one
+finished draining - a real risk in principle, since `build.diag`'s
+self-test suite had also grown to 14+ seconds around the same time
+(unrelated to staggering - just more tests accumulating across the
+session) and was the far more likely actual explanation for "boot takes
+a while." Reflashing the staggering build as `build.release` afterward
+(no self-test, direct interactive use, gravity driven by the real
+accelerometer exactly as feared) did **not** reproduce anything close to
+unresponsive - it worked, with the expected staggering artifact plainly
+visible (a block-row visibly floating for a frame before catching up)
+and, if anything, a subjective impression of slightly more stable
+framing. The accelerometer-thrash theory was never confirmed; the boot-
+time theory was never conclusively ruled in either. Worth being honest
+about: a scary symptom got a fast, correct-priority response (revert
+first, investigate after), and the investigation that followed did not
+actually pin down what caused it.
+
+**The real, live-tested verdict is a partial win, not a clean one.**
+Flip's worst step (9333us) beating the *old average* (9638us) held up
+under direct interactive testing - a genuine improvement to the worst
+case you would ever hit. Water did not improve - its worst step (17662us)
+stayed worse than both the old and new average, so staggering's own
+target metric moved the wrong way there. Settled-screen's regression
+(334us -> 1307us) stands with no offsetting benefit, since a static
+screen never had a worst-step problem for staggering to fix. Net
+assessment: worth it only if flip specifically is what matters more than
+water and idle-cost together - not worth it as a blanket change. Kept on
+a branch (`sand-block-row-stagger` off the commit before this section)
+rather than merged, exactly for that reason - `main` stays on the
+pull-based mechanism without staggering.
+
+**The lesson worth keeping is a repeat of the batching attempt's own
+lesson, in a new shape:** a change reasoned to be *correct* (bounded,
+provably cannot strand a grain, fully verified with a fast host-side
+diagnostic before ever touching the device) is still not the same as a
+change reasoned to be *worth it* - the coarse release granularity cost
+more, on a test built specifically to catch that class of regression,
+than the peak-flattening on the one scenario it did help was worth. A
+second, smaller lesson sits alongside it: **when a scary symptom appears
+mid-investigation, fixing it fast is the right call even before the
+cause is understood - but say so plainly once the cause turns out to be
+unconfirmed, rather than letting the first plausible theory harden into
+the record as settled fact.**
+
 ---
 
 ## Related
