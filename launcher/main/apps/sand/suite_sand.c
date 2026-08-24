@@ -922,8 +922,10 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
     /* A stream, falling in the rightmost block-column - two block-columns
      * away, but landing in the SAME row the heap rests in. A row-shaped
      * scheme could not tell these apart: the whole row would be forced
-     * awake by the stream, heap included. */
-    for (int i = 0; i < 40; i++) {
+     * awake by the stream, heap included. LOC_H steps is enough for a
+     * fresh grain to fall the full height of the grid, whatever
+     * SAND_BLOCK_H currently is. */
+    for (int i = 0; i < LOC_H; i++) {
         sand_set(&loc, LOC_W - 1, 0, SAND_FIRST_SHADE);
         sand_step(&loc, 0, 1000, 0);
     }
@@ -951,42 +953,46 @@ static void test_a_block_wakes_when_disturbed_diagonally(void)
 {
     loc_fixture();
 
-    /* A grain at (8,15) - the last row of block(1,1) and the first column
-     * of block-column 1 - fully boxed in on its only three legal moves:
-     * straight down and both diagonals. */
-    sand_set(&loc, 8, 15, SAND_FIRST_SHADE);
-    sand_set(&loc, 8, 16, CELL_MAKE(MAT_STONE, 8));    /* blocks the fall */
-    sand_set(&loc, 9, 16, CELL_MAKE(MAT_STONE, 8));    /* blocks down-right */
-    sand_set(&loc, 7, 16, CELL_MAKE(MAT_STONE, 8));    /* blocks down-left */
-    /* Once (7,16) is freed and the grain slides there, it must stop -
-     * otherwise it keeps sliding on its own three legal moves from its new
-     * position, and the test would be checking the wrong cell. */
-    sand_set(&loc, 7, 17, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, 6, 17, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, 8, 17, CELL_MAKE(MAT_STONE, 8));
+    /* A grain at the last row of block-row 0, first column of
+     * block-column 1 - a true block corner regardless of SAND_BLOCK_W/H -
+     * fully boxed in on its only three legal moves: straight down and
+     * both diagonals. */
+    const int gx = SAND_BLOCK_W;
+    const int gy = SAND_BLOCK_H - 1;
+    sand_set(&loc, gx, gy, SAND_FIRST_SHADE);
+    sand_set(&loc, gx,     gy + 1, CELL_MAKE(MAT_STONE, 8));  /* blocks the fall */
+    sand_set(&loc, gx + 1, gy + 1, CELL_MAKE(MAT_STONE, 8));  /* blocks down-right */
+    sand_set(&loc, gx - 1, gy + 1, CELL_MAKE(MAT_STONE, 8));  /* blocks down-left */
+    /* Once the down-left slide is freed and the grain lands there, it
+     * must stop - otherwise it keeps sliding on its own three legal moves
+     * from its new position, and the test would be checking the wrong
+     * cell. */
+    sand_set(&loc, gx - 1, gy + 2, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, gx - 2, gy + 2, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, gx,     gy + 2, CELL_MAKE(MAT_STONE, 8));
 
     for (int i = 0; i < 100; i++) {
         sand_step(&loc, 0, 1000, 0);
     }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE, sand_at(&loc, 8, 15),
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE, sand_at(&loc, gx, gy),
         "the grain must still be boxed in and asleep before the test begins,"
         " or freeing the down-left slide below proves nothing");
 
-    /* Free the down-left slide - at (7,16), block(0,2): differs from the
-     * grain's own block(1,1) in BOTH x and y, a true diagonal neighbour,
-     * not the orthogonal case an easy bug could special-case by mistake. */
-    sand_erase(&loc, 7, 16, 0);
+    /* Free the down-left slide - differs from the grain's own block in
+     * BOTH x and y, a true diagonal neighbour, not the orthogonal case an
+     * easy bug could special-case by mistake. */
+    sand_erase(&loc, gx - 1, gy + 1, 0);
 
     for (int i = 0; i < 20; i++) {
         sand_step(&loc, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&loc, 8, 15),
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&loc, gx, gy),
         "the grain must have left its old cell");
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, 7, 16),
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, gx - 1, gy + 1),
         "and taken the newly-freed diagonal slide - if the wake only "
         "reached orthogonal neighbours, the grain's own block would still "
-        "be asleep and it would still be sitting at (8,15)");
+        "be asleep and it would still be sitting where it started");
 }
 
 static void test_sideways_tilt_wakes_only_the_disturbed_column(void)

@@ -152,20 +152,105 @@ static inline void wake_blocks_range(sand_t *s, int bx0, int by0, int bx1,
     s->block_state[by1 * s->block_cols + bx1] |= BLOCK_ACTIVE;
 }
 
-/* Edge-aware neighbour reach for one cell coordinate along one axis: `b` is
- * which block it falls in, `local` its position within that block (0-based),
- * `size` the block's extent on this axis, `count` how many blocks exist on
- * this axis. Returns b-1 if the cell sits on the low edge of its block (and
- * a lower block exists), b+1 if it sits on the high edge (and a higher one
- * exists), else just b - the same reasoning as wake_blocks_point() used to
- * have inline, factored out so wake_blocks_points() below can apply it to
- * both ends of a move in one pass without a second function call. */
-static inline int edge_reach(int b, int local, int size, int count, bool low)
+__attribute__((always_inline))
+static inline bool cell_occupied(const sand_t *s, int x, int y)
 {
-    if (low) {
-        return (local == 0 && b > 0) ? b - 1 : b;
+    if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) {
+        return false;
     }
-    return (local == size - 1 && b + 1 < count) ? b + 1 : b;
+    return s->cells[(size_t)y * (size_t)s->w + (size_t)x] != SAND_EMPTY;
+}
+
+/* Which blocks touched cell (x,y) - in block (bx,by), local position
+ * (lx,ly) within it - requires waking: its own block always (written into
+ * the four out-parameters as [bx,bx] by [by,by] to start), widened to
+ * include an edge-adjacent neighbour only if that neighbour's shared-
+ * boundary cell is actually occupied. This is exact, not a heuristic: the
+ * automaton's
+ * whole rule is strictly local - a grain only ever moves to an
+ * immediately adjacent cell - so nothing further into a neighbour block
+ * could possibly react to a move touching (x,y) unless a cell directly
+ * touching (x,y) has something in it. An empty neighbour cell means
+ * nothing to wake, however close (x,y) sits to the boundary.
+ *
+ * This is what makes a free-falling grain scattering through open space -
+ * the common case right after a hard tilt or gravity flip, before a pile
+ * has had a chance to reform - cheap again: it crosses block boundaries
+ * constantly, but almost never lands next to anything, so almost none of
+ * those crossings wake a neighbour. A grain sliding within a dense,
+ * settling pile, where a boundary cell usually does have an occupied
+ * neighbour, keeps paying for the real wake it needs.
+ *
+ * A true corner - (x,y) on both axes' edges at once - is checked as one
+ * unit against all three of its non-owned neighbour cells (both
+ * orthogonal ones and the diagonal), not as two independent per-axis
+ * checks: a grain can rest diagonally against a corner with both
+ * orthogonal neighbours empty, so ANDing two independent axis checks
+ * would miss exactly that case - see
+ * test_a_block_wakes_when_disturbed_diagonally, which exists to catch
+ * it. */
+
+/* One axis' worth of point_reach()'s edge check - split out purely to
+ * keep that function's own complexity down, not because this is reused
+ * beyond its two call sites there (once for x, once for y). Forced
+ * inline: this and reach_corner()/cell_occupied() sit on the hottest
+ * path in the simulation (every grain move), and a real call here -
+ * rather than the compiler folding it into point_reach() - measured as a
+ * real cost on top of the reads themselves. */
+__attribute__((always_inline))
+static inline void reach_axis(const sand_t *s, int lo_cx, int lo_cy,
+                              int hi_cx, int hi_cy, int b, bool at_lo,
+                              bool at_hi, int *lo, int *hi)
+{
+    if (at_lo && cell_occupied(s, lo_cx, lo_cy)) {
+        *lo = b - 1;
+    }
+    if (at_hi && cell_occupied(s, hi_cx, hi_cy)) {
+        *hi = b + 1;
+    }
+}
+
+/* The true-corner case of point_reach()'s edge check, split out for the
+ * same reason as reach_axis() above. Forced inline, same reason too. */
+__attribute__((always_inline))
+static inline void reach_corner(const sand_t *s, int x, int y, int bx,
+                                int by, bool at_lo_x, bool at_lo_y,
+                                int *lo_x, int *hi_x, int *lo_y, int *hi_y)
+{
+    const int nx = at_lo_x ? x - 1 : x + 1;
+    const int ny = at_lo_y ? y - 1 : y + 1;
+
+    if (!cell_occupied(s, nx, y) && !cell_occupied(s, x, ny) &&
+        !cell_occupied(s, nx, ny)) {
+        return;
+    }
+    if (at_lo_x) { *lo_x = bx - 1; } else { *hi_x = bx + 1; }
+    if (at_lo_y) { *lo_y = by - 1; } else { *hi_y = by + 1; }
+}
+
+static inline void point_reach(const sand_t *s, int x, int y, int bx, int by,
+                               int lx, int ly, int *lo_x, int *hi_x,
+                               int *lo_y, int *hi_y)
+{
+    *lo_x = bx; *hi_x = bx; *lo_y = by; *hi_y = by;
+
+    const bool at_lo_x = lx == 0 && bx > 0;
+    const bool at_hi_x = lx == SAND_BLOCK_W - 1 && bx + 1 < s->block_cols;
+    const bool at_lo_y = ly == 0 && by > 0;
+    const bool at_hi_y = ly == SAND_BLOCK_H - 1 && by + 1 < s->block_rows;
+    const bool on_x_edge = at_lo_x || at_hi_x;
+    const bool on_y_edge = at_lo_y || at_hi_y;
+
+    if (on_x_edge && on_y_edge) {
+        reach_corner(s, x, y, bx, by, at_lo_x, at_lo_y, lo_x, hi_x, lo_y, hi_y);
+        return;
+    }
+    if (on_x_edge) {
+        reach_axis(s, x - 1, y, x + 1, y, bx, at_lo_x, at_hi_x, lo_x, hi_x);
+    }
+    if (on_y_edge) {
+        reach_axis(s, x, y - 1, x, y + 1, by, at_lo_y, at_hi_y, lo_y, hi_y);
+    }
 }
 
 /* Something changed at, or between, cells (x0,y0) and (x1,y1) - or a single
@@ -199,14 +284,40 @@ static inline void wake_blocks_points(sand_t *s, int x0, int y0, int x1,
     const int lx0 = x0 - bx0 * SAND_BLOCK_W, ly0 = y0 - by0 * SAND_BLOCK_H;
     const int lx1 = x1 - bx1 * SAND_BLOCK_W, ly1 = y1 - by1 * SAND_BLOCK_H;
 
-    const int lo_x0 = edge_reach(bx0, lx0, SAND_BLOCK_W, s->block_cols, true);
-    const int lo_x1 = edge_reach(bx1, lx1, SAND_BLOCK_W, s->block_cols, true);
-    const int hi_x0 = edge_reach(bx0, lx0, SAND_BLOCK_W, s->block_cols, false);
-    const int hi_x1 = edge_reach(bx1, lx1, SAND_BLOCK_W, s->block_cols, false);
-    const int lo_y0 = edge_reach(by0, ly0, SAND_BLOCK_H, s->block_rows, true);
-    const int lo_y1 = edge_reach(by1, ly1, SAND_BLOCK_H, s->block_rows, true);
-    const int hi_y0 = edge_reach(by0, ly0, SAND_BLOCK_H, s->block_rows, false);
-    const int hi_y1 = edge_reach(by1, ly1, SAND_BLOCK_H, s->block_rows, false);
+    /* The common case, by far: an interior move that stays inside one
+     * ALREADY-AWAKE block (most grain moves do - a fall or slide only
+     * ever crosses one cell). Needs nothing at all: step_one_block()
+     * already sets BLOCK_ACTIVE on its own block directly from
+     * moved_here, independent of this call, and finalisation only ever
+     * reads that bit - not the settled bits this function would
+     * otherwise clear, which would be this same block's own, and so
+     * already redundant with that direct write. The only thing that
+     * could still matter is a NEIGHBOUR noticing, and that is only
+     * possible if one of the two points sits ON this block's shared
+     * edge.
+     *
+     * The already-awake check is not optional: a caller outside the
+     * sweep entirely - sand_set()/sand_erase()/try_spawn_one() disturbing
+     * a block that has been asleep for a while - has no other path that
+     * would clear its settled bits, and skipping unconditionally there
+     * left it asleep forever (caught by
+     * test_sideways_tilt_wakes_only_the_disturbed_column erasing a
+     * settled block's interior cell and expecting it to wake). If the
+     * settled bits are already both 0, nothing needs clearing regardless
+     * of who is calling or when - that is what makes the check safe. */
+    if (bx0 == bx1 && by0 == by1 &&
+        lx0 != 0 && lx0 != SAND_BLOCK_W - 1 &&
+        ly0 != 0 && ly0 != SAND_BLOCK_H - 1 &&
+        lx1 != 0 && lx1 != SAND_BLOCK_W - 1 &&
+        ly1 != 0 && ly1 != SAND_BLOCK_H - 1 &&
+        (s->block_state[by0 * s->block_cols + bx0] &
+         (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) == 0) {
+        return;
+    }
+
+    int lo_x0, hi_x0, lo_y0, hi_y0, lo_x1, hi_x1, lo_y1, hi_y1;
+    point_reach(s, x0, y0, bx0, by0, lx0, ly0, &lo_x0, &hi_x0, &lo_y0, &hi_y0);
+    point_reach(s, x1, y1, bx1, by1, lx1, ly1, &lo_x1, &hi_x1, &lo_y1, &hi_y1);
 
     const int lo_x = lo_x0 < lo_x1 ? lo_x0 : lo_x1;
     const int hi_x = hi_x0 > hi_x1 ? hi_x0 : hi_x1;

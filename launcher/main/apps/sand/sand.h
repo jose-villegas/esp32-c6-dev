@@ -46,8 +46,8 @@
  * don't drag much of a settled pile awake through neighbour-wake
  * expansion, while per-row block-column bookkeeping stays cheap. 4 and 16
  * are the other values worth trying during tuning. */
-#define SAND_BLOCK_W 8
-#define SAND_BLOCK_H 8
+#define SAND_BLOCK_W 16
+#define SAND_BLOCK_H 16
 
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
