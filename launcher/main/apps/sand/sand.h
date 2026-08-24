@@ -47,7 +47,7 @@
  * expansion, while per-row block-column bookkeeping stays cheap. 4 and 16
  * are the other values worth trying during tuning. */
 #define SAND_BLOCK_W 16
-#define SAND_BLOCK_H 16
+#define SAND_BLOCK_H 64
 
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */

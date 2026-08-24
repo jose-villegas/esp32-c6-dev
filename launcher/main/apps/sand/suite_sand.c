@@ -883,10 +883,18 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
  * row-shaped scheme cannot fix it even in principle (wake propagation only
  * ever reached vertically, which stops meaning much once gravity tilts
  * towards horizontal). A grid of its own: 3x3 SAND_BLOCK_W x SAND_BLOCK_H
- * blocks, enough room for "far apart" to mean something. */
-
-#define LOC_W (SAND_BLOCK_W * 3)
-#define LOC_H (SAND_BLOCK_H * 3)
+ * blocks, enough room for "far apart" to mean something.
+ *
+ * Capped rather than a bare SAND_BLOCK_W/H*3: these are `static` arrays,
+ * not malloc'd, and this file is compiled into the device build too - a
+ * block size tuning experiment (SAND_BLOCK_H=64) once grew loc_cells from
+ * 2304 to 9216 bytes, permanent BSS the already-tight device heap (the
+ * framebuffer alone claims 322 of ~424 KiB) cannot spare, and a later,
+ * unrelated-looking malloc failed as a result. The cap only bites at
+ * block sizes well past anything sane to ship; it costs nothing at the
+ * sizes actually being tuned. */
+#define LOC_W (((SAND_BLOCK_W * 3) < 128) ? (SAND_BLOCK_W * 3) : 128)
+#define LOC_H (((SAND_BLOCK_H * 3) < 128) ? (SAND_BLOCK_H * 3) : 128)
 static uint8_t loc_cells[LOC_W * LOC_H];
 #define LOC_BLOCK_COLS ((LOC_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define LOC_BLOCK_ROWS ((LOC_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
