@@ -897,9 +897,23 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
  * open afterwards, long after the self-test suite had finished with it.
  * Freed at the end of every test that mallocs it, same as the existing
  * frame-budget tests below already do - the cap on top is extra headroom
- * for block sizes well past anything sane to ship, not the primary fix. */
-#define LOC_W (((SAND_BLOCK_W * 3) < 128) ? (SAND_BLOCK_W * 3) : 128)
-#define LOC_H (((SAND_BLOCK_H * 3) < 128) ? (SAND_BLOCK_H * 3) : 128)
+ * for block sizes well past anything sane to ship, not the primary fix.
+ *
+ * The cap can't be a flat 128 independent of the block size, though:
+ * test_a_block_wakes_when_disturbed_diagonally() plants its grain at the
+ * last row of block-row 0 and boxes it in two rows further down (gy + 2,
+ * gy = SAND_BLOCK_H - 1), which needs LOC_H >= SAND_BLOCK_H + 2 to even
+ * exist on the grid. A flat 128 cap silently clipped that room away once
+ * SAND_BLOCK_H passed ~42 (128/3), and sand_set() on an out-of-range cell
+ * is a silent no-op (see sand.c), so the containing stones never landed
+ * and the test failed on an assertion that had nothing to do with the
+ * simulation. Same reasoning applies to LOC_W for the gx + 1 stone in that
+ * same test. So the cap floats: never below what that test's geometry
+ * needs, 128 otherwise. */
+#define LOC_W_CAP (((SAND_BLOCK_W + 2) > 128) ? (SAND_BLOCK_W + 2) : 128)
+#define LOC_H_CAP (((SAND_BLOCK_H + 2) > 128) ? (SAND_BLOCK_H + 2) : 128)
+#define LOC_W (((SAND_BLOCK_W * 3) < LOC_W_CAP) ? (SAND_BLOCK_W * 3) : LOC_W_CAP)
+#define LOC_H (((SAND_BLOCK_H * 3) < LOC_H_CAP) ? (SAND_BLOCK_H * 3) : LOC_H_CAP)
 #define LOC_BLOCK_COLS ((LOC_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define LOC_BLOCK_ROWS ((LOC_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 static uint8_t *loc_cells;
@@ -1112,9 +1126,24 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
  * blocks - the direct regression guard for equalise_one_row()'s touched-x
  * range accumulation (see the comment there): getting that range wrong by
  * under-waking would show up here as water that stops levelling partway
- * across. */
+ * across.
+ *
+ * Both the pool and the water source it's fed from scale with SAND_BLOCK_W,
+ * not just its width. A single 1-cell-wide column tall enough for the
+ * default 16-wide block was tried first and does NOT generalise: at
+ * SAND_BLOCK_W=32 (so a pool twice as wide) it still fails to reach the far
+ * wall even with sleeping disabled entirely - that is insufficient water
+ * mass to cross a wider floor within SAND_LIQUID_SIGHT's per-step reach
+ * (see its comment), not a wake/sleep bug. So the source widens along with
+ * the pool (POOL_WATER_COLS) as well as filling whatever vertical room the
+ * pool has (POOL_WATER_H), instead of a fixed height. POOL_H itself grows
+ * with POOL_W too, keeping the basin's proportions - and the vertical room
+ * available to the source - the same at every block size. */
 #define POOL_W (SAND_BLOCK_W * 2)
-#define POOL_H 16
+#define POOL_H (POOL_W / 2)
+#define POOL_WALL_ROWS 3
+#define POOL_WATER_COLS (POOL_W / 8)
+#define POOL_WATER_H (POOL_H - POOL_WALL_ROWS - 1)
 #define POOL_BLOCK_COLS ((POOL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define POOL_BLOCK_ROWS ((POOL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 /* malloc'd/freed per-test rather than static - a static array here is
@@ -1154,17 +1183,17 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
      * edges, water dropped in near the left one. */
     pool_fixture();
 
-    for (int y = POOL_H - 3; y < POOL_H; y++) {
+    for (int y = POOL_H - POOL_WALL_ROWS; y < POOL_H; y++) {
         sand_set(&pool, 0, y, CELL_MAKE(MAT_STONE, 8));
         sand_set(&pool, POOL_W - 1, y, CELL_MAKE(MAT_STONE, 8));
     }
-    /* Twice the column height the original, narrower basin test used - a
-     * wider floor needs proportionally more total mass to reach the far
-     * wall at all, independent of any sleeping/wake question: the same
-     * gap shows up with sleeping off, on this engine's known integer-
-     * diffusion limits (see SAND_LIQUID_SIGHT's own comment). */
-    for (int y = 0; y < 12; y++) {
-        sand_set(&pool, 1, y, CELL_MAKE(MAT_WATER, 8));
+    /* POOL_WATER_COLS columns wide and POOL_WATER_H tall - see the comment
+     * above POOL_W for why both need to scale with the pool rather than
+     * staying a single fixed-height column. */
+    for (int x = 1; x <= POOL_WATER_COLS; x++) {
+        for (int y = 0; y < POOL_WATER_H; y++) {
+            sand_set(&pool, x, y, CELL_MAKE(MAT_WATER, 8));
+        }
     }
 
     for (int i = 0; i < 600; i++) {

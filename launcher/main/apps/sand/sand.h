@@ -40,12 +40,17 @@
 /* Cells per block, on each axis, for the settled-block tracking behind
  * sand_enable_sleeping() - see the comment there. A tunable, like LEAF_SUB
  * in gfx_dirty.h: needs real-device measurement before it's treated as
- * settled. 8 is a starting point - at the shipped 184x224 grid it gives
- * 23x28 = 644 blocks, comfortably small, and roughly the width of a
- * single pour (POUR_RADIUS=5 in app_sand.c), so a pour's active blocks
- * don't drag much of a settled pile awake through neighbour-wake
- * expansion, while per-row block-column bookkeeping stays cheap. 4 and 16
- * are the other values worth trying during tuning. */
+ * settled. 16x64 is a starting point - at the shipped 184x224 grid it
+ * gives ceil(184/16) x ceil(224/64) = 12x4 = 48 blocks, comfortably small,
+ * while per-row block-column bookkeeping stays cheap.
+ *
+ * SAND_BLOCK_W specifically has been swept at 8, 16 and 32 against
+ * test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range in
+ * suite_sand.c (that test's pool and water source scale with
+ * SAND_BLOCK_W, so it stays meaningful at every size instead of only the
+ * shipped one) - all three pass, so any of them remains a live option
+ * pending the real-device measurement above. SAND_BLOCK_H has not been
+ * swept the same way; changing it needs its own pass. */
 #define SAND_BLOCK_W 16
 #define SAND_BLOCK_H 64
 
