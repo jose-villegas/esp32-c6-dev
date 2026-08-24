@@ -42,7 +42,7 @@ static inline uint8_t *dest_row(const sand_t *s, int y)
  *
  * Only ROW_NO_LIQUID (sand_liquid.c) lives in row_state now - the settled
  * bits this used to also clear moved to block_state, see
- * wake_blocks_point()/wake_blocks_range() below. Kept exactly as it was: a
+ * any_neighbor_active()/wake_blocks_range() below. Kept exactly as it was: a
  * row's dry-of-liquid bit is still only
  * worth clearing this conservatively, and narrowing it is unrelated to why
  * settling moved to blocks. */
@@ -102,11 +102,10 @@ static inline int block_of(const sand_t *s, int x, int y)
 }
 
 /* Something changed at, or between, the two blocks covering (bx0,by0) and
- * (bx1,by1), given as BLOCK indices already (see wake_blocks_point() below
- * for the cell-coordinate, single-point version used on the hot path -
- * this one is for equalise_one_row()'s deferred, already-block-shaped
- * range wake, which is called once per row rather than once per transfer
- * and so does not need to be as cheap). Clears BLOCK_SETTLED_NEAREST|OTHER
+ * (bx1,by1), given as BLOCK indices already. Used only by
+ * equalise_one_row()'s deferred, already-block-shaped range wake, which
+ * is called once per row rather than once per transfer. Clears
+ * BLOCK_SETTLED_NEAREST|OTHER
  * for every block in the bounding box of the two, expanded by one block in
  * every direction and clipped to the grid (mirroring wake_span()'s
  * y0-1..y1+1 buffer, now on both axes), so a block bordering the one
@@ -152,266 +151,113 @@ static inline void wake_blocks_range(sand_t *s, int bx0, int by0, int bx1,
     s->block_state[by1 * s->block_cols + bx1] |= BLOCK_ACTIVE;
 }
 
-__attribute__((always_inline))
-static inline bool cell_occupied(const sand_t *s, int x, int y)
+/* Whether any of block (bx,by)'s up to 8 neighbours has BLOCK_ACTIVE set
+ * this step - the pull-based replacement for the old per-move push
+ * mechanism (wake_blocks_points()/point_reach()/reach_axis()/
+ * reach_corner()/should_wake_neighbor()/cell_occupied(), all removed;
+ * see docs/Notes/Simulation-Lessons.md for the two failed attempts at
+ * cheapening that mechanism that led here instead).
+ *
+ * Called once per block per step, from sand_step()'s own finalisation
+ * pass (sand.c) - not once per grain move, so unlike everything it
+ * replaces, it can afford to check unconditionally rather than needing
+ * edge-position/occupancy gating to stay cheap: the cost is already
+ * bounded to O(block_count) regardless of how many grains moved inside
+ * any of them. Not forced inline - it has exactly one caller, a loop
+ * that already isn't inlined into anything hotter. */
+static inline bool any_neighbor_active(const sand_t *s, int bx, int by)
 {
-    if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) {
-        return false;
+    const int lo_x = (bx > 0) ? bx - 1 : bx;
+    const int hi_x = (bx + 1 < s->block_cols) ? bx + 1 : bx;
+    const int lo_y = (by > 0) ? by - 1 : by;
+    const int hi_y = (by + 1 < s->block_rows) ? by + 1 : by;
+
+    for (int ny = lo_y; ny <= hi_y; ny++) {
+        for (int nx = lo_x; nx <= hi_x; nx++) {
+            if (nx == bx && ny == by) {
+                continue;
+            }
+            if (s->block_state[ny * s->block_cols + nx] & BLOCK_ACTIVE) {
+                return true;
+            }
+        }
     }
-    return s->cells[(size_t)y * (size_t)s->w + (size_t)x] != SAND_EMPTY;
+    return false;
 }
 
-/* Whether reaching into block (nbx,nby) - to clear its settled bits -
- * is worth the read needed to decide, given the one cell (cx,cy) that
- * would justify it if occupied (see point_reach()'s own comment for why
- * a single cell is enough).
+/* Marks block (bx,by) - the one containing (x,y) - and its up to 8
+ * neighbours unsettled, unconditionally. Used only by touches that
+ * happen OUTSIDE the gravity sweep (sand_set(), sand_erase(),
+ * try_spawn_one(), and liquid's cross-flow/rebound passes in
+ * sand_liquid.c), where there is no `moved_here`-style bookkeeping for
+ * the pull-based any_neighbor_active() check above to observe on its
+ * own next step.
  *
- * Checks the CANDIDATE'S OWN state first: if it is already awake (its
- * settled bits already 0), reaching it costs nothing extra regardless -
- * the caller's settled-bit clear is already a no-op - so there is
- * nothing to gain by reading grid cells to decide, and this returns true
- * immediately without doing so. Only a genuinely SETTLED neighbour needs
- * the occupancy read, since that is the only case where waking it
- * unnecessarily would cost anything.
+ * Sweep-internal moves need no equivalent: step_one_block() already
+ * sets BLOCK_ACTIVE on its own (source) block directly from
+ * `moved_here`, independent of any wake call, and a grain only ever
+ * moves one cell - so a destination block, if different from the
+ * source, is always that source block's immediate neighbour, which
+ * any_neighbor_active() will find active on its own the moment the
+ * finalisation pass runs. An external touch has no such source block
+ * whose own activity a neighbour could observe, which is why it needs
+ * to expand to neighbours itself, right here, instead.
  *
- * This is what makes the busiest moment in the simulation cheap: right
- * after a jostle or gravity flip, compute_settled_bit() resets every
- * block's settled bits to 0 in one memset, so for the first several
- * steps afterwards - exactly the chaotic, everything-scattering phase a
- * pour-then-flip produces - almost every neighbour this function is
- * asked about is already awake, and the occupancy read underneath never
- * runs at all. */
-__attribute__((always_inline))
-static inline bool should_wake_neighbor(const sand_t *s, int nbx, int nby,
-                                        int cx, int cy)
-{
-    if ((s->block_state[nby * s->block_cols + nbx] &
-        (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) == 0) {
-        return true;
-    }
-    return cell_occupied(s, cx, cy);
-}
-
-/* One axis' worth of point_reach()'s edge check - split out purely to
- * keep that function's own complexity down, not because this is reused
- * beyond its two call sites there (once for x, once for y). Forced
- * inline: this and its neighbours sit on the hottest path in the
- * simulation (every grain move), and a real call here - rather than the
- * compiler folding it into point_reach() - measured as a real cost on
- * top of the reads themselves. */
-__attribute__((always_inline))
-static inline void reach_axis(const sand_t *s, int nb_bx_lo, int nb_by_lo,
-                              int nb_bx_hi, int nb_by_hi, int lo_cx,
-                              int lo_cy, int hi_cx, int hi_cy, int b,
-                              bool at_lo, bool at_hi, int *lo, int *hi)
-{
-    if (at_lo && should_wake_neighbor(s, nb_bx_lo, nb_by_lo, lo_cx, lo_cy)) {
-        *lo = b - 1;
-    }
-    if (at_hi && should_wake_neighbor(s, nb_bx_hi, nb_by_hi, hi_cx, hi_cy)) {
-        *hi = b + 1;
-    }
-}
-
-/* The true-corner case of point_reach()'s edge check, split out for the
- * same reason as reach_axis() above. Forced inline, same reason too.
- *
- * A true corner - (x,y) on both axes' edges at once - is checked as one
- * unit against all three of the diagonal neighbour's justifying cells
- * (both orthogonal ones and the diagonal itself), not as two independent
- * per-axis checks: a grain can rest diagonally against a corner with
- * both orthogonal neighbours empty, so ANDing two independent axis
- * checks would miss exactly that case - see
- * test_a_block_wakes_when_disturbed_diagonally, which exists to catch
- * it. */
-__attribute__((always_inline))
-static inline void reach_corner(const sand_t *s, int x, int y, int bx,
-                                int by, bool at_lo_x, bool at_lo_y,
-                                int *lo_x, int *hi_x, int *lo_y, int *hi_y)
-{
-    const int nbx = at_lo_x ? bx - 1 : bx + 1;
-    const int nby = at_lo_y ? by - 1 : by + 1;
-    const int nx  = at_lo_x ? x - 1  : x + 1;
-    const int ny  = at_lo_y ? y - 1  : y + 1;
-
-    bool wake;
-    if ((s->block_state[nby * s->block_cols + nbx] &
-        (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) == 0) {
-        wake = true;
-    } else {
-        wake = cell_occupied(s, nx, y) || cell_occupied(s, x, ny) ||
-               cell_occupied(s, nx, ny);
-    }
-    if (!wake) {
-        return;
-    }
-    if (at_lo_x) { *lo_x = bx - 1; } else { *hi_x = bx + 1; }
-    if (at_lo_y) { *lo_y = by - 1; } else { *hi_y = by + 1; }
-}
-
-/* Which blocks touched cell (x,y) - in block (bx,by), local position
- * (lx,ly) within it - requires waking: its own block always (written into
- * the four out-parameters as [bx,bx] by [by,by] to start), widened to
- * include an edge-adjacent neighbour only if reaching it is worth doing -
- * see should_wake_neighbor() and reach_corner() above for what that
- * means.
- *
- * Forced inline, and load-bearing this time - see docs/Notes/Simulation-
- * Lessons.md's note on this. Plain `static inline` was NOT enough:
- * objdump showed wake_blocks_points() (this function's only caller) with
- * its own out-of-line `.text.wake_blocks_points` section, two real `jalr`
- * calls into a separately-compiled point_reach(), and a 96-byte stack
- * frame saving ten callee-saved registers - all of bx0/by0/bx1/by1/lx0/
- * ly0/lx1/ly1 forced to survive across the call boundary. Forcing this
- * inline collapsed that to zero calls and a 32-byte, two-register frame,
- * measured to matter directly: ~1.9ms off a 15.7ms worst case. */
-__attribute__((always_inline))
-static inline void point_reach(const sand_t *s, int x, int y, int bx, int by,
-                               int lx, int ly, int *lo_x, int *hi_x,
-                               int *lo_y, int *hi_y)
-{
-    *lo_x = bx; *hi_x = bx; *lo_y = by; *hi_y = by;
-
-    const bool at_lo_x = lx == 0 && bx > 0;
-    const bool at_hi_x = lx == SAND_BLOCK_W - 1 && bx + 1 < s->block_cols;
-    const bool at_lo_y = ly == 0 && by > 0;
-    const bool at_hi_y = ly == SAND_BLOCK_H - 1 && by + 1 < s->block_rows;
-    const bool on_x_edge = at_lo_x || at_hi_x;
-    const bool on_y_edge = at_lo_y || at_hi_y;
-
-    if (on_x_edge && on_y_edge) {
-        reach_corner(s, x, y, bx, by, at_lo_x, at_lo_y, lo_x, hi_x, lo_y, hi_y);
-        return;
-    }
-    if (on_x_edge) {
-        reach_axis(s, bx - 1, by, bx + 1, by, x - 1, y, x + 1, y, bx,
-                  at_lo_x, at_hi_x, lo_x, hi_x);
-    }
-    if (on_y_edge) {
-        reach_axis(s, bx, by - 1, bx, by + 1, x, y - 1, x, y + 1, by,
-                  at_lo_y, at_hi_y, lo_y, hi_y);
-    }
-}
-
-/* Something changed at, or between, cells (x0,y0) and (x1,y1) - or a single
- * cell changed in place, called with the same point twice (sand_set,
- * try_spawn_one, sand_erase). Clears BLOCK_SETTLED_NEAREST|OTHER over the
- * bounding box of both points' blocks, edge-aware instead of always
- * touching a blanket 3x3 neighbourhood per point: a neighbour block only
- * genuinely needs re-examining if a touched cell sits ON the shared
- * boundary with it (checked via its position modulo SAND_BLOCK_W/H), since
- * nothing outside that block could otherwise have anywhere new to go. Most
- * moves touch no edge at all, so this is usually just the block(s) the two
- * points are already in. Sets BLOCK_ACTIVE, unexpanded, on exactly the two
- * touched blocks - that bit is how compute_settled_bit() later knows not
- * to put a genuinely-active block back to sleep, and only a block a move
- * actually happened in counts, not its neighbours (which merely became
- * worth re-examining, not proven active).
- *
- * One call doing both points together, not two separate one-point calls:
- * measured to matter - two calls to a smaller single-point version cost
- * more in call overhead than the blanket 3x3 expansion this replaced saved,
- * on the hot path every grain move goes through.
- *
- * Forced inline for the same reason as point_reach() above - this is
- * mark_move()'s only call to it, and mark_move() itself is inlined at
- * every one of its own ~10 call sites in sand.c/sand_liquid.c, so leaving
- * this one boundary real would have meant paying a call, from deep
- * inside those already-inlined sites, on every grain move.
- *
- * Do NOT chase this same fix one level further by also forcing
- * mark_move() inline - tried, and measured to make everything worse, not
- * better: full-occupancy went from passing to 10568us (over an 8000us
- * budget), and the flip test got slower too. Once wake_blocks_points()
- * folds in here, this function is already large; inlining it again at
- * every one of mark_move()'s ~10 call sites bloats the already-large
- * inlined sand_step() past whatever fits in the chip's 32 KiB instruction
- * cache, and the resulting cache misses cost more than the saved calls
- * were worth - including on code paths, like full-occupancy, that barely
- * touch this function. There is a real ceiling here, found by measuring
- * past it, not by reasoning about it - see docs/Notes/Simulation-
- * Lessons.md. */
-__attribute__((always_inline))
-static inline void wake_blocks_points(sand_t *s, int x0, int y0, int x1,
-                                      int y1)
+ * Unconditional 3x3 expansion, not edge-aware the way point_reach() had
+ * to be: these calls are user-interaction/cross-flow rate, not once per
+ * grain move, so the precision that mechanism needed to stay cheap on
+ * the sweep's hot path is not needed here - see
+ * test_undermining_a_sleeping_pile_collapses_it, which is what would
+ * catch this being narrowed later: erasing a grain must wake whatever
+ * was resting on it in a NEIGHBOURING block, not just the block the
+ * erased cell itself was in, and there is no sweep-internal activity of
+ * its own to fall back on for a block that never gets examined at all. */
+static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
 {
     if (s->block_state == NULL) {
         return;
     }
 
-    /* x0/y0/x1/y1 are always non-negative grid coordinates here, but as
-     * plain int the compiler cannot prove that and falls back to signed
-     * division's round-toward-zero correction sequence instead of a plain
-     * shift for these compile-time-constant-power-of-two divisors (see
-     * docs/Notes/Optimization-Playbook.md's division lesson) - the
-     * unsigned cast tells it what every caller already guarantees.
-     * Measured on the flip/water frame-budget benchmarks: ~2.7-3.1ms on
-     * its own, on top of everything else already inlined into this
-     * function. */
-    const int bx0 = (int)((unsigned)x0 / SAND_BLOCK_W), by0 = (int)((unsigned)y0 / SAND_BLOCK_H);
-    const int bx1 = (int)((unsigned)x1 / SAND_BLOCK_W), by1 = (int)((unsigned)y1 / SAND_BLOCK_H);
-    const int lx0 = x0 - bx0 * SAND_BLOCK_W, ly0 = y0 - by0 * SAND_BLOCK_H;
-    const int lx1 = x1 - bx1 * SAND_BLOCK_W, ly1 = y1 - by1 * SAND_BLOCK_H;
+    /* Unsigned cast for the same reason as elsewhere in this file (see
+     * docs/Notes/Optimization-Playbook.md's division lesson) - x/y are
+     * always non-negative grid coordinates, the compiler just cannot
+     * prove it from a plain int parameter. Low-frequency call, so this
+     * matters far less here than it did on the sweep's old hot path,
+     * but there is no reason to leave it slower than free. */
+    const int bx = (int)((unsigned)x / SAND_BLOCK_W);
+    const int by = (int)((unsigned)y / SAND_BLOCK_H);
 
-    /* The common case, by far: an interior move that stays inside one
-     * ALREADY-AWAKE block (most grain moves do - a fall or slide only
-     * ever crosses one cell). Needs nothing at all: step_one_block()
-     * already sets BLOCK_ACTIVE on its own block directly from
-     * moved_here, independent of this call, and finalisation only ever
-     * reads that bit - not the settled bits this function would
-     * otherwise clear, which would be this same block's own, and so
-     * already redundant with that direct write. The only thing that
-     * could still matter is a NEIGHBOUR noticing, and that is only
-     * possible if one of the two points sits ON this block's shared
-     * edge.
-     *
-     * The already-awake check is not optional: a caller outside the
-     * sweep entirely - sand_set()/sand_erase()/try_spawn_one() disturbing
-     * a block that has been asleep for a while - has no other path that
-     * would clear its settled bits, and skipping unconditionally there
-     * left it asleep forever (caught by
-     * test_sideways_tilt_wakes_only_the_disturbed_column erasing a
-     * settled block's interior cell and expecting it to wake). If the
-     * settled bits are already both 0, nothing needs clearing regardless
-     * of who is calling or when - that is what makes the check safe. */
-    if (bx0 == bx1 && by0 == by1 &&
-        lx0 != 0 && lx0 != SAND_BLOCK_W - 1 &&
-        ly0 != 0 && ly0 != SAND_BLOCK_H - 1 &&
-        lx1 != 0 && lx1 != SAND_BLOCK_W - 1 &&
-        ly1 != 0 && ly1 != SAND_BLOCK_H - 1 &&
-        (s->block_state[by0 * s->block_cols + bx0] &
-         (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) == 0) {
-        return;
-    }
+    const int lo_x = (bx > 0) ? bx - 1 : bx;
+    const int hi_x = (bx + 1 < s->block_cols) ? bx + 1 : bx;
+    const int lo_y = (by > 0) ? by - 1 : by;
+    const int hi_y = (by + 1 < s->block_rows) ? by + 1 : by;
 
-    int lo_x0, hi_x0, lo_y0, hi_y0, lo_x1, hi_x1, lo_y1, hi_y1;
-    point_reach(s, x0, y0, bx0, by0, lx0, ly0, &lo_x0, &hi_x0, &lo_y0, &hi_y0);
-    point_reach(s, x1, y1, bx1, by1, lx1, ly1, &lo_x1, &hi_x1, &lo_y1, &hi_y1);
-
-    const int lo_x = lo_x0 < lo_x1 ? lo_x0 : lo_x1;
-    const int hi_x = hi_x0 > hi_x1 ? hi_x0 : hi_x1;
-    const int lo_y = lo_y0 < lo_y1 ? lo_y0 : lo_y1;
-    const int hi_y = hi_y0 > hi_y1 ? hi_y0 : hi_y1;
-
-    for (int wy = lo_y; wy <= hi_y; wy++) {
-        for (int wx = lo_x; wx <= hi_x; wx++) {
-            s->block_state[wy * s->block_cols + wx] &=
+    for (int ny = lo_y; ny <= hi_y; ny++) {
+        for (int nx = lo_x; nx <= hi_x; nx++) {
+            s->block_state[ny * s->block_cols + nx] &=
                 (uint8_t)~(BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER);
         }
     }
-    s->block_state[by0 * s->block_cols + bx0] |= BLOCK_ACTIVE;
-    s->block_state[by1 * s->block_cols + bx1] |= BLOCK_ACTIVE;
+    s->block_state[by * s->block_cols + bx] |= BLOCK_ACTIVE;
 }
 
-/* The row-shaped bookkeeping mark_rows() always did, plus the block-shaped
- * wake above. Every move-reporting call site in sand.c and sand_liquid.c
- * uses this now, except equalise_one_row()'s deferred, batched cross-flow
- * wake, which has a whole row's worth of touched x values rather than one
- * pair of points - see the comment there, and mark_rows() above. */
+/* The row-shaped bookkeeping mark_rows() always did, plus waking the
+ * touched blocks - see wake_block_and_neighbors() above for why this is
+ * only used outside the sweep (sand_set()/sand_erase()/try_spawn_one(),
+ * and liquid's equalise_one_cell()/rebound_one_cell()). The sweep's own
+ * move-reporting call sites (sand.c's try_scatter()/try_fall_or_scatter()/
+ * try_slide()/try_slide_pair(), and move_liquid_grain() in
+ * sand_liquid.c) call mark_rows() directly instead - they need no block
+ * wake of their own at all, since step_one_block()'s existing
+ * `moved_here` bookkeeping already marks the source block active, and
+ * any_neighbor_active() picks that up for its neighbours (including any
+ * different block a move actually landed in, always one of them) on its
+ * own the moment sand_step()'s finalisation pass runs. */
 static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
 {
     mark_rows(s, y0, y1);
-    wake_blocks_points(s, x0, y0, x1, y1);
+    wake_block_and_neighbors(s, x0, y0);
+    wake_block_and_neighbors(s, x1, y1);
 }
 
 /* Defined in sand_liquid.c, called from sand.c's per-cell sweep. The one

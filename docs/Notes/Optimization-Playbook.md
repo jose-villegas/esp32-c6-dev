@@ -286,6 +286,59 @@ rigor is exactly what makes it easy to stop one step too early.
 
 ---
 
+## If a hot path resists optimizing in place, stop optimizing it in place
+
+Two separate, independently-reasonable attempts to cheapen the same
+per-event notification (a mover telling a neighbour something changed,
+once per event) both regressed on real hardware — one for an understood
+reason, one for a reason that was never fully pinned down. After the
+second failure, the useful move was not a third, cleverer variant of the
+same fix. It was asking whether the notification needed to be a *push*
+at all.
+
+It did not. The system already had a periodic, fixed-cost pass running
+regardless of activity (there to decide what could go back to sleep).
+That pass could just as well *pull* the same information — "did
+anything change near me since I last checked?" — instead of relying on
+the event that caused the change to *push* it there. Once the check
+moved from "once per event, cost scales with event count" to "once per
+fixed unit per pass, cost is constant regardless of event count," the
+whole class of problem the two failed attempts were fighting (how to
+make an event-scaled cost cheap) stopped applying: there was no longer
+an event-scaled cost to make cheap. The per-event mechanism, along with
+all the precision machinery it had needed to stay affordable, could be
+deleted outright rather than tuned further.
+
+**The signal to watch for: repeated, independently-motivated failures to
+cheapen the same hot path are information, not bad luck.** Each
+individual attempt can be perfectly well-reasoned and still lose,
+because the path itself — not any specific implementation of it — may be
+the wrong shape for the cost it is trying to pay cheaply. Before a third
+attempt at the same mechanism, ask whether a *different* mechanism could
+answer the same question from somewhere the cost is already bounded
+(a pass that already runs at a fixed rate, a structure that already
+visits every unit once) rather than trying to bound a per-event cost
+directly. Push-to-pull is one concrete shape this takes — an event
+telling every interested party immediately, versus interested parties
+periodically asking whether anything relevant happened — but the general
+move is the same regardless of shape: relocate the check to somewhere
+its cost is already amortised, rather than continuing to shave a cost
+that scales with the thing you cannot control (how often the event
+happens).
+
+**The correctness trap to watch for when making this move:** a pull-based
+check only observes state that something already recorded. If the thing
+that needs to notify a neighbour has no equivalent of the event-driven
+mechanism's own bookkeeping — an external touch with no periodic pass of
+its own already covering it, say — that specific case still needs an
+explicit, if cheap, poke, or it silently stops working for exactly that
+case while every test built around the *common* path keeps passing. Find
+this by re-deriving the design against the sharpest existing test for
+the mechanism being replaced (a corner-case test, not the average case)
+before writing code, not by hoping the test suite catches it after.
+
+---
+
 ## Test and debug code shares your production memory budget
 
 On a target with one shared address space and no virtual memory, a `static`

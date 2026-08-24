@@ -78,15 +78,16 @@ static inline int room_in(cell_t c, uint8_t id)
 /* Give up to `mass` of `mat_id` to the cell at column `tx` of `to_row`, if it
  * exists and has room. Returns how much it actually took.
  *
- * Row-shaped bookkeeping only (mark_rows(), not mark_move()) - the block
- * wake is deliberately NOT done per transfer here. move_liquid_grain()
- * below can call this up to three times for one grain (down, then both
- * slides), and doing a full block-wake on every one of those was most of a
- * measured ~10ms/step regression on a screen-wide water collapse: it
- * consolidates all of one grain's transfers into a single wake instead -
- * see the comment there. mark_rows() itself stays cheap enough (two byte
- * writes, a three-row clear) that calling it up to three times is fine;
- * it's wake_blocks_points()'s bounding-box loop that isn't. */
+ * Row-shaped bookkeeping only (mark_rows()) - no block wake at all, per
+ * transfer or otherwise. move_liquid_grain() below can call this up to
+ * three times for one grain (down, then both slides), and doing a
+ * per-transfer block-wake here was most of a measured ~10ms/step
+ * regression on a screen-wide water collapse back when this called
+ * wake_blocks_points(); that call is gone entirely now (see
+ * move_liquid_grain()'s own comment for why nothing replaced it), so the
+ * old worry does not even apply any more - mark_rows() alone is cheap
+ * enough (two byte writes, a three-row clear) that calling it up to
+ * three times per grain was never the problem. */
 static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
                             int mass, uint8_t mat_id, int y, int ty)
 {
@@ -118,23 +119,11 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * own - because both of those are gravity-ward, and only the main sweep's
  * order guarantees a destination has not been visited yet.
  *
- * The block wake for everything this call touches happens ONCE, at the
- * end, over the bounding box of every destination that actually received
- * mass (see give_mass()'s comment for why) - not once per give_mass()
- * call. The box is small regardless: every destination is one cell away
- * from (x,y), so it is at most 3 cells wide and 2 tall. */
-/* Widens the box [*min_x,*max_x]x[*min_y,*max_y] to also cover (x,y) -
- * split out of move_liquid_grain() below purely to keep its own
- * complexity down, not because this is reused elsewhere. */
-static inline void union_point(int x, int y, int *min_x, int *max_x,
-                               int *min_y, int *max_y)
-{
-    if (x < *min_x) { *min_x = x; }
-    if (x > *max_x) { *max_x = x; }
-    if (y < *min_y) { *min_y = y; }
-    if (y > *max_y) { *max_y = y; }
-}
-
+ * No block wake of its own to do: give_mass() already calls mark_rows()
+ * per transfer, and this grain's own (source) block gets BLOCK_ACTIVE set
+ * by step_one_block()'s `moved_here` from this function's return value,
+ * same as every other kind of grain - see mark_move()'s comment in
+ * sand_priv.h for why nothing further is needed here. */
 bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        int x, int y, int dx, int dy,
                        const int *slide_a, const int *slide_b,
@@ -143,7 +132,6 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const int w = s->w;
     int mass = CELL_VARIANT(grain);
     bool moved = false;
-    int min_tx = x, max_tx = x, min_ty = y, max_ty = y;
 
     /* DOWN first, so a liquid falls before it spreads. */
     const int tx0 = x + dx, ty0 = y + dy;
@@ -151,7 +139,6 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     mass -= down;
     if (down > 0) {
         moved = true;
-        union_point(tx0, ty0, &min_tx, &max_tx, &min_ty, &max_ty);
     }
 
     /* Then DOWN THE SLOPE, both ways.
@@ -170,7 +157,6 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         mass -= given;
         if (given > 0) {
             moved = true;
-            union_point(tx, ty, &min_tx, &max_tx, &min_ty, &max_ty);
         }
     }
 
@@ -179,9 +165,6 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * occupied cell holding nothing. */
     row[x] = (mass > 0) ? CELL_MAKE(mat_id, mass) : CELL_EMPTY;
 
-    if (moved) {
-        wake_blocks_points(s, min_tx, min_ty, max_tx, max_ty);
-    }
     return moved;
 }
 
@@ -410,11 +393,11 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
 
     if (touched) {
         mark_rows(s, y, y);
-        /* Unsigned cast for the same reason as wake_blocks_points()'s own
-         * block-index division (see sand_priv.h) - touched_x0/touched_x1/y
-         * are always non-negative, but as plain int the compiler cannot
-         * prove that and falls back to a signed-division correction
-         * sequence instead of a shift. */
+        /* Unsigned cast for the same division-by-power-of-two reason
+         * documented in docs/Notes/Optimization-Playbook.md -
+         * touched_x0/touched_x1/y are always non-negative, but as plain
+         * int the compiler cannot prove that and falls back to a
+         * signed-division correction sequence instead of a shift. */
         const int by = (int)((unsigned)y / SAND_BLOCK_H);
         wake_blocks_range(s, (int)((unsigned)touched_x0 / SAND_BLOCK_W), by,
                    (int)((unsigned)touched_x1 / SAND_BLOCK_W), by);

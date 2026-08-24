@@ -518,6 +518,93 @@ three new host tests exercising the real, non-block-multiple screen size
 (a permanent, useful regression guard independent of this specific
 attempt), and the tooling lesson above.
 
+## The fourth attempt: stop pushing notifications, start pulling them
+
+Two failed attempts at cheapening the *push*-based mechanism - a mover
+telling its neighbour something happened, once per grain move - both
+touched the same hot path (`wake_blocks_points()`, called from inside
+the sweep) and both regressed. That is the real signal worth reading:
+not "this specific fix was wrong" but "this specific *path* has proven
+harder to safely modify than it looks, twice in a row." The fourth
+attempt does not try a third variant of it. It removes the push
+entirely and answers the same question a different way.
+
+`sand_step()` already runs an O(block_count) finalisation pass at the
+very end of every step - roughly 644 blocks at the real screen size, a
+small, fixed cost regardless of how many grains moved. It decides which
+blocks earn the settled bit by checking `BLOCK_ACTIVE`, a bit
+`step_one_block()` already sets directly whenever anything moves inside
+a block, independent of any wake call. That pass was the natural,
+already-existing, already-cheap place to ask a *pull*-based question
+instead: for every block that was not itself active, did any of its up
+to 8 neighbours become active this step? If so, it does not get to
+settle either. `any_neighbor_active()` (`sand_priv.h`) is that check -
+a plain, unconditional 8-direction bit test, nothing like the
+edge-position-aware, occupancy-gated `point_reach()`/`reach_corner()`/
+`should_wake_neighbor()` machinery the earlier per-move mechanism needed
+to stay cheap. That entire problem does not exist here: the cost is
+already bounded to once per block per step, not once per grain move, so
+there is nothing to gain by narrowing what gets checked.
+
+This is not a coarser version of the thing that failed twice - it is a
+different mechanism, on a different pass, that the sweep's hot path
+never touches at all. A grain only ever moves one cell, so a
+destination block, if different from its source, is always that
+source's immediate neighbour - which means a sweep-internal move needs
+*no* wake call of its own any more: `moved_here` marks the source
+active, and `any_neighbor_active()` picks that up for the destination on
+its own the moment the finalisation pass runs. The only place still
+needing an explicit wake is a touch from *outside* the sweep - `sand_set()`/
+`sand_erase()`/`try_spawn_one()`, and liquid's cross-flow/rebound passes -
+where there is no `moved_here` for the pull-based check to observe.
+Those get a small, unconditional 3x3-block expansion
+(`wake_block_and_neighbors()`) instead of the old edge-aware one - safe
+for the same reason the batching attempt's superset was safe, but
+without that attempt's cost, since these calls are user-interaction/
+cross-flow rate, not once per grain move.
+
+**A real correctness trap found while designing this, not after
+shipping it:** the first draft only expanded the touched block itself
+for external touches, reasoning that the pull-based check would handle
+propagation to neighbours "the same way it does for the sweep." It does
+not - `sand_erase()` undermining a grain resting in a *neighbouring*
+block leaves that neighbour with no `moved_here` activity of its own to
+observe (nothing there moved; the cell that disappeared was in the
+*other* block), so it would stay asleep forever, silently reintroducing
+the exact bug `test_undermining_a_sleeping_pile_collapses_it` exists to
+catch. Caught by re-deriving the design from that test's own scenario
+before writing code, not by the test itself failing - worth remembering
+that the tests catching a regression and the reasoning catching it in
+advance are not the same safety net, and having both mattered here.
+
+**This won, cleanly, on the first attempt** - flip 13053us -> 9638us
+(-26%), water 19562-19703us -> 16540us (-15%, now within ~500us of its
+budget), full-occupancy 6727us (comfortably passing). The only cost:
+settled-screen 319us -> 334us, since a motionless screen now pays one
+8-neighbour check per block every step instead of nothing - a small,
+expected trade (already flagged as the scenario most exposed to this
+change's own O(block_count) cost before it was ever measured), not a
+surprise. A large amount of code came out at the same time -
+`wake_blocks_points()`, `wake_blocks_core()`, `point_reach()`,
+`reach_axis()`, `reach_corner()`, `should_wake_neighbor()`,
+`cell_occupied()` are all gone, along with every register-spilling/
+inlining concern that machinery needed - not just a smaller cost, a
+smaller amount of code to have a cost at all.
+
+**Why this one worked where two similar-sounding ideas did not:**
+both earlier attempts stayed on the same O(grain_count) path and tried
+to make the SAME per-move check cheaper - by batching several into one
+call, or by removing its division. Both changes were entangled with
+whatever made that path expensive in the first place (in one case
+understood - over-waking; in one case never fully diagnosed). This one
+did not try to make the expensive thing cheaper at all - it made the
+expensive thing *disappear*, by noticing the question it was answering
+could be answered somewhere else, already cheap, for free. When a hot
+path resists being optimised in place across multiple honest attempts,
+that resistance is itself information: it may be evidence the path
+should not exist in that shape at all, not that the next attempt needs
+to be cleverer.
+
 ---
 
 ## Related

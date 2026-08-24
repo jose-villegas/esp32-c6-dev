@@ -643,7 +643,7 @@ static bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
         const int ddy  = pick_a ? slide_a[1] : slide_b[1];
 
         if (move_to(row, drow, x, x + ddx, w, grain, density)) {
-            mark_move(s, x, y, x + ddx, y + ddy);
+            mark_rows(s, y, y + ddy);
         }
     }
     return true;
@@ -661,7 +661,7 @@ static bool try_fall_or_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
     }
 
     if (move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_move(s, x, y, x + dx, y + dy);
+        mark_rows(s, y, y + dy);
         return true;
     }
     return false;
@@ -711,12 +711,12 @@ static bool try_slide_pair(sand_t *s, uint8_t *row, int x, int y, int w,
 
     if (first_driven &&
         move_to(row, first_row, x, x + first_dx, w, grain, density)) {
-        mark_move(s, x, y, x + first_dx, y + first_dy);
+        mark_rows(s, y, y + first_dy);
         return true;
     }
     if (second_driven &&
         move_to(row, second_row, x, x + second_dx, w, grain, density)) {
-        mark_move(s, x, y, x + second_dx, y + second_dy);
+        mark_rows(s, y, y + second_dy);
         return true;
     }
     return false;
@@ -748,7 +748,7 @@ static bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
 
     if (!shaken && jostle > 0 &&
         move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_move(s, x, y, x + dx, y + dy);
+        mark_rows(s, y, y + dy);
         return true;
     }
 
@@ -760,7 +760,7 @@ static bool try_slide(sand_t *s, uint8_t *row, uint8_t *prow, uint8_t *arow,
     }
 
     if (shaken && move_to(row, prow, x, x + dx, w, grain, density)) {
-        mark_move(s, x, y, x + dx, y + dy);
+        mark_rows(s, y, y + dy);
         return true;
     }
 
@@ -966,6 +966,38 @@ static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
     }
 }
 
+/* Finalise a step's settling: a block only earns the settled bit if
+ * nothing marked it BLOCK_ACTIVE anywhere in the step just finished -
+ * neither the sweep nor the liquid pass - and none of its up to 8
+ * neighbours did either (any_neighbor_active(), sand_priv.h - the
+ * pull-based replacement for the old per-move wake mechanism; see that
+ * function's own comment). Deferred to here, once, rather than decided
+ * per-row as the old row-shaped design could: a block spans
+ * SAND_BLOCK_H rows, each swept by a separate step_one_row() call, so
+ * whether anything moved in it cannot be known until every row
+ * belonging to it has been visited - which, for a block, only happens
+ * once across the entire sweep. */
+static void finalize_settling(sand_t *s, uint8_t settled_bit)
+{
+    if (s->block_state == NULL) {
+        return;
+    }
+    for (int by = 0; by < s->block_rows; by++) {
+        for (int bx = 0; bx < s->block_cols; bx++) {
+            const int i = by * s->block_cols + bx;
+            if (s->block_state[i] & BLOCK_ACTIVE) {
+                continue;
+            }
+            if (any_neighbor_active(s, bx, by)) {
+                s->block_state[i] &=
+                    (uint8_t)~(BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER);
+            } else {
+                s->block_state[i] |= settled_bit;
+            }
+        }
+    }
+}
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     update_momentum(s, gx, gy);
@@ -1045,20 +1077,5 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * just the sweep's share of it. */
     sand_step_liquids(s, perp_a, perp_b, dx, dy);
 
-    /* Finalise this step's settling: a block only earns the settled bit if
-     * nothing marked it BLOCK_ACTIVE anywhere in the step just finished -
-     * neither the sweep above nor the liquid pass. Deferred to here, once,
-     * rather than decided per-row as the old row-shaped design could:
-     * a block spans SAND_BLOCK_H rows, each swept by a separate
-     * step_one_row() call, so whether anything moved in it cannot be known
-     * until every row belonging to it has been visited - which, for a
-     * block, only happens once across this entire sweep. */
-    if (s->block_state != NULL) {
-        const int n = s->block_cols * s->block_rows;
-        for (int i = 0; i < n; i++) {
-            if (!(s->block_state[i] & BLOCK_ACTIVE)) {
-                s->block_state[i] |= settled_bit;
-            }
-        }
-    }
+    finalize_settling(s, settled_bit);
 }
