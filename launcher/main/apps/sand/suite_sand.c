@@ -10,6 +10,7 @@
  *   '.' empty, 'o' a grain.
  *===========================================================================*/
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "unity.h"
@@ -885,27 +886,48 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
  * towards horizontal). A grid of its own: 3x3 SAND_BLOCK_W x SAND_BLOCK_H
  * blocks, enough room for "far apart" to mean something.
  *
- * Capped rather than a bare SAND_BLOCK_W/H*3: these are `static` arrays,
- * not malloc'd, and this file is compiled into the device build too - a
- * block size tuning experiment (SAND_BLOCK_H=64) once grew loc_cells from
- * 2304 to 9216 bytes, permanent BSS the already-tight device heap (the
- * framebuffer alone claims 322 of ~424 KiB) cannot spare, and a later,
- * unrelated-looking malloc failed as a result. The cap only bites at
- * block sizes well past anything sane to ship; it costs nothing at the
- * sizes actually being tuned. */
+ * Capped rather than a bare SAND_BLOCK_W/H*3, and malloc'd per test rather
+ * than `static`: this file is compiled into the device build too, where a
+ * `static` array is permanent BSS for the whole boot, not just while a
+ * test is running. A block-size tuning experiment (SAND_BLOCK_H=64) once
+ * grew a `static loc_cells` from 2304 to 9216 bytes that way, and the
+ * already-tight device heap (the framebuffer alone claims 322 of ~424 KiB)
+ * could not spare it - not just failing a test, but leaving less heap for
+ * the REST of that same boot, including the real sand app a user might
+ * open afterwards, long after the self-test suite had finished with it.
+ * Freed at the end of every test that mallocs it, same as the existing
+ * frame-budget tests below already do - the cap on top is extra headroom
+ * for block sizes well past anything sane to ship, not the primary fix. */
 #define LOC_W (((SAND_BLOCK_W * 3) < 128) ? (SAND_BLOCK_W * 3) : 128)
 #define LOC_H (((SAND_BLOCK_H * 3) < 128) ? (SAND_BLOCK_H * 3) : 128)
-static uint8_t loc_cells[LOC_W * LOC_H];
 #define LOC_BLOCK_COLS ((LOC_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define LOC_BLOCK_ROWS ((LOC_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-static uint8_t loc_sleep_blocks[LOC_BLOCK_COLS * LOC_BLOCK_ROWS];
-static uint8_t loc_sleep_rows[LOC_H];
-static sand_t  loc;
+static uint8_t *loc_cells;
+static uint8_t *loc_sleep_blocks;
+static uint8_t *loc_sleep_rows;
+static sand_t   loc;
 
+/* Mallocs the three buffers above, fresh, every call - loc_free() below
+ * must be called before the test returns, or the next call here leaks the
+ * previous allocation. */
 static void loc_fixture(void)
 {
+    loc_cells        = malloc((size_t)LOC_W * LOC_H);
+    loc_sleep_blocks = malloc((size_t)LOC_BLOCK_COLS * LOC_BLOCK_ROWS);
+    loc_sleep_rows   = malloc((size_t)LOC_H);
+    TEST_ASSERT_NOT_NULL(loc_cells);
+    TEST_ASSERT_NOT_NULL(loc_sleep_blocks);
+    TEST_ASSERT_NOT_NULL(loc_sleep_rows);
+
     sand_init(&loc, loc_cells, LOC_W, LOC_H, 555u);
     sand_enable_sleeping(&loc, loc_sleep_blocks, loc_sleep_rows);
+}
+
+static void loc_free(void)
+{
+    free(loc_cells);
+    free(loc_sleep_blocks);
+    free(loc_sleep_rows);
 }
 
 static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_each_other(void)
@@ -947,12 +969,15 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
             }
         }
     }
+    const cell_t stream_landed = sand_at(&loc, LOC_W - 1, LOC_H - 1);
+
+    loc_free();
     TEST_ASSERT_TRUE_MESSAGE(left_unchanged,
         "a settled heap must stay undisturbed while an unrelated stream "
         "falls far away in the same row band - block-shaped sleeping must "
         "keep the two apart, which is exactly what a row-shaped scheme "
         "could not do");
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, LOC_W - 1, LOC_H - 1),
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, stream_landed,
         "the stream itself must actually have landed, or this test would "
         "pass for the wrong reason - nothing moving at all");
 }
@@ -995,9 +1020,13 @@ static void test_a_block_wakes_when_disturbed_diagonally(void)
         sand_step(&loc, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&loc, gx, gy),
+    const cell_t old_cell = sand_at(&loc, gx, gy);
+    const cell_t new_cell = sand_at(&loc, gx - 1, gy + 1);
+
+    loc_free();
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, old_cell,
         "the grain must have left its old cell");
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, gx - 1, gy + 1),
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, new_cell,
         "and taken the newly-freed diagonal slide - if the wake only "
         "reached orthogonal neighbours, the grain's own block would still "
         "be asleep and it would still be sitting where it started");
@@ -1043,11 +1072,7 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
         sand_step(&loc, 1000, 0, 0);
     }
 
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&loc, 3, 10),
-        "freeing the left grain's fall, under gravity now pointing along x, "
-        "must let it actually move there - proving the wake reached along "
-        "the now-primary direction of travel, not just vertically the way "
-        "the old row-shaped scheme's wake_span() only ever did");
+    const cell_t left_moved = sand_at(&loc, 3, 10);
 
     bool right_unchanged = true;
     for (int y = 8; y < 12 && right_unchanged; y++) {
@@ -1058,6 +1083,13 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
             }
         }
     }
+
+    loc_free();
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, left_moved,
+        "freeing the left grain's fall, under gravity now pointing along x, "
+        "must let it actually move there - proving the wake reached along "
+        "the now-primary direction of travel, not just vertically the way "
+        "the old row-shaped scheme's wake_span() only ever did");
     TEST_ASSERT_TRUE_MESSAGE(right_unchanged,
         "a disturbance far along x must not reach a settled grain two "
         "block-columns away in the same row, even though x is now the "
@@ -1073,12 +1105,36 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
  * across. */
 #define POOL_W (SAND_BLOCK_W * 2)
 #define POOL_H 16
-static uint8_t pool_cells[POOL_W * POOL_H];
 #define POOL_BLOCK_COLS ((POOL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define POOL_BLOCK_ROWS ((POOL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-static uint8_t pool_sleep_blocks[POOL_BLOCK_COLS * POOL_BLOCK_ROWS];
-static uint8_t pool_sleep_rows[POOL_H];
-static sand_t  pool;
+/* malloc'd/freed per-test rather than static - a static array here is
+ * permanent BSS for the whole device boot in any build that links this
+ * suite (diagnostics), not just while this test runs. See loc_fixture()'s
+ * comment above for the full story; this is the same bug class. */
+static uint8_t *pool_cells;
+static uint8_t *pool_sleep_blocks;
+static uint8_t *pool_sleep_rows;
+static sand_t   pool;
+
+static void pool_fixture(void)
+{
+    pool_cells        = malloc((size_t)POOL_W * POOL_H);
+    pool_sleep_blocks = malloc((size_t)POOL_BLOCK_COLS * POOL_BLOCK_ROWS);
+    pool_sleep_rows   = malloc((size_t)POOL_H);
+    TEST_ASSERT_NOT_NULL(pool_cells);
+    TEST_ASSERT_NOT_NULL(pool_sleep_blocks);
+    TEST_ASSERT_NOT_NULL(pool_sleep_rows);
+
+    sand_init(&pool, pool_cells, POOL_W, POOL_H, 77u);
+    sand_enable_sleeping(&pool, pool_sleep_blocks, pool_sleep_rows);
+}
+
+static void pool_free(void)
+{
+    free(pool_cells);
+    free(pool_sleep_blocks);
+    free(pool_sleep_rows);
+}
 
 static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(void)
 {
@@ -1086,8 +1142,7 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
      * both_ends, just wide enough to span several block-columns and with
      * block-sleeping turned on - that test leaves it off. Walls at both
      * edges, water dropped in near the left one. */
-    sand_init(&pool, pool_cells, POOL_W, POOL_H, 77u);
-    sand_enable_sleeping(&pool, pool_sleep_blocks, pool_sleep_rows);
+    pool_fixture();
 
     for (int y = POOL_H - 3; y < POOL_H; y++) {
         sand_set(&pool, 0, y, CELL_MAKE(MAT_STONE, 8));
@@ -1106,8 +1161,10 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
         sand_step(&pool, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&pool, POOL_W - 2, POOL_H - 1)),
+    const int far_end_material = CELL_MATERIAL(sand_at(&pool, POOL_W - 2, POOL_H - 1));
+
+    pool_free();
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, far_end_material,
         "water poured in at one end must still reach the far end with "
         "block-sleeping on - if equalise_one_row()'s deferred wake under-"
         "ranges what it touches, the far blocks never wake back up and "
