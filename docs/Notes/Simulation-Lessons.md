@@ -176,12 +176,24 @@ rather than deleting:
 
 - ~~Micro-optimising the simulation further. At 3.2 ms worst case, against a
   blit that is usually now under 2 ms, it is the bottleneck only when the
-  whole screen is moving.~~ **No longer holds.** That was sand alone, before
-  water existed as a material. Measured since: `sand_step` (powder) ~5.5-6 ms
-  worst case, but the liquid cross-flow and rebound pass now costs up to
-  ~15 ms against its own 16 ms budget - water, not sand, is the actual
-  bottleneck whenever a body of it is moving. If more simulation performance
-  is worth chasing, that pass is where it is.
+  whole screen is moving.~~ **No longer holds, and this time it actually got
+  chased** (see "`static inline` is a suggestion, not a guarantee" below for
+  the full story) rather than staying a someday-item. ~~That was sand alone,
+  before water existed as a material. Measured since: `sand_step` (powder)
+  ~5.5-6 ms worst case, but the liquid cross-flow and rebound pass now costs
+  up to ~15 ms against its own 16 ms budget - water, not sand, is the actual
+  bottleneck whenever a body of it is moving.~~ **Also stale** - those numbers
+  predate the row-to-block sleeping rewrite and the register-spilling fix
+  below, both of which touch sand and water alike. Current reference points,
+  same 16000 us water budget and a new 8000 us flip-gravity budget that did
+  not exist yet when the above was written: water-collapse 22788 us,
+  gravity-flip (a big settled pile, gravity reversed outright - the real
+  worst case pouring and tilting produces, not the old single-material
+  numbers above) 15733 us. Both still over budget, both real regression
+  guards in `suite_sand.c` now, and both improved substantially without yet
+  being solved - there is more here if anyone picks it back up, and the
+  section below is the place to start rather than re-deriving the same
+  three ruled-out theories again.
 - **IRAM placement of the hot loops.** Espressif
   [recommends it](https://docs.espressif.com/projects/esp-idf/en/stable/esp32c6/api-guides/performance/speed.html)
   for hot functions, and the C6 runs code from a 32 KB read-only flash cache so
@@ -269,6 +281,92 @@ would need per-grain memory. Scaling the whole simulation rate covers what it
 would have bought, and the catch-up cap (2 steps per frame) is the speed limit
 - a grain moves one cell per step, so that cap *is* the maximum distance
 anything can travel between two things the eye sees.
+
+---
+
+## `static inline` is a suggestion, not a guarantee - and guessing at why is a trap
+
+Row-shaped sleeping (the section above) had the same blind spot as row-shaped
+dirty tracking once did: an awake row forced a full-width walk over every
+occupied cell in it, including deep, provably-stuck pile-interior grains, just
+for sharing a row with something active at its edge - measured climbing
+step cost ~2.2x over 45 s of continuous pouring while the *count* of awake
+rows stayed flat. Generalising it to a 2D block grid (see the git history
+around `sand_priv.h`'s `wake_blocks_points()`/`point_reach()` for the design)
+fixed that - and then made the worst cases *worse*: a settled screen that used
+to cost 300 us now cost 613 us, and reversing gravity on a big settled pile,
+the actual worst case pouring and tilting produces, cost 17-21 ms against an
+8000 us budget depending on which fix attempt was live.
+
+Several plausible-sounding theories got ruled out **by measurement, not by
+inspection** - the same discipline as the random-number finding at the top of
+this file, worth restating because it kept paying off:
+
+- `sand_load_above()`'s buried-grain load loop - bypassed entirely, timing
+  unchanged. Not it.
+- `try_slide()` as a whole - bypassed entirely, timing unchanged. Not it.
+- The neighbour-wake logic firing too often - true, but even with it
+  correctly gated to only fire when genuinely needed (an edge-aware
+  neighbour reach, occupancy-checked), the cost barely moved.
+
+What finally explained it needed a tool this project had not reached for
+before: **disassembling the actual built object file.**
+
+```
+riscv32-esp-elf-objdump.exe -t sand.c.obj | grep wake_blocks
+```
+
+showed `wake_blocks_points()` and the `point_reach()` it called sitting in
+their own `.text.point_reach` / `.text.wake_blocks_points` sections - real,
+separately-compiled functions, despite both being declared `static inline` in
+a header. `static inline` only *offers* a function up for inlining; at `-O2`
+the compiler is still free to decline, and here it had, for both of them.
+Disassembling `wake_blocks_points()` itself showed why that mattered: a
+96-byte stack frame, ten callee-saved registers pushed on entry and popped on
+exit (`s0`-`s9`), and two real `jalr` calls into `point_reach()`. Every one of
+`bx0/by0/bx1/by1/lx0/ly0/lx1/ly1` had to survive that call boundary, and
+"survive a call" on this ABI means "live in a callee-saved register, which
+means the prologue must save it and the epilogue must restore it" - paid on
+every single grain move, whether or not that move ever needed to wake a
+neighbour.
+
+`__attribute__((always_inline))` on `point_reach()` - not just `static
+inline`, the actual forcing attribute - collapsed that to zero calls and a
+32-byte, two-register frame. Confirmed by re-running the same objdump, not
+assumed from the timing alone: the standalone `point_reach` symbol disappeared
+entirely, folded into `wake_blocks_points()`. That cost ~1.9 ms off a 15.7 ms
+worst case.
+
+**It does not compound by repeating it.** Inlining `point_reach()` into
+`wake_blocks_points()` made *that* function too large for the compiler to
+keep inlining at its own call site (`mark_move()`), so it went back to being a
+real out-of-line function - one level of the problem re-appeared one level up
+the call chain. Forcing `wake_blocks_points()` inline too fixed that one.
+Chasing the same trick one level further - forcing `mark_move()` inline at
+all ~10 of its own call sites in `sand.c`/`sand_liquid.c` - was tried, and
+made *everything* worse: full-occupancy went from passing to 10568 us over an
+8000 us budget, and the flip test got slower too, not faster. `mark_move()`
+inlined everywhere bloats the already-large inlined `sand_step()` past
+whatever fits in the chip's 32 KB instruction cache (the same cache the
+measurement-noise section above already identifies as the thing that made two
+untouched builds measure 3.2 ms and 3.9 ms) - and the resulting cache misses
+cost more than the saved calls were worth, on paths that barely touch this
+function too.
+
+There is a real ceiling on how far "just inline it" goes on this chip, and it
+was found by measuring past it, not by reasoning about where it should be.
+The rule this leaves behind: when a hot path crosses what should be a free
+`static inline` boundary and the cost does not add up from the logic alone,
+disassemble it before guessing further - and when forcing a call inline wins,
+measure one more level up the call chain before declaring victory, because the
+same problem can simply have moved rather than disappeared.
+
+Net result of the whole investigation: full-occupancy passing again,
+settled-screen 613 us -> 319 us (still over a 300 us budget), water-collapse
+30454 us -> 22788 us (still over 16000 us), gravity-flip 17666 us -> 15733 us
+(still over 8000 us). All four are real, load-bearing regression guards now
+(`suite_sand.c`'s frame-budget tests), not fixed - there is more here if
+anyone picks this back up.
 
 ---
 
