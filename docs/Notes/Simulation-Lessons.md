@@ -530,7 +530,9 @@ attempt does not try a third variant of it. It removes the push
 entirely and answers the same question a different way.
 
 `sand_step()` already runs an O(block_count) finalisation pass at the
-very end of every step - roughly 644 blocks at the real screen size, a
+very end of every step - only 48 blocks at the real screen size (12x4,
+at the 16x64 block dimensions settled on earlier; 644 was the 8x8
+starting size from the original tuning pass, not the shipped one), a
 small, fixed cost regardless of how many grains moved. It decides which
 blocks earn the settled bit by checking `BLOCK_ACTIVE`, a bit
 `step_one_block()` already sets directly whenever anything moves inside
