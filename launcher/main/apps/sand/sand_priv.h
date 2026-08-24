@@ -339,8 +339,17 @@ static inline void wake_blocks_points(sand_t *s, int x0, int y0, int x1,
         return;
     }
 
-    const int bx0 = x0 / SAND_BLOCK_W, by0 = y0 / SAND_BLOCK_H;
-    const int bx1 = x1 / SAND_BLOCK_W, by1 = y1 / SAND_BLOCK_H;
+    /* x0/y0/x1/y1 are always non-negative grid coordinates here, but as
+     * plain int the compiler cannot prove that and falls back to signed
+     * division's round-toward-zero correction sequence instead of a plain
+     * shift for these compile-time-constant-power-of-two divisors (see
+     * docs/Notes/Optimization-Playbook.md's division lesson) - the
+     * unsigned cast tells it what every caller already guarantees.
+     * Measured on the flip/water frame-budget benchmarks: ~2.7-3.1ms on
+     * its own, on top of everything else already inlined into this
+     * function. */
+    const int bx0 = (int)((unsigned)x0 / SAND_BLOCK_W), by0 = (int)((unsigned)y0 / SAND_BLOCK_H);
+    const int bx1 = (int)((unsigned)x1 / SAND_BLOCK_W), by1 = (int)((unsigned)y1 / SAND_BLOCK_H);
     const int lx0 = x0 - bx0 * SAND_BLOCK_W, ly0 = y0 - by0 * SAND_BLOCK_H;
     const int lx1 = x1 - bx1 * SAND_BLOCK_W, ly1 = y1 - by1 * SAND_BLOCK_H;
 
