@@ -942,7 +942,16 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
         sand_step(&loc, 0, 1000, 0);
     }
 
-    uint8_t left_before[SAND_BLOCK_W * LOC_H];
+    /* Heap, not a stack array: at the shipped SAND_BLOCK_W (16) this was a
+     * harmless 2 KB, but it scales with the tunable (see loc_fixture()'s
+     * own comment on SAND_BLOCK_W being worth retuning) and the device's
+     * main task stack is only 3.5 KB total (CONFIG_ESP_MAIN_TASK_STACK_SIZE)
+     * - a wider block size alone was enough to blow it, with a real
+     * stack-protection panic on device that a host run cannot reproduce
+     * (the host stack is megabytes). Found via exactly that: a block-size
+     * tuning sweep this session hit it at SAND_BLOCK_W=32. */
+    uint8_t *left_before = malloc((size_t)SAND_BLOCK_W * LOC_H);
+    TEST_ASSERT_NOT_NULL(left_before);
     for (int y = 0; y < LOC_H; y++) {
         for (int x = 0; x < SAND_BLOCK_W; x++) {
             left_before[y * SAND_BLOCK_W + x] = sand_at(&loc, x, y);
@@ -971,6 +980,7 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
     }
     const cell_t stream_landed = sand_at(&loc, LOC_W - 1, LOC_H - 1);
 
+    free(left_before);
     loc_free();
     TEST_ASSERT_TRUE_MESSAGE(left_unchanged,
         "a settled heap must stay undisturbed while an unrelated stream "
