@@ -7,7 +7,9 @@ logs and `esp_timer` measurements taken in this repo.
 
 Living document: correct it when the hardware disagrees with it.
 
-Split into six files, grown out of what was originally one:
+Split into five files, grown out of what was originally one - a sixth,
+the falling-sand app's own discovery narrative, moved out to
+[`../Sand/`](../Sand/) once that folder existed to hold it properly:
 
 - **[Board-and-Memory.md](Board-and-Memory.md)** — the board's hardware
   inventory, the memory budget with no PSRAM, and the SPI2/SD-card
@@ -19,11 +21,6 @@ Split into six files, grown out of what was originally one:
 - **[Input-and-Sensors.md](Input-and-Sensors.md)** — touch, the IMU's axes
   and its accelerometer/gyroscope split, and the two buttons that are not
   the same kind of device.
-- **[Simulation-Lessons.md](Simulation-Lessons.md)** — the falling-sand
-  app's discovery narrative: the bugs found and the reasoning behind each
-  fix, in the order they came up. See
-  [`../Sand-Simulation.md`](../Sand-Simulation.md) instead for how the
-  simulation works today.
 - **[Flashing-and-Toolchain.md](Flashing-and-Toolchain.md)** — recovering
   an unresponsive board, ESP-IDF version requirements, and the build-flag
   history (`-Og` vs `-O2`, release vs diagnostics).
@@ -38,8 +35,10 @@ Split into six files, grown out of what was originally one:
 
 - [`../Launcher-Architecture.md`](../Launcher-Architecture.md) — how the
   shell and its apps are built on top of the hardware facts here.
-- [`../Sand-Simulation.md`](../Sand-Simulation.md) — the falling-sand app,
-  whose performance numbers and memory choices are shaped directly by the
-  constraints here.
+- [`../Sand/`](../Sand/) — the falling-sand app: how it works today
+  (`Sand-Simulation.md`), the discovery narrative behind it
+  (`Simulation-Lessons.md`), and how to add a material
+  (`Adding-a-Material.md`). Its performance numbers and memory choices
+  are shaped directly by the constraints here.
 - [`../Testing-Guide.md`](../Testing-Guide.md) — how any of this gets
   verified on real hardware.

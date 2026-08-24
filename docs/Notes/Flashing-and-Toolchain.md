@@ -141,5 +141,5 @@ Two things this does expose:
 
 - [Display-and-Rendering.md](Display-and-Rendering.md) — the render-path
   numbers these build settings affect.
-- [Simulation-Lessons.md](Simulation-Lessons.md) — the sand-step numbers these
+- [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) — the sand-step numbers these
   build settings affect.

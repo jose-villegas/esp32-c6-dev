@@ -7,7 +7,7 @@ Everything else in this folder is specific to this board. This file is not —
 it is the general-purpose techniques that came out of optimizing on it,
 written so they travel to a different chip, a different project, or a
 different person. Each one is grounded in a real measurement from this repo
-(the specific numbers live in [Simulation-Lessons.md](Simulation-Lessons.md)
+(the specific numbers live in [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md)
 and [Display-and-Rendering.md](Display-and-Rendering.md)), but the lesson
 itself is not about falling sand or this particular display.
 
@@ -366,7 +366,7 @@ are currently running.
 
 ## Related
 
-- [Simulation-Lessons.md](Simulation-Lessons.md) — the falling-sand app's
+- [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) — the falling-sand app's
   full discovery narrative, including the specific investigation several of
   the techniques above were extracted from.
 - [Display-and-Rendering.md](Display-and-Rendering.md) — the dirty-region

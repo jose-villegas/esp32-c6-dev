@@ -11,7 +11,7 @@ them. For the app-registration mechanics (how `main/apps/*` plugs into the
 shell), see `docs/Launcher-Architecture.md`. For the hardware constraints
 underneath everything here, see `docs/Notes/README.md`. The discovery
 narrative behind the fixes below - the bugs found and the reasoning at the
-time - lives in `docs/Notes/Simulation-Lessons.md`.
+time - lives in `docs/Sand/Simulation-Lessons.md`.
 
 ---
 
@@ -76,7 +76,9 @@ runtime.
 Every grain gets the same rule: try to move the way gravity points; failing
 that, try the two directions either side of it. Angle of repose, heaps that
 collapse when undermined, sand pouring through a gap - none of that is
-modelled explicitly. It all falls out of those three attempts.
+modelled explicitly. It all falls out of those three attempts. (Gas is the
+one exception - the same rule, run against a negated direction, from its
+own pass - see "Gas: the same primitives, upside down" below.)
 
 **The sweep order is the one thing that cannot be wrong.** A grain only ever
 moves into a cell in the gravity-ward half of its neighbourhood, so sweeping
@@ -175,6 +177,36 @@ taking the axis from the *nearest* (non-dithered) direction instead, the
 same fix friction's burial check already used for the identical reason. See
 `test_a_settled_pool_does_not_flicker` in `suite_sand.c`.
 
+## Gas: the same primitives, upside down
+
+The fourth material (`MAT_GAS`/`KIND_GAS`, `sand_gas.c`) rises and
+disperses - literally the water model's shape, reflected: instead of
+"falls, then spreads across the surface it lands on", gas is "rises,
+then spreads across the ceiling it hits". It reuses the exact same
+`try_fall_or_scatter()`/`try_slide()` primitives sand's own gravity-ward
+move already used, called with the direction negated, rather than a
+parallel set of gas-specific movement functions.
+
+**Why it needs a second pass, the same reason cross-flow does.** The main
+sweep's no-double-move guarantee depends on sweeping *against* the
+direction something moves - correct for gravity-ward materials, exactly
+backwards for something moving *against* gravity. `sand_step_gas()` is
+its own pass, called after the main sweep, swept in the reverse row/
+column order, so a rising move lands in already-visited territory
+instead of teleporting to the ceiling in one step.
+
+**Getting the shared code onto both paths cheaply took three attempts,**
+the same "measure on device, don't assume" discipline as
+`SAND_LIQUID_SIGHT` above - full story, exact numbers, and why it matters
+generally (a `static` function turning `extern` silently loses inlining;
+inlining a large call graph into *two* hot call sites can cost more in
+flash-cache pressure than it saves) in
+[`Simulation-Lessons.md`](Simulation-Lessons.md).
+
+See [`Adding-a-Material.md`](Adding-a-Material.md) for the practical
+walkthrough of building this material end to end - the design questions
+that came up, and the mechanical checklist for adding the next one.
+
 ## Momentum and the wall-rebound splash
 
 Everything above reacts to where gravity *points*. Nothing reacted to how
@@ -220,7 +252,7 @@ estimated:
 | Full-screen panel blit | ~9.6 ms | (fixed hardware cost) |
 
 Water, not sand, is the actual bottleneck whenever a body of it is moving -
-see the correction in `docs/Notes/Simulation-Lessons.md`'s "A note on
+see the correction in `docs/Sand/Simulation-Lessons.md`'s "A note on
 measurement noise", which used to say the opposite before water existed as
 a material.
 
@@ -236,7 +268,7 @@ step" and the numbers above:
 - **Bitmasks over flash-table reads, inside a hot loop.** Asking
   `materials[id].kind` per cell is a flash read and a likely cache miss (the
   32 KB code/constant cache on this chip, not a data cache - see
-  `docs/Notes/Simulation-Lessons.md`). Precomputing a 16-bit "is this id a
+  `docs/Sand/Simulation-Lessons.md`). Precomputing a 16-bit "is this id a
   liquid" bitmask once per pass, instead of once per cell, measurably
   mattered: it alone was the difference between a settled screen of sand
   costing 17 us and costing 5.5 ms.
@@ -335,8 +367,11 @@ several small functions instead of one large one.
   into the shell; the folder layout every app follows.
 - `docs/Notes/` - the hardware constraints underneath all of this: the
   memory budget, the flash/RAM cache distinction, panel and touch gotchas.
-  Start at `docs/Notes/README.md`; `docs/Notes/Simulation-Lessons.md`
-  specifically is this app's own discovery narrative.
+  Start at `docs/Notes/README.md`.
+- `docs/Sand/Simulation-Lessons.md` - this app's own discovery narrative,
+  in the same folder as this file.
+- `docs/Sand/Adding-a-Material.md` - the practical how-to for adding a
+  new material, worked through end to end against a real one (gas).
 - `docs/Testing-Guide.md` - how the host and device test suites work, and
   why release builds carry none of the test code.
 - `launcher/tools/cognitive_complexity.py` - the complexity analyzer

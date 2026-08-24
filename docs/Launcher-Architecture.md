@@ -189,7 +189,7 @@ main/apps/sand/
 └── suite_sand.c    its tests                                (pure + a device block)
 ```
 
-See `docs/Sand-Simulation.md` for how the pieces above fit together - the
+See `docs/Sand/Sand-Simulation.md` for how the pieces above fit together - the
 material system, the water model, and why the liquid logic is split into its
 own file.
 
@@ -417,6 +417,6 @@ requires nothing new, but reworking input handling means preserving this.
 - `docs/Notes/` — the hardware constraints underneath all of this: memory
   budget, panel gotchas, touch quirks, flashing and recovery. Start at
   `docs/Notes/README.md`.
-- `docs/Sand-Simulation.md` — the falling-sand app in depth: materials, the
+- `docs/Sand/Sand-Simulation.md` — the falling-sand app in depth: materials, the
   water model, momentum, and why its liquid logic is its own file.
 - `docs/Testing-Guide.md` — how to test any of it.

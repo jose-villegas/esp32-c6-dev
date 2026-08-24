@@ -18,7 +18,7 @@ removing one touches no other file. Currently:
   substantial piece of engineering in this repo: a flash-resident material
   system, a hybrid mass-diffusion water model, gyroscope-driven momentum for
   a wall-rebound splash, and a device-verified performance budget for every
-  hot path. See `docs/Sand-Simulation.md`.
+  hot path. See `docs/Sand/Sand-Simulation.md`.
 - **3D Cube** — a Gouraud-shaded software rasterizer, no GPU.
 - **Diagnostics** — a bench-only hardware self-test report; ships only in
   the diagnostics build, the same one that carries the test suites, never
@@ -51,7 +51,7 @@ this, not a tour. Start wherever your question is:
 | | |
 |---|---|
 | [`docs/Launcher-Architecture.md`](docs/Launcher-Architecture.md) | How the shell and its apps fit together; the three rules that shape everything; how to add an app; why the UI toolkit is microui, not LVGL. |
-| [`docs/Sand-Simulation.md`](docs/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
+| [`docs/Sand/Sand-Simulation.md`](docs/Sand/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
 | [`docs/Notes/`](docs/Notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | How the host and on-device test suites work, and why release builds carry none of the test code. |
 

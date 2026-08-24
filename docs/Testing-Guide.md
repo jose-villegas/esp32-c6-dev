@@ -398,7 +398,7 @@ against.
 
 - `docs/Launcher-Architecture.md` — how an app plugs into the shell, and the
   folder layout the app-suite convention above assumes.
-- `docs/Sand-Simulation.md` — `suite_sand.c` is the largest suite in this
+- `docs/Sand/Sand-Simulation.md` — `suite_sand.c` is the largest suite in this
   codebase; this is what it is actually testing.
 - `docs/Notes/` — the hardware constraints behind the device-only
   performance tests. Start at `docs/Notes/README.md`.

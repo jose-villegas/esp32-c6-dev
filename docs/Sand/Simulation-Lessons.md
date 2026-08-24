@@ -1,13 +1,21 @@
 # Simulation Lessons
 
-Part of the platform notes for the Waveshare ESP32-C6-Touch-AMOLED-1.8 - see
-[`README.md`](README.md) for the full set.
+Part of the falling-sand app's own documentation folder - see
+[`README.md`](README.md) for the full set. Sits alongside, and draws on,
+the platform notes for the Waveshare ESP32-C6-Touch-AMOLED-1.8 at
+[`../Notes/README.md`](../Notes/README.md).
 
-This is the discovery narrative for the falling-sand app - the bugs found and
-the reasoning behind each fix, in the order they came up. For how the
-simulation actually works today, see [`../Sand-Simulation.md`](../Sand-Simulation.md)
-instead; the two are deliberately kept separate rather than merged, since one
-is a reference and the other is a history.
+This is the discovery narrative for how the simulation itself was
+originally built - the bugs found and the reasoning behind each fix, in
+the order they came up, from the very first performance pass through the
+sleeping/friction/timestep design that shipped. For how the simulation
+actually works today, see [`Sand-Simulation.md`](Sand-Simulation.md)
+instead; the two are deliberately kept separate rather than merged, since
+one is a reference and the other is a history. The performance-tuning
+work that came *after* the simulation had already shipped and worked -
+the wake-mechanism rewrite, staggering, block-size tuning, and the gas
+material - has its own narrative, continuing directly from where this one
+ends: [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 ---
 
@@ -15,7 +23,7 @@ is a reference and the other is a history.
 
 The automaton runs a 184x224 grid (a cell per 2x2 pixels - a cell per pixel
 would be 165 KB of grid, and the framebuffer has already taken 322 of the
-chip's ~424 KB, see [Board-and-Memory.md](Board-and-Memory.md)). Worst case is
+chip's ~424 KB, see [Board-and-Memory.md](../Notes/Board-and-Memory.md)). Worst case is
 a grid half full of *falling* grains, where every one attempts a move; a
 settled pile is far cheaper.
 
@@ -40,7 +48,7 @@ unsigned compare.
 ## A variable framerate needs a fixed timestep
 
 Worth writing down, because partial updates *created* this problem (see
-[Display-and-Rendering.md](Display-and-Rendering.md)).
+[Display-and-Rendering.md](../Notes/Display-and-Rendering.md)).
 
 A grain moves one cell per step, so steps-per-second is literally how fast sand
 falls. Stepping once per frame ties that to the framerate - survivable while the
@@ -55,7 +63,7 @@ still.
 
 The general lesson: **anything whose rate matters must be driven by elapsed
 time, not by frame count.** The tilt filter already was, for the same reason -
-see [Input-and-Sensors.md](Input-and-Sensors.md).
+see [Input-and-Sensors.md](../Notes/Input-and-Sensors.md).
 
 ---
 
@@ -263,7 +271,7 @@ gravity is**, so the simulation had exactly two speeds: full and stopped. Sand
 poured at the same rate down a 5-degree slope as a vertical one.
 
 `tilt_strength()` supplies the missing dimension - how much of a g lies in the
-plane, which is sin of the tilt (see [Input-and-Sensors.md](Input-and-Sensors.md))
+plane, which is sin of the tilt (see [Input-and-Sensors.md](../Notes/Input-and-Sensors.md))
 - and the frame loop scales its step rate by it. That is the actual physics (a
 grain on a tray is driven by `g·sin(theta)`), and it means tipping the device
 flat brings the sand smoothly to rest.
@@ -369,12 +377,28 @@ settled-screen 613 us -> 319 us (still over a 300 us budget), water-collapse
 30454 us -> 22788 us (still over 16000 us), gravity-flip 17666 us -> 15733 us
 (still over 8000 us). ~~All four are real, load-bearing regression guards now
 (`suite_sand.c`'s frame-budget tests), not fixed - there is more here if
-anyone picks this back up.~~ Picked back up - see "A guard chain can cost
-more than what it guards" below for the next round, and its current numbers.
+anyone picks this back up.~~ Picked back up - see
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)'s "A
+guard chain can cost more than what it guards" for the next round, and
+its current numbers.
 
 ---
 
-## A guard chain can cost more than what it guards
+## Related
+
+- [`Sand-Simulation.md`](Sand-Simulation.md) — how the simulation works
+  today; this file is how it got there.
+- [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
+  continues directly from here: the wake-mechanism rewrite, staggering,
+  block-size tuning, and the gas material, all measured on real hardware
+  after the simulation above already shipped and worked.
+- [Display-and-Rendering.md](../Notes/Display-and-Rendering.md) — the
+  dirty-tracking machinery this depends on.
+- [Input-and-Sensors.md](../Notes/Input-and-Sensors.md) — the tilt and
+  shake signals consumed here.
+- [Optimization-Playbook.md](../Notes/Optimization-Playbook.md) — the
+  `static inline`/`objdump` finding above generalised into a
+  board-agnostic technique.
 
 Continuing directly from the section above (same two failing benchmarks,
 same tests, no new scenario). The proposal on the table was amortising
@@ -397,7 +421,7 @@ ever turned out to need a neighbour woken.
 That guard chain computes four block indices by dividing `x`/`y` by
 `SAND_BLOCK_W`/`SAND_BLOCK_H` - both compile-time-constant powers of two,
 and both plain `int`. The same bug as the division lesson in
-[Optimization-Playbook.md](Optimization-Playbook.md): the values are
+[Optimization-Playbook.md](../Notes/Optimization-Playbook.md): the values are
 always non-negative grid coordinates in practice, but the compiler cannot
 prove that from a plain `int` parameter, so it falls back to signed
 division's round-toward-zero correction sequence instead of a shift. An
@@ -864,7 +888,7 @@ was already tried.
 tunable ever actually measured" question applies to `gfx_dirty.h`'s
 `LEAF_REFINE_MAX_RUNS` and `row_runs.h`'s `ROW_MAX_RUNS` (both 2), and
 even `GATHER_MAX_PIXELS` (8192) - flagged in
-[Display-and-Rendering.md](Display-and-Rendering.md)'s "still untapped"
+[Display-and-Rendering.md](../Notes/Display-and-Rendering.md)'s "still untapped"
 list as unmeasured, or measured once but never swept the systematic way
 this section describes. The same class of hardcoded-boundary-test bug
 turned up there too (`test_find_gives_up_past_the_cap`,
@@ -878,13 +902,13 @@ result is future work, not started this session.
 
 ## Related
 
-- [`../Sand-Simulation.md`](../Sand-Simulation.md) — how the simulation works
+- [`Sand-Simulation.md`](Sand-Simulation.md) — how the simulation works
   today; this file is how it got there.
-- [Display-and-Rendering.md](Display-and-Rendering.md) — the dirty-tracking
+- [Display-and-Rendering.md](../Notes/Display-and-Rendering.md) — the dirty-tracking
   machinery this depends on.
-- [Input-and-Sensors.md](Input-and-Sensors.md) — the tilt and shake signals
+- [Input-and-Sensors.md](../Notes/Input-and-Sensors.md) — the tilt and shake signals
   consumed here.
-- [Optimization-Playbook.md](Optimization-Playbook.md) — several of the
+- [Optimization-Playbook.md](../Notes/Optimization-Playbook.md) — several of the
   findings above (the objdump-driven inlining fix, the register-spilling
   call boundary, the coarse-skip-structure shape, the test-memory-footprint
   bug) generalised into board-agnostic techniques.

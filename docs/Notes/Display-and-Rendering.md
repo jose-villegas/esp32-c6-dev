@@ -293,7 +293,7 @@ On the simulation side the same dirty information answers "what needs
 redrawing" as well as "what needs sending", which is the point of the
 [dirty-rect approach](https://80.lv/articles/noita-a-game-based-on-falling-sand-simulation)
 Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered
-- see [Simulation-Lessons.md](Simulation-Lessons.md).
+- see [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md).
 
 **A development-only visualizer** makes this concrete on real hardware
 instead of only in synthetic tests: `gfx_set_debug_overlay(true)` (a checkbox
@@ -615,7 +615,7 @@ Both sweeps automated the same way as the sand block-size one: a
 PowerShell script edits the `#define`, runs the host suite as a gate,
 builds, flashes, captures the self-test output, and restores everything
 in a `finally` block regardless of outcome - see the sand simulation's
-own [Simulation-Lessons.md](Simulation-Lessons.md) for the sweep-
+own [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) for the sweep-
 tooling bugs that surfaced building the first one (all equally relevant
 here, since it is the same script pattern).
 
@@ -639,7 +639,7 @@ the ESP32-P4 has the PPA, PSRAM, *and* a real SDMMC host.
 
 - [Board-and-Memory.md](Board-and-Memory.md) — the SPI2 wiring and
   time-multiplexing this all sits on top of.
-- [Simulation-Lessons.md](Simulation-Lessons.md) — how the sand app makes use
+- [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) — how the sand app makes use
   of `gfx_mark_dirty()` and the dirty-row machinery.
 - [Flashing-and-Toolchain.md](Flashing-and-Toolchain.md) — the -O2 build-flag
   history referenced above.

@@ -53,7 +53,7 @@ Recorded where the relevant constant lives, not just here - see
 `sand.h`'s own comment above `SAND_BLOCK_W`/`SAND_BLOCK_H` for the full
 six-pair table, and:
 
-- `docs/Notes/Simulation-Lessons.md`, "The sixth attempt" - the block-
+- `docs/Sand/Simulation-Lessons.md`, "The sixth attempt" - the block-
   size sweep's full story, including two real bugs it surfaced (a
   device-only stack overflow, two test fixtures that broke under this
   same tuning) and the sweep-tooling bugs worth remembering if you're
