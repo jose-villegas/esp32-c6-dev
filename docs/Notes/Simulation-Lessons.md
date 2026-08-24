@@ -378,3 +378,7 @@ anyone picks this back up.
   machinery this depends on.
 - [Input-and-Sensors.md](Input-and-Sensors.md) — the tilt and shake signals
   consumed here.
+- [Optimization-Playbook.md](Optimization-Playbook.md) — several of the
+  findings above (the objdump-driven inlining fix, the register-spilling
+  call boundary, the coarse-skip-structure shape, the test-memory-footprint
+  bug) generalised into board-agnostic techniques.

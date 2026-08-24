@@ -7,7 +7,7 @@ logs and `esp_timer` measurements taken in this repo.
 
 Living document: correct it when the hardware disagrees with it.
 
-Split into five files, grown out of what was originally one:
+Split into six files, grown out of what was originally one:
 
 - **[Board-and-Memory.md](Board-and-Memory.md)** — the board's hardware
   inventory, the memory budget with no PSRAM, and the SPI2/SD-card
@@ -27,6 +27,12 @@ Split into five files, grown out of what was originally one:
 - **[Flashing-and-Toolchain.md](Flashing-and-Toolchain.md)** — recovering
   an unresponsive board, ESP-IDF version requirements, and the build-flag
   history (`-Og` vs `-O2`, release vs diagnostics).
+- **[Optimization-Playbook.md](Optimization-Playbook.md)** — general-purpose
+  performance techniques this board's work turned up, written to travel to
+  other chips and projects rather than staying specific to this one:
+  measuring by deleting code instead of reasoning about it, verifying
+  `static inline` actually inlined with `objdump`, register-spilling call
+  boundaries, and more.
 
 ## Related
 
