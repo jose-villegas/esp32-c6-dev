@@ -448,6 +448,67 @@ static void test_two_far_corners_cost_less_than_a_full_band(void)
         "still cost less than the whole band");
 }
 
+/* Three separated marks, not two - one more than ROW_MAX_RUNS/
+ * LEAF_REFINE_MAX_RUNS (row_runs.h, gfx_dirty.h) currently track - placed
+ * to actually exercise that cap, which test_two_far_corners_cost_less_
+ * than_a_full_band does not: collect_dirty_runs() finds cell-level runs
+ * with a cap of its own (GRID_COLS, effectively unlimited at 4 cells - see
+ * its own comment), not ROW_MAX_RUNS/LEAF_REFINE_MAX_RUNS at all. A mark
+ * in a genuinely separate, non-adjacent cell - like the two-far-corners
+ * test's opposite corners - is handled entirely at that cell level and
+ * never touches this cap, no matter how many marks there are. Cells 0-2
+ * are adjacent, though, so collect_dirty_runs() merges them into ONE
+ * coarse run before leaf refinement (refine_run()/plan_run()) ever gets
+ * involved - splitting THAT merged run into its three real gaps is what
+ * LEAF_REFINE_MAX_RUNS caps.
+ *
+ * At the shipped cap of 2, refine_run() gives up (three isolated leaf
+ * bits, cap 2 - see collect_runs_from_mask()'s own "too fragmented" case)
+ * and plan_run() falls back to run_box()'s coarse union instead - NOT the
+ * whole band, and not even the whole 3-cell span: run_box() unions each
+ * cell's own already-tight cell_x0/x1 box, so the fallback here is one
+ * ~240x64 send spanning just the marks' own extent, still skipping the
+ * untouched cell to its right entirely. That single wider transaction
+ * measured cheaper than the full band by a wide margin even at cap 2 -
+ * given the ~118us fixed cost of a QSPI transaction (see "The blit is
+ * bus-bound" in Display-and-Rendering.md), three separate small sends
+ * under a raised cap are not guaranteed to beat one merged fallback send;
+ * that is exactly the open question a sweep of this cap is for, not
+ * something to assume going in. */
+static void test_three_far_apart_marks_falls_back_at_the_current_cap(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();
+
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x602060));
+    const int64_t full_band = time_present();
+
+    gfx_color_t *fb = gfx_framebuffer();
+    const int size = 15;
+    /* Cells 0, 1 and 2 (COL_WIDTH=92 each) - adjacent, so these merge
+     * into one 276px-wide coarse run, not three separate cell-level ones.
+     * Each mark sits inside its own cell with real room either side, so
+     * the gaps are genuine at the leaf level, not an artifact of landing
+     * right on a cell boundary. */
+    const int xs[3] = { 5, 115, 230 };
+
+    for (int i = 0; i < 3; i++) {
+        for (int y = 0; y < size; y++) {
+            for (int x = 0; x < size; x++) {
+                fb[y * GFX_WIDTH + xs[i] + x] = gfx_rgb(0x602060);
+            }
+        }
+        gfx_mark_dirty(xs[i], 0, size, size);
+    }
+
+    const int64_t three_marks = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, three %dx%d marks %lld us",
+             (long long)full_band, size, size, (long long)three_marks);
+}
+
 /* Two small marks inside the SAME 92px cell, far enough apart to leave a
  * real gap between them - the shape only leaf refinement can split on.
  * test_two_far_corners above lands in different CELLS, which
@@ -603,6 +664,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_narrow_change_costs_less_than_a_full_band);
     RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);
     RUN_TEST(test_two_far_corners_cost_less_than_a_full_band);
+    RUN_TEST(test_three_far_apart_marks_falls_back_at_the_current_cap);
     RUN_TEST(test_two_marks_in_one_cell_cost_less_than_the_coarse_box);
     RUN_TEST(test_drawing_marks_what_it_touched);
 

@@ -220,17 +220,31 @@ static void test_plan_run_finds_a_real_gap_inside_one_cell(void)
     TEST_ASSERT_EQUAL_INT(2, n);
 }
 
+/* Mark width for test_plan_run_rejects_a_split_over_the_gather_budget:
+ * derived from GATHER_MAX_PIXELS/STRIP_HEIGHT (plus a margin) rather than
+ * hardcoded, so the "over budget" case it builds tracks whatever the
+ * budget is tuned to. At today's 8192 this evaluates to 136 - the exact
+ * value the test used before it was made parametric. Valid only while two
+ * such marks, with a gap between them, still fit inside one 4-cell run -
+ * the static assert below catches a GATHER_MAX_PIXELS large enough to
+ * break that, rather than this test silently stopping to mean anything. */
+#define OVER_BUDGET_MARK_W ((GATHER_MAX_PIXELS / STRIP_HEIGHT) + 8)
+
 static void test_plan_run_rejects_a_split_over_the_gather_budget(void)
 {
+    _Static_assert(OVER_BUDGET_MARK_W < (GRID_COLS * COL_WIDTH) / 2 - 20,
+        "GATHER_MAX_PIXELS is too large for two over-budget marks to both "
+        "fit, with a real gap, inside one 4-cell run - this test's "
+        "construction needs rethinking above this budget, not a bigger "
+        "mark");
     fixture();
-    /* Two wide marks (each ~6 leaf columns, avoiding exactly filling any
-     * one cell so every cell stays leaf-eligible) at opposite ends of a
-     * 4-cell run, full strip height - each half, once split, is 138x64 =
-     * 8832 px, over GATHER_MAX_PIXELS (8192). Must fall back to 0 (use the
-     * coarse box) rather than hand back a split gather_and_send()'s
-     * fixed-size buffer cannot hold. */
-    dirty_mark(1, 0, 136, STRIP_HEIGHT);
-    dirty_mark(231, 0, 136, STRIP_HEIGHT);
+    /* Two wide marks at opposite ends of a 4-cell run, full strip height -
+     * each half, once split, is over GATHER_MAX_PIXELS. Must fall back to
+     * 0 (use the coarse box) rather than hand back a split
+     * gather_and_send()'s fixed-size buffer cannot hold. */
+    dirty_mark(1, 0, OVER_BUDGET_MARK_W, STRIP_HEIGHT);
+    dirty_mark(GRID_COLS * COL_WIDTH - 1 - OVER_BUDGET_MARK_W, 0,
+               OVER_BUDGET_MARK_W, STRIP_HEIGHT);
 
     int sx0[LEAF_REFINE_MAX_RUNS], sx1[LEAF_REFINE_MAX_RUNS];
     const int n = plan_run(0, 0, 4, 0, STRIP_HEIGHT, sx0, sx1);

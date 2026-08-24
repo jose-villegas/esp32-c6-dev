@@ -72,11 +72,19 @@ static void test_find_reports_one_run_for_a_fully_occupied_row(void)
 static void test_find_gives_up_past_the_cap(void)
 {
     /* ROW_MAX_RUNS + 1 separate single-cell blobs, each isolated by a gap -
-     * one more than this module ever tries to track individually. */
-    uint8_t row[7] = { 1, 0, 1, 0, 1, 0, 0 };
+     * one more than this module ever tries to track individually. Built
+     * from ROW_MAX_RUNS rather than a hardcoded blob count, so this stays
+     * the right boundary case regardless of the cap's tuned value. */
+    const int width = 2 * (ROW_MAX_RUNS + 1) + 1;
+    uint8_t row[2 * (ROW_MAX_RUNS + 1) + 1];
+    for (int i = 0; i <= ROW_MAX_RUNS; i++) {
+        row[2 * i]     = FULL;
+        row[2 * i + 1] = EMPTY;
+    }
+    row[width - 1] = EMPTY;
     int x0[ROW_MAX_RUNS], x1[ROW_MAX_RUNS];
 
-    TEST_ASSERT_EQUAL_INT(-1, row_runs_find(row, 7, EMPTY, x0, x1));
+    TEST_ASSERT_EQUAL_INT(-1, row_runs_find(row, width, EMPTY, x0, x1));
 }
 
 /* --- row_runs_span_fallback ------------------------------------------------ */
