@@ -254,7 +254,18 @@ static inline void reach_corner(const sand_t *s, int x, int y, int bx,
  * the four out-parameters as [bx,bx] by [by,by] to start), widened to
  * include an edge-adjacent neighbour only if reaching it is worth doing -
  * see should_wake_neighbor() and reach_corner() above for what that
- * means. */
+ * means.
+ *
+ * Forced inline, and load-bearing this time - see docs/Notes/Simulation-
+ * Lessons.md's note on this. Plain `static inline` was NOT enough:
+ * objdump showed wake_blocks_points() (this function's only caller) with
+ * its own out-of-line `.text.wake_blocks_points` section, two real `jalr`
+ * calls into a separately-compiled point_reach(), and a 96-byte stack
+ * frame saving ten callee-saved registers - all of bx0/by0/bx1/by1/lx0/
+ * ly0/lx1/ly1 forced to survive across the call boundary. Forcing this
+ * inline collapsed that to zero calls and a 32-byte, two-register frame,
+ * measured to matter directly: ~1.9ms off a 15.7ms worst case. */
+__attribute__((always_inline))
 static inline void point_reach(const sand_t *s, int x, int y, int bx, int by,
                                int lx, int ly, int *lo_x, int *hi_x,
                                int *lo_y, int *hi_y)
@@ -300,7 +311,27 @@ static inline void point_reach(const sand_t *s, int x, int y, int bx, int by,
  * One call doing both points together, not two separate one-point calls:
  * measured to matter - two calls to a smaller single-point version cost
  * more in call overhead than the blanket 3x3 expansion this replaced saved,
- * on the hot path every grain move goes through. */
+ * on the hot path every grain move goes through.
+ *
+ * Forced inline for the same reason as point_reach() above - this is
+ * mark_move()'s only call to it, and mark_move() itself is inlined at
+ * every one of its own ~10 call sites in sand.c/sand_liquid.c, so leaving
+ * this one boundary real would have meant paying a call, from deep
+ * inside those already-inlined sites, on every grain move.
+ *
+ * Do NOT chase this same fix one level further by also forcing
+ * mark_move() inline - tried, and measured to make everything worse, not
+ * better: full-occupancy went from passing to 10568us (over an 8000us
+ * budget), and the flip test got slower too. Once wake_blocks_points()
+ * folds in here, this function is already large; inlining it again at
+ * every one of mark_move()'s ~10 call sites bloats the already-large
+ * inlined sand_step() past whatever fits in the chip's 32 KiB instruction
+ * cache, and the resulting cache misses cost more than the saved calls
+ * were worth - including on code paths, like full-occupancy, that barely
+ * touch this function. There is a real ceiling here, found by measuring
+ * past it, not by reasoning about it - see docs/Notes/Simulation-
+ * Lessons.md. */
+__attribute__((always_inline))
 static inline void wake_blocks_points(sand_t *s, int x0, int y0, int x1,
                                       int y1)
 {
