@@ -84,6 +84,10 @@ sdkconfig.old
 warnings.txt
 html_report/
 
+# Real-hardware sweep scratch output (CSVs, raw serial captures) - see
+# launcher/tools/sweeps/README.md. The scripts themselves are tracked.
+launcher/tools/sweeps/results/
+
 ### Windows
 # Windows thumbnail cache files
 Thumbs.db
