@@ -410,8 +410,14 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
 
     if (touched) {
         mark_rows(s, y, y);
-        wake_blocks_range(s, touched_x0 / SAND_BLOCK_W, y / SAND_BLOCK_H,
-                   touched_x1 / SAND_BLOCK_W, y / SAND_BLOCK_H);
+        /* Unsigned cast for the same reason as wake_blocks_points()'s own
+         * block-index division (see sand_priv.h) - touched_x0/touched_x1/y
+         * are always non-negative, but as plain int the compiler cannot
+         * prove that and falls back to a signed-division correction
+         * sequence instead of a shift. */
+        const int by = (int)((unsigned)y / SAND_BLOCK_H);
+        wake_blocks_range(s, (int)((unsigned)touched_x0 / SAND_BLOCK_W), by,
+                   (int)((unsigned)touched_x1 / SAND_BLOCK_W), by);
     }
 
     /* Nothing liquid in this row - say so, and skip it next time. Written
