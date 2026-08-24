@@ -754,6 +754,128 @@ variants for reference, unmerged.
 
 ---
 
+## The sixth attempt: the block size itself was still just a guess
+
+The staggering work above answered "why release whole block-rows, when
+the simulation already has finer-grained block structure to work with"
+with a finer release granularity - which didn't pay off. But that
+question had a second half nobody had asked yet: `SAND_BLOCK_W`/
+`SAND_BLOCK_H` (16x64, giving 48 blocks at the real screen size) had
+never been measured at all. It shipped as a guess, and every mass-wake
+cost this whole investigation had been chasing - the `memset()` in
+`compute_settled_bit()`, the `any_neighbor_active()` walk - scales
+directly with block count. Fewer, bigger blocks halve that count for
+free; the question was always whether re-examining a bigger block once
+it wakes costs back what the smaller count saves.
+
+**Automating the sweep paid for itself immediately.** A single
+PowerShell script edits the two `#define`s, runs the host suite as a
+gate, builds and flashes `build.diag`, resets the device via an RTS
+pulse (not `esptool`'s own reset - holding the serial port open
+throughout means no gap where early boot output gets missed), captures
+the self-test output, and restores everything in a `finally` block
+regardless of outcome. Three real bugs in the script itself before it
+ran cleanly, all instructive: `bash` isn't on `PATH` outside an
+interactive Git Bash session (needs `--login` to source the profile
+that puts `coreutils` there, or `dirname`/`cd` inside `run_tests.sh`
+fail with no useful error); `$hostOut -notmatch "pattern"` against a
+multi-line array return from a native command filters *elements*, not
+a boolean - a classic PowerShell trap that made every variant "fail"
+the host-test gate even at the unmodified baseline, until piped through
+`Out-String` first; and `Set-Content -Encoding utf8` in Windows
+PowerShell 5.1 writes a BOM, silently polluting every future `git diff`
+of a file it touches - `[System.IO.File]::WriteAllText` with an
+explicit no-BOM `UTF8Encoding` was the fix. None of these were sand
+bugs, but each one would have produced a confidently wrong sweep result
+if it had gone unnoticed.
+
+**Two real, device-only bugs turned up along the way, neither a
+performance question.** `test_two_separate_active_spots_in_the_same_
+block_row_do_not_wake_each_other` declared its comparison buffer as a
+*stack* array sized `SAND_BLOCK_W * LOC_H` - 2 KB at the shipped
+`SAND_BLOCK_W` (16), unremarkable, but every other buffer in that same
+fixture was already `malloc`'d, for a reason this one had quietly
+stopped honouring. At `SAND_BLOCK_W=32` the array alone is 4 KB -
+bigger than the device's entire 3.5 KB main task stack
+(`CONFIG_ESP_MAIN_TASK_STACK_SIZE`) - and the device panic-looped with
+a real `Stack protection fault`, symbolised straight to the exact line
+via `riscv32-esp-elf-addr2line` against the crashing build's own
+`.elf`. A host run cannot reproduce this at all - the host stack is
+megabytes - which is exactly why sweeping on real hardware, not just
+the host suite, is what this whole project has insisted on throughout.
+Fixed by heap-allocating it like everything else in that fixture.
+
+Separately, two *test fixtures* - not the simulation - turned out to
+hardcode geometry tied to the shipped block size rather than deriving
+it: `pool_fixture()`'s water source was a fixed-height column
+calibrated only for `SAND_BLOCK_W=16`, and failed to cross a
+`SAND_BLOCK_W=32` pool (twice as wide) even with sleeping disabled
+entirely - confirmed via a quick host-side experiment that this was
+insufficient water mass hitting the liquid engine's own integer-
+diffusion limit (`SAND_LIQUID_SIGHT`), not a wake bug. `loc_fixture()`'s
+`LOC_H`/`LOC_W` cap was a flat 128, but `test_a_block_wakes_when_
+disturbed_diagonally()` needs `SAND_BLOCK_H + 2` rows of room to place
+its boxing-in stones - past `SAND_BLOCK_H~42` the flat cap silently
+clipped that room away, and `sand_set()`'s silent no-op on an
+out-of-range write (safe - confirmed no memory corruption either way)
+meant the stones simply never landed. Both fixed to scale with the
+tunable they exist to help tune, rather than the one value that
+happened to ship.
+
+**The final sweep, six `(SAND_BLOCK_W, SAND_BLOCK_H)` pairs, real
+hardware, both bugs fixed:**
+
+| Pair | Blocks | Settled avg | Flip avg | Water avg |
+|---|---|---|---|---|
+| 8x32 | 161 | 610us | 9186us | 16374us |
+| 16x32 | 84 | 375us | 8869us | 16055us |
+| 8x64 | 92 | 528us | 9950us | 21642us |
+| 16x64 (old default) | 48 | 333us | 9638us | 16540us |
+| **32x64 (new default)** | **24** | **234us** | **9209us** | **16238us** |
+| 32x128 | 12 | 215us | 9658us | 16888us |
+
+32x64 is the only pair that clears the 300us settled-screen budget at
+all, and it beats the old 16x64 default on every metric - the halved
+block count (24 vs 48) roughly halves the mass-wake `memset()` cost,
+and re-examining a bigger block once woken did not cost back what that
+saved, at least not at this block size.
+
+**Worth being precise about the comparison that actually decided it,
+because the first pass through these numbers overstated it:** 32x64
+does *not* win outright against every alternative. 16x32 beats it on
+flip (8869us vs 9209us, ~4%) and on water (16055us vs 16238us, ~1%) -
+both real margins, just smaller than they first looked next to
+settled-screen's gap. What tipped the choice to 32x64 was that it is
+the *only* pair clearing its budget at all, on the specific case (a
+motionless, fully-settled screen) this project's very first documented
+lesson exists for - not that it dominated every number. A fair
+alternative reading of the same table could reasonably pick 16x32
+instead; this was a judgement call between "decisive win on the one
+metric currently failing outright" and "small wins on two metrics that
+already pass," not a computed optimum.
+
+**Shipped as the new default**, with the full table and its trade-offs
+recorded directly in `sand.h`'s own comment above `SAND_BLOCK_W`/
+`SAND_BLOCK_H`, not just here - the next person tuning this constant
+should not have to reconstruct this sweep from a doc file to know what
+was already tried.
+
+**A related sweep, prepared but not yet run:** the same "was this
+tunable ever actually measured" question applies to `gfx_dirty.h`'s
+`LEAF_REFINE_MAX_RUNS` and `row_runs.h`'s `ROW_MAX_RUNS` (both 2), and
+even `GATHER_MAX_PIXELS` (8192) - flagged in
+[Display-and-Rendering.md](Display-and-Rendering.md)'s "still untapped"
+list as unmeasured, or measured once but never swept the systematic way
+this section describes. The same class of hardcoded-boundary-test bug
+turned up there too (`test_find_gives_up_past_the_cap`,
+`test_plan_run_rejects_a_split_over_the_gather_budget`) and was fixed
+the same way, alongside a new device test giving `LEAF_REFINE_MAX_RUNS`'s
+fallback path a real number to compare against. Both sweep scripts are
+written and verified on real hardware; running them and recording the
+result is future work, not started this session.
+
+---
+
 ## Related
 
 - [`../Sand-Simulation.md`](../Sand-Simulation.md) — how the simulation works
