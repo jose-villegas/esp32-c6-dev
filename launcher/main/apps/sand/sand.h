@@ -91,12 +91,13 @@ typedef struct {
 
     int      last_load_dx, last_load_dy;
 
-    /* How many more steps compute_settled_bit() (sand.c) still has to
-     * release a block-row of BLOCK_STAGGER_HOLD (sand_priv.h) after a
-     * mass-wake (a jostle or gravity-direction change resets every
-     * block at once). 0 means no stagger in progress - every row
-     * already released, or none ever held. */
-    uint8_t  stagger_rows_remaining;
+    /* How many more blocks compute_settled_bit() (sand.c) still has to
+     * release from BLOCK_STAGGER_HOLD (sand_priv.h), STAGGER_BLOCKS_PER_STEP
+     * at a time, after a mass-wake (a jostle or gravity-direction change
+     * resets every block at once). 0 means no stagger in progress - every
+     * block already released, or none ever held. int, not uint8_t: a
+     * large enough grid's block count can exceed 255. */
+    int      stagger_blocks_remaining;
 
     int      scatter;   /* see sand_set_scatter() */
 } sand_t;

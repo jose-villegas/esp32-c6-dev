@@ -1324,17 +1324,40 @@ static void test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_th
     free(rows);
 }
 
+/* Counts how many blocks are currently held under BLOCK_STAGGER_HOLD,
+ * across the whole grid - a mechanism-level check that stays valid
+ * regardless of STAGGER_BLOCKS_PER_STEP's exact value or which blocks
+ * happen to release on which step. */
+static int count_staggered_blocks(const sand_t *s, int block_cols, int block_rows)
+{
+    int n = 0;
+    for (int by = 0; by < block_rows; by++) {
+        for (int bx = 0; bx < block_cols; bx++) {
+            if (sand_block_staggered(s, bx, by)) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 /* A mass wake (jostle, or gravity-direction change) resets every block
  * at once - the single most expensive step the simulation pays,
  * confirmed on real hardware. compute_settled_bit()'s staggered release
- * (BLOCK_STAGGER_HOLD) spreads that across a few steps instead: block-
- * row 0 releases immediately, every row after it one per step. Checked
- * directly against sand_block_staggered() rather than inferred from
- * grain positions - a settled pile's own physics already makes its
- * most-buried region the last to move regardless of staggering, which
- * would confound a position-based check with the mechanism actually
- * being tested. */
-static void test_flipping_gravity_stages_the_release_across_block_rows(void)
+ * (BLOCK_STAGGER_HOLD) spreads that across several steps instead,
+ * releasing a small, tunable batch of blocks (STAGGER_BLOCKS_PER_STEP)
+ * per step rather than every block at once. Checked directly against
+ * sand_block_staggered() rather than inferred from grain positions - a
+ * settled pile's own physics already makes its most-buried region the
+ * last to move regardless of staggering, which would confound a
+ * position-based check with the mechanism actually being tested.
+ * Deliberately does not hardcode which blocks release on which step -
+ * that is an implementation detail of STAGGER_BLOCKS_PER_STEP, not a
+ * guarantee the mechanism makes. What is guaranteed, and what this
+ * checks: an immediate partial release right after the triggering wake,
+ * a monotonically non-increasing held count from then on, and full
+ * release within a bounded number of steps. */
+static void test_flipping_gravity_stages_the_release_across_individual_blocks(void)
 {
     uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
     uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
@@ -1347,9 +1370,10 @@ static void test_flipping_gravity_stages_the_release_across_block_rows(void)
     sand_init(&stress, cells, STRESS_W, STRESS_H, 321u);
     sand_enable_sleeping(&stress, blocks, rows);
 
-    TEST_ASSERT_TRUE_MESSAGE(STRESS_BLOCK_ROWS > 1,
-        "this test needs a grid tall enough to span more than one "
-        "block-row, or staggering never engages at all");
+    const int total_blocks = STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS;
+    TEST_ASSERT_TRUE_MESSAGE(total_blocks > 1,
+        "this test needs more than one block, or staggering never "
+        "engages at all");
 
     for (int y = 0; y < STRESS_H / 2; y++) {
         for (int x = STRESS_W / 4; x < (STRESS_W * 3) / 4; x++) {
@@ -1360,28 +1384,29 @@ static void test_flipping_gravity_stages_the_release_across_block_rows(void)
         sand_step(&stress, 0, 1000, 0);
     }
 
-    /* The flip itself - triggers the full reset and holds every row but
-     * 0. Row 0 must be released already; every other row must not be. */
+    /* The flip itself - triggers the full reset and holds every block
+     * past the first batch. Some blocks must release immediately, but
+     * not necessarily all of them. */
     sand_step(&stress, 0, -1000, 0);
 
-    TEST_ASSERT_FALSE_MESSAGE(sand_block_staggered(&stress, 0, 0),
-        "block-row 0 must release immediately, not wait its turn");
-    for (int by = 1; by < STRESS_BLOCK_ROWS; by++) {
-        TEST_ASSERT_TRUE_MESSAGE(sand_block_staggered(&stress, 0, by),
-            "every row but 0 must start held right after the flip");
-    }
+    int held = count_staggered_blocks(&stress, STRESS_BLOCK_COLS, STRESS_BLOCK_ROWS);
+    TEST_ASSERT_LESS_THAN_MESSAGE(total_blocks, held,
+        "at least the first batch must release immediately after the flip");
 
-    /* One more step per remaining row - each should release exactly one
-     * additional row, in order, never skipping or double-releasing. */
-    for (int by = 1; by < STRESS_BLOCK_ROWS; by++) {
+    /* Held count must never increase, and must reach 0 within a bounded
+     * number of steps - one batch's worth of steps is the mechanism's
+     * own guarantee, so total_blocks steps is a generous upper bound. */
+    int steps = 0;
+    while (held > 0 && steps < total_blocks) {
         sand_step(&stress, 0, -1000, 0);
-        TEST_ASSERT_FALSE_MESSAGE(sand_block_staggered(&stress, 0, by),
-            "this row's turn has come - it must be released by now");
-        for (int later = by + 1; later < STRESS_BLOCK_ROWS; later++) {
-            TEST_ASSERT_TRUE_MESSAGE(sand_block_staggered(&stress, 0, later),
-                "a later row must not release early, ahead of its turn");
-        }
+        int next_held = count_staggered_blocks(&stress, STRESS_BLOCK_COLS, STRESS_BLOCK_ROWS);
+        TEST_ASSERT_LESS_OR_EQUAL_MESSAGE(held, next_held,
+            "the held count must never increase - release is one-way");
+        held = next_held;
+        steps++;
     }
+    TEST_ASSERT_EQUAL_MESSAGE(0, held,
+        "every block must be released within a bounded number of steps");
 
     free(cells);
     free(blocks);
@@ -2829,7 +2854,7 @@ void run_sand_suite(void)
     RUN_TEST(test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks);
     RUN_TEST(test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size);
     RUN_TEST(test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size);
-    RUN_TEST(test_flipping_gravity_stages_the_release_across_block_rows);
+    RUN_TEST(test_flipping_gravity_stages_the_release_across_individual_blocks);
 
     RUN_TEST(test_a_cell_carries_both_material_and_variant);
     RUN_TEST(test_stone_never_moves);

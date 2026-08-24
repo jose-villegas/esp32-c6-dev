@@ -90,7 +90,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->block_rows  = (h + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
     s->last_load_dx = 0;
     s->last_load_dy = 0;
-    s->stagger_rows_remaining = 0;
+    s->stagger_blocks_remaining = 0;
     s->scatter      = 0;
     s->mom_x_q8 = 0;
     s->mom_y_q8 = 0;
@@ -123,7 +123,7 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows)
     }
     s->last_load_dx = 0;
     s->last_load_dy = 0;
-    s->stagger_rows_remaining = 0;
+    s->stagger_blocks_remaining = 0;
 }
 
 bool sand_block_settled(const sand_t *s, int bx, int by)
@@ -165,7 +165,7 @@ void sand_clear(sand_t *s)
     if (s->block_state != NULL) {
         memset(s->block_state, 0, (size_t)s->block_cols * (size_t)s->block_rows);
     }
-    s->stagger_rows_remaining = 0;
+    s->stagger_blocks_remaining = 0;
 }
 
 cell_t sand_at(const sand_t *s, int x, int y)
@@ -823,43 +823,61 @@ static bool step_one_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                      density, mat, driven);
 }
 
-/* Sets BLOCK_STAGGER_HOLD on every block outside row 0, right after a
- * mass wake's full reset - split out of compute_settled_bit() purely to
- * keep its own complexity down. Row 0 stays released immediately (always,
- * regardless of gravity's actual sign - simplest to implement and
- * correctness-independent, since a held block is only ever delayed, never
- * incorrectly skipped forever; see BLOCK_STAGGER_HOLD's own comment).
- * s->stagger_rows_remaining then tracks how many more rows still need
- * releasing, one per subsequent step - see release_next_stagger_row(). */
-static void hold_non_leading_rows(sand_t *s)
+/* How many blocks release per step during a staggered mass-wake release.
+ * Tunable, the same way SAND_BLOCK_W/H were: bigger recovers from a
+ * disturbance faster but each release step re-examines that many more
+ * blocks' worth of settled cells; smaller keeps each step cheaper but
+ * takes longer to fully catch up (n - STAGGER_BLOCKS_PER_STEP blocks,
+ * released this many at a time, take ceil((n-this)/this) extra steps to
+ * fully drain). Started at a whole block-row (12 at the real screen
+ * size) per step - measured to regress the settled-screen budget 4x
+ * (334us -> 1307us), since even that release granularity re-examines
+ * several thousand cells of packed, maximally-buried sand in one step,
+ * the single most expensive category of cell in the whole simulation.
+ * This smaller value trades slower full recovery for a smaller per-step
+ * spike - see docs/Notes/Simulation-Lessons.md for both sets of
+ * measurements side by side. */
+#define STAGGER_BLOCKS_PER_STEP 4
+
+/* Sets BLOCK_STAGGER_HOLD on every block past the first
+ * STAGGER_BLOCKS_PER_STEP (in block_state's own linear order - by row,
+ * then column within it - not spatially grouped), right after a mass
+ * wake's full reset. Split out of compute_settled_bit() purely to keep
+ * its own complexity down. s->stagger_blocks_remaining then tracks how
+ * many more blocks still need releasing, up to
+ * STAGGER_BLOCKS_PER_STEP at a time, one batch per subsequent step -
+ * see release_next_stagger_blocks(). */
+static void hold_non_leading_blocks(sand_t *s)
 {
-    for (int by = 1; by < s->block_rows; by++) {
-        for (int bx = 0; bx < s->block_cols; bx++) {
-            s->block_state[by * s->block_cols + bx] |= BLOCK_STAGGER_HOLD;
-        }
+    const int n = s->block_cols * s->block_rows;
+    for (int i = STAGGER_BLOCKS_PER_STEP; i < n; i++) {
+        s->block_state[i] |= BLOCK_STAGGER_HOLD;
     }
-    s->stagger_rows_remaining = (uint8_t)(s->block_rows - 1);
+    s->stagger_blocks_remaining = n - STAGGER_BLOCKS_PER_STEP;
 }
 
-/* Releases the next held block-row, one per call - compute_settled_bit()
- * calls this once every non-reset step until stagger_rows_remaining
- * reaches 0, so every row is fully released within block_rows - 1 steps
- * of the triggering mass wake, unconditionally, regardless of activity
+/* Releases the next batch of up to STAGGER_BLOCKS_PER_STEP held blocks,
+ * one batch per call - compute_settled_bit() calls this once every
+ * non-reset step until stagger_blocks_remaining reaches 0, so every
+ * block is fully released within a bounded number of steps of the
+ * triggering mass wake, unconditionally, regardless of activity
  * elsewhere. That bound is what makes staggering safe: a held block's
  * grains simply do not move on steps where they are held, not stuck
  * forever - the same "eventual, guaranteed within N steps" shape as
  * any_neighbor_active()'s own one-step bound, just wider. */
-static void release_next_stagger_row(sand_t *s)
+static void release_next_stagger_blocks(sand_t *s)
 {
-    if (s->stagger_rows_remaining == 0) {
+    if (s->stagger_blocks_remaining == 0) {
         return;
     }
-    const int by = s->block_rows - s->stagger_rows_remaining;
-    for (int bx = 0; bx < s->block_cols; bx++) {
-        s->block_state[by * s->block_cols + bx] &=
-            (uint8_t)~BLOCK_STAGGER_HOLD;
+    const int n = s->block_cols * s->block_rows;
+    const int start = n - s->stagger_blocks_remaining;
+    const int count = (s->stagger_blocks_remaining < STAGGER_BLOCKS_PER_STEP)
+                     ? s->stagger_blocks_remaining : STAGGER_BLOCKS_PER_STEP;
+    for (int i = start; i < start + count; i++) {
+        s->block_state[i] &= (uint8_t)~BLOCK_STAGGER_HOLD;
     }
-    s->stagger_rows_remaining--;
+    s->stagger_blocks_remaining -= count;
 }
 
 /* Sleeping is off entirely when block_state does not exist. Otherwise, wakes
@@ -882,12 +900,12 @@ static void release_next_stagger_row(sand_t *s)
  * A full reset is also a mass wake - every block becomes eligible for a
  * full walk on the exact same step, which is the single most expensive
  * step the simulation ever pays (confirmed on real hardware: this is what
- * dominates the flip/water frame-budget benchmarks). hold_non_leading_rows()
+ * dominates the flip/water frame-budget benchmarks). hold_non_leading_blocks()
  * spreads that release across a few steps instead - see its own comment,
- * and release_next_stagger_row()'s, for why this cannot strand a grain.
- * Measured trade-off, not a blanket win - see BLOCK_STAGGER_HOLD's own
- * comment in sand_priv.h for the numbers and why this stays on its own
- * branch rather than merged. */
+ * and release_next_stagger_blocks()'s, for why this cannot strand a grain.
+ * Measured across several batch sizes, none a clean win - see
+ * BLOCK_STAGGER_HOLD's own comment in sand_priv.h for the numbers and
+ * why this stays on its own branch rather than merged. */
 static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
                                    int load_dx, int load_dy)
 {
@@ -899,12 +917,12 @@ static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
     if (jostle > 0 ||
         load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
         memset(s->block_state, 0, (size_t)n);
-        hold_non_leading_rows(s);
+        hold_non_leading_blocks(s);
     } else {
         for (int i = 0; i < n; i++) {
             s->block_state[i] &= (uint8_t)~BLOCK_ACTIVE;
         }
-        release_next_stagger_row(s);
+        release_next_stagger_blocks(s);
     }
     s->last_load_dx = load_dx;
     s->last_load_dy = load_dy;

@@ -701,6 +701,57 @@ cause is understood - but say so plainly once the cause turns out to be
 unconfirmed, rather than letting the first plausible theory harden into
 the record as settled fact.**
 
+**A natural follow-up question, asked directly: why release whole
+block-rows at all, when the simulation already has finer-grained
+spatial structure (individual blocks) to work with?** Fair challenge -
+the row grouping was chosen for being the simplest first version, not
+because it was reasoned to be the right granularity. Worth trying the
+finer-grained alternative properly rather than leaving the question
+unanswered.
+
+`hold_non_leading_blocks()`/`release_next_stagger_blocks()` replaced the
+row-based pair, releasing a small, tunable batch of blocks
+(`STAGGER_BLOCKS_PER_STEP`) per step in `block_state`'s own linear index
+order instead of by row. Two batch sizes were measured on real
+hardware, alongside the original row-based number (12 blocks/step,
+which drains the real screen's 48 blocks in ~3 steps):
+
+| Variant | Settled-screen avg | Flip avg | Flip worst | Water avg | Water worst |
+|---|---|---|---|---|---|
+| No staggering | 334us (pass) | - | avg 9638us | - | avg 16540us |
+| Row-based, 12/step (~3-step drain) | 1307us | 8343us | 9333us (win) | 16135us | 17662us (loss) |
+| Block-based, 4/step (~11-step drain) | 1566us (worse) | 6327us | 9733us | 15395us | 16357us (win) |
+| Block-based, 8/step (~6-step drain) | 1430us | 8128us (**new failure**, budget 8000us) | 9735us | 15940us | 16411us (win) |
+
+None of the three is a clean win. The intuition going in - smaller
+batches should mean less work re-examined per step, so a lighter touch
+- turned out to only be half the picture. The other half is *drain
+time*: fewer blocks released per step means more steps until every
+block is released, and the settled-screen test's fixed-length averaging
+window catches proportionally more of that "still recovering from the
+last stagger" tail the slower the drain is. That is exactly why 4/step
+(11-step drain) is *worse* than 12/step (3-step drain) on settled-screen,
+not better, even though each individual release batch is a third the
+size. Going the other way (8/step) partly clawed that back but broke
+something new instead - flip's *average*, not just its worst step, blew
+its own budget outright, a failure that did not exist in either other
+variant. The two costs (per-step work vs. total steps to drain) trade
+off against each other in a way that does not resolve monotonically by
+turning one knob in either direction on this hardware.
+
+**Verdict: dropped.** No variant beats the plain no-staggering baseline
+across the board, and the three measured points don't even form a
+clean frontier to pick a "best" one from - each wins on some axis and
+loses on another, differently each time. Further tuning of this one
+knob is unlikely to find a clean win without a genuinely different
+release strategy (e.g. one that accounts for drain time and per-step
+cost jointly, or picks blocks to release based on how expensive they
+actually are rather than fixed linear order) - not attempted, since the
+underlying tension had already shown up clearly enough across three
+data points to call it. `main` stays on the pull-based mechanism
+without any staggering; `sand-block-row-stagger` keeps all three
+variants for reference, unmerged.
+
 ---
 
 ## Related

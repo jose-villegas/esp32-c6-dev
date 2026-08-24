@@ -94,21 +94,32 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
  *
  * BLOCK_STAGGER_HOLD: a block whose settled bits are already 0 (known to
  * need re-examining) but is deliberately not being walked yet - waiting
- * for its block-row's turn in the staggered release that follows a mass
- * wake (a jostle or gravity-direction change, which resets every block
- * at once). Spreads the single most expensive step after a big
- * disturbance across a few steps instead of paying it all at once - see
+ * for its turn in the staggered release that follows a mass wake (a
+ * jostle or gravity-direction change, which resets every block at
+ * once). Spreads the single most expensive step after a big disturbance
+ * across a few steps instead of paying it all at once - see
  * compute_settled_bit()'s own comment. All four bits fit in one byte
  * (block_state has no other bits to share with, unlike row_state).
  *
- * MEASURED TRADE-OFF, confirmed by direct interactive testing (not just
- * the synthetic device tests): flip's worst single step genuinely beats
- * the pre-staggering average, a real improvement. Water's worst step
- * does not improve, and a fully settled/idle screen gets measurably
- * worse (re-examining a whole released block-row of packed, maximally-
- * buried sand is expensive even when nothing moves) - net negative
- * there, with nothing to offset it. Kept on its own branch rather than
- * merged, for exactly that reason - not a blanket win. See docs/Notes/
+ * MEASURED, THREE VARIANTS, NONE A CLEAN WIN: whole-block-row release
+ * (12 blocks/step on the real screen) makes flip's worst single step
+ * genuinely beat the pre-staggering average - confirmed by direct
+ * interactive testing, not just the synthetic device tests - but
+ * water's worst step does not improve, and a fully settled/idle screen
+ * gets measurably worse (re-examining a whole released group of packed,
+ * maximally-buried sand is expensive even when nothing moves), 334us up
+ * to 1307us. Releasing smaller, block_state-linear-order batches
+ * instead of whole rows does not fix that: 4 blocks/step made the
+ * settled-screen number worse still (1566us, since only 4-of-48 blocks
+ * release per step means ~11 steps to fully drain, and the fixed-length
+ * measurement window catches more of that still-recovering tail), and 8
+ * blocks/step made it slightly better (1430us, still far over budget)
+ * but broke flip's *average* outright (8128us, newly over its own
+ * budget - a failure that did not exist in either other variant). The
+ * trade-off does not resolve monotonically in either direction on this
+ * hardware - bigger batches do not reliably buy back what smaller
+ * batches cost, or vice versa. Kept on its own branch rather than
+ * merged, all three variants included for reference. See docs/Notes/
  * Simulation-Lessons.md's "The fifth attempt" section for the full
  * numbers and the (unconfirmed) live-accelerometer risk this was
  * originally suspected of, before direct device testing did not
