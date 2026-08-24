@@ -509,6 +509,64 @@ static void test_three_far_apart_marks_falls_back_at_the_current_cap(void)
              (long long)full_band, size, size, (long long)three_marks);
 }
 
+/* A small mark plus a wide one, in the same coarse run, sized to put the
+ * wide mark's own leaf-refined piece right where GATHER_MAX_PIXELS
+ * (gfx_dirty.h, 8192 shipped) decides whether it gets gathered at all -
+ * not near-zero like every other gathered-piece test here, and not so
+ * far over that it stays rejected everywhere a sweep of this budget would
+ * plausibly try. This file cannot reference GATHER_MAX_PIXELS directly:
+ * gfx_dirty.h is header-only, static, deliberately included only by
+ * gfx.c in the real firmware (see its own top comment) - a second real-
+ * firmware include here would silently duplicate its dirty-tracking
+ * state into a second, disconnected copy this test never touches, not
+ * just pull in a constant. Literal numbers instead, chosen for the
+ * candidates this project has actually swept (4096, 6144, 8192, 9216):
+ *
+ * The wide mark spans x=[48,158) - inside leaf columns 2 through 6
+ * (LEAF_W=23, COL_WIDTH=92, so leaf 1 ends at 46 and leaf 7 starts at
+ * 161 - clear of both). refine_run() reports leaf-refined pieces at
+ * whole leaf-column granularity, so this becomes a 5-leaf, 115px-wide
+ * piece regardless of the mark's own exact width - 115 * STRIP_HEIGHT
+ * (64) = 7360px. That is over budget at 4096 and 6144 (falls back to
+ * the coarse box, same fallback test_three_far_apart_marks_falls_back_
+ * at_the_current_cap already measured), and under budget at 8192 (the
+ * shipped default) and 9216 (gathers as two pieces instead). Whether
+ * that crossing actually helps or hurts is exactly what a sweep of this
+ * budget is for - not assumed here. */
+static void test_a_near_budget_split_crosses_the_gather_threshold(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();
+
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x206040));
+    const int64_t full_band = time_present();
+
+    gfx_color_t *fb = gfx_framebuffer();
+    const int small_size = 15;
+    const int wide_x = 48, wide_w = 110, wide_h = 64;
+
+    for (int y = 0; y < small_size; y++) {
+        for (int x = 0; x < small_size; x++) {
+            fb[y * GFX_WIDTH + 2 + x] = gfx_rgb(0x206040);
+        }
+    }
+    gfx_mark_dirty(2, 0, small_size, small_size);
+
+    for (int y = 0; y < wide_h; y++) {
+        for (int x = 0; x < wide_w; x++) {
+            fb[y * GFX_WIDTH + wide_x + x] = gfx_rgb(0x206040);
+        }
+    }
+    gfx_mark_dirty(wide_x, 0, wide_w, wide_h);
+
+    const int64_t near_budget = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, near-budget split %lld us",
+             (long long)full_band, (long long)near_budget);
+}
+
 /* Two small marks inside the SAME 92px cell, far enough apart to leave a
  * real gap between them - the shape only leaf refinement can split on.
  * test_two_far_corners above lands in different CELLS, which
@@ -665,6 +723,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);
     RUN_TEST(test_two_far_corners_cost_less_than_a_full_band);
     RUN_TEST(test_three_far_apart_marks_falls_back_at_the_current_cap);
+    RUN_TEST(test_a_near_budget_split_crosses_the_gather_threshold);
     RUN_TEST(test_two_marks_in_one_cell_cost_less_than_the_coarse_box);
     RUN_TEST(test_drawing_marks_what_it_touched);
 

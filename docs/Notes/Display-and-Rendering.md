@@ -484,11 +484,8 @@ kept here so the reasoning survives to whoever picks one up.
   subdivision visible on real hardware the same way the cell-level
   yellow/cyan overlay already does, rather than only in the synthetic
   `suite_gfx.c` test and the host-side `suite_gfx_dirty.c` suite.
-- **`LEAF_REFINE_MAX_RUNS` and `ROW_MAX_RUNS` (row_runs.h) are both 2,
-  unmeasured.** Same status `GATHER_MAX_PIXELS` had before it was tuned
-  against real numbers - a reasonable starting guess, not yet checked
-  against real device traces to see whether raising either cap would
-  catch cases currently falling back to a coarser send.
+- ~~`LEAF_REFINE_MAX_RUNS` and `ROW_MAX_RUNS` (row_runs.h) are both 2,
+  unmeasured.~~ **Measured** - see "The cap sweeps" below. Both stay at 2.
 - **Fixing 80 MHz at the driver level, instead of just not using it.**
   Raised, not started. The corner-shaped corruption traced back to
   `panel_sh8601_draw_bitmap()` in
@@ -542,6 +539,85 @@ kept here so the reasoning survives to whoever picks one up.
 - Clear only the previous frame's bounding box rather than all 165k pixels.
 - Skipping the launcher's redraw when nothing changed, which would let its bands
   go unsent too.
+
+### The cap sweeps: `LEAF_REFINE_MAX_RUNS`, `ROW_MAX_RUNS`, `GATHER_MAX_PIXELS`
+
+Three tunables this whole layer runs on - two flagged above as never
+measured, one ("tuned against the 40 MHz numbers") measured once but
+never systematically swept the way a later investigation into the sand
+simulation's own block-size constant started doing on real hardware.
+Same question applied here: is the shipped default actually right, or
+just the first value that happened to work?
+
+**`LEAF_REFINE_MAX_RUNS`/`ROW_MAX_RUNS` (both 2) swept to 3 and 4
+together** - they mirror each other by design (`row_runs.h`'s own
+comment). Needed a new device test first: the obvious one (three marks
+in three different cells) turned out to test nothing, because
+`collect_dirty_runs()` separates cells with its own cap
+(`GRID_COLS`, effectively unlimited at 4) - these two caps only govern
+splitting a single *already-merged* run further via the leaf layer.
+Fixed by placing three marks inside three *adjacent* cells instead, so
+`collect_dirty_runs()` merges them into one run before leaf refinement
+(`refine_run()`/`plan_run()`) ever sees it. Measured:
+
+| Cap | two far corners | three far-apart marks (merged run) |
+|---|---|---|
+| 2 (shipped) | 1916us | **872us** |
+| 3 | 1916us | **2881us** |
+| 4 | 1914us | **2870us** |
+
+Raising the cap makes the case it exists to help **3x worse**, not
+better. At cap 2, `refine_run()` gives up (three isolated leaf runs,
+cap of 2 - the same "too fragmented" case `collect_runs_from_mask()`
+already handles) and falls back to `run_box()`'s coarse union - not the
+whole band, just the union of each cell's own already-tight box, still
+skipping whatever is genuinely untouched. That fallback measured
+cheaper than three separately gathered pieces would have: each QSPI
+transaction costs a fixed ~118us regardless of size (see "The blit is
+bus-bound" above), so three small sends pay that fixed cost three times
+over, while one wider merged send pays it once. **Verdict: both stay at
+2.** Nothing here was broken; the guess just happened to already be
+right, for a reason (fixed per-transaction cost) nobody had measured
+against before.
+
+**`GATHER_MAX_PIXELS` (8192) swept to 4096/6144/8192/9216.** The first
+attempt at this one measured nothing real: both existing device tests
+(15x15 and 10x10 marks) are so far under any of these budgets that none
+of them ever approached the actual rejection boundary - a flat result
+across all four values that looked like "no effect" but was really "no
+test exercised the mechanism at all." Needed a new device test sized
+*at* the boundary: a small mark plus a wide one in the same run, the
+wide one's leaf-refined piece landing at a fixed 7360px (5 whole 23px
+leaf columns x 64px strip height - refine_run() reports whole-leaf
+pieces, not a mark's exact width) regardless of which candidate budget
+is active. That piece is over budget at 4096/6144 and under it at
+8192/9216 by construction, giving a genuine reject-vs-accept
+comparison instead of four copies of the same unaffected number:
+
+| Budget | near-budget split (7360px piece) |
+|---|---|
+| 4096 | 2714us (over budget - falls back) |
+| 6144 | 2714us (over budget - falls back) |
+| **8192 (shipped)** | **1716us (under budget - gathers)** |
+| 9216 | 1715us (under budget - gathers) |
+
+Gathering this piece is ~37% cheaper than the coarse-box fallback it
+would otherwise take. 8192 already sits on the correct side of that
+line for a piece this size; raising it further changes nothing here
+(1716 vs 1715 is noise), and the sweep did not test a piece bigger than
+9216 to see if going higher ever helps a larger one. **Verdict: 8192
+stays.** Confirmed rather than assumed, this time - the original "tuned
+against the 40 MHz numbers" claim turned out to be right, but had never
+actually been checked against a case built to sit exactly on the
+boundary it enforces.
+
+Both sweeps automated the same way as the sand block-size one: a
+PowerShell script edits the `#define`, runs the host suite as a gate,
+builds, flashes, captures the self-test output, and restores everything
+in a `finally` block regardless of outcome - see the sand simulation's
+own [Simulation-Lessons.md](Simulation-Lessons.md) for the sweep-
+tooling bugs that surfaced building the first one (all equally relevant
+here, since it is the same script pattern).
 
 ---
 
