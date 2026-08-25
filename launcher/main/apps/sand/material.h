@@ -86,8 +86,6 @@ typedef enum {
     MAT_EMBER,
     MAT_OIL,
     MAT_LAVA,
-    MAT_ASH,
-    MAT_OILY_ASH,
     MAT_COUNT
 } material_id_t;
 
@@ -239,29 +237,6 @@ typedef struct {
      * pool worth looking at, and is more nearly true besides. */
     uint8_t needs_air;
 
-    /* A material this one SOAKS UP: `absorbs` is the material_id_t it
-     * drinks (0 = it absorbs nothing, the default), and `absorbs_to` is
-     * what this cell becomes once it has. Absorbing takes one unit of
-     * mass from the neighbouring cell, exactly as quenching does - the
-     * liquid is consumed, not merely detected.
-     *
-     * Dry ash names MAT_OIL here and turns into MAT_OILY_ASH. That gives
-     * the "already full" behaviour for nothing: oily ash is a different
-     * material, and its own `absorbs` is 0, so a soaked grain simply
-     * stops drinking. No saturation counter, no per-cell wetness level -
-     * which matters, because there is nowhere to put one (see this
-     * file's top comment on the one-byte cell) and a powder's variant
-     * nibble is already spoken for as a shade.
-     *
-     * This replaced a stateless version that never consumed anything:
-     * ash carried a `flammability` gated on oil merely TOUCHING it, so a
-     * single drop of oil could make an unlimited amount of ash flammable
-     * without ever being used up. Cheaper, and wrong in the way that
-     * matters - soaking something is a transfer, not a proximity
-     * check. */
-    uint8_t absorbs;
-    uint8_t absorbs_to;
-
     /* Nonzero: this material IS a heat source, and sand_step_reactions()
      * gives it a turn - decaying, quenching, smothering, igniting
      * neighbours. Replaces the old `CELL_MATERIAL(c) != MAT_FIRE`
@@ -283,10 +258,7 @@ typedef struct {
     uint8_t conducts;
 
     /* Chance in 256 that a burnt-out cell of this material leaves
-     * something behind instead of simply clearing, and `residue_to` is
-     * what it leaves. `residue_to` of 0 reads as MAT_SMOKE, which is the
-     * common case and what this pair did before it could name anything
-     * else.
+     * MAT_SMOKE behind instead of simply clearing.
      *
      * MAT_SMOKE and MAT_STEAM are near-identical rows in materials[] and
      * were deliberately ONE material to begin with: both are a light gas
@@ -296,15 +268,8 @@ typedef struct {
      * puffing bright white kettle-steam reads as a bug to anyone watching
      * it happen. The two rows exist to be TOLD APART on screen, and the
      * difference that actually matters is in the palette, not here. See
-     * sand_reactions.c's own top comment.
-     *
-     * An ember names MAT_ASH here instead, so a burnt log leaves a pile
-     * rather than vanishing - and takes its smoke from the flames it
-     * flared while alive (fire's own residue) rather than from its own
-     * death, which is both what happens physically and the only way to
-     * get both effects out of one cell. */
+     * sand_reactions.c's own top comment. */
     uint8_t residue;
-    uint8_t residue_to;
 
     /* What this material becomes when a liquid touches it - a
      * material_id_t, narrowed. 0 means it simply vanishes, which is what

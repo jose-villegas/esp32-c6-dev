@@ -62,8 +62,6 @@ crash anything, only sit there as an immovable block.
 | 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
-| 12 | ash | `KIND_POWDER` | falls | `density=25` (**floats on water**), `repose=4`; inert, drinks oil; what a spent ember leaves |
-| 13 | oily ash | `KIND_POWDER` | falls | `density=28`, `slip=160` (clumps); ash that drank oil, and therefore fuel |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -89,46 +87,24 @@ how it moves, `reactions[]` for how it burns - which is a small price
 for keeping the hot table exactly as small as its own comment insists
 it stay.
 
-| Material | `flammability` | `needs_air` | `absorbs` → `absorbs_to` | `ignites_to` | `burns` | `conducts` | `residue` → `residue_to` | `quench_to` | `flare` |
-|---|---|---|---|---|---|---|---|---|---|
-| stone | 0 | - | - | - | 0 | 220 | 0 | - | 0 |
-| gas | 255 | - | - | fire | 0 | 0 | 0 | - | 0 |
-| fire | 0 | - | - | - | 1 | 0 | 40 → smoke | steam | 0 |
-| wood | 6 | - | - | ember | 0 | 0 | 0 | - | 0 |
-| ember | 0 | - | - | - | 1 | 0 | 40 → **ash** | steam | 48 |
-| oil | 50 | **1** | - | fire | 0 | 0 | 0 | - | 0 |
-| lava | 0 | - | - | - | **1** | 0 | 0 | **stone** | 16 |
-| ash | 0 | - | **oil → oily ash** | - | 0 | 0 | 0 | - | 0 |
-| oily ash | 120 | - | - | fire | 0 | 0 | 0 | - | 0 |
+| Material | `flammability` | `needs_air` | `ignites_to` | `burns` | `conducts` | `residue` | `quench_to` | `flare` |
+|---|---|---|---|---|---|---|---|---|
+| stone | 0 | - | - | 0 | 220 | 0 | - | 0 |
+| gas | 255 | - | fire | 0 | 0 | 0 | - | 0 |
+| fire | 0 | - | - | 1 | 0 | 40 | steam | 0 |
+| wood | 6 | - | ember | 0 | 0 | 0 | - | 0 |
+| ember | 0 | - | - | 1 | 0 | 90 | steam | 48 |
+| oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 |
+| lava | 0 | - | - | - | **1** | 0 | **stone** | 16 |
 
 Three things in that table are worth reading twice:
 
 - **The byproducts are different materials.** `quench_to` gives **steam**
-  (water that got hot); `residue` gives whatever `residue_to` names -
-  **smoke** for fire (fuel that burned out), **ash** for an ember. See the
+  (water that got hot); `residue` gives **smoke** (fuel that burned out). See the
   simulation document for why steam and smoke are not one row.
 - **`needs_air` is what makes a pool of fuel burn rather than detonate.**
   Only oil sets it. Without it a spark lights a whole connected pool
   inside one pass.
-- **`absorbs` is how ash can be inert and flammable at once.** Dry ash
-  must never burn - a fire able to feed on its own remains would never go
-  out - but oil-soaked ash should. Rather than testing for nearby oil at
-  ignition time, ash *drinks*: a grain takes one unit of a neighbouring
-  oil cell's mass and becomes **oily ash**, a separate material that is
-  flammable. Two things fall out of that. Soaking is a real transfer, so
-  a drop of oil cannot saturate an unlimited pile. And "already full"
-  needs no code, because oily ash has no `absorbs` of its own.
-
-  A pile buried in oil soaks *right through*, not one grain deep, via a
-  bounded walk that reaches through already-soaked grains to find liquid
-  beyond them - the same shape as `conduct_heat()`'s walk through stone,
-  and necessary for the same reason: oil is a liquid and ash is a powder,
-  so oil can never enter the pile's own cells.
-- **`residue` is a yield, and yields are easy to get wrong.** It is very
-  nearly `residue/256` of what burned. It was 200, which turned ~80% of a
-  log into ash - measured at 289 cells from 360 of wood, which is a log
-  being recoloured grey rather than a fire leaving a deposit. 40 gives
-  ~14%.
 - **Lava is `KIND_LIQUID` *and* `burns`.** That combination is the
   clearest evidence the movement and reaction axes are genuinely
   independent - nothing anywhere special-cases it. It is also why lava's
@@ -136,7 +112,7 @@ Three things in that table are worth reading twice:
   life remaining, and for a liquid that nibble is its fill level, so any
   decay at all would eat the cell's own mass.
 
-Everything else - sand, water, steam, smoke, ash, and every unused slot -
+Everything else - sand, water, steam, smoke, and every unused slot -
 is all-zero, which reads correctly for every field on its own: never
 catches, never a heat source, never conducts, leaves nothing, vanishes on
 quench, never flares. See

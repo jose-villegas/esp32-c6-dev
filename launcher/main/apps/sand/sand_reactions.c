@@ -418,18 +418,8 @@ static inline bool try_flare(sand_t *s, int x, int y, int w, int h,
     return false;
 }
 
-/* Take one unit of mass from the liquid at (nx, ny), clearing the cell
- * if that was its last.
- *
- * Two callers, and they are the same transaction seen from opposite
- * sides: a liquid neighbour that just quenched a burning cell pays for
- * it, and a liquid that has just been drunk by an absorbent one pays for
- * that. In both cases the point is that the liquid is CONSUMED rather
- * than merely detected - a quench that cost nothing would let a puddle
- * put out infinite fire, and a soak that cost nothing would let one drop
- * of oil saturate a whole board of ash.
- *
- * The original comment, still the clearest statement of why one unit: Steam is a byproduct, not a free
+/* The liquid neighbour that just quenched a burning cell pays for it:
+ * one unit of its own mass, gone. Steam is a byproduct, not a free
  * lunch - without this, a fire could boil an entire pool dry one cell at
  * a time for nothing, which reads as the water simply vanishing rather
  * than a pot boiling. One unit (of the 15 a full cell holds) keeps that
@@ -438,7 +428,7 @@ static inline bool try_flare(sand_t *s, int x, int y, int w, int h,
  * "written as CELL_EMPTY rather than a zero variant" rule (sand_liquid.c)
  * for the same reason: a zero variant would leave the material nibble
  * claiming an occupied cell holding nothing. */
-static inline void take_one_unit(sand_t *s, int nx, int ny, int w)
+static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w)
 {
     const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
     const cell_t n = s->cells[at];
@@ -453,15 +443,6 @@ static inline void take_one_unit(sand_t *s, int nx, int ny, int w)
  * number is sized the way it is. It caps a cold pass; it does not claim
  * anything about how far heat can really travel. */
 #define CONDUCT_REACH 32
-
-/* Bounds the wicking walk step_one_absorbent_cell() does - how far a dry
- * grain will reach THROUGH already-soaked ones to find liquid to drink.
- * Same job and same justification as CONDUCT_REACH above: it caps a cold
- * pass, and says nothing about how far a real pile wicks. Generous
- * enough that a pile of any thickness the pour brush can draw soaks
- * right through, since a cap that decides whether a feature works rather
- * than what it costs is the mistake CONDUCT_REACH already made once. */
-#define SOAK_REACH    32
 
 /* Heat crossing a run of conductor cells - the boiler. See this file's
  * own top comment ("THE BOILER") for the two problems this and
@@ -577,72 +558,6 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
     return acted;
 }
 
-/* One absorbent cell's turn: WICK. Look along each cardinal direction,
- * walking through cells that are already soaked, until either the liquid
- * this material drinks is found or the run ends; on finding it, take one
- * unit of its mass and become soaked too.
- *
- * The walk is the whole point, and it is the same shape - deliberately -
- * as conduct_heat()'s walk through a run of conductor cells further
- * down. Without it, only the grains in direct contact with the puddle
- * ever soak: oil is a liquid and ash is a powder, so oil cannot enter
- * the pile's cells at all (room_in() refuses any cell holding another
- * material), which means a pile buried under oil would soak exactly one
- * grain deep and stay dry underneath. Reaching through the already-wet
- * grains to the oil beyond them is what lets the whole pile take it up,
- * and it reads as what it is: the pile wicking.
- *
- * Crucially the liquid is still paid for, once per grain soaked. The
- * tempting cheaper rule - "a dry grain next to a soaked one becomes
- * soaked" - spreads wetness for free, so a single drop of oil would
- * saturate a pile of any size and still be a single drop. Every soaked
- * grain here corresponds to a unit of oil that is actually gone, so a
- * pile buried in oil drinks the puddle down by exactly as much as it
- * takes up.
- *
- * The "already full" rule then needs no code at all: what a cell becomes
- * has its own `absorbs` of 0, so it is never dispatched here again.
- * Saturation is expressed by being a different material rather than by a
- * counter there is nowhere to store (a powder's variant nibble is a
- * shade, and the cell is one byte - see material.h's top comment).
- *
- * One grain per step, so a deep pile darkens through gradually rather
- * than flashing wet on contact. Returns whether it absorbed anything. */
-static bool step_one_absorbent_cell(sand_t *s, int x, int y, int w, int h,
-                                    const reaction_t *r)
-{
-    for (int d = 0; d < 4; d++) {
-        const int dx = reaction_dirs[d][0];
-        const int dy = reaction_dirs[d][1];
-        int nx = x + dx;
-        int ny = y + dy;
-
-        for (int reach = 0; reach < SOAK_REACH; reach++) {
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                break;
-            }
-            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (CELL_IS_EMPTY(n)) {
-                break;
-            }
-            const uint8_t id = CELL_MATERIAL(n);
-            if (id == r->absorbs) {
-                take_one_unit(s, nx, ny, w);
-                place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
-                              r->absorbs_to);
-                return true;
-            }
-            if (id != r->absorbs_to) {
-                break;      /* not liquid, and not a soaked grain to
-                             * reach through - this direction is done */
-            }
-            nx += dx;
-            ny += dy;
-        }
-    }
-    return false;
-}
-
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
  * both die and spread the same step, but it can leave smoke behind, see
@@ -689,8 +604,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
          * residue; if one ever does not, that field is the change. */
         const uint8_t residue = reactions[mat_id].residue;
         if (residue != 0 && (int)(rng_next(&s->rng) & 0xFF) < residue) {
-            const uint8_t to = reactions[mat_id].residue_to;
-            place_reacted(s, x, y, at, to ? to : MAT_SMOKE);
+            place_reacted(s, x, y, at, MAT_SMOKE);
         }
         return true;
     }
@@ -707,7 +621,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
             }
-            take_one_unit(s, nx, ny, w);
+            pay_quench_cost(s, nx, ny, w);
             return true;
         }
     }
@@ -755,41 +669,20 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
  * would let a quiet, untouched burning cell fall out of
  * may_have_burning's bookkeeping while still physically on the grid,
  * stranding its own eventual burn-out. */
-/* Returns a bitmask rather than a bool: this row may hold burning cells,
- * absorbent ones, or both, and sand_step_reactions() clears the two
- * may_have_* flags independently. Collapsing them into one answer would
- * let a board of wet ash keep may_have_burning armed forever, and a board
- * of quiet fire keep may_have_absorbent armed. */
-#define FOUND_BURNING   1u
-#define FOUND_ABSORBENT 2u
-
-static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h,
-                                      bool scan_absorbent)
+static bool step_one_burning_row(sand_t *s, int y, int w, int h)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
-    unsigned found = 0;
+    bool any = false;
     for (int x = 0; x < w; x++) {
         const cell_t c = row[x];
-        if (CELL_IS_EMPTY(c)) {
+        if (CELL_IS_EMPTY(c) || !reaction_of(c)->burns) {
             continue;
         }
-        const reaction_t *r = reaction_of(c);
-        if (r->burns) {
-            found |= FOUND_BURNING;
-            step_one_burning_cell(s, row, x, y, w, h);
-            continue;
-        }
-        /* Absorbents are only looked at when there is a liquid somewhere
-         * on the board for them to drink - otherwise a screen of ash
-         * would pay four neighbour reads per grain per step to discover
-         * nothing, every step, forever. */
-        if (scan_absorbent && r->absorbs) {
-            found |= FOUND_ABSORBENT;
-            step_one_absorbent_cell(s, x, y, w, h, r);
-        }
+        any = true;
+        step_one_burning_cell(s, row, x, y, w, h);
     }
-    return found;
+    return any;
 }
 
 /* Takes only `s` again. It briefly took (gx, gy) as well, for
@@ -799,32 +692,21 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h,
  * which way gravity points. */
 void sand_step_reactions(sand_t *s)
 {
-    /* Absorption is not a fire reaction and must not be gated behind one:
-     * pouring oil onto a cold ash pile has to work with no flame anywhere
-     * on the board. Paired with may_have_liquid, since everything
-     * absorbable is a liquid. */
-    const bool scan_absorbent = s->may_have_absorbent && s->may_have_liquid;
-    if (!s->may_have_burning && !scan_absorbent) {
+    if (!s->may_have_burning) {
         return;
     }
 
     const int w = s->w;
     const int h = s->h;
 
-    unsigned found = 0;
+    bool found_any = false;
     for (int y = 0; y < h; y++) {
-        found |= step_one_reacting_row(s, y, w, h, scan_absorbent);
+        if (step_one_burning_row(s, y, w, h)) {
+            found_any = true;
+        }
     }
 
-    if (!(found & FOUND_BURNING)) {
+    if (!found_any) {
         s->may_have_burning = false;
-    }
-    /* Only clear this one if the scan actually looked. A pass that
-     * skipped absorbents because no liquid was present has learned
-     * nothing about whether any absorbent still exists, and clearing on
-     * that basis would strand a real ash pile the next time oil arrived
-     * near it. */
-    if (scan_absorbent && !(found & FOUND_ABSORBENT)) {
-        s->may_have_absorbent = false;
     }
 }

@@ -396,57 +396,6 @@ const material_t materials[MATERIAL_MAX] = {
                               * water, not by waiting. */
     },
 
-    [MAT_ASH] = {
-        .name    = "Ash",
-        .kind    = KIND_POWDER,
-        .density = 25,       /* BELOW water's 30, which is what makes ash
-                              * float as a scum on a pond rather than
-                              * sinking through it - and it needs no
-                              * floating code at all. Ash is a POWDER, so
-                              * it moves through can_enter(), which lets a
-                              * mover in only if it is DENSER than what is
-                              * already there; lighter than water simply
-                              * means it cannot get in, so it settles on
-                              * the surface. A liquid could not have had
-                              * this for free - see
-                              * sink_through_lighter_liquid() in
-                              * sand_liquid.c, which is what oil needed.
-                              *
-                              * Still above fire (15), gas (10), smoke (7)
-                              * and steam (5), so ash falls through all of
-                              * them and can still bury a flame; still
-                              * below sand (60), so sand poured onto an
-                              * ash pile sinks through it, which is the
-                              * right way round for something this light.
-                              * Above oil (22) as well, so ash sinks
-                              * through a slick and comes to rest on the
-                              * water beneath it - where an oil fire's
-                              * leavings ought to end up. */
-        .slip    = 200,      /* far looser than sand's 96 - an ash pile
-                              * slumps and skates where sand locks up */
-        .repose  = 4,        /* shallower than sand's 7: ash piles into a
-                              * flatter, softer heap */
-        .scatter = 60,       /* above sand's 40 - it puffs about as it
-                              * falls. Starting point, not final - tune on
-                              * device like every other constant here. */
-    },
-
-    [MAT_OILY_ASH] = {
-        .name    = "Oily Ash",
-        .kind    = KIND_POWDER,
-        .density = 28,       /* heavier than dry ash's 25 - it is
-                              * carrying oil now - but still under
-                              * water's 30, so a soaked pile floats just
-                              * like a dry one. Oil is lighter than
-                              * water, so ash that has drunk some has no
-                              * business becoming heavier than it. */
-        .slip    = 160,      /* stickier than dry ash's 200: wet ash
-                              * clumps where dry ash skates */
-        .repose  = 6,        /* and piles a little steeper - nearly
-                              * sand's 7, against dry ash's 4 */
-        .scatter = 50,
-    },
-
     /* Slots 9-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
@@ -468,49 +417,6 @@ const material_t materials[MATERIAL_MAX] = {
  *===========================================================================*/
 
 const reaction_t reactions[MATERIAL_MAX] = {
-    [MAT_ASH] = {
-        /* DRY ash never burns, and that is deliberate rather than an
-         * omission: ash is what is left when everything flammable has
-         * already burned, so a fire able to feed on it would never go
-         * out. No flammability here at all.
-         *
-         * What it does instead is DRINK. A grain of ash touching oil
-         * takes a unit of that oil's mass and becomes MAT_OILY_ASH,
-         * which is flammable - so oily ash burns and dry ash does not,
-         * with the difference held as an actual material rather than as
-         * a condition re-tested from scratch every time.
-         *
-         * That is the second design. The first gave ash a flammability
-         * gated on oil merely TOUCHING it, which cost nothing and was
-         * wrong in a way worth remembering: the oil was never consumed,
-         * so one drop could make an unlimited quantity of ash flammable
-         * and stay a drop. Soaking is a transfer. A soaked grain is also
-         * FULL - MAT_OILY_ASH's own `absorbs` is 0, so it stops drinking
-         * - which the proximity check had no way to express at all. */
-        .absorbs    = MAT_OIL,
-        .absorbs_to = MAT_OILY_ASH,
-    },
-
-    [MAT_OILY_ASH] = {
-        /* Ash that has drunk oil, and therefore fuel. 120 is above both
-         * dry oil's 50 and wood's 6: a soaked pile is the readiest thing
-         * on the board to catch, which is the whole character of the
-         * material. Starting point, not final.
-         *
-         * Burns away to flame rather than charring back to dry ash. Ash
-         * IS the char, so there is no further stage to reach - and a
-         * cell holds one thing, so it cannot both become a flame and
-         * leave a grain behind. Losing the ash to the fire is the
-         * accepted simplification; the alternative (a smouldering state
-         * that decays back to MAT_ASH) needs a third material for a
-         * detail nobody watching a fire would miss.
-         *
-         * No `absorbs` of its own - that omission is what makes a soaked
-         * grain FULL, and it is the entire mechanism. */
-        .flammability = 120,
-        .ignites_to   = MAT_FIRE,
-    },
-
     [MAT_OIL] = {
         /* Catches readily, but only where it meets air - see
          * material.h's own comment on `needs_air`. Without that flag a
@@ -642,39 +548,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * now keys off reaction_t.burns rather than
                          * CELL_MATERIAL(c) == MAT_FIRE */
 
-        .residue    = 40,    /* An ember leaves MAT_ASH rather than the
-                              * MAT_SMOKE it used to, so a burnt log ends
-                              * as a pile instead of as nothing. The
-                              * smoke from a burning log comes from the
-                              * FLAMES it flared while it was alive
-                              * (fire's own residue, 40) rather than from
-                              * its death - both what happens physically
-                              * and the only way to get a solid residue
-                              * and a rising one out of a system where a
-                              * cell holds exactly one thing.
-                              *
-                              * The FIGURE was 200, and that was wrong in
-                              * a way worth recording. Yield here is very
-                              * nearly residue/256 of the wood burned, so
-                              * 200 turned about 80% of a log into ash -
-                              * measured at 289 cells of ash from 360 of
-                              * wood. That is not a fire leaving a
-                              * deposit, it is a log being recoloured
-                              * grey.
-                              *
-                              * 40 gives ~14% (measured: 50 from 360).
-                              * Real wood leaves nearer 1-3% by mass and
-                              * that was tried: at 12 (~4%) a 120-cell
-                              * log leaves five grains, which at this
-                              * cell size is indistinguishable from
-                              * leaving nothing. 40 is the compromise -
-                              * an unmistakable fraction of what burned,
-                              * about a cell deep under the log's own
-                              * footprint, and still enough of a deposit
-                              * to insulate a boiler or be shaken about.
-                              * Starting point, not final - tune on
-                              * device like every other constant here. */
-        .residue_to = MAT_ASH,    /* a whole ember finishing
+        .residue = 90,  /* well above fire's 40: a whole ember finishing
                          * its slow burn is a bigger, more definite event
                          * than a flame guttering out, and should leave
                          * smoke behind far more often. Starting point,
@@ -812,26 +686,7 @@ static const gfx_color_t palette[256] = {
                                     * heat. Keeps a lava pool visually
                                     * distinct from the flames it
                                     * flares */
-    SHADES(0x24242A, 0x8E8A84),   /* ash   - a powder, so this is a SHADE
-                                    * ramp and every grain picks one at
-                                    * random: cold charcoal through pale
-                                    * grey. Overlaps smoke's range on
-                                    * purpose - they are the same stuff,
-                                    * one settled and one airborne - and
-                                    * they are never confusable in
-                                    * practice because one falls into
-                                    * piles and the other rises */
-    SHADES(0x14110C, 0x4C4034),   /* oily ash - a powder, so this is a
-                                    * shade ramp like dry ash's just
-                                    * above, but pulled dark and brown
-                                    * where that one is pale and neutral.
-                                    * Soaked ash has to be obviously the
-                                    * SAME STUFF as dry ash and obviously
-                                    * not the same state, so the two
-                                    * ramps share a shape and differ in
-                                    * value and warmth rather than being
-                                    * unrelated colours */
-    UNUSED, UNUSED,
+    UNUSED, UNUSED, UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)
