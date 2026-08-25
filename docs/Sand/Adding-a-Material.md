@@ -310,12 +310,20 @@ flowchart TD
    itself a heat source, it conducts heat, it smokes, it does something
    other than vanish when quenched, or it flares a flame - it also needs
    a row in the *second* table, `reaction_t reactions[]` (same header,
-   same file). Rows not given default to all-zero, which reads correctly
-   ("never catches, never a heat source, ...") for a material with no
-   reactions at all, so most materials never touch this table. See
-   `material.h`'s own comment on `reaction_t` for why this is a second
-   table rather than more fields on `materials[]` - the short version is
-   the next section.
+   same file).
+
+   **An absent row is not neutral.** It is all-zero, and zero means
+   something different for each field: never catches, never a heat
+   source - but also **immune to acid** and **heat stops here**. The
+   first two are the harmless reading that makes most materials able to
+   skip this table entirely. The last two are real behaviours, and glass
+   shipped with both by accident - correctly immune to acid, wrongly
+   inert to heat, from the same missing row. See "An omission is a
+   decision" below.
+
+   See `material.h`'s own comment on `reaction_t` for why this is a
+   second table rather than more fields on `materials[]` - the short
+   version is the next section.
 3. **If reusing an existing `KIND`**: that is the whole implementation.
    Write host tests (see below) and you are done.
 4. **If it needs a new `KIND`**: a new file (`sand_<name>.c`), mirroring
@@ -550,6 +558,36 @@ air" feel like the same thing right up until something occupies the
 opening. Test the predicate in the state the feature actually runs in,
 not the state you set it up in.
 
+## Lesson: an omission is a decision
+
+`reactions[]` rows are optional, and a material without one gets all
+zeroes. The guide above used to say that reads correctly for a material
+with no reactions, and for most materials it does. It is not true field
+by field.
+
+Glass is the counterexample. It shipped with no reaction row at all,
+which gave it two properties at once:
+
+- `dissolvable = 0` - **immune to acid**. Correct, and the entire reason
+  glass exists.
+- `conducts = 0` - **heat stops dead at it**. Wrong. A stone vessel over
+  a flame boiled its contents and a glass one did not, which is backwards
+  for the vessel you have to make and the only one acid cannot eat.
+
+Both came from the same absence, and nothing in the source distinguishes
+them: the feature and the bug look identical, because neither is written
+anywhere. It took someone noticing the beaker did not boil.
+
+The general shape: **a defaulted field is a decision you did not make,
+and the safety of the default depends entirely on which field it is.**
+Before leaving a material without a reaction row, read the field list and
+ask what zero means for each one, rather than what it means on average.
+The fields where zero is genuinely inert (`flammability`, `burns`,
+`dissolves`, `residue`) are safe to skip; the ones where zero is a real
+behaviour (`conducts`, `dissolvable`) want a deliberate answer even when
+the answer is zero - and a comment saying so, as stone's row does for
+`dissolvable`.
+
 ## Lesson: sometimes the palette *is* the feature
 
 `MAT_STEAM` and `MAT_SMOKE` have nearly identical `materials[]` rows.
@@ -685,6 +723,13 @@ number goes in a comment next to the constant and the probe is disposable.
 
 ## Small traps that cost real time
 
+- **The two tables key on the same material ids.** `materials[]` and
+  `reactions[]` both contain `[MAT_STONE] = {`, so any search-and-replace
+  or patch anchored on a bare `[MAT_X] = {` hits the movement table
+  first. That has put a reaction row into `materials[]` twice now; the
+  build catches it (`'material_t' has no member named 'conducts'`) but
+  only after the fact. Anchor on a field that only the intended table
+  has.
 - **Do not draw a random number when the chance is 255.** `try_ignite()`
   checks `flammability == 255` *before* rolling, so materials at "always"
   consume no RNG. This is not micro-optimisation - it keeps the whole
