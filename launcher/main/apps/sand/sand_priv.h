@@ -383,16 +383,14 @@ static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
  * cell is the only actor here; gas is passive fuel with nothing to do on
  * its own.
  *
- * Takes (gx, gy) now, unlike every earlier version of this comment: heat
- * conduction can boil a liquid on the far side of a conductor, and doing
- * that has to walk AGAINST gravity to find the liquid's surface (see
- * conduct_heat()'s own comment for why) - it needs a direction, and this
- * is the only place one is available without recomputing it. Still just
- * two ints, cheap enough that the reasoning in sand_step()'s own call
- * site (an internal early-return is enough, no need to also check
- * may_have_burning out there the way sand_step_gas() checks
- * may_have_gas) holds exactly as it did before. */
-void sand_step_reactions(sand_t *s, int gx, int gy);
+ * Takes only `s`. It briefly took (gx, gy) too, while boiling walked
+ * against gravity to find a liquid's surface; boiling happens at the
+ * heat source now and the steam bubbles up by itself, so this pass has
+ * no interest in gravity at all. That also restores the original reason
+ * may_have_burning is checked INSIDE rather than at the call site:
+ * there are no arguments to marshal for a call that will immediately
+ * return. */
+void sand_step_reactions(sand_t *s);
 
 /* Defined in sand_liquid.c, called from sand.c's per-cell sweep. The one
  * piece of liquid movement that has to live inside that sweep rather than in

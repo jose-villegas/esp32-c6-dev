@@ -320,14 +320,24 @@ Two things about where it lives are the interesting part:
   passes ran earlier in the same `sand_step()`. The liquid gets exactly
   one move, the same guarantee every other move has.
 
-**Boiling still converts the liquid at the surface of a column**
-(`boil_surface()`), not the cell nearest the heat. That began as a
-workaround for the trapping above and now stands on its own smaller
-merit: steam appearing at the top of the pot is where steam comes off a
-real one, and it saves a long bubble journey through the whole column
-every time. With bubbling in place, boiling at the heat source instead
-is now a viable alternative that would read as a rising bubble column -
-a visual choice rather than a correctness one.
+**Boiling happens at the heat source**, converting the very cell
+`conduct_heat()` reaches - the one touching the hot conductor - and the
+steam climbs out by itself from there. A pot on a hot stone reads as a
+column of bubbles rising off its base.
+
+It did not always. The first version walked *against gravity* through
+the liquid run and boiled the cell at the **surface** instead, purely
+because of the trapping described above: before bubbling existed, steam
+made at the bottom of a pool stayed there forever, so boiling anywhere
+else produced nothing anyone could see. That walk needed a gravity
+vector, which is the only reason this pass ever took one. Bubbling
+dissolved the constraint, and the walk, its `BOIL_REACH` cap and the
+whole `(gx, gy)` plumbing came back out with it.
+
+Worth keeping as a general habit: **a workaround built on a limitation
+should be re-examined the moment that limitation is lifted.** Left
+alone, it quietly outlives its reason and starts reading as a deliberate
+design choice - and the code carries a parameter nobody can justify.
 
 **Building one in the app:** a wood floor, a stone basin over it as
 thick as a single drag of the pour brush produces, water poured into the

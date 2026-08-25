@@ -967,14 +967,15 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     /* Same slot again, for a burning cell's reactions: ignition/
      * extinguish/burn-out are neither gravity-ward nor movement at all,
      * so they cannot join the main sweep and must finish before
-     * finalize_settling() too. Takes `s` plus (gx, gy) now - heat
-     * conduction's own boiler walk needs a gravity direction, see
-     * sand_priv.h's own comment on sand_step_reactions() - but that is
-     * still only two ints, unlike sand_step_gas()'s nine, so there is no
-     * marshalling cost to dodge by checking may_have_burning out here as
-     * well - the function's own internal check (mirroring
-     * sand_step_liquids()'s pattern, not sand_step_gas()'s) is enough. */
-    sand_step_reactions(s, gx, gy);
+     * finalize_settling() too. Takes only `s`, unlike sand_step_gas()'s
+     * nine arguments - it briefly took (gx, gy) as well, while boiling
+     * walked against gravity to find a liquid's surface, but boiling
+     * happens at the heat source now and the steam bubbles up by itself.
+     * With nothing to marshal there is no cost to dodge by checking
+     * may_have_burning out here as well, so the function's own internal
+     * check (mirroring sand_step_liquids()'s pattern, not
+     * sand_step_gas()'s) is enough. */
+    sand_step_reactions(s);
 
     finalize_settling(s, settled_bit);
 }

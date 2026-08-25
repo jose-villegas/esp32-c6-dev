@@ -127,26 +127,32 @@
  * Two problems specific to conduction are solved separately, in the two
  * functions below:
  *
- * boil_surface() solves a movement problem. Steam is lighter than gas
- * and fire (see material.c), but can_enter()'s displacement rule is
- * one-directional - a cell can only be entered by something DENSER, so
- * steam created at the BOTTOM of a still pool cannot rise into the water
- * sitting above it, and that water cannot fall into the steam either.
- * Boiling the liquid cell conduct_heat() actually reaches would trap the
- * steam there permanently, which would make the boiler produce nothing
- * anyone could see. Instead, boil_surface() walks AGAINST gravity
- * through the connected run of that same liquid and converts the LAST
- * cell in the run - the one at the surface, where the steam is free to
- * rise, which is also exactly where steam actually comes off a real pot.
- * That trapping is no longer permanent, which softens this a good deal:
- * try_bubble() (sand_gas.c) lets a gas cell swap places with the liquid
- * directly above it, so steam created anywhere inside a pool now climbs
- * out at about a cell a step. boil_surface() stays anyway, on its own
- * smaller merit - steam appearing at the top of the pot is where it
- * comes off a real one, and it saves a long bubble journey up through
- * the whole column every single time. A fire quenched while fully
- * submerged leaves its steam wherever it was and simply bubbles out
- * from there, which needs no special case at all.
+ * Boiling happens AT THE HEAT SOURCE - conduct_heat() converts the very
+ * cell it reaches, the one touching the hot conductor, and the steam
+ * then climbs out of the pool by itself through try_bubble()
+ * (sand_gas.c), roughly a cell a step. A pot on a hot stone therefore
+ * reads as a column of bubbles rising off its base, which is what a real
+ * one does.
+ *
+ * That is the second design here, and the first is worth recording
+ * because the reasoning was sound and the conclusion still had to be
+ * thrown away. Steam is lighter than gas and fire (see material.c), but
+ * can_enter()'s displacement rule is one-directional - a cell can only
+ * be entered by something DENSER - so steam could not rise into the
+ * water above it, and room_in() (sand_liquid.c) would not let that water
+ * fall into the steam either. Steam made at the bottom of a pool was
+ * therefore stuck there permanently, and the first version of this code
+ * worked around it with a boil_surface() walk: climb against gravity
+ * through the liquid run and convert the LAST cell instead, so the steam
+ * appeared at the surface where it was free to leave. It worked, and it
+ * cost this pass a gravity vector it otherwise had no use for.
+ *
+ * try_bubble() then made gas able to swap places with liquid above it,
+ * which dissolved the constraint the walk existed to dodge. The walk,
+ * its BOIL_REACH cap and the whole (gx, gy) plumbing came back out
+ * again. The lesson worth keeping: a workaround built on a limitation
+ * should be re-examined the moment that limitation is lifted, or it
+ * quietly outlives its reason and starts looking like a design choice.
  *
  * conduct_heat() solves a reach problem, and this is worth reading
  * carefully because an earlier version got it wrong in a way that was
@@ -375,47 +381,16 @@ static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w)
     wake_block_and_neighbors(s, nx, ny);
 }
 
-/* Bounds the against-gravity walk boil_surface() does below, and the
- * along-a-conductor walk conduct_heat() does further down - see this
- * file's own top comment ("THE BOILER") for why each exists and why
- * each number is sized the way it is. Both cap a cold pass, not claim
- * anything about how far heat or a liquid surface can really be. */
-#define BOIL_REACH    48
+/* Bounds the along-a-conductor walk conduct_heat() does below - see this
+ * file's own top comment ("THE BOILER") for why it exists and why the
+ * number is sized the way it is. It caps a cold pass; it does not claim
+ * anything about how far heat can really travel. */
 #define CONDUCT_REACH 32
-
-/* Finds the surface of a still liquid and boils IT, not whatever cell
- * conduct_heat() actually reached. Starting at (x, y) - which the caller
- * has already confirmed holds `liquid_id` - walks one cell at a time in
- * direction (updx, updy) (AGAINST gravity, i.e. towards the surface)
- * for as long as the next cell is still the same liquid, capped at
- * BOIL_REACH, then converts the LAST cell reached. See this file's own
- * top comment for why the cell conduct_heat() finds cannot simply be
- * boiled in place. */
-static inline void boil_surface(sand_t *s, int x, int y, int w, int h,
-                                int updx, int updy, uint8_t liquid_id)
-{
-    int lx = x, ly = y;
-    for (int k = 0; k < BOIL_REACH; k++) {
-        const int nx = lx + updx;
-        const int ny = ly + updy;
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            break;
-        }
-        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (CELL_IS_EMPTY(n) || CELL_MATERIAL(n) != liquid_id) {
-            break;
-        }
-        lx = nx;
-        ly = ny;
-    }
-    const size_t at = (size_t)ly * (size_t)w + (size_t)lx;
-    place_reacted(s, lx, ly, at, MAT_STEAM);
-}
 
 /* Heat crossing a run of conductor cells - the boiler. See this file's
  * own top comment ("THE BOILER") for the two problems this and
- * boil_surface() above solve, and why an exactly-one-cell reach was
- * tried first and did not work.
+ * solves, and why an exactly-one-cell reach was tried first and did
+ * not work.
  *
  * For each cardinal neighbour that is a conductor (reaction_t.conducts,
  * checked cheaply before ever entering the walk below), walks along
@@ -427,14 +402,12 @@ static inline void boil_surface(sand_t *s, int x, int y, int w, int h,
  * stops there - nothing happens, and in particular no fire is ever
  * created in that empty cell, which is what keeps a sealed stone box
  * sealed. The moment the walk reaches a cell that is NOT itself a
- * conductor, that is the far side: a liquid there boils (via
- * boil_surface(), not in place - see this file's own top comment for
- * why), fuel there ignites (deterministically - the conducts roll
+ * conductor, that is the far side: a liquid there boils in place and
+ * bubbles out on its own afterwards, fuel there ignites (deterministically - the conducts roll
  * already gated this, so ignition here does not also draw from
  * reaction_t.flammability), and anything else is simply warmed with no
  * visible effect. Returns whether it did anything. */
-static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h,
-                                int updx, int updy)
+static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
 {
     bool acted = false;
 
@@ -493,7 +466,26 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h,
         const cell_t bc = s->cells[bat];
         const material_t *bm = material_of(bc);
         if (bm->kind == KIND_LIQUID) {
-            boil_surface(s, rx, ry, w, h, updx, updy, CELL_MATERIAL(bc));
+            /* Boils the cell the heat actually reached, which is the one
+             * touching the conductor - the bottom of a pot sitting on a
+             * hot stone, not its surface. That steam then climbs out on
+             * its own through try_bubble() (sand_gas.c), one cell a step,
+             * which is what makes a boiler read as a rising column of
+             * bubbles rather than a puff appearing at the top from
+             * nowhere.
+             *
+             * It used to boil the SURFACE instead, walking against
+             * gravity through the liquid run to find it, and that walk is
+             * now deleted along with the (updx, updy) plumbing and the
+             * BOIL_REACH cap that bounded it. Worth knowing why, because
+             * the walk was not arbitrary: before bubbling existed, steam
+             * made at the bottom of a pool was stuck there permanently
+             * (see try_bubble()'s own comment for the two rules that
+             * deadlocked), so boiling anywhere but the surface produced
+             * nothing anyone could see. Bubbling removed that constraint
+             * entirely, and with it the only reason this code needed to
+             * know which way was up. */
+            place_reacted(s, rx, ry, bat, MAT_STEAM);
             acted = true;
         } else {
             const reaction_t *br = reaction_of(bc);
@@ -531,7 +523,7 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h,
  * early return, since there is no reason a fire cell could not both
  * light a neighbour AND warm a stone wall on its other side at once. */
 static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
-                                  int w, int h, int updx, int updy)
+                                  int w, int h)
 {
     cell_t grain = row[x];
     const material_t *mat = material_of(grain);
@@ -592,7 +584,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
         }
     }
 
-    if (conduct_heat(s, x, y, w, h, updx, updy)) {
+    if (conduct_heat(s, x, y, w, h)) {
         acted = true;
     }
 
@@ -620,8 +612,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
  * would let a quiet, untouched burning cell fall out of
  * may_have_burning's bookkeeping while still physically on the grid,
  * stranding its own eventual burn-out. */
-static bool step_one_burning_row(sand_t *s, int y, int w, int h, int updx,
-                                 int updy)
+static bool step_one_burning_row(sand_t *s, int y, int w, int h)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
@@ -632,12 +623,17 @@ static bool step_one_burning_row(sand_t *s, int y, int w, int h, int updx,
             continue;
         }
         any = true;
-        step_one_burning_cell(s, row, x, y, w, h, updx, updy);
+        step_one_burning_cell(s, row, x, y, w, h);
     }
     return any;
 }
 
-void sand_step_reactions(sand_t *s, int gx, int gy)
+/* Takes only `s` again. It briefly took (gx, gy) as well, for
+ * a since-deleted surface walk to climb against gravity;
+ * boiling now happens at the heat source instead and the steam finds its
+ * own way up by bubbling, so nothing in this pass has any interest in
+ * which way gravity points. */
+void sand_step_reactions(sand_t *s)
 {
     if (!s->may_have_burning) {
         return;
@@ -646,24 +642,9 @@ void sand_step_reactions(sand_t *s, int gx, int gy)
     const int w = s->w;
     const int h = s->h;
 
-    /* AGAINST gravity, for boil_surface() (via conduct_heat()) to walk
-     * towards a liquid's surface. The NEAREST-of-eight direction
-     * (sand_gravity_direction(), not the dithered per-step one) - same
-     * choice load/the cross-flow axis already make, and for the same
-     * reason: this direction should not flicker between two octants
-     * step to step the way the dithered one deliberately does, or a
-     * boiler's surface-finding walk would too. sand_step() has already
-     * ruled out (gx, gy) == (0, 0) before any of the passes that run
-     * before this one are reached (see its own free-fall early return),
-     * so this is always a real, nonzero unit vector here. */
-    int gdx, gdy;
-    sand_gravity_direction(gx, gy, &gdx, &gdy);
-    const int updx = -gdx;
-    const int updy = -gdy;
-
     bool found_any = false;
     for (int y = 0; y < h; y++) {
-        if (step_one_burning_row(s, y, w, h, updx, updy)) {
+        if (step_one_burning_row(s, y, w, h)) {
             found_any = true;
         }
     }

@@ -3704,7 +3704,29 @@ static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
         "attenuating walk itself, not a second constant");
 }
 
-static void test_boiling_converts_the_top_of_the_water_column_not_the_bottom(void)
+/* Boiling happens where the HEAT is, not where the steam wants to end up.
+ *
+ * This test asserted the exact opposite until bubbling existed, and the
+ * reversal is worth keeping visible rather than quietly rewriting.
+ * conduct_heat() reaches the bottom cell of the column - the one touching
+ * the hot stone - and used to hand it to a boil_surface() walk that
+ * climbed against gravity to convert the TOP cell instead. That walk was
+ * not decoration: steam made at the bottom of a pool was permanently
+ * stuck there (can_enter() only lets a denser mover displace a lighter
+ * target, and room_in() will not let water fall into a steam cell
+ * either), so boiling anywhere but the surface produced nothing anyone
+ * could see.
+ *
+ * try_bubble() (sand_gas.c) removed that constraint, and with it the
+ * only reason to boil anywhere other than the heat source. Boiling the
+ * bottom cell now reads the way a real pot does - a column of bubbles
+ * climbing from the hot base - instead of steam appearing at the surface
+ * from nowhere.
+ *
+ * sand_set_buoyancy(&wide, 0) keeps the newly made steam still for the
+ * duration, so this measures WHERE the boil happened rather than where
+ * the bubble had got to by the time it was inspected. */
+static void test_boiling_converts_the_cell_nearest_the_heat(void)
 {
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
@@ -3729,22 +3751,19 @@ static void test_boiling_converts_the_top_of_the_water_column_not_the_bottom(voi
     bool boiled = false;
     for (int i = 0; i < 10 && !boiled; i++) {
         sand_step(&wide, 0, 1000, 0);
-        boiled = CELL_MATERIAL(sand_at(&wide, x, water_top)) == MAT_STEAM;
+        boiled = CELL_MATERIAL(sand_at(&wide, x, water_bottom)) == MAT_STEAM;
     }
 
     TEST_ASSERT_TRUE_MESSAGE(boiled,
-        "setup: the surface of the column must eventually boil");
+        "the cell nearest the stone - the one conduct_heat() actually "
+        "reaches - must be the one that boils");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&wide, x, water_bottom)),
-        "the cell nearest the stone must still be plain water at the "
-        "moment the surface first boils - conduct_heat() reaches the "
-        "bottom cell of the column first, and boil_surface() must walk "
-        "from there to the top rather than converting the bottom cell "
-        "it actually found. This is the whole reason the surface-walk "
-        "exists: boiling the bottom cell in place would trap the steam "
-        "under the water sitting above it (can_enter() is "
-        "one-directional, so steam cannot rise into denser water) and "
-        "the boiler would produce nothing anyone could ever see");
+        CELL_MATERIAL(sand_at(&wide, x, water_top)),
+        "and the surface must still be plain water at that moment - "
+        "boiling happens at the heat source now, and the steam makes "
+        "its own way up by bubbling rather than being conjured at the "
+        "top of the column. A surface cell boiling first would mean the "
+        "old against-gravity walk had come back");
 }
 
 static void test_the_boiler_end_to_end(void)
@@ -4785,7 +4804,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thick_wall_still_conducts);
     RUN_TEST(test_conduction_stops_at_the_reach_cap);
     RUN_TEST(test_a_thick_wall_conducts_more_slowly_than_a_thin_one);
-    RUN_TEST(test_boiling_converts_the_top_of_the_water_column_not_the_bottom);
+    RUN_TEST(test_boiling_converts_the_cell_nearest_the_heat);
     RUN_TEST(test_the_boiler_end_to_end);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
