@@ -60,6 +60,9 @@ crash anything, only sit there as an immovable block.
 | 7 | steam | `KIND_GAS` | rises | `sight=20`, `buoyancy=160` (fastest); water that got hot |
 | 8 | smoke | `KIND_GAS` | rises | `sight=24` (widest), `decay=16` (longest-lived); fuel that burned out |
 | 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
+| 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
+| 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
+| 12 | ash | `KIND_POWDER` | falls | `density=40`, `repose=4` (flatter than sand); inert, what a spent ember leaves |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -85,22 +88,35 @@ how it moves, `reactions[]` for how it burns - which is a small price
 for keeping the hot table exactly as small as its own comment insists
 it stay.
 
-| Material | `flammability` | `ignites_to` | `burns` | `conducts` | `smoke` | `quench_to` | `flare` |
-|---|---|---|---|---|---|---|---|
-| stone | 0 | - | 0 | 220 | 0 | - | 0 |
-| gas | 255 | fire | 0 | 0 | 0 | - | 0 |
-| fire | 0 | - | 1 | 0 | 40 | steam | 0 |
-| wood | 6 | ember | 0 | 0 | 0 | - | 0 |
-| ember | 0 | - | 1 | 0 | 90 | steam | 48 |
+| Material | `flammability` | `needs_air` | `ignites_to` | `burns` | `conducts` | `residue` → `residue_to` | `quench_to` | `flare` |
+|---|---|---|---|---|---|---|---|---|
+| stone | 0 | - | - | 0 | 220 | 0 | - | 0 |
+| gas | 255 | - | fire | 0 | 0 | 0 | - | 0 |
+| fire | 0 | - | - | 1 | 0 | 40 → smoke | steam | 0 |
+| wood | 6 | - | ember | 0 | 0 | 0 | - | 0 |
+| ember | 0 | - | - | 1 | 0 | 200 → **ash** | steam | 48 |
+| oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 |
+| lava | 0 | - | - | **1** | 0 | 0 | **stone** | 16 |
 
-Note the two different byproducts: `quench_to` is **steam** (water that
-got hot) while `smoke` leaves **smoke** (fuel that burned out). They are
-separate materials for a reason worth not re-litigating - see the
-simulation document's own section.
+Three things in that table are worth reading twice:
 
-Everything else - sand, water, steam, smoke, and every unused slot - is
-all-zero, which reads correctly for every field on its own: never
-catches, never a heat source, never conducts, never smokes, vanishes on
+- **The byproducts are different materials.** `quench_to` gives **steam**
+  (water that got hot); `residue` gives whatever `residue_to` names -
+  **smoke** for fire (fuel that burned out), **ash** for an ember. See the
+  simulation document for why steam and smoke are not one row.
+- **`needs_air` is what makes a pool of fuel burn rather than detonate.**
+  Only oil sets it. Without it a spark lights a whole connected pool
+  inside one pass.
+- **Lava is `KIND_LIQUID` *and* `burns`.** That combination is the
+  clearest evidence the movement and reaction axes are genuinely
+  independent - nothing anywhere special-cases it. It is also why lava's
+  `decay` **must** be 0: `decay != 0` reinterprets the variant nibble as
+  life remaining, and for a liquid that nibble is its fill level, so any
+  decay at all would eat the cell's own mass.
+
+Everything else - sand, water, steam, smoke, ash, and every unused slot -
+is all-zero, which reads correctly for every field on its own: never
+catches, never a heat source, never conducts, leaves nothing, vanishes on
 quench, never flares. See
 [Fire chemistry: wood, embers, steam, and a working
 boiler](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)

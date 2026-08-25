@@ -237,16 +237,35 @@ static inline void place_reacted(sand_t *s, int x, int y, size_t at,
     wake_block_and_neighbors(s, x, y);
 }
 
-/* Whether (nx, ny) is in bounds and holds a liquid - the one thing that
- * extinguishes a burning cell. */
-static inline bool neighbor_is_liquid(const sand_t *s, int nx, int ny, int w,
-                                      int h)
+/* Whether (nx, ny) is in bounds and holds a liquid that actually puts
+ * fires out - which is not the same as "holds a liquid" any more, and
+ * this is the check that has to change first when a second liquid
+ * arrives.
+ *
+ * A liquid quenches only if it is NEITHER fuel (`flammability`) NOR a
+ * heat source itself (`burns`). Water is both zero and quenches on one
+ * touch exactly as it always has. Oil would otherwise put out the fire
+ * that is supposed to be lighting it - and it would win, because this
+ * check runs before ignition and returns outright. Lava would put out
+ * fires by existing, which is worse.
+ *
+ * Inferred from the two fields rather than opted into with a `quenches`
+ * flag of its own, deliberately: a flag would have to be set on every
+ * existing liquid or they silently stop extinguishing anything, and
+ * "does not burn and is not on fire" is the honest definition of the
+ * thing anyway. */
+static inline bool neighbor_quenches(const sand_t *s, int nx, int ny, int w,
+                                     int h)
 {
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
         return false;
     }
     const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-    return !CELL_IS_EMPTY(n) && material_of(n)->kind == KIND_LIQUID;
+    if (CELL_IS_EMPTY(n) || material_of(n)->kind != KIND_LIQUID) {
+        return false;
+    }
+    const reaction_t *r = reaction_of(n);
+    return r->flammability == 0 && r->burns == 0;
 }
 
 /* Whether (nx, ny) is in bounds and holds something strictly denser than
@@ -274,7 +293,7 @@ static inline bool neighbor_smothers(const sand_t *s, int nx, int ny,
 
 /* Whether every one of the 4 cardinal neighbours smothers this cell -
  * true burial, not a single denser touch. An ALL-of-4 predicate, unlike
- * neighbor_is_liquid()'s/try_ignite()'s own per-neighbour ANY/EACH loops
+ * neighbor_quenches()'s/try_ignite()'s own per-neighbour ANY/EACH loops
  * above and below - a gap on even one side means real air still reaches
  * it, so it returns false the moment any direction fails rather than
  * accumulating across all four. */
@@ -288,6 +307,40 @@ static inline bool smothered(const sand_t *s, int x, int y, int w, int h,
         }
     }
     return true;
+}
+
+/* Whether any of the four cardinal neighbours is open to the air - the
+ * test behind reaction_t.needs_air.
+ *
+ * "Air" is empty space OR any KIND_GAS cell, and that second half is not
+ * a nicety, it is the whole thing working. Fire is a gas. The moment a
+ * flame settles onto the surface of a pool of fuel, that surface stops
+ * having an EMPTY neighbour - it has a burning one - so a version of this
+ * that tested only for emptiness declared the slick unexposed exactly
+ * when it was most obviously on fire, and the pool could never light at
+ * all. Measured, not reasoned about: a flame blob sat on an oil surface
+ * for thirty steps doing nothing before this was fixed.
+ *
+ * Off the grid does NOT count as air: the walls are solid (sand_at()
+ * reads out-of-bounds as stone), so a pool lying against one is no more
+ * exposed there than against a stone block.
+ *
+ * An ANY-of-4 predicate, unlike smothered()'s ALL-of-4 just above - one
+ * open face is enough to feed a flame. */
+static inline bool touches_air(const sand_t *s, int x, int y, int w, int h)
+{
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(n) || material_of(n)->kind == KIND_GAS) {
+            return true;
+        }
+    }
+    return false;
 }
 
 /* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
@@ -309,6 +362,10 @@ static inline bool try_ignite(sand_t *s, int nx, int ny, int w, int h)
     const reaction_t *r = reaction_of(n);
     if (r->flammability == 0) {
         return false;
+    }
+    if (r->needs_air && !touches_air(s, nx, ny, w, h)) {
+        return false;   /* buried in more of itself - a pool of fuel burns
+                         * at its surface, not through its volume */
     }
     /* s->flammability mirrors s->decay's own override (see
      * sand_set_flammability()): negative (the default) means "each
@@ -545,9 +602,10 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
          * comment. Hardcoded rather than a `smokes_to` field mirroring
          * quench_to, because every material that burns wants the same
          * residue; if one ever does not, that field is the change. */
-        const uint8_t smoke = reactions[mat_id].smoke;
-        if (smoke != 0 && (int)(rng_next(&s->rng) & 0xFF) < smoke) {
-            place_reacted(s, x, y, at, MAT_SMOKE);
+        const uint8_t residue = reactions[mat_id].residue;
+        if (residue != 0 && (int)(rng_next(&s->rng) & 0xFF) < residue) {
+            const uint8_t to = reactions[mat_id].residue_to;
+            place_reacted(s, x, y, at, to ? to : MAT_SMOKE);
         }
         return true;
     }
@@ -555,7 +613,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
-        if (neighbor_is_liquid(s, nx, ny, w, h)) {
+        if (neighbor_quenches(s, nx, ny, w, h)) {
             const material_id_t quench_to = reactions[mat_id].quench_to;
             if (quench_to != 0) {
                 place_reacted(s, x, y, at, quench_to);

@@ -2065,6 +2065,15 @@ static void test_a_tipped_basin_keeps_its_sand(void)
  * CONDUCT_REACH_TEST mirrors sand_reactions.c's own CONDUCT_REACH,
  * which is private to that file; if the two ever drift apart the
  * test stops proving anything, so keep them together. */
+/* Half-full, matching WATER/STONE/GAS/... below rather than MASS_MAX -
+ * a liquid's variant is a FILL LEVEL, so a grid laid out with these does
+ * NOT fill its container, and a test that assumes a sealed box is brim
+ * full because every cell in it was set will be wrong about where the
+ * surface is. */
+#define OIL   CELL_MAKE(MAT_OIL,  8)
+#define LAVA  CELL_MAKE(MAT_LAVA, 8)
+#define ASH   CELL_MAKE(MAT_ASH,  8)
+
 #define CONDUCT_REACH_TEST 32
 #define CAP_W (CONDUCT_REACH_TEST + 16)
 #define CAP_H 8
@@ -3086,10 +3095,25 @@ static void test_an_ember_burns_out_over_time(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
-        "an ember, and anything it flared into fire along the way, must "
-        "burn out to nothing given enough time - the same decay "
-        "mechanism fire and gas already use");
+    /* NOT "burns out to nothing" any more: an ember's residue_to is
+     * MAT_ASH, so what a spent ember leaves is a grain of ash, and ash
+     * is inert and permanent. The assertion is therefore that nothing
+     * still BURNING is left - no ember, no fire it flared - rather than
+     * that the grid is empty. Ash falls under gravity like any powder,
+     * so this looks for it anywhere rather than at (3, 3). */
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ASH, CELL_MATERIAL(c),
+                "an ember, and anything it flared into fire along the "
+                "way, must stop burning given enough time - the only "
+                "thing allowed to remain is the ash the ember leaves "
+                "behind (reaction_t.residue_to)");
+        }
+    }
 }
 
 static void test_an_ember_flares_fire_into_an_empty_neighbour(void)
@@ -3379,6 +3403,339 @@ static long mass_held_by(uint8_t id)
  * legal move in EITHER direction and sat frozen there forever - which is
  * exactly what it looked like on the device: a boiler that made steam and
  * then held onto it. */
+/* --- oil, lava and ash ------------------------------------------------ */
+
+/* A stone basin holding a pool of oil `depth` cells deep in columns
+ * 2..5, with open air above it, and returns the row the surface sits on.
+ * Open above on purpose, unlike fire_room(): these tests need a flame to
+ * be able to sit ON the pool. */
+static int oil_pool(int depth)
+{
+    fixture();
+    sand_set_decay(&s, 0);
+    const int floor = 6;
+    for (int x = 1; x <= 6; x++) {
+        sand_set(&s, x, floor, STONE);
+    }
+    for (int y = floor - depth; y < floor; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, OIL);
+        }
+    }
+    return floor - depth;
+}
+
+/* The rule that makes a slick burn instead of detonate.
+ *
+ * Without reaction_t.needs_air, one spark lights every cell of a
+ * connected pool inside a single pass - this file's reactions scan
+ * propagates ignition through a whole pocket in one step (see
+ * sand_reactions.c's top comment), which is a fuel-air bomb, not a
+ * slick. With it, only cells touching air can catch, so the interior of
+ * the pool is untouchable until the layer above it has burned off. */
+static void test_only_the_exposed_surface_of_an_oil_pool_can_ignite(void)
+{
+    const int surface = oil_pool(4);
+    sand_set(&s, 3, surface - 1, FIRE);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_OIL,
+        CELL_MATERIAL(sand_at(&s, 3, surface + 2)),
+        "an oil cell buried under more oil must NOT ignite, however "
+        "much of the surface is alight - a pool burns off its top, it "
+        "does not go up all at once");
+}
+
+/* The other half of needs_air, and the bug that shipped in the first
+ * draft of it.
+ *
+ * "Exposed" originally meant "has an EMPTY cardinal neighbour", which is
+ * wrong in the one situation that matters: a flame sitting on the pool is
+ * not empty space, so the surface stopped counting as exposed at exactly
+ * the moment it caught fire, and a slick with a fire blob parked on it
+ * burned for thirty steps without ever lighting. Air has to include
+ * gases. */
+static void test_oil_ignites_with_a_flame_sitting_directly_on_it(void)
+{
+    const int surface = oil_pool(3);
+    /* Cover the whole surface with fire, so no oil cell has any EMPTY
+     * neighbour left at all - the exact case the first version failed. */
+    for (int x = 2; x <= 5; x++) {
+        sand_set(&s, x, surface - 1, FIRE);
+    }
+
+    /* Re-laid every step, because a single flame does not stay put long
+     * enough to react: fire is KIND_GAS, so sand_step_gas() lifts it away
+     * during the SAME step it was placed, before sand_step_reactions()
+     * ever runs. Holding the fire brush down is exactly this, and it is
+     * how the app produces the situation in the first place. */
+    bool caught = false;
+    for (int i = 0; i < 40 && !caught; i++) {
+        for (int x = 2; x <= 5; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, surface - 1))) {
+                sand_set(&s, x, surface - 1, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        caught = CELL_MATERIAL(sand_at(&s, 3, surface)) != MAT_OIL;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(caught,
+        "oil with a flame resting on it must catch - a fire neighbour "
+        "is a KIND_GAS cell, not an empty one, and touches_air() has to "
+        "count gases as air or the surface is declared unexposed "
+        "precisely when it is on fire");
+}
+
+/* Oil is fuel, so it must not also be an extinguisher. neighbor_quenches()
+ * runs before ignition and returns outright, so getting this wrong does
+ * not merely weaken the effect - it inverts it, and oil becomes the best
+ * fire suppressant in the simulation. */
+static void test_oil_does_not_put_fire_out()
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, OIL);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_EMPTY, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "a fire touching OIL must not be extinguished - only liquids "
+        "that are neither fuel nor a heat source quench");
+}
+
+/* And water must still work exactly as it did, which is the thing the
+ * new rule could most easily have broken. */
+static void test_water_still_puts_fire_out(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, WATER);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "water is neither fuel nor a heat source, so it must still "
+        "quench on one touch - and still turn the fire to steam");
+}
+
+/* Two liquids of different densities have to sort themselves out, which
+ * nothing before oil required. room_in() refuses a cell holding another
+ * material and a liquid never consults can_enter(), so without
+ * sink_through_lighter_liquid() the two simply block each other and oil
+ * trapped under water stays there forever. */
+static void test_oil_trapped_under_water_floats_to_the_surface(void)
+{
+    fixture();
+    sand_set_decay(&s, 0);
+    for (int x = 1; x <= 6; x++) {
+        sand_set(&s, x, 7, STONE);
+    }
+    for (int y = 2; y <= 6; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);
+    }
+    for (int y = 2; y <= 5; y++) {
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, WATER);
+        }
+    }
+    for (int x = 2; x <= 5; x++) {
+        sand_set(&s, x, 6, OIL);      /* underneath the whole column */
+    }
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* Asserted as an ORDERING rather than "oil is at row 2", because
+     * these cells are half full (see the shorthand macros at the top of
+     * this file) so the column does not reach the brim and the surface
+     * is not where counting rows would suggest. What matters is that
+     * every oil cell ends up above every water cell. */
+    /* Asserted as "which liquid is on top", not as a strict row
+     * ordering of every cell, and not as "oil is at row 2".
+     *
+     * Two things make the tempting stronger assertions wrong. These
+     * cells are half full (see the shorthand macros at the top of this
+     * file), so the column never reaches the brim and the surface is not
+     * where counting rows would put it. And the two liquids cannot mix
+     * within a cell, so the interface between them is ragged - one row
+     * genuinely holds some oil and some water at the same time, which
+     * makes "every oil cell is above every water cell" false even when
+     * the separation is perfect. */
+    int top = -1, bottom = -1;
+    for (int y = 0; y < H && top < 0; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (!CELL_IS_EMPTY(c) && material_of(c)->kind == KIND_LIQUID) {
+                top = CELL_MATERIAL(c);
+                break;
+            }
+        }
+    }
+    for (int y = H - 1; y >= 0 && bottom < 0; y--) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (!CELL_IS_EMPTY(c) && material_of(c)->kind == KIND_LIQUID) {
+                bottom = CELL_MATERIAL(c);
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_OIL, top,
+        "the topmost liquid must be OIL - it started underneath the "
+        "whole column and has to have risen through it, which only "
+        "happens because the denser water sinks into it, a "
+        "gravity-ward move riding the main sweep's own no-double-move "
+        "guarantee");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, bottom,
+        "and the bottom-most liquid must be WATER, for the same reason "
+        "from the other end");
+}
+
+/* Lava is the first material that is a liquid AND a heat source, so it
+ * is the first place the variant nibble's two meanings could collide.
+ * decay != 0 would make tick_decay() read a lava cell's MASS as a
+ * lifespan and eat it. */
+static void test_lava_does_not_decay_away(void)
+{
+    fixture();
+    /* Deliberately NO sand_set_decay() here, and that is the point of
+     * the test rather than an omission.
+     *
+     * The obvious version of this forces sand_set_decay(&s, 255) to make
+     * any decay show up immediately - but that override replaces the
+     * per-material figure for EVERY material at once (see tick_decay()),
+     * lava included, so it forces lava to decay no matter what its own
+     * row says and destroys the cell every time. It tests the override,
+     * not the table.
+     *
+     * Running on the per-material defaults instead is what actually pins
+     * the thing worth pinning: lava's own decay must be 0, so that
+     * tick_decay() never reads its variant nibble - which for a liquid
+     * is FILL LEVEL, not life - and never eats the cell's mass. Set
+     * lava's decay to anything nonzero and this fails.
+     *
+     * A one-cell-wide well. Lava is a liquid, so a lone cell on an open
+     * floor does not stay put - equalise_liquids() spreads it sideways
+     * and thins it to nothing worth measuring. Penning it in is what
+     * makes "is it still here, and still full" a question about DECAY
+     * rather than about flow. */
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, 2, H - 2, STONE);
+    sand_set(&s, 4, H - 2, STONE);
+    sand_set(&s, 3, H - 2, LAVA);
+
+    for (int i = 0; i < 4 * MATERIAL_VARIANTS; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "lava must be immortal - its variant nibble is a FILL LEVEL, "
+        "not life remaining, so any decay at all would consume the "
+        "cell's own mass");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(CELL_VARIANT(LAVA),
+        CELL_VARIANT(sand_at(&s, 3, H - 2)),
+        "and at exactly the mass it was placed with, not merely present "
+        "- a decay tick reads the variant nibble as life and would show "
+        "up here first");
+}
+
+/* The reaction that makes lava worth having, and a straight reuse of
+ * quench_to: what water does to a burning cell is put it out, and what
+ * putting lava out means is rock. */
+static void test_water_freezes_lava_into_stone(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, LAVA);
+    sand_set(&s, 4, 3, WATER);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "lava quenched by water must become stone, not vanish - "
+        "reaction_t.quench_to, the same field that turns a quenched "
+        "fire into steam");
+}
+
+/* Lava burns, so it must not quench - the same rule oil needs, arrived
+ * at from the other side (oil is fuel, lava is a heat source, and
+ * neighbor_quenches() excludes both). */
+static void test_lava_does_not_put_fire_out(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, LAVA);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_EMPTY, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "a fire touching LAVA must not be extinguished by it - lava is "
+        "a heat source, and a liquid only quenches if it is neither "
+        "fuel nor burning itself");
+}
+
+/* Ash closes the wood loop: a burnt log leaves a pile instead of
+ * nothing. reaction_t.residue_to is what generalised the old hardcoded
+ * MAT_SMOKE residue to name any material. */
+static void test_a_spent_ember_leaves_ash(void)
+{
+    fixture();
+    sand_set_decay(&s, 255);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 2, EMBER);
+    }
+
+    bool found_ash = false;
+    for (int i = 0; i < 2 * MATERIAL_VARIANTS && !found_ash; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_ash; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_ASH) {
+                    found_ash = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(found_ash,
+        "a row of embers burning out must leave ash behind - a burnt "
+        "log ends as a pile, not as nothing");
+}
+
+/* Ash is a powder and inert: it must pile up rather than hang in the air,
+ * and it must never catch fire, or a fire would feed on its own remains
+ * forever. */
+static void test_ash_is_an_inert_powder(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, 3, 1, ASH);
+    sand_set(&s, 3, 2, FIRE);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ASH, CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "ash must fall and settle on the floor like any powder, and "
+        "must still be ash - it is the one thing left when everything "
+        "flammable has already burned, so it can never itself burn");
+}
+
 static void test_steam_bubbles_up_through_standing_water(void)
 {
     water_column();
@@ -4793,6 +5150,16 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_rises_and_disperses);
     RUN_TEST(test_creating_steam_arms_the_gas_pass);
     RUN_TEST(test_burnt_out_fire_can_leave_smoke);
+    RUN_TEST(test_only_the_exposed_surface_of_an_oil_pool_can_ignite);
+    RUN_TEST(test_oil_ignites_with_a_flame_sitting_directly_on_it);
+    RUN_TEST(test_oil_does_not_put_fire_out);
+    RUN_TEST(test_water_still_puts_fire_out);
+    RUN_TEST(test_oil_trapped_under_water_floats_to_the_surface);
+    RUN_TEST(test_lava_does_not_decay_away);
+    RUN_TEST(test_water_freezes_lava_into_stone);
+    RUN_TEST(test_lava_does_not_put_fire_out);
+    RUN_TEST(test_a_spent_ember_leaves_ash);
+    RUN_TEST(test_ash_is_an_inert_powder);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);
     RUN_TEST(test_bubbling_conserves_the_water_it_displaces);
     RUN_TEST(test_plain_gas_bubbles_up_through_water_too);

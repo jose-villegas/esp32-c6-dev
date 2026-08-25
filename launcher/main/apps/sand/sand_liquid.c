@@ -99,6 +99,68 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * by step_one_block()'s `moved_here` from this function's return value,
  * same as every other kind of grain - see mark_move()'s comment in
  * sand_priv.h for why nothing further is needed here. */
+/* Two DIFFERENT liquids meeting, resolved by density: the denser one
+ * sinks and the lighter one is pushed up into the cell it vacated. Whole
+ * cells, swapped - not the mass transfer everything else in this file
+ * does, because there is no sense in which a cell can be part oil and
+ * part water.
+ *
+ * Without this, two liquids simply block each other forever. room_in()
+ * refuses a cell holding any other material, so neither can give mass to
+ * the other; and a liquid never consults can_enter() at all, so the
+ * density rule that sorts out sand and water never runs for them. Oil
+ * poured ONTO water already floats without any of this - it lands on the
+ * surface and cannot get in - but oil that ends up underneath water (a
+ * wave breaking over it, a pour from below, a basin filling around it)
+ * would stay there permanently, which looks broken in the specific way
+ * only a fluid can.
+ *
+ * Expressed as "the denser liquid moves DOWN" rather than "the lighter
+ * one rises", and that phrasing is doing real work. Down is gravity-ward,
+ * so it inherits the main sweep's own no-double-move guarantee for free -
+ * the sweep runs against gravity, so the cell being swapped into has
+ * already been visited and the liquid landing there cannot move again
+ * this step. The mirror-image rule, written as a rise, would have been
+ * anti-gravity and needed its own reversed pass, exactly as gas's does.
+ * Same physics, and one of the two is nearly free. (Compare try_bubble()
+ * in sand_gas.c, which could NOT be phrased this way: nothing else was
+ * going to move that liquid down out of a gas's path, so it had to be a
+ * rise, and it lives in the reversed gas pass because of it.)
+ *
+ * Strictly denser, mirroring can_enter()'s own rule: two liquids at equal
+ * density block each other, which is the correct answer and not a case
+ * worth special-casing. */
+static inline bool sink_through_lighter_liquid(sand_t *s, uint8_t *row,
+                                               uint8_t *prow, int x, int y,
+                                               int tx, int ty, int w,
+                                               cell_t grain,
+                                               const material_t *mat)
+{
+    if (prow == NULL || (unsigned)tx >= (unsigned)w) {
+        return false;
+    }
+    const cell_t below = prow[tx];
+    if (CELL_IS_EMPTY(below)) {
+        return false;   /* open space - the ordinary fall handles it */
+    }
+    if (CELL_MATERIAL(below) == CELL_MATERIAL(grain)) {
+        return false;   /* more of the same liquid - give_mass() handles
+                         * it, and far better: it splits the amount */
+    }
+    const material_t *bm = material_of(below);
+    if (bm->kind != KIND_LIQUID || mat->density <= bm->density) {
+        return false;
+    }
+
+    prow[tx] = grain;
+    row[x]   = below;
+
+    mark_rows(s, y, ty);
+    wake_block_and_neighbors(s, x, y);
+    wake_block_and_neighbors(s, tx, ty);
+    return true;
+}
+
 bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        int x, int y, int dx, int dy,
                        const int *slide_a, const int *slide_b,
@@ -110,6 +172,17 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
 
     /* DOWN first, so a liquid falls before it spreads. */
     const int tx0 = x + dx, ty0 = y + dy;
+
+    /* Before any of the mass bookkeeping: if what is directly below is a
+     * DIFFERENT, lighter liquid, the two trade places whole and this
+     * grain's turn is over. Returning here rather than falling through
+     * matters - row[x] now holds the OTHER liquid, and the mass
+     * accounting below would happily overwrite it with this one. */
+    if (sink_through_lighter_liquid(s, row, prow, x, y, tx0, ty0, w, grain,
+                                    &materials[mat_id])) {
+        return true;
+    }
+
     const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
     mass -= down;
     if (down > 0) {

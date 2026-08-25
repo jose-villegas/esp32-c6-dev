@@ -84,6 +84,9 @@ typedef enum {
     MAT_STEAM,
     MAT_SMOKE,
     MAT_EMBER,
+    MAT_OIL,
+    MAT_LAVA,
+    MAT_ASH,
     MAT_COUNT
 } material_id_t;
 
@@ -215,6 +218,26 @@ typedef struct {
      * into gets the obvious default for free. */
     uint8_t ignites_to;
 
+    /* Nonzero: this material only catches where it TOUCHES AIR - a cell
+     * with at least one empty cardinal neighbour. Zero, the default, means
+     * it catches anywhere fire reaches it, which is right for a solid.
+     *
+     * This is what makes a pool of liquid fuel burn off its surface
+     * instead of detonating through its whole volume the instant a spark
+     * lands on it. The interior cells of a pool are surrounded by more
+     * pool and never qualify; the ones along the top - and any exposed
+     * edge, which is correct too, a slick burns wherever it meets air -
+     * do. As each exposed layer converts and rises away, the layer under
+     * it becomes exposed in turn, so the pool is eaten from the top down
+     * without anything here needing to know which way is up.
+     *
+     * That last part is deliberate. "Only the top burns" is the obvious
+     * phrasing and would need a gravity vector, which this pass used to
+     * take and no longer does (see sand_step_reactions()). "Only what
+     * touches air burns" needs nothing, describes the same thing for any
+     * pool worth looking at, and is more nearly true besides. */
+    uint8_t needs_air;
+
     /* Nonzero: this material IS a heat source, and sand_step_reactions()
      * gives it a turn - decaying, quenching, smothering, igniting
      * neighbours. Replaces the old `CELL_MATERIAL(c) != MAT_FIRE`
@@ -236,18 +259,28 @@ typedef struct {
     uint8_t conducts;
 
     /* Chance in 256 that a burnt-out cell of this material leaves
-     * MAT_SMOKE behind instead of nothing.
+     * something behind instead of simply clearing, and `residue_to` is
+     * what it leaves. `residue_to` of 0 reads as MAT_SMOKE, which is the
+     * common case and what this pair did before it could name anything
+     * else.
      *
      * MAT_SMOKE and MAT_STEAM are near-identical rows in materials[] and
      * were deliberately ONE material to begin with: both are a light gas
      * that rises, spreads and fades, so a second row looked like pure
-     * duplication. It was not. Steam is water that got hot; smoke is
-     * fuel that burned out; and a fire dying in mid-air, nowhere near
-     * water, puffing bright white kettle-steam reads as a bug to anyone
-     * watching it happen. The two rows exist to be TOLD APART on screen,
-     * and the difference that actually matters is in the palette, not
-     * here. See sand_reactions.c's own top comment. */
-    uint8_t smoke;
+     * duplication. It was not. Steam is water that got hot; smoke is fuel
+     * that burned out; and a fire dying in mid-air, nowhere near water,
+     * puffing bright white kettle-steam reads as a bug to anyone watching
+     * it happen. The two rows exist to be TOLD APART on screen, and the
+     * difference that actually matters is in the palette, not here. See
+     * sand_reactions.c's own top comment.
+     *
+     * An ember names MAT_ASH here instead, so a burnt log leaves a pile
+     * rather than vanishing - and takes its smoke from the flames it
+     * flared while alive (fire's own residue) rather than from its own
+     * death, which is both what happens physically and the only way to
+     * get both effects out of one cell. */
+    uint8_t residue;
+    uint8_t residue_to;
 
     /* What this material becomes when a liquid touches it - a
      * material_id_t, narrowed. 0 means it simply vanishes, which is what

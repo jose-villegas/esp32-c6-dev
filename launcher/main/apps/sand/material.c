@@ -350,6 +350,69 @@ const material_t materials[MATERIAL_MAX] = {
                                      * does. */
     },
 
+    [MAT_OIL] = {
+        .name    = "Oil",
+        .kind    = KIND_LIQUID,
+        .density = 22,       /* below water's 30, which is what makes oil
+                              * float rather than sink when the two meet -
+                              * see the density swap in
+                              * move_liquid_grain() (sand_liquid.c).
+                              * Above fire's 15 so it is not something a
+                              * flame can shove around. Sand (60) still
+                              * sinks straight through it. */
+
+        /* The same "no resistance" values water uses, and for the same
+         * reason: a liquid does not slide, pile or scatter, it flows
+         * between neighbours as an amount. */
+        .slip    = 255,
+        .repose  = 0,
+        .scatter = 0,
+    },
+
+    [MAT_LAVA] = {
+        .name    = "Lava",
+        .kind    = KIND_LIQUID,
+        .density = 45,       /* above water (30) so lava sinks and water
+                              * floats when they meet, below sand (60) so
+                              * sand still sinks through lava. Both fall
+                              * out of the existing rules; neither needs
+                              * lava-specific code. */
+        .slip    = 255,
+        .repose  = 0,
+        .scatter = 0,
+
+        .decay   = 0,        /* MUST stay 0, and this is not a style
+                              * choice. decay != 0 is what switches the
+                              * variant nibble from meaning "how much of
+                              * this cell is full" to meaning "life
+                              * remaining" (see material.h's top comment),
+                              * and tick_decay() would then eat a lava
+                              * cell's MASS as though it were a lifespan.
+                              * Lava is the first material that is both a
+                              * liquid and a heat source, so it is the
+                              * first place those two uses of the nibble
+                              * could collide. Immortal is also simply
+                              * what lava should be: it cools by touching
+                              * water, not by waiting. */
+    },
+
+    [MAT_ASH] = {
+        .name    = "Ash",
+        .kind    = KIND_POWDER,
+        .density = 40,       /* between water (30) and sand (60): ash
+                              * sinks in water, and sand poured on top of
+                              * an ash pile sinks through it, which is the
+                              * right way round for something this
+                              * light. */
+        .slip    = 200,      /* far looser than sand's 96 - an ash pile
+                              * slumps and skates where sand locks up */
+        .repose  = 4,        /* shallower than sand's 7: ash piles into a
+                              * flatter, softer heap */
+        .scatter = 60,       /* above sand's 40 - it puffs about as it
+                              * falls. Starting point, not final - tune on
+                              * device like every other constant here. */
+    },
+
     /* Slots 9-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
@@ -371,6 +434,55 @@ const material_t materials[MATERIAL_MAX] = {
  *===========================================================================*/
 
 const reaction_t reactions[MATERIAL_MAX] = {
+    [MAT_OIL] = {
+        /* Catches readily, but only where it meets air - see
+         * material.h's own comment on `needs_air`. Without that flag a
+         * spark landing on a pool would light every cell of it in a
+         * single pass (this file's scan order propagates ignition
+         * through a connected pocket within one step - see the top
+         * comment), which is a detonation, not a slick burning.
+         *
+         * 50 in 256 is roughly one catch every five steps per adjacent
+         * flame: brisk enough that oil reads as obviously more eager
+         * than wood's 6, slow enough to watch a surface layer light up
+         * rather than blink. Starting point, not final - tune on device
+         * like every other constant here. */
+        .flammability = 50,
+        .needs_air    = 1,
+        .ignites_to   = MAT_FIRE,   /* burns straight to flame, unlike
+                                     * wood: there is no log left to
+                                     * smoulder, the fuel simply goes.
+                                     * The flame rises off, exposing the
+                                     * layer beneath, which is what eats
+                                     * the pool downward */
+    },
+
+    [MAT_LAVA] = {
+        /* A heat source that happens to be a liquid, and the clearest
+         * proof the movement and reaction axes really are independent:
+         * KIND_LIQUID in materials[] above, `burns` here, and not one
+         * line of code anywhere knows about the combination. */
+        .burns = 1,
+
+        .quench_to = MAT_STONE,   /* water puts lava out by turning it to
+                                   * rock, rather than by making it
+                                   * vanish. The water pays a unit of its
+                                   * own mass for it, exactly as it does
+                                   * quenching a fire (pay_quench_cost()),
+                                   * so a small puddle cannot pave an
+                                   * ocean of lava for free. */
+
+        .flare = 16,              /* well below ember's 48: lava licks the
+                                   * occasional flame rather than burning
+                                   * with one. Mostly so a pool reads as
+                                   * dangerous rather than decorative.
+                                   * Starting point, not final. */
+
+        /* No residue: lava never burns out (decay 0 above), so nothing
+         * here would ever fire. No conducts either - lava IS the heat,
+         * it does not pass someone else's along. */
+    },
+
     [MAT_STONE] = {
         /* 220 in 256 (~0.86) is the chance heat crosses ONE cell of
          * stone - see conduct_heat()'s own comment in sand_reactions.c
@@ -417,7 +529,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * sand_reactions.c's dispatch, which now keys off
                          * this instead of CELL_MATERIAL(c) == MAT_FIRE */
 
-        .smoke = 40,    /* chance in 256 that a burnt-out fire cell leaves
+        .residue = 40,    /* chance in 256 that a burnt-out fire cell leaves
                          * MAT_STEAM behind - smoke, physically the same
                          * material a kettle's steam is (see MAT_STEAM's
                          * own row above). Lower than ember's 90: a flame
@@ -453,7 +565,18 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * now keys off reaction_t.burns rather than
                          * CELL_MATERIAL(c) == MAT_FIRE */
 
-        .smoke = 90,    /* well above fire's 40: a whole ember finishing
+        .residue    = 200,   /* was 90, and left MAT_SMOKE. An ember now
+                              * leaves MAT_ASH most of the time instead,
+                              * so a burnt log ends as a pile rather than
+                              * as nothing. The smoke from a burning log
+                              * comes from the FLAMES it flared while it
+                              * was alive (fire's own residue, 40), not
+                              * from its death - which is both what
+                              * happens physically and the only way to
+                              * get a solid residue and a rising one out
+                              * of a system where a cell holds exactly
+                              * one thing. */
+        .residue_to = MAT_ASH,    /* well above fire's 40: a whole ember finishing
                          * its slow burn is a bigger, more definite event
                          * than a flame guttering out, and should leave
                          * smoke behind far more often. Starting point,
@@ -573,7 +696,33 @@ static const gfx_color_t palette[256] = {
                                     * fire's own yellow-white so a
                                     * smouldering log reads differently
                                     * from the flame above it */
-    UNUSED, UNUSED, UNUSED,
+    SHADES(0x6E5A22, 0x14100A),   /* oil   - a liquid's variant is FILL
+                                    * LEVEL, not life, so this runs the
+                                    * same way water's does: a thin film
+                                    * is a murky olive and a deep pool is
+                                    * nearly black. Dark and warm against
+                                    * water's pale blue, so a slick
+                                    * floating on water is unmistakable -
+                                    * which is the whole point of giving
+                                    * oil a density below water's */
+    SHADES(0xFFC24A, 0x8A1400),   /* lava  - fill level again, and
+                                    * deliberately INVERTED against
+                                    * fire's own ramp: a thin skim is
+                                    * bright yellow and a deep pool is
+                                    * dark red, so depth reads as
+                                    * cooling crust rather than as more
+                                    * heat. Keeps a lava pool visually
+                                    * distinct from the flames it
+                                    * flares */
+    SHADES(0x24242A, 0x8E8A84),   /* ash   - a powder, so this is a SHADE
+                                    * ramp and every grain picks one at
+                                    * random: cold charcoal through pale
+                                    * grey. Overlaps smoke's range on
+                                    * purpose - they are the same stuff,
+                                    * one settled and one airborne - and
+                                    * they are never confusable in
+                                    * practice because one falls into
+                                    * piles and the other rises */
     UNUSED, UNUSED, UNUSED,
 };
 

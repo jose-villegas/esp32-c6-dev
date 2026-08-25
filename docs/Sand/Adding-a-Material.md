@@ -196,7 +196,7 @@ The current ladder, which any new material has to slot into somewhere:
 
 ```mermaid
 flowchart LR
-    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> W["water\n30"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
+    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> W["water\n30"] --> AS["ash\n40"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
 
     style E fill:#2a2a2a,color:#fff
     style S fill:#3d6b8a,color:#fff
@@ -207,7 +207,14 @@ flowchart LR
     style A fill:#a87a3d,color:#fff
     style D fill:#a87a3d,color:#fff
     style T fill:#5a5a5a,color:#fff
+    style X fill:#a87a3d,color:#fff
+    style AS fill:#5a5a5a,color:#fff
+    style LV fill:#8a3d3d,color:#fff
 ```
+
+Oil at 22 and lava at 45 straddle water deliberately: oil floats, lava
+sinks, and both fall out of one rule rather than any material-specific
+code.
 
 Two consequences worth internalising, both real limitations rather than
 bugs to chase:
@@ -227,6 +234,16 @@ bugs to chase:
   it. Worth knowing as a precedent - **when a rule cannot express what
   you need, adding the exception to the cold or warm pass is usually
   right, and teaching the hot predicate is usually wrong.**
+- **Two liquids of different densities also needed their own rule, and it
+  was nearly free.** `room_in()` refuses a cell holding another material,
+  so oil and water simply blocked each other. The fix
+  (`sink_through_lighter_liquid()`, `sand_liquid.c`) is phrased as *the
+  denser liquid moves DOWN* rather than *the lighter one rises* - and
+  that phrasing is the whole trick, because down is gravity-ward and so
+  inherits the main sweep's existing no-double-move guarantee. The
+  mirror-image rule would have needed its own reversed pass, exactly like
+  gas's. **When a new movement has to be added, check whether it can be
+  stated gravity-ward before writing a pass for it.**
 
 **Does it need `slip`/`repose` to mean "no resistance", like a liquid,
 even if it is whole-grain?** Gas's `slip = 255`/`repose = 0` copy water's
@@ -336,12 +353,22 @@ flowchart TD
     Fire -->|"conducts through\nSTONE, boils beyond"| Steam
     Ember -->|"conducts"| Steam
 
+    Oil["OIL\nliquid, needs_air"] -->|"flammability 50\nSURFACE ONLY"| Fire
+    Fire -->|"ignites exposed\noil"| Oil
+    Ember -->|"residue 200"| Ash["ASH\ninert powder"]
+    Lava["LAVA\nliquid AND burns"] -->|"quench_to\n(water pays a unit)"| Stone["STONE"]
+    Lava -->|"flare 16"| Fire
+
     style Wood fill:#a87a3d,color:#fff
     style Gas fill:#4a7c59,color:#fff
     style Ember fill:#8a3d3d,color:#fff
     style Fire fill:#8a3d3d,color:#fff
     style Smoke fill:#5a5a5a,color:#fff
     style Steam fill:#3d6b8a,color:#fff
+    style Oil fill:#a87a3d,color:#fff
+    style Ash fill:#5a5a5a,color:#fff
+    style Lava fill:#8a3d3d,color:#fff
+    style Stone fill:#5a5a5a,color:#fff
 ```
 
 Note the two byproducts are **different materials on purpose**: steam is
@@ -484,6 +511,29 @@ finalising any constant that describes a distance in cells:
   because it reports success.
 
 ---
+
+## Lesson: a predicate about "air" has to know what air is
+
+Oil burns off its surface rather than detonating through its volume
+because of one flag, `needs_air`, and one predicate behind it:
+`touches_air()`. The first version of that predicate tested whether any
+cardinal neighbour was **empty**, which is the obvious reading and is
+wrong in exactly the situation the feature exists for.
+
+A flame resting on a pool is not empty space. The moment the surface
+caught, its neighbour became a fire cell, the surface stopped counting as
+exposed, and the pool could never light. Measured, not reasoned about: a
+fire blob sat on an oil slick for thirty steps doing nothing. The fix is
+one clause - air is empty space **or any `KIND_GAS` cell** - and the
+slick then burns top-down exactly as intended.
+
+Worth generalising, because this shape recurs: **a predicate named after
+a physical concept will be written against the simplest encoding of it,
+and the simplest encoding is usually the one that breaks under the
+condition the feature was built to handle.** "Empty" and "open to the
+air" feel like the same thing right up until something occupies the
+opening. Test the predicate in the state the feature actually runs in,
+not the state you set it up in.
 
 ## Lesson: sometimes the palette *is* the feature
 
