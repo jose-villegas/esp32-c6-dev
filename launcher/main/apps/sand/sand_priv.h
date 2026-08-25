@@ -370,13 +370,15 @@ static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
     return true;
 }
 
-/* Defined in sand_reactions.c: the whole of a step's fire work - ignition
- * of adjacent flammable neighbours, extinguishing by adjacent liquid,
- * and burning out via tick_decay() above. Called once from sand_step(),
- * after sand_step_gas() finishes and before finalize_settling() - same
- * slot, same reasoning as sand_step_liquids()/sand_step_gas() before it:
- * BLOCK_ACTIVE has to reflect the whole step. Gated on s->may_have_fire
- * alone (not may_have_gas too) - fire is the only actor here, gas is
+/* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
+ * for every burning cell (reaction_t.burns - fire and ember today) -
+ * ignition of adjacent flammable neighbours, extinguishing by adjacent
+ * liquid, burning out via tick_decay() above, and (ember only) flaring a
+ * flame upward. Called once from sand_step(), after sand_step_gas()
+ * finishes and before finalize_settling() - same slot, same reasoning as
+ * sand_step_liquids()/sand_step_gas() before it: BLOCK_ACTIVE has to
+ * reflect the whole step. Gated on s->may_have_burning alone (not
+ * may_have_gas too) - a burning cell is the only actor here; gas is
  * passive fuel with nothing to do on its own. */
 void sand_step_reactions(sand_t *s);
 

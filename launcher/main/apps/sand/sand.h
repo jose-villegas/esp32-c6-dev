@@ -89,11 +89,15 @@ typedef struct {
      * sand_gas.c. */
     bool     may_have_gas;
 
-    /* Same idea again, for fire - see sand_step_reactions() in
-     * sand_reactions.c. Keyed on MAT_FIRE specifically wherever it is
-     * set, NOT on kind == KIND_STATIC - stone shares that kind and is
-     * poured far too often to accidentally re-arm this on every touch. */
-    bool     may_have_fire;
+    /* Same idea again, for anything that burns - see sand_step_reactions()
+     * in sand_reactions.c. Named may_have_fire until wood and ember
+     * arrived; renamed once a second material could set it, since the
+     * flag was never really about MAT_FIRE specifically - see
+     * reaction_t.burns in material.h. Keyed on that field wherever it is
+     * set, NOT on kind == KIND_STATIC - stone shares that kind with ember
+     * and is poured far too often to accidentally re-arm this on every
+     * touch. */
+    bool     may_have_burning;
 
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
@@ -119,9 +123,10 @@ typedef struct {
 
     int      last_load_dx, last_load_dy;
 
-    int      scatter;   /* see sand_set_scatter() */
-    int      decay;     /* see sand_set_decay() */
-    int      buoyancy;  /* see sand_set_buoyancy() */
+    int      scatter;      /* see sand_set_scatter() */
+    int      decay;        /* see sand_set_decay() */
+    int      buoyancy;     /* see sand_set_buoyancy() */
+    int      flammability; /* see sand_set_flammability() */
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
@@ -403,6 +408,21 @@ void sand_set_scatter(sand_t *s, int chance);
  * test that specifically wants to watch something decay wants instead. */
 void sand_set_decay(sand_t *s, int chance);
 #define SAND_DECAY_PER_MATERIAL (-1)
+
+/* How often a flammable neighbour actually catches, per adjacent burning
+ * cell per step, as a chance in 256 - see material.h's reaction_t.
+ * flammability field. Defaults to SAND_FLAMMABILITY_PER_MATERIAL (each
+ * material's own table figure), unlike scatter/decay which default OFF -
+ * ignition already only ever happens next to an actual burning cell, so
+ * there is no "background chance of it quietly happening" to guard
+ * against the way there is for decay ticking on its own or a falling
+ * grain scattering on its own. Without an override, a test that wants
+ * to watch something NOT catch (wood beside a single flame, one step)
+ * uses the real slow-catching figure; a test that wants to watch it
+ * catch forces this to 255 instead, rather than looping hundreds of
+ * steps and hoping. */
+void sand_set_flammability(sand_t *s, int chance);
+#define SAND_FLAMMABILITY_PER_MATERIAL (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `buoyancy` field. 255, the default,

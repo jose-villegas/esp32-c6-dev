@@ -79,8 +79,15 @@ static const char *TAG = "sand";
  *   material already chosen, instead of walking through all of them.
  *
  * A stand-in until the palette overlay; without some way to choose, water and
- * stone exist and cannot be reached. */
-static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE, MAT_GAS, MAT_FIRE };
+ * stone exist and cannot be reached.
+ *
+ * MAT_WOOD only, not MAT_STEAM or MAT_EMBER: every entry here costs the
+ * player a button press to cycle past, so only materials someone actually
+ * paints belong. Wood is something you build a fire out of; steam is a
+ * byproduct you watch happen, and ember is a burn state wood passes
+ * through on its own, not a material anyone chooses directly - see
+ * docs/Sand/Adding-a-Material.md for this as a worked example. */
+static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE, MAT_GAS, MAT_FIRE, MAT_WOOD };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
 /* How long the mode label stays up after the PWR button is pressed. Long

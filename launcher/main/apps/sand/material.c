@@ -160,7 +160,58 @@ const material_t materials[MATERIAL_MAX] = {
                                 * point, not final - tune on device */
     },
 
-    /* Slots 6-15 are unused and left zeroed except for these, which make an
+    [MAT_WOOD] = {
+        .name    = "Wood",
+        .kind    = KIND_STATIC,     /* a log does not fall over or pile up
+                                     * - it sits where it is drawn until
+                                     * fire chars it into an ember (see
+                                     * sand_reactions.c) */
+        .density = 150,             /* above sand (60) and water (30), so
+                                     * neither can displace a log - it
+                                     * holds its shape under a pour, the
+                                     * way a real log does not wash away.
+                                     * Below stone (200), which stays the
+                                     * one thing nothing else touches.
+                                     * Starting point, not final - tune on
+                                     * device like every other constant
+                                     * here. */
+        /* slip/repose/scatter/decay/buoyancy/sight all meaningless for a
+         * KIND_STATIC material and left at zero, same as stone's own row. */
+    },
+
+    [MAT_EMBER] = {
+        .name    = "Ember",
+        .kind    = KIND_STATIC,     /* what wood chars into - stays put and
+                                     * keeps burning in place rather than
+                                     * floating off as a flame would. See
+                                     * sand_reactions.c's top comment for
+                                     * why this is a genuinely different
+                                     * material from fire rather than wood
+                                     * just igniting straight to MAT_FIRE. */
+        .density = 150,             /* same as wood - it is charred wood,
+                                     * still a solid log's worth of mass
+                                     * sitting in the same cell */
+
+        .decay = 24,                /* roughly 15 * (256/24) ~= 160 steps,
+                                     * ~2.7s at this app's ~60fps step rate
+                                     * - a log that visibly smoulders
+                                     * rather than one that either lingers
+                                     * forever or gutters out at once.
+                                     * Starting point, not final - tune on
+                                     * device like every other constant
+                                     * here.
+                                     *
+                                     * Worth knowing rather than chasing as
+                                     * a bug: at density 150, an ember is
+                                     * essentially never smother()'d - that
+                                     * predicate needs all four neighbours
+                                     * STRICTLY denser, and only stone (200)
+                                     * qualifies. Burying a log in sand will
+                                     * not put it out; only decay, or water,
+                                     * does. */
+    },
+
+    /* Slots 8-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
     [MAT_COUNT ... MATERIAL_MAX - 1] = {
@@ -204,6 +255,38 @@ const reaction_t reactions[MATERIAL_MAX] = {
         /* .quench_to left at 0: touching water still just vanishes, the
          * same behaviour fire always had before steam existed - see
          * material.h's own comment on quench_to. */
+    },
+
+    [MAT_WOOD] = {
+        /* 6 in 256 is roughly 43 steps of contact with a single flame
+         * before it catches - a fire that has to work at it, which is
+         * the whole point of "slowly consumed" (see sand_reactions.c's
+         * top comment for why wood does not just ignite straight to
+         * MAT_FIRE the way gas does). Starting point, not final - tune
+         * on device like every other constant here. */
+        .flammability = 6,
+        .ignites_to   = MAT_EMBER,   /* chars, does not flash - see
+                                      * sand_reactions.c's top comment */
+    },
+
+    [MAT_EMBER] = {
+        .burns = 1,     /* a second heat source, alongside fire - see
+                         * sand_reactions.c's dispatch, which is why that
+                         * now keys off reaction_t.burns rather than
+                         * CELL_MATERIAL(c) == MAT_FIRE */
+        /* .quench_to left at 0 for the same reason fire's is, above. */
+
+        .flare = 48,    /* chance in 256, per step, that this ember emits
+                         * a MAT_FIRE cell into an empty cardinal neighbour
+                         * - an ember is KIND_STATIC and would otherwise be
+                         * a glowing brick with no flame licking up off it.
+                         * The emitted fire is ordinary MAT_FIRE and rises
+                         * on its own through sand_step_gas(), so "wood
+                         * burning below, flame above" falls out of this
+                         * one field rather than needing any upward-aware
+                         * code in sand_reactions.c. Starting point, not
+                         * final - tune on device like every other
+                         * constant here. */
     },
 };
 
@@ -255,9 +338,14 @@ static const gfx_color_t palette[256] = {
                                     * lit is bright yellow-white; variant
                                     * is life remaining, same trick gas
                                     * already uses */
+    SHADES(0x3A2616, 0x7A5230),   /* wood  - dark grain to lit grain */
+    SHADES(0x2A0A00, 0xFF7A28),   /* ember - dying char to glowing orange,
+                                    * deliberately redder and darker than
+                                    * fire's own yellow-white so a
+                                    * smouldering log reads differently
+                                    * from the flame above it */
     UNUSED, UNUSED, UNUSED, UNUSED,
     UNUSED, UNUSED, UNUSED, UNUSED,
-    UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

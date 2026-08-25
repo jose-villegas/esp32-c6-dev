@@ -86,7 +86,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->liquid_flip = false;
     s->gas_flip   = false;
     s->may_have_gas    = false;
-    s->may_have_fire   = false;
+    s->may_have_burning = false;
     s->dirty_rows = NULL;
     s->may_have_liquid = false;
     s->block_state = NULL;
@@ -102,6 +102,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->scatter      = 0;
     s->decay        = 0;
     s->buoyancy     = 255;  /* full speed by default - see sand_set_buoyancy() */
+    s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->mom_x_q8 = 0;
     s->mom_y_q8 = 0;
     s->dir_x_q8 = 0;
@@ -181,16 +182,16 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
     if (!CELL_IS_EMPTY(cell)) {
         /* Independent ifs, not an else-if chain: fire is BOTH
          * kind == KIND_GAS (rises/disperses through sand_step_gas())
-         * AND material == MAT_FIRE (reacts through
-         * sand_step_reactions()) at once, and needs both flags set.
-         * An else-if chain here would let the kind==KIND_GAS branch
-         * shadow the MAT_FIRE branch for every fire cell, silently
-         * stranding may_have_fire false forever - caught before it
-         * shipped, not after. The MAT_FIRE check stays keyed on the
-         * material ID, not kind, for the original reason: KIND_STATIC
-         * (fire's predecessor here) was shared with stone, and even
-         * now KIND_GAS is not guaranteed to stay unique to gas and
-         * fire alone. */
+         * AND reactions[].burns (reacts through sand_step_reactions())
+         * at once, and needs both flags set. An else-if chain here
+         * would let the kind==KIND_GAS branch shadow the burns branch
+         * for every fire cell, silently stranding may_have_burning
+         * false forever - caught before it shipped, not after. The
+         * burns check stays keyed on the material ID via reactions[],
+         * not on kind, for the original reason: KIND_STATIC (fire's
+         * predecessor here, and ember's kind today) is shared with
+         * stone, and KIND_GAS is not guaranteed to stay unique to gas
+         * and fire alone either. */
         const material_t *mat = &materials[CELL_MATERIAL(cell)];
         if (mat->kind == KIND_LIQUID) {
             s->may_have_liquid = true;
@@ -198,8 +199,8 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         if (mat->kind == KIND_GAS) {
             s->may_have_gas = true;
         }
-        if (CELL_MATERIAL(cell) == MAT_FIRE) {
-            s->may_have_fire = true;
+        if (reactions[CELL_MATERIAL(cell)].burns) {
+            s->may_have_burning = true;
         }
     }
     mark_move(s, x, y, x, y);
@@ -233,8 +234,8 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     if (materials[material].kind == KIND_GAS) {
         s->may_have_gas = true;
     }
-    if (material == MAT_FIRE) {
-        s->may_have_fire = true;
+    if (reactions[material].burns) {
+        s->may_have_burning = true;
     }
     s->cells[y * s->w + x] = random_cell(s, material);
     mark_move(s, x, y, x, y);
@@ -435,6 +436,15 @@ void sand_set_buoyancy(sand_t *s, int chance)
         s->buoyancy = SAND_BUOYANCY_PER_MATERIAL;
     } else {
         s->buoyancy = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_flammability(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;
+    } else {
+        s->flammability = chance > 255 ? 255 : chance;
     }
 }
 
@@ -944,13 +954,14 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
                      load_dx, load_dy, x_step, jostle);
     }
 
-    /* Same slot again, for fire's reactions: ignition/extinguish/burn-out
-     * are neither gravity-ward nor movement at all, so they cannot join
-     * the main sweep and must finish before finalize_settling() too.
-     * Takes only `s`, unlike sand_step_gas()'s nine arguments, so there
-     * is no marshalling cost to dodge by checking may_have_fire out here
-     * as well - the function's own internal check (mirroring
-     * sand_step_liquids()'s pattern, not sand_step_gas()'s) is enough. */
+    /* Same slot again, for a burning cell's reactions: ignition/
+     * extinguish/burn-out are neither gravity-ward nor movement at all,
+     * so they cannot join the main sweep and must finish before
+     * finalize_settling() too. Takes only `s`, unlike sand_step_gas()'s
+     * nine arguments, so there is no marshalling cost to dodge by
+     * checking may_have_burning out here as well - the function's own
+     * internal check (mirroring sand_step_liquids()'s pattern, not
+     * sand_step_gas()'s) is enough. */
     sand_step_reactions(s);
 
     finalize_settling(s, settled_bit);

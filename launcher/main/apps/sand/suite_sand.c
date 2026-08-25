@@ -1610,6 +1610,8 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
 #define SAND  CELL_MAKE(MAT_SAND,  8)
 #define GAS   CELL_MAKE(MAT_GAS,   8)
 #define FIRE  CELL_MAKE(MAT_FIRE,  8)
+#define WOOD  CELL_MAKE(MAT_WOOD,  8)
+#define EMBER CELL_MAKE(MAT_EMBER, 8)
 
 /* Total AMOUNT of a material, not the number of cells holding it.
  *
@@ -2913,8 +2915,8 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
 {
     fixture();
 
-    /* No public getter for may_have_fire - reading the field directly is
-     * intentional here. The bug this guards (gating on kind ==
+    /* No public getter for may_have_burning - reading the field directly
+     * is intentional here. The bug this guards (gating on kind ==
      * KIND_STATIC instead of the material ID, in sand_set()/
      * try_spawn_one()) is only externally visible as a silent
      * performance regression on device - a host test can only catch it
@@ -2923,11 +2925,11 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
     for (int i = 0; i < 20; i++) {
         sand_spawn(&s, 3, 3, 2, MAT_STONE);
         sand_step(&s, 0, 1000, 0);
-        TEST_ASSERT_FALSE_MESSAGE(s.may_have_fire,
-            "placing plain stone must never set may_have_fire - stone "
-            "shares KIND_STATIC with fire, so gating on kind instead of "
-            "the material ID would silently re-arm a full-grid reactions "
-            "scan on every stone touch");
+        TEST_ASSERT_FALSE_MESSAGE(s.may_have_burning,
+            "placing plain stone must never set may_have_burning - stone "
+            "shares KIND_STATIC with fire and ember, so gating on kind "
+            "instead of the material ID would silently re-arm a "
+            "full-grid reactions scan on every stone touch");
     }
 }
 
@@ -2937,12 +2939,12 @@ static void test_placing_fire_arms_both_gas_and_fire_passes(void)
 
     /* Guards the else-if ordering bug found before this shipped: fire is
      * BOTH kind == KIND_GAS (needs sand_step_gas() to rise/disperse) AND
-     * material == MAT_FIRE (needs sand_step_reactions() to ignite/
+     * reactions[].burns (needs sand_step_reactions() to ignite/
      * extinguish/burn out) at once. sand_set()/try_spawn_one() used to
      * test these as an else-if chain with the kind check first, which
-     * would shadow the material check for every fire cell the moment
-     * fire's kind became KIND_GAS - may_have_fire would silently never
-     * get set, and a freshly painted fire spark would rise correctly
+     * would shadow the burns check for every fire cell the moment fire's
+     * kind became KIND_GAS - may_have_burning would silently never get
+     * set, and a freshly painted fire spark would rise correctly
      * (kind-generic, unaffected) but never ignite, extinguish, or burn
      * out. No public getter for either flag - reading them directly is
      * intentional, mirroring test_pouring_stone_never_arms_the_reactions_pass's
@@ -2952,11 +2954,139 @@ static void test_placing_fire_arms_both_gas_and_fire_passes(void)
     TEST_ASSERT_TRUE_MESSAGE(s.may_have_gas,
         "a directly-placed fire cell must arm may_have_gas - it needs "
         "sand_step_gas() to rise and disperse");
-    TEST_ASSERT_TRUE_MESSAGE(s.may_have_fire,
-        "a directly-placed fire cell must ALSO arm may_have_fire - it "
+    TEST_ASSERT_TRUE_MESSAGE(s.may_have_burning,
+        "a directly-placed fire cell must ALSO arm may_have_burning - it "
         "needs sand_step_reactions() to ignite/extinguish/burn out, and "
         "an else-if chain that checks kind == KIND_GAS first would "
         "shadow this branch entirely");
+}
+
+/* --- wood, embers and steam ---------------------------------------------- */
+
+/* Sets up a fire cell at (3,3) beside a wood cell at (4,3), boxed just
+ * enough to keep the fire from smothering itself or drifting away
+ * before reactions gets a turn.
+ *
+ * fire_room() (used by the plain-fire tests above) will not do here: it
+ * seals a fire cell in on all four sides with stone, which works for a
+ * GAS neighbour (density 10, lighter than fire's 15, so it never counts
+ * towards smothered()'s ALL-of-4 test) but not for a WOOD one - wood's
+ * density (150) is, unlike gas's, denser than fire, so a wood neighbour
+ * on the one remaining open side completes the smother all by itself,
+ * clearing the fire before it ever reaches the ignite loop (confirmed:
+ * this is exactly what the first version of these two tests did). The
+ * cell below fire is deliberately left open instead, mirroring
+ * test_fire_is_not_smothered_with_a_gap's identical reasoning: gas only
+ * ever rises or spreads sideways, never falls, so leaving it empty
+ * cannot let fire drift away before this step's reactions pass runs,
+ * and it is one fewer denser neighbour, so smothered() reads false. */
+static void wood_ignition_room(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, WOOD);
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 2, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+}
+
+static void test_wood_does_not_catch_instantly(void)
+{
+    wood_ignition_room();
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WOOD, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "at the real per-material flammability (6 in 256), wood touching "
+        "fire for a single step must almost always still be wood - a fire "
+        "that catches instantly defeats the whole point of a slow-burning "
+        "fuel");
+}
+
+static void test_wood_eventually_catches_and_becomes_an_ember(void)
+{
+    wood_ignition_room();
+    sand_set_flammability(&s, 255);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EMBER, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "wood forced to catch (flammability=255) must char into an "
+        "ember, not flash straight to MAT_FIRE - fire is KIND_GAS and "
+        "would float away on the very next gas pass, dissolving the log "
+        "instead of letting it burn in place (see sand_reactions.c's top "
+        "comment for the full reasoning)");
+}
+
+static void test_an_ember_does_not_rise(void)
+{
+    fixture();
+    sand_set(&s, 3, H - 1, EMBER);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EMBER,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "an ember is KIND_STATIC, unlike fire - it must stay exactly "
+        "where it was placed rather than rising the way fire (KIND_GAS) "
+        "does");
+}
+
+static void test_an_ember_burns_out_over_time(void)
+{
+    fixture();
+    sand_set_decay(&s, 255);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 3, 0, MAT_EMBER),
+        "setup: exactly one ember cell placed");
+
+    /* Twice an ember's own full life, not once: reaction_t.flare (no test
+     * override exists for it - see the note on why smoke/flare get none)
+     * can spawn a fresh MAT_FIRE cell on any step the ember is still
+     * alive, and that fire cell gets its own full MATERIAL_VARIANTS-1
+     * decay budget starting from whenever it was born - worst case, on
+     * the ember's very last living step. This gives both budgets room to
+     * run out even then, so the test is not at the mercy of exactly when
+     * (if ever) the flare roll happens to hit. */
+    for (int i = 0; i < 2 * (MATERIAL_VARIANTS - 1); i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "an ember, and anything it flared into fire along the way, must "
+        "burn out to nothing given enough time - the same decay "
+        "mechanism fire and gas already use");
+}
+
+static void test_an_ember_flares_fire_into_an_empty_neighbour(void)
+{
+    fixture();
+    /* Decay left off (the default) - see material.c's own comment on
+     * MAT_EMBER's decay figure and test_an_ember_burns_out_over_time
+     * above; this test wants an ember that lives long enough to get many
+     * tries at the flare roll, not one racing its own burn-out. */
+    sand_set(&s, 3, 3, EMBER);
+
+    bool found_fire = false;
+    for (int i = 0; i < 200 && !found_fire; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_fire; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_FIRE) {
+                    found_fire = true;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(found_fire,
+        "an ember must eventually flare a MAT_FIRE cell into an empty "
+        "neighbour - at 48 in 256 per step, 200 steps is comfortably "
+        "enough that never seeing one means try_flare() is broken, not "
+        "unlucky");
 }
 
 /* --- conservation ------------------------------------------------------- */
@@ -3835,6 +3965,12 @@ void run_sand_suite(void)
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
     RUN_TEST(test_placing_fire_arms_both_gas_and_fire_passes);
+
+    RUN_TEST(test_wood_does_not_catch_instantly);
+    RUN_TEST(test_wood_eventually_catches_and_becomes_an_ember);
+    RUN_TEST(test_an_ember_does_not_rise);
+    RUN_TEST(test_an_ember_burns_out_over_time);
+    RUN_TEST(test_an_ember_flares_fire_into_an_empty_neighbour);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
