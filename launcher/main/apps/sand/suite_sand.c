@@ -3138,24 +3138,29 @@ static void test_shaking_spreads_a_pile_sideways(void)
 
 /* The worst case: every cell on the screen moving at once.
  *
- * The number is chosen from a principle rather than from whatever the code
- * currently manages, because it has already been raised twice and that is how
- * a performance test quietly stops meaning anything.
+ * Historically this budget was set from a principle (stay well under the
+ * blit's ~9.6 ms bus-time ceiling) rather than the measured number, because
+ * it had already been raised twice from over-tight measured budgets - see
+ * git history. It also carries a documented cross-build risk: the same code
+ * has measured a 3.2-3.9 ms swing purely from the ESP32-C6's 32 KB flash
+ * cache aligning differently as unrelated code shifts layout.
  *
- * The principle: THE SIMULATION MUST NOT BECOME THE DOMINANT COST. Sending a
- * full frame is 9.6 ms and is irreducible - it is bus time at the C6's maximum
- * clock, and no amount of cleverness here will change it. So the ceiling is
- * the blit, and a step that stays under it is by definition not the problem.
+ * Tightened anyway, past even the ~10% headroom this file's other
+ * budgets use, to 6000 - about 3.3% over the real measured 5802 us,
+ * exactly reproducible across fresh captures on the current build (fixed
+ * RNG seed - see docs/Sand/Architecture.md's "Verifying performance on
+ * real hardware"). That thin a margin is a real bet against the
+ * documented flash-cache swing above: if a future rebuild reintroduces
+ * it and this starts flaking, that is the known, accepted trade-off of
+ * tightening this far past the old principle-based number - loosen it
+ * again rather than treating one flaky run as a simulation regression.
  *
- * Measured at 5.7 ms with three materials. The worst possible frame is then
- * step + full redraw + full blit, about 17 ms or 58 fps, and only while the
- * entire screen is churning.
- *
- * The margin also has to absorb the ESP32-C6's 32 KB flash cache: the same
- * code has measured 3.2 and 3.9 ms across builds that did not touch it, purely
- * from code layout shifting. A tighter budget than that spread is a coin toss,
- * not a test. */
-#define STEP_BUDGET_US 8000
+ * Previously shared with the settled-pile flip test below via one
+ * STEP_BUDGET_US constant; split into its own name once the two
+ * scenarios needed genuinely different numbers - a checkerboard of
+ * falling sand and a full-grid gravity flip are different worst cases
+ * and there was never a real reason to hold them to the same ceiling. */
+#define FULL_STEP_BUDGET_US 6000
 
 static void test_a_full_size_step_fits_in_the_frame_budget(void)
 {
@@ -3193,7 +3198,7 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
 
     free(big);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(STEP_BUDGET_US, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(FULL_STEP_BUDGET_US, (int)per_step,
         "the simulation no longer fits in its share of the frame");
 }
 
@@ -3354,9 +3359,119 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
     free(rows);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(STEP_BUDGET_US, (int)per_step,
+    /* 6500us: its own number now, split off from the plain full-size-step
+     * test's FULL_STEP_BUDGET_US above (see that constant's comment for
+     * why they used to share one). Measured ~8996 us, well over this -
+     * same deliberate-reduction-target framing as the mixed-scene and
+     * water tests: a real regression would be this number jumping
+     * further, not the fact that it currently fails at all. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(6500, (int)per_step,
         "reversing gravity on a settled pile must still fit in a frame or "
         "two - this is the real worst case pouring and tilting produces");
+}
+
+static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void)
+{
+    /* A harder worst case than the single-material flip above: three
+     * materials at once, plus a fixed obstacle, so a settled pile isn't the
+     * only thing that has to wake and move together. Sand fills ~30% of the
+     * width on the left, water ~30% on the right, both poured from the
+     * floor to half height so there's headroom to launch into once flipped
+     * - same reasoning as the plain flip test. The remaining ~40% in the
+     * middle holds a stone X, floor to ceiling: a fixed obstacle both
+     * materials have to route around, not just fall/rise past. */
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *rows   = malloc(REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(rows);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 17u);
+    sand_enable_sleeping(&real, blocks, rows);
+
+    const int sand_x1  = (REAL_W * 3) / 10;          /* ~30% from the left */
+    const int water_x0 = REAL_W - (REAL_W * 3) / 10; /* ~30% from the right */
+
+    for (int y = REAL_H / 2; y < REAL_H; y++) {
+        for (int x = 0; x < sand_x1; x++) {
+            sand_set(&real, x, y, SAND_FIRST_SHADE);
+        }
+        for (int x = water_x0; x < REAL_W; x++) {
+            sand_set(&real, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    /* The X: two diagonals crossing at mid-height, floor to ceiling across
+     * the middle band. Two cells thick, clamped to stay inside the band -
+     * a single-pixel diagonal staircase is exactly the shape that let fire
+     * leak past a corner earlier this session (see
+     * test_fire_is_not_smothered_with_a_gap); thickening it is the same
+     * fix applied here up front instead of after finding the same leak
+     * twice. */
+    const int mid_w = water_x0 - sand_x1;
+    for (int y = 0; y < REAL_H; y++) {
+        const int off = (y * (mid_w - 1)) / (REAL_H - 1);
+        const int xa = sand_x1 + off;
+        const int xb = water_x0 - 1 - off;
+        const int xa2 = (xa + 1 < water_x0) ? xa + 1 : xa;
+        const int xb2 = (xb - 1 >= sand_x1) ? xb - 1 : xb;
+        sand_set(&real, xa,  y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&real, xa2, y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&real, xb,  y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&real, xb2, y, CELL_MAKE(MAT_STONE, 8));
+    }
+
+    /* Let it fully settle first - same starting state a real pour-then-
+     * pause reaches, stone included (it was never moving, but the pass
+     * still has to notice that). */
+    for (int i = 0; i < 300; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    /* Flip - straight up instead of straight down. */
+    const int64_t start = esp_timer_get_time();
+    const int steps = 20;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, -1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "gravity flip on a mixed sand/water/stone-X "
+                             "scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    /* No grain-conservation check here, unlike the plain flip test above -
+     * deliberately, not an oversight. sand_count() counts occupied CELLS,
+     * and water's fill-level model can legitimately spread its mass across
+     * more or fewer cells while conserving total mass; test_a_screen_of_-
+     * water_fits_in_the_frame_budget already skips this same check for the
+     * same reason. Asserting it here once failed with a real, misleading
+     * "Expected 13206 Was 13348" - not a simulation bug, just this
+     * invariant not holding once water is in the scene - and because the
+     * assertion sat before the frees below, Unity's longjmp on that
+     * failure skipped them and leaked ~41 KB, starving every later
+     * malloc()-based test on this device's no-PSRAM heap. Left here as the
+     * reason, not just removed quietly. */
+
+    free(big);
+    free(rows);
+    free(blocks);
+
+    /* 12000us: NOT headroom over the real measured 15144us - a deliberate
+     * reduction target below it (about 21% down), same as this file's
+     * other two currently-failing budgets (the plain settled-pile flip and
+     * the water test just above). Those exist to keep pressure on real
+     * optimization work rather than quietly ratchet up to whatever the
+     * code happens to cost today; this one joins them on purpose, not as a
+     * mistake - SELFTEST_COMPLETE's accepted baseline moves from
+     * failures=2 to failures=3 the moment this lands (see
+     * docs/Sand/Architecture.md's device-tests table, which needs the same
+     * update). */
+    TEST_ASSERT_LESS_THAN_MESSAGE(12000, (int)per_step,
+        "reversing gravity over a mixed sand/water/stone scene should come "
+        "down to this - a target to optimize toward, not yet the reality");
 }
 
 static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
@@ -3415,7 +3530,8 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
     /* Measured on device at 321339-321342 us (~321 ms), exactly
      * reproducible across three separate captures (this simulation's
      * fixed RNG seeds mean identical runs give identical timings) -
-     * nowhere near STEP_BUDGET_US, and deliberately not held to it:
+     * nowhere near the plain-material budgets above, and deliberately not
+     * held to them:
      * unlike the flip and water tests above, which model a single
      * realistic user gesture (a pour, then a tilt), an edge-to-edge
      * screen of gas is not something the current pour-brush UI can
@@ -3628,6 +3744,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_full_size_step_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_settled_sand_costs_almost_nothing);
     RUN_TEST(test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget);
+    RUN_TEST(test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);

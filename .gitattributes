@@ -1,0 +1,10 @@
+# Shell/Python scripts must check out with LF, everywhere - Git for Windows
+# left run_tests.sh/run_device_tests.sh stored with CRLF, which is silently
+# harmless on Git Bash/MSYS but makes bash reject the script outright on a
+# real Linux box (GitHub Actions' ubuntu-latest runners): every line ends up
+# with a trailing \r, so `set -eu` becomes `set -eu\r` - an invalid option -
+# and `#!/bin/sh` masks the very first such failure until the interpreter is
+# invoked explicitly. eol=lf overrides the checking-out machine's own
+# core.autocrlf, so this holds regardless of how any one clone is configured.
+*.sh text eol=lf
+*.py text eol=lf

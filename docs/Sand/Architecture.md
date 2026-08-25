@@ -274,12 +274,14 @@ grep -E "FAIL|SELFTEST_COMPLETE" /path/to/output.txt
 ```
 
 `SELFTEST_COMPLETE failures=N` is the number that matters. As of this
-writing the accepted baseline is **`failures=2`** - two frame-budget
+writing the accepted baseline is **`failures=3`** - two frame-budget
 tests (flip, water) have been over their own budget since before gas or
-fire existed (see the table below); anything beyond that count is a real
-regression.
+fire existed, and a third (the mixed sand/water/stone-X flip) was given
+a deliberately-below-measured budget on purpose, as a reduction target
+rather than a safety margin (see the table below); anything beyond that
+count is a real regression.
 
-## The six device frame-budget tests
+## The seven device frame-budget tests
 
 All `#ifdef DEVICE_BUILD`-only, in `suite_sand.c`, run against the real
 184x224 grid rather than the 8x8 host-test fixture. Each one's number
@@ -288,19 +290,25 @@ comment for the reasoning behind its specific budget.
 
 | Test | Scenario | Budget | Last measured |
 |---|---|---|---|
-| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 8000 µs | ~5700 µs |
+| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | ~5800 µs |
 | `test_a_screen_of_settled_sand_costs_almost_nothing` | Entire grid full of sand, nothing moving | 300 µs | passes |
-| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 8000 µs | **9699 µs (pre-existing FAIL)** |
-| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 16000 µs | **16565 µs (pre-existing FAIL)** |
-| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 400000 µs | ~321000 µs |
-| `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 300000 µs | ~230962 µs |
+| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | **~8996 µs (pre-existing FAIL)** |
+| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | **~15144 µs (deliberate reduction target, not a regression)** |
+| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 16000 µs | **~16141 µs (pre-existing FAIL)** |
+| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~321340 µs |
+| `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~221000-231000 µs (varies with flash-cache layout - see below) |
 
-The two marked **FAIL** are a known, accepted baseline, not something to
-chase down reflexively - `failures=2` on a clean capture means "as
-expected," not "something is broken." If a capture ever shows
-`failures=3` or more, or either of the two FAILing numbers jumps sharply
-(not the ordinary ~2-5% flash-layout noise this project has already
-characterised - see [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)),
+Three rows are marked **FAIL**, and that is the known, accepted
+baseline, not something to chase down reflexively - `failures=3` on a
+clean capture means "as expected," not "something is broken." Two of
+them (flip, water) are budgets the code has never actually met; the
+third (the mixed scene) is a budget nothing has met *yet*, set below
+the real 15144 µs measurement on purpose to keep pressure on future
+optimization work rather than silently ratchet the number up to match
+the code. If a capture ever shows `failures=4` or more, or any of the
+three FAILing numbers jumps sharply (not the ordinary ~2-5% flash-layout
+noise this project has already characterised - see
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)),
 that is the real signal to investigate.
 
 The last two rows are new territory this session opened, not a template
