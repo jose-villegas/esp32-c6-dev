@@ -13,6 +13,12 @@ of contents. Split out on its own once the combined file passed 800
 lines and the two halves stopped being one story: build-time correctness
 lessons in one file, a chronological tuning campaign in the other.
 
+This file is the authority, and it is a long read by design - every
+derivation and negative result is kept in full. For a first read, or to
+find which attempt taught a half-remembered lesson, start with the visual
+map in [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md) and come back here
+for the details.
+
 ---
 
 ## A guard chain can cost more than what it guards
