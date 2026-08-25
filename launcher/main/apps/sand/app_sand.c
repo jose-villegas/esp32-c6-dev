@@ -519,6 +519,13 @@ static inline int shine_phase(void)
     return (sim.last_load_dx * 3 + sim.last_load_dy * 5) & 7;
 }
 
+/* Everything about the reflection that can change what a pane looks like,
+ * in one number, so the renderer can notice it moved. */
+static inline int shine_key(void)
+{
+    return (shine_uses_sum() ? 8 : 0) | shine_phase();
+}
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
@@ -674,9 +681,33 @@ static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     return n;
 }
 
+/* The last orientation the board was actually PAINTED at. */
+static int shine_key_drawn = -1;
+
 static void draw_dirty_rows(void)
 {
     gfx_color_t *fb = gfx_framebuffer();
+
+    /* A row is repainted when something in it CHANGED, and turning the
+     * board changes nothing in the grid - a glass wall is static, so its
+     * cells are identical before and after a tilt and no row is ever
+     * marked. The reflection would then sit frozen at whatever orientation
+     * the wall was last built or disturbed at, which is exactly what "the
+     * diagonals still don't align with the device tilt" looks like: the
+     * direction was right and the pixels were never asked for again.
+     *
+     * So the orientation is treated as another thing that can dirty a row.
+     * Whole screen, because any cell of a hatched material anywhere is now
+     * wrong and finding out which would cost a scan of the grid to save a
+     * repaint the tilt itself already forces - a direction change mass
+     * wakes every block (see sand.c), so the board is re-simulating
+     * regardless. It happens only when the direction crosses into a
+     * different eighth, not on every frame of a tilt. */
+    const int key = shine_key();
+    if (key != shine_key_drawn) {
+        shine_key_drawn = key;
+        memset(dirty_rows, 1, (size_t)grid_h);
+    }
 
     /* 256 entries in flash, indexed by the raw cell byte: no material lookup,
      * no shade arithmetic, no colour conversion, and no RAM. */
