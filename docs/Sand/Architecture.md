@@ -44,7 +44,7 @@ for the exact budget.
 
 ## The material table, today
 
-6 of 16 slots used; the other 10 are zeroed to an inert inline material
+9 of 16 slots used; the other 7 are zeroed to an inert inline material
 (`kind = KIND_STATIC`, `density = 255`) so a corrupt cell byte can never
 crash anything, only sit there as an immovable block.
 
@@ -54,8 +54,11 @@ crash anything, only sit there as an immovable block.
 | 1 | sand | `KIND_POWDER` | falls | `repose=7` (~35°), `slip=96` |
 | 2 | water | `KIND_LIQUID` | falls | `slip=255` (no resistance) |
 | 3 | stone | `KIND_STATIC` | never | `density=200`, undisplaceable |
-| 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `buoyancy=96`, `flammable=true` |
+| 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `buoyancy=96` |
 | 5 | fire | `KIND_GAS` | rises | `sight=5` (tighter), `decay=96` (shorter life), reacts via a second pass (below) |
+| 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own |
+| 7 | steam | `KIND_GAS` | rises | `sight=20` (widest), `buoyancy=160` (fastest); doubles as fire's smoke |
+| 8 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -63,6 +66,39 @@ movement fields first - the C6's cache line is 32 bytes, and a fatter
 row would straddle two lines. Full field-by-field reasoning:
 [`material.h`](../../launcher/main/apps/sand/material.h)'s own top
 comment and struct comment.
+
+## The reaction table, a second table for a cold pass
+
+Fire chemistry - flammability, what a material ignites into, whether it
+is itself a heat source, how well it conducts heat, whether it smokes
+on burn-out, what it becomes when quenched, whether it flares a flame -
+lives in a **second** table, `reaction_t reactions[MATERIAL_MAX]`, not
+as more fields on `materials[]` above. None of those fields are read by
+any movement code, only by `sand_reactions.c`'s cold pass, gated behind
+`may_have_burning`; fattening the hot table's stride to carry them would
+cost every step that never touches fire at all, for a table almost
+nothing reads on such a step. The cost of the split is that adding a
+material capable of burning, catching, conducting, or reacting to
+either is now potentially two rows instead of one - `materials[]` for
+how it moves, `reactions[]` for how it burns - which is a small price
+for keeping the hot table exactly as small as its own comment insists
+it stay.
+
+| Material | `flammability` | `ignites_to` | `burns` | `conducts` | `smoke` | `quench_to` | `flare` |
+|---|---|---|---|---|---|---|---|
+| stone | 0 | - | 0 | 176 | 0 | - | 0 |
+| gas | 255 | fire | 0 | 0 | 0 | - | 0 |
+| fire | 0 | - | 1 | 0 | 40 | steam | 0 |
+| wood | 6 | ember | 0 | 0 | 0 | - | 0 |
+| ember | 0 | - | 1 | 0 | 90 | steam | 48 |
+
+Everything else - sand, water, steam, and every unused slot - is
+all-zero, which reads correctly for every field on its own: never
+catches, never a heat source, never conducts, never smokes, vanishes on
+quench, never flares. See
+[Fire chemistry: wood, embers, steam, and a working
+boiler](Sand-Simulation.md#fire-chemistry-wood-embers-steam-and-a-working-boiler)
+for what each field actually drives.
 
 ## Choosing a `kind` for a new material
 
@@ -74,7 +110,7 @@ flowchart TD
     D -- "amount\n(1-15, splits/merges)" --> E["KIND_LIQUID\n(water)"]
     D -- "whole grain" --> F{"Falls with gravity,\nor rises against it?"}
     F -- "falls" --> G["KIND_POWDER\n(sand)"]
-    F -- "rises" --> H["KIND_GAS\n(gas, fire)"]
+    F -- "rises" --> H["KIND_GAS\n(gas, fire, steam)"]
     H --> I["Tune per-material:\nsight (spread), decay\n(lifespan), buoyancy\n(rise speed)"]
 
     style C fill:#5a5a5a,color:#fff
@@ -85,15 +121,21 @@ flowchart TD
 ```
 
 This only answers *movement*. A material's *reactions* (ignite, extinguish,
-smother - `sand_reactions.c`) are a separate, orthogonal axis: fire is
-`KIND_GAS` for how it moves, but its material-level `flammable` bit and
-its neighbour-scanning pass are what make it a fire specifically. A future
-material can mix and match - e.g. a `KIND_POWDER` material that is also
-`flammable`, no new pass required. See
+smother, conduct, quench, flare - `sand_reactions.c`) are a separate,
+orthogonal axis, driven by the second table above: fire is `KIND_GAS`
+for how it moves, but `reaction_t.burns` and the reactions pass's own
+neighbour-scanning are what make it a fire specifically. Ember is the
+clearest proof the two axes are independent: it is `KIND_STATIC` - the
+same kind as motionless stone - and yet it is very much a heat source,
+`reaction_t.burns` and all, decaying and flaring exactly like a fire
+that happens not to move. A future material can mix and match too - a
+`KIND_POWDER` material that is also flammable needs a `reactions[]` row
+and nothing else, no new pass. See
 [`Adding-a-Material.md`](Adding-a-Material.md) for the full worked
 checklist, including the three-attempt inlining lesson that applies
 whenever a new material needs to call into an existing hot-path function
-from a second place.
+from a second place, and the `place_reacted()` lesson this feature's own
+design surfaced.
 
 ## One step, in order
 
@@ -106,7 +148,7 @@ flowchart TD
     Liq --> GasCheck{"may_have_gas?"}
     GasCheck -- yes --> Gas["sand_step_gas()\nrise + disperse\n(gas, fire)"]
     GasCheck -- no --> React
-    Gas --> React["sand_step_reactions()\nignite / extinguish /\nsmother / burn out"]
+    Gas --> React["sand_step_reactions(s, gx, gy)\nignite / extinguish / smother /\nburn out / conduct heat / flare"]
     React --> Fin["finalize_settling()\nBLOCK_ACTIVE -> settled bits"]
     Fin --> End(["done"])
 
@@ -130,7 +172,11 @@ because it takes nine arguments and this call site runs on every step of
 every test - skipping the call avoids marshalling all nine for nothing.
 `sand_step_liquids()` and `sand_step_reactions()` rely on their own
 internal early-return instead, because they take few enough arguments
-that the marshalling cost was never worth a second check. Getting this
+that the marshalling cost was never worth a second check -
+`sand_step_reactions()` grew from one argument to three (`s, gx, gy`)
+when heat conduction's boiler needed a gravity direction, and two ints
+is still nowhere near sand_step_gas()'s nine, so the reasoning held
+without needing to move the check. Getting this
 gating wrong in the wrong direction is a real, shipped bug class - see
 "the else-if ordering bug" in
 [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).

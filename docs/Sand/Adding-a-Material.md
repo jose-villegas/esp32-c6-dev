@@ -114,7 +114,16 @@ Once the design questions above are answered:
 2. **`material.c`**: add a `materials[]` row (kind, density, slip,
    repose, scatter, name) and a `palette[]` row (`SHADES(lo, hi)`,
    replacing one `UNUSED` slot, same enum position). `MATERIAL_MAX`
-   stays 16 either way - it is already padded.
+   stays 16 either way - it is already padded. **If the material reacts
+   to fire at all** - it can catch, it is itself a heat source, it
+   conducts heat, it smokes, it does something other than vanish when
+   quenched, or it flares a flame - it also needs a row in the *second*
+   table, `reaction_t reactions[]` (same header, same file). Rows not
+   given default to all-zero, which reads correctly ("never catches,
+   never a heat source, ...") for a material with no reactions at all,
+   so most materials never touch this table. See `material.h`'s own
+   comment on `reaction_t` for why this is a second table rather than
+   more fields on `materials[]`.
 3. **If reusing an existing `KIND`**: that is the whole implementation.
    Write host tests (see below) and you are done.
 4. **If it needs a new `KIND`**: a new file (`sand_<name>.c`), mirroring
@@ -179,6 +188,81 @@ often the right default, not the fallback.
 The full numbers, and the exact code, are in
 [`Simulation-Lessons.md`](Simulation-Lessons.md)'s gas material section
 and `sand_priv.h`'s own comments above `try_fall_or_scatter_impl()`.
+
+## A material whose reaction changes its KIND has to latch that kind's flag
+
+This one came from building fire chemistry past a single material
+(gas/fire) into several (wood, fire, steam, ember), and it is worth its
+own section because it is invisible to almost every test that could
+catch it.
+
+`sand_t` carries a `may_have_<kind>` flag per movement kind
+(`may_have_liquid`, `may_have_gas`) plus `may_have_burning` for
+reactions, and every one of the passes those flags gate **early-returns**
+when its flag is clear - that is the entire point of the flag, the cheap
+skip that keeps a screen of sand from paying for a gas pass it does not
+need. `sand_set()`/`try_spawn_one()` set the right flag(s) whenever a
+material is placed *from outside the simulation*. That covers a player
+painting materials, but it does not cover a material a *reaction*
+creates mid-step: fuel igniting into a gas (wood into a static ember,
+but gas straight into fire), or - once heat conduction and quenching
+exist - a liquid boiling into steam. Every one of those is a cell of a
+NEW kind appearing on the grid from inside `sand_reactions.c`, not
+through `sand_set()` at all, so nothing sets its `may_have_*` flag
+unless the reactions code does it itself.
+
+Get this wrong - create the cell, forget the flag - and the bug is a
+cell that sits frozen on the grid forever: the pass that would move or
+react it again gated on that flag and now never runs. It is invisible
+to almost every test, because the flag is usually ALREADY set some
+other way (another gas cell already on the grid, say), which is exactly
+what makes it dangerous - the one test that would catch it is a scene
+with *nothing else* of that kind already present, which is not the
+scene anyone writes by default.
+
+The fix that shipped: every place in `sand_reactions.c` that creates a
+cell goes through one function, `place_reacted()`, which sets the cell
+*and* latches every `may_have_*` flag the new material's kind and
+`reaction_t.burns` value need, in the same independent-`if` shape
+`sand_set()` itself uses (and for the same reason stated there: a
+material can need more than one flag at once, so an `else if` chain
+would silently shadow one of them). One function, one place to get this
+right, instead of re-deriving it at every call site that creates a
+cell. `suite_sand.c` has a test built specifically around this failure
+mode - a quench that produces steam in a scene with no other gas
+anywhere on the grid, so nothing else could accidentally keep the gas
+pass armed - see `test_creating_steam_arms_the_gas_pass`.
+
+## The ember decision: when the obvious material is the wrong one
+
+Worth recording as a worked example, because the instinct it corrects
+is a reasonable one. The obvious way to make wood burn is: wood touches
+fire, wood becomes fire. It is the same shape gas already uses, it is
+less code, and it is wrong for wood specifically, in a way that only
+shows up once you ask what happens on the very next step.
+
+Fire is `KIND_GAS`. A wood cell that became fire would rise and
+disperse on the next `sand_step_gas()` pass, exactly like any other
+fire cell - which means a log would dissolve into a rising flame that
+drifts away, often before it gets a turn to ignite the log next to it.
+The burn stalls or races depending on nothing the player did. The
+symptom would not even be obviously wrong in a quick look - fire IS
+supposed to rise - which is what makes this the kind of mistake that
+ships if nobody asks the second question: not "does this ignite?" but
+"does this still look like a burning log ten steps later?"
+
+The fix was a second material, `MAT_EMBER`, that splits wood's burn
+into two jobs instead of asking one material to do both: a `KIND_STATIC`
+heat source that stays exactly where the wood was (igniting, decaying,
+eventually burning out, all without moving), and a separate, ordinary
+`MAT_FIRE` flame the ember periodically flares upward
+(`reaction_t.flare`) purely for looks. Two materials, each doing one
+simple thing, instead of one material asked to be both a heat source
+and a moving flame at once. The general question this leaves behind for
+the next material: when something reacts into another material, ask
+whether the REACTED-INTO material's own movement rules still make sense
+for what just happened - "wood catches fire" sounds right until "fire
+floats away" turns out to be exactly the wrong behaviour for a log.
 
 ## Testing
 

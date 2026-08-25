@@ -37,12 +37,14 @@ purpose:
 - **Liquid** (`KIND_LIQUID`, e.g. water): a *fill level*, 1-15
   (`MASS_MAX`). This is what lets water level itself using only its
   immediate neighbours - see [The water model](#the-water-model) below.
-- **Transient** (`decay != 0`, e.g. gas, fire): *life remaining*, counting
-  down to nothing. Reusing the nibble is what makes that free instead of
-  needing its own byte - see [Gas: the same primitives, upside
-  down](#gas-the-same-primitives-upside-down) and
-  [`Adding-a-Material.md`](Adding-a-Material.md) for how gas and fire
-  both use this.
+- **Transient** (`decay != 0`, e.g. gas, fire, steam, ember): *life
+  remaining*, counting down to nothing. Reusing the nibble is what makes
+  that free instead of needing its own byte - see [Gas: the same
+  primitives, upside down](#gas-the-same-primitives-upside-down),
+  [Fire chemistry: wood, embers, steam, and a working
+  boiler](#fire-chemistry-wood-embers-steam-and-a-working-boiler), and
+  [`Adding-a-Material.md`](Adding-a-Material.md) for how each of these
+  uses this.
 
 ## Materials are a flash-resident table, not code
 
@@ -209,6 +211,140 @@ flash-cache pressure than it saves) in
 See [`Adding-a-Material.md`](Adding-a-Material.md) for the practical
 walkthrough of building this material end to end - the design questions
 that came up, and the mechanical checklist for adding the next one.
+
+## Fire chemistry: wood, embers, steam, and a working boiler
+
+Fire's own reactions - ignition, extinguishing, smothering, burn-out -
+live in `sand_reactions.c` and are driven by a second table,
+`reaction_t reactions[]` (`material.h`), kept deliberately separate from
+`materials[]`. The reasoning is the same one that keeps `material_t`
+itself small: every field of `materials[]` is read several times per
+cell per step from the main sweep, and fire chemistry is read only by
+the cold reactions pass, gated behind `may_have_burning`. Paying for
+`flammability`, `ignites_to`, `burns`, `conducts`, `smoke`, `quench_to`
+and `flare` in the hot table's stride would be paying for nothing on
+every step that never touches fire at all.
+
+**Wood catches slowly, and chars into an ember rather than a flame.**
+The obvious design - wood ignites straight to `MAT_FIRE`, the same way
+gas does - does not work, and the reason is worth understanding before
+touching either material. Fire is `KIND_GAS`, so a wood cell that became
+fire would float away on the very next `sand_step_gas()` pass, leaving a
+hole where the log was; a log would dissolve into rising flames that
+drift off, often before they get a turn to ignite the next log along.
+`MAT_EMBER` fixes this by splitting the two jobs fire was doing at once:
+the ember is `KIND_STATIC` and stays exactly where the wood was - it
+keeps igniting neighbours, keeps decaying, and eventually burns out, all
+without moving - while the flame licking up off it (`reaction_t.flare`)
+is ordinary, separate `MAT_FIRE`, purely for looks and for reaching fuel
+stacked above. "Wood burning below, flame above" falls out of two
+materials each doing one simple thing, not one material trying to be
+both a heat source and a moving flame simultaneously. Wood's own
+`flammability` (6 in 256) makes catching a slow negotiation rather than
+an instant flash - roughly 43 steps of contact with a single flame
+before it takes, so a log has to actually burn rather than vanish on
+first touch.
+
+Ember is essentially never `smothered()` the way fire can be: that
+predicate needs all four cardinal neighbours *strictly* denser, and at
+density 150 only stone (200) qualifies - burying a log in sand will not
+put it out. That is an accepted limitation, not a bug to chase: only
+decay, or water, ends an ember.
+
+**Steam is fire's exhaust, and it does two jobs.** A burning cell
+touched by water still goes out in one touch, but now becomes
+`MAT_STEAM` instead of simply vanishing, and the water that quenched it
+pays a unit of its own mass for the privilege - steam is a byproduct,
+not a free lunch, and a pot boiled dry should eventually run dry rather
+than boiling forever for nothing. A burning cell can also leave steam
+behind purely from burning out on its own (`reaction_t.smoke`), no water
+required. One material does both "the fire went out" and "the pot is
+boiling" rather than two, because both want the same pale, light,
+rising, fading gas - the same overlap-the-nibble trick this document's
+own top section describes for shade/fill-level/life-remaining, applied
+one level up: two *behaviours* sharing one *material* rather than one
+*field* meaning two things.
+
+**Steam trapped under standing water, and the surface-walk that avoids
+it.** `can_enter()`'s displacement rule is one-directional - denser
+only ever displaces lighter - and steam (density 5) sits below both gas
+(10) and fire (15) so that either can rise through and displace it, but
+the reverse does not hold. That is the same already-accepted limitation
+gas has displacing more gas, applied to a third material - except here
+it has a real consequence: steam created at the *bottom* of a still pool
+cannot rise into the water sitting above it, and that water cannot fall
+into the steam either. Left alone, this would trap a boiler's entire
+output at the bottom of whatever it just boiled, producing nothing
+anyone could ever see.
+
+The fix is specific to heat *conducted* through a wall (below): rather
+than converting the liquid cell conduction actually reaches, it walks
+*against gravity* through the connected run of that same liquid and
+converts the cell at the **surface** instead - where steam is free to
+rise, which is also exactly where steam actually comes off a real pot.
+Accepted limitation, not chased further: a fire quenched while fully
+submerged still leaves its steam wherever it was, which can be trapped
+the same way - not worth a second surface-walk for that separate,
+rarer case.
+
+## The boiler: heat conducts, fire does not pass through stone
+
+A fire sitting beside a stone wall can boil water, or ignite fuel, on
+the *other* side of that wall without fire ever physically crossing it -
+`conduct_heat()` in `sand_reactions.c`. The obvious alternative - give
+fire a chance to pass through stone directly - was rejected outright: it
+would need a special case inside `can_enter()`, the single hottest
+predicate in the project, and it would make every sealed stone container
+leak fire. Conduction gets the same boiler for zero cost in the main
+sweep, and it reads better besides: the stone gets hot, it does not
+become porous. Conduction only ever does two things to whatever it
+reaches on the far side of a wall - boil a liquid (via the surface-walk
+above), or ignite fuel - and it never creates fire in empty space, which
+is what keeps a sealed box sealed.
+
+**How thick a wall the player can actually build turned out to matter
+more than the physics.** The first version of this feature let heat
+cross exactly one conductor cell - a clean rule, and the one this
+document described until it was measured against the actual app.
+`app_sand.c`'s pour brush has no size control (`POUR_RADIUS 5`, a
+fixed-size disc), and the thinnest stone floor a finger can drag out
+with it comes out roughly *eleven cells thick*. A reach-of-one boiler is
+therefore not a hard-to-build boiler - it is an **unbuildable** one, and
+nothing about the simulation or its host tests would ever surface that;
+only asking "can a player actually draw this" does.
+
+The fix: heat crosses a *run* of conductor cells rather than stopping
+after one, rolling `reaction_t.conducts` again for every further cell it
+has to cross. Crossing depth `d` succeeds with probability
+`(conducts/256)^d`, so a thin wall conducts briskly and a thick one
+conducts slowly - thermal resistance falling out of one attenuating walk,
+for free, with no second "how thick" constant to tune. The walk is
+capped at `CONDUCT_REACH` (16 cells, comfortably past what the pour
+brush actually draws) purely to bound a cold pass, not because heat
+stops meaning anything beyond that depth. Stone's own `conducts` figure
+(176 in 256, ≈0.69) is tuned against the *eleven-cell* reality the app
+actually produces: a single cell conducts about 7 times in 10 steps, an
+eleven-cell hand-drawn slab conducts roughly once every 42 steps
+(`0.69^11 ≈ 0.024`) - slower, but a real, buildable boiler rather than a
+theoretical one.
+
+**Building one in the app:** a wood floor, a stone basin over it as
+thick as a single drag of the pour brush produces, water poured into the
+basin, and a spark to light the wood. The wood catches, chars into an
+ember, and the ember's own heat conducts up through the basin floor,
+boiling the water inside it and sending steam up out of the basin - all
+without the fire or the ember ever leaving the space below the stone.
+
+The general lesson, worth keeping past this one feature: a rule that is
+clean in the abstract can be unreachable through the very UI that has to
+produce the scene it depends on, and the material and reaction tables
+are not where anyone finds that out.
+
+See [`Adding-a-Material.md`](Adding-a-Material.md) for the `place_reacted()`
+lesson this feature's own design surfaced - a material whose reaction
+changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
+has to latch that kind's `may_have_*` flag, and getting it wrong is
+invisible to almost every other test.
 
 ## Momentum and the wall-rebound splash
 
