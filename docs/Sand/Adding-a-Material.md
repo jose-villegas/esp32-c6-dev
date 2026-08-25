@@ -196,7 +196,7 @@ The current ladder, which any new material has to slot into somewhere:
 
 ```mermaid
 flowchart LR
-    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> W["water\n30"] --> AS["ash\n40"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
+    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> AS["ash\n25"] --> W["water\n30"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
 
     style E fill:#2a2a2a,color:#fff
     style S fill:#3d6b8a,color:#fff
@@ -215,6 +215,16 @@ flowchart LR
 Oil at 22 and lava at 45 straddle water deliberately: oil floats, lava
 sinks, and both fall out of one rule rather than any material-specific
 code.
+
+Ash at 25 is the same trick from the powder side, and it is worth
+noticing that it was **free** where oil's was not. A powder moves through
+`can_enter()`, which admits a mover only if it is denser than what is
+already there - so putting ash below water's 30 means it simply cannot
+get into water, and it settles on the surface as scum. Oil needed a whole
+new rule (`sink_through_lighter_liquid()`) to do the same thing, purely
+because *liquids* never consult `can_enter()` at all. **Check which
+mechanism your kind actually goes through before assuming a density
+relationship needs code to enforce it.**
 
 Two consequences worth internalising, both real limitations rather than
 bugs to chase:
@@ -534,6 +544,35 @@ condition the feature was built to handle.** "Empty" and "open to the
 air" feel like the same thing right up until something occupies the
 opening. Test the predicate in the state the feature actually runs in,
 not the state you set it up in.
+
+## Lesson: a byproduct's yield is a number, and a wrong one is invisible
+
+Ash is what a spent ember leaves, via `reaction_t.residue` - a chance in
+256, and therefore very nearly the fraction of burnt fuel that becomes
+residue. It shipped at 200.
+
+Nothing was broken. Every test passed, the material behaved correctly,
+and the ash piled up and insulated exactly as designed. It was simply
+*wrong by a factor of five*: 200/256 turns about 80% of a log into ash,
+measured at 289 cells of ash from 360 cells of wood. A log did not leave
+a deposit, it turned grey. Nobody spotted it from the code, because a
+chance-in-256 field carries no sense of scale on its own - 200 looks like
+"often", not like "almost all of it".
+
+Two things to take from that:
+
+- **When a field is a probability that converts one material into
+  another, work out the resulting RATIO and sanity-check it against the
+  real thing.** Here the honest answer (wood leaves 1-3% ash by mass)
+  turned out to be unusable - at ~4% a whole log leaves five grains,
+  which at this cell size is indistinguishable from nothing - so the
+  figure landed at ~14% as a compromise. Fine. But that is a decision
+  made with the number in hand, not one made by picking 200 because it
+  felt like a lot.
+- **Pin the ratio in a test, not the count.**
+  `test_a_log_leaves_far_less_ash_than_it_had_wood` asserts a log leaves
+  under half its own volume - loose enough that ordinary tuning does not
+  trip it, tight enough that a drift back to near-1:1 does.
 
 ## Lesson: sometimes the palette *is* the feature
 

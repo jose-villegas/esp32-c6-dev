@@ -3368,6 +3368,19 @@ static void water_column(void)
     }
 }
 
+static int count_material(uint8_t id)
+{
+    int n = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == id) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 static int first_row_holding(uint8_t id)
 {
     for (int y = 0; y < H; y++) {
@@ -3732,9 +3745,127 @@ static void test_ash_is_an_inert_powder(void)
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ASH, CELL_MATERIAL(sand_at(&s, 3, H - 2)),
         "ash must fall and settle on the floor like any powder, and "
-        "must still be ash - it is the one thing left when everything "
-        "flammable has already burned, so it can never itself burn");
+        "must still be ash - DRY ash is the one thing left when "
+        "everything flammable has already burned, so a fire able to "
+        "feed on it would never go out");
 }
+
+/* The other half of ash's flammability, and the reason it carries one at
+ * all: reaction_t.soak_from makes it fuel, but only while a cell of oil
+ * is actually touching it. Stateless - there is no soaked-ash material
+ * and no per-cell wetness, the condition is simply re-checked whenever
+ * ignition is attempted. */
+static void test_oil_soaked_ash_burns(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 2; x <= 5; x++) {
+        sand_set(&s, x, H - 2, ASH);
+        sand_set(&s, x, H - 3, OIL);   /* soaking it from above */
+    }
+    const int before = count_material(MAT_ASH);
+
+    for (int i = 0; i < 200; i++) {
+        for (int x = 2; x <= 5; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 4))) {
+                sand_set(&s, x, H - 4, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(before, count_material(MAT_ASH),
+        "ash with oil against it must burn - it is the same ash that "
+        "test_ash_is_an_inert_powder proves will not burn on its own, "
+        "and the only difference is the oil");
+}
+
+/* Ash floats, and gets it for nothing. A powder moves through
+ * can_enter(), which admits a mover only if it is DENSER than what is
+ * already there - so ash at 25 simply cannot get into water at 30, and
+ * settles on the surface. No floating code, and notably NOT the
+ * machinery oil needed (sink_through_lighter_liquid(), sand_liquid.c),
+ * because that problem only exists between two LIQUIDS. */
+static void test_ash_floats_on_water(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = H - 4; y <= H - 2; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    sand_set(&s, 3, 1, ASH);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* Somewhere at or above the top of the pond, never inside it. */
+    int ash_y = -1;
+    for (int y = 0; y < H && ash_y < 0; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_ASH) {
+                ash_y = y;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(-1, ash_y, "setup: the ash must survive");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(H - 3, ash_y,
+        "ash is lighter than water, so it must come to rest ON the pond "
+        "rather than sinking through it - can_enter() only admits a "
+        "DENSER mover, so being lighter is the whole mechanism");
+}
+
+/* Ash yield, pinned as a RATIO rather than a count.
+ *
+ * reaction_t.residue was 200 when ash was added, which turned about 80%
+ * of a burnt log into ash - measured at 289 cells from 360 of wood. That
+ * is not a fire leaving a deposit, it is a log being recoloured grey. It
+ * is 40 now (~14%), and this test exists so nobody drifts it back:
+ * whatever the figure, a log must leave clearly LESS ash than the wood
+ * that burned. */
+static void test_a_log_leaves_far_less_ash_than_it_had_wood(void)
+{
+    fixture();
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_buoyancy(&s, SAND_BUOYANCY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = H - 4; y <= H - 2; y++) {
+        for (int x = 1; x < W - 1; x++) {
+            sand_set(&s, x, y, WOOD);
+        }
+    }
+    const int wood = count_material(MAT_WOOD);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(10, wood,
+        "setup: enough wood for a ratio to mean anything");
+
+    for (int i = 0; i < 1200; i++) {
+        if (i < 200) {
+            sand_spawn(&s, W / 2, H - 6, 2, MAT_FIRE);
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_material(MAT_WOOD),
+        "setup: the whole log must actually have burned");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(wood / 2, count_material(MAT_ASH),
+        "a burnt log must leave well under half its own volume in ash - "
+        "held to a loose half rather than the measured ~14% so ordinary "
+        "tuning does not trip it, but a return to the old near-1:1 "
+        "conversion does");
+}
+
 
 static void test_steam_bubbles_up_through_standing_water(void)
 {
@@ -5160,6 +5291,9 @@ void run_sand_suite(void)
     RUN_TEST(test_lava_does_not_put_fire_out);
     RUN_TEST(test_a_spent_ember_leaves_ash);
     RUN_TEST(test_ash_is_an_inert_powder);
+    RUN_TEST(test_oil_soaked_ash_burns);
+    RUN_TEST(test_ash_floats_on_water);
+    RUN_TEST(test_a_log_leaves_far_less_ash_than_it_had_wood);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);
     RUN_TEST(test_bubbling_conserves_the_water_it_displaces);
     RUN_TEST(test_plain_gas_bubbles_up_through_water_too);

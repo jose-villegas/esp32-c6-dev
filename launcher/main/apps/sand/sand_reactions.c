@@ -309,6 +309,26 @@ static inline bool smothered(const sand_t *s, int x, int y, int w, int h,
     return true;
 }
 
+/* Whether any of the four cardinal neighbours holds material `id` - the
+ * test behind reaction_t.soak_from. Same ANY-of-4 shape as touches_air()
+ * below. */
+static inline bool touches_material(const sand_t *s, int x, int y, int w,
+                                    int h, uint8_t id)
+{
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == id) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Whether any of the four cardinal neighbours is open to the air - the
  * test behind reaction_t.needs_air.
  *
@@ -366,6 +386,10 @@ static inline bool try_ignite(sand_t *s, int nx, int ny, int w, int h)
     if (r->needs_air && !touches_air(s, nx, ny, w, h)) {
         return false;   /* buried in more of itself - a pool of fuel burns
                          * at its surface, not through its volume */
+    }
+    if (r->soak_from && !touches_material(s, nx, ny, w, h, r->soak_from)) {
+        return false;   /* fuel only while something else is soaking it -
+                         * dry ash is not fuel, oily ash is */
     }
     /* s->flammability mirrors s->decay's own override (see
      * sand_set_flammability()): negative (the default) means "each

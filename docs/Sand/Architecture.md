@@ -62,7 +62,7 @@ crash anything, only sit there as an immovable block.
 | 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
-| 12 | ash | `KIND_POWDER` | falls | `density=40`, `repose=4` (flatter than sand); inert, what a spent ember leaves |
+| 12 | ash | `KIND_POWDER` | falls | `density=25` (**floats on water**), `repose=4`; inert unless oil-soaked; what a spent ember leaves |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -88,15 +88,16 @@ how it moves, `reactions[]` for how it burns - which is a small price
 for keeping the hot table exactly as small as its own comment insists
 it stay.
 
-| Material | `flammability` | `needs_air` | `ignites_to` | `burns` | `conducts` | `residue` → `residue_to` | `quench_to` | `flare` |
-|---|---|---|---|---|---|---|---|---|
-| stone | 0 | - | - | 0 | 220 | 0 | - | 0 |
-| gas | 255 | - | fire | 0 | 0 | 0 | - | 0 |
-| fire | 0 | - | - | 1 | 0 | 40 → smoke | steam | 0 |
-| wood | 6 | - | ember | 0 | 0 | 0 | - | 0 |
-| ember | 0 | - | - | 1 | 0 | 200 → **ash** | steam | 48 |
-| oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 |
-| lava | 0 | - | - | **1** | 0 | 0 | **stone** | 16 |
+| Material | `flammability` | `needs_air` | `soak_from` | `ignites_to` | `burns` | `conducts` | `residue` → `residue_to` | `quench_to` | `flare` |
+|---|---|---|---|---|---|---|---|---|---|
+| stone | 0 | - | - | - | 0 | 220 | 0 | - | 0 |
+| gas | 255 | - | - | fire | 0 | 0 | 0 | - | 0 |
+| fire | 0 | - | - | - | 1 | 0 | 40 → smoke | steam | 0 |
+| wood | 6 | - | - | ember | 0 | 0 | 0 | - | 0 |
+| ember | 0 | - | - | - | 1 | 0 | 40 → **ash** | steam | 48 |
+| oil | 50 | **1** | - | fire | 0 | 0 | 0 | - | 0 |
+| lava | 0 | - | - | - | **1** | 0 | 0 | **stone** | 16 |
+| ash | 90 | - | **oil** | fire | 0 | 0 | 0 | - | 0 |
 
 Three things in that table are worth reading twice:
 
@@ -107,6 +108,17 @@ Three things in that table are worth reading twice:
 - **`needs_air` is what makes a pool of fuel burn rather than detonate.**
   Only oil sets it. Without it a spark lights a whole connected pool
   inside one pass.
+- **`soak_from` is how ash can be inert and flammable at once.** Dry ash
+  must never burn - a fire able to feed on its own remains would never go
+  out - but oil-soaked ash should. Ash therefore carries a real
+  `flammability` gated on a cell of oil actually touching it, re-checked
+  at every ignition attempt rather than stored, so the ash stops being
+  flammable by itself the moment the oil burns off.
+- **`residue` is a yield, and yields are easy to get wrong.** It is very
+  nearly `residue/256` of what burned. It was 200, which turned ~80% of a
+  log into ash - measured at 289 cells from 360 of wood, which is a log
+  being recoloured grey rather than a fire leaving a deposit. 40 gives
+  ~14%.
 - **Lava is `KIND_LIQUID` *and* `burns`.** That combination is the
   clearest evidence the movement and reaction axes are genuinely
   independent - nothing anywhere special-cases it. It is also why lava's

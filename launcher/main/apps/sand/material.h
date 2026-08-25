@@ -238,6 +238,26 @@ typedef struct {
      * pool worth looking at, and is more nearly true besides. */
     uint8_t needs_air;
 
+    /* If set, this material only catches while a cell of THIS material
+     * (a material_id_t, narrowed) is one of its four cardinal
+     * neighbours. 0, the default, means no such requirement.
+     *
+     * Ash is the reason it exists: ash is what is left when everything
+     * flammable has already burned, so on its own it must never burn
+     * again or a fire feeds on its own remains forever. Soak it in oil,
+     * though, and it is fuel again - so ash carries a real
+     * `flammability` and names MAT_OIL here, and the two together mean
+     * "burns, but only while there is oil against it".
+     *
+     * Stateless on purpose. There is no soaked-ash material and no
+     * per-cell wetness to store (there is nowhere to store it - see
+     * material.h's top comment on the one-byte cell); the condition is
+     * simply re-checked at the moment of ignition. That gets the
+     * behaviour that matters for free, including the part that would
+     * otherwise need bookkeeping: once the oil has burned off, the ash
+     * beside it stops being flammable again on its own. */
+    uint8_t soak_from;
+
     /* Nonzero: this material IS a heat source, and sand_step_reactions()
      * gives it a turn - decaying, quenching, smothering, igniting
      * neighbours. Replaces the old `CELL_MATERIAL(c) != MAT_FIRE`

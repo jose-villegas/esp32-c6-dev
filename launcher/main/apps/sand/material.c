@@ -399,11 +399,29 @@ const material_t materials[MATERIAL_MAX] = {
     [MAT_ASH] = {
         .name    = "Ash",
         .kind    = KIND_POWDER,
-        .density = 40,       /* between water (30) and sand (60): ash
-                              * sinks in water, and sand poured on top of
-                              * an ash pile sinks through it, which is the
-                              * right way round for something this
-                              * light. */
+        .density = 25,       /* BELOW water's 30, which is what makes ash
+                              * float as a scum on a pond rather than
+                              * sinking through it - and it needs no
+                              * floating code at all. Ash is a POWDER, so
+                              * it moves through can_enter(), which lets a
+                              * mover in only if it is DENSER than what is
+                              * already there; lighter than water simply
+                              * means it cannot get in, so it settles on
+                              * the surface. A liquid could not have had
+                              * this for free - see
+                              * sink_through_lighter_liquid() in
+                              * sand_liquid.c, which is what oil needed.
+                              *
+                              * Still above fire (15), gas (10), smoke (7)
+                              * and steam (5), so ash falls through all of
+                              * them and can still bury a flame; still
+                              * below sand (60), so sand poured onto an
+                              * ash pile sinks through it, which is the
+                              * right way round for something this light.
+                              * Above oil (22) as well, so ash sinks
+                              * through a slick and comes to rest on the
+                              * water beneath it - where an oil fire's
+                              * leavings ought to end up. */
         .slip    = 200,      /* far looser than sand's 96 - an ash pile
                               * slumps and skates where sand locks up */
         .repose  = 4,        /* shallower than sand's 7: ash piles into a
@@ -434,6 +452,33 @@ const material_t materials[MATERIAL_MAX] = {
  *===========================================================================*/
 
 const reaction_t reactions[MATERIAL_MAX] = {
+    [MAT_ASH] = {
+        /* Ash is what is left when everything flammable has already
+         * burned, so on its own it must never burn again - a fire able
+         * to feed on its own remains would never go out. Soak it in oil
+         * and it is fuel once more, which is what `soak_from` says: a
+         * real flammability, conditional on a cell of MAT_OIL actually
+         * touching this one.
+         *
+         * Stateless - there is no soaked-ash material and no per-cell
+         * wetness anywhere (there is nowhere to put it; see material.h's
+         * top comment on the one-byte cell), the condition is simply
+         * re-checked whenever ignition is attempted. The nicest
+         * consequence falls out of that for free: the oil burns off
+         * first, being what the flame reaches, and the moment it is gone
+         * the ash beside it stops being flammable again on its own, with
+         * no bookkeeping to undo.
+         *
+         * 90 is well above oil's own 50 - once oil-soaked, ash is the
+         * readier of the two to catch. Starting point, not final. */
+        .flammability = 90,
+        .soak_from    = MAT_OIL,
+        .ignites_to   = MAT_FIRE,   /* burns away rather than charring:
+                                     * there is no ember stage left for
+                                     * something that is already the end
+                                     * of one */
+    },
+
     [MAT_OIL] = {
         /* Catches readily, but only where it meets air - see
          * material.h's own comment on `needs_air`. Without that flag a
@@ -565,18 +610,39 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * now keys off reaction_t.burns rather than
                          * CELL_MATERIAL(c) == MAT_FIRE */
 
-        .residue    = 200,   /* was 90, and left MAT_SMOKE. An ember now
-                              * leaves MAT_ASH most of the time instead,
-                              * so a burnt log ends as a pile rather than
-                              * as nothing. The smoke from a burning log
-                              * comes from the FLAMES it flared while it
-                              * was alive (fire's own residue, 40), not
-                              * from its death - which is both what
-                              * happens physically and the only way to
-                              * get a solid residue and a rising one out
-                              * of a system where a cell holds exactly
-                              * one thing. */
-        .residue_to = MAT_ASH,    /* well above fire's 40: a whole ember finishing
+        .residue    = 40,    /* An ember leaves MAT_ASH rather than the
+                              * MAT_SMOKE it used to, so a burnt log ends
+                              * as a pile instead of as nothing. The
+                              * smoke from a burning log comes from the
+                              * FLAMES it flared while it was alive
+                              * (fire's own residue, 40) rather than from
+                              * its death - both what happens physically
+                              * and the only way to get a solid residue
+                              * and a rising one out of a system where a
+                              * cell holds exactly one thing.
+                              *
+                              * The FIGURE was 200, and that was wrong in
+                              * a way worth recording. Yield here is very
+                              * nearly residue/256 of the wood burned, so
+                              * 200 turned about 80% of a log into ash -
+                              * measured at 289 cells of ash from 360 of
+                              * wood. That is not a fire leaving a
+                              * deposit, it is a log being recoloured
+                              * grey.
+                              *
+                              * 40 gives ~14% (measured: 50 from 360).
+                              * Real wood leaves nearer 1-3% by mass and
+                              * that was tried: at 12 (~4%) a 120-cell
+                              * log leaves five grains, which at this
+                              * cell size is indistinguishable from
+                              * leaving nothing. 40 is the compromise -
+                              * an unmistakable fraction of what burned,
+                              * about a cell deep under the log's own
+                              * footprint, and still enough of a deposit
+                              * to insulate a boiler or be shaken about.
+                              * Starting point, not final - tune on
+                              * device like every other constant here. */
+        .residue_to = MAT_ASH,    /* a whole ember finishing
                          * its slow burn is a bigger, more definite event
                          * than a flame guttering out, and should leave
                          * smoke behind far more often. Starting point,
