@@ -605,6 +605,222 @@ calling absolutely needs to be inlined somewhere else.
 
 ---
 
+## The eighth attempt: three good ideas aimed at code the failing test never runs
+
+This one is almost entirely negative results, and the reason they are
+worth writing down at length is that all three of them failed the *same
+way*, for a reason nobody checked until the third one had already been
+measured. The campaign opened with a genuine discovery, spent three
+device rounds acting on it, and only then found out the discovery was
+about a code path the failing benchmark does not execute at all.
+
+**Step 0: the phase split, re-taken.** Per-phase `esp_timer_get_time()`
+accumulators inside `sand_step()`, summed across the twenty measured
+steps and printed once at the end so the timer calls themselves stay a
+rounding error (they cost under 70 us of the totals below - the
+uninstrumented numbers are 8996/15144/16141). Temporary, `#ifdef`-gated
+to device builds, reverted afterward. All three failing tests, at the
+commit that added the mixed-scene test:
+
+| Test | Total | wake | **sweep** | **liquid** | gas | react | settle |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| settled-pile flip | 8931 | 2 | **8912 (99%)** | 1 | 1 | 1 | 7 |
+| mixed sand/water/stone-X flip | 15146 | 2 | **11322 (74%)** | **3804 (25%)** | 1 | 1 | 8 |
+| screen of water | 16212 | 2 | **11311 (69%)** | **4882 (30%)** | 1 | 1 | 9 |
+
+The mixed scene's split had never been taken before. It lands almost
+exactly between the other two, which is what it was designed to do: a
+sweep-dominated flip with a water half bolted on. Everything outside the
+sweep and the liquid equalise pass is single-digit microseconds in every
+scenario - the mass-wake `memset()`, the gas pass, the reactions pass and
+the settling finalisation are all, together, under 20 us. **Whatever is
+wrong is in the sweep, in all three cases.**
+
+**The discovery: `try_slide_impl()` had silently stopped being inlined.**
+`objdump -t` on `sand.c.obj` showed it compiled as a real, standalone
+1022-byte function (`.text.try_slide_impl`), entered through a 96-byte
+stack frame - the exact register-spill signature that
+[Optimization-Playbook.md](../Notes/Optimization-Playbook.md) documents
+as having been worth nearly 2 ms the last time it turned up here. Worse,
+it directly contradicted `sand_priv.h`'s own comment, written during the
+seventh attempt above, promising that the main sweep's hot path stayed
+"fully inlined, exactly as it always was."
+
+**Why it un-inlined, which is the part worth carrying forward.** The
+seventh attempt's own fix caused it. Splitting the inline `_impl()` from
+the callable wrapper gave `try_slide_impl()` a *second* caller inside the
+same translation unit - `try_slide()`, the ordinary function `sand_gas.c`
+calls. A `static` function with exactly one call site gets inlined by
+GCC unconditionally (`-finline-functions-called-once`), no size heuristic
+consulted. Add a second call site and that guarantee evaporates, leaving
+only the ordinary heuristics, which decline a body this large. The
+compiler then emitted one shared out-of-line copy and turned the wrapper
+into a 26-byte tail-jump into it. `try_fall_or_scatter_impl()`, given the
+identical treatment in the identical commit, has a smaller body and was
+still being inlined at both sites - which is exactly why nothing looked
+wrong. **The seventh attempt verified its fix by measuring the tests it
+had regressed, and they did come back; it never re-ran `objdump -t` to
+check the inlining it claimed. Half the claim was true.**
+
+**Experiment 1: force it back inline.** `__attribute__((always_inline))`,
+the mechanism the playbook documents. Verified the way the problem was
+found: the standalone `try_slide_impl` symbol is gone, `sand_step()` grew
+2750 -> 3990 bytes, `try_slide()` grew 26 -> 1068 as it took its own
+copy, net +1260 bytes of flash. Full device suite, two captures,
+byte-identical to each other:
+
+| | baseline | always_inline | |
+|---|---:|---:|---|
+| settled-pile flip | 8931 | 9134 | +2.3% **worse** |
+| mixed scene | 15146 | 15015 | -0.9% |
+| screen of water | 16212 | 15948 | -1.6% |
+| full-size step | 5736 | 5809 | +1.3% worse |
+| settled screen | 261 | 228 | -12.6% |
+
+A wash, and the one test that is 99% pure sweep moved the *wrong* way.
+Reverted.
+
+**Experiment 2: put the hot set in IRAM.** Nothing sand-related was in
+SRAM - every symbol sat at a `0x42xxxxxx` flash address behind the 32 KB
+instruction cache. A `linker.lf` fragment on the `main` component
+(`LDFRAGMENTS`, `noflash_text` so only code moved and the `const` tables
+stayed a separate question) mapped `sand_step`, `try_slide_impl` and
+`sand_load_above` into SRAM. Placement verified by address before
+trusting any timing - `0x4080d39e`, `0x4080df90`, `0x4080d35e` - at a
+cost of 4140 bytes of a very comfortable 347 KB of free DIRAM. Two
+identical captures:
+
+| | baseline | IRAM | |
+|---|---:|---:|---|
+| settled-pile flip | 8931 | 9260 | +3.7% **worse** |
+| mixed scene | 15146 | 15318 | +1.1% worse |
+| screen of water | 16212 | 16239 | +0.2% worse |
+| full-size step | 5736 | 5931 | +3.4% worse |
+
+Worse across the board. Reverted, and the planned follow-up stages (the
+water-side symbols, then the `const` material tables) were not run - a
+first stage that regresses is not a base to add a second stage onto.
+**The useful reading is not "IRAM is slow" but "the instruction cache was
+never missing."** This loop is small enough and tight enough to sit in
+32 KB permanently; taking it out of flash removes a cost that was not
+being paid, and gives up the linker relaxations that flash-resident code
+gets (`sand_step()` alone links 308 bytes larger in SRAM). Between this
+and experiment 1 - one made the hot function 1240 bytes bigger, the other
+took it out of the cache entirely, and neither moved the number more than
+3.7% - **instruction fetch is not this sweep's problem, and that is now
+measured rather than assumed.**
+
+**Experiment 3: the buried-grain early-out (H1).** Compute the burial
+load and slide allowance *before* drawing a random number, and return
+early when the allowance is zero, so a deeply buried grain that cannot
+possibly slide stops paying for the generator. Host suite clean, present
+in the build (`try_slide_impl` grew 1022 -> 1134 bytes, `sand_step()`
+2750 -> 3092). Device result: `8931 / 15146 / 16212 / 5736 / 261` -
+**identical to the baseline in every single test, to the microsecond.**
+
+That is not a null result, it is an impossible one. A change that skips
+an RNG draw shifts the generator's stream, and a shifted stream makes the
+simulation evolve differently and time differently. Identical-to-the-
+microsecond across five tests means the changed code never executed.
+
+**Finding out why is what turned the campaign around.** A throwaway host
+probe - counters compiled into the real `sand.c` behind an `#ifdef`,
+driving the device test's exact scenario on a laptop, no flash cycle -
+reported that during the twenty measured flip steps `try_slide_impl()` is
+called **zero** times. During the 300 settling steps that set the scene up
+beforehand it is called 3,010,225 times, 95% of which would have taken
+H1's early-out. The measured window contains none of them.
+
+The reason is obvious in hindsight and was in `step_one_grain()` the
+whole time: `try_slide_impl()` is only reached when the gravity-ward move
+*fails*. Reverse gravity under a settled pile and every grain in it is
+suddenly in free fall - the gravity-ward move succeeds for all 10,304 of
+them, every step, and the slide path is dead code for the entire
+measurement. **All three experiments above were aimed at a function the
+failing benchmark does not call.** Experiment 1's inlining, experiment
+2's placement, H1's early-out: three independent, well-motivated,
+correctly-implemented changes to code that never runs in the test they
+were meant to fix.
+
+**What the sweep actually does**, from the same host probe, per step:
+
+| | settled-pile flip | mixed scene | water | full-size step |
+|---|---:|---:|---:|---:|
+| blocks swept / skipped | 1344 / 0 | 1276 / 67 | 1180 / 163 | 1344 / 0 |
+| cells examined | 41216 | 39244 | 36211 | 41216 |
+| of which non-empty | 10304 | 13283 | 11130 | 10304 |
+| `move_liquid_grain()` | 0 | 6282 | 11130 | 0 |
+| `try_fall_or_scatter_impl()` | 10304 | 6160 | 0 | 10304 |
+| ... of which succeeded | **10304** | **6160** | - | **19** |
+| `try_slide_impl()` | **0** | **0** | **0** | 10284 |
+| `sand_load_above()` | 0 | 0 | 0 | 10284 |
+
+The last column is the control that makes the rest legible. The
+full-size-step test walks the *same* 41,216 cells holding the *same*
+10,304 grains as the flip test, and differs in exactly one respect:
+nothing moves. Every grain fails its fall, pays a full `try_slide_impl()`
+with its RNG draw and its `sand_load_above()` walk, and fails that too -
+and the whole step costs **5736 us**. The flip test skips all of that
+work and instead lets all 10,304 grains move - and costs **8931 us**.
+**Moving a grain is roughly 3.2 ms/step more expensive than failing to
+move one, at this grain count.** Every optimisation this campaign and the
+last one tried has been aimed at making the *deciding* cheaper, on a
+benchmark whose cost is the *moving*.
+
+**Where the moving cost actually is, measured by deleting.** The only
+thing on the success path that scales with moves rather than cells is the
+per-move bookkeeping: `mark_rows()`, and the `wake_span()` row-clearing
+loop inside it. Stubbed to an unconditional `return` (correctness-
+breaking, `TEMPORARY EXPERIMENT`, reverted; the water and mixed numbers
+under that build are meaningless because `ROW_NO_LIQUID` never clears, so
+only the pure-sand flip number is readable) the settled-pile flip went
+**8931 -> 5343 us**. Per-successful-move row bookkeeping is **3588 us,
+40% of the entire failing test** - an order of magnitude more than
+anything else this campaign measured.
+
+**What that bookkeeping is spent on is the part to look at next, and it
+is deliberately left as a decision rather than a change.** Since the
+fourth attempt moved the settled bits to `block_state`, the only bit left
+in `row_state` is `ROW_NO_LIQUID`. `wake_span()`'s comment says as much
+and says it was "kept exactly as it was" on the grounds that narrowing it
+was unrelated to that move. The consequence, unnoticed until now: a
+sand grain moving on a screen with no liquid anywhere on it still clears
+three `row_state` entries per move, to invalidate a cache of "this row
+has no liquid" that was already true and stays true. The obvious
+narrowing - only liquid movement can make a `ROW_NO_LIQUID` bit wrong,
+and external placement already wakes explicitly - looks safe, but so did
+the batching attempt and so did staggering, and both of those lost to
+things their safety arguments said nothing about. It is a one-line-shaped
+idea sitting on the sleeping machinery that has now burned three separate
+attempts in this file. **It should be its own experiment, with its own
+sharpest-existing-test derivation done before any code is written** -
+`test_undermining_a_sleeping_pile_collapses_it` and the pool fixtures
+being the obvious places to start.
+
+**One micro-item inspected and dismissed without a device round:**
+`liquid_mask()`'s 16-entry scan of the flash material table was flagged
+as a per-call recomputation worth hoisting. It is called exactly twice
+per step (once in `equalise_liquids()`, once in `sand_step_liquids()`),
+not once per cell - roughly 32 table reads out of a 4882 us liquid phase.
+Reading the call sites was enough to rule it out; flashing a build to
+confirm it would have been the measurement, not the discipline.
+
+**Committed from this attempt: nothing but this section.** Every
+experiment was reverted, and a fresh `tools/report_performance.sh`
+capture on the restored tree reproduces the incoming baseline exactly -
+5801 / 16141 / 15144 / 8996 / 259, `failures=3`, unchanged. **The lesson,
+and it is a repeat of this file's oldest one wearing new clothes:**
+"measure, don't reason" is normally applied to *where the time goes*.
+It applies just as hard to *whether the code you are optimising runs at
+all*. A profiler-shaped phase split said "the sweep," which was true and
+far too coarse; an `objdump` finding said "this function is un-inlined,"
+which was also true and completely irrelevant. Three device rounds and a
+day would have been saved by the cheapest possible check - a counter, on
+the host, in a scenario that takes ten seconds to run - asking not "how
+expensive is this function" but "is this function called."
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery
