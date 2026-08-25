@@ -80,17 +80,35 @@
  * That is an accepted limitation, not a bug to chase: only decay, or
  * water, ends an ember today.
  *
- * QUENCHING NOW PRODUCES STEAM, AT A COST
+ * QUENCHING PRODUCES STEAM, AT A COST - AND BURNING OUT PRODUCES SMOKE
  *
  * A burning cell touched by water used to simply vanish. It still gets
  * put out in one touch - that generosity is unchanged - but now becomes
  * MAT_STEAM instead of CELL_EMPTY (reaction_t.quench_to), and the liquid
  * neighbour that did the quenching pays a unit of its own mass for the
- * privilege (pay_quench_cost(), below). Steam doubles as smoke: a
- * burnt-out cell can also leave one behind on its own (reaction_t.smoke),
- * no water required - one material for both "the fire went out" and "the
- * pot is boiling", since both want the same pale, light, rising, fading
- * cell.
+ * privilege (pay_quench_cost(), below).
+ *
+ * A burning cell that simply runs out of life leaves MAT_SMOKE instead,
+ * on a roll of reaction_t.smoke, with no water involved anywhere. The
+ * split between the two byproducts is the whole point and is worth
+ * stating plainly, because they were ONE material at first and it was
+ * wrong:
+ *
+ *     steam  water that got hot   - boiled through a conductor, or
+ *                                   flashed off a fire a liquid put out
+ *     smoke  fuel that burned out - a fire or an ember reaching the end
+ *                                   of its life
+ *
+ * Physically they behave almost identically - both are a light gas that
+ * rises, spreads and fades - and that is exactly why sharing one row
+ * looked right on paper. It was wrong on the SCREEN. A lone fire
+ * burning out in mid-air, nowhere near water, puffing bright white
+ * kettle-steam reads as a bug to anyone watching, because the player
+ * can see for themselves there is nothing there to have boiled. The two
+ * rows differ mostly in their palettes (cool and bright for steam, warm
+ * and dim for smoke - see material.c), which is the actual payload of
+ * the split; the small differences in decay, buoyancy and sight are
+ * flavour on top.
  *
  * THE BOILER: HEAT CONDUCTS, FIRE DOES NOT PASS THROUGH STONE
  *
@@ -524,9 +542,15 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
          * within a step) and far simpler than threading a "did it
          * already wake this cell" flag back out of a shared, hot-header
          * helper for a cold pass's cosmetic byproduct. */
+        /* MAT_SMOKE, not MAT_STEAM: nothing here got wet, and a fire
+         * puffing kettle-steam as it dies is the exact confusion the
+         * two-material split exists to avoid - see this file's own top
+         * comment. Hardcoded rather than a `smokes_to` field mirroring
+         * quench_to, because every material that burns wants the same
+         * residue; if one ever does not, that field is the change. */
         const uint8_t smoke = reactions[mat_id].smoke;
         if (smoke != 0 && (int)(rng_next(&s->rng) & 0xFF) < smoke) {
-            place_reacted(s, x, y, at, MAT_STEAM);
+            place_reacted(s, x, y, at, MAT_SMOKE);
         }
         return true;
     }

@@ -57,8 +57,9 @@ crash anything, only sit there as an immovable block.
 | 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `buoyancy=96` |
 | 5 | fire | `KIND_GAS` | rises | `sight=5` (tighter), `decay=96` (shorter life), reacts via a second pass (below) |
 | 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own |
-| 7 | steam | `KIND_GAS` | rises | `sight=20` (widest), `buoyancy=160` (fastest); doubles as fire's smoke |
-| 8 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
+| 7 | steam | `KIND_GAS` | rises | `sight=20`, `buoyancy=160` (fastest); water that got hot |
+| 8 | smoke | `KIND_GAS` | rises | `sight=24` (widest), `decay=16` (longest-lived); fuel that burned out |
+| 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -86,13 +87,18 @@ it stay.
 
 | Material | `flammability` | `ignites_to` | `burns` | `conducts` | `smoke` | `quench_to` | `flare` |
 |---|---|---|---|---|---|---|---|
-| stone | 0 | - | 0 | 176 | 0 | - | 0 |
+| stone | 0 | - | 0 | 220 | 0 | - | 0 |
 | gas | 255 | fire | 0 | 0 | 0 | - | 0 |
 | fire | 0 | - | 1 | 0 | 40 | steam | 0 |
 | wood | 6 | ember | 0 | 0 | 0 | - | 0 |
 | ember | 0 | - | 1 | 0 | 90 | steam | 48 |
 
-Everything else - sand, water, steam, and every unused slot - is
+Note the two different byproducts: `quench_to` is **steam** (water that
+got hot) while `smoke` leaves **smoke** (fuel that burned out). They are
+separate materials for a reason worth not re-litigating - see the
+simulation document's own section.
+
+Everything else - sand, water, steam, smoke, and every unused slot - is
 all-zero, which reads correctly for every field on its own: never
 catches, never a heat source, never conducts, never smokes, vanishes on
 quench, never flares. See

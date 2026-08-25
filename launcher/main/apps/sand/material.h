@@ -82,6 +82,7 @@ typedef enum {
     MAT_FIRE,
     MAT_WOOD,
     MAT_STEAM,
+    MAT_SMOKE,
     MAT_EMBER,
     MAT_COUNT
 } material_id_t;
@@ -235,9 +236,17 @@ typedef struct {
     uint8_t conducts;
 
     /* Chance in 256 that a burnt-out cell of this material leaves
-     * MAT_STEAM behind instead of nothing - smoke, physically the same
-     * "pale, light, rises, fades" material a kettle's steam is, so one
-     * material does both jobs instead of two rows for the same shape. */
+     * MAT_SMOKE behind instead of nothing.
+     *
+     * MAT_SMOKE and MAT_STEAM are near-identical rows in materials[] and
+     * were deliberately ONE material to begin with: both are a light gas
+     * that rises, spreads and fades, so a second row looked like pure
+     * duplication. It was not. Steam is water that got hot; smoke is
+     * fuel that burned out; and a fire dying in mid-air, nowhere near
+     * water, puffing bright white kettle-steam reads as a bug to anyone
+     * watching it happen. The two rows exist to be TOLD APART on screen,
+     * and the difference that actually matters is in the palette, not
+     * here. See sand_reactions.c's own top comment. */
     uint8_t smoke;
 
     /* What this material becomes when a liquid touches it - a

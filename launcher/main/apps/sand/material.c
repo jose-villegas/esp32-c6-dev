@@ -187,14 +187,24 @@ const material_t materials[MATERIAL_MAX] = {
                                      * kind, not material ID) - lighter
                                      * and faster-dispersing than either
                                      * via the figures below, not a
-                                     * different mechanism. Doubles as
-                                     * smoke: a fire's smoke and a
-                                     * kettle's steam want exactly the
-                                     * same "pale, light, rises, fades"
-                                     * behaviour, and a second gas
-                                     * material would be a second row for
-                                     * no visible gain - see
-                                     * reaction_t.smoke in material.h. */
+                                     * different mechanism.
+                                     *
+                                     * Steam is specifically WATER THAT
+                                     * GOT HOT: boiled through a
+                                     * conductor, or flashed off a fire
+                                     * a liquid put out. Fuel burning
+                                     * out leaves MAT_SMOKE instead, a
+                                     * separate row below. The two were
+                                     * one material at first, on the
+                                     * theory that both want the same
+                                     * "pale, light, rises, fades"
+                                     * behaviour - true of the physics,
+                                     * false of the PICTURE: a fire
+                                     * quietly puffing white
+                                     * kettle-steam reads as a bug,
+                                     * because a player can see there is
+                                     * no water anywhere near it. Two
+                                     * rows, two palettes. */
 
         .density = 5,               /* below gas (10) and fire (15), so
                                      * both of those can rise through and
@@ -216,8 +226,7 @@ const material_t materials[MATERIAL_MAX] = {
         .repose  = 0,
         .scatter = 140,             /* above both gas's 120 and fire's
                                      * 120 - a wispier, more turbulent
-                                     * rise, reading as steam rather than
-                                     * smoke. Starting point, not final -
+                                     * rise. Starting point, not final -
                                      * tune on device like every other
                                      * constant here. */
 
@@ -240,6 +249,69 @@ const material_t materials[MATERIAL_MAX] = {
                                      * way fire's own 5 does. Starting
                                      * point, not final - tune on device
                                      * like every other constant here. */
+    },
+
+    [MAT_SMOKE] = {
+        .name    = "Smoke",
+        .kind    = KIND_GAS,        /* same pass as steam, gas and fire -
+                                     * see steam's own row above. Smoke
+                                     * is what FUEL leaves behind when it
+                                     * burns out (reaction_t.smoke),
+                                     * where steam is what WATER leaves
+                                     * when it gets hot. Physically the
+                                     * two behave almost identically,
+                                     * which is why this row is mostly a
+                                     * copy of steam's - the reason they
+                                     * are separate materials at all is
+                                     * that they must not LOOK alike, so
+                                     * a puff rising off a fire reads as
+                                     * soot and a puff rising off a basin
+                                     * reads as a kettle. The palette
+                                     * below is the real payload of this
+                                     * row. */
+
+        .density = 7,               /* between steam's 5 and gas's 10 -
+                                     * nothing here is load bearing, it
+                                     * only keeps smoke and steam from
+                                     * being mutually undisplaceable the
+                                     * way two cells of EQUAL density are
+                                     * (see fire's own density comment
+                                     * for that limitation). Smoke being
+                                     * the heavier of the two means steam
+                                     * can rise through smoke, which is
+                                     * the right way round for a basin
+                                     * sitting over a fire. */
+        .slip    = 255,             /* no resistance, same reasoning as
+                                     * gas's own row */
+        .repose  = 0,
+        .scatter = 150,             /* just above steam's 140 - smoke
+                                     * curls a little more than steam
+                                     * does. Starting point, not final -
+                                     * tune on device like every other
+                                     * constant here. */
+
+        .decay    = 16,             /* lower than steam's 24, so smoke
+                                     * LASTS LONGER - decay is the chance
+                                     * per step of losing a life tick, so
+                                     * smaller is slower. Roughly 240
+                                     * steps, ~4s at ~60fps: soot hangs
+                                     * around after the fire is out,
+                                     * where a wisp off a pot does not.
+                                     * Starting point, not final - tune
+                                     * on device like every other
+                                     * constant here. */
+        .buoyancy = 120,            /* between gas's 96 and steam's 160 -
+                                     * smoke climbs, but lazily, where
+                                     * steam comes off a boil eagerly.
+                                     * Starting point, not final - tune
+                                     * on device like every other
+                                     * constant here. */
+        .sight    = 24,             /* widest of any gas here (steam 20,
+                                     * gas 16, fire 5) - smoke spreads
+                                     * and thins into a haze rather than
+                                     * holding a column. Starting point,
+                                     * not final - tune on device like
+                                     * every other constant here. */
     },
 
     [MAT_EMBER] = {
@@ -450,16 +522,54 @@ static const gfx_color_t palette[256] = {
                                     * is life remaining, same trick gas
                                     * already uses */
     SHADES(0x3A2616, 0x7A5230),   /* wood  - dark grain to lit grain */
-    SHADES(0x5A6470, 0xE6EEF6),   /* steam - variant is life remaining, so
-                                    * a dying wisp is grey and a fresh one
-                                    * is near-white; same trick fire and
-                                    * gas already use */
+    SHADES(0x6E8496, 0xF2FAFF),   /* steam - variant is life remaining, so
+                                    * a dying wisp is a cool blue-grey and
+                                    * a fresh one is almost white; same
+                                    * trick fire and gas already use.
+                                    * Deliberately COOL and BRIGHT, against
+                                    * smoke's warm and dim just below: the
+                                    * pair has to be told apart at a
+                                    * glance, in motion, at two screen
+                                    * pixels per cell, which is the entire
+                                    * reason they are two materials rather
+                                    * than one (see MAT_SMOKE's own row in
+                                    * the material table above). */
+    SHADES(0x2A2622, 0x857A6E),   /* smoke - dying wisp is near-black soot,
+                                    * fresh is a warm mid grey-brown. Warm
+                                    * rather than neutral so it reads as
+                                    * soot off a fire, not fog.
+                                    *
+                                    * The bright end is deliberately held
+                                    * DOWN, and the exact figures are
+                                    * measured rather than eyeballed
+                                    * (suite_sand.c pins both):
+                                    *
+                                    *   - at equal life, steam is at least
+                                    *     89 luminance brighter than smoke,
+                                    *     across all sixteen variants;
+                                    *   - the FRESHEST smoke (122) is still
+                                    *     dimmer than the most nearly-dead
+                                    *     steam (132), so the two ranges do
+                                    *     not overlap at all - a puff can
+                                    *     never be ambiguous, whatever
+                                    *     stage of its life it is caught at.
+                                    *
+                                    * That second property is the fiddly
+                                    * one and the first draft of this
+                                    * palette did not have it: 0x9A8F84 at
+                                    * the bright end put fresh smoke at 144
+                                    * against dying steam's 132, which
+                                    * overlapped. Being able to tell these
+                                    * two apart at a glance is the entire
+                                    * reason they are separate materials,
+                                    * so it is worth a test rather than a
+                                    * good intention. */
     SHADES(0x2A0A00, 0xFF7A28),   /* ember - dying char to glowing orange,
                                     * deliberately redder and darker than
                                     * fire's own yellow-white so a
                                     * smouldering log reads differently
                                     * from the flame above it */
-    UNUSED, UNUSED, UNUSED, UNUSED,
+    UNUSED, UNUSED, UNUSED,
     UNUSED, UNUSED, UNUSED,
 };
 

@@ -3232,7 +3232,7 @@ static void test_burnt_out_fire_can_leave_smoke(void)
         sand_step(&s, 0, 1000, 0);
         for (int y = 0; y < H && !found_steam; y++) {
             for (int x = 0; x < W; x++) {
-                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STEAM) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_SMOKE) {
                     found_steam = true;
                     break;
                 }
@@ -3242,9 +3242,123 @@ static void test_burnt_out_fire_can_leave_smoke(void)
 
     TEST_ASSERT_TRUE_MESSAGE(found_steam,
         "a whole grid of fire burning out at once (40 in 256 smoke "
-        "chance per cell) must leave at least one MAT_STEAM cell behind "
+        "chance per cell) must leave at least one MAT_SMOKE cell behind "
         "- not seeing a single one across 64 cells means smoke is "
         "broken, not unlucky");
+}
+
+/* The two byproducts must not be the same material, asserted directly
+ * rather than left implied by the two tests either side of it.
+ *
+ * They WERE one material - MAT_STEAM did both jobs - and sharing the row
+ * was defensible right up until you watched it: a fire dying in mid-air
+ * with no water within reach puffing bright white kettle-steam reads as
+ * a bug, because the player can see there was nothing there to boil.
+ * This pins the split so nobody re-merges them on the entirely correct
+ * observation that the two materials[] rows are nearly identical - the
+ * difference that matters is the palette, not the physics. */
+/* Relative luminance of a rendered cell, 0-255. The palette stores
+ * panel-ready (byte-swapped) RGB565 - see gfx_color.h - so this undoes
+ * both before weighting the channels the way an eye does. */
+static int cell_luminance(cell_t c)
+{
+    const gfx_color_t p = material_palette()[c];
+    const unsigned v = (unsigned)(((p & 0xFF) << 8) | ((p >> 8) & 0xFF));
+    const int r = (int)((v >> 11) & 0x1F) * 255 / 31;
+    const int g = (int)((v >> 5)  & 0x3F) * 255 / 63;
+    const int b = (int)(v         & 0x1F) * 255 / 31;
+    return (r * 30 + g * 59 + b * 11) / 100;
+}
+
+/* The palette test the two-material split exists for.
+ *
+ * MAT_STEAM and MAT_SMOKE are near-identical rows in materials[] - the
+ * ONLY thing that makes them worth being two materials is that a player
+ * can tell them apart on sight. That makes their palettes load-bearing
+ * rather than decorative, which is unusual enough here to be worth
+ * asserting: everything else in this suite tests behaviour, and a future
+ * palette tweak that quietly collapsed these two back into the same
+ * range would break the feature while passing every other test in the
+ * file.
+ *
+ * Two separate properties, and the second is the one that is easy to
+ * lose. Equal-life brightness ordering is the obvious one. Non-overlap
+ * of the whole RANGES is the subtle one: a puff of smoke is caught at
+ * whatever point in its life you happen to look at it, so "fresh smoke
+ * is dimmer than dying steam" is what actually guarantees no cell is
+ * ever ambiguous. The first draft of this palette had the first
+ * property and not the second. */
+static void test_steam_and_smoke_are_told_apart_by_brightness(void)
+{
+    int smallest_gap = 255;
+    for (int life = 0; life < MATERIAL_VARIANTS; life++) {
+        const int steam = cell_luminance(CELL_MAKE(MAT_STEAM, life));
+        const int smoke = cell_luminance(CELL_MAKE(MAT_SMOKE, life));
+        if (steam - smoke < smallest_gap) {
+            smallest_gap = steam - smoke;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(60, smallest_gap,
+        "at equal life, steam must be clearly brighter than smoke at "
+        "every one of the sixteen variants - measured at 89 when this "
+        "was written, held to a looser 60 so ordinary palette tuning "
+        "does not trip it but a collapse of the two ranges does");
+
+    const int freshest_smoke = cell_luminance(CELL_MAKE(MAT_SMOKE,
+                                                        MATERIAL_VARIANTS - 1));
+    const int dying_steam    = cell_luminance(CELL_MAKE(MAT_STEAM, 1));
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(dying_steam, freshest_smoke,
+        "and the two ranges must not overlap AT ALL: the brightest smoke "
+        "there is must still be dimmer than the faintest steam, or a puff "
+        "caught at the wrong moment of its life is ambiguous - which "
+        "defeats the entire reason these are two materials rather than "
+        "one");
+}
+
+static void test_quenching_makes_steam_but_burning_out_makes_smoke(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, WATER);
+    sand_set(&s, 4, 3, FIRE);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "a fire put out by water must leave STEAM - water that got hot, "
+        "which is exactly what happened");
+
+    /* Same fire, no water anywhere, forced to burn out and forced to
+     * smoke: the residue must be the OTHER material. sand_set_decay()
+     * at 255 burns it out on the first step it gets; smoke's own 40 in
+     * 256 chance is not forced, so this loops until it fires rather
+     * than asserting on a single roll. */
+    fixture();
+    sand_set_decay(&s, 255);
+    sand_set_buoyancy(&s, 0);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, FIRE);
+    }
+
+    bool found_smoke = false, found_steam = false;
+    for (int i = 0; i < 2 * (MATERIAL_VARIANTS - 1); i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const uint8_t m = CELL_MATERIAL(sand_at(&s, x, y));
+                if (m == MAT_SMOKE) found_smoke = true;
+                if (m == MAT_STEAM) found_steam = true;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(found_smoke,
+        "fire burning out with no water in the scene must leave SMOKE");
+    TEST_ASSERT_FALSE_MESSAGE(found_steam,
+        "and must never leave STEAM - there is no water anywhere on this "
+        "grid, so a steam cell here would mean the two byproducts have "
+        "been collapsed back into one material");
 }
 
 static void test_stone_conducts_heat_into_water_beyond_it(void)
@@ -4507,6 +4621,8 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_rises_and_disperses);
     RUN_TEST(test_creating_steam_arms_the_gas_pass);
     RUN_TEST(test_burnt_out_fire_can_leave_smoke);
+    RUN_TEST(test_quenching_makes_steam_but_burning_out_makes_smoke);
+    RUN_TEST(test_steam_and_smoke_are_told_apart_by_brightness);
     RUN_TEST(test_stone_conducts_heat_into_water_beyond_it);
     RUN_TEST(test_stone_does_not_conduct_fire_into_empty_space);
     RUN_TEST(test_a_thick_wall_still_conducts);

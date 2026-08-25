@@ -251,19 +251,41 @@ density 150 only stone (200) qualifies - burying a log in sand will not
 put it out. That is an accepted limitation, not a bug to chase: only
 decay, or water, ends an ember.
 
-**Steam is fire's exhaust, and it does two jobs.** A burning cell
-touched by water still goes out in one touch, but now becomes
-`MAT_STEAM` instead of simply vanishing, and the water that quenched it
-pays a unit of its own mass for the privilege - steam is a byproduct,
-not a free lunch, and a pot boiled dry should eventually run dry rather
-than boiling forever for nothing. A burning cell can also leave steam
-behind purely from burning out on its own (`reaction_t.smoke`), no water
-required. One material does both "the fire went out" and "the pot is
-boiling" rather than two, because both want the same pale, light,
-rising, fading gas - the same overlap-the-nibble trick this document's
-own top section describes for shade/fill-level/life-remaining, applied
-one level up: two *behaviours* sharing one *material* rather than one
-*field* meaning two things.
+**Fire has two exhausts, and they are deliberately different
+materials.** A burning cell touched by water still goes out in one
+touch, but now becomes `MAT_STEAM` instead of simply vanishing, and the
+water that quenched it pays a unit of its own mass for the privilege -
+steam is a byproduct, not a free lunch, and a pot boiled dry should
+eventually run dry rather than boiling forever for nothing. A burning
+cell that just runs out of life leaves `MAT_SMOKE` instead
+(`reaction_t.smoke`), no water involved:
+
+| | what it is | where it comes from |
+|---|---|---|
+| `MAT_STEAM` | water that got hot | boiled through a conductor, or flashed off a quenched fire |
+| `MAT_SMOKE` | fuel that burned out | a fire or an ember reaching the end of its life |
+
+These were **one** material at first, and the reasoning for sharing a
+row was good: both are a light gas that rises, spreads and fades, their
+`materials[]` rows are nearly identical even now, and this document's
+own top section is a sustained argument for making one thing do two
+jobs when the two jobs have the same shape. It was still wrong, and the
+way it was wrong is the useful part. The overlap was real in the
+*physics* and false in the *picture*: a lone fire burning out in
+mid-air, nowhere near water, puffing bright white kettle-steam reads as
+a bug to anyone watching, because the player can see for themselves
+there was nothing there to boil. Nothing in the simulation or its tests
+could surface that - only looking at it could.
+
+So the split is not really two materials, it is two *palettes* that
+happen to need a material each: steam is cool and bright, smoke is warm
+and dim, and a fresh puff of smoke tops out dimmer than a dying wisp of
+steam so the two stay separable even where they overlap. The small
+differences in `decay`, `buoyancy` and `sight` are flavour on top - if
+you find yourself re-merging these rows on the entirely correct
+observation that they are nearly identical,
+`test_quenching_makes_steam_but_burning_out_makes_smoke` is there to
+stop you.
 
 **Steam trapped under standing water, and the surface-walk that avoids
 it.** `can_enter()`'s displacement rule is one-directional - denser
@@ -318,15 +340,32 @@ after one, rolling `reaction_t.conducts` again for every further cell it
 has to cross. Crossing depth `d` succeeds with probability
 `(conducts/256)^d`, so a thin wall conducts briskly and a thick one
 conducts slowly - thermal resistance falling out of one attenuating walk,
-for free, with no second "how thick" constant to tune. The walk is
-capped at `CONDUCT_REACH` (16 cells, comfortably past what the pour
-brush actually draws) purely to bound a cold pass, not because heat
-stops meaning anything beyond that depth. Stone's own `conducts` figure
-(176 in 256, ≈0.69) is tuned against the *eleven-cell* reality the app
-actually produces: a single cell conducts about 7 times in 10 steps, an
-eleven-cell hand-drawn slab conducts roughly once every 42 steps
-(`0.69^11 ≈ 0.024`) - slower, but a real, buildable boiler rather than a
-theoretical one.
+for free, with no second "how thick" constant to tune.
+
+Both of that walk's numbers then had to be corrected a second time, for
+the same underlying reason as the first, which is why it is worth
+recording rather than quietly fixing:
+
+- **`CONDUCT_REACH` was 16**, chosen as "comfortably past what one drag
+  of the pour brush produces". Nothing stops a player scribbling back
+  and forth, and a floor built that way runs well past sixteen cells -
+  at which point the walk gave up and the boiler was silently,
+  *completely* dead rather than merely slow. A bound that exists to cap
+  a cold pass's cost should never be the thing that decides whether a
+  feature works, so it is now 32: far enough out that attenuation, not
+  the cap, limits depth in any scene the brush can realistically draw.
+- **Stone's `conducts` was 176** (≈0.69 per cell), which falls off a
+  cliff with depth. A thirteen-cell floor got through on ~0.8% of steps
+  and a sixteen-cell one on ~0.3%, so a hand-drawn basin took the best
+  part of a minute to show its first wisp of steam, or read as
+  completely inert. At **220** (≈0.86) those same depths are ~14% and
+  ~9%, and every thickness the brush can draw starts boiling within a
+  step or two of fire reaching it - measured by sweeping slab thickness
+  1..20 under a pour-brush-sized blob of fire, not estimated.
+
+Thickness still matters. It just matters over a range the player can
+actually build in, rather than one where the difference between "thick"
+and "impossible" is a couple of finger-widths.
 
 **Building one in the app:** a wood floor, a stone basin over it as
 thick as a single drag of the pour brush produces, water poured into the
