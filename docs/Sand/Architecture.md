@@ -302,21 +302,26 @@ line tagged `device_tests` containing a microsecond figure - so a new
 budget test appears in the report automatically, with no change to the
 tooling.
 
-### Why `test/run_device_tests.sh` is not on that list
+### The one constraint behind all of it
 
-Because it does not work from Git Bash, and both `README.md` and
-`docs/Testing-Guide.md` will happily send you to it. It needs `idf.py`
-for its collection step as well as its build step, so it hits the
-`MSYSTEM` wall below even with `--no-flash`. It is the right entry point
-from PowerShell or CI, and the wrong one from the shell most of this
-work actually happens in.
+**`idf.py` cannot run under Git Bash.** That is the whole problem, and
+everything above is a consequence of it:
 
-That mismatch has cost real time more than once, which is the reason this
-section now opens with the table above instead of with the mechanics.
+- Anything that BUILDS or FLASHES must go through PowerShell. The
+  wrappers do that for you; `test/run_device_tests.sh` does not, so it
+  refuses outright rather than silently flashing nothing (`idf.py` exits
+  *successfully* without building under MSys, which would report a
+  confident pass for code that was never compiled).
+- Anything that only READS THE SERIAL PORT is plain Python and works fine
+  from Git Bash - including `test/run_device_tests.sh --no-flash`.
+
+So from Git Bash there are two honest routes: use a `tools/` wrapper and
+get the whole thing in one command, or build and flash from PowerShell
+and then collect with `--no-flash`.
 
 ### The mechanics, for when a script is not enough
 
-The rest of this section is what the scripts are doing, kept because
+The rest of this section is what the wrappers are doing, kept because
 something eventually breaks and the wrapper stops being enough.
 
 ### The trap: `idf.py` cannot run from Git Bash, at all
@@ -394,10 +399,15 @@ python tools/sweeps/capture_selftest.py /path/to/output.txt --port COM3
 `ModuleNotFoundError: No module named 'serial'` means exactly that, not
 a real error.)
 
-Do **not** reach for `test/run_device_tests.sh` from Git Bash even with
-`--no-flash` - it needs `idf.py` for the collection step too, and hits
-the exact same `MSYSTEM` wall. `capture_selftest.py` is the only
-Bash-native path to a device capture.
+`test/run_device_tests.sh --no-flash` works here too, and collects the
+same way: its collection step is this same plain-Python path, not
+`idf.py`. Only its build/flash half needs ESP-IDF.
+
+(That was not always true in practice. The script used to check for
+`idf.py` on PATH *before* looking at `--no-flash`, so collecting failed
+for want of a tool it never runs - which read as "this script needs
+ESP-IDF for everything" and is why this page once said so. The check is
+scoped to the flash path now.)
 
 ### Reading the result
 

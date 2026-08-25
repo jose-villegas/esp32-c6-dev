@@ -14,9 +14,12 @@ Living document: update it when the approach changes.
 ./launcher/test/run_device_tests.sh   # every suite, on the board, host-triggered
 ```
 
-**On Windows, in Git Bash, use the wrappers instead** - `run_device_tests.sh`
-needs `idf.py` for both its build and its collection step, and ESP-IDF
-refuses to run under Git Bash at all (see
+**On Windows, in Git Bash**, `idf.py` cannot run at all, so the build and
+flash half of that second script refuses rather than silently flashing
+nothing. Two ways round it: collect from firmware already on the board
+with `run_device_tests.sh --no-flash` (its collection step is plain
+Python and works fine here), or use a wrapper that does the whole job by
+shelling out to PowerShell (see
 [`Sand/Architecture.md`](Sand/Architecture.md#verifying-performance-on-real-hardware)):
 
 ```sh

@@ -38,9 +38,20 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-if ! command -v idf.py >/dev/null 2>&1; then
+# Only the build/flash half needs idf.py. Collection is plain Python and
+# pyserial (collect_device_results.py, below), so --no-flash must not be
+# gated on ESP-IDF being available - that is the entire point of
+# --no-flash, and on Windows it is what makes this script usable from Git
+# Bash at all.
+#
+# This check used to run unconditionally, before the --no-flash branch it
+# should have been inside. The result was that collecting results failed
+# for want of a tool it never invokes, which read as "the whole script
+# needs ESP-IDF" and sent people looking for a wrapper they did not need.
+if [ "$DO_FLASH" -eq 1 ] && ! command -v idf.py >/dev/null 2>&1; then
     echo "idf.py not on PATH. Source ESP-IDF's export script first:" >&2
     echo "  . \$IDF_PATH/export.sh" >&2
+    echo "(or use --no-flash to collect from what is already on the board)" >&2
     exit 1
 fi
 
