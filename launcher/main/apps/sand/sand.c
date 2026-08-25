@@ -92,11 +92,18 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
-    s->may_have_gas    = false;
-    s->may_have_burning = false;
-    s->may_have_dissolver = false;
+    /* The THIRD copy of this list, and the one that made the other two
+     * hard to see. Four of the five flags were reset here by hand and
+     * may_have_temperature was not, so a sand_t reused across tests
+     * carried it in from whatever ran before - which meant the tests
+     * written to catch the brush latching bug could not see it, because
+     * the flag they were checking was already true on both sides.
+     *
+     * On a fresh board the same omission reads as the opposite bug: the
+     * simulation is a static, so the flag starts false and stays false,
+     * and painted snow never wakes the reactions pass at all. */
+    clear_content_flags(s);
     s->dirty_rows = NULL;
-    s->may_have_liquid = false;
     s->block_state = NULL;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
@@ -188,48 +195,7 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         return;
     }
     s->cells[y * s->w + x] = cell;
-    if (!CELL_IS_EMPTY(cell)) {
-        /* Independent ifs, not an else-if chain: fire is BOTH
-         * kind == KIND_GAS (rises/disperses through sand_step_gas())
-         * AND reactions[].burns (reacts through sand_step_reactions())
-         * at once, and needs both flags set. An else-if chain here
-         * would let the kind==KIND_GAS branch shadow the burns branch
-         * for every fire cell, silently stranding may_have_burning
-         * false forever - caught before it shipped, not after. The
-         * burns check stays keyed on the material ID via reactions[],
-         * not on kind, for the original reason: KIND_STATIC (fire's
-         * predecessor here, and ember's kind today) is shared with
-         * stone, and KIND_GAS is not guaranteed to stay unique to gas
-         * and fire alone either. */
-        const material_t *mat = &materials[CELL_MATERIAL(cell)];
-        if (mat->kind == KIND_LIQUID) {
-            s->may_have_liquid = true;
-        }
-        if (mat->kind == KIND_GAS) {
-            s->may_have_gas = true;
-        }
-        if (reactions[CELL_MATERIAL(cell)].burns) {
-            s->may_have_burning = true;
-        }
-        if (reactions[CELL_MATERIAL(cell)].dissolves) {
-            s->may_have_dissolver = true;
-        }
-        /* And a cell with a TEMPERATURE, which is the same trap one more
-         * time: a board built with hot glass or with snow in it - a
-         * restored scene, a test fixture - would never wake the reactions
-         * pass, so the pane would sit at whatever level it was placed at
-         * forever and the snow would never melt.
-         *
-         * Placed COLD glass sets nothing, which is right: it has no heat
-         * to lose, and it gets the flag from try_heat_transform() the
-         * moment a flame reaches it. Snow sets it unconditionally, because
-         * being cold is not a state it can be in or out of. */
-        if ((reactions[CELL_MATERIAL(cell)].heat_ramp != 0 &&
-             CELL_VARIANT(cell) != 0) ||
-            reactions[CELL_MATERIAL(cell)].chills != 0) {
-            s->may_have_temperature = true;
-        }
-    }
+    latch_content_flags(s, cell);
     mark_move(s, x, y, x, y);
 }
 
@@ -253,21 +219,13 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     if (s->cells[y * s->w + x] != SAND_EMPTY) {
         return false;   /* never overwrite, so the count cannot drift */
     }
-    /* Independent ifs, not an else-if chain - see sand_set()'s own
-     * identical structure for why (fire needs both flags at once). */
-    if (materials[material].kind == KIND_LIQUID) {
-        s->may_have_liquid = true;
-    }
-    if (materials[material].kind == KIND_GAS) {
-        s->may_have_gas = true;
-    }
-    if (reactions[material].burns) {
-        s->may_have_burning = true;
-    }
-    if (reactions[material].dissolves) {
-        s->may_have_dissolver = true;
-    }
-    s->cells[y * s->w + x] = random_cell(s, material);
+    /* Latched from the finished cell, not from the material id, because
+     * one of the flags depends on the variant - and through the SAME
+     * helper sand_set() uses, because this list existing twice is what
+     * let the brush and the setter disagree about snow. */
+    const cell_t cell = random_cell(s, material);
+    s->cells[y * s->w + x] = cell;
+    latch_content_flags(s, cell);
     mark_move(s, x, y, x, y);
     return true;
 }

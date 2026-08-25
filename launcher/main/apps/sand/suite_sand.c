@@ -3936,6 +3936,127 @@ static void test_snow_melts_where_it_chills(void)
         "and what it turns into is water, not nothing");
 }
 
+/* A re-initialised simulation remembers nothing about the old board.
+ *
+ * The may_have_* flags are an optimisation - they let whole passes be
+ * skipped - so a stale one is not a wrong answer, it is a pass running
+ * when it need not. A stale FALSE is the dangerous direction, and that is
+ * what a missing reset produces on a fresh board.
+ *
+ * This is here because the omission hid a second bug rather than causing
+ * one directly. may_have_temperature was not reset, the suite reuses one
+ * static sand_t, so the flag arrived already true from whichever test ran
+ * before - and the two tests written to prove the brush latched it could
+ * not fail, because the thing they checked was true either way. Both bugs
+ * were mine, in the same change, and the second made the first
+ * untestable. */
+static void test_reinitialising_forgets_the_old_board(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set(&s, 1, 1, CELL_MAKE(MAT_WATER, MASS_MAX));
+    sand_set(&s, 2, 1, GAS);
+    sand_set(&s, 3, 1, FIRE);
+    sand_set(&s, 4, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    sand_set(&s, 5, 1, SNOW);
+
+    TEST_ASSERT_TRUE_MESSAGE(s.may_have_liquid && s.may_have_gas &&
+                             s.may_have_burning && s.may_have_dissolver &&
+                             s.may_have_temperature,
+        "fixture check: this board has one of everything, so every flag "
+        "should be set before we throw it away");
+
+    fixture();
+
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_liquid,      "liquid flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_gas,         "gas flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_burning,     "burning flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_dissolver,   "dissolver flag leaked");
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_temperature, "temperature flag leaked");
+}
+
+/* The brush and the setter must agree about what a cell implies.
+ *
+ * They did not, and the way they failed is the point. sand_set() and
+ * try_spawn_one() each carried their own copy of the may_have_* latch
+ * list, both with a comment noting the other one. A fifth flag was added
+ * to one of them. Snow PLACED by sand_set() melted in water; snow PAINTED
+ * with the brush never woke the reactions pass at all, so on a board with
+ * no fire and no acid it sat in a pond forever and chilled nothing.
+ *
+ * Every test at the time used sand_set(), so every test passed and the
+ * only way to find it was to draw snow into water by hand. This one walks
+ * every material through both doors and compares what each one latched,
+ * so a sixth flag cannot repeat it. */
+static void test_the_brush_and_the_setter_agree_about_every_material(void)
+{
+    for (int m = 1; m < MAT_COUNT; m++) {
+        const int cx = W / 2, cy = H / 2;
+
+        /* The brush. */
+        fixture();
+        sand_clear(&s);
+        sand_spawn(&s, cx, cy, 1, (material_id_t)m);
+        const cell_t painted = sand_at(&s, cx, cy);
+        const bool b_liquid = s.may_have_liquid;
+        const bool b_gas    = s.may_have_gas;
+        const bool b_burn   = s.may_have_burning;
+        const bool b_diss   = s.may_have_dissolver;
+        const bool b_temp   = s.may_have_temperature;
+
+        TEST_ASSERT_FALSE_MESSAGE(CELL_IS_EMPTY(painted),
+            "fixture check: the brush has to actually paint the centre "
+            "cell, or this compares two empty boards");
+
+        /* The setter, given the very cell the brush produced. */
+        fixture();
+        sand_clear(&s);
+        sand_set(&s, cx, cy, painted);
+
+        char why[96];
+        snprintf(why, sizeof why,
+                 "brush and setter disagree about %s", materials[m].name);
+        TEST_ASSERT_EQUAL_MESSAGE(s.may_have_liquid,      b_liquid, why);
+        TEST_ASSERT_EQUAL_MESSAGE(s.may_have_gas,         b_gas,    why);
+        TEST_ASSERT_EQUAL_MESSAGE(s.may_have_burning,     b_burn,   why);
+        TEST_ASSERT_EQUAL_MESSAGE(s.may_have_dissolver,   b_diss,   why);
+        TEST_ASSERT_EQUAL_MESSAGE(s.may_have_temperature, b_temp,   why);
+    }
+}
+
+/* And the same thing end to end, through the door the player uses.
+ *
+ * The test above compares flags; this one says what the flags were for.
+ * Snow painted into a pool on a board where nothing is burning has to
+ * melt, and it is worth stating separately because the flag is only
+ * machinery - the observable claim is that a drift does not sit in water
+ * forever. */
+static void test_snow_painted_into_water_melts(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = H - 4; y < H - 1; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    sand_spawn(&s, W / 2, 1, 2, MAT_SNOW);
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SNOW) > 0,
+        "fixture check: the brush has to put some snow on the board");
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_SNOW),
+        "snow PAINTED into water must melt, on a board with no fire and "
+        "no acid anywhere - nothing else is running the reactions pass, "
+        "so this is the whole of what wakes it");
+}
+
 /* Snow melts in liquid, not only near fire.
  *
  * Water is not a heat source in this simulation, so before `thaws` a
@@ -6252,6 +6373,9 @@ void run_sand_suite(void)
     RUN_TEST(test_cold_glass_is_unharmed_by_snow);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_reinitialising_forgets_the_old_board);
+    RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
+    RUN_TEST(test_snow_painted_into_water_melts);
     RUN_TEST(test_snow_melts_in_any_liquid);
     RUN_TEST(test_melting_snow_makes_water_not_more_of_the_liquid);
     RUN_TEST(test_snow_keeps_on_dry_ground);

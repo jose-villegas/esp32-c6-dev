@@ -300,6 +300,62 @@ static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
     s->block_state[by * s->block_cols + bx] |= BLOCK_ACTIVE;
 }
 
+/* Latch the may_have_* flags that a newly written cell implies.
+ *
+ * ONE copy of this list, because there were two and they drifted. sand_set()
+ * and try_spawn_one() each carried their own identical run of ifs, and when
+ * a fifth flag arrived only one of them learned about it: snow drawn with
+ * the BRUSH never woke the reactions pass, so it sat in water forever and
+ * never chilled anything, while snow placed by sand_set() melted correctly.
+ * Every test used sand_set(), so every test passed. The duplication was
+ * flagged in both copies' comments and duplicated anyway.
+ *
+ * Independent ifs, not an else-if chain: fire is BOTH kind == KIND_GAS
+ * (rises through sand_step_gas()) AND reactions[].burns (reacts through
+ * sand_step_reactions()) and needs both flags set. An else-if would let the
+ * gas branch shadow the burns branch for every fire cell and strand
+ * may_have_burning false forever.
+ *
+ * Takes a CELL rather than a material id because temperature depends on the
+ * variant: cold glass has nothing to cool and needs no flag, and gets one
+ * from try_heat_transform() the moment a flame reaches it. Snow is cold
+ * whatever its variant, so it always sets the flag. */
+static inline void clear_content_flags(sand_t *s)
+{
+    s->may_have_liquid      = false;
+    s->may_have_gas         = false;
+    s->may_have_burning     = false;
+    s->may_have_dissolver   = false;
+    s->may_have_temperature = false;
+}
+
+static inline void latch_content_flags(sand_t *s, cell_t cell)
+{
+    if (CELL_IS_EMPTY(cell)) {
+        return;
+    }
+    const material_id_t id = (material_id_t)CELL_MATERIAL(cell);
+    const material_t *mat = &materials[id];
+    const reaction_t *r = &reactions[id];
+
+    if (mat->kind == KIND_LIQUID) {
+        s->may_have_liquid = true;
+    }
+    if (mat->kind == KIND_GAS) {
+        s->may_have_gas = true;
+    }
+    if (r->burns) {
+        s->may_have_burning = true;
+    }
+    if (r->dissolves) {
+        s->may_have_dissolver = true;
+    }
+    if (r->chills != 0 ||
+        (r->heat_ramp != 0 && CELL_VARIANT(cell) != 0)) {
+        s->may_have_temperature = true;
+    }
+}
+
 /* The row-shaped bookkeeping mark_rows() always did, plus waking the
  * touched blocks - see wake_block_and_neighbors() above for why this is
  * only used outside the sweep (sand_set()/sand_erase()/try_spawn_one(),

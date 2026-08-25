@@ -235,19 +235,7 @@ static inline void place_reacted(sand_t *s, int x, int y, size_t at,
     s->cells[at] = CELL_MAKE(mat, reactions[mat].heat_ramp != 0
                                       ? 0 : MATERIAL_VARIANTS - 1);
 
-    const material_t *m = &materials[mat];
-    if (m->kind == KIND_LIQUID) {
-        s->may_have_liquid = true;
-    }
-    if (m->kind == KIND_GAS) {
-        s->may_have_gas = true;
-    }
-    if (reactions[mat].burns) {
-        s->may_have_burning = true;
-    }
-    if (reactions[mat].dissolves) {
-        s->may_have_dissolver = true;
-    }
+    latch_content_flags(s, s->cells[at]);
 
     mark_rows(s, y, y);
     wake_block_and_neighbors(s, x, y);
