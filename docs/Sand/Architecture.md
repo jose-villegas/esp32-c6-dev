@@ -113,10 +113,10 @@ a quantity a cell carries.
 
 | Field | On | Meaning |
 | --- | --- | --- |
-| `heat_ramp` | glass, 12 | chance/256 per step per adjacent heat source to climb one level. **Non-zero is what makes the variant a temperature** rather than a shade |
-| `cools` | glass, 6 | chance/256 to move one level **towards `SAND_AMBIENT_HEAT`** - down if hot, up if frosted |
+| `heat_ramp` | glass, 64 | chance/256 per step per adjacent heat source to climb one level. **Non-zero is what makes the variant a temperature** rather than a shade |
+| `cools` | glass, 5 | chance/256 to move one level **towards `SAND_AMBIENT_HEAT`**, down if hot and up if frosted - **scaled** by how far above ambient the cell already is, so the drain grows the hotter it gets |
 | `chills` | snow, 40 | chance/256 to pull a level out of a *neighbour* that has a temperature, down to 0; non-zero also marks the material **cold** |
-| `shatters_to` | glass, sand | what a cell at temperature >= `SAND_SHOCK_HEAT` (9) becomes when something cold touches it - **on contact, no roll** |
+| `shatters_to` | glass, sand | what a cell becomes when shocked - **on contact, no roll**, in **either** direction: at or above `SAND_SHOCK_HEAT` when something cold touches it, or at or below `SAND_SHOCK_COLD` when heat reaches it |
 | `thaws` | snow, 4 | chance/256 per step per adjacent **liquid** cell that it gives up and becomes `heats_to` |
 | `SAND_AMBIENT_HEAT` | 3 | not a field - where room temperature sits on the 0-15 scale, so that **cold has somewhere to go** |
 | `conducts >> SPREAD_SHIFT` | glass, 220>>3 = 27 | chance/256 that a cell off ambient drags a neighbour of the same kind one level towards itself, when they differ by 2 or more |
@@ -150,6 +150,68 @@ fields, because they sit on different materials: `cools` belongs to the hot
 one and drains it to nothing, `chills` belongs to the cold one and drains a
 neighbour. They also cannot share a number - snow's 40 against glass's 6 is
 what lets a snowbank win a race that ambient cooling always loses.
+
+### Shock runs in both directions
+
+Thermal shock is a large temperature **change**, not a high temperature. For
+a while only half of it existed - cold arriving at hot glass broke it, heat
+arriving at frosted glass did not - which is an asymmetry nobody could have
+explained to a player, and which made the obvious experiment (chill a
+vessel, then pour something hot in) quietly do nothing.
+
+The two directions live in different code and can break independently:
+cold-onto-hot in `step_one_cold_cell()`, driven by the cold cell;
+hot-onto-cold in `try_heat_transform()`, driven by the heat source.
+
+### Why the drain scales with temperature
+
+`cools` is the drain **one level above ambient**, and it is multiplied by
+how far above ambient the cell already is. One constant then serves two
+jobs that pull opposite ways: getting a pane WARM is easy, and getting it
+MOLTEN stays hard.
+
+With a flat drain there was no setting that did both. At 12 up against 6
+flat, a pane took 152 steps just to become shatterable. Raising the ramp
+enough to fix that dropped time-to-melt from ~450 steps to ~30 and threw
+away the long exposure the ramp exists for. Scaled, the same ramp gives:
+
+| held source | shatterable | molten |
+| --- | --- | --- |
+| lava | 12-26 steps | 102-678 steps |
+| fire | ~65 steps | **never** (peaks at 13) |
+
+Fire making glass fragile but never melting it is a consequence, not a
+special case.
+
+One **brush** of fire still does almost nothing, and no ramp fixes it: fire
+is a rising gas, so a single dab has drifted off the pane within a couple of
+steps. Measured, it peaks around 6 whether the ramp is 64 or 160. Heat has
+to be held against glass.
+
+### What the vessel scene taught
+
+The scene people actually build is a drawn glass ring filled about half way
+with lava, with snow poured over the top. It did not work, and the reason
+was not the transfer rate:
+
+- A half filled vessel puts the glass a player can **reach** - the rim,
+  above the lava line - several cells from the heat. The gradient decays
+  about two levels per cell, so the rim sits in the warming band while the
+  submerged glass glows. Snow can only touch the part that was never hot.
+- Snow and lava **annihilate each other** before either reaches the glass.
+  Snow melts to water, and water quenches lava to stone. Measured on a
+  filled ring, the lava had turned to stone and the whole vessel had
+  frosted over with two panes broken out of dozens.
+
+Lowering `SAND_SHOCK_HEAT` is what fixed it, and the numbers are worth
+keeping because they are the only measurement of the scene as played:
+
+| threshold | panes broken |
+| --- | --- |
+| ambient + 6 | **0** |
+| ambient + 4 | 12 |
+| ambient + 3 | 17 |
+| ambient + 2 | 25 |
 
 ### Room temperature is in the middle
 

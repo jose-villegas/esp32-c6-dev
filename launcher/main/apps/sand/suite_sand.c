@@ -3701,6 +3701,19 @@ static void hold_lava_under_a_pane(int steps)
     }
 }
 
+/* One more step of the scene hold_lava_under_a_pane() built, lava topped
+ * back up. Separate so a caller can soak to a condition instead of to a
+ * step count. */
+static void hold_lava_under_a_pane_again(void)
+{
+    for (int x = 1; x < W - 1; x++) {
+        if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
+            sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+    sand_step(&s, 0, 1000, 0);
+}
+
 /* Heat ACCUMULATES in the pane rather than transforming it on contact.
  *
  * This is the difference between `heat_ramp` and the `heat_chance` sand
@@ -3762,7 +3775,14 @@ static void test_a_fire_held_long_enough_melts_glass_to_lava(void)
  * a furnace - the exposure simply accumulates forever. */
 static void test_glass_forgets_a_fire_that_went_out(void)
 {
-    hold_lava_under_a_pane(200);
+    /* Soaked in short bursts up to a CONDITION rather than for a fixed
+     * count: the ramp is fast enough now that a constant long enough to
+     * heat the pane on a slow build melts it outright on this one, and a
+     * fixture that destroys its own subject reports on nothing. */
+    hold_lava_under_a_pane(1);
+    for (int i = 0; i < 400 && hottest_glass() <= SAND_AMBIENT_HEAT + 2; i++) {
+        hold_lava_under_a_pane_again();
+    }
     const int peak = hottest_glass();
     TEST_ASSERT_TRUE_MESSAGE(peak > 0,
         "fixture check: the pane has to be hot before cooling it means "
@@ -4108,6 +4128,79 @@ static void test_snow_keeps_on_ordinary_cold_glass(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_WATER),
         "and it must leave no water behind, which is how the melting showed "
         "up on the board");
+}
+
+/* Shock works HOT ONTO COLD as well.
+ *
+ * Thermal shock is a large temperature CHANGE, not a high temperature, and
+ * for a while only half of it existed: cold arriving at hot glass broke it,
+ * heat arriving at frosted glass did not. Nobody could have explained that
+ * asymmetry to a player, and the obvious experiment - chill a vessel, then
+ * pour something hot into it - quietly did nothing.
+ *
+ * Kept as its own test rather than folded into the cold-onto-hot one
+ * because the two run through completely different code: this direction
+ * lives in try_heat_transform(), driven by the heat source, and the other
+ * in step_one_cold_cell(), driven by the cold cell. They can break
+ * independently and have. */
+static void test_heat_arriving_at_frosted_glass_cracks_it(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0));   /* fully frosted */
+    }
+    const int panes = W;
+    const int sand_before = count_cells_of(MAT_SAND);
+
+    int cracked = 0;
+    for (int i = 0; i < 60 && !cracked; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, CELL_MAKE(MAT_LAVA, MASS_MAX));
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        cracked = count_cells_of(MAT_SAND) > sand_before;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(cracked,
+        "lava arriving at a frosted pane must crack it, not warm it "
+        "through - shock is about the size of the change, and it has to "
+        "work in both directions or it is not that");
+    TEST_ASSERT_LESS_THAN_MESSAGE(panes, count_cells_of(MAT_GLASS),
+        "and the pane must actually be gone, not merely warmed");
+}
+
+/* A pane at room temperature is not cracked by heat arriving.
+ *
+ * The guard on the test above, and the reason SAND_SHOCK_COLD is not
+ * simply "below ambient": ordinary glass meeting fire has to warm up
+ * through the ramp the way it always did, or every pane in the game breaks
+ * the first time anyone lights something next to it. */
+static void test_heat_arriving_at_resting_glass_only_warms_it(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, GLASS);            /* at rest */
+    }
+    const int sand_before = count_cells_of(MAT_SAND);
+
+    for (int i = 0; i < 12; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(sand_before, count_cells_of(MAT_SAND),
+        "glass at room temperature must warm up when fire reaches it, not "
+        "shatter - only glass that was already COLD is shocked by heat");
 }
 
 /* Frost fades. It is a state, not a scar.
@@ -6820,6 +6913,8 @@ void run_sand_suite(void)
     RUN_TEST(test_snow_frosts_a_resting_pane);
     RUN_TEST(test_lava_one_side_snow_the_other_cracks_the_wall);
     RUN_TEST(test_a_frosted_pane_warms_back_to_room_temperature);
+    RUN_TEST(test_heat_arriving_at_frosted_glass_cracks_it);
+    RUN_TEST(test_heat_arriving_at_resting_glass_only_warms_it);
     RUN_TEST(test_frost_spreads_beyond_the_snow_touching_it);
     RUN_TEST(test_snow_keeps_on_ordinary_cold_glass);
     RUN_TEST(test_the_shock_threshold_is_exact);

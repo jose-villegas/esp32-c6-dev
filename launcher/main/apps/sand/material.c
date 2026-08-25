@@ -664,22 +664,42 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * tell a brief fierce flame from a long slow one, and "long
          * exposure" is the entire point of this reaction.
          *
-         * 12 up against 6 down is a net 6 in 256 per step per adjacent
-         * heat source. Measured, not derived: lava held against one face
-         * of a pane melts it in 550-1150 steps depending on seed, so ten
-         * to twenty seconds of a fire you have to keep fed. Sources add,
-         * so surrounding the pane is faster - the range is the point. A
-         * flame that goes out takes the pane roughly 610 steps to drain
-         * back to cold, which is the same order as heating it, so the
-         * player who looks away loses most of the progress.
+         * Sources ADD, so a pane walled in by lava climbs several times
+         * faster than one with a single flame under it - that range is
+         * deliberate. A source that goes out lets the pane drain back to
+         * room temperature, and the drain is what makes the ramp mean
+         * duration rather than lifetime total.
          *
          * `cools` at half the ramp is deliberately not much lower. It has
          * to be large enough that heat visibly DRAINS once the fire is
          * out, because that draining is the only thing that makes the
          * ramp mean duration rather than merely total exposure. */
         .heats_to    = MAT_LAVA,
-        .heat_ramp   = 12,
-        .cools       = 6,
+        .heat_ramp   = 64,
+
+        /* `cools` is the drain ONE level above ambient; it scales with how
+         * far above ambient the cell already is (step_one_tempered_cell()).
+         * So this pair is not a tug of war at a single fixed rate - 64 up
+         * against 10, then 20, then 30 as it climbs.
+         *
+         * Measured on a pane with a held source, which is what these
+         * numbers are for:
+         *
+         *   lava     shatterable in 12-26 steps, molten in 102-678
+         *   fire     shatterable in ~65 steps, NEVER molten (peaks at 13)
+         *
+         * That split is the reason for the scaling. Fire should be able to
+         * make glass fragile and should not be able to melt it; lava should
+         * do both. A flat drain cannot express that - it was 12 against 6,
+         * which took 152 steps just to reach shatterable and made the whole
+         * mechanic feel like it was not working.
+         *
+         * One BRUSH of fire still does nothing much, and no ramp fixes it:
+         * fire is a rising gas, so a single dab has drifted off the pane
+         * within a couple of steps. Measured, it peaks around 6 whether the
+         * ramp is 64 or 160. Heat has to be HELD against glass, which is
+         * the right lesson for the player to learn from it. */
+        .cools       = 5,
 
         /* Shocked glass goes back to being sand, which closes the loop it
          * opened: sand fuses to glass under heat, glass returns to sand
@@ -871,56 +891,64 @@ const reaction_t reactions[MATERIAL_MAX] = {
  * different things happening on either side.
  *
  * Below SAND_AMBIENT_HEAT a pane has been chilled and is FROSTED: pale,
- * near white, the way cold glass actually goes. Those three levels exist
- * entirely so that "snow is making this colder" is something the player
- * can see. With ambient at the bottom of the range there was nothing below
- * it, so chilling a resting pane changed no number and therefore no
- * colour, and snow beside glass looked exactly like snow beside nothing.
+ * near white, the way cold glass actually goes. Those levels exist so that
+ * "snow is making this colder" is something the player can see. With
+ * ambient at the bottom of the range there was nothing below it, so
+ * chilling a resting pane changed no number and therefore no colour.
  *
- * Above ambient it warms towards a flat neutral, and at SAND_SHOCK_HEAT
- * the ramp BREAKS into a glow and climbs to lava's own brightest, which is
- * what a pane at 15 is about to become. The break is deliberate and it is
- * the largest colour step in the ramp: at that level the material stops
- * merely cooling when something cold touches it and starts shattering
- * instead, and a pane at 8 and a pane at 9 behaving completely differently
- * while looking nearly identical is not a rule anyone can play against.
+ * At SAND_SHOCK_HEAT the ramp BREAKS into a glow and climbs to lava's own
+ * brightest, which is what a pane at 15 is about to become. The break is
+ * the largest colour step in the ramp on purpose: at that level the
+ * material stops merely cooling when something cold touches it and starts
+ * shattering instead, and two panes that behave completely differently
+ * must not look nearly identical.
  *
- *     0 .. 2   frosted, pale       - colder than the room
- *     3        AMBIENT             - freshly drawn, at rest
- *     4 .. 8   warming             - cools back down if left alone
- *     9 .. 15  glowing             - snow SHATTERS this on contact
- */
+ * COMPUTED from the two constants rather than written out by hand. The
+ * hand-written version needed a _Static_assert to catch the ramp and the
+ * rule drifting apart, which worked but made the threshold expensive to
+ * TUNE - every trial move meant re-cutting sixteen entries by hand. It is
+ * a number that wants trying at several values against a real board, so
+ * the palette follows it instead of guarding it. */
 #define GLASS_FROST   0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
 #define GLASS_NEUTRAL 0x7E8E86
 #define GLASS_GLOW    0xC8701E
 #define GLASS_MOLTEN  0xFFD873
 
-#define GLASS_SHADES                                                        \
-    SEG(GLASS_FROST,   GLASS_AMBIENT, 0, SAND_AMBIENT_HEAT + 1),            \
-    SEG(GLASS_FROST,   GLASS_AMBIENT, 1, SAND_AMBIENT_HEAT + 1),            \
-    SEG(GLASS_FROST,   GLASS_AMBIENT, 2, SAND_AMBIENT_HEAT + 1),            \
-    SEG(GLASS_FROST,   GLASS_AMBIENT, 3, SAND_AMBIENT_HEAT + 1),            \
-    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 1, 6),                                \
-    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 2, 6),                                \
-    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 3, 6),                                \
-    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 4, 6),                                \
-    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 5, 6),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  0, 7),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  1, 7),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  2, 7),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  3, 7),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  4, 7),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  5, 7),                                \
-    SEG(GLASS_GLOW,    GLASS_MOLTEN,  6, 7)
+/* The three segments, each mapped onto 0..15 for LERP. Every branch has to
+ * compute without dividing by zero even where it is not selected, hence the
+ * guards on the denominators. */
+#define GLASS_COOL(v)  LERP(GLASS_FROST, GLASS_AMBIENT,                    \
+                            ((v) * 15) / (SAND_AMBIENT_HEAT > 0            \
+                                          ? SAND_AMBIENT_HEAT : 1))
+#define GLASS_WARM(v)  LERP(GLASS_AMBIENT, GLASS_NEUTRAL,                  \
+                            (((v) - SAND_AMBIENT_HEAT) * 15) /             \
+                            (SAND_SHOCK_HEAT > SAND_AMBIENT_HEAT           \
+                             ? SAND_SHOCK_HEAT - SAND_AMBIENT_HEAT : 1))
+#define GLASS_HOT(v)   LERP(GLASS_GLOW, GLASS_MOLTEN,                      \
+                            (((v) - SAND_SHOCK_HEAT) * 15) /               \
+                            (SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1       \
+                             ? MATERIAL_VARIANTS - 1 - SAND_SHOCK_HEAT : 1))
 
-/* The ramp above is written out by hand, so it only lines up with the rule
- * if the two splits land where the rule's two levels are. */
-_Static_assert(SAND_AMBIENT_HEAT == 3 && SAND_SHOCK_HEAT == 9,
-               "glass's palette is built as 4 frosted-to-ambient entries, "
-               "5 warming ones and 7 glowing ones; move SAND_AMBIENT_HEAT "
-               "or SAND_SHOCK_HEAT and the colours stop marking the levels "
-               "where the behaviour changes");
+#define GLASS_AT(v)                                                        \
+    GFX_RGB((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v)                       \
+            : (v) < SAND_SHOCK_HEAT  ? GLASS_WARM(v)                       \
+                                     : GLASS_HOT(v))
+
+#define GLASS_SHADES                                                       \
+    GLASS_AT(0),  GLASS_AT(1),  GLASS_AT(2),  GLASS_AT(3),                 \
+    GLASS_AT(4),  GLASS_AT(5),  GLASS_AT(6),  GLASS_AT(7),                 \
+    GLASS_AT(8),  GLASS_AT(9),  GLASS_AT(10), GLASS_AT(11),                \
+    GLASS_AT(12), GLASS_AT(13), GLASS_AT(14), GLASS_AT(15)
+
+/* The ramp is computed, so the two levels only need to be sane: room
+ * temperature strictly inside the range with the shock point above it and
+ * below the top. */
+_Static_assert(SAND_AMBIENT_HEAT > 0 &&
+               SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT &&
+               SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1,
+               "glass needs room below ambient for frost, room above the "
+               "shock point to keep climbing, and ambient strictly between");
 #define SHADES(lo, hi)                                                    \
     GFX_RGB(LERP(lo, hi,  0)), GFX_RGB(LERP(lo, hi,  1)),                 \
     GFX_RGB(LERP(lo, hi,  2)), GFX_RGB(LERP(lo, hi,  3)),                 \

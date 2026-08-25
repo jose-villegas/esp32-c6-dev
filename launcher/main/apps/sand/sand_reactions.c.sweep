@@ -535,7 +535,7 @@ static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
  * the same physical property - a material that carries a fire's heat well
  * carries its own temperature well - and two independent numbers could
  * disagree about a material for no reason anyone could explain. */
-#define SPREAD_SHIFT 1
+#define SPREAD_SHIFT 3
 
 /* One cell whose temperature is not room temperature: it relaxes back
  * towards it.

@@ -95,14 +95,46 @@ typedef uint8_t cell_t;
  * sand_reactions.c, which is how the number and the colour would have
  * drifted apart the first time either moved.
  *
- * SIX LEVELS ABOVE AMBIENT, which is what it has always really been - it
- * read as 6 while ambient was 0 and reads as 9 now that ambient is 3. The
- * gap is the tuned quantity; the absolute number is bookkeeping. It was
- * briefly ten levels above ambient, which meant a pane had to be most of
- * the way to melting before snow would touch it - and snow chills on
- * contact, so the player poured a drift and watched a basin cool instead
- * of break. */
-#define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 6)
+ * FOUR LEVELS ABOVE AMBIENT. The gap is the tuned quantity; the absolute
+ * number is bookkeeping, and the palette is computed from it so it can be
+ * moved without re-cutting sixteen colours by hand.
+ *
+ * Measured against the scene people actually build - a drawn glass ring
+ * filled about half way with lava, snow poured over the top:
+ *
+ *     ambient + 6      0 panes broken
+ *     ambient + 4     12
+ *     ambient + 3     17
+ *     ambient + 2     25
+ *
+ * Six was unreachable, and not because heat travelled too slowly. A half
+ * filled vessel puts the glass a player can REACH - the rim, above the
+ * lava line - several cells from the heat, and the gradient decays about
+ * two levels per cell, so the rim sits in the warming band while the
+ * submerged glass glows. Snow can only touch the part that was never hot.
+ *
+ * Four is chosen over three or two because it still asks for real heating.
+ * Lower and any faintly warm pane shatters on contact, which makes glass
+ * feel fragile rather than makes thermal shock feel earned. */
+#define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 4)
+
+/* And the other end of the same rule: at or BELOW this, a sudden heat
+ * source cracks the cell instead of warming it.
+ *
+ * Thermal shock is a large temperature CHANGE, not a high temperature, and
+ * for a while only half of it existed - cold onto hot broke glass, hot onto
+ * cold did not. That asymmetry showed up the moment anyone tried the
+ * obvious inversion: chill a vessel with snow, then pour lava in. Nothing
+ * happened, for no reason that could be explained to the person doing it.
+ *
+ * The half that was missing is also the more USABLE half. Pouring snow onto
+ * a lava-filled vessel mostly makes water, and water quenches lava to
+ * stone, so the snow tends to kill the heat before it ever reaches the
+ * glass - measured on a filled ring, the lava had turned to stone and the
+ * whole vessel had frosted over with only two panes broken. Frost the
+ * vessel first and then introduce the heat, and the two meet at the glass
+ * where they are supposed to. */
+#define SAND_SHOCK_COLD (SAND_AMBIENT_HEAT - 2)
 
 /* A liquid cell holds between 1 and 15. Zero is not a very empty cell - it is
  * no cell at all, and must be written as CELL_EMPTY, or the material nibble
