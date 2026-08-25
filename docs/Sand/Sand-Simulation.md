@@ -17,10 +17,13 @@ time - lives in `docs/Sand/Simulation-Lessons.md`.
 
 ## The grid is one byte per cell, and always will be
 
-At the simulation's resolution (184 x 224, `CELL = 2` px) a one-byte cell is
-41 KB; two bytes would be 82 KB, against roughly 90 KB actually free once the
-framebuffer (322 KB of the chip's ~424 KB internal SRAM, no PSRAM) is
-accounted for. That budget is why the encoding is this tight:
+The cell size is a quality setting chosen on the app's boot menu - HIGH
+(2 px, 184 x 224), MEDIUM (3 px, 122 x 149, the default) or LOW (4 px,
+92 x 112) - so the grid's own byte budget varies with it, from 41 KB down to
+10 KB; two bytes per cell at the finest setting would be 82 KB, against
+roughly 90 KB actually free once the framebuffer (322 KB of the chip's
+~424 KB internal SRAM, no PSRAM) is accounted for. That budget is why the
+encoding is this tight:
 
 ```
 high nibble   material id, 0 meaning empty  -> 15 materials, MATERIAL_MAX = 16

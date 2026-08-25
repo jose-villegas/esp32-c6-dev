@@ -9,18 +9,34 @@
  * WHY THE GRID IS COARSER THAN THE SCREEN
  *
  * A cell per pixel would be 368 x 448 = 165 KB of grid. After the framebuffer
- * takes 322 KB of the chip's ~424 KB there is nowhere near that left, so a cell
- * is a square block of CELL x CELL pixels. At CELL = 2 the grid is 184 x 224,
- * or 41 KB, which fits comfortably and still looks like grains rather than
- * bricks.
+ * takes 322 KB of the chip's ~424 KB there is nowhere near that left, so a
+ * cell is a square block of `cell` x `cell` pixels, and `cell` is chosen from
+ * the boot menu rather than fixed: HIGH (2 px) gives a 184 x 224 grid, or
+ * 41 KB; MEDIUM (3 px, the default) gives 122 x 149, or 18 KB; LOW (4 px)
+ * gives 92 x 112, or 10 KB. All three still read as grains rather than
+ * bricks - the choice trades fineness for the step budget a finer grid
+ * costs, not for whether it looks right.
  *
- * CELL need not divide 368 or 448 evenly - GRID_W/GRID_H floor, so a
- * remainder just leaves an unredrawn margin at most CELL-1 px wide along the
- * right and bottom edges, not an out-of-bounds write. It does divide evenly
- * at 2, 4, 8 and 16, which is why those are the values with no margin at
- * all.
+ * Every allocation below is sized for the finest quality (2 px) regardless of
+ * which one is active, so switching quality on the menu never reallocates
+ * anything - it just changes how much of the same buffer is in use. That
+ * matters for the same reason sand_exit() keeps the grid between visits: an
+ * allocation that only ever happens once cannot fail because the heap
+ * fragmented while something else was running.
+ *
+ * `cell` need not divide 368 or 448 evenly - grid_w/grid_h floor, so a
+ * remainder just leaves an unredrawn margin at most cell-1 px wide along the
+ * right and bottom edges, not an out-of-bounds write. At 2 px it divides
+ * both evenly and there is no margin at all, but at 3 px it does not: 122 * 3
+ * = 366 and 149 * 3 = 447, leaving a 2 px strip on the right and a 1 px strip
+ * on the bottom that the grid never touches. That is harmless only because
+ * the colour of an empty cell and the menu's background are the same value,
+ * 0x0A0C14 - see COL_BACKGROUND - so the untouched strip is indistinguishable
+ * from the screen around it. start_sim() still clears the screen explicitly
+ * before the first frame rather than leaning on that coincidence alone.
  *===========================================================================*/
 
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -31,25 +47,70 @@
 #include "../../app.h"
 #include "../../gfx.h"
 #include "../../imu.h"
+#include "../../ui.h"
 #include "row_runs.h"
 #include "sand.h"
 #include "tilt.h"
 
 static const char *TAG = "sand";
 
-#define CELL    2
-#define GRID_W  (GFX_WIDTH  / CELL)
-#define GRID_H  (GFX_HEIGHT / CELL)
+/* Same background as the launcher (see ui_launcher.c) and as an empty sand
+ * cell (see material.c), so neither the menu-to-launcher nor the
+ * menu-to-simulation transition has any visible seam. */
+#define COL_BACKGROUND 0x0A0C14
+
+/* Quality selects the simulation's cell size. Chosen on the boot menu and
+ * held in `quality` below, which is deliberately file-scope and untouched by
+ * sand_enter() so a choice made on one visit is still in effect the next -
+ * see the comment on `quality` itself. */
+typedef struct { const char *name; int cell; } quality_t;
+static const quality_t qualities[] = {
+    { "HIGH",   2 },
+    { "MEDIUM", 3 },
+    { "LOW",    4 },
+};
+#define QUALITY_COUNT ((int)(sizeof(qualities) / sizeof(qualities[0])))
+#define QUALITY_DEFAULT 1        /* MEDIUM */
+
+/* Persists across app visits by design - only a device reboot resets this to
+ * QUALITY_DEFAULT. Reset in sand_enter() would mean picking LOW, backing out
+ * to the launcher, and coming straight back in throws the choice away. */
+static int quality = QUALITY_DEFAULT;
+
+/* The active grid shape, set from qualities[quality] in start_sim() and held
+ * fixed for the rest of that run - changing quality mid-run would require
+ * the grid to change shape under a live simulation, which nothing here
+ * supports and the menu does not offer a way to trigger anyway. */
+static int cell, grid_w, grid_h, block_cols, block_rows;
+
+/* Every allocation is sized for CELL_MIN (the finest quality), never for
+ * whichever quality happens to be active, so a quality switch is just a
+ * change to cell/grid_w/grid_h/block_cols/block_rows and never touches the
+ * heap - see the header comment above. */
+#define CELL_MIN    2                          /* finest quality; sets every allocation size */
+#define GRID_W_MAX  (GFX_WIDTH  / CELL_MIN)
+#define GRID_H_MAX  (GFX_HEIGHT / CELL_MIN)
 
 /* Duplicated rather than shared: sand.h has no business knowing the screen
  * size, so it cannot expose a ready-made block-count for this specific
  * grid - see sand_enable_sleeping()'s own comment. */
-#define BLOCK_COLS ((GRID_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
-#define BLOCK_ROWS ((GRID_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+#define BLOCK_COLS_MAX ((GRID_W_MAX + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define BLOCK_ROWS_MAX ((GRID_H_MAX + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
-/* How big a blob each touched frame drops, in cells. Large enough that a tap
- * is clearly a handful of sand rather than a speck. */
-#define POUR_RADIUS 5
+typedef enum { SCREEN_MENU, SCREEN_RUNNING } screen_t;
+static screen_t screen;
+
+/* Centered, absolutely-placed pair of buttons - see draw_menu(). UI_ROW_HEIGHT
+ * is the shared row metric from ui.h, used here so the menu's buttons match
+ * the height every other app UI's rows use. */
+#define MENU_BTN_W    240
+#define MENU_BTN_H    UI_ROW_HEIGHT
+#define MENU_BTN_GAP  20
+
+/* How big a blob each touched frame drops, in pixels rather than cells - see
+ * the comment above handle_pour_input()'s use of these for why. Large enough
+ * that a tap is clearly a handful of sand rather than a speck. */
+#define POUR_RADIUS_PX   10      /* was 5 cells at 2 px */
 
 /* Pouring runs at a fixed rate too, for the same reason the simulation does.
  *
@@ -62,8 +123,9 @@ static const char *TAG = "sand";
 #define POUR_STEP_MS  (1000 / POUR_HZ)
 
 /* The eraser is wider than the pour. Removing material is a corrective action
- * and wants to feel broad; pouring wants to feel placed. */
-#define ERASE_RADIUS 8
+ * and wants to feel broad; pouring wants to feel placed. Pixels, not cells -
+ * see POUR_RADIUS_PX above. */
+#define ERASE_RADIUS_PX  16      /* was 8 cells at 2 px */
 
 /* What the finger puts down.
  *
@@ -128,18 +190,22 @@ static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE,
 #define SIM_MAX_CATCHUP   2
 
 static uint8_t    *grid;
-static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
-static uint8_t    *sleep_blocks; /* BLOCK_COLS*BLOCK_ROWS bytes: settled
-                                   * blocks to skip - see sand_enable_sleeping() */
+static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
+                                   * only the first grid_h are in use at any
+                                   * quality below HIGH */
+static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
+                                   * settled blocks to skip - see
+                                   * sand_enable_sleeping() */
 
 /* Up to ROW_MAX_RUNS (row_runs.h) separate cell-index ranges per row - not
  * pixel ranges, and not a single min/max span - recording where a row's
  * material sat the last time it was drawn, so a run whose content just
  * vanished still sends far enough to clear its old pixels, and two
  * genuinely separate blobs in one row keep being sent separately instead
- * of one box spanning the gap between them. See row_runs.h. GRID_H *
- * ROW_MAX_RUNS entries each; row_run_n[cy] says how many of a row's
- * ROW_MAX_RUNS slots are actually in use. */
+ * of one box spanning the gap between them. See row_runs.h. GRID_H_MAX *
+ * ROW_MAX_RUNS entries each - only the first grid_h rows are in use at any
+ * quality below HIGH; row_run_n[cy] says how many of a row's ROW_MAX_RUNS
+ * slots are actually in use. */
 static uint16_t   *row_run_x0;
 static uint16_t   *row_run_x1;
 static uint8_t    *row_run_n;
@@ -171,7 +237,7 @@ static int64_t  idle_step_us_total, idle_draw_us_total;
 static uint32_t idle_frames;
 static int64_t  split_log_at_us;
 
-/* TEMPORARY, alongside the above: how many of BLOCK_COLS*BLOCK_ROWS blocks
+/* TEMPORARY, alongside the above: how many of block_cols*block_rows blocks
  * are actually awake (!sand_block_settled(), about to be examined at full
  * cost) right after a step - originally how many of GRID_H ROWS, back when
  * sleeping was row-shaped: that first round of capture showed the awake-row
@@ -241,6 +307,33 @@ static void sand_enter(void)
     idle_awake_cells_total = 0;
     split_log_at_us = esp_timer_get_time() + 2000000;
 #endif
+    /* Nothing else: no allocation, no sand_init(), no imu_init(), no starting
+     * heap. Those only happen once START is pressed - see start_sim() - so
+     * opening the app costs nothing beyond drawing the menu. */
+    screen = SCREEN_MENU;
+
+    /* The launcher's own output is still sitting in the framebuffer, and
+     * ui_end()'s repaint-skip logic only knows about changes to the UI
+     * command list, not about the screen having been replaced out from
+     * under it - see ui_invalidate()'s own comment. Without this the menu
+     * would compare equal to the launcher's last frame here and never
+     * actually repaint. */
+    ui_invalidate();
+}
+
+/* Builds the active grid at the chosen quality, then does everything
+ * sand_enter() used to do unconditionally: allocate (only on the first-ever
+ * call - see the header comment on why every allocation is sized for
+ * CELL_MIN), seed row_runs, start the simulation and the IMU, and drop the
+ * starting heap of sand. Called when START is pressed on the menu. */
+static void start_sim(void)
+{
+    cell       = qualities[quality].cell;
+    grid_w     = GFX_WIDTH  / cell;
+    grid_h     = GFX_HEIGHT / cell;
+    block_cols = (grid_w + SAND_BLOCK_W - 1) / SAND_BLOCK_W;
+    block_rows = (grid_h + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
+
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
     brush = 0;
@@ -249,30 +342,35 @@ static void sand_enter(void)
     failed = false;
 
     if (dirty_rows == NULL) {
-        dirty_rows = malloc(GRID_H);
+        dirty_rows = malloc(GRID_H_MAX);
     }
     if (sleep_blocks == NULL) {
-        sleep_blocks = malloc((size_t)BLOCK_COLS * BLOCK_ROWS);
+        sleep_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
     }
     if (grid == NULL) {
-        grid = malloc((size_t)GRID_W * GRID_H);
+        grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
     if (row_run_x0 == NULL) {
-        row_run_x0 = malloc(GRID_H * ROW_MAX_RUNS * sizeof(*row_run_x0));
+        row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));
     }
     if (row_run_x1 == NULL) {
-        row_run_x1 = malloc(GRID_H * ROW_MAX_RUNS * sizeof(*row_run_x1));
+        row_run_x1 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x1));
     }
     if (row_run_n == NULL) {
-        row_run_n = malloc(GRID_H * sizeof(*row_run_n));
+        row_run_n = malloc(GRID_H_MAX * sizeof(*row_run_n));
     }
     if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
-                 GRID_W, GRID_H, GRID_W * GRID_H,
+                 GRID_W_MAX, GRID_H_MAX, GRID_W_MAX * GRID_H_MAX,
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         failed = true;
+        /* The "no memory for the grid" message lives on the RUNNING path in
+         * sand_frame() - leaving screen at SCREEN_MENU here would strand the
+         * user on a menu whose only button silently re-fails the same
+         * allocation forever, with no on-screen sign anything is wrong. */
+        screen = SCREEN_RUNNING;
         return;
     }
 
@@ -284,13 +382,13 @@ static void sand_enter(void)
      * the same guarantee the old unconditional-full-width send gave for
      * free. Only once a row has genuinely been redrawn does its real,
      * narrower extent become trusted enough to send instead. */
-    for (int i = 0; i < GRID_H; i++) {
+    for (int i = 0; i < grid_h; i++) {
         row_run_x0[i * ROW_MAX_RUNS] = 0;
-        row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)GRID_W;
+        row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)grid_w;
         row_run_n[i] = 1;
     }
 
-    sand_init(&sim, grid, GRID_W, GRID_H, (uint32_t)esp_timer_get_time());
+    sand_init(&sim, grid, grid_w, grid_h, (uint32_t)esp_timer_get_time());
     /* Falling material looks like a rigid block without this: everything in
      * open air takes the same move on the same step, so a poured blob keeps
      * its shape all the way down. Per-material, because water and sand do not
@@ -320,10 +418,19 @@ static void sand_enter(void)
 
     /* A starting heap, so the app is doing something the moment it opens
      * rather than presenting an empty screen and no clue what to do. */
-    sand_spawn(&sim, GRID_W / 2, GRID_H / 4, GRID_W / 5, MAT_SAND);
+    sand_spawn(&sim, grid_w / 2, grid_h / 4, grid_w / 5, MAT_SAND);
 
     ESP_LOGI(TAG, "%d x %d grid, %d bytes, %d px cells",
-             GRID_W, GRID_H, GRID_W * GRID_H, CELL);
+             grid_w, grid_h, grid_w * grid_h, cell);
+
+    /* Clears the menu's pixels out of the framebuffer, including the strip
+     * at cell != 2 that the grid itself never redraws - see the header
+     * comment - and forces the whole screen out to the panel so the first
+     * frame of the simulation has no menu pixels left in it anywhere. */
+    gfx_clear(material_palette()[SAND_EMPTY]);
+    gfx_mark_all_dirty();
+
+    screen = SCREEN_RUNNING;
 }
 
 static void sand_exit(void)
@@ -338,7 +445,7 @@ static void sand_exit(void)
                  (unsigned long)frames, (long long)steps_total,
                  (long long)(step_us_total / frames),
                  (long long)(draw_us_total / frames),
-                 (long long)(rows_redrawn_total / frames), GRID_H);
+                 (long long)(rows_redrawn_total / frames), grid_h);
     }
 #endif
 }
@@ -354,21 +461,42 @@ static void sand_exit(void)
  * gfx which band it landed in. A settled pile therefore costs almost nothing
  * to draw AND almost nothing to send, which is where the real saving is: a
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
-static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
-                      const uint8_t *row)
+static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
+                               int cy, const uint8_t *row, int n)
 {
-    gfx_color_t *out = fb + (cy * CELL) * GFX_WIDTH;
+    gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
 
-    for (int cx = 0; cx < GRID_W; cx++) {
+    /* grid_w, not a parameter: it does not need to be a compile-time
+     * constant the way n does - only the innermost dy/dx loops below are hot
+     * enough, per pixel rather than per cell, to matter. */
+    for (int cx = 0; cx < grid_w; cx++) {
         const gfx_color_t c = pal[row[cx]];
-        gfx_color_t *p = out + cx * CELL;
+        gfx_color_t *p = out + cx * n;
 
-        /* CELL is a compile-time constant, so these unroll away. */
-        for (int dy = 0; dy < CELL; dy++) {
-            for (int dx = 0; dx < CELL; dx++) {
+        /* n is a compile-time constant at each of paint_row()'s call sites,
+         * so these unroll away there even though cell itself is a runtime
+         * value - see paint_row()'s own comment for why that split exists. */
+        for (int dy = 0; dy < n; dy++) {
+            for (int dx = 0; dx < n; dx++) {
                 p[dy * GFX_WIDTH + dx] = c;
             }
         }
+    }
+}
+
+/* cell is chosen on the boot menu, so it is a runtime value here - but the
+ * unrolled dy/dx loops in paint_row_n() only unroll when the compiler can
+ * see their bound as a constant, and this is the hottest loop in the app,
+ * running once per visible pixel of every changed row. Dispatching through a
+ * switch gives each arm a literal `n`, so every quality level still gets the
+ * unrolled version instead of paying for a runtime-bounded loop here. */
+static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
+                      const uint8_t *row)
+{
+    switch (cell) {
+    case 2:  paint_row_n(fb, pal, cy, row, 2); break;
+    case 3:  paint_row_n(fb, pal, cy, row, 3); break;
+    default: paint_row_n(fb, pal, cy, row, 4); break;
     }
 }
 
@@ -379,15 +507,15 @@ static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
 static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
                         uint16_t *cur_x0, uint16_t *cur_x1)
 {
-    const uint8_t *row = &grid[cy * GRID_W];
+    const uint8_t *row = &grid[cy * grid_w];
 
     paint_row(fb, pal, cy, row);
 
     int run_x0[ROW_MAX_RUNS], run_x1[ROW_MAX_RUNS];
-    const int n = row_runs_find(row, GRID_W, SAND_EMPTY, run_x0, run_x1);
+    const int n = row_runs_find(row, grid_w, SAND_EMPTY, run_x0, run_x1);
     if (n < 0) {
         int x0, x1;
-        row_runs_span_fallback(row, GRID_W, SAND_EMPTY, &x0, &x1);
+        row_runs_span_fallback(row, grid_w, SAND_EMPTY, &x0, &x1);
         cur_x0[0] = (uint16_t)x0;
         cur_x1[0] = (uint16_t)x1;
         return 1;
@@ -412,7 +540,7 @@ static void draw_dirty_rows(void)
     int redrawn = 0;
 #endif
 
-    for (int cy = 0; cy < GRID_H; cy++) {
+    for (int cy = 0; cy < grid_h; cy++) {
         if (!dirty_rows[cy]) {
             continue;
         }
@@ -437,8 +565,8 @@ static void draw_dirty_rows(void)
          * so is not optional - a missed mark leaves stale pixels on the
          * panel. */
         for (int i = 0; i < send_n; i++) {
-            gfx_mark_dirty(send_x0[i] * CELL, cy * CELL,
-                          (send_x1[i] - send_x0[i]) * CELL, CELL);
+            gfx_mark_dirty(send_x0[i] * cell, cy * cell,
+                          (send_x1[i] - send_x0[i]) * cell, cell);
         }
 
         for (int i = 0; i < cur_n; i++) {
@@ -588,13 +716,18 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
         pour_accumulator_ms -= (uint32_t)applications * POUR_STEP_MS;
     }
 
-    const int cx = input->x / CELL;
-    const int cy = input->y / CELL;
+    const int cx = input->x / cell;
+    const int cy = input->y / cell;
+    /* The radii are defined in pixels and divided down here rather than
+     * defined in cells, so a finger's-width brush stays a finger's width on
+     * screen at every quality - a cell-based radius would instead have
+     * covered twice the physical area at LOW that it does at HIGH, since a
+     * LOW cell is twice as many pixels across. */
     for (int i = 0; i < applications; i++) {
         if (erasing) {
-            sand_erase(&sim, cx, cy, ERASE_RADIUS);
+            sand_erase(&sim, cx, cy, ERASE_RADIUS_PX / cell);
         } else {
-            sand_spawn(&sim, cx, cy, POUR_RADIUS, brushes[brush]);
+            sand_spawn(&sim, cx, cy, POUR_RADIUS_PX / cell, brushes[brush]);
         }
     }
 }
@@ -650,7 +783,7 @@ static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
 }
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
-/* TEMPORARY - counts how many of BLOCK_COLS*BLOCK_ROWS blocks are awake
+/* TEMPORARY - counts how many of block_cols*block_rows blocks are awake
  * (not sand_block_settled(), about to be examined at full cost) right
  * now, and how many occupied cells sit inside those awake blocks
  * specifically - the count that actually drives step_one_row()'s cost,
@@ -664,13 +797,13 @@ static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
 static int count_occupied_in_block(int bx, int by)
 {
     const int x0 = bx * SAND_BLOCK_W;
-    const int x1 = (x0 + SAND_BLOCK_W < GRID_W) ? x0 + SAND_BLOCK_W : GRID_W;
+    const int x1 = (x0 + SAND_BLOCK_W < grid_w) ? x0 + SAND_BLOCK_W : grid_w;
     const int y0 = by * SAND_BLOCK_H;
-    const int y1 = (y0 + SAND_BLOCK_H < GRID_H) ? y0 + SAND_BLOCK_H : GRID_H;
+    const int y1 = (y0 + SAND_BLOCK_H < grid_h) ? y0 + SAND_BLOCK_H : grid_h;
 
     int cells = 0;
     for (int y = y0; y < y1; y++) {
-        const uint8_t *row = &grid[(size_t)y * GRID_W];
+        const uint8_t *row = &grid[(size_t)y * grid_w];
         for (int x = x0; x < x1; x++) {
             if (row[x] != SAND_EMPTY) {
                 cells++;
@@ -683,8 +816,8 @@ static int count_occupied_in_block(int bx, int by)
 static void count_awake(int *out_blocks, int *out_cells)
 {
     int blocks = 0, cells = 0;
-    for (int by = 0; by < BLOCK_ROWS; by++) {
-        for (int bx = 0; bx < BLOCK_COLS; bx++) {
+    for (int by = 0; by < block_rows; by++) {
+        for (int bx = 0; bx < block_cols; bx++) {
             if (sand_block_settled(&sim, bx, by)) {
                 continue;
             }
@@ -732,7 +865,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
                  (unsigned long)pour_frames,
                  (long long)(pour_step_us_total / pour_frames),
                  (long long)(pour_draw_us_total / pour_frames),
-                 (long long)blocks, BLOCK_COLS * BLOCK_ROWS,
+                 (long long)blocks, block_cols * block_rows,
                  (long long)(blocks > 0 ? cells / blocks : 0));
     }
     if (idle_frames > 0) {
@@ -743,7 +876,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
                  (unsigned long)idle_frames,
                  (long long)(idle_step_us_total / idle_frames),
                  (long long)(idle_draw_us_total / idle_frames),
-                 (long long)blocks, BLOCK_COLS * BLOCK_ROWS,
+                 (long long)blocks, block_cols * block_rows,
                  (long long)(blocks > 0 ? cells / blocks : 0));
     }
     pour_step_us_total = pour_draw_us_total = 0;
@@ -755,8 +888,67 @@ static void track_pour_split(const input_t *input, int64_t step_us,
 }
 #endif
 
+/* The boot menu: START begins the simulation at the current quality, and the
+ * quality button cycles HIGH/MEDIUM/LOW and stays on the menu. Modeled on
+ * ui_launcher.c's own frame - same ui_begin()/mu_begin_window_ex()/
+ * mu_end_window()/ui_end() shape, one full-screen window with no chrome.
+ *
+ * The shell (main.c) draws the home-swipe hint over whatever the app drew
+ * and owns the swipe-up-to-exit gesture itself, so this menu needs no back
+ * button of its own. */
+static void draw_menu(const input_t *input)
+{
+    mu_Context *ctx = ui_context();
+
+    ui_begin(input);
+
+    if (mu_begin_window_ex(ctx, "Sand Menu",
+                           mu_rect(0, 0, GFX_WIDTH, GFX_HEIGHT),
+                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+
+        /* Both buttons centered as one block, so microui's default top-down
+         * row layout is bypassed with mu_layout_set_next() and each button
+         * placed at an absolute rect instead. */
+        const int total_h = 2 * MENU_BTN_H + MENU_BTN_GAP;
+        const int top      = (GFX_HEIGHT - total_h) / 2;
+        const int x        = (GFX_WIDTH - MENU_BTN_W) / 2;
+
+        mu_layout_set_next(ctx, mu_rect(x, top, MENU_BTN_W, MENU_BTN_H), 0);
+        if (mu_button(ctx, "START")) {
+            start_sim();
+        }
+
+        /* Built fresh each frame rather than cached: it is cheap, and
+         * caching it would be one more thing to remember to invalidate
+         * when quality changes. */
+        char label[24];
+        snprintf(label, sizeof label, "QUALITY: %s", qualities[quality].name);
+
+        mu_layout_set_next(ctx, mu_rect(x, top + MENU_BTN_H + MENU_BTN_GAP,
+                                        MENU_BTN_W, MENU_BTN_H), 0);
+        if (mu_button(ctx, label)) {
+            quality = (quality + 1) % QUALITY_COUNT;
+        }
+
+        mu_end_window(ctx);
+    }
+
+    ui_end(COL_BACKGROUND);
+}
+
 static void sand_frame(uint32_t dt_ms, const input_t *input)
 {
+    /* SCREEN_MENU is checked first, but a FAILED start_sim() sets screen to
+     * SCREEN_RUNNING before returning specifically so it falls through to
+     * the `failed` check below rather than getting caught here - see that
+     * comment in start_sim(). Do not reorder these two checks, or add a
+     * third state, without keeping that path intact. */
+    if (screen == SCREEN_MENU) {
+        draw_menu(input);
+        return;
+    }
+
     if (failed) {
         gfx_clear(gfx_rgb(0x1A0C0C));
         gfx_text(20, GFX_HEIGHT / 2, "no memory for the grid", gfx_rgb(0xFF5C5C));
@@ -786,7 +978,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * one frame rather than trust either path to infer it. */
     if (label_left_ms > 0) {
         label_left_ms = (dt_ms >= label_left_ms) ? 0 : (label_left_ms - dt_ms);
-        memset(dirty_rows, 1, (size_t)GRID_H);
+        memset(dirty_rows, 1, (size_t)grid_h);
         gfx_mark_dirty(0, 0, GFX_WIDTH, GFX_HEIGHT);
     }
 
