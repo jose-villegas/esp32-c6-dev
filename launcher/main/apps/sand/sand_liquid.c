@@ -19,11 +19,19 @@
 /* Set by equalise_liquids() on a row it has scanned and found no liquid in,
  * so it need not walk that row again.
  *
- * Safe because it is cleared by ANY change to the row - mark_rows() wipes the
- * whole byte through wake_span(), and every write to a cell goes through
- * mark_rows() (directly, or via mark_move(), which calls it). So the flag
- * can only ever be stale in the harmless direction: a row that has just
- * gained liquid has already had it cleared.
+ * Safe because it is cleared by any change to the row that could possibly
+ * matter - mark_rows() wipes the whole byte through wake_span(), and every
+ * write to a cell goes through mark_rows() (directly, or via mark_move(),
+ * which calls it). So the flag can only ever be stale in the harmless
+ * direction: a row that has just gained liquid has already had it cleared.
+ *
+ * "Could possibly matter" is the one narrowing: mark_rows() skips the clear
+ * entirely while s->may_have_liquid is false, because with no liquid in the
+ * grid at all every one of these bits is trivially still true and this pass
+ * is not even running to read them. The full derivation lives above
+ * mark_rows() in sand_priv.h - including why the flag going false below
+ * really does mean "no liquid anywhere", which is the step that argument
+ * rests on.
  *
  * row_state carries only this one bit now - the settling bits that used to
  * share the byte (sand.c's ROW_SETTLED_NEAREST/OTHER) moved to their own,
@@ -448,7 +456,7 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
      * Only valid because a full sweep happened - rows skipped by ROW_NO_LIQUID
      * were themselves proved dry by an earlier sweep. */
     if (!found_any) {
-        s->may_have_liquid = false;
+        sand_note_liquid(s, false);
     }
 }
 

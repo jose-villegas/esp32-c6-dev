@@ -85,11 +85,12 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
-    s->may_have_liquid = false;
     s->may_have_gas    = false;
     s->may_have_fire   = false;
     s->dirty_rows = NULL;
     s->row_state  = NULL;
+    /* After row_state, not before: this derives s->liquid_rows from it. */
+    sand_note_liquid(s, false);
     s->block_state = NULL;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
@@ -132,6 +133,10 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows)
     if (rows != NULL) {
         memset(rows, 0, (size_t)s->h);
     }
+    /* row_state is one of the two inputs mark_rows()'s s->liquid_rows cache
+     * is derived from, so handing the simulation a buffer (or taking it
+     * away) has to re-derive it - same flag, new pointer. */
+    sand_note_liquid(s, s->may_have_liquid);
     s->last_load_dx = 0;
     s->last_load_dy = 0;
 }
@@ -202,7 +207,11 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
          * fire alone. */
         const material_t *mat = &materials[CELL_MATERIAL(cell)];
         if (mat->kind == KIND_LIQUID) {
-            s->may_have_liquid = true;
+            /* Before mark_move() below, not after - that is the step
+             * mark_rows()'s liquid gate rests on: the very first liquid
+             * placed on a dry grid opens the gate before it reports its
+             * own rows, so its rows do get cleared. */
+            sand_note_liquid(s, true);
         }
         if (mat->kind == KIND_GAS) {
             s->may_have_gas = true;
@@ -237,7 +246,8 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     /* Independent ifs, not an else-if chain - see sand_set()'s own
      * identical structure for why (fire needs both flags at once). */
     if (materials[material].kind == KIND_LIQUID) {
-        s->may_have_liquid = true;
+        /* Before mark_move() below - see sand_set()'s own note. */
+        sand_note_liquid(s, true);
     }
     if (materials[material].kind == KIND_GAS) {
         s->may_have_gas = true;
