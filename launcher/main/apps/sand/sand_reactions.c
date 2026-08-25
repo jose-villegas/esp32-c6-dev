@@ -346,6 +346,37 @@ static inline bool touches_air(const sand_t *s, int x, int y, int w, int h)
     return false;
 }
 
+/* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
+ * bounds and the roll succeeds - heat WITHOUT burning.
+ *
+ * Sand into glass is the only use today. Kept apart from try_ignite()
+ * rather than folded into it because the two are different events that
+ * happen to share a trigger: one is combustion and consumes fuel, the
+ * other is a phase change and consumes nothing. A material can sensibly
+ * have both, neither, or one.
+ *
+ * Returns whether it changed anything. */
+static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
+{
+    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+        return false;
+    }
+    const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
+    const cell_t n = s->cells[at];
+    if (CELL_IS_EMPTY(n)) {
+        return false;
+    }
+    const reaction_t *r = reaction_of(n);
+    if (r->heats_to == 0 || r->heat_chance == 0) {
+        return false;
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->heat_chance) {
+        return false;
+    }
+    place_reacted(s, nx, ny, at, (material_id_t)r->heats_to);
+    return true;
+}
+
 /* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
  * flammable material, and the roll for it succeeds. Returns whether it
  * did - the caller needs this to know whether this burning cell reacted
@@ -549,6 +580,14 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
             acted = true;
         } else {
             const reaction_t *br = reaction_of(bc);
+            if (br->heats_to != 0 && br->heat_chance != 0) {
+                /* Sand behind a hot wall becomes glass, the same way water
+                 * behind one boils - heat that has crossed a conductor
+                 * does everything heat in contact does. */
+                if (try_heat_transform(s, rx, ry, w, h)) {
+                    acted = true;
+                }
+            }
             if (br->flammability != 0) {
                 const material_id_t becomes = br->ignites_to ? br->ignites_to
                                                               : MAT_FIRE;
@@ -707,8 +746,15 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
 
     bool acted = false;
     for (int d = 0; d < 4; d++) {
-        if (try_ignite(s, x + reaction_dirs[d][0], y + reaction_dirs[d][1],
-                       w, h)) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if (try_ignite(s, nx, ny, w, h)) {
+            acted = true;
+        }
+        /* Separate from ignition, and reached whether or not that fired:
+         * a neighbour is either fuel or something heat merely changes, and
+         * nothing is both today, but there is no reason one could not be. */
+        if (try_heat_transform(s, nx, ny, w, h)) {
             acted = true;
         }
     }

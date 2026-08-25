@@ -477,6 +477,19 @@ const material_t materials[MATERIAL_MAX] = {
                               * like every other constant here. */
     },
 
+    [MAT_GLASS] = {
+        .name    = "Glass",
+        .kind    = KIND_STATIC,
+        .density = 200,      /* stone's own figure, and for the same
+                              * reason: nothing displaces it, and it
+                              * smothers a buried flame the way stone
+                              * does. Glass differs from stone in what
+                              * ACID does to it, not in how it sits. */
+        .slip    = 0,
+        .repose  = 0,
+        .scatter = 0,
+    },
+
     /* Slots 9-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
@@ -577,19 +590,38 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
     [MAT_SAND] = {
         /* Acid eats sand readily - it is the obvious thing to point acid
-         * at, and the one that shows what it does. Sand's first entry in
-         * this table: it has never had a reaction before. */
+         * at, and the one that shows what it does. */
         .dissolvable = 200,
+
+        .heats_to    = MAT_GLASS,
+        .heat_chance = 8,    /* 8 in 256 per adjacent heat source per step,
+                              * so roughly 32 steps of sustained contact
+                              * with a single flame. Deliberately slow -
+                              * glass should be something you set up and
+                              * wait for, not something that happens
+                              * whenever a spark lands on a dune. Wood's
+                              * own 6 is the reference: about as patient.
+                              * Starting point, not final - tune on device
+                              * like every other constant here. */
     },
 
     [MAT_STONE] = {
-        /* NOT dissolvable, and the omission is load-bearing rather than
-         * an oversight: stone is what acid can be kept IN. A material
-         * that dissolved its own container would be unusable. Every other
-         * material is safe by the same route - `dissolvable` defaults to
-         * zero, so acid eats only what has opted in.
-         *
-         * 220 in 256 (~0.86) is the chance heat crosses ONE cell of
+        .dissolvable = 60,   /* Stone gives way to acid now, just slowly -
+                              * well under sand's 200, so a wall holds for
+                              * a while and then does not. It used to be
+                              * immune, and being immune made it the only
+                              * thing acid could be kept in.
+                              *
+                              * MAT_GLASS took that job, which is the whole
+                              * point of the change: a container you have
+                              * to MAKE (sand plus sustained heat) rather
+                              * than one you already had, and acid that is
+                              * dangerous to everything you built the level
+                              * out of. Glass is immune by omission - it
+                              * simply has no `dissolvable` - which is the
+                              * same route every other material takes. */
+
+        /* 220 in 256 (~0.86) is the chance heat crosses ONE cell of
          * stone - see conduct_heat()'s own comment in sand_reactions.c
          * for the walk this actually drives. It attenuates with depth,
          * not a fixed reach: crossing d cells succeeds with probability
@@ -824,7 +856,18 @@ static const gfx_color_t palette[256] = {
                                     * the density ladder but they are
                                     * adjacent on screen the moment
                                     * something fizzes */
-    UNUSED, UNUSED, UNUSED,
+    SHADES(0x14383F, 0x74C4D0),   /* glass - a static material, so this is
+                                    * a SHADE ramp and every cell picks one
+                                    * at random, giving a pane some
+                                    * variation rather than a flat block.
+                                    * Deep teal through pale cyan: cool
+                                    * like steam, but far more saturated
+                                    * and much darker at the bottom of its
+                                    * range, since steam is a thin bright
+                                    * wisp and glass is a solid wall - and
+                                    * the two are otherwise the only cool
+                                    * things on the board */
+    UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

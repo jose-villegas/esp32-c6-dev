@@ -2072,6 +2072,7 @@ static void test_a_tipped_basin_keeps_its_sand(void)
  * surface is. */
 #define OIL   CELL_MAKE(MAT_OIL,  8)
 #define LAVA  CELL_MAKE(MAT_LAVA, 8)
+#define GLASS CELL_MAKE(MAT_GLASS, 8)
 
 #define CONDUCT_REACH_TEST 32
 #define CAP_W (CONDUCT_REACH_TEST + 16)
@@ -3555,18 +3556,24 @@ static int count_cells_of(uint8_t id)
     return n;
 }
 
-/* A sealed stone tank with `sand_rows` of sand in the bottom and
- * `acid_rows` of acid above it. Returns the acid mass placed. */
+/* A sealed GLASS tank with `sand_rows` of sand in the bottom and
+ * `acid_rows` of acid above it. Returns the acid mass placed.
+ *
+ * Glass, not stone. Stone used to be immune to acid and was therefore the
+ * only thing acid could be kept in; it dissolves like everything else now
+ * and glass is the sole exception. These fixtures were stone until that
+ * changed, and both tests below started failing the moment it did - which
+ * is the feature working, not a break. */
 static long acid_tank(int sand_rows, int acid_rows)
 {
     fixture();
     sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
     for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 1, GLASS);
     }
     for (int y = 1; y < H; y++) {
-        sand_set(&s, 1, y, STONE);
-        sand_set(&s, W - 2, y, STONE);
+        sand_set(&s, 1, y, GLASS);
+        sand_set(&s, W - 2, y, GLASS);
     }
     for (int y = H - 1 - sand_rows; y < H - 1; y++) {
         for (int x = 2; x < W - 2; x++) {
@@ -3595,23 +3602,89 @@ static void test_acid_dissolves_sand(void)
         "acid must eat the sand it settles onto");
 }
 
-/* Stone is not dissolvable, and that is the property that makes acid
- * usable at all: it has to be possible to keep it somewhere. Every other
- * material is safe by the same route - `dissolvable` defaults to zero, so
- * acid eats only what opts in. */
+/* Glass is what acid can be kept in, and the only thing left that is.
+ *
+ * Stone held that role until acid learned to eat it. Moving the job to a
+ * material you have to MAKE - sand plus sustained heat - is the point of
+ * the change: acid is now dangerous to everything the level is built out
+ * of, and a container is something you earn rather than something you
+ * already had. */
 static void test_acid_does_not_dissolve_its_container(void)
 {
     acid_tank(2, 2);
-    const int walls = count_cells_of(MAT_STONE);
+    const int walls = count_cells_of(MAT_GLASS);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, walls,
+        "setup: the tank must actually be made of glass");
 
     for (int i = 0; i < 400; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(walls, count_cells_of(MAT_STONE),
-        "acid must not touch stone - a material that dissolved its own "
-        "container could never be held, and this is what makes a tank a "
-        "tank");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(walls, count_cells_of(MAT_GLASS),
+        "acid must not touch glass - it is the one material that resists, "
+        "and therefore the only thing acid can be held in");
+}
+
+/* The other half, and the reason glass has a job at all. */
+static void test_acid_eats_through_stone(void)
+{
+    fixture();
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, GLASS);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, STONE);
+    }
+    const int before = count_cells_of(MAT_STONE);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, before, "setup: a stone floor");
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 4, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(before, count_cells_of(MAT_STONE),
+        "acid must eat into stone - stone stopped being the acid-proof "
+        "material when glass took that role, and a stone wall that still "
+        "held would leave glass with nothing to do");
+}
+
+/* Sand plus sustained heat makes glass: reaction_t.heats_to, which is a
+ * phase change rather than combustion and so is kept apart from
+ * flammability/ignites_to. Sand does not catch fire, and calling the field
+ * that would send the next reader looking for a flame. */
+static void test_sand_turns_to_glass_under_sustained_heat(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, GLASS);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+
+    /* A flame held against it, re-laid each step: fire is KIND_GAS and
+     * rises away during the same step it is placed, so a single spark
+     * never gets a turn to react - the same reason the wood-ignition
+     * fixtures hold their spark down. */
+    bool made = false;
+    for (int i = 0; i < 600 && !made; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        made = count_cells_of(MAT_GLASS) > W;   /* more than the floor */
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(made,
+        "sand held against a flame must eventually become glass - slowly, "
+        "at heat_chance 8, so it is something you set up and wait for "
+        "rather than something a stray spark does to a dune");
 }
 
 /* Dissolving is a TRANSFER, like quenching a fire or soaking a grain: the
@@ -5681,6 +5754,8 @@ void run_sand_suite(void)
     RUN_TEST(test_oil_trapped_under_water_floats_to_the_surface);
     RUN_TEST(test_acid_dissolves_sand);
     RUN_TEST(test_acid_does_not_dissolve_its_container);
+    RUN_TEST(test_acid_eats_through_stone);
+    RUN_TEST(test_sand_turns_to_glass_under_sustained_heat);
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);

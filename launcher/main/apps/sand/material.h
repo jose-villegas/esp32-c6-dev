@@ -87,6 +87,7 @@ typedef enum {
     MAT_OIL,
     MAT_LAVA,
     MAT_ACID,
+    MAT_GLASS,
     MAT_COUNT
 } material_id_t;
 
@@ -339,6 +340,23 @@ typedef struct {
      * fumes are not that. Smoke is the generic "something was destroyed
      * here", which is what this is. */
     uint8_t fizz;
+
+    /* What HEAT alone turns this material into, without burning it, and
+     * the chance in 256 per step per adjacent heat source that it does.
+     *
+     * Sand names MAT_GLASS here. Its own pair of fields rather than
+     * reusing `flammability`/`ignites_to`, which would work mechanically -
+     * a burning neighbour, a roll, a material swap - and would be a lie:
+     * sand does not catch fire, and a field called `flammability` on sand
+     * would send the next reader looking for the flame. The same
+     * overloading is how `mobility` and `sight` came to mean different
+     * things to different kinds without saying so.
+     *
+     * Reached both by direct contact with a burning cell and through a
+     * conductor (conduct_heat()), so a fire under a stone slab makes glass
+     * of the sand on the other side exactly as it boils water there. */
+    uint8_t heats_to;
+    uint8_t heat_chance;
 } reaction_t;
 
 /* Indexed by the material nibble, same as materials[] - `const`, so it
