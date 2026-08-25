@@ -99,6 +99,16 @@ typedef struct {
      * touch. */
     bool     may_have_burning;
 
+    /* Same idea again, for a material that soaks another up
+     * (reaction_t.absorbs - dry ash drinking oil is the only one today).
+     * Separate from may_have_burning because absorption has nothing to
+     * do with fire: pouring oil onto a cold ash pile has to work with no
+     * flame anywhere on the grid, so sand_step_reactions() runs when
+     * EITHER flag is set. Paired with may_have_liquid at the gate, since
+     * everything absorbable is a liquid and there is no point scanning
+     * for absorbents on a board that holds none. */
+    bool     may_have_absorbent;
+
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
      * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised

@@ -196,7 +196,7 @@ The current ladder, which any new material has to slot into somewhere:
 
 ```mermaid
 flowchart LR
-    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> AS["ash\n25"] --> W["water\n30"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
+    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> AS["ash\n25"] --> OA["oily ash\n28"] --> W["water\n30"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
 
     style E fill:#2a2a2a,color:#fff
     style S fill:#3d6b8a,color:#fff
@@ -209,6 +209,7 @@ flowchart LR
     style T fill:#5a5a5a,color:#fff
     style X fill:#a87a3d,color:#fff
     style AS fill:#5a5a5a,color:#fff
+    style OA fill:#a87a3d,color:#fff
     style LV fill:#8a3d3d,color:#fff
 ```
 
@@ -365,7 +366,9 @@ flowchart TD
 
     Oil["OIL\nliquid, needs_air"] -->|"flammability 50\nSURFACE ONLY"| Fire
     Fire -->|"ignites exposed\noil"| Oil
-    Ember -->|"residue 200"| Ash["ASH\ninert powder"]
+    Ember -->|"residue 40"| Ash["ASH\ninert powder"]
+    Ash -->|"absorbs OIL\n(1 unit per grain)"| Oily["OILY ASH\nfuel again"]
+    Oily -->|"flammability 120"| Fire
     Lava["LAVA\nliquid AND burns"] -->|"quench_to\n(water pays a unit)"| Stone["STONE"]
     Lava -->|"flare 16"| Fire
 
@@ -377,6 +380,7 @@ flowchart TD
     style Steam fill:#3d6b8a,color:#fff
     style Oil fill:#a87a3d,color:#fff
     style Ash fill:#5a5a5a,color:#fff
+    style Oily fill:#a87a3d,color:#fff
     style Lava fill:#8a3d3d,color:#fff
     style Stone fill:#5a5a5a,color:#fff
 ```
@@ -573,6 +577,42 @@ Two things to take from that:
   `test_a_log_leaves_far_less_ash_than_it_had_wood` asserts a log leaves
   under half its own volume - loose enough that ordinary tuning does not
   trip it, tight enough that a drift back to near-1:1 does.
+
+## Lesson: a state you can't store is a material, and a transfer is not a proximity check
+
+Oil-soaked ash was built twice, and the first version is instructive
+because it was cheap, passed its tests, and was wrong in two ways at once.
+
+That version gave ash a `flammability` gated on a cell of oil merely
+**touching** it, re-checked at every ignition attempt. No new material,
+no state, no bookkeeping. But nothing was ever consumed - so one drop of
+oil could make an unbounded quantity of ash flammable and still be one
+drop - and there was no way to express *saturation*, because "soaked" was
+never a thing a cell was, only a thing that happened to be true about its
+neighbourhood.
+
+The fix was to make soaking an actual **transfer** into an actual
+**material**: a grain takes one unit of a neighbouring oil cell's mass
+and becomes `MAT_OILY_ASH`. Both problems dissolve. The oil is spent, one
+unit per grain. And "already full" needs no code whatsoever - oily ash
+simply has no `absorbs` of its own, so it is never offered another drink.
+
+Two things generalise:
+
+- **When a cell needs a state you have nowhere to store, that state is
+  probably a material.** The cell is one byte and a powder's variant
+  nibble is already a shade, so there was no room for a wetness level -
+  and reaching for a second material turned out to be *cheaper* than the
+  stateless trick it replaced, not more expensive.
+- **A reaction that consumes something must actually consume it.** If
+  your rule reads the neighbourhood without changing it, ask what stops
+  it applying an unlimited number of times.
+
+The wicking walk that lets a buried pile soak all the way through is the
+third instance of the same bounded-walk shape in this simulation
+(`conduct_heat()` through stone, `boil_surface()` before it was deleted,
+and this) - when a rule needs to see past the cell next door, that shape
+is usually the answer, and it comes with a cap for free.
 
 ## Lesson: sometimes the palette *is* the feature
 

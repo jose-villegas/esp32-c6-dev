@@ -431,6 +431,22 @@ const material_t materials[MATERIAL_MAX] = {
                               * device like every other constant here. */
     },
 
+    [MAT_OILY_ASH] = {
+        .name    = "Oily Ash",
+        .kind    = KIND_POWDER,
+        .density = 28,       /* heavier than dry ash's 25 - it is
+                              * carrying oil now - but still under
+                              * water's 30, so a soaked pile floats just
+                              * like a dry one. Oil is lighter than
+                              * water, so ash that has drunk some has no
+                              * business becoming heavier than it. */
+        .slip    = 160,      /* stickier than dry ash's 200: wet ash
+                              * clumps where dry ash skates */
+        .repose  = 6,        /* and piles a little steeper - nearly
+                              * sand's 7, against dry ash's 4 */
+        .scatter = 50,
+    },
+
     /* Slots 9-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
@@ -453,30 +469,46 @@ const material_t materials[MATERIAL_MAX] = {
 
 const reaction_t reactions[MATERIAL_MAX] = {
     [MAT_ASH] = {
-        /* Ash is what is left when everything flammable has already
-         * burned, so on its own it must never burn again - a fire able
-         * to feed on its own remains would never go out. Soak it in oil
-         * and it is fuel once more, which is what `soak_from` says: a
-         * real flammability, conditional on a cell of MAT_OIL actually
-         * touching this one.
+        /* DRY ash never burns, and that is deliberate rather than an
+         * omission: ash is what is left when everything flammable has
+         * already burned, so a fire able to feed on it would never go
+         * out. No flammability here at all.
          *
-         * Stateless - there is no soaked-ash material and no per-cell
-         * wetness anywhere (there is nowhere to put it; see material.h's
-         * top comment on the one-byte cell), the condition is simply
-         * re-checked whenever ignition is attempted. The nicest
-         * consequence falls out of that for free: the oil burns off
-         * first, being what the flame reaches, and the moment it is gone
-         * the ash beside it stops being flammable again on its own, with
-         * no bookkeeping to undo.
+         * What it does instead is DRINK. A grain of ash touching oil
+         * takes a unit of that oil's mass and becomes MAT_OILY_ASH,
+         * which is flammable - so oily ash burns and dry ash does not,
+         * with the difference held as an actual material rather than as
+         * a condition re-tested from scratch every time.
          *
-         * 90 is well above oil's own 50 - once oil-soaked, ash is the
-         * readier of the two to catch. Starting point, not final. */
-        .flammability = 90,
-        .soak_from    = MAT_OIL,
-        .ignites_to   = MAT_FIRE,   /* burns away rather than charring:
-                                     * there is no ember stage left for
-                                     * something that is already the end
-                                     * of one */
+         * That is the second design. The first gave ash a flammability
+         * gated on oil merely TOUCHING it, which cost nothing and was
+         * wrong in a way worth remembering: the oil was never consumed,
+         * so one drop could make an unlimited quantity of ash flammable
+         * and stay a drop. Soaking is a transfer. A soaked grain is also
+         * FULL - MAT_OILY_ASH's own `absorbs` is 0, so it stops drinking
+         * - which the proximity check had no way to express at all. */
+        .absorbs    = MAT_OIL,
+        .absorbs_to = MAT_OILY_ASH,
+    },
+
+    [MAT_OILY_ASH] = {
+        /* Ash that has drunk oil, and therefore fuel. 120 is above both
+         * dry oil's 50 and wood's 6: a soaked pile is the readiest thing
+         * on the board to catch, which is the whole character of the
+         * material. Starting point, not final.
+         *
+         * Burns away to flame rather than charring back to dry ash. Ash
+         * IS the char, so there is no further stage to reach - and a
+         * cell holds one thing, so it cannot both become a flame and
+         * leave a grain behind. Losing the ash to the fire is the
+         * accepted simplification; the alternative (a smouldering state
+         * that decays back to MAT_ASH) needs a third material for a
+         * detail nobody watching a fire would miss.
+         *
+         * No `absorbs` of its own - that omission is what makes a soaked
+         * grain FULL, and it is the entire mechanism. */
+        .flammability = 120,
+        .ignites_to   = MAT_FIRE,
     },
 
     [MAT_OIL] = {
@@ -789,7 +821,17 @@ static const gfx_color_t palette[256] = {
                                     * they are never confusable in
                                     * practice because one falls into
                                     * piles and the other rises */
-    UNUSED, UNUSED, UNUSED,
+    SHADES(0x14110C, 0x4C4034),   /* oily ash - a powder, so this is a
+                                    * shade ramp like dry ash's just
+                                    * above, but pulled dark and brown
+                                    * where that one is pale and neutral.
+                                    * Soaked ash has to be obviously the
+                                    * SAME STUFF as dry ash and obviously
+                                    * not the same state, so the two
+                                    * ramps share a shape and differ in
+                                    * value and warmth rather than being
+                                    * unrelated colours */
+    UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

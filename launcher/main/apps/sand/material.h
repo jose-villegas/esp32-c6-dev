@@ -87,6 +87,7 @@ typedef enum {
     MAT_OIL,
     MAT_LAVA,
     MAT_ASH,
+    MAT_OILY_ASH,
     MAT_COUNT
 } material_id_t;
 
@@ -238,25 +239,28 @@ typedef struct {
      * pool worth looking at, and is more nearly true besides. */
     uint8_t needs_air;
 
-    /* If set, this material only catches while a cell of THIS material
-     * (a material_id_t, narrowed) is one of its four cardinal
-     * neighbours. 0, the default, means no such requirement.
+    /* A material this one SOAKS UP: `absorbs` is the material_id_t it
+     * drinks (0 = it absorbs nothing, the default), and `absorbs_to` is
+     * what this cell becomes once it has. Absorbing takes one unit of
+     * mass from the neighbouring cell, exactly as quenching does - the
+     * liquid is consumed, not merely detected.
      *
-     * Ash is the reason it exists: ash is what is left when everything
-     * flammable has already burned, so on its own it must never burn
-     * again or a fire feeds on its own remains forever. Soak it in oil,
-     * though, and it is fuel again - so ash carries a real
-     * `flammability` and names MAT_OIL here, and the two together mean
-     * "burns, but only while there is oil against it".
+     * Dry ash names MAT_OIL here and turns into MAT_OILY_ASH. That gives
+     * the "already full" behaviour for nothing: oily ash is a different
+     * material, and its own `absorbs` is 0, so a soaked grain simply
+     * stops drinking. No saturation counter, no per-cell wetness level -
+     * which matters, because there is nowhere to put one (see this
+     * file's top comment on the one-byte cell) and a powder's variant
+     * nibble is already spoken for as a shade.
      *
-     * Stateless on purpose. There is no soaked-ash material and no
-     * per-cell wetness to store (there is nowhere to store it - see
-     * material.h's top comment on the one-byte cell); the condition is
-     * simply re-checked at the moment of ignition. That gets the
-     * behaviour that matters for free, including the part that would
-     * otherwise need bookkeeping: once the oil has burned off, the ash
-     * beside it stops being flammable again on its own. */
-    uint8_t soak_from;
+     * This replaced a stateless version that never consumed anything:
+     * ash carried a `flammability` gated on oil merely TOUCHING it, so a
+     * single drop of oil could make an unlimited amount of ash flammable
+     * without ever being used up. Cheaper, and wrong in the way that
+     * matters - soaking something is a transfer, not a proximity
+     * check. */
+    uint8_t absorbs;
+    uint8_t absorbs_to;
 
     /* Nonzero: this material IS a heat source, and sand_step_reactions()
      * gives it a turn - decaying, quenching, smothering, igniting

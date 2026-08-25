@@ -87,6 +87,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->gas_flip   = false;
     s->may_have_gas    = false;
     s->may_have_burning = false;
+    s->may_have_absorbent = false;
     s->dirty_rows = NULL;
     s->may_have_liquid = false;
     s->block_state = NULL;
@@ -203,6 +204,9 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         if (reactions[CELL_MATERIAL(cell)].burns) {
             s->may_have_burning = true;
         }
+        if (reactions[CELL_MATERIAL(cell)].absorbs) {
+            s->may_have_absorbent = true;
+        }
     }
     mark_move(s, x, y, x, y);
 }
@@ -237,6 +241,9 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     }
     if (reactions[material].burns) {
         s->may_have_burning = true;
+    }
+    if (reactions[material].absorbs) {
+        s->may_have_absorbent = true;
     }
     s->cells[y * s->w + x] = random_cell(s, material);
     mark_move(s, x, y, x, y);

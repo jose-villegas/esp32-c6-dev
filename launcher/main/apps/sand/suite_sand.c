@@ -2073,6 +2073,7 @@ static void test_a_tipped_basin_keeps_its_sand(void)
 #define OIL   CELL_MAKE(MAT_OIL,  8)
 #define LAVA  CELL_MAKE(MAT_LAVA, 8)
 #define ASH   CELL_MAKE(MAT_ASH,  8)
+#define OILY  CELL_MAKE(MAT_OILY_ASH, 8)
 
 #define CONDUCT_REACH_TEST 32
 #define CAP_W (CONDUCT_REACH_TEST + 16)
@@ -3750,11 +3751,115 @@ static void test_ash_is_an_inert_powder(void)
         "feed on it would never go out");
 }
 
-/* The other half of ash's flammability, and the reason it carries one at
- * all: reaction_t.soak_from makes it fuel, but only while a cell of oil
- * is actually touching it. Stateless - there is no soaked-ash material
- * and no per-cell wetness, the condition is simply re-checked whenever
- * ignition is attempted. */
+/* An ash pile in a sealed box with `oil_rows` of oil laid on top of it.
+ * Returns the total oil mass placed, so a caller can check what the pile
+ * drank. */
+static long ash_pile_under_oil(int ash_rows, int oil_rows)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    const int top = H - 1 - ash_rows - oil_rows;
+    for (int y = top; y < H - 1; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);
+    }
+    for (int y = H - 1 - ash_rows; y < H - 1; y++) {
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, ASH);
+        }
+    }
+    for (int y = top; y < H - 1 - ash_rows; y++) {
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_OIL, MASS_MAX));
+        }
+    }
+    return mass_held_by(MAT_OIL);
+}
+
+/* Soaking is a TRANSFER, and this is the assertion that says so.
+ *
+ * The first version of oil-soaked ash was a proximity check: ash carried
+ * a flammability gated on oil merely touching it, and nothing was ever
+ * consumed - so one drop of oil could make an unlimited quantity of ash
+ * flammable and still be one drop. Every grain that soaks here costs a
+ * unit of real oil mass. */
+static void test_soaking_costs_the_oil_a_unit_per_grain(void)
+{
+    const long oil_before = ash_pile_under_oil(3, 2);
+    const int ash_before = count_material(MAT_ASH);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, ash_before, "setup: ash placed");
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    const int soaked = count_material(MAT_OILY_ASH);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, soaked,
+        "setup: some of the pile must actually have soaked");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(soaked, oil_before - mass_held_by(MAT_OIL),
+        "the oil must lose exactly one unit of mass per grain soaked - "
+        "wicking spreads wetness through a pile, but it must never "
+        "create it, or a single drop saturates a board");
+}
+
+/* Wicking, and why the walk exists at all.
+ *
+ * Oil is a liquid and ash is a powder, so oil can never enter the pile's
+ * cells (room_in() refuses a cell holding another material). Only the
+ * top layer is ever in contact with the puddle. Without a reach through
+ * the already-soaked grains to the oil beyond them, a pile buried in oil
+ * would soak exactly one grain deep and stay dry underneath. */
+static void test_a_whole_pile_soaks_through_not_just_its_top_layer(void)
+{
+    ash_pile_under_oil(3, 3);
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_material(MAT_ASH),
+        "every grain of the pile must end up soaked, including the "
+        "bottom layer that never touches the oil - reaching THROUGH the "
+        "soaked grains above it is the whole point of the wicking walk");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_OILY_ASH,
+        CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "and the very bottom of the pile specifically");
+}
+
+/* A soaked grain is FULL, and the mechanism for that is simply that it
+ * is a different material with no `absorbs` of its own - no saturation
+ * counter, which is just as well since there is nowhere to keep one. */
+static void test_soaked_ash_does_not_keep_drinking(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = H - 4; y < H - 1; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);
+    }
+    for (int x = 2; x <= 5; x++) {
+        sand_set(&s, x, H - 2, OILY);                      /* already full */
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_OIL, MASS_MAX));
+    }
+    const long oil_before = mass_held_by(MAT_OIL);
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(oil_before, mass_held_by(MAT_OIL),
+        "ash that is already soaked must not drink any more - it holds "
+        "what it holds, and the oil above it must be untouched");
+}
+
+/* The payoff: dry ash will not burn, soaked ash will. Asserted on
+ * MAT_OILY_ASH rather than on the ash count falling, because absorption
+ * alone lowers the ash count without anything burning at all - the
+ * earlier version of this test could not tell the two apart. */
 static void test_oil_soaked_ash_burns(void)
 {
     fixture();
@@ -3762,24 +3867,23 @@ static void test_oil_soaked_ash_burns(void)
         sand_set(&s, x, H - 1, STONE);
     }
     for (int x = 2; x <= 5; x++) {
-        sand_set(&s, x, H - 2, ASH);
-        sand_set(&s, x, H - 3, OIL);   /* soaking it from above */
+        sand_set(&s, x, H - 2, OILY);
     }
-    const int before = count_material(MAT_ASH);
+    const int before = count_material(MAT_OILY_ASH);
 
     for (int i = 0; i < 200; i++) {
         for (int x = 2; x <= 5; x++) {
-            if (CELL_IS_EMPTY(sand_at(&s, x, H - 4))) {
-                sand_set(&s, x, H - 4, FIRE);
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, FIRE);
             }
         }
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_LESS_THAN_INT_MESSAGE(before, count_material(MAT_ASH),
-        "ash with oil against it must burn - it is the same ash that "
-        "test_ash_is_an_inert_powder proves will not burn on its own, "
-        "and the only difference is the oil");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(before, count_material(MAT_OILY_ASH),
+        "soaked ash must burn - it is the same ash that "
+        "test_ash_is_an_inert_powder proves will not burn dry, and the "
+        "only difference is the oil it drank");
 }
 
 /* Ash floats, and gets it for nothing. A powder moves through
@@ -5291,6 +5395,9 @@ void run_sand_suite(void)
     RUN_TEST(test_lava_does_not_put_fire_out);
     RUN_TEST(test_a_spent_ember_leaves_ash);
     RUN_TEST(test_ash_is_an_inert_powder);
+    RUN_TEST(test_soaking_costs_the_oil_a_unit_per_grain);
+    RUN_TEST(test_a_whole_pile_soaks_through_not_just_its_top_layer);
+    RUN_TEST(test_soaked_ash_does_not_keep_drinking);
     RUN_TEST(test_oil_soaked_ash_burns);
     RUN_TEST(test_ash_floats_on_water);
     RUN_TEST(test_a_log_leaves_far_less_ash_than_it_had_wood);
