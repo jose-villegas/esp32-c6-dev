@@ -3637,6 +3637,59 @@ static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
 /* The consequence of that, and the reason it is worth paying for: a
  * finite amount of acid can only eat a finite amount. A drop lands on a
  * deep pile and stops partway rather than boring through the floor. */
+/* Acid fizzes: a dissolve sometimes leaves smoke where the cell was.
+ *
+ * Without it acid worked in complete silence - cells simply stopped
+ * existing, with nothing on screen to say what had happened or that the
+ * acid was doing anything at all. reaction_t.fizz puts a wisp in the cell
+ * that was just eaten, which is about to be empty anyway.
+ *
+ * MAT_SMOKE and not MAT_STEAM: steam here means water that got hot, and
+ * acid fumes are not that - the same distinction that made smoke its own
+ * material in the first place. */
+static void test_acid_fizzes_while_it_eats(void)
+{
+    acid_tank(2, 2);
+
+    bool fizzed = false;
+    for (int i = 0; i < 400 && !fizzed; i++) {
+        sand_step(&s, 0, 1000, 0);
+        fizzed = count_cells_of(MAT_SMOKE) > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(fizzed,
+        "acid eating a pile of sand must leave some smoke behind - it is "
+        "the only sign on screen that the acid is working");
+}
+
+/* And the fizz has to be able to get OUT of the acid, which it does for
+ * free: smoke is lighter than every liquid, so try_bubble() (sand_gas.c)
+ * swaps it up through the pool. Worth asserting, because a byproduct that
+ * cannot leave the liquid that made it would just accumulate at the
+ * bottom, invisible under the acid. */
+static void test_the_fizz_rises_out_of_the_acid(void)
+{
+    const int surface = 1;      /* acid_tank() fills from row 1 down */
+    acid_tank(2, 2);
+
+    int highest = H;
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_SMOKE && y < highest) {
+                    highest = y;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(surface, highest,
+        "smoke made at the bottom of an acid pool must reach the top of "
+        "it - a gas is lighter than any liquid, and try_bubble() is what "
+        "lets it climb out instead of being trapped underneath");
+}
+
 static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)
 {
     fixture();
@@ -5629,6 +5682,8 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_dissolves_sand);
     RUN_TEST(test_acid_does_not_dissolve_its_container);
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
+    RUN_TEST(test_acid_fizzes_while_it_eats);
+    RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
     RUN_TEST(test_water_does_not_drill_into_oil_when_tilted);

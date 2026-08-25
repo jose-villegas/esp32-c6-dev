@@ -324,6 +324,21 @@ typedef struct {
      * air, and the failure would look like acid working rather than like
      * a field nobody set. */
     uint8_t dissolvable;
+
+    /* Chance in 256 that a cell this material dissolves leaves MAT_SMOKE
+     * behind instead of simply clearing - the fizz.
+     *
+     * Its own field rather than reusing `residue`, which fires when a
+     * BURNING cell runs out of life. Dissolving is a different event on a
+     * different cell (the target's, not the reactor's), and overloading
+     * one field to mean both is how `mobility` and `sight` ended up
+     * meaning different things to different kinds without saying so.
+     *
+     * Smoke rather than steam, deliberately: steam in this simulation is
+     * water that got hot (see sand_reactions.c's top comment), and acid
+     * fumes are not that. Smoke is the generic "something was destroyed
+     * here", which is what this is. */
+    uint8_t fizz;
 } reaction_t;
 
 /* Indexed by the material nibble, same as materials[] - `const`, so it

@@ -605,13 +605,25 @@ static bool step_one_dissolver_cell(sand_t *s, uint8_t *row, int x, int y,
             continue;
         }
 
-        s->cells[at] = CELL_EMPTY;
-        mark_rows(s, ny, ny);
-        wake_block_and_neighbors(s, nx, ny);
+        /* The fizz. Placed in the cell that was just eaten, which is
+         * about to be empty anyway, so it costs nothing extra and appears
+         * exactly where the reaction happened.
+         *
+         * It reads properly without any help from this code: smoke is
+         * lighter than every liquid, so try_bubble() (sand_gas.c) walks it
+         * up and out of the acid rather than leaving it stranded at the
+         * bottom of the pool. */
+        if (r->fizz != 0 && (int)(rng_next(&s->rng) & 0xFF) < r->fizz) {
+            place_reacted(s, nx, ny, at, MAT_SMOKE);
+        } else {
+            s->cells[at] = CELL_EMPTY;
+            mark_rows(s, ny, ny);
+            wake_block_and_neighbors(s, nx, ny);
+        }
 
         /* The acid pays, and may spend itself doing it - pay_quench_cost()
          * clears the cell when its last unit goes. Done after the target
-         * is cleared so the two can never both survive a bite. */
+         * is dealt with so the two can never both survive a bite. */
         pay_quench_cost(s, x, y, w);
         return true;
     }

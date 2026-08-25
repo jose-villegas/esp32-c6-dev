@@ -512,6 +512,18 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * ash made before soaking became a real transfer. A puddle of
          * acid has a budget, and when it is spent the puddle is gone. */
         .dissolves = 60,
+
+        .fizz = 40,     /* about one bite in six leaves a wisp of smoke.
+                         * Acid was silent before this: cells simply
+                         * vanished, with nothing on screen to say the
+                         * acid was the cause or that it was working.
+                         *
+                         * Modest on purpose - every bite fizzing would
+                         * bury a dissolving pile under its own exhaust,
+                         * and the smoke has to be readable against the
+                         * thing being eaten rather than instead of it.
+                         * Starting point, not final - tune on device like
+                         * every other constant here. */
     },
 
     [MAT_OIL] = {
