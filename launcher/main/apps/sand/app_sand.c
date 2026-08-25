@@ -476,37 +476,139 @@ static void sand_exit(void)
  * gfx which band it landed in. A settled pile therefore costs almost nothing
  * to draw AND almost nothing to send, which is where the real saving is: a
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
+/* A stable scatter value for one cell, so a speckled material shows the
+ * same grain in the same place every frame. Cheap integer mixing, not a
+ * good hash - it only has to look unpatterned at two bits. */
+static inline unsigned cell_hash(int cx, int cy)
+{
+    unsigned h = (unsigned)cx * 0x9E3779B9u ^ (unsigned)cy * 0x85EBCA6Bu;
+    h ^= h >> 15;
+    return h;
+}
+
+/* Which of a hatched material's two diagonals catches the light, and where
+ * along it the highlights fall.
+ *
+ * Both diagonals are always drawn - the quiet one is the grain in the
+ * material and does not move. The other is the REFLECTION: it is brighter,
+ * it is the one gravity picks, and its phase shifts as the board turns, so
+ * the glints slide across a pane while it is tilted instead of sitting
+ * still. That movement is most of what sells it as a surface catching
+ * light rather than a texture printed on one.
+ *
+ * This was already here and did nothing visible, which is worth recording.
+ * It chose which family was "lit" back when only one family was drawn;
+ * once both were, both were painted the same colour and the choice had no
+ * effect anyone could see. Reported as "I didn't see them follow the
+ * gravity", and they did not - a direction that selects between two
+ * identical things is not a direction.
+ *
+ * Rounded to the nearest eighth, so tilting past 45 degrees swaps which
+ * diagonal shines. A reflection axis is symmetric under half a turn
+ * anyway, so eight directions give four distinct looks, which is as many
+ * as the idea has. */
+static inline bool shine_uses_sum(void)
+{
+    const int gx = sim.last_load_dx < 0 ? -sim.last_load_dx : sim.last_load_dx;
+    const int gy = sim.last_load_dy < 0 ? -sim.last_load_dy : sim.last_load_dy;
+    return gy >= gx;
+}
+
+static inline int shine_phase(void)
+{
+    return (sim.last_load_dx * 3 + sim.last_load_dy * 5) & 7;
+}
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
     gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
+    const bool by_sum = shine_uses_sum();
+    const int phase = shine_phase();
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
      * enough, per pixel rather than per cell, to matter. */
+    /* Off the grid is NOT empty - the walls are solid, the same reading
+     * sand_at() gives out-of-bounds cells - so a wall lying against the
+     * screen edge is not outlined there. */
+    const uint8_t *above = (cy > 0) ? row - grid_w : NULL;
+    const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
+
     for (int cx = 0; cx < grid_w; cx++) {
-        const gfx_color_t c = pal[row[cx]];
-        const gfx_color_t d = material_dither(row[cx]);
+        const bool edge =
+            (cx > 0            && CELL_IS_EMPTY(row[cx - 1])) ||
+            (cx < grid_w - 1   && CELL_IS_EMPTY(row[cx + 1])) ||
+            (above != NULL     && CELL_IS_EMPTY(above[cx]))   ||
+            (below != NULL     && CELL_IS_EMPTY(below[cx]));
+
+        gfx_color_t col[3];
+        const material_pattern_t pat =
+            material_colours(row[cx], cell_hash(cx, cy), edge, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
          * so these unroll away there even though cell itself is a runtime
          * value - see paint_row()'s own comment for why that split exists.
          *
-         * The DITHER rides on that unrolling and costs nothing per pixel:
-         * (dx ^ dy) & 1 is constant once dx and dy are, so every store the
-         * compiler emits already knows which of the two colours it writes.
-         * A material that does not dither returns the same colour for both,
-         * so its block comes out flat with no test anywhere.
+         * FLAT and SPECKLED share this loop and are equally cheap: a
+         * speckled cell simply arrived with a different colour, chosen
+         * once per cell from its position. Only STRIPED does per-pixel
+         * work, and only where a striped material is actually on screen. */
+        if (pat != MATERIAL_HATCHED) {
+            const gfx_color_t c = col[0];
+            for (int dy = 0; dy < n; dy++) {
+                for (int dx = 0; dx < n; dx++) {
+                    p[dy * GFX_WIDTH + dx] = c;
+                }
+            }
+            continue;
+        }
+
+        /* Diagonals BOTH ways, and brightest where two cross - which is
+         * what makes it read as light caught on a pane rather than as a
+         * pattern printed on one. A single family of lines was almost
+         * invisible; the crossings are what the eye picks up.
          *
-         * Inside the block, deliberately, rather than across cells: the
-         * dirty-run tracking works on grid CELLS (row_runs_find below), so
-         * a checker made of whole cells would break every run into pieces
-         * one cell wide and multiply what has to be pushed to the panel. A
-         * checker made of pixels inside a cell is invisible to all of it. */
+         * The gravity-aligned diagonal is the one drawn slightly stronger
+         * (it picks `lit` first), so the grain still follows the board.
+         *
+         * Measured in SCREEN pixels rather than within the block, so the
+         * lines run unbroken from one cell into the next instead of
+         * restarting at every boundary. That is the whole reason this
+         * cannot be constant-folded the way the flat loop above is: the
+         * phase depends on where the cell is.
+         *
+         * Still inside the block as far as the dirty-run tracking is
+         * concerned - that works on grid CELLS (row_runs_find below), and
+         * every cell is painted whatever its neighbours are, so no run is
+         * broken by any of this. */
+        const int base = (cx + cy) * n;
+        const int diff = (cx - cy) * n;
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
-                p[dy * GFX_WIDTH + dx] = ((dx ^ dy) & 1) ? d : c;
+                /* One pixel every eight, both ways. Wide bands were the
+                 * first try and buried the pane - half the pixels were
+                 * line and a quarter were shine, so the glass itself
+                 * barely showed. Thin and sparse reads as light caught on
+                 * a surface; thick reads as a pattern printed on one.
+                 *
+                 * `& 7` rather than a modulo because the period is a power
+                 * of two, and it is fine on the negative values `w` takes
+                 * left of the diagonal: two's complement just shifts the
+                 * phase, which nothing here can tell apart from any other
+                 * phase. */
+                const bool a = ((base + dx + dy + phase) & 7) == 0;
+                const bool b = ((diff + dx - dy) & 7) == 0;
+
+                /* The reflection wins wherever it falls, including over a
+                 * crossing - it is the bright thing, and letting the grain
+                 * override it anywhere would put dark notches through a
+                 * highlight. */
+                const bool shine = by_sum ? a : b;
+                const bool grain = by_sum ? b : a;
+                p[dy * GFX_WIDTH + dx] =
+                    shine ? col[2] : (grain ? col[1] : col[0]);
             }
         }
     }

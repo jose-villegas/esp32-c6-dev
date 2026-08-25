@@ -552,7 +552,31 @@ static inline const reaction_t *reaction_of(cell_t c)
  * "what colour is this?". */
 const gfx_color_t *material_palette(void);
 
-/* The colour for the alternate squares of the dither inside one cell's
- * block. Equal to material_palette()[c] for every material that does not
- * dither, so a caller can use it unconditionally and get a flat block. */
-gfx_color_t material_dither(cell_t c);
+/* How one cell is painted inside its own block of pixels. PURELY VISUAL -
+ * nothing here is read by the simulation, and changing any of it changes
+ * only what the panel shows.
+ *
+ * The point of the split is that FLAT stays free. A flat material fills
+ * its block with one colour in the same tight loop it always did; only the
+ * materials that ask for a pattern pay for one, and only where they
+ * actually appear on the board. */
+typedef enum {
+    MATERIAL_FLAT = 0,      /* one colour, whole block */
+    MATERIAL_SPECKLED,      /* one colour per cell, varied by POSITION */
+    MATERIAL_HATCHED,       /* diagonals both ways, bright where they cross */
+} material_pattern_t;
+
+/* Fills in the colours this cell is painted with and says how to arrange
+ * them: `out[0]` is the body, `out[1]` the diagonal lines, `out[2]` where
+ * two lines cross. A flat or speckled material sets all three the same.
+ *
+ * `hash` is any stable per-cell number - a speckled material uses it to
+ * pick its shade, so the same cell keeps the same one frame to frame. */
+/* `edge` marks a cell with empty space cardinally beside it - the outline
+ * of whatever it is part of. A material whose colour tracks a temperature
+ * moves much less on its outline than in its body, so a wall keeps its
+ * shape as it heats instead of the silhouette itself changing colour. The
+ * heat is still perfectly visible; it is just shown by the inside of the
+ * wall rather than by its edge against the background. */
+material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
+                                    gfx_color_t out[3]);

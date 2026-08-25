@@ -741,25 +741,28 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * things, because a player who has learned to read one wall should
          * not have to learn the other.
          *
-         * With ONE difference, and it is the difference between them:
-         * stone has no `heats_to`, so it never melts however hot it gets.
-         * That is not an omission - it is the reason to build out of stone.
-         * If both melted there would be no vessel that holds lava
-         * indefinitely, and the choice between the two materials would
-         * collapse into "glass, but it dies". As it stands:
+         * It reads the temperature and does NOTHING ELSE with it. No
+         * `heats_to`, so it never melts however hot it gets; no
+         * `shatters_to`, so chilling it does not break it. Both absences
+         * are decisions:
          *
-         *     stone   survives any heat, but acid eats it
-         *     glass   immune to acid, but sustained heat melts it
+         *     stone   shows heat, survives it, and acid eats it
+         *     glass   immune to acid, melts under sustained heat, and
+         *             cracks when chilled while hot
          *
-         * and both crack if you chill them while they are hot.
+         * If stone melted there would be no vessel that holds lava
+         * indefinitely and the choice would collapse into "glass, but it
+         * dies". And rock does not thermally shock into anything - a
+         * quenched slab spalls and cracks, it does not turn to sand, and
+         * there is no honest byproduct to name here. Thermal shock is
+         * glass's, which is also what makes glass worth making.
          *
          * Ramps at half glass's rate. Rock is the heavier thing and should
-         * take longer to come up to temperature, and it is also the more
-         * common building material - a wall that glowed the instant a flame
-         * came near would have the whole board lit up. */
+         * take longer to come up to temperature, and it is the more common
+         * building material - a wall that glowed the instant a flame came
+         * near would have the whole board lit up. */
         .heat_ramp   = 32,
         .cools       = 5,
-        .shatters_to = MAT_SAND,
 
         .dissolvable = 60,   /* Stone gives way to acid now, just slowly -
                               * well under sand's 200, so a wall holds for
@@ -1163,11 +1166,69 @@ static const gfx_color_t palette[256] = {
  *
  * Only glass has one. Everything else dithers against itself, which is the
  * same as not dithering - see material_dither() and paint_row_n(). */
-#define GLASS_DIM(v)                                                       \
-    GFX_RGB(LERP((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v)                  \
-                 : (v) < SAND_SHOCK_HEAT  ? GLASS_WARM(v)                  \
-                                          : GLASS_HOT(v),                  \
-                 0x0A0C14, 7))
+#define GLASS_DIM(v) GFX_RGB(GLASS_LINE(GLASS_RGB(v)))
+
+/* The same ramps pulled two thirds of the way back to their own ambient
+ * colour, used wherever a cell touches empty space. Ten of fifteen, so an
+ * outline still shifts with heat - just a third as far as the body does. */
+#define GLASS_RGB(v)                                                       \
+    ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v)                              \
+     : (v) < SAND_SHOCK_HEAT  ? GLASS_WARM(v)                              \
+                              : GLASS_HOT(v))
+
+#define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
+#define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
+
+/* The lines and their crossings are LIGHTER than the pane, not darker.
+ * They were a mix toward the background, which is what you would do for
+ * something see-through and which came out as very nearly no pattern at
+ * all - a dark line on a dark pane is invisible. What glass actually shows
+ * is light caught on it, so the lines lift toward white and the crossings
+ * go most of the way there. That is the shine. */
+#define GLASS_LINE(rgb)  LERP((rgb), 0xFFFFFF, 4)
+#define GLASS_SHINE(rgb) LERP((rgb), 0xFFFFFF, 11)
+
+#define GLASS_EDGE_AT(v)  GFX_RGB(GLASS_EDGE_RGB(v))
+#define GLASS_EDGE_DIM(v) GFX_RGB(GLASS_LINE(GLASS_EDGE_RGB(v)))
+
+static const gfx_color_t glass_edge[MATERIAL_VARIANTS] = {
+    GLASS_EDGE_AT(0),  GLASS_EDGE_AT(1),  GLASS_EDGE_AT(2),
+    GLASS_EDGE_AT(3),  GLASS_EDGE_AT(4),  GLASS_EDGE_AT(5),
+    GLASS_EDGE_AT(6),  GLASS_EDGE_AT(7),  GLASS_EDGE_AT(8),
+    GLASS_EDGE_AT(9),  GLASS_EDGE_AT(10), GLASS_EDGE_AT(11),
+    GLASS_EDGE_AT(12), GLASS_EDGE_AT(13), GLASS_EDGE_AT(14),
+    GLASS_EDGE_AT(15),
+};
+
+static const gfx_color_t glass_edge_dither[MATERIAL_VARIANTS] = {
+    GLASS_EDGE_DIM(0),  GLASS_EDGE_DIM(1),  GLASS_EDGE_DIM(2),
+    GLASS_EDGE_DIM(3),  GLASS_EDGE_DIM(4),  GLASS_EDGE_DIM(5),
+    GLASS_EDGE_DIM(6),  GLASS_EDGE_DIM(7),  GLASS_EDGE_DIM(8),
+    GLASS_EDGE_DIM(9),  GLASS_EDGE_DIM(10), GLASS_EDGE_DIM(11),
+    GLASS_EDGE_DIM(12), GLASS_EDGE_DIM(13), GLASS_EDGE_DIM(14),
+    GLASS_EDGE_DIM(15),
+};
+
+#define GLASS_EDGE_SHINE(v) GFX_RGB(GLASS_SHINE(GLASS_EDGE_RGB(v)))
+#define GLASS_AT_SHINE(v)   GFX_RGB(GLASS_SHINE(GLASS_RGB(v)))
+
+static const gfx_color_t glass_edge_shine[MATERIAL_VARIANTS] = {
+    GLASS_EDGE_SHINE(0),  GLASS_EDGE_SHINE(1),  GLASS_EDGE_SHINE(2),
+    GLASS_EDGE_SHINE(3),  GLASS_EDGE_SHINE(4),  GLASS_EDGE_SHINE(5),
+    GLASS_EDGE_SHINE(6),  GLASS_EDGE_SHINE(7),  GLASS_EDGE_SHINE(8),
+    GLASS_EDGE_SHINE(9),  GLASS_EDGE_SHINE(10), GLASS_EDGE_SHINE(11),
+    GLASS_EDGE_SHINE(12), GLASS_EDGE_SHINE(13), GLASS_EDGE_SHINE(14),
+    GLASS_EDGE_SHINE(15),
+};
+
+static const gfx_color_t glass_shine[MATERIAL_VARIANTS] = {
+    GLASS_AT_SHINE(0),  GLASS_AT_SHINE(1),  GLASS_AT_SHINE(2),
+    GLASS_AT_SHINE(3),  GLASS_AT_SHINE(4),  GLASS_AT_SHINE(5),
+    GLASS_AT_SHINE(6),  GLASS_AT_SHINE(7),  GLASS_AT_SHINE(8),
+    GLASS_AT_SHINE(9),  GLASS_AT_SHINE(10), GLASS_AT_SHINE(11),
+    GLASS_AT_SHINE(12), GLASS_AT_SHINE(13), GLASS_AT_SHINE(14),
+    GLASS_AT_SHINE(15),
+};
 
 static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
     GLASS_DIM(0),  GLASS_DIM(1),  GLASS_DIM(2),  GLASS_DIM(3),
@@ -1176,26 +1237,90 @@ static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
     GLASS_DIM(12), GLASS_DIM(13), GLASS_DIM(14), GLASS_DIM(15),
 };
 
-/* Stone's dither partner is a shade of ITSELF, not a mix toward the
- * background: stone is opaque and should look it. This is the texture the
- * random per-cell shade used to provide, moved down to the pixel level -
- * finer than the old speckle, and it survives the variant being spent on
- * temperature. */
-#define STONE_DIM(v) GFX_RGB(LERP(STONE_RGB(v), 0x000000, 3))
+/* Stone's SPECKLE: eight shades of each temperature, picked per cell from
+ * the cell's own position rather than from its variant.
+ *
+ * Spread BOTH WAYS around the temperature colour, not just downward. The
+ * first version only darkened, which made every wall sit below the grey it
+ * used to average at and read as a different, murkier material. The old
+ * shade ramp ran 0x4A4F5A to 0x767D8C with the resting colour near its
+ * middle, so a fifth toward black and a fifth toward white from ambient
+ * lands back on very nearly those two endpoints.
+ *
+ * Stone used to carry a random shade in its variant and a wall looked like
+ * rock because of it. Spending the variant on temperature took that away
+ * and left a flat grey slab. It does not have to: the shade never needed
+ * to be stored, only to be STABLE - the same cell showing the same speckle
+ * every frame - and a position gives that for free while the variant goes
+ * on meaning heat.
+ *
+ * Four levels rather than the sixteen the old shade ramp had. The old one
+ * spanned the whole grey range because grey was all it had to say; this
+ * one has to leave the temperature legible underneath it, so it is a
+ * texture on top of a colour rather than the colour itself. */
+#define STONE_DARK(rgb)  LERP((rgb), 0x000000, 3)
+#define STONE_LIGHT(rgb) LERP((rgb), 0xFFFFFF, 3)
 
-static const gfx_color_t stone_dither[MATERIAL_VARIANTS] = {
-    STONE_DIM(0),  STONE_DIM(1),  STONE_DIM(2),  STONE_DIM(3),
-    STONE_DIM(4),  STONE_DIM(5),  STONE_DIM(6),  STONE_DIM(7),
-    STONE_DIM(8),  STONE_DIM(9),  STONE_DIM(10), STONE_DIM(11),
-    STONE_DIM(12), STONE_DIM(13), STONE_DIM(14), STONE_DIM(15),
+#define STONE_GRAIN(rgb, k)                                                \
+    GFX_RGB(LERP(STONE_DARK(rgb), STONE_LIGHT(rgb), (k) * 15 / 7))
+
+#define STONE_SPECKLE(v, k) STONE_GRAIN(STONE_RGB(v), k)
+
+#define STONE_SPECKLE_ROW(v)                                               \
+    { STONE_SPECKLE(v, 0), STONE_SPECKLE(v, 1), STONE_SPECKLE(v, 2),       \
+      STONE_SPECKLE(v, 3), STONE_SPECKLE(v, 4), STONE_SPECKLE(v, 5),       \
+      STONE_SPECKLE(v, 6), STONE_SPECKLE(v, 7) }
+
+static const gfx_color_t stone_speckle[MATERIAL_VARIANTS][8] = {
+    STONE_SPECKLE_ROW(0),  STONE_SPECKLE_ROW(1),
+    STONE_SPECKLE_ROW(2),  STONE_SPECKLE_ROW(3),
+    STONE_SPECKLE_ROW(4),  STONE_SPECKLE_ROW(5),
+    STONE_SPECKLE_ROW(6),  STONE_SPECKLE_ROW(7),
+    STONE_SPECKLE_ROW(8),  STONE_SPECKLE_ROW(9),
+    STONE_SPECKLE_ROW(10), STONE_SPECKLE_ROW(11),
+    STONE_SPECKLE_ROW(12), STONE_SPECKLE_ROW(13),
+    STONE_SPECKLE_ROW(14), STONE_SPECKLE_ROW(15),
 };
 
-gfx_color_t material_dither(cell_t c)
+#define STONE_EDGE_SPECKLE(v, k) STONE_GRAIN(STONE_EDGE_RGB(v), k)
+
+#define STONE_EDGE_ROW(v)                                                  \
+    { STONE_EDGE_SPECKLE(v, 0), STONE_EDGE_SPECKLE(v, 1),                  \
+      STONE_EDGE_SPECKLE(v, 2), STONE_EDGE_SPECKLE(v, 3),                  \
+      STONE_EDGE_SPECKLE(v, 4), STONE_EDGE_SPECKLE(v, 5),                  \
+      STONE_EDGE_SPECKLE(v, 6), STONE_EDGE_SPECKLE(v, 7) }
+
+static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
+    STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
+    STONE_EDGE_ROW(3),  STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),
+    STONE_EDGE_ROW(6),  STONE_EDGE_ROW(7),  STONE_EDGE_ROW(8),
+    STONE_EDGE_ROW(9),  STONE_EDGE_ROW(10), STONE_EDGE_ROW(11),
+    STONE_EDGE_ROW(12), STONE_EDGE_ROW(13), STONE_EDGE_ROW(14),
+    STONE_EDGE_ROW(15),
+};
+
+material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
+                                    gfx_color_t out[3])
 {
+    const uint8_t v = CELL_VARIANT(c);
+
     switch (CELL_MATERIAL(c)) {
-    case MAT_GLASS: return glass_dither[CELL_VARIANT(c)];
-    case MAT_STONE: return stone_dither[CELL_VARIANT(c)];
-    default:        return palette[c];
+    case MAT_GLASS:
+        out[0] = edge ? glass_edge[v]        : palette[c];
+        out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
+        out[2] = edge ? glass_edge_shine[v]  : glass_shine[v];
+        return MATERIAL_HATCHED;
+    case MAT_STONE:
+        out[0] = edge ? stone_edge_speckle[v][hash & 7u]
+                      : stone_speckle[v][hash & 7u];
+        out[1] = out[0];
+        out[2] = out[0];
+        return MATERIAL_SPECKLED;
+    default:
+        out[0] = palette[c];
+        out[1] = out[0];
+        out[2] = out[0];
+        return MATERIAL_FLAT;
     }
 }
 

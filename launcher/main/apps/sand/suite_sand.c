@@ -4717,57 +4717,202 @@ static void test_stone_never_melts_however_hot(void)
         "after 800 steps");
 }
 
-/* And a hot stone wall cracks when it is chilled, exactly as glass does. */
-static void test_snow_shatters_hot_stone_too(void)
+/* A hot stone wall does NOT crack when it is chilled. Glass, right beside
+ * it in the same scene, does.
+ *
+ * Stone reads the temperature and does nothing else with it. Rock quenched
+ * from hot spalls and cracks; it does not turn into sand, and there is no
+ * honest byproduct to name for it - so `shatters_to` is left off, and the
+ * absence is the decision.
+ *
+ * Both halves in one test on one board, because the claim is a CONTRAST.
+ * "Stone survives" passes just as well on a board where nothing shocks at
+ * all, which would hide the feature breaking rather than show it. */
+static void test_snow_cracks_glass_but_not_stone(void)
 {
     fixture();
     sand_clear(&s);
-    const int wall = W - 2;
+    const int mid = W / 2;
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
     }
     for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 2, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+        /* left half stone, right half glass - both at the top of the ramp */
+        sand_set(&s, x, H - 2,
+                 CELL_MAKE(x < mid ? MAT_STONE : MAT_GLASS,
+                           MATERIAL_VARIANTS - 1));
         sand_set(&s, x, H - 3, SNOW);
     }
+    const int stone_before = count_cells_of(MAT_STONE);
+    const int glass_before = count_cells_of(MAT_GLASS);
 
-    for (int i = 0; i < 60; i++) {
+    for (int i = 0; i < 80; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SAND) > 0,
-        "snow on a glowing stone wall must crack it into sand - shock is a "
-        "property of carrying a temperature, not a property of glass");
-    TEST_ASSERT_LESS_THAN_MESSAGE(wall + W, count_cells_of(MAT_STONE),
-        "and some of that wall has to actually be gone");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, reactions[MAT_STONE].shatters_to,
+        "stone must name nothing in shatters_to - rock does not thermally "
+        "shock into anything this simulation has a material for");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(stone_before, count_cells_of(MAT_STONE),
+        "and a glowing stone wall packed with snow must survive it");
+    TEST_ASSERT_LESS_THAN_MESSAGE(glass_before, count_cells_of(MAT_GLASS),
+        "while glass on the same board, at the same temperature, under the "
+        "same snow, must crack - otherwise this passes on a board where "
+        "shock is simply broken");
 }
 
-/* Only the materials meant to dither have a second colour.
+
+
+/* Rough perceptual distance between two panel colours - both are RGB565
+ * with the bytes swapped for the panel (GFX_RGB in gfx_color.h), so they
+ * have to be unswapped before the channels mean anything. Green counts
+ * once and red and blue twice, which is only a rule of thumb; nothing here
+ * needs better than "clearly further apart". */
+static int colour_gap(gfx_color_t x, gfx_color_t y)
+{
+    const uint16_t a = (uint16_t)((x >> 8) | (x << 8));
+    const uint16_t b = (uint16_t)((y >> 8) | (y << 8));
+    const int dr = ((a >> 11) & 0x1F) - ((b >> 11) & 0x1F);
+    const int dg = ((a >>  5) & 0x3F) - ((b >>  5) & 0x3F);
+    const int db = ( a        & 0x1F) - ( b        & 0x1F);
+    return (dr < 0 ? -dr : dr) * 2 + (dg < 0 ? -dg : dg) +
+           (db < 0 ? -db : db) * 2;
+}
+
+/* An outline moves less with temperature than the body it encloses.
  *
- * material_dither() is consulted for every cell the renderer paints, and
- * returning anything but the cell's own colour puts a visible checker on
- * it. A material picking one up by accident would be a rendering change
- * nobody asked for, on a code path the host tests otherwise never touch -
- * app_sand.c does not compile here. */
-static void test_only_glass_and_stone_dither(void)
+ * A wall going from grey to glowing changed its whole silhouette, so the
+ * shape stopped being readable at exactly the moment it mattered. Cells
+ * touching empty space are drawn much nearer their own resting colour, so
+ * the outline stays put and the heat is shown by the inside.
+ *
+ * Asserted as a comparison rather than against fixed colours: the claim is
+ * that the edge moves LESS than the body, which stays true if the ramps
+ * are ever retuned. */
+static void test_an_edge_shows_less_temperature_than_the_body(void)
+{
+    static const uint8_t tempered[] = { MAT_GLASS, MAT_STONE };
+
+    for (unsigned k = 0; k < sizeof tempered / sizeof tempered[0]; k++) {
+        const uint8_t m = tempered[k];
+        gfx_color_t body[3], ed[3], hot[3], hot_ed[3];
+
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, false, body);
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, true,  ed);
+        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, false, hot);
+        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, true, hot_ed);
+
+        const gfx_color_t rest_body = body[0], rest_edge = ed[0];
+        const gfx_color_t hot_body = hot[0], hot_edge = hot_ed[0];
+
+        char why[224];
+        snprintf(why, sizeof why,
+                 "%s: an edge must travel less than the body between rest "
+                 "and full heat, or the outline changes with the "
+                 "temperature and the shape stops reading",
+                 materials[m].name);
+
+        TEST_ASSERT_TRUE_MESSAGE(colour_gap(rest_edge, hot_edge) <
+                                 colour_gap(rest_body, hot_body), why);
+        TEST_ASSERT_TRUE_MESSAGE(colour_gap(rest_edge, hot_edge) > 0,
+            "but it must still travel some - an outline frozen at ambient "
+            "would hide heat entirely at the boundary");
+    }
+}
+
+/* Every material is painted the way it is meant to be, and no other.
+ *
+ * material_colours() is consulted for every cell the renderer paints, so a
+ * material picking up a pattern by accident is a visible change nobody
+ * asked for - on a path the host tests otherwise never reach, because
+ * app_sand.c does not compile here.
+ *
+ * PURELY VISUAL, all of it: nothing the simulation reads comes from this,
+ * which is exactly why it needs its own guard. A wrong colour breaks no
+ * behaviour and no other test would notice. */
+static void test_each_material_is_painted_the_way_it_should_be(void)
 {
     const gfx_color_t *pal = material_palette();
 
     for (int m = 1; m < MAT_COUNT; m++) {
         for (int v = 0; v < MATERIAL_VARIANTS; v++) {
             const cell_t c = CELL_MAKE(m, v);
-            const bool differs = material_dither(c) != pal[c];
-            const bool should = (m == MAT_GLASS || m == MAT_STONE);
+            gfx_color_t col[3] = { 0, 0, 0 };
+            const material_pattern_t pat = material_colours(c, 0u, false, col);
 
             char why[128];
-            snprintf(why, sizeof why,
-                     "%s variant %d: dither colour %s the palette",
-                     materials[m].name, v,
-                     should ? "must differ from" : "must equal");
-            TEST_ASSERT_EQUAL_MESSAGE(should, differs, why);
+            snprintf(why, sizeof why, "%s variant %d", materials[m].name, v);
+
+            if (m == MAT_GLASS) {
+                TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_HATCHED, pat, why);
+                TEST_ASSERT_TRUE_MESSAGE(col[0] != col[1] && col[1] != col[2],
+                    "glass is hatched, so its body, its lines and their "
+                    "crossings must all differ - equal ones paint a flat "
+                    "pane and the shine vanishes");
+            } else if (m == MAT_STONE) {
+                TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_SPECKLED, pat, why);
+            } else {
+                TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat, why);
+                TEST_ASSERT_EQUAL_MESSAGE(pal[c], col[0], why);
+                TEST_ASSERT_EQUAL_MESSAGE(col[0], col[2], why);
+            }
         }
     }
 }
+
+/* Stone's speckle comes from the cell's POSITION, not from its variant.
+ *
+ * Stone used to carry a random shade and a wall looked like rock because
+ * of it. Spending the variant on temperature took that away; deriving the
+ * shade from a per-cell hash instead puts it back without the variant
+ * having to mean two things at once.
+ *
+ * Both halves are asserted because both can fail on their own: a speckle
+ * that does not vary is a flat slab again, and one that varies with
+ * anything unstable would crawl and shimmer from frame to frame. */
+static void test_stone_speckles_by_position_at_every_temperature(void)
+{
+    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+        const cell_t c = CELL_MAKE(MAT_STONE, v);
+        gfx_color_t seen[8];
+        int distinct = 0;
+
+        for (unsigned h = 0; h < 8u; h++) {
+            gfx_color_t col[3] = { 0, 0, 0 };
+            material_colours(c, h, false, col);
+            const gfx_color_t a = col[0];
+            TEST_ASSERT_EQUAL_MESSAGE(col[0], col[1],
+                "a speckled cell is one flat colour - the variation is "
+                "BETWEEN cells, not inside one");
+            int fresh = 1;
+            for (int k = 0; k < distinct; k++) {
+                if (seen[k] == a) {
+                    fresh = 0;
+                }
+            }
+            if (fresh) {
+                seen[distinct++] = a;
+            }
+        }
+
+        char why[160];
+        snprintf(why, sizeof why,
+                 "stone at temperature %d must offer more than one shade - "
+                 "one shade is the flat slab this exists to undo", v);
+        TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, distinct, why);
+    }
+
+    /* Stable: the same cell asked twice gets the same answer. */
+    gfx_color_t one[3], two[3];
+    const cell_t c = CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT);
+    material_colours(c, 12345u, false, one);
+    material_colours(c, 12345u, false, two);
+    TEST_ASSERT_EQUAL_MESSAGE(one[0], two[0],
+        "the same cell must speckle the same way every time it is asked, "
+        "or a stone wall shimmers");
+}
+
+
 
 /* Burying lava does not delete it.
  *
@@ -7148,8 +7293,10 @@ void run_sand_suite(void)
     RUN_TEST(test_snow_floats_on_water);
     RUN_TEST(test_stone_heats_up_next_to_lava);
     RUN_TEST(test_stone_never_melts_however_hot);
-    RUN_TEST(test_snow_shatters_hot_stone_too);
-    RUN_TEST(test_only_glass_and_stone_dither);
+    RUN_TEST(test_snow_cracks_glass_but_not_stone);
+    RUN_TEST(test_an_edge_shows_less_temperature_than_the_body);
+    RUN_TEST(test_each_material_is_painted_the_way_it_should_be);
+    RUN_TEST(test_stone_speckles_by_position_at_every_temperature);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);

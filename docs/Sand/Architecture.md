@@ -35,7 +35,7 @@ that row:
 | `0` (immortal) and `kind == KIND_POWDER` | a shade (cosmetic texture) | sand |
 | `0` (immortal) and `kind == KIND_LIQUID` | fill level, 1-15 | water |
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
-| `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass |
+| `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass, stone |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -54,7 +54,7 @@ crash anything, only sit there as an immovable block.
 | 0 | empty | `KIND_NONE` | - | - |
 | 1 | sand | `KIND_POWDER` | falls | `repose=7` (~35°), `slip=96` |
 | 2 | water | `KIND_LIQUID` | falls | `slip=255` (no resistance) |
-| 3 | stone | `KIND_STATIC` | never | `density=200`, undisplaceable |
+| 3 | stone | `KIND_STATIC` | never | `density=200`, undisplaceable. Carries a **temperature** like glass, but never melts and never shatters - acid is the only thing that destroys it |
 | 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `mobility=96` |
 | 5 | fire | `KIND_GAS` | rises | `sight=5` (tighter), `decay=96` (shorter life), reacts via a second pass (below) |
 | 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own |
@@ -212,6 +212,75 @@ keeping because they are the only measurement of the scene as played:
 | ambient + 4 | 12 |
 | ambient + 3 | 17 |
 | ambient + 2 | 25 |
+
+### What carries a temperature, and what it does with one
+
+`heat_ramp` makes a material's variant a temperature. What it does with
+that temperature is a separate question, answered by which other fields it
+has - and for the two materials that carry one, the answers are opposites:
+
+| | shows heat | melts (`heats_to`) | shatters (`shatters_to`) | acid |
+| --- | --- | --- | --- | --- |
+| stone | yes | **no** | **no** | eaten |
+| glass | yes | to lava | to sand | immune |
+
+Both absences on stone are decisions rather than omissions. If stone melted
+there would be no vessel that holds lava indefinitely and the choice
+between the two would collapse into "glass, but it dies". And rock does not
+thermally shock into anything this simulation has a material for - a
+quenched slab spalls and cracks, it does not become sand - so there is no
+honest byproduct to name, and thermal shock stays glass's alone. That is
+most of what makes glass worth making.
+
+### How these materials are drawn
+
+Purely visual, all of it: nothing in `material_colours()` is read by the
+simulation, which is exactly why it needs its own tests - a wrong colour
+breaks no behaviour and nothing else would notice.
+
+- **Flat** is the default and stays free. One colour, whole block, the same
+  tight loop it always used.
+- **Speckled** (stone) picks its shade from the cell's POSITION rather than
+  its variant. Stone used to carry a random shade and a wall looked like
+  rock because of it; spending the variant on temperature took that away.
+  The shade never needed to be *stored*, only to be stable, and a position
+  gives that for free. Still one colour per cell, so it costs nothing extra
+  in the pixel loop.
+
+  Eight levels, spread **both ways** around the temperature colour. The
+  first version only darkened, which put every wall below the grey it used
+  to average at and read as a different, murkier material. A fifth toward
+  black and a fifth toward white from resting grey lands back on very
+  nearly the old ramp's own endpoints, 0x4A4F5A and 0x767D8C.
+- **Hatched** (glass) draws two families of single-pixel diagonals, one
+  every eight pixels each way, over three colours: the pane, a quiet
+  **grain** that does not move, and a brighter **reflection** that does.
+  Which diagonal reflects is chosen by gravity, and its phase shifts with
+  orientation, so the glints slide across a pane as the board is tilted.
+  That movement is most of what sells it as a surface catching light
+  rather than a texture printed on one.
+
+  Both were tried the other way round first and neither worked. Wide bands
+  buried the pane - half the pixels were line and a quarter were highlight.
+  And the lines mixed *toward the background*, which is the obvious thing
+  to do for something see-through and came out as no pattern at all: a
+  dark line on a dark pane is invisible. Light caught on glass is lighter
+  than the glass, so they lift toward white instead.
+
+  Lines are measured in screen pixels so they run unbroken from one cell
+  into the next. That is the one pattern that cannot be constant-folded,
+  and the only one that does per-pixel work.
+
+All of it happens *inside* a cell's block. The dirty-run tracking works on
+grid cells, so a pattern made of whole cells would break every run into
+one-cell pieces and multiply what gets pushed to the panel; a pattern made
+of pixels inside a cell is invisible to it.
+
+**Edges are softened.** A cell with empty space cardinally beside it is
+drawn two thirds of the way back toward its own resting colour. A wall
+going from grey to glowing otherwise changes its whole silhouette, so the
+shape stops reading at exactly the moment it matters. The outline still
+shifts with heat, a third as far; the body is what shows the temperature.
 
 ### Room temperature is in the middle
 
