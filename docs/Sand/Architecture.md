@@ -35,6 +35,7 @@ that row:
 | `0` (immortal) and `kind == KIND_POWDER` | a shade (cosmetic texture) | sand |
 | `0` (immortal) and `kind == KIND_LIQUID` | fill level, 1-15 | water |
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
+| `heat_ramp != 0` | **heat, 0-15** - a temperature, and the palette index, so the cell's colour *is* its heat | glass |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -63,7 +64,8 @@ crash anything, only sit there as an immovable block.
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
 | 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
-| 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, and the **only** thing acid cannot eat
+| 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat, and the only material whose variant is a temperature |
+| 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -100,6 +102,60 @@ it stay.
 | oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 | 0 | 0 | - |
 | lava | 0 | - | - | **1** | 0 | 0 | **stone** | 16 | 0 | 0 | - |
 | acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 | - |
+| glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0** (immune) | **lava**, by ramp |
+| snow | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | 0 | **water** (120) |
+
+### Heat that accumulates
+
+Four fields that only glass and snow use today, kept out of the table above
+because they describe a different thing: not a reaction that fires once, but
+a quantity a cell carries.
+
+| Field | On | Meaning |
+| --- | --- | --- |
+| `heat_ramp` | glass, 12 | chance/256 per step per adjacent heat source to climb one level. **Non-zero is what makes the variant a temperature** rather than a shade |
+| `cools` | glass, 6 | chance/256 to lose a level with nothing heating it |
+| `chills` | snow, 40 | chance/256 to pull a level out of a hot *neighbour*; non-zero also marks the material **cold** |
+| `shatters_to` | glass, sand | what a cell at heat >= 10 becomes when something cold touches it |
+
+`heat_ramp` and `heat_chance` are alternatives, not partners. `heat_chance`
+is a memoryless roll - sand fuses to glass the first time it wins one, and
+nothing is remembered between attempts. `heat_ramp` banks progress in the
+cell, which is the only way to express *sustained* exposure: under a
+memoryless roll a candle lit for one step a day melts a pane exactly as
+surely as a furnace, just later.
+
+`cools` is the other half of that and is not optional. Without it the ramp
+measures lifetime total rather than duration, and the distinction the ramp
+exists for disappears.
+
+`chills` and `cools` do the same thing in the same units and are still two
+fields, because they sit on different materials: `cools` belongs to the hot
+one and drains it to nothing, `chills` belongs to the cold one and drains a
+neighbour. They also cannot share a number - snow's 40 against glass's 6 is
+what lets a snowbank win a race that ambient cooling always loses.
+
+**Measured** (host, 2026-08-25): lava held against one face of a pane melts
+it in 550-1150 steps depending on seed; a pane at full heat drains back to
+cold in ~610 steps once the fire is gone.
+
+```mermaid
+graph LR
+    Sand["SAND"] -->|"heat_chance 16<br/>(memoryless)"| Glass["GLASS<br/>heat 0"]
+    Glass -->|"heat_ramp 12<br/>climbs"| Hot["GLASS<br/>heat 15 - glowing"]
+    Hot -->|"cools 6<br/>when the fire stops"| Glass
+    Hot -->|"melts"| Lava["LAVA"]
+    Hot -->|"shatters_to<br/>+ anything that chills"| Sand
+    Snow["SNOW"] -->|"heats_to 120"| Water["WATER"]
+    Snow -.->|"chills 40"| Hot
+
+    style Sand fill:#a87a3d,color:#fff
+    style Glass fill:#3d6b8a,color:#fff
+    style Hot fill:#8a3d3d,color:#fff
+    style Lava fill:#8a3d3d,color:#fff
+    style Snow fill:#5a5a5a,color:#fff
+    style Water fill:#3d6b8a,color:#fff
+```
 | glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0 (immune)** | - |
 
 Six things in that table are worth reading twice:

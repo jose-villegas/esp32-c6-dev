@@ -106,6 +106,15 @@ typedef struct {
      * sand_step_reactions() runs when EITHER flag is set. */
     bool     may_have_dissolver;
 
+    /* And again for cells holding HEAT in their variant - glass, today.
+     * Its own flag rather than riding may_have_burning, for the same
+     * reason may_have_dissolver has one: a pane goes on cooling long
+     * after the fire that heated it is out, and cooling is the half of
+     * the ramp that makes it mean duration. Gated behind the fire flag it
+     * would simply stop draining the moment the flame died, leaving hot
+     * glass frozen mid-ramp forever. */
+    bool     may_have_heat;
+
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
      * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised

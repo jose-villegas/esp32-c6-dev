@@ -220,7 +220,20 @@ static const int reaction_dirs[4][2] = {
 static inline void place_reacted(sand_t *s, int x, int y, size_t at,
                                  material_id_t mat)
 {
-    s->cells[at] = CELL_MAKE(mat, MATERIAL_VARIANTS - 1);
+    /* A heat-ramping material's variant is HEAT, and a cell that has just
+     * come into existence has none of it yet. MATERIAL_VARIANTS - 1 would
+     * mean sand fusing into glass produced a pane already at the top of its
+     * melt ramp, which the very next step would turn into lava - so sand
+     * under a steady flame would run to lava in two ticks and the whole
+     * duration mechanism would be dead on arrival.
+     *
+     * Starting cold also makes the ramp measure exposure since THIS cell
+     * existed, which is what "long exposure" has to mean for a material
+     * that can be created mid-fire. The reading is nice too: sand turns to
+     * cool teal glass, glows as the flame keeps working on it, and only
+     * then runs. */
+    s->cells[at] = CELL_MAKE(mat, reactions[mat].heat_ramp != 0
+                                      ? 0 : MATERIAL_VARIANTS - 1);
 
     const material_t *m = &materials[mat];
     if (m->kind == KIND_LIQUID) {
@@ -367,6 +380,32 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
         return false;
     }
     const reaction_t *r = reaction_of(n);
+
+    /* A material that BANKS heat climbs one level instead of transforming,
+     * and only becomes `heats_to` on reaching the top. Same trigger as the
+     * memoryless form below and reached from the same two places - contact
+     * with a burning cell, and through a conductor - so a fire behind a
+     * stone wall heats a pane on the far side exactly as it fuses sand
+     * there. What differs is only that this one remembers. */
+    if (r->heat_ramp != 0) {
+        if ((int)(rng_next(&s->rng) & 0xFF) >= r->heat_ramp) {
+            return false;
+        }
+        const uint8_t heat = CELL_VARIANT(n);
+        if (heat + 1 >= MATERIAL_VARIANTS) {
+            if (r->heats_to == 0) {
+                return false;   /* banks heat but melts into nothing */
+            }
+            place_reacted(s, nx, ny, at, (material_id_t)r->heats_to);
+            return true;
+        }
+        s->cells[at] = CELL_MAKE(CELL_MATERIAL(n), heat + 1);
+        s->may_have_heat = true;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
+        return true;
+    }
+
     if (r->heats_to == 0 || r->heat_chance == 0) {
         return false;
     }
@@ -375,6 +414,80 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
     }
     place_reacted(s, nx, ny, at, (material_id_t)r->heats_to);
     return true;
+}
+
+/* Heat far enough up the ramp that a sudden chill cracks the cell rather
+ * than merely cooling it. 10 of 15 - high enough that a pane has to be
+ * visibly glowing before snow will shatter it, so the player can see the
+ * condition they are creating, and low enough that it does not turn into a
+ * race against melting. */
+#define SHOCK_HEAT 10
+
+/* One cell that is holding heat: it cools, a cold neighbour pulls heat out
+ * of it faster, and if it is hot enough when that happens it shatters.
+ *
+ * Driven from the HOT cell rather than from the cold one, which is the
+ * opposite of how burning works - a flame reaches out to its neighbours.
+ * The reason is that cooling has to happen with no neighbour involved at
+ * all, so this cell needs a turn regardless; once it has one, doing the
+ * chill scan here as well costs nothing extra.
+ *
+ * Returns whether it still holds heat afterwards, which is what keeps
+ * s->may_have_heat honest. */
+static bool step_one_hot_cell(sand_t *s, uint8_t *row, int x, int y,
+                              int w, int h, const reaction_t *r)
+{
+    const cell_t c = row[x];
+    uint8_t heat = CELL_VARIANT(c);
+
+    /* A cold neighbour first: it is the faster of the two drains, and the
+     * only one that can destroy the cell outright. */
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        const reaction_t *nr = reaction_of(n);
+        if (nr->chills == 0) {
+            continue;
+        }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= nr->chills) {
+            continue;
+        }
+
+        /* The exchange runs both ways. Snow that chilled a glowing pane for
+         * nothing would be an unlimited heat sink made of a material that
+         * arrives in a light drift, so it pays for what it removed: its own
+         * heats_to fires, which is what melts it to water. */
+        try_heat_transform(s, nx, ny, w, h);
+
+        if (heat >= SHOCK_HEAT && r->shatters_to != 0) {
+            place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
+                          (material_id_t)r->shatters_to);
+            return false;
+        }
+        if (heat > 0) {
+            heat--;
+        }
+        break;      /* one chill per cell per step, like every other roll */
+    }
+
+    if (heat > 0 && r->cools != 0 &&
+        (int)(rng_next(&s->rng) & 0xFF) < r->cools) {
+        heat--;
+    }
+
+    if (heat != CELL_VARIANT(c)) {
+        row[x] = CELL_MAKE(CELL_MATERIAL(c), heat);
+        mark_rows(s, y, y);
+        wake_block_and_neighbors(s, x, y);
+    }
+    return heat > 0;
 }
 
 /* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
@@ -580,7 +693,8 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
             acted = true;
         } else {
             const reaction_t *br = reaction_of(bc);
-            if (br->heats_to != 0 && br->heat_chance != 0) {
+            if (br->heat_ramp != 0 ||
+                (br->heats_to != 0 && br->heat_chance != 0)) {
                 /* Sand behind a hot wall becomes glass, the same way water
                  * behind one boils - heat that has crossed a conductor
                  * does everything heat in contact does. */
@@ -794,6 +908,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
  * and a board of quiet fire keep may_have_dissolver armed. */
 #define FOUND_BURNING   1u
 #define FOUND_DISSOLVER 2u
+#define FOUND_HEAT      4u
 
 static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
 {
@@ -814,6 +929,17 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
         if (r->dissolves) {
             found |= FOUND_DISSOLVER;
             step_one_dissolver_cell(s, row, x, y, w, h, r);
+            continue;
+        }
+        /* Only cells ALREADY holding heat need a turn. A cold pane is
+         * heated from the fire's side by try_heat_transform(), the same as
+         * any other neighbour of a flame, so the common case - a board full
+         * of glass and one candle - walks past nearly all of it on a
+         * variant test. */
+        if (r->heat_ramp != 0 && CELL_VARIANT(c) != 0) {
+            if (step_one_hot_cell(s, row, x, y, w, h, r)) {
+                found |= FOUND_HEAT;
+            }
         }
     }
     return found;
@@ -828,7 +954,10 @@ void sand_step_reactions(sand_t *s)
 {
     /* Dissolving is not a fire reaction and must not be gated behind one:
      * acid has to work on a board with no flame anywhere. */
-    if (!s->may_have_burning && !s->may_have_dissolver) {
+    /* Heat is a third independent reason to run, not a rider on fire: glass
+     * goes on cooling long after the flame that heated it is out, and gated
+     * behind may_have_burning it would freeze mid-ramp instead. */
+    if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_heat) {
         return;
     }
 
@@ -845,5 +974,8 @@ void sand_step_reactions(sand_t *s)
     }
     if (!(found & FOUND_DISSOLVER)) {
         s->may_have_dissolver = false;
+    }
+    if (!(found & FOUND_HEAT)) {
+        s->may_have_heat = false;
     }
 }

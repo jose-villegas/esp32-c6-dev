@@ -490,7 +490,30 @@ const material_t materials[MATERIAL_MAX] = {
         .scatter = 0,
     },
 
-    /* Slots 9-15 are unused and left zeroed except for these, which make an
+    [MAT_SNOW] = {
+        .name    = "Snow",
+        .kind    = KIND_POWDER,
+        .density = 15,       /* Under oil's 22 and well under water's 30,
+                              * so snow FLOATS on both - can_enter() lets
+                              * the denser one displace it and that is the
+                              * whole mechanism. Snow sitting on top of a
+                              * pool is right, and it also puts the snow
+                              * where it is useful: on the surface, in
+                              * reach of whatever is above it. */
+        .slip    = 64,       /* Stickier than sand's 96. Snow clumps, and a
+                              * bank that holds its shape is what makes it
+                              * possible to pack snow ONTO a glass pane and
+                              * have it stay there long enough to matter. */
+        .repose  = 9,        /* ~42 degrees, steeper than dry sand's ~35 -
+                              * again so a bank holds. */
+        .scatter = 90,       /* High, and the one purely cosmetic number
+                              * here: falling snow drifts instead of
+                              * dropping straight, which is most of what
+                              * makes it read as snow rather than as pale
+                              * sand. */
+    },
+
+    /* The remaining slot is unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
     [MAT_COUNT ... MATERIAL_MAX - 1] = {
@@ -633,6 +656,55 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * absent row reads as "no reactions", which is right for most
          * materials and was wrong for this one. */
         .conducts = 220,
+
+        /* Glass BANKS heat in its own variant nibble rather than
+         * transforming on contact, and at the top of that ramp it melts.
+         * See reaction_t.heat_ramp in material.h for why accumulation
+         * rather than a per-step roll: a roll has no memory, so it cannot
+         * tell a brief fierce flame from a long slow one, and "long
+         * exposure" is the entire point of this reaction.
+         *
+         * 12 up against 6 down is a net 6 in 256 per step per adjacent
+         * heat source. Measured, not derived: lava held against one face
+         * of a pane melts it in 550-1150 steps depending on seed, so ten
+         * to twenty seconds of a fire you have to keep fed. Sources add,
+         * so surrounding the pane is faster - the range is the point. A
+         * flame that goes out takes the pane roughly 610 steps to drain
+         * back to cold, which is the same order as heating it, so the
+         * player who looks away loses most of the progress.
+         *
+         * `cools` at half the ramp is deliberately not much lower. It has
+         * to be large enough that heat visibly DRAINS once the fire is
+         * out, because that draining is the only thing that makes the
+         * ramp mean duration rather than merely total exposure. */
+        .heats_to    = MAT_LAVA,
+        .heat_ramp   = 12,
+        .cools       = 6,
+
+        /* Shocked glass goes back to being sand, which closes the loop it
+         * opened: sand fuses to glass under heat, glass returns to sand
+         * when the heat is pulled out of it too fast. The player can
+         * un-make the material without a second material and without
+         * spending one of the two remaining slots. */
+        .shatters_to = MAT_SAND,
+    },
+
+    [MAT_SNOW] = {
+        /* The only cold thing on the board, and the reason thermal shock
+         * is legible at all. `chills` pulls a heat level out of a hot
+         * neighbour and marks snow as cold for the shock rule - 40 in 256
+         * so a bank cools a pane briskly without a single flake being an
+         * instant crack.
+         *
+         * It melts in the exchange: heat has to go somewhere, and snow
+         * that chilled a glowing pane for free would make an unlimited
+         * heat sink out of a material that falls in a light drift. 120 is
+         * high - snow near ANY heat source is short-lived, which is the
+         * behaviour you want when you have to pack a bank onto a pane
+         * that is already hot. */
+        .chills      = 40,
+        .heats_to    = MAT_WATER,
+        .heat_chance = 120,
     },
 
     [MAT_STONE] = {
@@ -886,18 +958,31 @@ static const gfx_color_t palette[256] = {
                                     * the density ladder but they are
                                     * adjacent on screen the moment
                                     * something fizzes */
-    SHADES(0x14383F, 0x74C4D0),   /* glass - a static material, so this is
-                                    * a SHADE ramp and every cell picks one
-                                    * at random, giving a pane some
-                                    * variation rather than a flat block.
-                                    * Deep teal through pale cyan: cool
-                                    * like steam, but far more saturated
-                                    * and much darker at the bottom of its
-                                    * range, since steam is a thin bright
-                                    * wisp and glass is a solid wall - and
-                                    * the two are otherwise the only cool
-                                    * things on the board */
-    UNUSED, UNUSED,
+    SHADES(0x3E8A99, 0xFFC24A),   /* glass - NOT a shade ramp. Glass is the
+                                    * one material whose variant is HEAT
+                                    * (material.h's top comment), so this
+                                    * ramp is a temperature scale and a
+                                    * heating pane visibly glows along it.
+                                    * That is most of the argument for
+                                    * spending the nibble this way: the
+                                    * palette already indexes it, so heat
+                                    * became visible for no rendering work
+                                    * at all.
+                                    *
+                                    * Cool teal at rest through to
+                                    * 0xFFC24A, which is not a chosen
+                                    * colour but lava's own brightest one
+                                    * - so a pane about to melt is already
+                                    * exactly the colour of what it turns
+                                    * into, and the transformation lands
+                                    * without a visible seam */
+    SHADES(0xC6D8E4, 0xFFFFFF),   /* snow  - a powder, so a shade ramp
+                                    * again, and a narrow one: cold blue
+                                    * white to plain white. Deliberately
+                                    * the palest thing on the board, since
+                                    * it has to read as COLD at a glance
+                                    * for thermal shock to explain itself */
+    UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

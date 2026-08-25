@@ -28,7 +28,13 @@
  * one. Give the cell an amount and the same pair becomes 15 and 0, averages to
  * 8 and 7, and the difference spreads outward one neighbour at a time.
  *
- * That overlap is deliberate. Transient materials are exactly the ones that
+ * For GLASS it is HEAT, 0 to 15 - see reaction_t.heat_ramp. Glass is static,
+ * so its nibble was a shade and nothing read it. Heat is the one piece of
+ * per-cell state this simulation would otherwise have no room for: a second
+ * byte across the grid is 41 KB it does not have. One material can afford it
+ * because one material was not using its nibble.
+ *
+ * That overlap is deliberate.
  * need per-cell state, and per-cell state is the one thing there is no room
  * for. Reusing the nibble costs nothing, and it makes fire fade as it burns
  * out, which looks better than a random shade would.
@@ -88,6 +94,7 @@ typedef enum {
     MAT_LAVA,
     MAT_ACID,
     MAT_GLASS,
+    MAT_SNOW,
     MAT_COUNT
 } material_id_t;
 
@@ -357,13 +364,83 @@ typedef struct {
      * of the sand on the other side exactly as it boils water there. */
     uint8_t heats_to;
     uint8_t heat_chance;
+
+    /* HEAT THAT ACCUMULATES, rather than a roll that either fires or does
+     * not. Non-zero `heat_ramp` means this material banks heat in its own
+     * variant nibble instead of transforming on contact: each step beside a
+     * heat source it climbs one level with this chance, and only on reaching
+     * the top does it become `heats_to`.
+     *
+     * The point of it is that `heat_chance` alone CANNOT express "long
+     * exposure". A per-step roll has no memory, so a brief fierce flame and
+     * a slow banked fire accumulate identically - the only thing that
+     * separates them is heat draining back out, which is `cools`. Sand keeps
+     * the memoryless form because sand fusing is meant to be quick; glass
+     * melting to lava is meant to take a while and to be visible while it
+     * does, which is the other half of this: the nibble is what the palette
+     * indexes, so the heat level IS the colour and a heating pane glows.
+     *
+     * `cools` is the chance per step of losing a level with nothing heating
+     * it. Together the two set how long "long" is, and the ratio is what
+     * decides whether a fire can ever win at all: cooling faster than the
+     * ramp climbs means no flame of that size will EVER melt the pane, which
+     * is a legitimate thing to want and a very easy thing to do by accident.
+     * See test_a_lone_flame_never_melts_glass. */
+    uint8_t heat_ramp;
+    uint8_t cools;
+
+    /* COLD, which this simulation otherwise has no way to say.
+     *
+     * `chills` is the chance per step that this material pulls a heat level
+     * out of a neighbour that has one. Non-zero also MARKS the material as
+     * cold for thermal shock below - the two always want to travel together,
+     * so they are one field rather than two that can disagree.
+     *
+     * `chills` and `cools` do the same thing in the same units - remove one
+     * heat level, chance in 256 - and they are still two fields. What
+     * separates them is whose row they are on: `cools` belongs to the HOT
+     * material and drains it to nothing, `chills` belongs to the COLD one
+     * and drains a neighbour. Folding them into a single "rate this
+     * material removes heat", read as self-drain when it has a ramp and
+     * neighbour-drain when it does not, works mechanically and is exactly
+     * the mistake `mobility` and `sight` already made here: a field whose
+     * meaning switches on kind without saying so.
+     *
+     * They do not collapse to one NUMBER either. If a chilling neighbour
+     * merely re-ran the hot cell's own `cools`, snow would drain 6 in 256
+     * against a ramp of 12 and could never beat even a single flame. Snow's
+     * 40 against glass's 6 is most of a factor of seven, and that gap is
+     * the mechanic - it is what lets a bank of snow win a race that
+     * ambient cooling always loses.
+     *
+     * Snow is the only material with it, and adding it is what made thermal
+     * shock legible. Shock was first drafted as "heat on one side, water on
+     * the other", which fails as a design even though it works as a rule:
+     * nothing in the simulation says water is COLD, so a pane cracking next
+     * to it reads as "glass breaks near water" rather than as a temperature
+     * gradient. A material that is visibly, obviously cold fixes that
+     * without a temperature scale on anything but the glass itself. */
+    uint8_t chills;
+
+    /* What a THERMALLY SHOCKED cell of this material becomes: hot enough to
+     * be near the top of its ramp, and touching something that `chills`.
+     *
+     * Glass names MAT_SAND, which closes the loop it opens - sand becomes
+     * glass under heat, glass becomes sand again when shocked - so the
+     * material can be un-made by the player without a new material and
+     * without a slot. */
+    uint8_t shatters_to;
 } reaction_t;
 
 /* Indexed by the material nibble, same as materials[] - `const`, so it
- * costs no RAM either. Rows not given here default to all-zero
- * (designated initializers zero the rest), which reads correctly for
- * every field above: never catches, never a heat source, never conducts,
- * never smokes, vanishes on quench, never flares. */
+ * costs no RAM either. Rows not given here default to all-zero, and that is
+ * NOT the same as neutral. Zero reads harmlessly for most fields - never
+ * catches, never a heat source, never smokes - but `dissolvable` 0 means
+ * IMMUNE TO ACID and `conducts` 0 means HEAT STOPS HERE, which are
+ * behaviours, not absences. Glass shipped with both from one missing row:
+ * the acid immunity was the whole reason it exists and the heat block was a
+ * bug, and nothing in the source told them apart. Ask what zero means field
+ * by field before leaving a row out. */
 extern const reaction_t reactions[MATERIAL_MAX];
 
 static inline const reaction_t *reaction_of(cell_t c)

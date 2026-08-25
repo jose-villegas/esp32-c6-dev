@@ -2072,7 +2072,12 @@ static void test_a_tipped_basin_keeps_its_sand(void)
  * surface is. */
 #define OIL   CELL_MAKE(MAT_OIL,  8)
 #define LAVA  CELL_MAKE(MAT_LAVA, 8)
-#define GLASS CELL_MAKE(MAT_GLASS, 8)
+/* Heat 0, not a shade. Glass is the one material whose variant is a
+ * TEMPERATURE (material.h's top comment), so the 8 this used to carry
+ * silently placed every pane in these tests at half melt - and, worse,
+ * placed it hot enough that a stray flake of snow would shatter it. */
+#define GLASS CELL_MAKE(MAT_GLASS, 0)
+#define SNOW  CELL_MAKE(MAT_SNOW,  8)
 
 #define CONDUCT_REACH_TEST 32
 #define CAP_W (CONDUCT_REACH_TEST + 16)
@@ -3650,6 +3655,322 @@ static void test_acid_eats_through_stone(void)
         "acid must eat into stone - stone stopped being the acid-proof "
         "material when glass took that role, and a stone wall that still "
         "held would leave glass with nothing to do");
+}
+
+/* ===================================================================
+ * Glass as a material with a temperature: the heat ramp, cooling, and
+ * thermal shock against snow.
+ * =================================================================== */
+
+/* The hottest glass cell anywhere, or 0 if there is no glass at all. */
+static int hottest_glass(void)
+{
+    int hot = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_GLASS && CELL_VARIANT(c) > hot) {
+                hot = CELL_VARIANT(c);
+            }
+        }
+    }
+    return hot;
+}
+
+/* A pane with lava held against its underside, for `steps` steps. */
+static void hold_lava_under_a_pane(int steps)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 3, GLASS);
+    }
+    for (int i = 0; i < steps; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
+                sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+}
+
+/* Heat ACCUMULATES in the pane rather than transforming it on contact.
+ *
+ * This is the difference between `heat_ramp` and the `heat_chance` sand
+ * uses, and it is the whole reason glass melting can mean "long exposure"
+ * at all: a per-step roll has no memory, so under it a brief fierce flame
+ * and a long slow one are the same event with different luck. Banking the
+ * exposure in the cell is what lets duration be a real requirement.
+ *
+ * Asserted as "still glass, but changed" rather than on a specific level,
+ * because the level is a race between the ramp and cooling and pinning it
+ * would make this a test of the RNG. */
+static void test_glass_banks_heat_rather_than_melting_on_contact(void)
+{
+    hold_lava_under_a_pane(60);
+
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_GLASS) > 0,
+        "a brief touch of lava must not melt glass outright - if it does, "
+        "the ramp is not being consulted and heat is transforming on "
+        "contact the way it does for sand");
+    TEST_ASSERT_TRUE_MESSAGE(hottest_glass() > 0,
+        "and it must have GAINED heat while being touched, or nothing is "
+        "accumulating and the pane is simply immune");
+}
+
+/* Held long enough, the same fire wins and the pane runs. */
+static void test_a_fire_held_long_enough_melts_glass_to_lava(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 3, GLASS);
+    }
+
+    int melted = 0;
+    for (int i = 0; i < 4000 && !melted; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
+                sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        melted = count_cells_of(MAT_GLASS) == 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(melted,
+        "lava held against a pane must eventually melt it. Cooling faster "
+        "than the ramp climbs would make this never happen for any fire of "
+        "any size, which is an easy thing to do by accident with two "
+        "constants that pull opposite ways");
+}
+
+/* Take the fire away and the heat drains back out.
+ *
+ * This is the half of the mechanism that makes the ramp mean DURATION
+ * rather than lifetime total. Without it a pane remembers every flame it
+ * ever met, so a candle lit for one step a day melts it just as surely as
+ * a furnace - the exposure simply accumulates forever. */
+static void test_glass_forgets_a_fire_that_went_out(void)
+{
+    hold_lava_under_a_pane(200);
+    const int peak = hottest_glass();
+    TEST_ASSERT_TRUE_MESSAGE(peak > 0,
+        "fixture check: the pane has to be hot before cooling it means "
+        "anything");
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_LAVA) {
+                sand_set(&s, x, y, 0);
+            }
+        }
+    }
+    for (int i = 0; i < 3000 && hottest_glass() > 0; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, hottest_glass(),
+        "with the fire gone the pane must drain all the way back to cold");
+}
+
+/* And it drains on a board where nothing is burning and nothing dissolves.
+ *
+ * Separate from the test above because it fails differently: the reactions
+ * pass returns early unless something wants it, and hanging heat off the
+ * fire flag would leave a pane frozen at whatever level the fire left it -
+ * cooling forever pending a fire that is, by definition, already out. */
+static void test_glass_cools_on_a_board_with_no_fire_at_all(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, MATERIAL_VARIANTS - 1));
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1, hottest_glass(),
+        "fixture check: the pane starts at the top of its ramp");
+
+    for (int i = 0; i < 3000 && hottest_glass() > 0; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, hottest_glass(),
+        "hot glass must cool with no fire and no acid anywhere on the "
+        "board - heat is its own reason to run the reactions pass");
+}
+
+/* Glass made by heat arrives COLD.
+ *
+ * place_reacted() gives a new cell a full variant, which is right for a
+ * liquid (a full one) and for a transient (a fresh one) and would be
+ * catastrophic here: sand fusing under a flame would produce a pane
+ * already at the top of its melt ramp, and the next step would run it to
+ * lava. Sand under a steady fire would reach lava in two ticks and the
+ * duration this whole mechanism exists to express would be unreachable. */
+static void test_freshly_fused_glass_starts_cold(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+
+    int made = 0;
+    for (int i = 0; i < 2000 && !made; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        made = count_cells_of(MAT_GLASS) > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(made,
+        "fixture check: fire over sand has to make some glass");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, hottest_glass(),
+        "glass fused out of sand must start at heat 0 - starting full "
+        "would melt it to lava on the following step");
+}
+
+/* Snow on a glowing pane cracks it, and it goes back to being sand.
+ *
+ * Thermal shock needs a gradient, and a gradient needs something the
+ * player can SEE is cold. An earlier draft used water for the cold side,
+ * which works as a rule and fails as a design: nothing in this simulation
+ * says water is cold, so a pane cracking beside it reads as "glass breaks
+ * near water" rather than as a temperature difference. */
+static void test_snow_shatters_a_glowing_pane_into_sand(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, MATERIAL_VARIANTS - 1));
+        sand_set(&s, x, H - 3, SNOW);
+    }
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
+        "snow packed onto a pane at the top of its heat ramp must shatter "
+        "it");
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SAND) > 0,
+        "and shattered glass must come back as sand, which closes the loop "
+        "heat opened - the player can un-make the material");
+}
+
+/* The same snow on a cold pane does nothing at all.
+ *
+ * Which is what makes the rule about a GRADIENT rather than about snow
+ * being corrosive to glass. Without this the previous test passes just as
+ * happily against "snow destroys glass", a far worse rule that would make
+ * the only acid-proof container in the game vulnerable to weather. */
+static void test_cold_glass_is_unharmed_by_snow(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    const int panes = W - 2;
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, GLASS);
+        sand_set(&s, x, H - 3, SNOW);
+    }
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(panes, count_cells_of(MAT_GLASS),
+        "snow on COLD glass must leave every pane intact - shock is about "
+        "the temperature difference, not about snow being bad for glass");
+}
+
+/* Chilling costs the snow. It melts doing it.
+ *
+ * Snow that drained a glowing pane for free would be an unlimited heat
+ * sink made of a material that arrives in a drift, so any pane anywhere
+ * near weather would be unusable. Paying for the exchange is what keeps a
+ * glass vessel over a fire a thing you can actually build. */
+static void test_snow_melts_where_it_chills(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 10 - 1));
+        sand_set(&s, x, H - 3, SNOW);
+    }
+    const int flakes = count_cells_of(MAT_SNOW);
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SNOW) < flakes,
+        "snow that cools a hot pane must be spent doing it, or it is a "
+        "free and permanent heat sink");
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_WATER) > 0,
+        "and what it turns into is water, not nothing");
+}
+
+/* Snow floats, because it is lighter than what it lands on.
+ *
+ * Not decoration: floating is what puts snow ON TOP of a pool rather than
+ * under it, which is where it has to be to reach anything. A snowfall that
+ * sank would be a snowfall the player could not aim. */
+static void test_snow_floats_on_water(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = H - 4; y < H - 1; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    for (int x = 2; x < W - 2; x++) {
+        sand_set(&s, x, 0, SNOW);
+    }
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int lowest_snow = -1, highest_water = H;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const uint8_t m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_SNOW && y > lowest_snow) {
+                lowest_snow = y;
+            }
+            if (m == MAT_WATER && y < highest_water) {
+                highest_water = y;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(lowest_snow >= 0,
+        "fixture check: some snow has to survive the fall to say anything "
+        "about where it ended up");
+    TEST_ASSERT_TRUE_MESSAGE(lowest_snow <= highest_water,
+        "snow must come to rest on top of the water, not under it - it is "
+        "lighter than water and can_enter() is what makes that true");
 }
 
 /* Glass conducts heat, the same as stone.
@@ -5809,6 +6130,15 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_eats_through_stone);
     RUN_TEST(test_sand_turns_to_glass_under_sustained_heat);
     RUN_TEST(test_glass_conducts_heat_like_stone);
+    RUN_TEST(test_glass_banks_heat_rather_than_melting_on_contact);
+    RUN_TEST(test_a_fire_held_long_enough_melts_glass_to_lava);
+    RUN_TEST(test_glass_forgets_a_fire_that_went_out);
+    RUN_TEST(test_glass_cools_on_a_board_with_no_fire_at_all);
+    RUN_TEST(test_freshly_fused_glass_starts_cold);
+    RUN_TEST(test_snow_shatters_a_glowing_pane_into_sand);
+    RUN_TEST(test_cold_glass_is_unharmed_by_snow);
+    RUN_TEST(test_snow_melts_where_it_chills);
+    RUN_TEST(test_snow_floats_on_water);
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
