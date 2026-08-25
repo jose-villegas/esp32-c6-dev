@@ -387,10 +387,23 @@ Grep the capture for the headline line and any failures:
 grep -E "FAIL|SELFTEST_COMPLETE" /path/to/output.txt
 ```
 
-`SELFTEST_COMPLETE failures=N` is the number that matters. As of this
-writing the accepted baseline is **`failures=0`**: every frame budget is
-met. Anything above zero is now a real regression - there is no longer a
-known-failing row to explain away.
+`SELFTEST_COMPLETE failures=N` is the number that matters. The accepted
+baseline is **`failures=5`** as of the 2026-08-25 capture, and only one
+of those five is deliberate:
+
+- `test_a_gravity_flip_on_every_material_at_once_stays_sane` - a
+  reduction target, 10% under its measured 60091 µs, failing by design.
+- Four others are **unexplained and probably regressions**: the full
+  screen of fire (286720 against a 250000 budget, up 34% on its last
+  recorded figure), the fire cascade (390158, up 23%), the screen of
+  water (16052, up 21%) and the mixed-scene flip (12876, up 15%).
+  Everything sand-only is unchanged to within a percent, which points at
+  the reactions and liquid passes rather than at the sweep.
+
+That is not a baseline anyone should be comfortable with. It is written
+down as five so the number is honest, not because four unexplained
+regressions are acceptable - they want attributing against the commit
+they appeared in.
 
 It was `failures=3` for a long time, and all three came off without a
 single budget moving, which is the part worth knowing. The settled-pile
@@ -408,12 +421,10 @@ All `#ifdef DEVICE_BUILD`-only, in `suite_sand.c`, run against the real
 came from an actual device capture, not a guess - see each test's own
 comment for the reasoning behind its specific budget.
 
-**One exception, clearly marked.** The mixed-material flip at the bottom
-was written without access to hardware, so its figure is a loose sanity
-ceiling rather than a budget: wide enough that it cannot be mistaken for
-a tuned number, tight enough to catch an accidental quadratic. It needs
-replacing with a real capture the first time anyone runs
-`run_device_tests.sh` after it landed.
+Two of them are **reduction targets** rather than headroom - set below
+what the code could do when they were written, on purpose, so they fail
+until the work is done. The mixed scene was the first and came good; the
+mixed-material flip is the second and has not yet.
 
 | Test | Scenario | Budget | Last measured |
 |---|---|---|---|
@@ -424,7 +435,7 @@ replacing with a real capture the first time anyone runs
 | `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 14000 µs (tightened from 16000 after the tenth attempt) | ~13288 µs (was 16141 and failing until the ninth attempt) |
 | `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~316000 µs |
 | `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~214000-231000 µs (varies with flash-cache layout - see below) |
-| `test_a_gravity_flip_on_every_material_at_once_stays_sane` | Bands of **all eleven** movable materials, reactive pairs touching, settled then flipped - every pass doing real work in one step | 100000 µs **(sanity ceiling, not a budget)** | **never measured - needs a device run** |
+| `test_a_gravity_flip_on_every_material_at_once_stays_sane` | A wrapped tile of **every** material, laid out so all 66 material pairs touch, settled then flipped - every pass doing real work at once | 54000 µs (**reduction target**, 10% under measured) | 60091 µs (2026-08-25) - **currently 11% over** |
 
 Every measured row passes, and no budget was ever raised to make that
 true - the mixed scene in particular was set 21% *below* what the code

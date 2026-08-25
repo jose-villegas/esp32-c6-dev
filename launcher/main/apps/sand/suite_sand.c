@@ -5401,26 +5401,26 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     free(big);
     free(blocks);
 
-    /* Sanity ceiling, NOT a budget - see this test's own comment.
+    /* 54000 us: a REDUCTION TARGET, not headroom. Measured at 60091 us on
+     * device (2026-08-25), and set 10% below that deliberately, so this
+     * fails today and stops failing only when the code gets faster. That
+     * is the same thing the mixed-scene budget above does, and the reason
+     * that one went from 26.2% over to 7.0% under without the number ever
+     * moving.
      *
-     * It was 100000, which was a guess and a bad one: it would have failed
-     * on the first device run. Calibrated since, without hardware, against
-     * a scene whose device cost IS known.
-     * test_a_full_screen_of_fire_fits_in_the_frame_budget measures 214-231
-     * ms on the board and 0.90 ms/step on this host - a ratio of about
-     * 240. This scene costs 0.95 ms/step on the same host, so it should
-     * land near 226-244 ms on device. 300000 sits above that with room for
-     * the extrapolation to be wrong, and far enough below a runaway to
-     * still catch one.
-     *
-     * Still not a budget. Replace it with a real capture from
-     * tools/report_performance.sh, set BELOW what the code actually does,
-     * the way the mixed-scene budget above was. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(300000, (int)per_step,
-        "a mixed-material flip must not run away - this is a catastrophe "
-        "detector calibrated by extrapolation, not a frame budget, and it "
-        "wants replacing with a measured figure the first time it runs on "
-        "real hardware");
+     * It replaces a guess. The first figure here was 100000, picked with
+     * no hardware; the second was 300000, extrapolated from the
+     * full-screen-fire scene's known device cost by assuming the
+     * host-to-device ratio carried across scenes. It does not: fire
+     * measures ~318x host, this scene ~63x, so the extrapolation was four
+     * times too pessimistic and predicted 226-244 ms against an actual
+     * 60 ms. Worth remembering before anyone extrapolates again - on this
+     * chip the ratio is dominated by cache behaviour the host does not
+     * model, and it is scene-specific. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(54000, (int)per_step,
+        "the mixed-material flip is held to 10% below what it measured, "
+        "as a reduction target - this failing means the work has not been "
+        "done yet, not that something broke");
 }
 
 static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
