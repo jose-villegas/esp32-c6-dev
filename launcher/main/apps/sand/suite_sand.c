@@ -3681,6 +3681,111 @@ static void test_every_liquid_declares_a_mobility(void)
     }
 }
 
+/* Interfacial drag: a liquid pushing into another gets less willing the
+ * further in it already is.
+ *
+ * Two liquids exchange by swapping whole cells gravity-ward, and under tilt
+ * that direction is DITHERED between two octants step by step. Ungated,
+ * every water cell with oil below it swaps every step, so water drills into
+ * the oil along alternating diagonals and the boundary becomes a mixed
+ * band - which on screen reads as straight lines running through what
+ * should be a smooth surface.
+ *
+ * What the drag actually buys is not a smaller number, it is a BOUNDED one.
+ * Measured across grid widths 24 to 40, eight seeds each, counting water
+ * cells left sitting inside the oil after a tilt:
+ *
+ *     width      24    26    28    30    32    34    36    40
+ *     ungated  17.4  18.9  20.5  21.4  14.3  16.9  22.4  29.8
+ *     drag      8.1  12.5  12.1   8.9  12.5  12.1  12.0  12.3
+ *
+ * Ungated it grows with the length of the interface; with drag it sits flat
+ * near twelve however wide the board gets. That is the property worth
+ * having and the one worth testing, so this uses a deliberately WIDE grid -
+ * on the 32-wide shared fixture the two are 14.3 against 12.5, close enough
+ * that the test passed either way and proved nothing. It did, for one
+ * round, before the sweep above was run.
+ *
+ * Averaged over seeds for the same reason: a single run of a chaotic scene
+ * is not evidence. */
+#define DRAG_W 40
+#define DRAG_H 20
+
+static int water_inside_oil(sand_t *g)
+{
+    static const int d[4][2] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+    int inside = 0;
+    for (int y = 1; y < DRAG_H - 1; y++) {
+        for (int x = 1; x < DRAG_W - 1; x++) {
+            if (CELL_MATERIAL(sand_at(g, x, y)) != MAT_WATER) {
+                continue;
+            }
+            int oil = 0;
+            for (int k = 0; k < 4; k++) {
+                if (CELL_MATERIAL(sand_at(g, x + d[k][0], y + d[k][1]))
+                        == MAT_OIL) {
+                    oil++;
+                }
+            }
+            if (oil >= 3) {
+                inside++;
+            }
+        }
+    }
+    return inside;
+}
+
+static void test_water_does_not_drill_into_oil_when_tilted(void)
+{
+    static uint8_t drag_cells[DRAG_W * DRAG_H];
+    sand_t g;
+    const int seeds = 4;
+    int total = 0;
+
+    for (int k = 0; k < seeds; k++) {
+        memset(drag_cells, 0, sizeof drag_cells);
+        sand_init(&g, drag_cells, DRAG_W, DRAG_H, (uint32_t)(11 + k));
+        sand_set_mobility(&g, SAND_MOBILITY_PER_MATERIAL);
+
+        for (int x = 0; x < DRAG_W; x++) {
+            sand_set(&g, x, 0, STONE);
+            sand_set(&g, x, DRAG_H - 1, STONE);
+        }
+        for (int y = 0; y < DRAG_H; y++) {
+            sand_set(&g, 0, y, STONE);
+            sand_set(&g, DRAG_W - 1, y, STONE);
+        }
+        /* A thin slick of oil on the floor with water resting on it - the
+         * unstable order, since water is the denser of the two. */
+        for (int x = 1; x < DRAG_W - 1; x++) {
+            sand_set(&g, x, DRAG_H - 2, CELL_MAKE(MAT_OIL, MASS_MAX));
+            sand_set(&g, x, DRAG_H - 3, CELL_MAKE(MAT_OIL, MASS_MAX));
+        }
+        for (int y = DRAG_H - 7; y <= DRAG_H - 4; y++) {
+            for (int x = 1; x < DRAG_W - 1; x++) {
+                sand_set(&g, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            }
+        }
+
+        for (int i = 0; i < 60; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+        for (int i = 0; i < 300; i++) {
+            sand_step(&g, 700, 700, 0);
+        }
+        total += water_inside_oil(&g);
+    }
+
+    /* 20 sits between the two measured means at this width (29.8 ungated,
+     * 12.3 with drag) with room either side for ordinary variation. */
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(20 * seeds, total,
+        "water must not end up riddled through the oil body after a tilt - "
+        "without interfacial drag the gravity-ward swap fires on every "
+        "interface cell every step, drilling into the oil along the "
+        "dithered diagonals, and the intrusion grows with the width of the "
+        "board instead of staying bounded");
+}
+
 static void test_oil_flows_more_slowly_than_water(void)
 {
     int steps[2];
@@ -5486,6 +5591,7 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
+    RUN_TEST(test_water_does_not_drill_into_oil_when_tilted);
     RUN_TEST(test_oil_flows_more_slowly_than_water);
     RUN_TEST(test_lava_does_not_decay_away);
     RUN_TEST(test_water_freezes_lava_into_stone);

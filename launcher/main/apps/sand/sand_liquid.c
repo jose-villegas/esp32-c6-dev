@@ -149,6 +149,70 @@ static inline bool liquid_may_move(sand_t *s, uint8_t id)
     return m >= 255 || (int)(rng_next(&s->rng) & 0xFF) < m;
 }
 
+/* How many of the four cardinal neighbours hold a DIFFERENT liquid.
+ *
+ * The measure of how deep inside another fluid a cell has got: 0 or 1 for a
+ * cell sitting on the boundary, 3 or 4 for one that has pushed a finger into
+ * the middle of the other liquid. */
+static inline int foreign_liquid_neighbours(const sand_t *s, int x, int y,
+                                            uint8_t id)
+{
+    static const int dirs[4][2] = { { 0, -1 }, { 0, 1 }, { -1, 0 }, { 1, 0 } };
+    const int w = s->w;
+    const int h = s->h;
+
+    int n = 0;
+    for (int k = 0; k < 4; k++) {
+        const int nx = x + dirs[k][0];
+        const int ny = y + dirs[k][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t c = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(c)) {
+            continue;
+        }
+        const material_t *m = material_of(c);
+        if (m->kind == KIND_LIQUID && CELL_MATERIAL(c) != id) {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* INTERFACIAL DRAG: how readily a cell keeps pushing into another liquid,
+ * given how far into it it already is.
+ *
+ * Free at the boundary - nought or one foreign neighbour - and then halving
+ * for each one beyond that, so 2 neighbours is one step in two, 3 is one in
+ * four, 4 is one in eight. The halving shape is `slip`'s, from material.h:
+ * "chance in 256 that a grain carrying one unit of load may still slide,
+ * halving for each further unit". Same idea, different load.
+ *
+ * The problem it solves: two liquids exchange by swapping whole cells along
+ * the gravity-ward direction, and under tilt that direction is DITHERED
+ * between two octants step by step. Unchecked, every water cell with oil
+ * below it swaps every step, so water drills into the oil along alternating
+ * diagonals and the boundary becomes a mess of grid-aligned stripes -
+ * measured at 7 water cells sitting inside the oil body on a thin slick,
+ * which reads on screen as straight lines through what should be a smooth
+ * surface.
+ *
+ * Drag does not stop the exchange, it stops the FINGER: the first cell into
+ * the oil moves freely, the one behind it is already half as willing, and by
+ * three deep the intrusion has effectively stalled while the broad interface
+ * keeps sorting itself out normally. */
+static inline bool drag_allows_swap(sand_t *s, int x, int y, uint8_t id)
+{
+    const int surrounded = foreign_liquid_neighbours(s, x, y, id);
+    if (surrounded <= 1) {
+        return true;
+    }
+    /* 2 -> mask 1 (1 in 2), 3 -> mask 3 (1 in 4), 4 -> mask 7 (1 in 8). */
+    const unsigned mask = (1u << (unsigned)(surrounded - 1)) - 1u;
+    return (rng_next(&s->rng) & mask) == 0u;
+}
+
 /* Two DIFFERENT liquids meeting, resolved by density: the denser one
  * sinks and the lighter one is pushed up into the cell it vacated. Whole
  * cells, swapped - not the mass transfer everything else in this file
@@ -220,6 +284,9 @@ static inline bool sink_through_lighter_liquid(sand_t *s, uint8_t *row,
     }
     const material_t *bm = material_of(below);
     if (bm->kind != KIND_LIQUID || mat->density <= bm->density) {
+        return false;
+    }
+    if (!drag_allows_swap(s, x, y, CELL_MATERIAL(grain))) {
         return false;
     }
 
