@@ -262,12 +262,22 @@ a material.
 Three techniques account for most of the gap between "walk every cell every
 step" and the numbers above:
 
-- **Row sleeping.** A row that produced no movement under the current
-  gravity direction, and whose neighbours have not moved either, is skipped
-  entirely next step (`row_state`, in `sand.c`). Motionless sand costs
-  roughly 1,000x less than the same sand while it is actually falling.
-- **`ROW_NO_LIQUID`.** The same idea for the liquid pass specifically - a
-  row scanned and found dry is skipped until something writes to it again.
+- **Block sleeping.** A block that produced no movement under the current
+  gravity direction, and none of whose neighbours moved either, is skipped
+  entirely next step (`block_state`, in `sand.c`). Motionless sand costs
+  roughly 1,000x less than the same sand while it is actually falling. This
+  was row-shaped originally (`row_state`); see
+  [Performance-Tuning-Attempts.md](Performance-Tuning-Attempts.md)'s fourth
+  and sixth attempts for why it became block-shaped and how the block
+  dimensions were chosen.
+- **Not every skip structure earns its keep.** The liquid pass had one of
+  its own for a long time - `ROW_NO_LIQUID`, a per-row "scanned and found
+  dry" flag - and it was deleted in the ninth attempt after the device
+  measured the bookkeeping that kept it honest (a three-byte row_state wipe
+  on every move of every material, anywhere on the grid) as costing far more
+  than the row scans it avoided: a screen of water went from 17,860 us a
+  step to 13,130 just from removing it. Worth reading before adding another
+  one.
 - **Bitmasks over flash-table reads, inside a hot loop.** Asking
   `materials[id].kind` per cell is a flash read and a likely cache miss (the
   32 KB code/constant cache on this chip, not a data cache - see

@@ -16,29 +16,6 @@
 
 #include "sand_priv.h"
 
-/* Set by equalise_liquids() on a row it has scanned and found no liquid in,
- * so it need not walk that row again.
- *
- * Safe because it is cleared by any change to the row that could possibly
- * matter - mark_rows() wipes the whole byte through wake_span(), and every
- * write to a cell goes through mark_rows() (directly, or via mark_move(),
- * which calls it). So the flag can only ever be stale in the harmless
- * direction: a row that has just gained liquid has already had it cleared.
- *
- * "Could possibly matter" is the one narrowing: mark_rows() skips the clear
- * entirely while s->may_have_liquid is false, because with no liquid in the
- * grid at all every one of these bits is trivially still true and this pass
- * is not even running to read them. The full derivation lives above
- * mark_rows() in sand_priv.h - including why the flag going false below
- * really does mean "no liquid anywhere", which is the step that argument
- * rests on.
- *
- * row_state carries only this one bit now - the settling bits that used to
- * share the byte (sand.c's ROW_SETTLED_NEAREST/OTHER) moved to their own,
- * block-shaped array, block_state (see BLOCK_SETTLED_NEAREST/OTHER in
- * sand_priv.h) - so there is nothing left in row_state to collide with. */
-#define ROW_NO_LIQUID 0x4
-
 /* Which materials are liquid, as a bitmask over the nibble.
  *
  * Both passes below look at every cell in the grid, and asking
@@ -93,9 +70,13 @@ static inline int room_in(cell_t c, uint8_t id)
  * regression on a screen-wide water collapse back when this called
  * wake_blocks_points(); that call is gone entirely now (see
  * move_liquid_grain()'s own comment for why nothing replaced it), so the
- * old worry does not even apply any more - mark_rows() alone is cheap
- * enough (two byte writes, a three-row clear) that calling it up to
- * three times per grain was never the problem. */
+ * old worry does not even apply any more - mark_rows() is now two byte
+ * writes into dirty_rows and nothing else, so calling it up to three times
+ * per grain costs almost nothing. It did NOT always cost almost nothing:
+ * until the ninth attempt it also wiped three bytes of row_state per call
+ * to invalidate a ROW_NO_LIQUID cache, and this one call site was 99.9% of
+ * that traffic on a screen of water - 11,130 of the 11,142 calls a step
+ * made. Removing the cache is what made this cheap. */
 static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
                             int mass, uint8_t mat_id, int y, int ty)
 {
@@ -381,7 +362,10 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
 }
 
 /* One row's share of cross-flow. Returns whether it held any liquid, which
- * the caller needs in order to know whether the whole pass found anything. */
+ * the caller needs in order to know whether the whole pass found anything -
+ * that is what arms may_have_liquid, and it is now this return value's only
+ * job. It used to also decide whether the row earned a ROW_NO_LIQUID bit;
+ * see equalise_liquids() below for where that went. */
 static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
                              int x_step, int px, int py, int dx, int dy,
                              int sight, uint16_t is_liquid)
@@ -411,12 +395,6 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
                    (int)((unsigned)touched_x1 / SAND_BLOCK_W), by);
     }
 
-    /* Nothing liquid in this row - say so, and skip it next time. Written
-     * after mark_rows may have cleared the byte, so a row that received
-     * liquid during this very pass is not wrongly marked dry. */
-    if (!any_liquid && s->row_state != NULL) {
-        s->row_state[y] |= ROW_NO_LIQUID;
-    }
     return any_liquid;
 }
 
@@ -441,11 +419,16 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
     const int x_to   = (px > 0) ? -1    : w;
     const int x_step = (px > 0) ? -1    : 1;
 
+    /* Every row, every step. There used to be a per-row "proved dry" cache
+     * (ROW_NO_LIQUID) letting this skip rows a previous sweep had found
+     * empty of liquid. It was removed in the ninth attempt: keeping it
+     * honest meant wiping three bytes of row_state on every liquid transfer
+     * anywhere on the grid - 33,426 byte writes a step on the water
+     * benchmark - to save scanning about 104 of 224 rows, and the device
+     * measured the bookkeeping as costing far more than the scans it
+     * avoided (water 17860 -> 13130 us just from deleting it). See
+     * docs/Sand/Performance-Tuning-Attempts.md. */
     for (int y = y_from; y != y_to; y += y_step) {
-        /* Known dry, and nothing has touched it since. */
-        if (s->row_state != NULL && (s->row_state[y] & ROW_NO_LIQUID)) {
-            continue;
-        }
         if (equalise_one_row(s, y, w, x_from, x_to, x_step, px, py, dx, dy,
                              sight, is_liquid)) {
             found_any = true;
@@ -453,10 +436,10 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
     }
 
     /* Looked everywhere and found none, so stop looking until some is placed.
-     * Only valid because a full sweep happened - rows skipped by ROW_NO_LIQUID
-     * were themselves proved dry by an earlier sweep. */
+     * Every row really was walked this pass - there is no skip cache any
+     * more - so this needs no argument beyond the loop above. */
     if (!found_any) {
-        sand_note_liquid(s, false);
+        s->may_have_liquid = false;
     }
 }
 

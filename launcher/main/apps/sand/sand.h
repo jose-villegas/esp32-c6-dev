@@ -82,9 +82,7 @@ typedef struct {
     /* Whether the grid might hold any liquid at all. Conservative: set the
      * moment a liquid is placed, and only ever cleared by a pass that has
      * looked everywhere and found none. When it is false the whole cross-flow
-     * pass is skipped, so a screen of sand never pays for water. Written
-     * only through sand_note_liquid() (sand_priv.h), which keeps
-     * liquid_rows below in step with it. */
+     * pass is skipped, so a screen of sand never pays for water. */
     bool     may_have_liquid;
 
     /* Same idea as may_have_liquid, for gas - see sand_step_gas() in
@@ -109,31 +107,6 @@ typedef struct {
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
     uint8_t *dirty_rows;
-
-    /* Optional, caller-owned, h bytes: which rows sand_liquid.c's cross-flow
-     * pass can skip as already proven dry (ROW_NO_LIQUID). NULL means look
-     * at every row, every step. See sand_enable_sleeping(). */
-    uint8_t *row_state;
-
-    /* row_state, or NULL while there is provably no liquid in the grid -
-     * a derived cache of `row_state != NULL && may_have_liquid`, not a
-     * second buffer. Exists purely so mark_rows(), on the hottest path in
-     * the simulation, can decide whether row bookkeeping is worth doing at
-     * all with the SAME single pointer test it always did, rather than a
-     * pointer test plus a flag test. Never assigned directly: everything
-     * that changes either input goes through sand_note_liquid()
-     * (sand_priv.h), which re-derives both together. See mark_rows()'s own
-     * comment for why skipping the bookkeeping is safe.
-     *
-     * Sitting here, next to the buffer it caches, rather than at the end of
-     * the struct where it would leave every other field's offset untouched:
-     * both placements were built and measured on device and came out
-     * identical to the microsecond on every benchmark, so readability wins.
-     * Worth knowing, because ADDING this field at all did move two
-     * benchmarks it cannot semantically affect - see the ninth attempt in
-     * docs/Sand/Performance-Tuning-Attempts.md. That was the extra code,
-     * not the extra field. */
-    uint8_t *liquid_rows;
 
     /* Optional, caller-owned, block_cols*block_rows bytes: which blocks of
      * the grid are worth looking at at all. NULL means look at every
@@ -189,15 +162,18 @@ void sand_track_dirty_rows(sand_t *s, uint8_t *rows);
  * ever reached vertically, which stopped meaning much once gravity tilted
  * towards horizontal and most movement became sideways within a row.
  *
- * `rows` is caller-owned, `h` bytes - used only to let sand_liquid.c's
- * cross-flow pass skip a row already proven to hold no liquid at all (see
- * ROW_NO_LIQUID in sand_liquid.c); unrelated to grain settling now.
+ * NULL disables sleeping entirely.
  *
- * Either buffer may be NULL independently, disabling just that half.
+ * There used to be a second, row-shaped buffer here as well. It outlived
+ * the settled bits that first justified it (those moved to `blocks`) and
+ * ended up carrying exactly one flag - sand_liquid.c's ROW_NO_LIQUID, a
+ * per-row "proved dry" cache for the cross-flow pass - before being removed
+ * outright: keeping that one bit honest cost more, measured on device, than
+ * the row scans it saved. See docs/Sand/Performance-Tuning-Attempts.md.
  *
  * Everything wakes when the gravity direction changes or the grid is shaken,
  * since either can free a grain that had nothing to do with its neighbours. */
-void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows);
+void sand_enable_sleeping(sand_t *s, uint8_t *blocks);
 
 /* Diagnostic only: whether block (bx, by) - in SAND_BLOCK_W x SAND_BLOCK_H
  * units, not pixels or cells - is currently settled under either dithered

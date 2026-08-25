@@ -35,125 +35,43 @@ static inline uint8_t *dest_row(const sand_t *s, int y)
     return s->cells + (size_t)y * (size_t)s->w;
 }
 
-/* Something changed across rows y0..y1, so none of them - nor the rows
- * touching them - can still be considered settled under any direction.
- * Clearing the neighbours is what makes a grain notice that its support has
- * moved.
- *
- * Only ROW_NO_LIQUID (sand_liquid.c) lives in row_state now - the settled
- * bits this used to also clear moved to block_state, see
- * any_neighbor_active()/wake_blocks_range() below. That one remaining bit is
- * why mark_rows() below calls this only through s->liquid_rows, which is
- * NULL whenever there is provably no liquid to protect: see the derivation
- * there. `rows` is that already-loaded, already-checked pointer, passed in
- * rather than re-read off `s`, so this costs exactly what it always did. */
-static inline void wake_span(const sand_t *s, uint8_t *rows, int y0, int y1)
-{
-    int lo = (y0 < y1 ? y0 : y1) - 1;
-    int hi = (y0 > y1 ? y0 : y1) + 1;
-
-    if (lo < 0) {
-        lo = 0;
-    }
-    if (hi >= s->h) {
-        hi = s->h - 1;
-    }
-    for (int y = lo; y <= hi; y++) {
-        rows[y] = 0;
-    }
-}
-
 /* Marking is a pair because every move touches two rows: the one a grain left
  * and the one it arrived in. Both are guaranteed in range at every call
  * site - a move only happens once its destination row has been found to
  * exist.
  *
- * Row-shaped only: dirty_rows and row_state's ROW_NO_LIQUID bit. Kept
- * alongside mark_move() below for the one call site (equalise_one_row()'s
- * deferred cross-flow wake) that needs the row-shaped bookkeeping without
- * a single pair of points to wake blocks from - see the comment there.
+ * Row-shaped only, and now that means dirty_rows and nothing else. This used
+ * to also wipe a three-row span of row_state through a wake_span() helper -
+ * first because the settled bits lived there (they moved to block_state in
+ * the fourth attempt), and after that purely to invalidate sand_liquid.c's
+ * ROW_NO_LIQUID "this row is dry" cache. That cache is gone: maintaining it
+ * cost more than the row scans it saved, measured on device - see the ninth
+ * attempt in docs/Sand/Performance-Tuning-Attempts.md. What is left is what
+ * the name always said: mark two rows dirty for the renderer.
  *
- * THE LIQUID GATE, and why it is safe. Measured first: stubbing
- * this whole function to a no-op took the settled-pile flip benchmark from
- * 8931 us to 5343 us - per-move row bookkeeping was 40% of a test running on
- * a screen with no liquid anywhere on it, spent invalidating a "this row has
- * no liquid" cache that was already true and stays true. The gate makes that
- * cost proportional to what it actually protects. The derivation, in the
- * order it has to hold:
- *
- * 1. row_state carries exactly one bit, ROW_NO_LIQUID (sand_liquid.c), and
- *    exactly one reader: equalise_liquids(). Nothing else in the simulation
- *    looks at row_state at all, so a stale bit can only ever mislead that
- *    pass.
- * 2. While s->may_have_liquid is false there is provably no liquid in the
- *    grid, so every ROW_NO_LIQUID bit is trivially still true no matter what
- *    moves: every move on this path is a swap or a within-material transfer,
- *    and neither can conjure liquid into a row that had none.
- * 3. The flag only goes false in one place - equalise_liquids(), when a FULL
- *    sweep found none. The rows that sweep skipped were skipped because their
- *    own ROW_NO_LIQUID bit was set, i.e. an earlier sweep proved them dry and
- *    nothing has written to them since (that bit is cleared by any change).
- *    So "found none" really does mean none anywhere, not "none in the rows I
- *    bothered to look at".
- * 4. Liquid can only ENTER an empty-of-liquid grid through sand_set() or
- *    try_spawn_one() (sand.c) - the only two writers of a fresh cell from
- *    outside the simulation - and both set may_have_liquid BEFORE calling
- *    mark_move(). So the very first liquid placement is already made with the
- *    gate open, and clears its own rows. Every liquid-internal writer
- *    (give_mass(), equalise_one_cell(), rebound_one_cell()) needs liquid to
- *    already exist to run at all, and sand_step_liquids() is itself gated on
- *    the same flag.
- * 5. While the flag is false, equalise_liquids() never runs, so nobody even
- *    reads the bits until the flag is true again - and the placement that
- *    turns it true is the one covered by (4).
- *
- * The gate deliberately does NOT cover dirty_rows: rendering needs every
- * move reported regardless of what material moved.
- *
- * It is spelled as ONE pointer test, not `may_have_liquid && row_state !=
- * NULL`, and that is a measured decision rather than a stylistic one. The
- * two-test version shipped first and cost a reproducible +3.2%/+4.2% on the
- * water and mixed benchmarks - the scenarios where the flag is always true,
- * so the extra load is paid on every one of the ~11,000 mark_rows() calls a
- * step of water makes and never saves anything. s->liquid_rows folds both
- * conditions into the single load this function already did, so the two
- * liquid-heavy paths pay exactly what they paid before the gate existed.
- * sand_note_liquid() below is what keeps it in step. */
+ * Kept alongside mark_move() below for the one call site (equalise_one_row()'s
+ * deferred cross-flow marking) that needs the row-shaped bookkeeping without
+ * a single pair of points to wake blocks from - see the comment there. */
 static inline void mark_rows(sand_t *s, int y0, int y1)
 {
     if (s->dirty_rows != NULL) {
         s->dirty_rows[y0] = 1;
         s->dirty_rows[y1] = 1;
     }
-    uint8_t *rows = s->liquid_rows;
-    if (rows != NULL) {
-        wake_span(s, rows, y0, y1);
-    }
-}
-
-/* The one writer of may_have_liquid, and therefore of liquid_rows - the
- * derived pointer mark_rows() above tests. Every place that learns whether
- * the grid might hold liquid (sand_set()/try_spawn_one() placing some,
- * equalise_liquids() sweeping and finding none) goes through here, and so
- * does sand_enable_sleeping(), which changes the other input by handing the
- * simulation a row_state buffer. Re-deriving both together in one place is
- * what stops the cache drifting out of step with the flag it caches. */
-static inline void sand_note_liquid(sand_t *s, bool present)
-{
-    s->may_have_liquid = present;
-    s->liquid_rows = present ? s->row_state : NULL;
 }
 
 /* Settled-block bits, in block_state - the finer-grained sibling of
- * ROW_SETTLED_NEAREST/OTHER (which used to live in row_state; see
- * sand_enable_sleeping()'s comment in sand.h for why they moved). Two
+ * ROW_SETTLED_NEAREST/OTHER (which used to live in a row-shaped array; see
+ * sand_enable_sleeping()'s comment in sand.h for why they moved, and why
+ * that array is gone altogether now). Two
  * settled bits for the same reason a row needed two: gravity direction is
  * dithered between two ring directions each step, and a block settled
  * under one may not be settled under the other. BLOCK_ACTIVE is transient,
  * cleared at the start of every sand_step() and finalised into the settled
  * bits at the very end - see compute_settled_bit() and the finalisation
  * pass in sand_step(), both in sand.c. All three fit in one byte
- * (block_state has no other bits to share with, unlike row_state). */
+ * (block_state is the only per-region byte left, and has nothing to share
+ * with). */
 #define BLOCK_SETTLED_NEAREST 0x1
 #define BLOCK_SETTLED_OTHER   0x2
 #define BLOCK_ACTIVE          0x4
@@ -169,8 +87,7 @@ static inline int block_of(const sand_t *s, int x, int y)
  * is called once per row rather than once per transfer. Clears
  * BLOCK_SETTLED_NEAREST|OTHER
  * for every block in the bounding box of the two, expanded by one block in
- * every direction and clipped to the grid (mirroring wake_span()'s
- * y0-1..y1+1 buffer, now on both axes), so a block bordering the one
+ * every direction and clipped to the grid, so a block bordering the one
  * actually touched also notices - the same reason a neighbouring row
  * noticing a move is what lets undermining wake a settled pile above it.
  * Also sets BLOCK_ACTIVE, unexpanded, on exactly the two touched blocks

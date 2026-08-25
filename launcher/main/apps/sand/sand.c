@@ -88,9 +88,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->may_have_gas    = false;
     s->may_have_fire   = false;
     s->dirty_rows = NULL;
-    s->row_state  = NULL;
-    /* After row_state, not before: this derives s->liquid_rows from it. */
-    sand_note_liquid(s, false);
+    s->may_have_liquid = false;
     s->block_state = NULL;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
@@ -113,15 +111,14 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     sand_clear(s);
 }
 
-/* wake_span()/wake_blocks_point()/wake_blocks_range() and mark_rows()/
- * mark_move() are shared with
- * sand_liquid.c and live in sand_priv.h now - see the comment there for
- * why they are `static inline` in a header rather than ordinary functions
- * declared extern. BLOCK_SETTLED_NEAREST/OTHER/ACTIVE (block_state) and
- * ROW_NO_LIQUID (row_state, sand_liquid.c's own) live there too, next to
+/* wake_blocks_range()/wake_block_and_neighbors() and mark_rows()/
+ * mark_move() are shared with sand_liquid.c and live in sand_priv.h now -
+ * see the comment there for why they are `static inline` in a header
+ * rather than ordinary functions declared extern.
+ * BLOCK_SETTLED_NEAREST/OTHER/ACTIVE (block_state) live there too, next to
  * the code that reads them. */
 
-void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows)
+void sand_enable_sleeping(sand_t *s, uint8_t *blocks)
 {
     s->block_state = blocks;
     if (blocks != NULL) {
@@ -129,14 +126,6 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks, uint8_t *rows)
          * settled. */
         memset(blocks, 0, (size_t)s->block_cols * (size_t)s->block_rows);
     }
-    s->row_state = rows;
-    if (rows != NULL) {
-        memset(rows, 0, (size_t)s->h);
-    }
-    /* row_state is one of the two inputs mark_rows()'s s->liquid_rows cache
-     * is derived from, so handing the simulation a buffer (or taking it
-     * away) has to re-derive it - same flag, new pointer. */
-    sand_note_liquid(s, s->may_have_liquid);
     s->last_load_dx = 0;
     s->last_load_dy = 0;
 }
@@ -165,9 +154,6 @@ void sand_clear(sand_t *s)
     memset(s->cells, SAND_EMPTY, (size_t)s->w * (size_t)s->h);
     if (s->dirty_rows != NULL) {
         memset(s->dirty_rows, 1, (size_t)s->h);
-    }
-    if (s->row_state != NULL) {
-        memset(s->row_state, 0, (size_t)s->h);
     }
     if (s->block_state != NULL) {
         memset(s->block_state, 0, (size_t)s->block_cols * (size_t)s->block_rows);
@@ -207,11 +193,7 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
          * fire alone. */
         const material_t *mat = &materials[CELL_MATERIAL(cell)];
         if (mat->kind == KIND_LIQUID) {
-            /* Before mark_move() below, not after - that is the step
-             * mark_rows()'s liquid gate rests on: the very first liquid
-             * placed on a dry grid opens the gate before it reports its
-             * own rows, so its rows do get cleared. */
-            sand_note_liquid(s, true);
+            s->may_have_liquid = true;
         }
         if (mat->kind == KIND_GAS) {
             s->may_have_gas = true;
@@ -246,8 +228,7 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     /* Independent ifs, not an else-if chain - see sand_set()'s own
      * identical structure for why (fire needs both flags at once). */
     if (materials[material].kind == KIND_LIQUID) {
-        /* Before mark_move() below - see sand_set()'s own note. */
-        sand_note_liquid(s, true);
+        s->may_have_liquid = true;
     }
     if (materials[material].kind == KIND_GAS) {
         s->may_have_gas = true;

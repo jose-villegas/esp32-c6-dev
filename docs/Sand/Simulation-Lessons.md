@@ -168,7 +168,11 @@ grid itself lives in DIRAM (plain heap SRAM) with no cache tier above it -
 SRAM access already runs at the speed a cache would give on a bigger CPU, so
 "lay the grid out for better cache hits" has nothing to bite on here. The only
 way to go faster on the RAM side is to touch fewer bytes per step, which is
-what the row-sleeping and `ROW_NO_LIQUID` skips already do.
+what the block-sleeping skip already does. (A second such skip,
+`ROW_NO_LIQUID`, was removed later for touching MORE bytes maintaining
+itself than it saved - see the ninth attempt in
+[Performance-Tuning-Attempts.md](Performance-Tuning-Attempts.md). "Touch
+fewer bytes" cuts both ways.)
 
 **LP SRAM is not a faster tier either, in case that is ever tempting.**
 Checked directly against Espressif's own docs rather than assumed: the 16 KB

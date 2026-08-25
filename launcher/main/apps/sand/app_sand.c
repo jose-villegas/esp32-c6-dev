@@ -119,7 +119,6 @@ static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE, MAT_GAS
 
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H bytes: which rows changed */
-static uint8_t    *sleep_rows;   /* GRID_H bytes: dry-of-liquid rows to skip */
 static uint8_t    *sleep_blocks; /* BLOCK_COLS*BLOCK_ROWS bytes: settled
                                    * blocks to skip - see sand_enable_sleeping() */
 
@@ -242,9 +241,6 @@ static void sand_enter(void)
     if (dirty_rows == NULL) {
         dirty_rows = malloc(GRID_H);
     }
-    if (sleep_rows == NULL) {
-        sleep_rows = malloc(GRID_H);
-    }
     if (sleep_blocks == NULL) {
         sleep_blocks = malloc((size_t)BLOCK_COLS * BLOCK_ROWS);
     }
@@ -260,8 +256,7 @@ static void sand_enter(void)
     if (row_run_n == NULL) {
         row_run_n = malloc(GRID_H * sizeof(*row_run_n));
     }
-    if (grid == NULL || dirty_rows == NULL || sleep_rows == NULL ||
-        sleep_blocks == NULL ||
+    if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
@@ -304,7 +299,7 @@ static void sand_enter(void)
     /* Without this, a screen full of motionless sand is the most expensive
      * thing the simulation can hold rather than the least - every settled
      * grain runs the whole decision path each step to conclude nothing. */
-    sand_enable_sleeping(&sim, sleep_blocks, sleep_rows);
+    sand_enable_sleeping(&sim, sleep_blocks);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {

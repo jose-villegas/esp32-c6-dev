@@ -711,7 +711,6 @@ static void test_a_steep_tilt_does_pour_the_bed(void)
  * nothing at all happens. If sleeping froze something, the second pass frees
  * it and the grids differ. */
 
-static uint8_t sleep_rows[H];
 #define BLOCK_COLS ((W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define BLOCK_ROWS ((H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 static uint8_t sleep_blocks[BLOCK_COLS * BLOCK_ROWS];
@@ -720,7 +719,7 @@ static void settle_with_sleeping(const char *rows[], int count, int steps,
                                  int gx, int gy)
 {
     fixture();
-    sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
+    sand_enable_sleeping(&s, sleep_blocks);
     load(rows, count);
 
     for (int i = 0; i < steps; i++) {
@@ -918,7 +917,6 @@ static void test_turning_the_board_wakes_a_sleeping_pile(void)
 #define LOC_BLOCK_ROWS ((LOC_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 static uint8_t *loc_cells;
 static uint8_t *loc_sleep_blocks;
-static uint8_t *loc_sleep_rows;
 static sand_t   loc;
 
 /* Mallocs the three buffers above, fresh, every call - loc_free() below
@@ -928,20 +926,17 @@ static void loc_fixture(void)
 {
     loc_cells        = malloc((size_t)LOC_W * LOC_H);
     loc_sleep_blocks = malloc((size_t)LOC_BLOCK_COLS * LOC_BLOCK_ROWS);
-    loc_sleep_rows   = malloc((size_t)LOC_H);
     TEST_ASSERT_NOT_NULL(loc_cells);
     TEST_ASSERT_NOT_NULL(loc_sleep_blocks);
-    TEST_ASSERT_NOT_NULL(loc_sleep_rows);
 
     sand_init(&loc, loc_cells, LOC_W, LOC_H, 555u);
-    sand_enable_sleeping(&loc, loc_sleep_blocks, loc_sleep_rows);
+    sand_enable_sleeping(&loc, loc_sleep_blocks);
 }
 
 static void loc_free(void)
 {
     free(loc_cells);
     free(loc_sleep_blocks);
-    free(loc_sleep_rows);
 }
 
 static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_each_other(void)
@@ -1152,27 +1147,23 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
  * comment above for the full story; this is the same bug class. */
 static uint8_t *pool_cells;
 static uint8_t *pool_sleep_blocks;
-static uint8_t *pool_sleep_rows;
 static sand_t   pool;
 
 static void pool_fixture(void)
 {
     pool_cells        = malloc((size_t)POOL_W * POOL_H);
     pool_sleep_blocks = malloc((size_t)POOL_BLOCK_COLS * POOL_BLOCK_ROWS);
-    pool_sleep_rows   = malloc((size_t)POOL_H);
     TEST_ASSERT_NOT_NULL(pool_cells);
     TEST_ASSERT_NOT_NULL(pool_sleep_blocks);
-    TEST_ASSERT_NOT_NULL(pool_sleep_rows);
 
     sand_init(&pool, pool_cells, POOL_W, POOL_H, 77u);
-    sand_enable_sleeping(&pool, pool_sleep_blocks, pool_sleep_rows);
+    sand_enable_sleeping(&pool, pool_sleep_blocks);
 }
 
 static void pool_free(void)
 {
     free(pool_cells);
     free(pool_sleep_blocks);
-    free(pool_sleep_rows);
 }
 
 static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(void)
@@ -1211,48 +1202,48 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
 }
 
 /* The one case where a move of something that is NOT a liquid still
- * relocates liquid, and therefore still has to clear ROW_NO_LIQUID.
+ * relocates liquid: move_to() (sand_priv.h) is a SWAP, so sand entering a
+ * water cell sends that water back UP into the row the sand came from - a
+ * row that had no liquid in it at all a moment earlier. Whatever machinery
+ * decides which rows the cross-flow pass looks at has to cope with liquid
+ * arriving that way, and this is the test that says so.
  *
- * move_to() (sand_priv.h) is a SWAP: sand entering a water cell sends that
- * water back up into the row the sand came from. That row may well have
- * been proved dry and marked ROW_NO_LIQUID moments earlier - it was, right
- * up until the swap - and a row wrongly believed dry is skipped by
- * equalise_liquids() for ever, because nothing that can happen to still
- * water clears the bit again.
- *
- * This test exists because that bit is under active pressure to be cleared
- * less often. mark_rows() already skips the clear entirely when there is no
- * liquid anywhere (see its liquid-gate comment), and the obvious next
- * narrowing - clear only when the move actually moved liquid - was built
- * and measured and then reverted for being slower, not for being wrong.
- * The next person to try it will need exactly this scenario, so it is left
- * behind as a permanent guard rather than removed with the experiment.
+ * It was written against a specific such mechanism, ROW_NO_LIQUID - a
+ * per-row "proved dry" cache that skipped rows, and that was cleared by
+ * every move of every material. That cache has since been deleted outright
+ * for costing more than it saved (see docs/Sand/Performance-Tuning-
+ * Attempts.md's ninth attempt), and cross-flow now walks every row every
+ * step, which passes this trivially. The test stays anyway: it was the
+ * derivation that killed the cache's last proposed narrowing, and anything
+ * that tries to skip rows again will need exactly this scenario to be
+ * checked against. Verified to genuinely catch the failure when it was
+ * written - with the clear suppressed, it failed with the water frozen in
+ * the single cell the swap put it in.
  *
  * No test covered it before: the sleeping/liquid tests above use water
  * alone, and the sand-through-water tests (test_sand_sinks_through_water
- * and friends) run with sleeping off, so row_state does not exist in them
- * at all and no ROW_NO_LIQUID bit is ever set.
+ * and friends) run with sleeping off entirely.
  *
  * The setup is built so that ONLY cross-flow can spread the displaced
  * water, which is what makes the assertion sharp. The pool is full
  * (MASS_MAX), so once the water is pushed up it has no room below it and
- * no room down either slope - move_liquid_grain() inside the main sweep
- * can do nothing with it. If the row it landed in is awake, cross-flow
+ * no room down either slope - move_liquid_grain() inside the main sweep can
+ * do nothing with it. If the row it landed in is examined, cross-flow
  * halves it into a neighbour on the very next pass and the row holds two
- * water cells; if that row is still marked dry, it holds exactly the one
- * cell the swap put there, for ever. The sand is dropped from the top row
- * rather than placed on the surface on purpose: sand_set() clears rows
- * itself, so a grain placed directly above the pool would clear the very
- * bit this test needs set. Falling from three rows up gives the cross-flow
- * pass a step to re-prove the landing row dry before the swap happens. */
+ * water cells; if that row is skipped, it holds exactly the one cell the
+ * swap put there, for ever. The sand is dropped from the top row rather
+ * than placed on the surface on purpose: an external sand_set() reports its
+ * own rows, so a grain placed directly above the pool would itself announce
+ * the landing row and mask the case under test. Falling from three rows up
+ * makes the swap the only thing that reports it. */
 static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
 {
     fixture();
-    sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
+    sand_enable_sleeping(&s, sleep_blocks);
     sand_clear(&s);
 
     /* A full pool, two rows deep. Full matters: nothing in it has anywhere
-     * to flow, so it settles and every row above it gets ROW_NO_LIQUID. */
+     * to flow, so it settles and every row above it is genuinely dry. */
     for (int y = H - 2; y < H; y++) {
         for (int x = 0; x < W; x++) {
             sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
@@ -1279,11 +1270,10 @@ static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1,
         water_cells_in_the_row_above_the_pool,
-        "sand sinking into a pool swaps water up into the row it came from, "
-        "which by then believes it is dry - that swap has to clear "
-        "ROW_NO_LIQUID for the row it lands in, or cross-flow skips it for "
-        "ever and the displaced water sits in the single cell it was pushed "
-        "into instead of levelling out along the row");
+        "sand sinking into a pool swaps water up into a row that held none "
+        "a moment earlier - the cross-flow pass has to examine that row, or "
+        "the displaced water sits in the single cell it was pushed into "
+        "instead of levelling out along the row");
 }
 
 /* At the real screen size, SAND_BLOCK_W/H (16x64) do NOT evenly divide
@@ -1306,14 +1296,12 @@ static void test_block_indices_stay_in_range_at_the_real_screens_partial_edge_bl
 {
     uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
     uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
-    uint8_t *rows   = malloc((size_t)STRESS_H);
     TEST_ASSERT_NOT_NULL(cells);
     TEST_ASSERT_NOT_NULL(blocks);
-    TEST_ASSERT_NOT_NULL(rows);
 
     sand_t stress;
     sand_init(&stress, cells, STRESS_W, STRESS_H, 4242u);
-    sand_enable_sleeping(&stress, blocks, rows);
+    sand_enable_sleeping(&stress, blocks);
 
     /* A checkerboard over the whole grid, including the last column and
      * last row exactly - the two partial blocks - not just somewhere
@@ -1362,7 +1350,6 @@ static void test_block_indices_stay_in_range_at_the_real_screens_partial_edge_bl
 
     free(cells);
     free(blocks);
-    free(rows);
 }
 
 /* A closer reproduction of the device test that actually crashed
@@ -1376,14 +1363,12 @@ static void test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_th
 {
     uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
     uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
-    uint8_t *rows   = malloc((size_t)STRESS_H);
     TEST_ASSERT_NOT_NULL(cells);
     TEST_ASSERT_NOT_NULL(blocks);
-    TEST_ASSERT_NOT_NULL(rows);
 
     sand_t real;
     sand_init(&real, cells, STRESS_W, STRESS_H, 13u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     for (int y = STRESS_H / 2; y < STRESS_H; y++) {
         for (int x = STRESS_W / 4; x < (STRESS_W * 3) / 4; x++) {
@@ -1404,7 +1389,6 @@ static void test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_th
 
     free(cells);
     free(blocks);
-    free(rows);
 }
 
 /* Same idea, reproducing test_a_screen_of_water_fits_in_the_frame_budget
@@ -1415,14 +1399,12 @@ static void test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_th
 {
     uint8_t *cells  = malloc((size_t)STRESS_W * STRESS_H);
     uint8_t *blocks = malloc((size_t)STRESS_BLOCK_COLS * STRESS_BLOCK_ROWS);
-    uint8_t *rows   = malloc((size_t)STRESS_H);
     TEST_ASSERT_NOT_NULL(cells);
     TEST_ASSERT_NOT_NULL(blocks);
-    TEST_ASSERT_NOT_NULL(rows);
 
     sand_t real;
     sand_init(&real, cells, STRESS_W, STRESS_H, 11u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     for (int y = 0; y < STRESS_H / 2; y++) {
         for (int x = STRESS_W / 4; x < (STRESS_W * 3) / 4; x++) {
@@ -1436,7 +1418,6 @@ static void test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_th
 
     free(cells);
     free(blocks);
-    free(rows);
 }
 
 /* --- scatter -------------------------------------------------------------- */
@@ -1528,7 +1509,7 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
      * settled row. Get this wrong and grains hang in mid-air for ever. */
     for (int trial = 0; trial < 24; trial++) {
         sand_init(&s, cells, W, H, 800u + (uint32_t)trial);
-        sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
+        sand_enable_sleeping(&s, sleep_blocks);
         sand_set_scatter(&s, 200);          /* lags constantly */
         sand_set(&s, 3, 0, SAND_FIRST_SHADE);
 
@@ -2470,7 +2451,7 @@ static void test_gas_grain_count_is_conserved(void)
 static void test_rising_gas_wakes_the_blocks_it_passes_through(void)
 {
     fixture();
-    sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
+    sand_enable_sleeping(&s, sleep_blocks);
     sand_set(&s, 3, H - 1, GAS);
 
     /* Straight, unchanging gravity - every step but the first is steady
@@ -3284,15 +3265,13 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
      * path through the step - and the one part of it that is not local, the
      * search across the flow, runs per cell. Something has to watch that. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *rows   = malloc(REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(rows);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 11u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     /* Half a screen of water, dropped in as an uneven slab so it is genuinely
      * flowing rather than already settled - the expensive case. */
@@ -3313,7 +3292,6 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
              REAL_W, REAL_H, (long long)per_step);
 
     free(big);
-    free(rows);
     free(blocks);
 
     /* Water gets a budget of its own, and a larger one, because it genuinely
@@ -3340,15 +3318,13 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
     /* The user-visible complaint this answers: adding lots of sand dropped the
      * framerate, even though most of it was just sitting there. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *rows   = malloc(REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(rows);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 5u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     /* Every cell full, so nothing can move anywhere. */
     for (int y = 0; y < REAL_H; y++) {
@@ -3370,7 +3346,6 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 
     const int grains = sand_count(&real);
     free(big);
-    free(rows);
     free(blocks);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains,
@@ -3390,15 +3365,13 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
      * design exists to keep affordable, not the synthetic all-cells-full
      * or checkerboard-falling grids the other frame-budget tests use. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *rows   = malloc(REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(rows);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 13u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     /* A big pour: the middle half of the screen's width, filled from the
      * floor up to half the screen's height - wide enough to span many
@@ -3432,7 +3405,6 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
         "flipping gravity must conserve grains too");
 
     free(big);
-    free(rows);
     free(blocks);
 
     /* 6500us: its own number now, split off from the plain full-size-step
@@ -3457,15 +3429,13 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
      * middle holds a stone X, floor to ceiling: a fixed obstacle both
      * materials have to route around, not just fall/rise past. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *rows   = malloc(REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(rows);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 17u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     const int sand_x1  = (REAL_W * 3) / 10;          /* ~30% from the left */
     const int water_x0 = REAL_W - (REAL_W * 3) / 10; /* ~30% from the right */
@@ -3532,7 +3502,6 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
      * reason, not just removed quietly. */
 
     free(big);
-    free(rows);
     free(blocks);
 
     /* 12000us: NOT headroom over the real measured 15144us - a deliberate
@@ -3564,15 +3533,13 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
      * REAL_W*REAL_H cells in ONE step, each paying a decay tick plus up
      * to eight neighbour lookups. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *rows   = malloc(REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(rows);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 17u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
@@ -3600,7 +3567,6 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
         "actually measuring the worst case it claims to");
 
     free(big);
-    free(rows);
     free(blocks);
 
     /* Measured on device at 321339-321342 us (~321 ms), exactly
@@ -3641,15 +3607,13 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
      * existed), so its own numbers are untouched by this and did not
      * need revisiting - this is genuinely new territory. */
     uint8_t *big    = malloc(REAL_W * REAL_H);
-    uint8_t *rows   = malloc(REAL_H);
     uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
     TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(rows);
     TEST_ASSERT_NOT_NULL(blocks);
 
     sand_t real;
     sand_init(&real, big, REAL_W, REAL_H, 19u);
-    sand_enable_sleeping(&real, blocks, rows);
+    sand_enable_sleeping(&real, blocks);
 
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
@@ -3675,7 +3639,6 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
         "drift");
 
     free(big);
-    free(rows);
     free(blocks);
 
     /* Measured on device at 230962 us (~231 ms), identical across two
