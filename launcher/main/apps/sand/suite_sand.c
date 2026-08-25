@@ -3317,6 +3317,159 @@ static void test_steam_and_smoke_are_told_apart_by_brightness(void)
         "one");
 }
 
+/* --- bubbles: gas rising through standing liquid ---------------------- */
+
+/* A sealed column of full-mass water in columns 2..5, rows 2..6, with a
+ * stone floor and stone walls, so the water can neither drain nor spread
+ * and a gas cell placed inside it has nowhere to go except up THROUGH the
+ * water. Without that seal a gas cell just slips out sideways and the
+ * test proves nothing about bubbling. */
+static void water_column(void)
+{
+    fixture();
+    sand_set_decay(&s, 0);   /* immortal: these tests measure movement,
+                              * and a decaying cell that vanished
+                              * mid-rise would read as "never escaped" */
+    for (int y = 1; y <= 7; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);
+    }
+    for (int x = 1; x <= 6; x++) {
+        sand_set(&s, x, 7, STONE);
+    }
+    for (int y = 2; y <= 6; y++) {
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+}
+
+static int first_row_holding(uint8_t id)
+{
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == id) {
+                return y;
+            }
+        }
+    }
+    return -1;
+}
+
+static long mass_held_by(uint8_t id)
+{
+    long m = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == id) {
+                m += CELL_VARIANT(c);
+            }
+        }
+    }
+    return m;
+}
+
+/* The behaviour try_bubble() exists for, and the one this simulation could
+ * not do at all before it.
+ *
+ * can_enter() only lets a DENSER mover displace a lighter target, and a
+ * liquid never consults it anyway (room_in() refuses a cell holding any
+ * other material). Between them, a steam cell under standing water had no
+ * legal move in EITHER direction and sat frozen there forever - which is
+ * exactly what it looked like on the device: a boiler that made steam and
+ * then held onto it. */
+static void test_steam_bubbles_up_through_standing_water(void)
+{
+    water_column();
+    sand_set(&s, 3, 6, CELL_MAKE(MAT_STEAM, MATERIAL_VARIANTS - 1));
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(6, first_row_holding(MAT_STEAM),
+        "setup: the steam must start at the BOTTOM of the water column, "
+        "with the full depth of it to climb through");
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    const int reached = first_row_holding(MAT_STEAM);
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(-1, reached,
+        "the steam must still exist - decay is off for this test, so "
+        "losing it means it was destroyed rather than moved");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(2, reached,
+        "steam under standing water must rise all the way OUT of the "
+        "column, not sit where it was made - a gas lighter than the "
+        "liquid above it displaces that liquid downward one cell at a "
+        "time");
+}
+
+/* A bubble swaps two whole cells, so the liquid it shoves aside has to
+ * arrive intact - same material, same amount. Nothing here splits mass,
+ * which is what makes that guarantee exact rather than approximate, and
+ * this pins it: a bubble that quietly rounded a partial cell away would
+ * drain a boiler every time one rose. */
+static void test_bubbling_conserves_the_water_it_displaces(void)
+{
+    water_column();
+    /* One deliberately PARTIAL cell in the bubble's path, so this would
+     * catch a swap that rebuilt the liquid at full mass instead of
+     * carrying its own variant nibble across. */
+    sand_set(&s, 3, 4, CELL_MAKE(MAT_WATER, 7));
+    sand_set(&s, 3, 6, CELL_MAKE(MAT_STEAM, MATERIAL_VARIANTS - 1));
+
+    const long before = mass_held_by(MAT_WATER);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(before, mass_held_by(MAT_WATER),
+            "a bubble must never create or destroy water mass on any "
+            "step - it is a swap of two whole cells, and the liquid "
+            "keeps its own variant nibble as it moves");
+    }
+}
+
+/* Bubbling is keyed on KIND_GAS and a density comparison, not on steam
+ * specifically, so plain gas gets it too - asserted directly so nobody
+ * "fixes" try_bubble() into a steam special case later. */
+static void test_plain_gas_bubbles_up_through_water_too(void)
+{
+    water_column();
+    sand_set(&s, 3, 6, GAS);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(2, first_row_holding(MAT_GAS),
+        "gas is lighter than water too, so it must bubble out of a "
+        "column of it exactly the way steam does - try_bubble() tests "
+        "kind and density, not material identity");
+}
+
+/* The other half of the rule: only LIQUIDS get shoved aside. A gas capped
+ * by something solid stays put, or "bubbling" would quietly become a
+ * licence to walk through walls. */
+static void test_a_bubble_does_not_push_through_a_solid(void)
+{
+    fixture();
+    sand_set_decay(&s, 0);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 3, STONE);
+        sand_set(&s, x, 5, STONE);
+    }
+    sand_set(&s, 3, 4, CELL_MAKE(MAT_STEAM, MATERIAL_VARIANTS - 1));
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "the stone ceiling must still be stone - a bubble displaces "
+        "liquid only, never a solid");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 4)),
+        "and the steam must still be under it, not through it");
+}
+
 static void test_quenching_makes_steam_but_burning_out_makes_smoke(void)
 {
     fire_room(3, 4);
@@ -4621,6 +4774,10 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_rises_and_disperses);
     RUN_TEST(test_creating_steam_arms_the_gas_pass);
     RUN_TEST(test_burnt_out_fire_can_leave_smoke);
+    RUN_TEST(test_steam_bubbles_up_through_standing_water);
+    RUN_TEST(test_bubbling_conserves_the_water_it_displaces);
+    RUN_TEST(test_plain_gas_bubbles_up_through_water_too);
+    RUN_TEST(test_a_bubble_does_not_push_through_a_solid);
     RUN_TEST(test_quenching_makes_steam_but_burning_out_makes_smoke);
     RUN_TEST(test_steam_and_smoke_are_told_apart_by_brightness);
     RUN_TEST(test_stone_conducts_heat_into_water_beyond_it);

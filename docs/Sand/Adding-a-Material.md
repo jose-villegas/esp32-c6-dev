@@ -216,12 +216,17 @@ bugs to chase:
   needs *strictly* greater density to displace. Two materials at the
   same density simply stop each other dead. Steam sits at 5 and smoke
   at 7 for exactly this reason - nothing else depends on the gap.
-- **A gas cannot bubble up through liquid above it.** Steam (5) cannot
-  enter water (30), and water will not fall into steam either, because
-  `room_in()` refuses a cell holding a different material outright. This
-  one *does* bite: it is why boiling converts the liquid at the
-  **surface** of a column rather than the cell nearest the heat. See
-  `boil_surface()`.
+- **Buoyancy is not expressible in `can_enter()`, and needed its own
+  code.** Steam (5) cannot *enter* water (30) - the rule wants a denser
+  mover - and water will not fall into steam either, because `room_in()`
+  refuses a cell holding a different material outright. Between them a
+  gas under standing liquid had no legal move in either direction and
+  froze there permanently. The fix is `try_bubble()` in `sand_gas.c`: a
+  straight two-cell swap, gated on `KIND_GAS` and an inverted density
+  test, living in the warm tier so the hot predicate never learns about
+  it. Worth knowing as a precedent - **when a rule cannot express what
+  you need, adding the exception to the cold or warm pass is usually
+  right, and teaching the hot predicate is usually wrong.**
 
 **Does it need `slip`/`repose` to mean "no resistance", like a liquid,
 even if it is whole-grain?** Gas's `slip = 255`/`repose = 0` copy water's

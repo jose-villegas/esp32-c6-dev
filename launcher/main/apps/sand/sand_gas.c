@@ -26,6 +26,11 @@
  * (see sand_liquid.c), swapping mass-splitting for a plain whole-cell hop
  * to the nearest open cell along the perpendicular.
  *
+ * Gas rising through standing LIQUID is its own problem, solved by
+ * try_bubble() below rather than by the shared movement primitives -
+ * can_enter() cannot express buoyancy, and it is far too hot a predicate
+ * to teach it. See that function's own comment.
+ *
  * Whole-grain also means gas cannot THIN a saturated pocket the way water
  * levels one - a cell is either a full grain or empty, nothing between, so
  * a held-down pour saturates its own neighbourhood faster than the spread
@@ -70,6 +75,77 @@ static uint16_t gas_mask(void)
  * every other resistance here): a grain that misses the roll just sits
  * this step, decay tick aside, which is what makes gas rise at a lazy
  * drift instead of sand's instant one-cell-per-step. */
+/* A BUBBLE: a gas cell trading places with the LIQUID directly above it.
+ *
+ * This is the one movement in the whole simulation that runs against
+ * can_enter()'s rule rather than through it, and it needs to, because that
+ * rule cannot express buoyancy. can_enter() only ever lets a DENSER mover
+ * displace a LIGHTER target - which is right for sand sinking through
+ * water, and exactly backwards for steam rising through it. Worse, a
+ * liquid never consults can_enter() at all: room_in() (sand_liquid.c)
+ * refuses any cell holding a different material outright, so water will
+ * not fall into a steam cell either. Between the two rules, a gas cell
+ * underneath standing liquid had NO legal move in either direction and
+ * simply sat there forever - a bubble frozen mid-pour, which is what this
+ * fixes.
+ *
+ * Deliberately NOT solved by touching can_enter(). That predicate is the
+ * hottest thing in the project, read several times per cell per step from
+ * the main sweep, and a buoyancy special case there would be paid for by
+ * every falling grain of sand on the board forever. Here it costs one
+ * comparison, only for gas cells, only in a pass already gated behind
+ * may_have_gas, and only on the cells whose ordinary rise was already
+ * blocked.
+ *
+ * Why the swap is safe with respect to sweep order, which is the usual
+ * hazard for anything that moves two cells at once: this pass sweeps so
+ * that the rise destination is territory it has ALREADY visited, so the
+ * liquid that lands at (x, y) cannot be picked up again by this pass. The
+ * liquid passes (sand_step_liquids(), and move_liquid_grain() inside the
+ * main sweep) both ran EARLIER in this same sand_step(), so they are done
+ * for the step too. The displaced liquid therefore gets exactly one move,
+ * the same guarantee every other move in this file has.
+ *
+ * Mass is conserved by construction - this is a swap of two whole cells,
+ * and the liquid keeps its own variant nibble (its amount) untouched as it
+ * moves. Nothing is split, so nothing can round away. */
+static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
+                       int w, int rdx, int rdy, cell_t grain, uint8_t density)
+{
+    if (prow == NULL) {
+        return false;
+    }
+    const int nx = x + rdx;
+    if ((unsigned)nx >= (unsigned)w) {
+        return false;
+    }
+
+    const cell_t target = prow[nx];
+    if (CELL_IS_EMPTY(target)) {
+        return false;   /* an ordinary rise, and try_fall_or_scatter() has
+                         * already had its turn at it */
+    }
+    const material_t *tm = material_of(target);
+    if (tm->kind != KIND_LIQUID) {
+        return false;   /* only liquids get pushed aside this way - a gas
+                         * still cannot bubble through sand or stone */
+    }
+    if (density >= tm->density) {
+        return false;   /* buoyancy, and the inverse of can_enter()'s own
+                         * test: only something LIGHTER than the liquid
+                         * rises through it. A gas as heavy as the liquid
+                         * would just sit, which is the correct answer */
+    }
+
+    prow[nx] = grain;
+    row[x]   = target;
+
+    mark_rows(s, y, y + rdy);
+    wake_block_and_neighbors(s, x, y);
+    wake_block_and_neighbors(s, nx, y + rdy);
+    return true;
+}
+
 static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                                uint8_t *arow, uint8_t *brow, int x, int y,
                                int w, int rdx, int rdy, const int *rslide_a,
@@ -107,6 +183,12 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         moved = try_slide(s, row, prow, arow, brow, x, y, w, rdx, rdy,
                           rslide_a, rslide_b, rload_dx, rload_dy, jostle,
                           grain, mat_id, density, mat, driven_gas);
+    }
+    /* Last, so an ordinary rise into open space always wins over shoving a
+     * liquid aside - a gas with somewhere free to go takes it, and only a
+     * gas that is genuinely capped by liquid pays for the extra check. */
+    if (try_moving && !moved) {
+        moved = try_bubble(s, row, prow, x, y, w, rdx, rdy, grain, density);
     }
     if (moved) {
         wake_block_and_neighbors(s, x, y);

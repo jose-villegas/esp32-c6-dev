@@ -138,10 +138,15 @@
  * through the connected run of that same liquid and converts the LAST
  * cell in the run - the one at the surface, where the steam is free to
  * rise, which is also exactly where steam actually comes off a real pot.
- * Accepted limitation, not chased: a fire quenched while fully
- * submerged still leaves its steam wherever it was, which can be
- * trapped the same way - not worth a surface-walk for that separate
- * case.
+ * That trapping is no longer permanent, which softens this a good deal:
+ * try_bubble() (sand_gas.c) lets a gas cell swap places with the liquid
+ * directly above it, so steam created anywhere inside a pool now climbs
+ * out at about a cell a step. boil_surface() stays anyway, on its own
+ * smaller merit - steam appearing at the top of the pot is where it
+ * comes off a real one, and it saves a long bubble journey up through
+ * the whole column every single time. A fire quenched while fully
+ * submerged leaves its steam wherever it was and simply bubbles out
+ * from there, which needs no special case at all.
  *
  * conduct_heat() solves a reach problem, and this is worth reading
  * carefully because an earlier version got it wrong in a way that was

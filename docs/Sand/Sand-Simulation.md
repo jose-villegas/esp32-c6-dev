@@ -287,85 +287,47 @@ observation that they are nearly identical,
 `test_quenching_makes_steam_but_burning_out_makes_smoke` is there to
 stop you.
 
-**Steam trapped under standing water, and the surface-walk that avoids
-it.** `can_enter()`'s displacement rule is one-directional - denser
-only ever displaces lighter - and steam (density 5) sits below both gas
-(10) and fire (15) so that either can rise through and displace it, but
-the reverse does not hold. That is the same already-accepted limitation
-gas has displacing more gas, applied to a third material - except here
-it has a real consequence: steam created at the *bottom* of a still pool
-cannot rise into the water sitting above it, and that water cannot fall
-into the steam either. Left alone, this would trap a boiler's entire
-output at the bottom of whatever it just boiled, producing nothing
-anyone could ever see.
+**Gas under standing liquid, and the bubble that gets it out.**
+`can_enter()`'s displacement rule is one-directional - denser only ever
+displaces lighter - and steam (density 5) sits below water (30), so
+steam cannot *enter* the water above it. The reverse does not save it
+either: a liquid never consults `can_enter()` at all, and `room_in()`
+(`sand_liquid.c`) refuses any cell holding a different material, so
+water will not fall into a steam cell. Between the two rules a gas cell
+underneath standing liquid had **no legal move in either direction** and
+sat frozen there forever. On the device that read exactly as what it
+was: a boiler that produced steam and then held onto it.
 
-The fix is specific to heat *conducted* through a wall (below): rather
-than converting the liquid cell conduction actually reaches, it walks
-*against gravity* through the connected run of that same liquid and
-converts the cell at the **surface** instead - where steam is free to
-rise, which is also exactly where steam actually comes off a real pot.
-Accepted limitation, not chased further: a fire quenched while fully
-submerged still leaves its steam wherever it was, which can be trapped
-the same way - not worth a second surface-walk for that separate,
-rarer case.
+`try_bubble()` (`sand_gas.c`) is the fix - a plain two-cell swap between
+a gas cell and the liquid directly above it, gated on `KIND_GAS` and an
+*inverted* density test (only something lighter than the liquid rises
+through it). Measured at one cell per step, with water mass conserved
+exactly, since a swap moves the liquid's variant nibble across untouched
+rather than splitting it.
 
-## The boiler: heat conducts, fire does not pass through stone
+Two things about where it lives are the interesting part:
 
-A fire sitting beside a stone wall can boil water, or ignite fuel, on
-the *other* side of that wall without fire ever physically crossing it -
-`conduct_heat()` in `sand_reactions.c`. The obvious alternative - give
-fire a chance to pass through stone directly - was rejected outright: it
-would need a special case inside `can_enter()`, the single hottest
-predicate in the project, and it would make every sealed stone container
-leak fire. Conduction gets the same boiler for zero cost in the main
-sweep, and it reads better besides: the stone gets hot, it does not
-become porous. Conduction only ever does two things to whatever it
-reaches on the far side of a wall - boil a liquid (via the surface-walk
-above), or ignite fuel - and it never creates fire in empty space, which
-is what keeps a sealed box sealed.
+- **It is deliberately not in `can_enter()`.** That predicate is the
+  hottest thing in the project, read several times per cell per step
+  from the main sweep; a buoyancy special case there would be paid for
+  by every falling grain of sand on the board forever. In the gas pass
+  it costs one comparison, only for gas cells, only in a pass already
+  gated behind `may_have_gas`, and only on cells whose ordinary rise was
+  already blocked.
+- **It is safe with respect to sweep order for free.** The gas pass
+  sweeps so the rise destination is already-visited territory, so the
+  displaced liquid cannot be picked up again by it; and both liquid
+  passes ran earlier in the same `sand_step()`. The liquid gets exactly
+  one move, the same guarantee every other move has.
 
-**How thick a wall the player can actually build turned out to matter
-more than the physics.** The first version of this feature let heat
-cross exactly one conductor cell - a clean rule, and the one this
-document described until it was measured against the actual app.
-`app_sand.c`'s pour brush has no size control (`POUR_RADIUS 5`, a
-fixed-size disc), and the thinnest stone floor a finger can drag out
-with it comes out roughly *eleven cells thick*. A reach-of-one boiler is
-therefore not a hard-to-build boiler - it is an **unbuildable** one, and
-nothing about the simulation or its host tests would ever surface that;
-only asking "can a player actually draw this" does.
-
-The fix: heat crosses a *run* of conductor cells rather than stopping
-after one, rolling `reaction_t.conducts` again for every further cell it
-has to cross. Crossing depth `d` succeeds with probability
-`(conducts/256)^d`, so a thin wall conducts briskly and a thick one
-conducts slowly - thermal resistance falling out of one attenuating walk,
-for free, with no second "how thick" constant to tune.
-
-Both of that walk's numbers then had to be corrected a second time, for
-the same underlying reason as the first, which is why it is worth
-recording rather than quietly fixing:
-
-- **`CONDUCT_REACH` was 16**, chosen as "comfortably past what one drag
-  of the pour brush produces". Nothing stops a player scribbling back
-  and forth, and a floor built that way runs well past sixteen cells -
-  at which point the walk gave up and the boiler was silently,
-  *completely* dead rather than merely slow. A bound that exists to cap
-  a cold pass's cost should never be the thing that decides whether a
-  feature works, so it is now 32: far enough out that attenuation, not
-  the cap, limits depth in any scene the brush can realistically draw.
-- **Stone's `conducts` was 176** (≈0.69 per cell), which falls off a
-  cliff with depth. A thirteen-cell floor got through on ~0.8% of steps
-  and a sixteen-cell one on ~0.3%, so a hand-drawn basin took the best
-  part of a minute to show its first wisp of steam, or read as
-  completely inert. At **220** (≈0.86) those same depths are ~14% and
-  ~9%, and every thickness the brush can draw starts boiling within a
-  step or two of fire reaching it - measured by sweeping slab thickness
-  1..20 under a pour-brush-sized blob of fire, not estimated.
-
-Thickness still matters. It just matters over a range the player can
-actually build in, rather than one where the difference between "thick"
-and "impossible" is a couple of finger-widths.
+**Boiling still converts the liquid at the surface of a column**
+(`boil_surface()`), not the cell nearest the heat. That began as a
+workaround for the trapping above and now stands on its own smaller
+merit: steam appearing at the top of the pot is where steam comes off a
+real one, and it saves a long bubble journey through the whole column
+every time. With bubbling in place, boiling at the heat source instead
+is now a viable alternative that would read as a rising bubble column -
+a visual choice rather than a correctness one.
 
 **Building one in the app:** a wood floor, a stone basin over it as
 thick as a single drag of the pour brush produces, water poured into the

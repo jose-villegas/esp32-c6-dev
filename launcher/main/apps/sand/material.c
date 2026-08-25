@@ -216,11 +216,15 @@ const material_t materials[MATERIAL_MAX] = {
                                      * same already-accepted
                                      * one-directional limitation
                                      * can_enter() has everywhere else -
-                                     * see conduct_heat()'s own comment
-                                     * in sand_reactions.c for the one
-                                     * place this limitation actually
-                                     * bites (steam trapped at the
-                                     * bottom of standing water). */
+                                     * Steam being lighter than WATER
+                                     * (30) is what makes it bubble up
+                                     * through a pool rather than sit
+                                     * under it - see try_bubble() in
+                                     * sand_gas.c, which reads this
+                                     * density against the liquid's and
+                                     * is the one place the ordinary
+                                     * displacement rule is deliberately
+                                     * inverted. */
         .slip    = 255,             /* no resistance, same reasoning as
                                      * gas's own row */
         .repose  = 0,
