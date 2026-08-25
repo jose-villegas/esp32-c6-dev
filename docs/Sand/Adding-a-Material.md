@@ -196,7 +196,7 @@ The current ladder, which any new material has to slot into somewhere:
 
 ```mermaid
 flowchart LR
-    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> W["water\n30"] --> AC["acid\n38"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone\n200"]
+    E["empty\n0"] --> S["steam\n5"] --> K["smoke\n7"] --> G["gas\n10"] --> F["fire\n15"] --> X["oil\n22"] --> W["water\n30"] --> AC["acid\n38"] --> LV["lava\n45"] --> A["sand\n60"] --> D["wood/ember\n150"] --> T["stone / glass\n200"]
 
     style E fill:#2a2a2a,color:#fff
     style S fill:#3d6b8a,color:#fff
@@ -366,6 +366,9 @@ flowchart TD
     Ember -->|"residue 90"| Smoke
     Lava["LAVA\nliquid AND burns"] -->|"quench_to\n(water pays a unit)"| Stone["STONE"]
     Acid["ACID\ndissolves"] -->|"dissolves 60 x dissolvable\n(acid pays a unit)"| Gone["EMPTY"]
+    Acid -->|"dissolvable 60"| Stone
+    Sand["SAND"] -->|"heats_to, 8\n(needs sustained heat)"| Glass["GLASS\nimmune to acid"]
+    Fire -->|"heat, no burning"| Sand
     Lava -->|"flare 16"| Fire
 
     style Wood fill:#a87a3d,color:#fff
@@ -378,6 +381,8 @@ flowchart TD
     style Lava fill:#8a3d3d,color:#fff
     style Stone fill:#5a5a5a,color:#fff
     style Acid fill:#4a7c59,color:#fff
+    style Sand fill:#a87a3d,color:#fff
+    style Glass fill:#3d6b8a,color:#fff
     style Gone fill:#2a2a2a,color:#fff
 ```
 
