@@ -139,10 +139,19 @@
  * conductor succeeds with probability (conducts/256)^d, rolled fresh
  * per cell, so a thin wall conducts briskly and a thick one conducts
  * slowly, which is thermal resistance for free and needs no second
- * constant. CONDUCT_REACH bounds the walk (16 cells - comfortably past
- * what the pour brush produces) so this cold pass still cannot become
- * an unbounded scan; it is a bound on the cost, not a claim about how
- * heat actually behaves at that depth.
+ * constant. CONDUCT_REACH bounds the walk (32 cells) so this cold pass
+ * still cannot become an unbounded scan; it is a bound on the cost, not
+ * a claim about how heat behaves at that depth.
+ *
+ * That bound was 16, which was itself still too tight for the same
+ * reason the reach-of-one was: it assumed a basin floor is about as
+ * thick as ONE drag of the pour brush. Nothing stops a player scribbling
+ * back and forth, and a floor built that way runs well past sixteen
+ * cells - at which point the walk gave up and the boiler was silently,
+ * completely dead rather than merely slow. A cost bound should never be
+ * the thing that decides whether a feature works, so it now sits far
+ * enough out that attenuation, not the cap, is what limits depth in
+ * every scene the brush can realistically draw.
  *
  * The general lesson, worth keeping past this one feature: a rule that
  * is clean in the abstract can be unreachable through the very UI that
@@ -349,7 +358,7 @@ static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w)
  * each number is sized the way it is. Both cap a cold pass, not claim
  * anything about how far heat or a liquid surface can really be. */
 #define BOIL_REACH    48
-#define CONDUCT_REACH 16
+#define CONDUCT_REACH 32
 
 /* Finds the surface of a still liquid and boils IT, not whatever cell
  * conduct_heat() actually reached. Starting at (x, y) - which the caller

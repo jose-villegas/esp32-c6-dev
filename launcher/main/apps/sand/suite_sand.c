@@ -2059,6 +2059,15 @@ static void test_a_tipped_basin_keeps_its_sand(void)
  * water and sand both end up "full" and the comparison measures nothing. */
 #define WIDE_W 32
 #define WIDE_H 20
+
+/* A deliberately over-long grid for test_conduction_stops_at_the_reach_cap
+ * alone - see that test for why it cannot share `wide`.
+ * CONDUCT_REACH_TEST mirrors sand_reactions.c's own CONDUCT_REACH,
+ * which is private to that file; if the two ever drift apart the
+ * test stops proving anything, so keep them together. */
+#define CONDUCT_REACH_TEST 32
+#define CAP_W (CONDUCT_REACH_TEST + 16)
+#define CAP_H 8
 static uint8_t wide_cells[WIDE_W * WIDE_H];
 static sand_t  wide;
 
@@ -3346,21 +3355,46 @@ static void test_a_thick_wall_still_conducts(void)
 
 static void test_conduction_stops_at_the_reach_cap(void)
 {
-    /* Comfortably past CONDUCT_REACH (16) - forcing conduction to 255
-     * (AFTER build_boiler_room(), which would otherwise wipe the
-     * override via its own internal sand_init()) makes every ROLL
-     * along the walk succeed, so the only thing left that can stop it
-     * is the reach cap itself, which is exactly what this test pins
-     * down. */
-    const int water_x = build_boiler_room(20);
-    sand_set_conduction(&wide, 255);
+    /* Its own grid, not the shared `wide` one: this test needs a
+     * conductor run longer than CONDUCT_REACH, and the cap is now 32,
+     * which does not fit across WIDE_W (32). Widening the shared grid
+     * instead would have changed the cell count every other test using
+     * it draws random numbers over, so this one test gets its own.
+     *
+     * The wall length here tracks CONDUCT_REACH and has to stay ahead
+     * of it: this test asserts the cap EXISTS, not that it sits at any
+     * particular depth, so raising the cap means raising this too.
+     *
+     * Forcing conduction to 255 (AFTER sand_init(), which would
+     * otherwise wipe the override) makes every ROLL along the walk
+     * succeed, so the only thing left that can stop it is the reach cap
+     * itself, which is exactly what this pins down. */
+    static uint8_t cap_cells[CAP_W * CAP_H];
+    sand_t cap;
+    sand_init(&cap, cap_cells, CAP_W, CAP_H, 3u);
+    sand_set_buoyancy(&cap, 0);
+    sand_set_conduction(&cap, 255);
+
+    const int y = 2;
+    const int wall_x0 = 2;
+    const int wall_len = CONDUCT_REACH_TEST + 8;
+    const int water_x = wall_x0 + wall_len;
+
+    sand_set(&cap, water_x - 1, y + 1, STONE);
+    sand_set(&cap, water_x,     y + 1, STONE);
+    sand_set(&cap, water_x + 1, y + 1, STONE);
+    sand_set(&cap, 1, y, FIRE);
+    for (int i = 0; i < wall_len; i++) {
+        sand_set(&cap, wall_x0 + i, y, STONE);
+    }
+    sand_set(&cap, water_x, y, WATER);
 
     for (int i = 0; i < 50; i++) {
-        sand_step(&wide, 0, 1000, 0);
+        sand_step(&cap, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&wide, water_x, 2)),
+        CELL_MATERIAL(sand_at(&cap, water_x, 2)),
         "a conductor run longer than CONDUCT_REACH must never conduct "
         "at all, even with every per-cell roll forced to succeed - the "
         "walk has to actually stop at the cap, not merely be unlikely "
