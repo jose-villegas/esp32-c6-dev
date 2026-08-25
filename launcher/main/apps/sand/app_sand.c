@@ -507,16 +507,29 @@ static inline unsigned cell_hash(int cx, int cy)
  * diagonal shines. A reflection axis is symmetric under half a turn
  * anyway, so eight directions give four distinct looks, which is as many
  * as the idea has. */
+/* Which way is down, as the RENDERER sees it. Set once a frame from the
+ * same smoothed vector the simulation is given.
+ *
+ * Taken from sand_gravity_direction() rather than from sim.last_load_dx /
+ * last_load_dy, which is where it started. That field is the simulation's
+ * own record of the last direction it SETTLED under, so it is only written
+ * when a step actually runs - and run_sim_steps() can decide a frame is
+ * worth zero steps, and compute_settled_bit() returns early under zero
+ * gravity, and neither has any business deciding when a reflection moves.
+ * Reading the input directly has none of those failure modes and is what
+ * the mode label already does two lines below. */
+static int shine_dx = 0, shine_dy = 1;
+
 static inline bool shine_uses_sum(void)
 {
-    const int gx = sim.last_load_dx < 0 ? -sim.last_load_dx : sim.last_load_dx;
-    const int gy = sim.last_load_dy < 0 ? -sim.last_load_dy : sim.last_load_dy;
-    return gy >= gx;
+    const int ax = shine_dx < 0 ? -shine_dx : shine_dx;
+    const int ay = shine_dy < 0 ? -shine_dy : shine_dy;
+    return ay >= ax;
 }
 
 static inline int shine_phase(void)
 {
-    return (sim.last_load_dx * 3 + sim.last_load_dy * 5) & 7;
+    return (shine_dx * 3 + shine_dy * 5) & 7;
 }
 
 /* Everything about the reflection that can change what a pane looks like,
@@ -681,8 +694,20 @@ static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     return n;
 }
 
-/* The last orientation the board was actually PAINTED at. */
+/* The last orientation the board was actually PAINTED at, and how long a
+ * different one has been asking to replace it.
+ *
+ * The wait is what keeps this cheap. A tilt resting near one of the
+ * boundaries between directions would otherwise flip the key back and
+ * forth every frame, and every flip claims the whole screen - the one way
+ * this could genuinely cost something, and it would do it while the board
+ * was sitting still, which is the worst time. Six frames of agreement is
+ * far below what a deliberate turn takes and far above any jitter. */
+#define SHINE_SETTLE_FRAMES 6
+
 static int shine_key_drawn = -1;
+static int shine_key_pending = -1;
+static int shine_key_agrees = 0;
 
 static void draw_dirty_rows(void)
 {
@@ -704,9 +729,23 @@ static void draw_dirty_rows(void)
      * regardless. It happens only when the direction crosses into a
      * different eighth, not on every frame of a tilt. */
     const int key = shine_key();
-    if (key != shine_key_drawn) {
-        shine_key_drawn = key;
-        memset(dirty_rows, 1, (size_t)grid_h);
+    if (key == shine_key_drawn) {
+        shine_key_agrees = 0;
+    } else {
+        shine_key_agrees = (key == shine_key_pending) ? shine_key_agrees + 1
+                                                      : 1;
+        shine_key_pending = key;
+        if (shine_key_agrees >= SHINE_SETTLE_FRAMES) {
+            shine_key_drawn = key;
+            shine_key_agrees = 0;
+            memset(dirty_rows, 1, (size_t)grid_h);
+#if CONFIG_LAUNCHER_DEVELOPMENT
+            ESP_LOGI(TAG, "reflection follows down (%+d,%+d): %s diagonal, "
+                          "phase %d - repainting",
+                     shine_dx, shine_dy,
+                     shine_uses_sum() ? "x+y" : "x-y", shine_phase());
+#endif
+        }
     }
 
     /* 256 entries in flash, indexed by the raw cell byte: no material lookup,
@@ -1170,6 +1209,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     }
 
     handle_pour_input(input, dt_ms);
+    sand_gravity_direction(gx, gy, &shine_dx, &shine_dy);
     log_direction_change(gx, gy, jostle, &sample);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT

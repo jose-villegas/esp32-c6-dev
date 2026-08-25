@@ -4860,6 +4860,60 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
     }
 }
 
+/* Glass has a grain too, and it is quieter than stone's.
+ *
+ * Stone is rock and wants visible speckle; glass is smooth and wants only
+ * enough variation that a wall of it stops reading as one flat fill. Both
+ * halves are asserted because both can fail alone - no variation is the
+ * flat fill this exists to undo, and variation as loud as stone's would
+ * make a pane look like gravel.
+ *
+ * Compared against stone rather than against a fixed number, so it stays
+ * meaningful if either ramp is retuned. */
+static void test_glass_grain_is_quieter_than_stone(void)
+{
+    int glass_spread = 0, stone_spread = 0;
+
+    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+        gfx_color_t g0[3], g1[3], s0[3], s1[3];
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, false, g0);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, false, g1);
+        material_colours(CELL_MAKE(MAT_STONE, v), 0u, false, s0);
+        material_colours(CELL_MAKE(MAT_STONE, v), 7u, false, s1);
+
+        glass_spread += colour_gap(g0[0], g1[0]);
+        stone_spread += colour_gap(s0[0], s1[0]);
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, glass_spread,
+        "glass must vary from cell to cell at all - without it a pane is "
+        "one flat fill, which is what the grain exists to undo");
+    TEST_ASSERT_TRUE_MESSAGE(glass_spread < stone_spread,
+        "but it must vary LESS than stone does - glass is smooth and rock "
+        "is not, and a pane speckled as hard as a wall reads as gravel");
+}
+
+/* The lines and the shine do NOT vary from cell to cell.
+ *
+ * They are light landing on the surface, not the surface itself. Letting
+ * them wobble per cell makes a highlight look chewed instead of
+ * reflective, so only the pane underneath carries the grain. */
+static void test_the_shine_does_not_vary_between_cells(void)
+{
+    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+        gfx_color_t a[3], b[3];
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, false, a);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, false, b);
+
+        char why[128];
+        snprintf(why, sizeof why,
+                 "glass at temperature %d: the %%s must be identical in "
+                 "every cell", v);
+        TEST_ASSERT_EQUAL_MESSAGE(a[1], b[1], why);
+        TEST_ASSERT_EQUAL_MESSAGE(a[2], b[2], why);
+    }
+}
+
 /* Stone's speckle comes from the cell's POSITION, not from its variant.
  *
  * Stone used to carry a random shade and a wall looked like rock because
@@ -7296,6 +7350,8 @@ void run_sand_suite(void)
     RUN_TEST(test_snow_cracks_glass_but_not_stone);
     RUN_TEST(test_an_edge_shows_less_temperature_than_the_body);
     RUN_TEST(test_each_material_is_painted_the_way_it_should_be);
+    RUN_TEST(test_glass_grain_is_quieter_than_stone);
+    RUN_TEST(test_the_shine_does_not_vary_between_cells);
     RUN_TEST(test_stone_speckles_by_position_at_every_temperature);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
