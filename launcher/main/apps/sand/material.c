@@ -453,6 +453,29 @@ const material_t materials[MATERIAL_MAX] = {
                               * water, not by waiting. */
     },
 
+    [MAT_ACID] = {
+        .name    = "Acid",
+        .kind    = KIND_LIQUID,
+        .density = 38,       /* between water's 30 and lava's 45: acid
+                              * sinks through water and floats on lava,
+                              * both of which fall out of
+                              * sink_through_lighter_liquid() with no
+                              * acid-specific code. Sand (60) still sinks
+                              * through it, which matters - a grain has to
+                              * get INTO the acid to be eaten by it. */
+        .slip    = 255,      /* the usual "no resistance" values a liquid
+                              * leaves these at - see water's own row */
+        .repose  = 0,
+        .scatter = 0,
+
+        .mobility = 220,     /* VISCOSITY, inverted - see material.h.
+                              * Just short of water's 255: acid is runny,
+                              * and being fractionally slower is enough to
+                              * read as heavier without behaving like oil.
+                              * Starting point, not final - tune on device
+                              * like every other constant here. */
+    },
+
     /* Slots 9-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
@@ -474,6 +497,22 @@ const material_t materials[MATERIAL_MAX] = {
  *===========================================================================*/
 
 const reaction_t reactions[MATERIAL_MAX] = {
+    [MAT_ACID] = {
+        /* The only thing that dissolves anything. 60 in 256 is roughly
+         * one bite every four steps per acid cell, which eats a pile of
+         * sand at a pace you can watch rather than one that removes it
+         * between frames.
+         *
+         * Every bite costs the acid a unit of its own mass, exactly as
+         * quenching costs water a unit (they go through the same
+         * pay_quench_cost()). That is not decoration: without it a single
+         * cell of acid would eat an unbounded amount of anything and
+         * still be a single cell, which is the same mistake oil-soaked
+         * ash made before soaking became a real transfer. A puddle of
+         * acid has a budget, and when it is spent the puddle is gone. */
+        .dissolves = 60,
+    },
+
     [MAT_OIL] = {
         /* Catches readily, but only where it meets air - see
          * material.h's own comment on `needs_air`. Without that flag a
@@ -523,8 +562,21 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * it does not pass someone else's along. */
     },
 
+    [MAT_SAND] = {
+        /* Acid eats sand readily - it is the obvious thing to point acid
+         * at, and the one that shows what it does. Sand's first entry in
+         * this table: it has never had a reaction before. */
+        .dissolvable = 200,
+    },
+
     [MAT_STONE] = {
-        /* 220 in 256 (~0.86) is the chance heat crosses ONE cell of
+        /* NOT dissolvable, and the omission is load-bearing rather than
+         * an oversight: stone is what acid can be kept IN. A material
+         * that dissolved its own container would be unusable. Every other
+         * material is safe by the same route - `dissolvable` defaults to
+         * zero, so acid eats only what has opted in.
+         *
+         * 220 in 256 (~0.86) is the chance heat crosses ONE cell of
          * stone - see conduct_heat()'s own comment in sand_reactions.c
          * for the walk this actually drives. It attenuates with depth,
          * not a fixed reach: crossing d cells succeeds with probability
@@ -597,9 +649,15 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .flammability = 6,
         .ignites_to   = MAT_EMBER,   /* chars, does not flash - see
                                       * sand_reactions.c's top comment */
+        .dissolvable  = 160,         /* slower than sand's 200: a plank
+                                      * holds out a moment longer than a
+                                      * loose pile does */
     },
 
     [MAT_EMBER] = {
+        .dissolvable = 160,  /* what is left of a burning log gives way
+                              * the same as the log would */
+
         .burns = 1,     /* a second heat source, alongside fire - see
                          * sand_reactions.c's dispatch, which is why that
                          * now keys off reaction_t.burns rather than
@@ -743,7 +801,17 @@ static const gfx_color_t palette[256] = {
                                     * heat. Keeps a lava pool visually
                                     * distinct from the flames it
                                     * flares */
-    UNUSED, UNUSED, UNUSED, UNUSED,
+    SHADES(0xEAFF3C, 0x2E6B0A),   /* acid  - a liquid's variant is FILL
+                                    * LEVEL, so this runs the way water's
+                                    * does: a thin film is a vivid lime and
+                                    * a deep pool is dark olive. Saturated
+                                    * and yellow-leaning on purpose, to
+                                    * keep it clear of gas's pale, washed
+                                    * green - the two are never adjacent in
+                                    * the density ladder but they are
+                                    * adjacent on screen the moment
+                                    * something fizzes */
+    UNUSED, UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

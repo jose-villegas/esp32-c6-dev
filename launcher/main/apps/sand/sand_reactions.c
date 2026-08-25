@@ -232,6 +232,9 @@ static inline void place_reacted(sand_t *s, int x, int y, size_t at,
     if (reactions[mat].burns) {
         s->may_have_burning = true;
     }
+    if (reactions[mat].dissolves) {
+        s->may_have_dissolver = true;
+    }
 
     mark_rows(s, y, y);
     wake_block_and_neighbors(s, x, y);
@@ -558,6 +561,63 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
     return acted;
 }
 
+/* One dissolver cell's turn: eat one cardinal neighbour, and pay for it.
+ *
+ * Two rolls, on two different materials, and both have to pass: this
+ * cell's `dissolves` (how hard the acid tries) and the neighbour's
+ * `dissolvable` (how easily it gives way). Splitting it that way is what
+ * lets one acid figure produce different rates against sand, wood and
+ * stone without acid knowing any of their names - and `dissolvable`
+ * defaulting to zero is what keeps acid from eating the container it is
+ * standing in, the floor it is standing on, or the air above it.
+ *
+ * The bite costs the acid one unit of its own mass, through the same
+ * pay_quench_cost() a liquid pays to put out a fire, because it is the
+ * same kind of transaction: the liquid is CONSUMED rather than merely
+ * consulted. Without that a single cell of acid dissolves an unbounded
+ * amount of anything and remains a single cell - the exact mistake
+ * oil-soaked ash made before soaking became a real transfer, and worth
+ * naming twice because it is the easy one to make.
+ *
+ * At most one neighbour per step, so a cell of acid surrounded by sand
+ * eats into it rather than opening a hole on all four sides at once.
+ * Returns whether it dissolved anything. */
+static bool step_one_dissolver_cell(sand_t *s, uint8_t *row, int x, int y,
+                                    int w, int h, const reaction_t *r)
+{
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->dissolves) {
+        return false;
+    }
+
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[at];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        const uint8_t give = reaction_of(n)->dissolvable;
+        if (give == 0 || (int)(rng_next(&s->rng) & 0xFF) >= give) {
+            continue;
+        }
+
+        s->cells[at] = CELL_EMPTY;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
+
+        /* The acid pays, and may spend itself doing it - pay_quench_cost()
+         * clears the cell when its last unit goes. Done after the target
+         * is cleared so the two can never both survive a bite. */
+        pay_quench_cost(s, x, y, w);
+        return true;
+    }
+    return false;
+}
+
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
  * both die and spread the same step, but it can leave smoke behind, see
@@ -669,20 +729,36 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
  * would let a quiet, untouched burning cell fall out of
  * may_have_burning's bookkeeping while still physically on the grid,
  * stranding its own eventual burn-out. */
-static bool step_one_burning_row(sand_t *s, int y, int w, int h)
+/* Returns a bitmask rather than a bool: a row may hold burning cells,
+ * dissolving ones, or both, and sand_step_reactions() clears the two
+ * may_have_* flags independently. Collapsing them into one answer would
+ * let a board of nothing but acid keep may_have_burning armed for ever,
+ * and a board of quiet fire keep may_have_dissolver armed. */
+#define FOUND_BURNING   1u
+#define FOUND_DISSOLVER 2u
+
+static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
-    bool any = false;
+    unsigned found = 0;
     for (int x = 0; x < w; x++) {
         const cell_t c = row[x];
-        if (CELL_IS_EMPTY(c) || !reaction_of(c)->burns) {
+        if (CELL_IS_EMPTY(c)) {
             continue;
         }
-        any = true;
-        step_one_burning_cell(s, row, x, y, w, h);
+        const reaction_t *r = reaction_of(c);
+        if (r->burns) {
+            found |= FOUND_BURNING;
+            step_one_burning_cell(s, row, x, y, w, h);
+            continue;
+        }
+        if (r->dissolves) {
+            found |= FOUND_DISSOLVER;
+            step_one_dissolver_cell(s, row, x, y, w, h, r);
+        }
     }
-    return any;
+    return found;
 }
 
 /* Takes only `s` again. It briefly took (gx, gy) as well, for
@@ -692,21 +768,24 @@ static bool step_one_burning_row(sand_t *s, int y, int w, int h)
  * which way gravity points. */
 void sand_step_reactions(sand_t *s)
 {
-    if (!s->may_have_burning) {
+    /* Dissolving is not a fire reaction and must not be gated behind one:
+     * acid has to work on a board with no flame anywhere. */
+    if (!s->may_have_burning && !s->may_have_dissolver) {
         return;
     }
 
     const int w = s->w;
     const int h = s->h;
 
-    bool found_any = false;
+    unsigned found = 0;
     for (int y = 0; y < h; y++) {
-        if (step_one_burning_row(s, y, w, h)) {
-            found_any = true;
-        }
+        found |= step_one_reacting_row(s, y, w, h);
     }
 
-    if (!found_any) {
+    if (!(found & FOUND_BURNING)) {
         s->may_have_burning = false;
+    }
+    if (!(found & FOUND_DISSOLVER)) {
+        s->may_have_dissolver = false;
     }
 }

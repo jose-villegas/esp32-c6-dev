@@ -99,6 +99,13 @@ typedef struct {
      * touch. */
     bool     may_have_burning;
 
+    /* Same idea again, for a material that dissolves others
+     * (reaction_t.dissolves - acid is the only one today). Separate from
+     * may_have_burning because dissolving is not a fire reaction: acid
+     * has to work on a board with no flame anywhere, so
+     * sand_step_reactions() runs when EITHER flag is set. */
+    bool     may_have_dissolver;
+
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
      * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised

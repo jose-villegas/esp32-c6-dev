@@ -3538,6 +3538,133 @@ static void test_water_still_puts_fire_out(void)
  * So this checks the table instead. Nonzero is not a claim about the
  * right value - only that somebody chose one, which is precisely the step
  * that got skipped. */
+/* --- acid ---------------------------------------------------------------- */
+
+/* Cells, not mass: a powder's variant is a shade, so summing it would be
+ * meaningless for sand. */
+static int count_cells_of(uint8_t id)
+{
+    int n = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == id) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+/* A sealed stone tank with `sand_rows` of sand in the bottom and
+ * `acid_rows` of acid above it. Returns the acid mass placed. */
+static long acid_tank(int sand_rows, int acid_rows)
+{
+    fixture();
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = 1; y < H; y++) {
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, W - 2, y, STONE);
+    }
+    for (int y = H - 1 - sand_rows; y < H - 1; y++) {
+        for (int x = 2; x < W - 2; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_SAND, 8));
+        }
+    }
+    for (int y = 1; y <= acid_rows; y++) {
+        for (int x = 2; x < W - 2; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+        }
+    }
+    return mass_held_by(MAT_ACID);
+}
+
+static void test_acid_dissolves_sand(void)
+{
+    acid_tank(2, 2);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, count_cells_of(MAT_SAND),
+        "setup: there must be sand to eat");
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_SAND),
+        "acid must eat the sand it settles onto");
+}
+
+/* Stone is not dissolvable, and that is the property that makes acid
+ * usable at all: it has to be possible to keep it somewhere. Every other
+ * material is safe by the same route - `dissolvable` defaults to zero, so
+ * acid eats only what opts in. */
+static void test_acid_does_not_dissolve_its_container(void)
+{
+    acid_tank(2, 2);
+    const int walls = count_cells_of(MAT_STONE);
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(walls, count_cells_of(MAT_STONE),
+        "acid must not touch stone - a material that dissolved its own "
+        "container could never be held, and this is what makes a tank a "
+        "tank");
+}
+
+/* Dissolving is a TRANSFER, like quenching a fire or soaking a grain: the
+ * acid is consumed by the work it does. Asserted as an exact ratio, since
+ * it is exactly one unit of acid mass per cell removed. */
+static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
+{
+    const long acid_before = acid_tank(2, 2);
+    const int sand_before = count_cells_of(MAT_SAND);
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    const int eaten = sand_before - count_cells_of(MAT_SAND);
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, eaten, "setup: something eaten");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(eaten, acid_before - mass_held_by(MAT_ACID),
+        "every cell dissolved must cost the acid exactly one unit of its "
+        "own mass - without that a single drop eats an unbounded amount "
+        "and remains a single drop");
+}
+
+/* The consequence of that, and the reason it is worth paying for: a
+ * finite amount of acid can only eat a finite amount. A drop lands on a
+ * deep pile and stops partway rather than boring through the floor. */
+static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)
+{
+    fixture();
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = 2; y < H - 1; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_SAND, 8));
+        }
+    }
+    const int sand_before = count_cells_of(MAT_SAND);
+    /* One cell of acid: MASS_MAX units, so at one unit a cell it can
+     * account for at most MASS_MAX cells however long it is left. */
+    sand_set(&s, W / 2, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+
+    for (int i = 0; i < 2000; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    const int eaten = sand_before - count_cells_of(MAT_SAND);
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(MASS_MAX, eaten,
+        "a single cell of acid holds MASS_MAX units and spends one per "
+        "cell, so it can never dissolve more than that many - if it can, "
+        "the bite has stopped costing anything");
+}
+
 static void test_every_liquid_declares_a_mobility(void)
 {
     for (int m = 0; m < MATERIAL_MAX; m++) {
@@ -5253,6 +5380,10 @@ void run_sand_suite(void)
     RUN_TEST(test_oil_does_not_put_fire_out);
     RUN_TEST(test_water_still_puts_fire_out);
     RUN_TEST(test_oil_trapped_under_water_floats_to_the_surface);
+    RUN_TEST(test_acid_dissolves_sand);
+    RUN_TEST(test_acid_does_not_dissolve_its_container);
+    RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
+    RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
     RUN_TEST(test_oil_flows_more_slowly_than_water);
     RUN_TEST(test_lava_does_not_decay_away);

@@ -62,6 +62,7 @@ crash anything, only sit there as an immovable block.
 | 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
+| 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -87,15 +88,17 @@ how it moves, `reactions[]` for how it burns - which is a small price
 for keeping the hot table exactly as small as its own comment insists
 it stay.
 
-| Material | `flammability` | `needs_air` | `ignites_to` | `burns` | `conducts` | `residue` | `quench_to` | `flare` |
-|---|---|---|---|---|---|---|---|---|
-| stone | 0 | - | - | 0 | 220 | 0 | - | 0 |
-| gas | 255 | - | fire | 0 | 0 | 0 | - | 0 |
-| fire | 0 | - | - | 1 | 0 | 40 | steam | 0 |
-| wood | 6 | - | ember | 0 | 0 | 0 | - | 0 |
-| ember | 0 | - | - | 1 | 0 | 90 | steam | 48 |
-| oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 |
-| lava | 0 | - | - | - | **1** | 0 | **stone** | 16 |
+| Material | `flammability` | `needs_air` | `ignites_to` | `burns` | `conducts` | `residue` | `quench_to` | `flare` | `dissolves` | `dissolvable` |
+|---|---|---|---|---|---|---|---|---|---|---|
+| sand | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | **200** |
+| stone | 0 | - | - | 0 | 220 | 0 | - | 0 | 0 | 0 |
+| gas | 255 | - | fire | 0 | 0 | 0 | - | 0 | 0 | 0 |
+| fire | 0 | - | - | 1 | 0 | 40 | steam | 0 | 0 | 0 |
+| wood | 6 | - | ember | 0 | 0 | 0 | - | 0 | 0 | **160** |
+| ember | 0 | - | - | 1 | 0 | 90 | steam | 48 | 0 | **160** |
+| oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 | 0 | 0 |
+| lava | 0 | - | - | **1** | 0 | 0 | **stone** | 16 | 0 | 0 |
+| acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 |
 
 Three things in that table are worth reading twice:
 
@@ -105,6 +108,14 @@ Three things in that table are worth reading twice:
 - **`needs_air` is what makes a pool of fuel burn rather than detonate.**
   Only oil sets it. Without it a spark lights a whole connected pool
   inside one pass.
+- **`dissolves` and `dissolvable` are a pair, on two different
+  materials.** One is how hard the acid tries, the other is how easily the
+  target gives way, and both must be nonzero for anything to happen. That
+  split lets a single acid figure produce different rates against sand,
+  wood and stone without acid knowing any of their names. `dissolvable`
+  defaulting to **0 = immune** is the important half: a material is eaten
+  only by opting in, so stone holds acid, the floor survives, and every
+  material added without a thought for acid is safe by omission.
 - **Lava is `KIND_LIQUID` *and* `burns`.** That combination is the
   clearest evidence the movement and reaction axes are genuinely
   independent - nothing anywhere special-cases it. It is also why lava's

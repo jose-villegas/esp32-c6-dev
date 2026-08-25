@@ -86,6 +86,7 @@ typedef enum {
     MAT_EMBER,
     MAT_OIL,
     MAT_LAVA,
+    MAT_ACID,
     MAT_COUNT
 } material_id_t;
 
@@ -303,6 +304,26 @@ typedef struct {
      * everything but the one material that needs to look like it is
      * licking a flame upward while staying put itself. */
     uint8_t flare;
+
+    /* Chance in 256, per step, that a cell of this material DISSOLVES one
+     * of its four cardinal neighbours. Acid is the only thing that does.
+     *
+     * Paired with `dissolvable` below, on the other material: this is how
+     * hard the acid tries, that is how easily the target gives way. Both
+     * have to be nonzero for anything to happen, which is what lets a
+     * stone tank hold acid while the sand inside it disappears. */
+    uint8_t dissolves;
+
+    /* Chance in 256 that an attempt to dissolve THIS material succeeds.
+     *
+     * 0, the default, means immune - and that default is doing real work.
+     * A material is dissolvable only by opting in, so every material that
+     * existed before acid did, and every one added without a thought for
+     * it, is safe by omission. The alternative default would have acid
+     * quietly eating the walls of its own container, the floor, and the
+     * air, and the failure would look like acid working rather than like
+     * a field nobody set. */
+    uint8_t dissolvable;
 } reaction_t;
 
 /* Indexed by the material nibble, same as materials[] - `const`, so it
