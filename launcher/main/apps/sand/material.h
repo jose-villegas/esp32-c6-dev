@@ -422,6 +422,24 @@ typedef struct {
      * without a temperature scale on anything but the glass itself. */
     uint8_t chills;
 
+    /* Chance in 256 per step, per adjacent LIQUID cell, that this material
+     * gives up and becomes `heats_to`. Snow melting in water.
+     *
+     * A second trigger for the same transformation `heat_chance` drives,
+     * and a separate number because one number cannot serve both. Snow
+     * beside a flame should be gone almost at once - 120 in 256, two steps
+     * - and snow landing on a pond should not, or a snowfall over water
+     * would never be seen to land at all. The float is worth a moment:
+     * snow is lighter than water and rides on top of it, which is the only
+     * reason a drift ends up anywhere useful.
+     *
+     * Any liquid counts, not water alone. Nothing in this simulation is at
+     * a temperature except glass, so "liquid" is the closest thing to
+     * "warm and touching you everywhere" available, and oil or acid
+     * leaving snow untouched would need explaining in a way that melting
+     * does not. */
+    uint8_t thaws;
+
     /* What a THERMALLY SHOCKED cell of this material becomes: hot enough to
      * be near the top of its ramp, and touching something that `chills`.
      *

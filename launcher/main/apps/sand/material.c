@@ -705,6 +705,13 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .chills      = 40,
         .heats_to    = MAT_WATER,
         .heat_chance = 120,
+
+        /* And it melts in liquid, at its own far slower rate - see
+         * reaction_t.thaws. 120 beside a flame is two steps; 4 in water is
+         * nearer a second per touching face, which is long enough to watch
+         * a drift land on a pond and ride on it before it goes. Snow is
+         * lighter than water precisely so that it does. */
+        .thaws       = 4,
     },
 
     [MAT_STONE] = {

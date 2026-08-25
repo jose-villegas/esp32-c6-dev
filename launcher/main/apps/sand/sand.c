@@ -214,16 +214,20 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         if (reactions[CELL_MATERIAL(cell)].dissolves) {
             s->may_have_dissolver = true;
         }
-        /* And a cell that is already holding HEAT, which is the same trap
-         * one more time: a board built with hot glass in it - a restored
-         * scene, a test fixture - would never wake the reactions pass, so
-         * the pane would sit at whatever level it was placed at forever,
-         * neither cooling nor able to shatter. Placed COLD glass sets
-         * nothing, which is right: it has no heat to lose, and it gets the
-         * flag from try_heat_transform() the moment a flame reaches it. */
-        if (reactions[CELL_MATERIAL(cell)].heat_ramp != 0 &&
-            CELL_VARIANT(cell) != 0) {
-            s->may_have_heat = true;
+        /* And a cell with a TEMPERATURE, which is the same trap one more
+         * time: a board built with hot glass or with snow in it - a
+         * restored scene, a test fixture - would never wake the reactions
+         * pass, so the pane would sit at whatever level it was placed at
+         * forever and the snow would never melt.
+         *
+         * Placed COLD glass sets nothing, which is right: it has no heat
+         * to lose, and it gets the flag from try_heat_transform() the
+         * moment a flame reaches it. Snow sets it unconditionally, because
+         * being cold is not a state it can be in or out of. */
+        if ((reactions[CELL_MATERIAL(cell)].heat_ramp != 0 &&
+             CELL_VARIANT(cell) != 0) ||
+            reactions[CELL_MATERIAL(cell)].chills != 0) {
+            s->may_have_temperature = true;
         }
     }
     mark_move(s, x, y, x, y);

@@ -65,7 +65,7 @@ crash anything, only sit there as an immovable block.
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
 | 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
 | 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat, and the only material whose variant is a temperature |
-| 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material
+| 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material. Melts in any liquid, keeps indefinitely on dry ground
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -117,6 +117,20 @@ a quantity a cell carries.
 | `cools` | glass, 6 | chance/256 to lose a level with nothing heating it |
 | `chills` | snow, 40 | chance/256 to pull a level out of a hot *neighbour*; non-zero also marks the material **cold** |
 | `shatters_to` | glass, sand | what a cell at heat >= 10 becomes when something cold touches it |
+| `thaws` | snow, 4 | chance/256 per step per adjacent **liquid** cell that it gives up and becomes `heats_to` |
+
+`thaws` is a second trigger for the transformation `heat_chance` already
+drives, and needs its own number because one cannot serve both. Snow beside
+a flame should be gone in two steps (`heat_chance` 120); snow landing on a
+pond should not, or a snowfall over water would never be seen to land -
+it lasts about 60 steps there instead. Any liquid counts, because nothing
+in this simulation is at a temperature except glass, so "liquid" is the
+nearest available statement of *warm and touching you on every side*.
+
+What it melts *into* is always water, whatever melted it. Snow becoming
+more of the liquid that touched it would be an exploit rather than a
+flourish: acid is spent as it dissolves, so snow melting into acid is a
+bucket that refills itself.
 
 `heat_ramp` and `heat_chance` are alternatives, not partners. `heat_chance`
 is a memoryless roll - sand fuses to glass the first time it wins one, and
@@ -146,7 +160,7 @@ graph LR
     Hot -->|"cools 6<br/>when the fire stops"| Glass
     Hot -->|"melts"| Lava["LAVA"]
     Hot -->|"shatters_to<br/>+ anything that chills"| Sand
-    Snow["SNOW"] -->|"heats_to 120"| Water["WATER"]
+    Snow["SNOW"] -->|"heats_to 120 near fire<br/>thaws 4 in any liquid"| Water["WATER"]
     Snow -.->|"chills 40"| Hot
 
     style Sand fill:#a87a3d,color:#fff

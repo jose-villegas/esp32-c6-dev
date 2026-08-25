@@ -400,7 +400,7 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
             return true;
         }
         s->cells[at] = CELL_MAKE(CELL_MATERIAL(n), heat + 1);
-        s->may_have_heat = true;
+        s->may_have_temperature = true;
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
         return true;
@@ -423,6 +423,49 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
  * race against melting. */
 #define SHOCK_HEAT 10
 
+/* One cell that is COLD: it melts if a liquid is touching it.
+ *
+ * The mirror of step_one_hot_cell(), and driven from the same side - the
+ * cell that is going to change - rather than from the liquid. Driving it
+ * from the liquid would mean a neighbour scan on every liquid cell on the
+ * board, which is the commonest material there is and the hottest loop
+ * here; from the snow it costs a scan per snow cell, and snow arrives in
+ * drifts rather than in oceans.
+ *
+ * Nothing here consults a temperature: liquid is warm BY DEFINITION,
+ * because nothing except glass has one to consult. That is also why any
+ * liquid counts rather than water alone - oil or acid leaving snow
+ * untouched would need explaining in a way that melting does not.
+ *
+ * Returns whether the cell survived, which keeps may_have_temperature
+ * honest. */
+static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
+                               const reaction_t *r)
+{
+    if (r->thaws == 0 || r->heats_to == 0 || !s->may_have_liquid) {
+        return true;
+    }
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(n) ||
+            materials[CELL_MATERIAL(n)].kind != KIND_LIQUID) {
+            continue;
+        }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= r->thaws) {
+            continue;
+        }
+        place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
+                      (material_id_t)r->heats_to);
+        return false;
+    }
+    return true;
+}
+
 /* One cell that is holding heat: it cools, a cold neighbour pulls heat out
  * of it faster, and if it is hot enough when that happens it shatters.
  *
@@ -433,7 +476,7 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
  * chill scan here as well costs nothing extra.
  *
  * Returns whether it still holds heat afterwards, which is what keeps
- * s->may_have_heat honest. */
+ * s->may_have_temperature honest. */
 static bool step_one_hot_cell(sand_t *s, uint8_t *row, int x, int y,
                               int w, int h, const reaction_t *r)
 {
@@ -908,7 +951,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
  * and a board of quiet fire keep may_have_dissolver armed. */
 #define FOUND_BURNING   1u
 #define FOUND_DISSOLVER 2u
-#define FOUND_HEAT      4u
+#define FOUND_TEMPERATURE      4u
 
 static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
 {
@@ -938,7 +981,16 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
          * variant test. */
         if (r->heat_ramp != 0 && CELL_VARIANT(c) != 0) {
             if (step_one_hot_cell(s, row, x, y, w, h, r)) {
-                found |= FOUND_HEAT;
+                found |= FOUND_TEMPERATURE;
+            }
+            continue;
+        }
+        /* A cold cell keeps the flag set whether or not it melts this
+         * step: a drift on dry ground has nothing to do now and still has
+         * to be found later, when a liquid reaches it. */
+        if (r->chills != 0) {
+            if (step_one_cold_cell(s, x, y, w, h, r)) {
+                found |= FOUND_TEMPERATURE;
             }
         }
     }
@@ -957,7 +1009,7 @@ void sand_step_reactions(sand_t *s)
     /* Heat is a third independent reason to run, not a rider on fire: glass
      * goes on cooling long after the flame that heated it is out, and gated
      * behind may_have_burning it would freeze mid-ramp instead. */
-    if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_heat) {
+    if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature) {
         return;
     }
 
@@ -975,7 +1027,7 @@ void sand_step_reactions(sand_t *s)
     if (!(found & FOUND_DISSOLVER)) {
         s->may_have_dissolver = false;
     }
-    if (!(found & FOUND_HEAT)) {
-        s->may_have_heat = false;
+    if (!(found & FOUND_TEMPERATURE)) {
+        s->may_have_temperature = false;
     }
 }

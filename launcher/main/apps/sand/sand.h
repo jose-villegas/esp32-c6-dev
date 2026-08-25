@@ -106,14 +106,19 @@ typedef struct {
      * sand_step_reactions() runs when EITHER flag is set. */
     bool     may_have_dissolver;
 
-    /* And again for cells holding HEAT in their variant - glass, today.
+    /* And again for cells with a TEMPERATURE - glass holding heat in its
+     * variant, or anything cold enough to `chill`, which is snow.
+     *
      * Its own flag rather than riding may_have_burning, for the same
      * reason may_have_dissolver has one: a pane goes on cooling long
      * after the fire that heated it is out, and cooling is the half of
      * the ramp that makes it mean duration. Gated behind the fire flag it
-     * would simply stop draining the moment the flame died, leaving hot
-     * glass frozen mid-ramp forever. */
-    bool     may_have_heat;
+     * would freeze mid-ramp instead - and snow would sit in a pond
+     * forever on a board where nothing happened to be burning.
+     *
+     * Named for temperature rather than heat because cold is half of it.
+     * It was may_have_temperature while glass was the only thing that had one. */
+    bool     may_have_temperature;
 
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8

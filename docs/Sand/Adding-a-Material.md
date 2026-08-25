@@ -379,7 +379,8 @@ flowchart TD
     Glass -->|"heat_ramp - long exposure"| Lava
     Glass -->|"shatters_to, if hot + chilled"| Sand
     Snow["SNOW
-cold"] -->|"heats_to, 120"| Water["WATER"]
+cold"] -->|"heats_to 120 near fire
+thaws 4 in any liquid"| Water["WATER"]
     Snow -.->|"chills 40"| Glass
     Fire -->|"heat, no burning"| Sand
     Lava -->|"flare 16"| Fire
