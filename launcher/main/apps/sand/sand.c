@@ -185,7 +185,7 @@ cell_t sand_at(const sand_t *s, int x, int y)
          * without a single bounds check in the movement code - and, being the
          * densest thing there is, too solid for anything heavy to displace its
          * way through the floor. */
-        return CELL_MAKE(MAT_STONE, 0);
+        return CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT);
     }
     return s->cells[y * s->w + x];
 }

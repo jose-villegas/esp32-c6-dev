@@ -1012,16 +1012,16 @@ static void test_a_block_wakes_when_disturbed_diagonally(void)
     const int gx = SAND_BLOCK_W;
     const int gy = SAND_BLOCK_H - 1;
     sand_set(&loc, gx, gy, SAND_FIRST_SHADE);
-    sand_set(&loc, gx,     gy + 1, CELL_MAKE(MAT_STONE, 8));  /* blocks the fall */
-    sand_set(&loc, gx + 1, gy + 1, CELL_MAKE(MAT_STONE, 8));  /* blocks down-right */
-    sand_set(&loc, gx - 1, gy + 1, CELL_MAKE(MAT_STONE, 8));  /* blocks down-left */
+    sand_set(&loc, gx,     gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks the fall */
+    sand_set(&loc, gx + 1, gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks down-right */
+    sand_set(&loc, gx - 1, gy + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));  /* blocks down-left */
     /* Once the down-left slide is freed and the grain lands there, it
      * must stop - otherwise it keeps sliding on its own three legal moves
      * from its new position, and the test would be checking the wrong
      * cell. */
-    sand_set(&loc, gx - 1, gy + 2, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, gx - 2, gy + 2, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, gx,     gy + 2, CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, gx - 1, gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&loc, gx - 2, gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&loc, gx,     gy + 2, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
     for (int i = 0; i < 100; i++) {
         sand_step(&loc, 0, 1000, 0);
@@ -1059,20 +1059,20 @@ static void test_sideways_tilt_wakes_only_the_disturbed_column(void)
      * direction of travel, gravity pointing straight right - each boxed in
      * by three stone blockers covering its only three legal moves. */
     sand_set(&loc, 2, 10, SAND_FIRST_SHADE);
-    sand_set(&loc, 3, 10, CELL_MAKE(MAT_STONE, 8));    /* blocks the fall */
-    sand_set(&loc, 3, 11, CELL_MAKE(MAT_STONE, 8));    /* blocks down-right slide */
-    sand_set(&loc, 3, 9,  CELL_MAKE(MAT_STONE, 8));    /* blocks up-right slide */
+    sand_set(&loc, 3, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks the fall */
+    sand_set(&loc, 3, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks down-right slide */
+    sand_set(&loc, 3, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));    /* blocks up-right slide */
     /* Once (3,10) is freed and the grain moves there, it must stop, or it
      * keeps sliding diagonally from its new position and the test would
      * be checking the wrong cell. */
-    sand_set(&loc, 4, 10, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, 4, 11, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, 4, 9,  CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 4, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&loc, 4, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&loc, 4, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
     sand_set(&loc, 18, 10, SAND_FIRST_SHADE);
-    sand_set(&loc, 19, 10, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, 19, 11, CELL_MAKE(MAT_STONE, 8));
-    sand_set(&loc, 19, 9,  CELL_MAKE(MAT_STONE, 8));
+    sand_set(&loc, 19, 10, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&loc, 19, 11, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&loc, 19, 9,  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
     for (int i = 0; i < 100; i++) {
         sand_step(&loc, 1000, 0, 0);
@@ -1175,8 +1175,8 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
     pool_fixture();
 
     for (int y = POOL_H - POOL_WALL_ROWS; y < POOL_H; y++) {
-        sand_set(&pool, 0, y, CELL_MAKE(MAT_STONE, 8));
-        sand_set(&pool, POOL_W - 1, y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pool, 0, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&pool, POOL_W - 1, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     /* POOL_WATER_COLS columns wide and POOL_WATER_H tall - see the comment
      * above POOL_W for why both need to scale with the pool rather than
@@ -1313,7 +1313,7 @@ static void test_water_falling_into_the_next_block_down_still_spreads(void)
      * rest inside the LOWER block with nowhere gravity-ward left to go -
      * only cross-flow can move it after that. */
     for (int x = 0; x < CROSS_BLOCK_W; x++) {
-        sand_set(&g, x, SAND_BLOCK_H + 1, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&g, x, SAND_BLOCK_H + 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     /* One full cell of water, in the last row of the UPPER block. */
     sand_set(&g, 5, SAND_BLOCK_H - 1, CELL_MAKE(MAT_WATER, MASS_MAX));
@@ -1606,7 +1606,11 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
  * other - which is the whole basis of the sandbox. */
 
 #define WATER CELL_MAKE(MAT_WATER, 8)
-#define STONE CELL_MAKE(MAT_STONE, 8)
+/* Room temperature, not a shade: stone's variant is a TEMPERATURE
+ * now, the same as glass's, so the 8 this used to carry placed every
+ * floor and wall in the suite well above the shock threshold - hot
+ * enough that a flake of snow landing on it turned it into sand. */
+#define STONE CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT)
 #define SAND  CELL_MAKE(MAT_SAND,  8)
 #define GAS   CELL_MAKE(MAT_GAS,   8)
 #define FIRE  CELL_MAKE(MAT_FIRE,  8)
@@ -1946,11 +1950,11 @@ static void build_full_basin(void)
     sand_init(&pour, pour_cells, POUR_W, POUR_H, 9u);
 
     for (int y = POUR_H - 6; y < POUR_H; y++) {
-        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, 8));
-        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int x = 5; x < 13; x++) {
-        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int y = POUR_H - 4; y < POUR_H - 1; y++) {
         for (int x = 6; x < 12; x++) {
@@ -2031,11 +2035,11 @@ static void test_a_tipped_basin_keeps_its_sand(void)
      * powder. */
     sand_init(&pour, pour_cells, POUR_W, POUR_H, 9u);
     for (int y = POUR_H - 6; y < POUR_H; y++) {
-        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, 8));
-        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pour, 5,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&pour, 12, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int x = 5; x < 13; x++) {
-        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&pour, x, POUR_H - 1, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
     for (int y = POUR_H - 4; y < POUR_H - 1; y++) {
         for (int x = 6; x < 12; x++) {
@@ -4651,6 +4655,120 @@ static int liquid_mass_of(uint8_t id)
     return m;
 }
 
+/* Stone carries a temperature, the same as glass. */
+static void test_stone_heats_up_next_to_lava(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    int hottest = 0;
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_STONE && CELL_VARIANT(c) > hottest) {
+                hottest = CELL_VARIANT(c);
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest,
+        "stone under lava must warm up - it reads the same temperature "
+        "scale glass does, so a player who has learned one wall can read "
+        "the other");
+}
+
+/* But it never melts, however hot it gets, and that is the point of it.
+ *
+ * Glass names MAT_LAVA in `heats_to` and stone names nothing. If both
+ * melted there would be no vessel that holds lava indefinitely and the
+ * choice between the two materials would collapse into "glass, but it
+ * dies". As it stands stone survives any heat and acid eats it, glass is
+ * immune to acid and heat melts it, and both crack when chilled hot. */
+static void test_stone_never_melts_however_hot(void)
+{
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, reactions[MAT_STONE].heats_to,
+        "stone must name nothing in heats_to - surviving heat is the "
+        "reason to build out of it");
+
+    fixture();
+    sand_clear(&s);
+    const int walls = W;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    }
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    for (int i = 0; i < 800; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(walls, count_cells_of(MAT_STONE),
+        "stone held at the top of its ramp under lava must still be stone "
+        "after 800 steps");
+}
+
+/* And a hot stone wall cracks when it is chilled, exactly as glass does. */
+static void test_snow_shatters_hot_stone_too(void)
+{
+    fixture();
+    sand_clear(&s);
+    const int wall = W - 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+        sand_set(&s, x, H - 3, SNOW);
+    }
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SAND) > 0,
+        "snow on a glowing stone wall must crack it into sand - shock is a "
+        "property of carrying a temperature, not a property of glass");
+    TEST_ASSERT_LESS_THAN_MESSAGE(wall + W, count_cells_of(MAT_STONE),
+        "and some of that wall has to actually be gone");
+}
+
+/* Only the materials meant to dither have a second colour.
+ *
+ * material_dither() is consulted for every cell the renderer paints, and
+ * returning anything but the cell's own colour puts a visible checker on
+ * it. A material picking one up by accident would be a rendering change
+ * nobody asked for, on a code path the host tests otherwise never touch -
+ * app_sand.c does not compile here. */
+static void test_only_glass_and_stone_dither(void)
+{
+    const gfx_color_t *pal = material_palette();
+
+    for (int m = 1; m < MAT_COUNT; m++) {
+        for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+            const cell_t c = CELL_MAKE(m, v);
+            const bool differs = material_dither(c) != pal[c];
+            const bool should = (m == MAT_GLASS || m == MAT_STONE);
+
+            char why[128];
+            snprintf(why, sizeof why,
+                     "%s variant %d: dither colour %s the palette",
+                     materials[m].name, v,
+                     should ? "must differ from" : "must equal");
+            TEST_ASSERT_EQUAL_MESSAGE(should, differs, why);
+        }
+    }
+}
+
 /* Burying lava does not delete it.
  *
  * smothered() clears a burning cell outright when all four neighbours are
@@ -6561,10 +6679,10 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
         const int xb = water_x0 - 1 - off;
         const int xa2 = (xa + 1 < water_x0) ? xa + 1 : xa;
         const int xb2 = (xb - 1 >= sand_x1) ? xb - 1 : xb;
-        sand_set(&real, xa,  y, CELL_MAKE(MAT_STONE, 8));
-        sand_set(&real, xa2, y, CELL_MAKE(MAT_STONE, 8));
-        sand_set(&real, xb,  y, CELL_MAKE(MAT_STONE, 8));
-        sand_set(&real, xb2, y, CELL_MAKE(MAT_STONE, 8));
+        sand_set(&real, xa,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&real, xa2, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&real, xb,  y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+        sand_set(&real, xb2, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
     }
 
     /* Let it fully settle first - same starting state a real pour-then-
@@ -7028,6 +7146,10 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_stone_heats_up_next_to_lava);
+    RUN_TEST(test_stone_never_melts_however_hot);
+    RUN_TEST(test_snow_shatters_hot_stone_too);
+    RUN_TEST(test_only_glass_and_stone_dither);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);

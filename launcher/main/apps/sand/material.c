@@ -735,6 +735,32 @@ const reaction_t reactions[MATERIAL_MAX] = {
     },
 
     [MAT_STONE] = {
+        /* Stone carries a temperature exactly as glass does - its variant
+         * is heat, it frosts, it glows, and a cold shock cracks it into
+         * sand. Same fields, same scale, same colours meaning the same
+         * things, because a player who has learned to read one wall should
+         * not have to learn the other.
+         *
+         * With ONE difference, and it is the difference between them:
+         * stone has no `heats_to`, so it never melts however hot it gets.
+         * That is not an omission - it is the reason to build out of stone.
+         * If both melted there would be no vessel that holds lava
+         * indefinitely, and the choice between the two materials would
+         * collapse into "glass, but it dies". As it stands:
+         *
+         *     stone   survives any heat, but acid eats it
+         *     glass   immune to acid, but sustained heat melts it
+         *
+         * and both crack if you chill them while they are hot.
+         *
+         * Ramps at half glass's rate. Rock is the heavier thing and should
+         * take longer to come up to temperature, and it is also the more
+         * common building material - a wall that glowed the instant a flame
+         * came near would have the whole board lit up. */
+        .heat_ramp   = 32,
+        .cools       = 5,
+        .shatters_to = MAT_SAND,
+
         .dissolvable = 60,   /* Stone gives way to acid now, just slowly -
                               * well under sand's 200, so a wall holds for
                               * a while and then does not. It used to be
@@ -909,6 +935,47 @@ const reaction_t reactions[MATERIAL_MAX] = {
  * TUNE - every trial move meant re-cutting sixteen entries by hand. It is
  * a number that wants trying at several values against a real board, so
  * the palette follows it instead of guarding it. */
+/* Stone's ramp, built the same way glass's is and meaning the same things
+ * at the same levels - see the glass block below for why the splits are
+ * computed from the constants rather than written out.
+ *
+ * Stone LOSES its random shade to this. That shade was a per-cell texture
+ * that made a wall look like rock rather than a flat block, and it is a
+ * real thing to give up; the dither in material_dither() puts a texture
+ * back at the pixel level, which is not the same speckle but is not
+ * nothing either. What is gained is that a hot wall is visibly hot, which
+ * a random grey could never show. */
+#define STONE_FROST   0xCEDCE8
+#define STONE_AMBIENT 0x5F6673
+#define STONE_NEUTRAL 0x8A7466
+#define STONE_GLOW    0x9E3A18
+#define STONE_MOLTEN  0xE8752A
+
+#define STONE_COOL(v)  LERP(STONE_FROST, STONE_AMBIENT,                    \
+                            ((v) * 15) / (SAND_AMBIENT_HEAT > 0            \
+                                          ? SAND_AMBIENT_HEAT : 1))
+#define STONE_WARM(v)  LERP(STONE_AMBIENT, STONE_NEUTRAL,                  \
+                            (((v) - SAND_AMBIENT_HEAT) * 15) /             \
+                            (SAND_SHOCK_HEAT > SAND_AMBIENT_HEAT           \
+                             ? SAND_SHOCK_HEAT - SAND_AMBIENT_HEAT : 1))
+#define STONE_HOT(v)   LERP(STONE_GLOW, STONE_MOLTEN,                      \
+                            (((v) - SAND_SHOCK_HEAT) * 15) /               \
+                            (SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1       \
+                             ? MATERIAL_VARIANTS - 1 - SAND_SHOCK_HEAT : 1))
+
+#define STONE_RGB(v)                                                       \
+    ((v) <= SAND_AMBIENT_HEAT ? STONE_COOL(v)                              \
+     : (v) < SAND_SHOCK_HEAT  ? STONE_WARM(v)                              \
+                              : STONE_HOT(v))
+
+#define STONE_AT(v) GFX_RGB(STONE_RGB(v))
+
+#define STONE_SHADES                                                       \
+    STONE_AT(0),  STONE_AT(1),  STONE_AT(2),  STONE_AT(3),                 \
+    STONE_AT(4),  STONE_AT(5),  STONE_AT(6),  STONE_AT(7),                 \
+    STONE_AT(8),  STONE_AT(9),  STONE_AT(10), STONE_AT(11),                \
+    STONE_AT(12), STONE_AT(13), STONE_AT(14), STONE_AT(15)
+
 #define GLASS_FROST   0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
 #define GLASS_NEUTRAL 0x7E8E86
@@ -969,7 +1036,10 @@ static const gfx_color_t palette[256] = {
     SHADES(0x0A0C14, 0x0A0C14),   /* empty - the background */
     SHADES(0xB07430, 0xF2CE90),   /* sand  */
     SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
-    SHADES(0x4A4F5A, 0x767D8C),   /* stone */
+    STONE_SHADES,                 /* stone - a TEMPERATURE scale now, not a
+                                    * shade ramp: same levels and the same
+                                    * meanings as glass, so one wall reads
+                                    * like the other */
     SHADES(0x445544, 0xC8E8B8),   /* gas   */
     SHADES(0x400A00, 0xFFE060),   /* fire  - dying ember is dark, freshly
                                     * lit is bright yellow-white; variant
@@ -1077,6 +1147,57 @@ static const gfx_color_t palette[256] = {
                                     * for thermal shock to explain itself */
     UNUSED,
 };
+
+/* Glass's SECOND colour: the same temperature, mixed halfway to the
+ * background.
+ *
+ * Painted on alternate pixels inside each cell's block it reads as a woven
+ * or frosted pane rather than a solid slab - which is most of what tells
+ * glass apart from stone at a glance, since the two are identical in the
+ * density ladder and behave identically to everything except acid.
+ *
+ * Mixed toward the BACKGROUND specifically, not simply darkened, because
+ * what glass wants to look like is see-through. Half strength is the whole
+ * effect: at cell size 2 a block is four pixels, so a checker is two of
+ * each and any subtler mix would round away.
+ *
+ * Only glass has one. Everything else dithers against itself, which is the
+ * same as not dithering - see material_dither() and paint_row_n(). */
+#define GLASS_DIM(v)                                                       \
+    GFX_RGB(LERP((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v)                  \
+                 : (v) < SAND_SHOCK_HEAT  ? GLASS_WARM(v)                  \
+                                          : GLASS_HOT(v),                  \
+                 0x0A0C14, 7))
+
+static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
+    GLASS_DIM(0),  GLASS_DIM(1),  GLASS_DIM(2),  GLASS_DIM(3),
+    GLASS_DIM(4),  GLASS_DIM(5),  GLASS_DIM(6),  GLASS_DIM(7),
+    GLASS_DIM(8),  GLASS_DIM(9),  GLASS_DIM(10), GLASS_DIM(11),
+    GLASS_DIM(12), GLASS_DIM(13), GLASS_DIM(14), GLASS_DIM(15),
+};
+
+/* Stone's dither partner is a shade of ITSELF, not a mix toward the
+ * background: stone is opaque and should look it. This is the texture the
+ * random per-cell shade used to provide, moved down to the pixel level -
+ * finer than the old speckle, and it survives the variant being spent on
+ * temperature. */
+#define STONE_DIM(v) GFX_RGB(LERP(STONE_RGB(v), 0x000000, 3))
+
+static const gfx_color_t stone_dither[MATERIAL_VARIANTS] = {
+    STONE_DIM(0),  STONE_DIM(1),  STONE_DIM(2),  STONE_DIM(3),
+    STONE_DIM(4),  STONE_DIM(5),  STONE_DIM(6),  STONE_DIM(7),
+    STONE_DIM(8),  STONE_DIM(9),  STONE_DIM(10), STONE_DIM(11),
+    STONE_DIM(12), STONE_DIM(13), STONE_DIM(14), STONE_DIM(15),
+};
+
+gfx_color_t material_dither(cell_t c)
+{
+    switch (CELL_MATERIAL(c)) {
+    case MAT_GLASS: return glass_dither[CELL_VARIANT(c)];
+    case MAT_STONE: return stone_dither[CELL_VARIANT(c)];
+    default:        return palette[c];
+    }
+}
 
 const gfx_color_t *material_palette(void)
 {

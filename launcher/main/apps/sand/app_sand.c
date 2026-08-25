@@ -486,14 +486,27 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * enough, per pixel rather than per cell, to matter. */
     for (int cx = 0; cx < grid_w; cx++) {
         const gfx_color_t c = pal[row[cx]];
+        const gfx_color_t d = material_dither(row[cx]);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
          * so these unroll away there even though cell itself is a runtime
-         * value - see paint_row()'s own comment for why that split exists. */
+         * value - see paint_row()'s own comment for why that split exists.
+         *
+         * The DITHER rides on that unrolling and costs nothing per pixel:
+         * (dx ^ dy) & 1 is constant once dx and dy are, so every store the
+         * compiler emits already knows which of the two colours it writes.
+         * A material that does not dither returns the same colour for both,
+         * so its block comes out flat with no test anywhere.
+         *
+         * Inside the block, deliberately, rather than across cells: the
+         * dirty-run tracking works on grid CELLS (row_runs_find below), so
+         * a checker made of whole cells would break every run into pieces
+         * one cell wide and multiply what has to be pushed to the panel. A
+         * checker made of pixels inside a cell is invisible to all of it. */
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
-                p[dy * GFX_WIDTH + dx] = c;
+                p[dy * GFX_WIDTH + dx] = ((dx ^ dy) & 1) ? d : c;
             }
         }
     }

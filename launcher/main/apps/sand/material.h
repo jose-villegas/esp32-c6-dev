@@ -551,3 +551,8 @@ static inline const reaction_t *reaction_of(cell_t c)
  * Indexed by the raw cell byte, so `material_palette()[cell]` is the whole of
  * "what colour is this?". */
 const gfx_color_t *material_palette(void);
+
+/* The colour for the alternate squares of the dither inside one cell's
+ * block. Equal to material_palette()[c] for every material that does not
+ * dither, so a caller can use it unconditionally and get a flat block. */
+gfx_color_t material_dither(cell_t c);
