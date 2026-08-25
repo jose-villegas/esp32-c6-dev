@@ -4305,10 +4305,20 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
         "nothing about heat arriving from a real source");
 
     const int sand_before = count_cells_of(MAT_SAND);
-    sand_set(&s, wall + 1, face, SNOW);
 
+    /* Topped up every step, the way a player pours rather than places.
+     * Snow has scatter 90 - it drifts as it settles - so a single flake
+     * set against the wall can wander off the one cell being tested
+     * before the reactions pass ever looks at it, which makes a
+     * single-placement version of this test a coin flip on the movement
+     * RNG rather than a test of shock. */
     int cracked = 0;
-    for (int k = 0; k < 30 && !cracked; k++) {
+    for (int k = 0; k < 60 && !cracked; k++) {
+        for (int y = face - 1; y <= face; y++) {
+            if (CELL_IS_EMPTY(sand_at(&s, wall + 1, y))) {
+                sand_set(&s, wall + 1, y, SNOW);
+            }
+        }
         sand_step(&s, 0, 1000, 0);
         cracked = count_cells_of(MAT_SAND) > sand_before;
     }

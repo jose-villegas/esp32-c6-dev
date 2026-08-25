@@ -102,21 +102,27 @@ typedef uint8_t cell_t;
  * Measured against the scene people actually build - a drawn glass ring
  * filled about half way with lava, snow poured over the top:
  *
- *     ambient + 6      0 panes broken
- *     ambient + 4     12
- *     ambient + 3     17
- *     ambient + 2     25
+ *     ambient + 6     2.8 panes broken, mean over 12 seeds
+ *     ambient + 4     2.8
+ *     ambient + 2     6.8
  *
- * Six was unreachable, and not because heat travelled too slowly. A half
- * filled vessel puts the glass a player can REACH - the rim, above the
- * lava line - several cells from the heat, and the gradient decays about
- * two levels per cell, so the rim sits in the warming band while the
- * submerged glass glows. Snow can only touch the part that was never hot.
+ * The reason it has to be this low is worth writing down, because it is
+ * not "heat travels too slowly". Measured at the point that actually
+ * decides: the glass a snowflake is TOUCHING, at the moment it touches,
+ * sits at 3.02 - room temperature - averaged over 3277 contact steps.
+ * Not warm-but-not-quite. Ambient.
  *
- * Four is chosen over three or two because it still asks for real heating.
- * Lower and any faintly warm pane shatters on contact, which makes glass
- * feel fragile rather than makes thermal shock feel earned. */
-#define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 4)
+ * Two things put it there. A half filled vessel puts the reachable glass -
+ * the rim, above the lava line - several cells from the heat, and the
+ * gradient decays about two levels per cell. And snow CHILLS what it
+ * lands on, so the contact cell is being actively cooled by the very
+ * thing that wants to shock it.
+ *
+ * Four asked the reachable glass to be four levels above where it can
+ * get. Two is still a real requirement - a pane at rest or one level up
+ * is safe, so ordinary glass beside ordinary weather does nothing - but
+ * it is a requirement the scene can actually meet. */
+#define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 2)
 
 /* And the other end of the same rule: at or BELOW this, a sudden heat
  * source cracks the cell instead of warming it.
