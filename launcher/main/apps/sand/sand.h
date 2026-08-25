@@ -89,6 +89,12 @@ typedef struct {
      * sand_gas.c. */
     bool     may_have_gas;
 
+    /* Same idea again, for fire - see sand_step_reactions() in
+     * sand_reactions.c. Keyed on MAT_FIRE specifically wherever it is
+     * set, NOT on kind == KIND_STATIC - stone shares that kind and is
+     * poured far too often to accidentally re-arm this on every touch. */
+    bool     may_have_fire;
+
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
      * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised
@@ -262,16 +268,14 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  */
 #define SAND_LIQUID_SIGHT 8
 
-/* Same idea as SAND_LIQUID_SIGHT, for sand_step_gas()'s own spread pass
- * (sand_gas.c) - how far along the perpendicular a gas grain will look
- * for an empty cell to hop into. Deliberately wider than water's 8, not
- * just mirrored: gas is meant to disperse noticeably faster/further than
- * water levels, and given both use the same equalise_*() mechanism this
- * is the one parameter that actually encodes that difference. 16 is
- * SAND_LIQUID_SIGHT's own measured data's last "still fine" point before
- * 32 - not yet measured for gas specifically; tune once real numbers
- * exist, same as every other constant on this page. */
-#define SAND_GAS_SIGHT 16
+/* sand_step_gas()'s own spread pass (sand_gas.c) used to have a single
+ * global sight constant here (SAND_GAS_SIGHT), the same idea as
+ * SAND_LIQUID_SIGHT above - how far along the perpendicular a grain
+ * will look for an empty cell to hop into. Now per-material
+ * (material.h's `sight` field), since fire shares KIND_GAS with gas
+ * but needs to disperse tighter, not the same amount - see gas's and
+ * fire's own rows in material.c for the tuned figures and their
+ * reasoning. */
 
 /* THE WALL-REBOUND SPLASH
  *

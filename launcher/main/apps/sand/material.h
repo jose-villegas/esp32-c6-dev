@@ -79,6 +79,7 @@ typedef enum {
     MAT_WATER,
     MAT_STONE,
     MAT_GAS,
+    MAT_FIRE,
     MAT_COUNT
 } material_id_t;
 
@@ -154,6 +155,25 @@ typedef struct {
      * bypasses slide_chance()'s own resistance. Meaningless outside a gas
      * pass, so every other material leaves it at zero. */
     uint8_t buoyancy;
+
+    /* How far along the perpendicular a KIND_GAS material's spread pass
+     * (equalise_gas() in sand_gas.c) will look for an empty cell to hop
+     * into. Used to be a single global constant (SAND_GAS_SIGHT) shared
+     * by every KIND_GAS material; per-material now so two materials
+     * sharing that pass - gas and fire - can disperse by different
+     * amounts (fire tighter, gas wider) without either one affecting
+     * the other. Meaningless outside a gas pass, so every other
+     * material leaves it at zero. */
+    uint8_t sight;
+
+    /* Whether an adjacent fire cell can ignite this material - see
+     * sand_reactions.c. A material property, not a kind: fuel isn't
+     * about how something moves, so a future flammable material of any
+     * kind (solid, powder, whatever) opts in with this one field, no new
+     * pass code. False for everything but the one fuel that exists today
+     * (gas) - including fire itself, which must not re-ignite adjacent
+     * fire. */
+    bool flammable;
 
     /* Cold: for the UI, never touched by the simulation. Last, so it cannot
      * push the movement fields out of the first cache line. */

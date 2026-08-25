@@ -260,6 +260,67 @@ static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
     wake_block_and_neighbors(s, x1, y1);
 }
 
+/* Ticks a transient material's life down by one, per material.h's `decay`
+ * field, or clears the cell outright if it was already down to its last
+ * tick. Returns whether the cell is still occupied - the caller must not
+ * go on to treat a grain that just vanished as still there. Writing the
+ * ticked-down value back into `row[x]` before the caller does anything
+ * else with `*grain` matters wherever `*grain` gets handed to something
+ * like move_to(), which trusts its argument as the thing to place rather
+ * than re-reading row[x] itself - a stale life value there would carry
+ * an already-dead grain one more step before the next roll caught it.
+ *
+ * Shared between sand_gas.c (gas's own burn-down) and sand_reactions.c
+ * (fire's burn-out) rather than duplicated - the body is entirely
+ * generic, nothing here is gas- or fire-specific. Originally lived in
+ * sand_gas.c as tick_gas_decay() with a single call site; extracting it
+ * to a second call site is exactly the kind of change that regressed
+ * try_fall_or_scatter()/try_slide() when done carelessly (see this
+ * header's own comment above try_fall_or_scatter_impl() for the full
+ * three-attempt story) - measured before and after this extraction on
+ * device rather than assumed safe, since it is small enough that a
+ * regression was thought unlikely but not impossible. */
+static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
+                              cell_t *grain, const material_t *mat,
+                              uint8_t mat_id)
+{
+    /* s->decay mirrors s->scatter's own override (see sand_set_decay()):
+     * 0, the default, means immortal regardless of the table, so placing
+     * a decaying material in a test does not risk it quietly vanishing
+     * mid-test. */
+    const int decay = (s->decay >= 0) ? s->decay : mat->decay;
+    if (decay == 0) {
+        return true;
+    }
+    const uint32_t r = rng_next(&s->rng);
+    if ((int)(r & 0xFF) >= decay) {
+        return true;
+    }
+
+    const uint8_t life = CELL_VARIANT(*grain);
+    if (life <= 1) {
+        row[x] = CELL_EMPTY;
+        mark_rows(s, y, y);
+        wake_block_and_neighbors(s, x, y);
+        return false;
+    }
+
+    *grain = CELL_MAKE(mat_id, life - 1);
+    row[x] = *grain;
+    mark_rows(s, y, y);
+    return true;
+}
+
+/* Defined in sand_reactions.c: the whole of a step's fire work - ignition
+ * of adjacent flammable neighbours, extinguishing by adjacent liquid,
+ * and burning out via tick_decay() above. Called once from sand_step(),
+ * after sand_step_gas() finishes and before finalize_settling() - same
+ * slot, same reasoning as sand_step_liquids()/sand_step_gas() before it:
+ * BLOCK_ACTIVE has to reflect the whole step. Gated on s->may_have_fire
+ * alone (not may_have_gas too) - fire is the only actor here, gas is
+ * passive fuel with nothing to do on its own. */
+void sand_step_reactions(sand_t *s);
+
 /* Defined in sand_liquid.c, called from sand.c's per-cell sweep. The one
  * piece of liquid movement that has to live inside that sweep rather than in
  * its own pass: it is gravity-ward, so it shares that sweep's own guarantee

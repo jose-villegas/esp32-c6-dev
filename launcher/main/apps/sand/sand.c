@@ -87,6 +87,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->gas_flip   = false;
     s->may_have_liquid = false;
     s->may_have_gas    = false;
+    s->may_have_fire   = false;
     s->dirty_rows = NULL;
     s->row_state  = NULL;
     s->block_state = NULL;
@@ -186,12 +187,29 @@ void sand_set(sand_t *s, int x, int y, cell_t cell)
         return;
     }
     s->cells[y * s->w + x] = cell;
-    if (!CELL_IS_EMPTY(cell) &&
-        materials[CELL_MATERIAL(cell)].kind == KIND_LIQUID) {
-        s->may_have_liquid = true;
-    } else if (!CELL_IS_EMPTY(cell) &&
-              materials[CELL_MATERIAL(cell)].kind == KIND_GAS) {
-        s->may_have_gas = true;
+    if (!CELL_IS_EMPTY(cell)) {
+        /* Independent ifs, not an else-if chain: fire is BOTH
+         * kind == KIND_GAS (rises/disperses through sand_step_gas())
+         * AND material == MAT_FIRE (reacts through
+         * sand_step_reactions()) at once, and needs both flags set.
+         * An else-if chain here would let the kind==KIND_GAS branch
+         * shadow the MAT_FIRE branch for every fire cell, silently
+         * stranding may_have_fire false forever - caught before it
+         * shipped, not after. The MAT_FIRE check stays keyed on the
+         * material ID, not kind, for the original reason: KIND_STATIC
+         * (fire's predecessor here) was shared with stone, and even
+         * now KIND_GAS is not guaranteed to stay unique to gas and
+         * fire alone. */
+        const material_t *mat = &materials[CELL_MATERIAL(cell)];
+        if (mat->kind == KIND_LIQUID) {
+            s->may_have_liquid = true;
+        }
+        if (mat->kind == KIND_GAS) {
+            s->may_have_gas = true;
+        }
+        if (CELL_MATERIAL(cell) == MAT_FIRE) {
+            s->may_have_fire = true;
+        }
     }
     mark_move(s, x, y, x, y);
 }
@@ -216,10 +234,16 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     if (s->cells[y * s->w + x] != SAND_EMPTY) {
         return false;   /* never overwrite, so the count cannot drift */
     }
+    /* Independent ifs, not an else-if chain - see sand_set()'s own
+     * identical structure for why (fire needs both flags at once). */
     if (materials[material].kind == KIND_LIQUID) {
         s->may_have_liquid = true;
-    } else if (materials[material].kind == KIND_GAS) {
+    }
+    if (materials[material].kind == KIND_GAS) {
         s->may_have_gas = true;
+    }
+    if (material == MAT_FIRE) {
+        s->may_have_fire = true;
     }
     s->cells[y * s->w + x] = random_cell(s, material);
     mark_move(s, x, y, x, y);
@@ -896,6 +920,15 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
         sand_step_gas(s, gx, gy, dx, dy, slide_a, slide_b, perp_a, perp_b,
                      load_dx, load_dy, x_step, jostle);
     }
+
+    /* Same slot again, for fire's reactions: ignition/extinguish/burn-out
+     * are neither gravity-ward nor movement at all, so they cannot join
+     * the main sweep and must finish before finalize_settling() too.
+     * Takes only `s`, unlike sand_step_gas()'s nine arguments, so there
+     * is no marshalling cost to dodge by checking may_have_fire out here
+     * as well - the function's own internal check (mirroring
+     * sand_step_liquids()'s pattern, not sand_step_gas()'s) is enough. */
+    sand_step_reactions(s);
 
     finalize_settling(s, settled_bit);
 }

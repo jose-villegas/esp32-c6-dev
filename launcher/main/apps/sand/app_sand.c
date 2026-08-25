@@ -80,7 +80,7 @@ static const char *TAG = "sand";
  *
  * A stand-in until the palette overlay; without some way to choose, water and
  * stone exist and cannot be reached. */
-static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE, MAT_GAS };
+static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE, MAT_GAS, MAT_FIRE };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
 /* How long the mode label stays up after the PWR button is pressed. Long

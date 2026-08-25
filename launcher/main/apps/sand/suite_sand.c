@@ -1487,6 +1487,7 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
 #define STONE CELL_MAKE(MAT_STONE, 8)
 #define SAND  CELL_MAKE(MAT_SAND,  8)
 #define GAS   CELL_MAKE(MAT_GAS,   8)
+#define FIRE  CELL_MAKE(MAT_FIRE,  8)
 
 /* Total AMOUNT of a material, not the number of cells holding it.
  *
@@ -2472,8 +2473,368 @@ static void test_gas_decaying_away_marks_its_row_dirty(void)
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[4],
         "the row a gas grain decayed away in must be marked dirty, or its "
         "last colour stays on the panel forever after the cell itself is "
-        "already empty - tick_gas_decay()'s vanish branch must call "
+        "already empty - tick_decay()'s vanish branch must call "
         "mark_rows() the same way its tick-down branch already does");
+}
+
+/* --- fire ------------------------------------------------------------- */
+
+/* A stone box sealing columns x0..x1 of row 3 on all four sides with NO
+ * spare cells inside, so nothing placed inside it can drift away via its
+ * OWN movement pass (main sweep, sand_step_liquids(), or sand_step_gas()
+ * - all of which run before reactions, in the same step) before the
+ * reactions pass gets a chance to check adjacency: gas/fire rise against
+ * gravity (blocked by the row 2 ceiling) and disperse sideways (blocked
+ * by walls immediately at x0-1 and x1+1 - not just somewhere further
+ * out, since ANY empty cell inside the box is still room for
+ * equalise_gas() to hop into), water falls (blocked by the row 4
+ * floor). Fire needing this too, not just gas, is new since fire became
+ * kind = KIND_GAS - it is now just as capable of drifting off during the
+ * SAME step it was placed as gas always was, and a room with even one
+ * spare empty cell left room for exactly that (confirmed: the first
+ * version of this room, walled only two columns further out than
+ * strictly necessary, let both the fire and gas cells each hop one cell
+ * sideways into the slack before reactions ever ran). The caller passes
+ * the exact span it is about to fill (x0..x1 inclusive) - no slack, no
+ * spare cells, by construction. */
+static void fire_room(int x0, int x1)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 2, STONE);
+        sand_set(&s, x, 4, STONE);
+    }
+    sand_set(&s, x0 - 1, 3, STONE);
+    sand_set(&s, x1 + 1, 3, STONE);
+}
+
+static void test_fire_ignites_an_adjacent_flammable_neighbour(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "a flammable neighbour touching fire must ignite");
+}
+
+static void test_extinguishing_wins_over_igniting(void)
+{
+    fire_room(2, 4);
+    sand_set(&s, 2, 3, WATER);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 3)),
+        "fire touching water must be extinguished");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "extinguishing must win outright over igniting - a gas neighbour "
+        "must not catch fire in the same step the fire that would have "
+        "lit it was put out");
+}
+
+static void test_fire_burns_out_and_disappears_over_time(void)
+{
+    fixture();
+    sand_set_decay(&s, 255);   /* forced 100% chance, for a fast, exact
+                                * test rather than waiting out the real
+                                * material figure's low per-step odds */
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 3, 0, MAT_FIRE),
+        "setup: exactly one fire cell placed");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1,
+        CELL_VARIANT(sand_at(&s, 3, 3)),
+        "a freshly spawned fire cell must start at full life, not a "
+        "random shade - random_cell() already generalises this for any "
+        "decay != 0 material, gas included");
+
+    for (int i = 0; i < MATERIAL_VARIANTS - 1; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "fire must burn out to nothing given enough time, the same "
+        "decay mechanism gas already uses");
+}
+
+/* Supersedes the old test_fire_does_not_move_under_gravity: fire was
+ * KIND_STATIC and this test asserted the opposite of what it asserts
+ * now. Kept under the same topic heading rather than silently deleted,
+ * mirroring how sand_reactions.c's own top comment narrates the
+ * KIND_STATIC-era design as history worth keeping visible. Mirrors
+ * test_gas_rises_straight_up_under_ordinary_gravity exactly - fire is
+ * kind = KIND_GAS now, swept by the identical pass. */
+static void test_fire_rises_and_disperses_like_gas(void)
+{
+    fixture();
+    sand_set(&s, 3, H - 1, FIRE);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "with ordinary gravity pointing down, fire moves up - the same "
+        "kind = KIND_GAS movement gas already has, replacing the "
+        "immobile-ember behaviour this test used to assert");
+}
+
+/* Supersedes the old test_fire_is_not_displaced_by_falling_sand, for
+ * the same reason as the test above - mirrors test_sand_sinks_through_gas
+ * exactly, since fire's displacement rules are now identical to gas's
+ * (density-based, not KIND_STATIC's blanket refusal). Burying it
+ * completely is a different question - see
+ * test_fire_is_smothered_when_fully_buried below, which is the actual
+ * replacement for "sand can put fire out", just via smothering rather
+ * than simple contact. */
+static void test_sand_sinks_through_fire(void)
+{
+    fixture();
+    for (int y = 4; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, FIRE);
+        }
+    }
+    sand_set(&s, 3, 3, SAND);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND, CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "sand is denser than fire (60 > 15), so it must sink all the "
+        "way through rather than be blocked by it - a single touch does "
+        "not smother fire, it just passes through uneventfully");
+}
+
+static void test_fire_is_smothered_when_fully_buried(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 3, 2, STONE);   /* above */
+    sand_set(&s, 3, 4, STONE);   /* below */
+    sand_set(&s, 2, 3, STONE);   /* left */
+    sand_set(&s, 4, 3, STONE);   /* right */
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 3)),
+        "fire buried on all four sides by something denser must smother "
+        "out - the only way sand puts fire out, since a single touch "
+        "just lets sand sink through uneventfully (see "
+        "test_sand_sinks_through_fire above)");
+}
+
+static void test_fire_is_not_smothered_with_a_gap(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 3, 2, STONE);   /* above */
+    sand_set(&s, 2, 3, STONE);   /* left */
+    sand_set(&s, 4, 3, STONE);   /* right */
+    /* Diagonal-up neighbours also need blocking, not just the straight
+     * cardinal ones - try_slide()'s own fallback would otherwise carry
+     * fire diagonally out of (3,3) via the two open corners before
+     * reactions ever ran, leaving the cell empty for a reason that has
+     * nothing to do with smothering (confirmed: this is exactly what
+     * happened the first version of this test wrote). */
+    sand_set(&s, 2, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    /* (3,4), below, deliberately left open - a KIND_GAS material only
+     * rises and spreads sideways, never falls, so this gap is safe
+     * from being closed by fire itself drifting into it before
+     * reactions checks smothering; the test stays a clean check of the
+     * smother predicate alone. */
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "one open side is enough for air to reach it - smothered() "
+        "requires ALL four neighbours to be denser, not just three");
+}
+
+static void test_fire_is_not_smothered_by_gas(void)
+{
+    fixture();
+    sand_set_buoyancy(&s, 0);   /* keep fire (and the surrounding gas)
+                                 * from rising away before reactions
+                                 * checks smothering this same step -
+                                 * equalise_gas()'s own spread sub-pass
+                                 * never touches these neighbours anyway
+                                 * (different material, not empty), so
+                                 * this alone is enough to pin fire */
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 3, 2, GAS);
+    sand_set(&s, 3, 4, GAS);
+    sand_set(&s, 2, 3, GAS);
+    sand_set(&s, 4, 3, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "gas is not denser than fire (10 < 15), so a gas-only surround "
+        "must not smother it - otherwise any sufficiently large, dense "
+        "pocket of fire/gas would extinguish itself from the inside "
+        "out");
+}
+
+static void test_liquid_wins_over_smothering(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 4, 3, STONE);
+    sand_set(&s, 3, 4, WATER);
+    sand_set(&s, 3, 5, STONE);   /* floor, so water does not fall away
+                                  * before reactions checks it */
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 3)),
+        "fire touching water on even one side must extinguish via the "
+        "liquid rule - smothered() itself would have said no here too "
+        "(it explicitly excludes liquid neighbours from counting "
+        "towards a smother, even though water is denser than fire), so "
+        "this confirms that exclusion does not accidentally block the "
+        "liquid path from still working");
+}
+
+static void test_igniting_a_neighbour_marks_its_row_dirty(void)
+{
+    dirty_fixture();
+    /* Box gas in on every side except where it touches fire below, so it
+     * cannot drift away via its OWN rise or spread pass (both run before
+     * reactions, in the same step) before reactions gets to check it. A
+     * straight-up ceiling alone blocks the plain rise but leaves the
+     * diagonal slide fallback free to move it up-left/up-right instead
+     * (which is exactly what happened the first time this test was
+     * written with only the straight-up cell blocked) - and a ceiling
+     * with no side walls at all leaves the perpendicular spread pass
+     * free to walk it sideways out of column 3 entirely (the failure
+     * before that). All three of straight-up, both diagonals-up, and
+     * both sideways neighbours need blocking - everywhere except where
+     * fire sits, directly below. */
+    sand_set(&s, 2, 2, STONE);
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 4, 3, STONE);
+    sand_set(&s, 3, 4, FIRE);
+    sand_set(&s, 3, 3, GAS);        /* directly above fire - a DIFFERENT
+                                      * row from fire's own, so this test
+                                      * can tell whether mark_rows()
+                                      * targeted the ignited neighbour's
+                                      * row specifically, not just the
+                                      * fire cell's */
+    memset(dirty, 0, sizeof(dirty));
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "setup: the gas neighbour must have ignited");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[3],
+        "the row the newly-ignited neighbour is in must be marked dirty, "
+        "or its cell changes colour on the panel without ever being "
+        "redrawn - ignition's mark_rows() call must target the "
+        "neighbour's row, not just the fire cell's own");
+}
+
+static void test_fire_burning_out_marks_its_row_dirty(void)
+{
+    dirty_fixture();
+    sand_set_decay(&s, 255);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 4, 0, MAT_FIRE),
+        "setup: exactly one fire cell placed");
+    memset(dirty, 0, sizeof(dirty));
+
+    for (int i = 0; i < MATERIAL_VARIANTS - 1; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "setup: the fire cell must have burned out by now");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1, dirty[4],
+        "the row a fire cell burned out in must be marked dirty, or its "
+        "last colour stays on the panel forever after the cell itself is "
+        "already empty - tick_decay()'s vanish branch already does this "
+        "correctly (shared with gas), this pins it down for fire too");
+}
+
+static void test_fire_spreads_through_a_connected_pocket_in_one_step(void)
+{
+    fixture();
+    sand_set(&s, 0, 0, FIRE);
+    for (int x = 1; x < W; x++) {
+        sand_set(&s, x, 0, GAS);
+    }
+
+    sand_step(&s, 0, 1000, 0);
+
+    for (int x = 1; x < W; x++) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
+            CELL_MATERIAL(sand_at(&s, x, 0)),
+            "a straight line of gas laid out AHEAD of the reactions "
+            "pass's own fixed scan direction (row-major, left to right) "
+            "must ignite all the way through in a single step - the "
+            "confirmed explosion-like cascade, not creeping spread. A "
+            "line laid out BEHIND the scan direction would need several "
+            "steps instead - a documented, accepted scan-order artifact, "
+            "not a bug (see sand_reactions.c's own top comment)");
+    }
+}
+
+static void test_pouring_stone_never_arms_the_reactions_pass(void)
+{
+    fixture();
+
+    /* No public getter for may_have_fire - reading the field directly is
+     * intentional here. The bug this guards (gating on kind ==
+     * KIND_STATIC instead of the material ID, in sand_set()/
+     * try_spawn_one()) is only externally visible as a silent
+     * performance regression on device - a host test can only catch it
+     * by checking the bookkeeping directly, there is no behavioural
+     * difference in simulation output to assert on instead. */
+    for (int i = 0; i < 20; i++) {
+        sand_spawn(&s, 3, 3, 2, MAT_STONE);
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_FALSE_MESSAGE(s.may_have_fire,
+            "placing plain stone must never set may_have_fire - stone "
+            "shares KIND_STATIC with fire, so gating on kind instead of "
+            "the material ID would silently re-arm a full-grid reactions "
+            "scan on every stone touch");
+    }
+}
+
+static void test_placing_fire_arms_both_gas_and_fire_passes(void)
+{
+    fixture();
+
+    /* Guards the else-if ordering bug found before this shipped: fire is
+     * BOTH kind == KIND_GAS (needs sand_step_gas() to rise/disperse) AND
+     * material == MAT_FIRE (needs sand_step_reactions() to ignite/
+     * extinguish/burn out) at once. sand_set()/try_spawn_one() used to
+     * test these as an else-if chain with the kind check first, which
+     * would shadow the material check for every fire cell the moment
+     * fire's kind became KIND_GAS - may_have_fire would silently never
+     * get set, and a freshly painted fire spark would rise correctly
+     * (kind-generic, unaffected) but never ignite, extinguish, or burn
+     * out. No public getter for either flag - reading them directly is
+     * intentional, mirroring test_pouring_stone_never_arms_the_reactions_pass's
+     * own justified exception. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 3, 0, MAT_FIRE),
+        "setup: exactly one fire cell placed");
+    TEST_ASSERT_TRUE_MESSAGE(s.may_have_gas,
+        "a directly-placed fire cell must arm may_have_gas - it needs "
+        "sand_step_gas() to rise and disperse");
+    TEST_ASSERT_TRUE_MESSAGE(s.may_have_fire,
+        "a directly-placed fire cell must ALSO arm may_have_fire - it "
+        "needs sand_step_reactions() to ignite/extinguish/burn out, and "
+        "an else-if chain that checks kind == KIND_GAS first would "
+        "shadow this branch entirely");
 }
 
 /* --- conservation ------------------------------------------------------- */
@@ -2997,6 +3358,141 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
         "reversing gravity on a settled pile must still fit in a frame or "
         "two - this is the real worst case pouring and tilting produces");
 }
+
+static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
+{
+    /* The worst case sand_step_reactions() can face, not a synthetic one:
+     * sand_reactions.c's own top comment explains that this pass's fixed
+     * row-major (top-to-bottom, then left-to-right) scan order lets a
+     * cascade continue into any neighbour positioned AHEAD of the scan
+     * pointer within the same pass - which is both the right neighbour
+     * (same row, not yet scanned) AND the neighbour directly below (a
+     * row not yet reached at all). A single spark in the top-left corner
+     * of a completely gas-filled grid is therefore the single most
+     * expensive case there is: the cascade reaches every one of
+     * REAL_W*REAL_H cells in ONE step, each paying a decay tick plus up
+     * to eight neighbour lookups. */
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *rows   = malloc(REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(rows);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 17u);
+    sand_enable_sleeping(&real, blocks, rows);
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(&real, x, y, CELL_MAKE(MAT_GAS, MATERIAL_VARIANTS - 1));
+        }
+    }
+    sand_set(&real, 0, 0, FIRE);
+    const int total = REAL_W * REAL_H;
+
+    const int64_t start = esp_timer_get_time();
+    sand_step(&real, 0, 1000, 0);
+    const int64_t elapsed = esp_timer_get_time() - start;
+
+    ESP_LOGI("device_tests", "fire cascading through a full %dx%d screen of "
+                             "gas: %lld us for the one step",
+             REAL_W, REAL_H, (long long)elapsed);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(total, sand_count(&real),
+        "setup: cells must only ever convert material, never appear or "
+        "vanish, across gas igniting into fire");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE,
+        CELL_MATERIAL(sand_at(&real, REAL_W - 1, REAL_H - 1)),
+        "setup: the cascade must have reached the far corner - the whole "
+        "grid must have ignited in this one step, or this is not "
+        "actually measuring the worst case it claims to");
+
+    free(big);
+    free(rows);
+    free(blocks);
+
+    /* Measured on device at 314514 us (~314 ms) - nowhere near
+     * STEP_BUDGET_US, and deliberately not held to it: unlike the flip
+     * and water tests above, which model a single realistic user
+     * gesture (a pour, then a tilt), an edge-to-edge screen of gas is
+     * not something the current pour-brush UI can practically produce -
+     * this is a deliberately synthetic worst case (see this test's own
+     * top comment), not a claim that a real user could trigger a 300 ms
+     * stall. If fire+gas ever needs to support a fully-packed screen at
+     * interactive rates, that is the "creeping fire" design explicitly
+     * deferred in the plan this was built from, not a bug in this v1.
+     * The budget here exists purely to catch a much worse regression
+     * (an accidental O(n^2), say) - generous headroom on purpose, not a
+     * frame-rate promise. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)elapsed,
+        "a full-screen cascade must stay in the same ballpark as measured "
+        "- a large jump here means something got much more expensive, "
+        "not that this specific number is a real-time requirement");
+}
+
+static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
+{
+    /* The steady-state cost fire's KIND_GAS redesign introduced, not
+     * measured by the cascade test above: a full screen that is
+     * ALREADY fire pays for BOTH sand_step_gas() (rise+disperse, now
+     * that fire shares gas's own pass) AND sand_step_reactions()
+     * (decay/extinguish/ignite/smother) on every cell, every step,
+     * indefinitely - not just once during ignition. Traced directly:
+     * the cascade test's one measured step ignites via
+     * sand_step_reactions() alone (sand_step_gas() already ran earlier
+     * in that same sand_step() call, before the newly-ignited cells
+     * existed), so its own numbers are untouched by this and did not
+     * need revisiting - this is genuinely new territory. */
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *rows   = malloc(REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(rows);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 19u);
+    sand_enable_sleeping(&real, blocks, rows);
+
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            sand_set(&real, x, y, FIRE);
+        }
+    }
+    const int total = REAL_W * REAL_H;
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 10;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "full %dx%d screen already fire, steady "
+                             "state: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(total, sand_count(&real),
+        "setup: a fully packed screen of same-density fire cannot "
+        "displace, ignite, or smother anything - the count must not "
+        "drift");
+
+    free(big);
+    free(rows);
+    free(blocks);
+
+    /* Measured on device at 230962 us (~231 ms) - roughly 30% headroom
+     * on top of that, same "generous, not a real-time promise" reasoning
+     * as the cascade test above: an edge-to-edge screen of fire is not
+     * something the pour-brush UI can practically sustain, but this
+     * catches a real regression if the steady-state cost balloons far
+     * past what was actually measured. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(300000, (int)per_step,
+        "steady-state cost of a full screen of fire must stay in the "
+        "same ballpark as measured - not a real-time promise, but a "
+        "real regression guard");
+}
 #endif /* DEVICE_BUILD */
 
 /* --- suite -------------------------------------------------------------- */
@@ -3087,6 +3583,21 @@ void run_sand_suite(void)
     RUN_TEST(test_gas_decays_and_disappears_over_time);
     RUN_TEST(test_gas_decaying_away_marks_its_row_dirty);
 
+    RUN_TEST(test_fire_ignites_an_adjacent_flammable_neighbour);
+    RUN_TEST(test_extinguishing_wins_over_igniting);
+    RUN_TEST(test_fire_burns_out_and_disappears_over_time);
+    RUN_TEST(test_fire_rises_and_disperses_like_gas);
+    RUN_TEST(test_sand_sinks_through_fire);
+    RUN_TEST(test_fire_is_smothered_when_fully_buried);
+    RUN_TEST(test_fire_is_not_smothered_with_a_gap);
+    RUN_TEST(test_fire_is_not_smothered_by_gas);
+    RUN_TEST(test_liquid_wins_over_smothering);
+    RUN_TEST(test_igniting_a_neighbour_marks_its_row_dirty);
+    RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
+    RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
+    RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_placing_fire_arms_both_gas_and_fire_passes);
+
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
 
@@ -3112,6 +3623,8 @@ void run_sand_suite(void)
     RUN_TEST(test_a_screen_of_settled_sand_costs_almost_nothing);
     RUN_TEST(test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
+    RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
+    RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);
 #endif
 }
 

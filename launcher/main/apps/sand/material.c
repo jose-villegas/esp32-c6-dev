@@ -85,14 +85,87 @@ const material_t materials[MATERIAL_MAX] = {
                                * one-cell-per-step, without reading as
                                * stuck. Life ticks every step regardless of
                                * whether this roll succeeds (see
-                               * tick_gas_decay() in sand_gas.c), so
+                               * tick_decay() in sand_priv.h), so
                                * slowing the rise does not also stretch the
                                * lifetime. Starting point, not final - tune
                                * on device like every other constant
                                * here. */
+
+        .sight = 16,           /* was the global SAND_GAS_SIGHT constant,
+                               * now this material's own figure - see
+                               * material.h's own comment on `sight` for
+                               * why it moved. Same value, same
+                               * reasoning as before: deliberately wider
+                               * than water's SAND_LIQUID_SIGHT(8), the
+                               * one parameter that encodes gas
+                               * dispersing faster/further than water
+                               * levels, given both use the same
+                               * equalise_*() mechanism. */
+
+        .flammable = true,     /* the one fuel that exists today - see
+                                * sand_reactions.c */
     },
 
-    /* Slots 5-15 are unused and left zeroed except for these, which make an
+    [MAT_FIRE] = {
+        .name    = "Fire",
+        .kind    = KIND_GAS,    /* rises and disperses through the exact
+                                 * same pass gas does (sand_step_gas()
+                                 * dispatches on kind, not material ID) -
+                                 * tighter and shorter-lived than gas via
+                                 * `sight`/`decay` below, not a different
+                                 * mechanism. This replaces an earlier
+                                 * KIND_STATIC version (immobile, never
+                                 * buriable) - see
+                                 * docs/Sand/Adding-a-Material.md and the
+                                 * plan this redesign was built from for
+                                 * why that changed. */
+
+        .density = 15,          /* strictly between gas's 10 and sand's
+                                 * 60 - three things depend on this at
+                                 * once: sand must still sink through
+                                 * fire (needs fire < sand); fire must
+                                 * not smother itself via its own gas
+                                 * neighbours (smothered(), below in
+                                 * sand_reactions.c, requires a
+                                 * neighbour's density STRICTLY greater
+                                 * than fire's, so anything at gas's
+                                 * density or lower never counts); and
+                                 * fire needs real headroom above gas to
+                                 * mix with/displace what it just
+                                 * ignited next to it. can_enter()
+                                 * requires strictly greater density to
+                                 * displace, so equal density (e.g.
+                                 * fire == gas) would make the two
+                                 * simply block each other instead of
+                                 * mixing - the same already-accepted
+                                 * limitation gas has displacing more
+                                 * gas. */
+        .slip    = 255,         /* no resistance, same reasoning as
+                                 * gas's own row above */
+        .repose  = 0,
+        .scatter = 120,         /* matches gas's own figure - equally
+                                 * turbulent rise, tune independently
+                                 * later if it should read differently */
+
+        .decay    = 96,        /* shorter life than gas's 32: 15 ticks *
+                                * 256/96 (~2.7 steps average between
+                                * ticks) ~= 40 steps, under a second at
+                                * ~60fps - fire burns out noticeably
+                                * faster than gas fades. Starting point,
+                                * not final - tune on device like every
+                                * other constant here. */
+        .buoyancy = 96,         /* matches gas's own figure as a
+                                * starting point - tune independently if
+                                * fire should rise faster/slower than
+                                * gas once seen in motion */
+        .sight    = 5,          /* noticeably tighter than gas's 16 -
+                                * "tighter instead of sparse". Starting
+                                * point, not final - tune on device */
+
+        .flammable = false,     /* fire does not re-ignite adjacent fire */
+    },
+
+    /* Slots 6-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
     [MAT_COUNT ... MATERIAL_MAX - 1] = {
@@ -146,9 +219,13 @@ static const gfx_color_t palette[256] = {
     SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
     SHADES(0x4A4F5A, 0x767D8C),   /* stone */
     SHADES(0x445544, 0xC8E8B8),   /* gas   */
+    SHADES(0x400A00, 0xFFE060),   /* fire  - dying ember is dark, freshly
+                                    * lit is bright yellow-white; variant
+                                    * is life remaining, same trick gas
+                                    * already uses */
     UNUSED, UNUSED, UNUSED, UNUSED,
     UNUSED, UNUSED, UNUSED, UNUSED,
-    UNUSED, UNUSED, UNUSED,
+    UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

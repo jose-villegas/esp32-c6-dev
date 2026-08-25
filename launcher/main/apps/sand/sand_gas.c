@@ -30,7 +30,8 @@
  * levels one - a cell is either a full grain or empty, nothing between, so
  * a held-down pour saturates its own neighbourhood faster than the spread
  * pass can find real gaps to move into, and looks and behaves like a pile
- * of sand until it does. tick_gas_decay() is what keeps that from being
+ * of sand until it does. tick_decay() (sand_priv.h, shared with fire's
+ * own burn-out - see sand_reactions.c) is what keeps that from being
  * permanent: material.h's `decay` field reuses the variant nibble as LIFE
  * REMAINING (per that file's own top comment), so a grain fades and clears
  * itself rather than accumulating forever. Off by default (see
@@ -59,45 +60,6 @@ static uint16_t gas_mask(void)
  * try_slide(), reused from sand.c with the direction inverted.
  *-------------------------------------------------------------------------*/
 
-/* Ticks this grain's life down by one, per material_h's `decay` field, or
- * clears the cell outright if it was already down to its last tick.
- * Returns the grain to move with (updated in place if it survived) and
- * whether the cell is still occupied - the caller must not attempt to
- * move a grain that just vanished. Writing the ticked-down value back into
- * `row[x]` before movement runs matters: move_to() trusts its `grain`
- * argument as the thing to place at the destination, it does not re-read
- * row[x] itself, so a stale life value here would move an already-dead
- * grain one more step before the next roll caught it. */
-static inline bool tick_gas_decay(sand_t *s, uint8_t *row, int x, int y,
-                                  cell_t *grain, const material_t *mat,
-                                  uint8_t mat_id)
-{
-    /* s->decay mirrors s->scatter's own override (see sand_set_decay()):
-     * 0, the default, means immortal regardless of the table, so placing
-     * gas in a test does not risk it quietly vanishing mid-test. */
-    const int decay = (s->decay >= 0) ? s->decay : mat->decay;
-    if (decay == 0) {
-        return true;
-    }
-    const uint32_t r = rng_next(&s->rng);
-    if ((int)(r & 0xFF) >= decay) {
-        return true;
-    }
-
-    const uint8_t life = CELL_VARIANT(*grain);
-    if (life <= 1) {
-        row[x] = CELL_EMPTY;
-        mark_rows(s, y, y);
-        wake_block_and_neighbors(s, x, y);
-        return false;
-    }
-
-    *grain = CELL_MAKE(mat_id, life - 1);
-    row[x] = *grain;
-    mark_rows(s, y, y);
-    return true;
-}
-
 /* One gas grain's turn - the same dispatch step_one_grain() runs for a
  * powder (try to fall/rise, then try the two slides), but with an explicit
  * wake, since this pass gets none of step_one_block()'s own moved_here ->
@@ -120,7 +82,7 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const uint8_t mat_id  = CELL_MATERIAL(grain);
     const uint8_t density = mat->density;
 
-    if (!tick_gas_decay(s, row, x, y, &grain, mat, mat_id)) {
+    if (!tick_decay(s, row, x, y, &grain, mat, mat_id)) {
         return true;    /* vanished - already woken, nothing left to move */
     }
 
@@ -330,9 +292,8 @@ static inline void gas_union_touched_x(bool *touched, int *x0, int *x1,
 
 static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
                                              int y, int px, int py, int rdx,
-                                             int rdy, int sight,
-                                             uint16_t is_gas, bool *touched,
-                                             int *touched_x0,
+                                             int rdy, uint16_t is_gas,
+                                             bool *touched, int *touched_x0,
                                              int *touched_x1)
 {
     const cell_t c = row[x];
@@ -343,6 +304,11 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
     if (((is_gas >> id) & 1u) == 0) {
         return false;
     }
+
+    /* Per-material now, not a pass-wide constant - see material.h's own
+     * comment on `sight` for why: two materials can share this pass
+     * (gas, fire) and disperse by different amounts. */
+    const int sight = materials[id].sight;
 
     bool stayed_in_row = false;
     int  tx = 0;
@@ -361,8 +327,7 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
  * alone is the pass's cheap-skip for now. */
 static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
                                  int x_to, int x_step, int px, int py,
-                                 int rdx, int rdy, int sight,
-                                 uint16_t is_gas)
+                                 int rdx, int rdy, uint16_t is_gas)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
     bool any_gas = false;
@@ -370,7 +335,7 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
     int  touched_x0 = 0, touched_x1 = 0;
 
     for (int x = x_from; x != x_to; x += x_step) {
-        if (equalise_gas_one_row_cell(s, row, x, y, px, py, rdx, rdy, sight,
+        if (equalise_gas_one_row_cell(s, row, x, y, px, py, rdx, rdy,
                                       is_gas, &touched, &touched_x0,
                                       &touched_x1)) {
             any_gas = true;
@@ -386,8 +351,7 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
     return any_gas;
 }
 
-static bool equalise_gas(sand_t *s, const int *perp, int sight, int rdx,
-                         int rdy)
+static bool equalise_gas(sand_t *s, const int *perp, int rdx, int rdy)
 {
     bool found_any = false;
 
@@ -408,7 +372,7 @@ static bool equalise_gas(sand_t *s, const int *perp, int sight, int rdx,
 
     for (int y = y_from; y != y_to; y += y_step) {
         if (equalise_gas_one_row(s, y, w, x_from, x_to, x_step, px, py, rdx,
-                                 rdy, sight, is_gas)) {
+                                 rdy, is_gas)) {
             found_any = true;
         }
     }
@@ -469,8 +433,7 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
      * liquid's cross-flow does (see sand_step_liquids() in sand_liquid.c).
      * Kept on its own flip flag rather than sharing liquid_flip, so gas's
      * alternation is not coupled to whether water also moved this step. */
-    if (equalise_gas(s, s->gas_flip ? perp_a : perp_b, SAND_GAS_SIGHT, rdx,
-                     rdy)) {
+    if (equalise_gas(s, s->gas_flip ? perp_a : perp_b, rdx, rdy)) {
         found_any = true;
     }
     s->gas_flip = !s->gas_flip;
