@@ -223,12 +223,15 @@ typedef struct {
      * kinds are shared with materials that must not burn (gas, stone). */
     uint8_t burns;
 
-    /* Chance in 256, per step, per burning neighbour, that heat crosses a
-     * cell of this material to the cell one further along the same
-     * direction - see conduct_heat() in sand_reactions.c. Meaningless for
-     * anything that never sits between a fire and something worth heating;
-     * left at zero for everything but the one material that exists to be
-     * a heat conductor. */
+    /* Chance in 256, per step, per burning neighbour, that heat crosses
+     * ONE cell of this material - see conduct_heat() in
+     * sand_reactions.c. Rolled again for every further cell of the same
+     * conductor the heat has to cross, so crossing depth d succeeds with
+     * probability (conducts/256)^d: a thin wall conducts briskly and a
+     * thick one slowly, for free, with no second "how thick" constant.
+     * Meaningless for anything that never sits between a fire and
+     * something worth heating; left at zero for everything but the one
+     * material that exists to be a heat conductor. */
     uint8_t conducts;
 
     /* Chance in 256 that a burnt-out cell of this material leaves

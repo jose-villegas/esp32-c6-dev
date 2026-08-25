@@ -91,6 +91,64 @@
  * no water required - one material for both "the fire went out" and "the
  * pot is boiling", since both want the same pale, light, rising, fading
  * cell.
+ *
+ * THE BOILER: HEAT CONDUCTS, FIRE DOES NOT PASS THROUGH STONE
+ *
+ * A fire under a one-cell-thick stone basin can boil the water sitting
+ * in that basin without fire ever physically crossing the stone -
+ * conduct_heat(), below. The obvious alternative - give fire a chance to
+ * pass through stone directly - was rejected: it would need a special
+ * case inside can_enter(), the single hottest predicate in the project,
+ * and it would make every sealed stone container leak fire. Conduction
+ * gets the same boiler for zero cost in the main sweep, and it reads
+ * better besides: the stone gets hot, the stone does not become porous.
+ * Conduction only ever does two things to whatever it reaches on the far
+ * side - boil a liquid, or ignite fuel - and NEVER creates fire in empty
+ * space, which is what keeps a sealed box sealed.
+ *
+ * Two problems specific to conduction are solved separately, in the two
+ * functions below:
+ *
+ * boil_surface() solves a movement problem. Steam is lighter than gas
+ * and fire (see material.c), but can_enter()'s displacement rule is
+ * one-directional - a cell can only be entered by something DENSER, so
+ * steam created at the BOTTOM of a still pool cannot rise into the water
+ * sitting above it, and that water cannot fall into the steam either.
+ * Boiling the liquid cell conduct_heat() actually reaches would trap the
+ * steam there permanently, which would make the boiler produce nothing
+ * anyone could see. Instead, boil_surface() walks AGAINST gravity
+ * through the connected run of that same liquid and converts the LAST
+ * cell in the run - the one at the surface, where the steam is free to
+ * rise, which is also exactly where steam actually comes off a real pot.
+ * Accepted limitation, not chased: a fire quenched while fully
+ * submerged still leaves its steam wherever it was, which can be
+ * trapped the same way - not worth a surface-walk for that separate
+ * case.
+ *
+ * conduct_heat() solves a reach problem, and this is worth reading
+ * carefully because an earlier version got it wrong in a way that was
+ * invisible from inside the simulation. Heat crossing exactly one
+ * conductor cell reads as a clean rule, and was the first version of
+ * this feature - but app_sand.c's pour brush (POUR_RADIUS 5, no size
+ * control anywhere in the UI) cannot draw anything one cell thick. The
+ * thinnest stone floor a finger can drag out is on the order of eleven
+ * cells, so a reach-of-one boiler was unbuildable on the actual device,
+ * a fact no amount of testing the simulation in isolation would ever
+ * surface. The fix - and what shipped - is a walk that attenuates with
+ * thickness instead of stopping cold at one cell: crossing d cells of
+ * conductor succeeds with probability (conducts/256)^d, rolled fresh
+ * per cell, so a thin wall conducts briskly and a thick one conducts
+ * slowly, which is thermal resistance for free and needs no second
+ * constant. CONDUCT_REACH bounds the walk (16 cells - comfortably past
+ * what the pour brush produces) so this cold pass still cannot become
+ * an unbounded scan; it is a bound on the cost, not a claim about how
+ * heat actually behaves at that depth.
+ *
+ * The general lesson, worth keeping past this one feature: a rule that
+ * is clean in the abstract can be unreachable through the very UI that
+ * has to produce the scene it depends on, and the material and reaction
+ * tables are not where anyone finds that out - only asking "can a
+ * player actually draw this" does.
  *===========================================================================*/
 
 #include "sand_priv.h"
@@ -285,6 +343,140 @@ static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w)
     wake_block_and_neighbors(s, nx, ny);
 }
 
+/* Bounds the against-gravity walk boil_surface() does below, and the
+ * along-a-conductor walk conduct_heat() does further down - see this
+ * file's own top comment ("THE BOILER") for why each exists and why
+ * each number is sized the way it is. Both cap a cold pass, not claim
+ * anything about how far heat or a liquid surface can really be. */
+#define BOIL_REACH    48
+#define CONDUCT_REACH 16
+
+/* Finds the surface of a still liquid and boils IT, not whatever cell
+ * conduct_heat() actually reached. Starting at (x, y) - which the caller
+ * has already confirmed holds `liquid_id` - walks one cell at a time in
+ * direction (updx, updy) (AGAINST gravity, i.e. towards the surface)
+ * for as long as the next cell is still the same liquid, capped at
+ * BOIL_REACH, then converts the LAST cell reached. See this file's own
+ * top comment for why the cell conduct_heat() finds cannot simply be
+ * boiled in place. */
+static inline void boil_surface(sand_t *s, int x, int y, int w, int h,
+                                int updx, int updy, uint8_t liquid_id)
+{
+    int lx = x, ly = y;
+    for (int k = 0; k < BOIL_REACH; k++) {
+        const int nx = lx + updx;
+        const int ny = ly + updy;
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            break;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (CELL_IS_EMPTY(n) || CELL_MATERIAL(n) != liquid_id) {
+            break;
+        }
+        lx = nx;
+        ly = ny;
+    }
+    const size_t at = (size_t)ly * (size_t)w + (size_t)lx;
+    place_reacted(s, lx, ly, at, MAT_STEAM);
+}
+
+/* Heat crossing a run of conductor cells - the boiler. See this file's
+ * own top comment ("THE BOILER") for the two problems this and
+ * boil_surface() above solve, and why an exactly-one-cell reach was
+ * tried first and did not work.
+ *
+ * For each cardinal neighbour that is a conductor (reaction_t.conducts,
+ * checked cheaply before ever entering the walk below), walks along
+ * that same direction one conductor cell at a time, rolling `conducts`
+ * again for every cell crossed - so crossing depth d succeeds with
+ * probability (conducts/256)^d, capped at CONDUCT_REACH cells so this
+ * cold pass cannot become an unbounded scan. The moment the roll fails,
+ * or the walk runs off the grid, or the next cell is empty, heat simply
+ * stops there - nothing happens, and in particular no fire is ever
+ * created in that empty cell, which is what keeps a sealed stone box
+ * sealed. The moment the walk reaches a cell that is NOT itself a
+ * conductor, that is the far side: a liquid there boils (via
+ * boil_surface(), not in place - see this file's own top comment for
+ * why), fuel there ignites (deterministically - the conducts roll
+ * already gated this, so ignition here does not also draw from
+ * reaction_t.flammability), and anything else is simply warmed with no
+ * visible effect. Returns whether it did anything. */
+static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h,
+                                int updx, int updy)
+{
+    bool acted = false;
+
+    for (int d = 0; d < 4; d++) {
+        const int dx = reaction_dirs[d][0];
+        const int dy = reaction_dirs[d][1];
+        int rx = x + dx;
+        int ry = y + dy;
+
+        if ((unsigned)rx >= (unsigned)w || (unsigned)ry >= (unsigned)h) {
+            continue;
+        }
+        if (CELL_IS_EMPTY(s->cells[(size_t)ry * (size_t)w + (size_t)rx])) {
+            continue;
+        }
+        if (reaction_of(s->cells[(size_t)ry * (size_t)w + (size_t)rx])
+                ->conducts == 0) {
+            continue;   /* cheap early-out - most neighbours are not a
+                         * conductor at all, and the walk below is not
+                         * worth entering for them */
+        }
+
+        bool got_through = false;
+        for (int depth = 0; depth < CONDUCT_REACH; depth++) {
+            const cell_t here = s->cells[(size_t)ry * (size_t)w + (size_t)rx];
+            const int c = (s->conduction >= 0) ? s->conduction
+                                               : reaction_of(here)->conducts;
+            if ((int)(rng_next(&s->rng) & 0xFF) >= c) {
+                break;      /* heat stops inside this cell of the run */
+            }
+
+            const int nx = rx + dx;
+            const int ny = ry + dy;
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                break;
+            }
+            const cell_t next = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (CELL_IS_EMPTY(next)) {
+                break;      /* never creates fire in empty space */
+            }
+            rx = nx;
+            ry = ny;
+            if (reaction_of(next)->conducts == 0) {
+                got_through = true;    /* the far side - not a conductor */
+                break;
+            }
+            /* still inside the conductor run - loop again and roll for
+             * THIS cell's own conducts figure */
+        }
+
+        if (!got_through) {
+            continue;
+        }
+
+        const size_t bat = (size_t)ry * (size_t)w + (size_t)rx;
+        const cell_t bc = s->cells[bat];
+        const material_t *bm = material_of(bc);
+        if (bm->kind == KIND_LIQUID) {
+            boil_surface(s, rx, ry, w, h, updx, updy, CELL_MATERIAL(bc));
+            acted = true;
+        } else {
+            const reaction_t *br = reaction_of(bc);
+            if (br->flammability != 0) {
+                const material_id_t becomes = br->ignites_to ? br->ignites_to
+                                                              : MAT_FIRE;
+                place_reacted(s, rx, ry, bat, becomes);
+                acted = true;
+            }
+        }
+    }
+
+    return acted;
+}
+
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
  * both die and spread the same step, but it can leave smoke behind, see
@@ -298,12 +490,16 @@ static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w)
  * this is the only way sand puts fire out, since sand passes through it
  * uneventfully otherwise, the same way it already passes through gas);
  * otherwise ignite every non-empty, flammable neighbour found - a cell
- * touching fuel on three sides lights all three, not just one - and, if
- * this material flares (ember, not fire), roll for that too. Ignition
- * and flaring are independent of each other rather than either/or: a
- * burning cell can perfectly well do both in the same step. */
+ * touching fuel on three sides lights all three, not just one - conduct
+ * heat into any conductor neighbour (see conduct_heat() above), and, if
+ * this material flares (ember, not fire), roll for that too. Ignition,
+ * conduction and flaring are independent of each other rather than
+ * either/or: a burning cell can perfectly well do all three in the same
+ * step - conduction sits alongside ignition deliberately, not after an
+ * early return, since there is no reason a fire cell could not both
+ * light a neighbour AND warm a stone wall on its other side at once. */
 static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
-                                  int w, int h)
+                                  int w, int h, int updx, int updy)
 {
     cell_t grain = row[x];
     const material_t *mat = material_of(grain);
@@ -358,6 +554,10 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
         }
     }
 
+    if (conduct_heat(s, x, y, w, h, updx, updy)) {
+        acted = true;
+    }
+
     if (try_flare(s, x, y, w, h, reactions[mat_id].flare)) {
         acted = true;
     }
@@ -382,7 +582,8 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
  * would let a quiet, untouched burning cell fall out of
  * may_have_burning's bookkeeping while still physically on the grid,
  * stranding its own eventual burn-out. */
-static bool step_one_burning_row(sand_t *s, int y, int w, int h)
+static bool step_one_burning_row(sand_t *s, int y, int w, int h, int updx,
+                                 int updy)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
 
@@ -393,12 +594,12 @@ static bool step_one_burning_row(sand_t *s, int y, int w, int h)
             continue;
         }
         any = true;
-        step_one_burning_cell(s, row, x, y, w, h);
+        step_one_burning_cell(s, row, x, y, w, h, updx, updy);
     }
     return any;
 }
 
-void sand_step_reactions(sand_t *s)
+void sand_step_reactions(sand_t *s, int gx, int gy)
 {
     if (!s->may_have_burning) {
         return;
@@ -407,9 +608,24 @@ void sand_step_reactions(sand_t *s)
     const int w = s->w;
     const int h = s->h;
 
+    /* AGAINST gravity, for boil_surface() (via conduct_heat()) to walk
+     * towards a liquid's surface. The NEAREST-of-eight direction
+     * (sand_gravity_direction(), not the dithered per-step one) - same
+     * choice load/the cross-flow axis already make, and for the same
+     * reason: this direction should not flicker between two octants
+     * step to step the way the dithered one deliberately does, or a
+     * boiler's surface-finding walk would too. sand_step() has already
+     * ruled out (gx, gy) == (0, 0) before any of the passes that run
+     * before this one are reached (see its own free-fall early return),
+     * so this is always a real, nonzero unit vector here. */
+    int gdx, gdy;
+    sand_gravity_direction(gx, gy, &gdx, &gdy);
+    const int updx = -gdx;
+    const int updy = -gdy;
+
     bool found_any = false;
     for (int y = 0; y < h; y++) {
-        if (step_one_burning_row(s, y, w, h)) {
+        if (step_one_burning_row(s, y, w, h, updx, updy)) {
             found_any = true;
         }
     }

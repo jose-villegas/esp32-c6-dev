@@ -3238,6 +3238,355 @@ static void test_burnt_out_fire_can_leave_smoke(void)
         "broken, not unlucky");
 }
 
+static void test_stone_conducts_heat_into_water_beyond_it(void)
+{
+    fixture();
+    sand_set_buoyancy(&s, 0);   /* keep fire from rising away before it
+                                 * gets a turn to conduct - same
+                                 * technique used throughout this
+                                 * section */
+    sand_set_conduction(&s, 255);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, STONE);
+    /* Floor plus both down-diagonals under the water, not the floor
+     * alone - see test_creating_steam_arms_the_gas_pass's own comment
+     * for why a partial-mass WATER cell needs all three blocked. */
+    sand_set(&s, 4, 4, STONE);
+    sand_set(&s, 5, 4, STONE);
+    sand_set(&s, 6, 4, STONE);
+    sand_set(&s, 5, 3, WATER);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 5, 3)),
+        "a fire beside a single cell of stone must boil water sitting "
+        "on the OTHER side of that stone - the whole boiler mechanism - "
+        "without fire ever crossing the stone itself");
+}
+
+static void test_stone_does_not_conduct_fire_into_empty_space(void)
+{
+    fixture();
+    sand_set_buoyancy(&s, 0);
+    sand_set_conduction(&s, 255);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, STONE);
+    /* (5, 3) deliberately left empty. */
+
+    for (int i = 0; i < 50; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 5, 3)),
+        "conduction must never create fire in empty space on the far "
+        "side of a conductor, even with the roll forced to succeed "
+        "every time it is tried - a sealed stone container must stay "
+        "sealed");
+}
+
+/* Wide enough for an eleven-cell-thick stone wall (matching
+ * app_sand.c's own pour brush, POUR_RADIUS 5 with no size control - see
+ * conduct_heat()'s own top-of-file comment for why that thickness
+ * specifically) plus fire, water and margin, all in one row of `wide`
+ * (WIDE_W/WIDE_H, declared above). Builds fire at column 1, a stone
+ * wall `wall_len` cells thick starting at column 2, and one water cell
+ * just past it - boxes the water (floor plus both down-diagonals, see
+ * test_creating_steam_arms_the_gas_pass) so it cannot drain away before
+ * conduction gets a look at it, and pins fire with buoyancy rather than
+ * physically boxing it in, since a physical box dense enough to also
+ * stop the diagonal slides would make every side of fire denser than
+ * fire itself and smother it outright (confirmed: this is what the
+ * first version of this helper, walled on every side, actually did).
+ * Returns the column the water cell sits at. */
+static int build_boiler_room(int wall_len)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    sand_set_buoyancy(&wide, 0);
+
+    const int y = 2;
+    const int fire_x  = 1;
+    const int wall_x0 = fire_x + 1;
+    const int water_x = wall_x0 + wall_len;
+
+    sand_set(&wide, water_x - 1, y + 1, STONE);
+    sand_set(&wide, water_x,     y + 1, STONE);
+    sand_set(&wide, water_x + 1, y + 1, STONE);
+
+    sand_set(&wide, fire_x, y, FIRE);
+    for (int i = 0; i < wall_len; i++) {
+        sand_set(&wide, wall_x0 + i, y, STONE);
+    }
+    sand_set(&wide, water_x, y, WATER);
+
+    return water_x;
+}
+
+static void test_a_thick_wall_still_conducts(void)
+{
+    /* AFTER build_boiler_room(), not before - it calls sand_init()
+     * internally, which would otherwise wipe this override right back
+     * to its default. */
+    const int water_x = build_boiler_room(11);
+    sand_set_conduction(&wide, 255);
+
+    bool boiled = false;
+    for (int i = 0; i < 10 && !boiled; i++) {
+        sand_step(&wide, 0, 1000, 0);
+        boiled = CELL_MATERIAL(sand_at(&wide, water_x, 2)) == MAT_STEAM;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(boiled,
+        "an eleven-cell-thick stone wall - what app_sand.c's own pour "
+        "brush actually draws, not a one-cell idealisation - must still "
+        "conduct and eventually boil the water beyond it. A reach of "
+        "exactly one cell (an earlier version of this feature) would "
+        "make this fail forever: that is the whole reason the walk "
+        "attenuates with depth instead of stopping cold at one cell");
+}
+
+static void test_conduction_stops_at_the_reach_cap(void)
+{
+    /* Comfortably past CONDUCT_REACH (16) - forcing conduction to 255
+     * (AFTER build_boiler_room(), which would otherwise wipe the
+     * override via its own internal sand_init()) makes every ROLL
+     * along the walk succeed, so the only thing left that can stop it
+     * is the reach cap itself, which is exactly what this test pins
+     * down. */
+    const int water_x = build_boiler_room(20);
+    sand_set_conduction(&wide, 255);
+
+    for (int i = 0; i < 50; i++) {
+        sand_step(&wide, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&wide, water_x, 2)),
+        "a conductor run longer than CONDUCT_REACH must never conduct "
+        "at all, even with every per-cell roll forced to succeed - the "
+        "walk has to actually stop at the cap, not merely be unlikely "
+        "to reach that far");
+}
+
+/* Steps until MAT_STEAM appears past a stone wall `wall_len` cells
+ * thick, using the REAL per-material conduction figure (material.c's
+ * stone row) rather than an override - or `budget` if it never appears
+ * within that many steps. */
+static int steps_to_boil(int wall_len, int budget)
+{
+    const int water_x = build_boiler_room(wall_len);
+    for (int i = 0; i < budget; i++) {
+        sand_step(&wide, 0, 1000, 0);
+        if (CELL_MATERIAL(sand_at(&wide, water_x, 2)) == MAT_STEAM) {
+            return i + 1;
+        }
+    }
+    return budget;
+}
+
+static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
+{
+    /* At the real figure (176 in 256, ~0.69/step), a thin wall's
+     * cumulative miss probability is negligible within a handful of
+     * steps (0.31^10 =~ 9e-6); a thick eleven-cell one needs roughly 41
+     * steps on average (0.69^11 =~ 0.024/step) and has real spread
+     * around that - so this compares actual step counts rather than
+     * asserting a fixed pass/fail line either wall would sometimes
+     * cross the wrong way on an unlucky seed. */
+    const int budget = 200;
+    const int thin  = steps_to_boil(1, budget);
+    const int thick = steps_to_boil(11, budget);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(thick, thin,
+        "at the real per-material conduction figure, a thin (1-cell) "
+        "stone wall must boil the water beyond it sooner than an "
+        "eleven-cell one - thermal resistance falling out of the "
+        "attenuating walk itself, not a second constant");
+}
+
+static void test_boiling_converts_the_top_of_the_water_column_not_the_bottom(void)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    sand_set_conduction(&wide, 255);
+    sand_set_buoyancy(&wide, 0);
+
+    const int x = 5;
+    const int fire_y = 6, stone_y = 5, water_top = 1, water_bottom = 4;
+
+    sand_set(&wide, x, fire_y, FIRE);
+    sand_set(&wide, x, stone_y, STONE);
+    for (int y = water_top; y <= water_bottom; y++) {
+        sand_set(&wide, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+    /* Side walls the height of the column, so cross-flow has nowhere to
+     * send any mass and the column stays exactly this shape while
+     * conduction does its work. */
+    for (int y = water_top; y <= fire_y; y++) {
+        sand_set(&wide, x - 1, y, STONE);
+        sand_set(&wide, x + 1, y, STONE);
+    }
+
+    bool boiled = false;
+    for (int i = 0; i < 10 && !boiled; i++) {
+        sand_step(&wide, 0, 1000, 0);
+        boiled = CELL_MATERIAL(sand_at(&wide, x, water_top)) == MAT_STEAM;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(boiled,
+        "setup: the surface of the column must eventually boil");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&wide, x, water_bottom)),
+        "the cell nearest the stone must still be plain water at the "
+        "moment the surface first boils - conduct_heat() reaches the "
+        "bottom cell of the column first, and boil_surface() must walk "
+        "from there to the top rather than converting the bottom cell "
+        "it actually found. This is the whole reason the surface-walk "
+        "exists: boiling the bottom cell in place would trap the steam "
+        "under the water sitting above it (can_enter() is "
+        "one-directional, so steam cannot rise into denser water) and "
+        "the boiler would produce nothing anyone could ever see");
+}
+
+static void test_the_boiler_end_to_end(void)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+
+    const int x = 10;
+    const int wood_y    = 19;
+    const int slab_top  = 8, slab_bottom = 18;   /* 11 rows thick,
+                                                  * matching the pour
+                                                  * brush's real
+                                                  * thickness */
+    const int water_top = 5, water_bottom = 7;   /* 3 cells of water */
+
+    sand_set(&wide, x, wood_y, WOOD);
+    for (int y = slab_top; y <= slab_bottom; y++) {
+        sand_set(&wide, x, y, STONE);
+    }
+    for (int y = water_top; y <= water_bottom; y++) {
+        sand_set(&wide, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+    /* Side walls the height of the water and the slab (not wood's own
+     * row - the ignition spark below needs an open cell beside the
+     * wood, and wood is KIND_STATIC so it needs no walls to stay put
+     * regardless), so nothing drains or drifts sideways out of the
+     * column while the boiler does its work. */
+    for (int y = water_top; y <= slab_bottom; y++) {
+        sand_set(&wide, x - 1, y, STONE);
+        sand_set(&wide, x + 1, y, STONE);
+    }
+
+    const long water_before = mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER);
+
+    /* Light it: a forced-certain spark, pinned in place just long
+     * enough to catch - mirrors wood_ignition_room()'s reasoning above,
+     * except the fuel here is KIND_STATIC and never drifts itself, only
+     * the spark that lights it could.
+     *
+     * sand_set_buoyancy(&s, 0) alone is NOT enough here, and it is worth
+     * knowing why: it only blocks sub-pass 1 of sand_step_gas() (the
+     * rise/diagonal-slide attempt), not sub-pass 2 (equalise_gas()'s
+     * sideways spread), which is gated on has_room_above() - "is
+     * there room to rise" - not on buoyancy at all. The spark's own row
+     * sits one below the stone slab's bottom, so the cell directly
+     * above it is real stone, not open sky: has_room_above() correctly
+     * reports false, so equalise_gas() does NOT defer to sub-pass 1 the
+     * way it would with open sky above (see
+     * test_creating_steam_arms_the_gas_pass, where that deferral is
+     * exactly what pins fire) - it goes ahead and looks sideways
+     * instead, and an open cell beside the spark is exactly what it
+     * would use to drift away before ever touching the wood (confirmed:
+     * this is what the first version of this test, without the block
+     * below, actually did). Blocking that one remaining open side is
+     * what actually pins it: every neighbour is then either denser
+     * stone, wood, or off the grid (which never counts, win or lose -
+     * see neighbor_smothers()), so neither sub-pass has anywhere left
+     * to send it. */
+    sand_set(&wide, x - 2, wood_y, STONE);
+    sand_set_flammability(&wide, 255);
+    sand_set_buoyancy(&wide, 0);
+    sand_set(&wide, x - 1, wood_y, FIRE);
+    sand_step(&wide, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EMBER, CELL_MATERIAL(sand_at(&wide, x, wood_y)),
+        "setup: the wood must have caught and charred into an ember");
+
+    /* Back to realistic behaviour for the boiler itself - the whole
+     * point of this test is the REAL per-material conduction figure
+     * (material.c's stone row) working through a slab as thick as the
+     * app's own pour brush actually draws, not a forced one. */
+    sand_set_flammability(&wide, SAND_FLAMMABILITY_PER_MATERIAL);
+    sand_set_buoyancy(&wide, SAND_BUOYANCY_PER_MATERIAL);
+
+    for (int i = 0; i < 300; i++) {
+        sand_step(&wide, 0, 1000, 0);
+    }
+
+    bool steam_above_basin = false;
+    for (int y = 0; y < water_top && !steam_above_basin; y++) {
+        for (int x2 = 0; x2 < WIDE_W; x2++) {
+            if (CELL_MATERIAL(sand_at(&wide, x2, y)) == MAT_STEAM) {
+                steam_above_basin = true;
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(steam_above_basin,
+        "the boiler must eventually produce steam that rises above "
+        "where the water started - wood catching, charring into an "
+        "ember, conducting heat through an eleven-cell stone slab, and "
+        "boiling the water on the other side, all through the real "
+        "per-material figures with nothing forced. This is the "
+        "feature; if it does not pass, nothing else in this section "
+        "matters");
+    TEST_ASSERT_LESS_THAN_MESSAGE(water_before,
+        mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER),
+        "the water level must have dropped - the boiler consumed at "
+        "least one cell's worth of it");
+}
+
+static void test_wood_and_steam_grain_count_is_conserved(void)
+{
+    fixture();
+    /* No reaction side-effects to worry about here, unlike ember: wood
+     * never burns on its own (it has no burning neighbour in this
+     * scene) and steam does not react at all (reactions[MAT_STEAM] is
+     * all-zero), so may_have_burning never even arms and
+     * sand_step_reactions() early-returns every step - this is purely
+     * a movement (or, for wood, non-movement) conservation check.
+     * Ember is deliberately NOT covered here: its flare
+     * (reaction_t.flare) can spawn a brand new MAT_FIRE cell out of an
+     * empty neighbour, which is the feature working as designed
+     * (test_an_ember_flares_fire_into_an_empty_neighbour), not a
+     * conservation violation - but it does mean a strict grain-count
+     * invariant, the kind this test checks, does not apply to ember the
+     * way it does to every other material here. */
+    for (int y = 1; y <= 2; y++) {
+        for (int x = 1; x <= 3; x++) {
+            sand_set(&s, x, y, WOOD);
+        }
+    }
+    for (int y = 4; y <= 5; y++) {
+        for (int x = 1; x <= 3; x++) {
+            sand_set(&s, x, y, STEAM);
+        }
+    }
+    const int expected = sand_count(&s);
+    TEST_ASSERT_EQUAL_INT(12, expected);
+
+    static const int dirs[8][2] = {
+        {0,1}, {1,1}, {1,0}, {1,-1}, {0,-1}, {-1,-1}, {-1,0}, {-1,1},
+    };
+    for (int d = 0; d < 8; d++) {
+        for (int i = 0; i < 20; i++) {
+            sand_step(&s, dirs[d][0], dirs[d][1], 0);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+                "a step must conserve wood and steam grains in every "
+                "gravity direction, the same as every other material");
+        }
+    }
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -4124,6 +4473,14 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_rises_and_disperses);
     RUN_TEST(test_creating_steam_arms_the_gas_pass);
     RUN_TEST(test_burnt_out_fire_can_leave_smoke);
+    RUN_TEST(test_stone_conducts_heat_into_water_beyond_it);
+    RUN_TEST(test_stone_does_not_conduct_fire_into_empty_space);
+    RUN_TEST(test_a_thick_wall_still_conducts);
+    RUN_TEST(test_conduction_stops_at_the_reach_cap);
+    RUN_TEST(test_a_thick_wall_conducts_more_slowly_than_a_thin_one);
+    RUN_TEST(test_boiling_converts_the_top_of_the_water_column_not_the_bottom);
+    RUN_TEST(test_the_boiler_end_to_end);
+    RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);

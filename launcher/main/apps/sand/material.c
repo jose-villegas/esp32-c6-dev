@@ -295,6 +295,24 @@ const material_t materials[MATERIAL_MAX] = {
  *===========================================================================*/
 
 const reaction_t reactions[MATERIAL_MAX] = {
+    [MAT_STONE] = {
+        /* 176 in 256 (~0.69) is the chance heat crosses ONE cell of
+         * stone - see conduct_heat()'s own comment in sand_reactions.c
+         * for the walk this actually drives. It attenuates with depth,
+         * not a fixed reach: crossing d cells succeeds with probability
+         * 0.69^d, so a thin wall conducts briskly (about 7 in 10 steps
+         * for a single cell) and a thick one slowly (~0.69^11 =~ 0.024,
+         * roughly one transfer every 42 steps at 11 cells deep) without
+         * a second tuning constant. 11 cells is not an arbitrary example
+         * - it is about how thick the floor from a single drag of
+         * app_sand.c's own pour brush (POUR_RADIUS 5, no size control)
+         * actually comes out, so a hand-drawn stone basin over a fire
+         * conducts at all, just more slowly than a deliberately thin
+         * one would. Starting point, not final - tune on device like
+         * every other constant here. */
+        .conducts = 176,
+    },
+
     [MAT_GAS] = {
         /* 255: gas catches the instant fire touches it, and - because
          * try_ignite() checks for 255 before ever drawing a random number -

@@ -127,6 +127,7 @@ typedef struct {
     int      decay;        /* see sand_set_decay() */
     int      buoyancy;     /* see sand_set_buoyancy() */
     int      flammability; /* see sand_set_flammability() */
+    int      conduction;   /* see sand_set_conduction() */
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
@@ -423,6 +424,19 @@ void sand_set_decay(sand_t *s, int chance);
  * steps and hoping. */
 void sand_set_flammability(sand_t *s, int chance);
 #define SAND_FLAMMABILITY_PER_MATERIAL (-1)
+
+/* How often heat crosses one cell of a conductor, per adjacent burning
+ * cell per step, as a chance in 256 - see material.h's reaction_t.
+ * conducts field and conduct_heat()'s own comment in sand_reactions.c
+ * for the walk this actually drives. Defaults to
+ * SAND_CONDUCTION_PER_MATERIAL, same reasoning as
+ * sand_set_flammability()'s own default: conduction only ever happens
+ * next to an actual burning cell, so there is no background chance to
+ * guard tests against. Forcing this to 255 is what turns "wait several
+ * dozen steps and hope a thick, hand-drawn stone slab eventually boils
+ * something" into a one-step, deterministic assertion. */
+void sand_set_conduction(sand_t *s, int chance);
+#define SAND_CONDUCTION_PER_MATERIAL (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `buoyancy` field. 255, the default,

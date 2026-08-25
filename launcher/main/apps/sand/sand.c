@@ -103,6 +103,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->decay        = 0;
     s->buoyancy     = 255;  /* full speed by default - see sand_set_buoyancy() */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
+    s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->mom_x_q8 = 0;
     s->mom_y_q8 = 0;
     s->dir_x_q8 = 0;
@@ -445,6 +446,15 @@ void sand_set_flammability(sand_t *s, int chance)
         s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;
     } else {
         s->flammability = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_conduction(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->conduction = SAND_CONDUCTION_PER_MATERIAL;
+    } else {
+        s->conduction = chance > 255 ? 255 : chance;
     }
 }
 
@@ -957,12 +967,14 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     /* Same slot again, for a burning cell's reactions: ignition/
      * extinguish/burn-out are neither gravity-ward nor movement at all,
      * so they cannot join the main sweep and must finish before
-     * finalize_settling() too. Takes only `s`, unlike sand_step_gas()'s
-     * nine arguments, so there is no marshalling cost to dodge by
-     * checking may_have_burning out here as well - the function's own
-     * internal check (mirroring sand_step_liquids()'s pattern, not
-     * sand_step_gas()'s) is enough. */
-    sand_step_reactions(s);
+     * finalize_settling() too. Takes `s` plus (gx, gy) now - heat
+     * conduction's own boiler walk needs a gravity direction, see
+     * sand_priv.h's own comment on sand_step_reactions() - but that is
+     * still only two ints, unlike sand_step_gas()'s nine, so there is no
+     * marshalling cost to dodge by checking may_have_burning out here as
+     * well - the function's own internal check (mirroring
+     * sand_step_liquids()'s pattern, not sand_step_gas()'s) is enough. */
+    sand_step_reactions(s, gx, gy);
 
     finalize_settling(s, settled_bit);
 }

@@ -373,14 +373,26 @@ static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
 /* Defined in sand_reactions.c: the whole of a step's fire-chemistry work
  * for every burning cell (reaction_t.burns - fire and ember today) -
  * ignition of adjacent flammable neighbours, extinguishing by adjacent
- * liquid, burning out via tick_decay() above, and (ember only) flaring a
- * flame upward. Called once from sand_step(), after sand_step_gas()
- * finishes and before finalize_settling() - same slot, same reasoning as
- * sand_step_liquids()/sand_step_gas() before it: BLOCK_ACTIVE has to
- * reflect the whole step. Gated on s->may_have_burning alone (not
- * may_have_gas too) - a burning cell is the only actor here; gas is
- * passive fuel with nothing to do on its own. */
-void sand_step_reactions(sand_t *s);
+ * liquid, burning out via tick_decay() above, (ember only) flaring a
+ * flame upward, and now heat conduction through a material like stone
+ * (reaction_t.conducts - see conduct_heat() in sand_reactions.c). Called
+ * once from sand_step(), after sand_step_gas() finishes and before
+ * finalize_settling() - same slot, same reasoning as sand_step_liquids()/
+ * sand_step_gas() before it: BLOCK_ACTIVE has to reflect the whole step.
+ * Gated on s->may_have_burning alone (not may_have_gas too) - a burning
+ * cell is the only actor here; gas is passive fuel with nothing to do on
+ * its own.
+ *
+ * Takes (gx, gy) now, unlike every earlier version of this comment: heat
+ * conduction can boil a liquid on the far side of a conductor, and doing
+ * that has to walk AGAINST gravity to find the liquid's surface (see
+ * conduct_heat()'s own comment for why) - it needs a direction, and this
+ * is the only place one is available without recomputing it. Still just
+ * two ints, cheap enough that the reasoning in sand_step()'s own call
+ * site (an internal early-return is enough, no need to also check
+ * may_have_burning out there the way sand_step_gas() checks
+ * may_have_gas) holds exactly as it did before. */
+void sand_step_reactions(sand_t *s, int gx, int gy);
 
 /* Defined in sand_liquid.c, called from sand.c's per-cell sweep. The one
  * piece of liquid movement that has to live inside that sweep rather than in
