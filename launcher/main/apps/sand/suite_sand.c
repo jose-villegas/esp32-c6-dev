@@ -4624,6 +4624,103 @@ static void test_snow_keeps_on_dry_ground(void)
         "heat, and a floor is neither");
 }
 
+/* Total mass of one liquid on the board - fill levels, not cell count.
+ * A liquid that spreads occupies more cells holding less each, so cells
+ * are the wrong unit for asking whether any of it was destroyed. */
+static int liquid_mass_of(uint8_t id)
+{
+    int m = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == id) {
+                m += CELL_VARIANT(c);
+            }
+        }
+    }
+    return m;
+}
+
+/* Burying lava does not delete it.
+ *
+ * smothered() clears a burning cell outright when all four neighbours are
+ * denser and solid, which is right for a FLAME - burial starves it of air -
+ * and wrong for lava, which is not burning anything. It is simply hot, and
+ * burying something hot should leave something hot.
+ *
+ * Reported as "lava is clearly evaporating against stone, I can even see
+ * bubbles up". It was, and the bubbles were its own flare going off as it
+ * went. A first probe found nothing because it used a clean rectangular
+ * vessel, which has no cell with four solid neighbours; every vessel drawn
+ * by hand has dozens. */
+static void test_lava_buried_in_stone_is_not_deleted(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    const int before = liquid_mass_of(MAT_LAVA);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, before,
+        "fixture check: one full cell of lava, walled in on all four sides");
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "lava walled in by stone must still be there - smothering puts a "
+        "FLAME out because burial starves it of air, and lava is not "
+        "burning anything");
+}
+
+/* Nor does conducted heat boil it away.
+ *
+ * conduct_heat() turns whatever the heat reaches into steam if that cell
+ * is KIND_LIQUID, and lava is a liquid - so lava on the far side of a
+ * conductor was boiled into steam by the heat of other lava. A plain pool
+ * never showed it, because a pool has no conductor running through it. A
+ * vessel with stone in it does, and that is what a drawn one looks like.
+ *
+ * The measurement that found it: a pillared vessel lost 83% of its lava in
+ * 200 steps where a flat-floored one lost none, and water and oil in the
+ * same pillared vessel lost nothing - which is what ruled out a bug in
+ * liquid movement and pointed at the burning path. */
+static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* Two pools of lava with a single conducting wall between them. */
+    const int wall = W / 2;
+    for (int y = H - 3; y < H - 1; y++) {
+        sand_set(&s, wall, y, STONE);
+        for (int x = 1; x < W - 1; x++) {
+            if (x != wall) {
+                sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+            }
+        }
+    }
+    const int before = liquid_mass_of(MAT_LAVA);
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "lava must not be boiled into steam by heat conducted from other "
+        "lava - a liquid that BURNS is a heat source, and a heat source is "
+        "not a kettle");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_STEAM),
+        "and no steam at all should come off it: there is no water here, "
+        "so steam is the visible symptom of lava being boiled");
+}
+
 /* Snow floats, because it is lighter than what it lands on.
  *
  * Not decoration: floating is what puts snow ON TOP of a pool rather than
@@ -6921,6 +7018,8 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
+    RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
     RUN_TEST(test_reinitialising_forgets_the_old_board);
     RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
