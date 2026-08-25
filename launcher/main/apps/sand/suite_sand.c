@@ -3412,23 +3412,27 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
     free(rows);
     free(blocks);
 
-    /* Measured on device at 314514 us (~314 ms) - nowhere near
-     * STEP_BUDGET_US, and deliberately not held to it: unlike the flip
-     * and water tests above, which model a single realistic user
-     * gesture (a pour, then a tilt), an edge-to-edge screen of gas is
-     * not something the current pour-brush UI can practically produce -
-     * this is a deliberately synthetic worst case (see this test's own
-     * top comment), not a claim that a real user could trigger a 300 ms
-     * stall. If fire+gas ever needs to support a fully-packed screen at
-     * interactive rates, that is the "creeping fire" design explicitly
-     * deferred in the plan this was built from, not a bug in this v1.
-     * The budget here exists purely to catch a much worse regression
-     * (an accidental O(n^2), say) - generous headroom on purpose, not a
+    /* Measured on device at 321339-321342 us (~321 ms), exactly
+     * reproducible across three separate captures (this simulation's
+     * fixed RNG seeds mean identical runs give identical timings) -
+     * nowhere near STEP_BUDGET_US, and deliberately not held to it:
+     * unlike the flip and water tests above, which model a single
+     * realistic user gesture (a pour, then a tilt), an edge-to-edge
+     * screen of gas is not something the current pour-brush UI can
+     * practically produce - this is a deliberately synthetic worst case
+     * (see this test's own top comment), not a claim that a real user
+     * could trigger a stall this long. If fire+gas ever needs to
+     * support a fully-packed screen at interactive rates, that is the
+     * "creeping fire" design explicitly deferred in the plan this was
+     * built from, not a bug in this v1. The budget below is ~9% over
+     * the measured number - tight enough to catch a real regression,
+     * loose enough to absorb ordinary flash-layout noise (the
+     * ~2-5% this project has already characterised elsewhere), not a
      * frame-rate promise. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)elapsed,
+    TEST_ASSERT_LESS_THAN_MESSAGE(350000, (int)elapsed,
         "a full-screen cascade must stay in the same ballpark as measured "
-        "- a large jump here means something got much more expensive, "
-        "not that this specific number is a real-time requirement");
+        "- a jump here means something got much more expensive, not that "
+        "this specific number is a real-time requirement");
 }
 
 static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
@@ -3482,13 +3486,15 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
     free(rows);
     free(blocks);
 
-    /* Measured on device at 230962 us (~231 ms) - roughly 30% headroom
-     * on top of that, same "generous, not a real-time promise" reasoning
-     * as the cascade test above: an edge-to-edge screen of fire is not
+    /* Measured on device at 230962 us (~231 ms), identical across two
+     * separate captures - same "not a real-time promise" reasoning as
+     * the cascade test above: an edge-to-edge screen of fire is not
      * something the pour-brush UI can practically sustain, but this
-     * catches a real regression if the steady-state cost balloons far
-     * past what was actually measured. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(300000, (int)per_step,
+     * catches a real regression if the steady-state cost balloons past
+     * what was actually measured. ~8% headroom, tightened from an
+     * initial, untuned 300000 once the number proved exactly
+     * reproducible rather than noisy. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(250000, (int)per_step,
         "steady-state cost of a full screen of fire must stay in the "
         "same ballpark as measured - not a real-time promise, but a "
         "real regression guard");
