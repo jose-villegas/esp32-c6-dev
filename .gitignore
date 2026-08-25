@@ -88,6 +88,10 @@ html_report/
 # launcher/tools/sweeps/README.md. The scripts themselves are tracked.
 launcher/tools/sweeps/results/
 
+# Same idea for tools/report_test_results.sh and tools/report_performance.sh
+# - generated reports and raw captures, not something to commit.
+launcher/tools/results/
+
 ### Windows
 # Windows thumbnail cache files
 Thumbs.db
