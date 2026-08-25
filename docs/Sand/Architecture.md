@@ -119,6 +119,7 @@ a quantity a cell carries.
 | `shatters_to` | glass, sand | what a cell at temperature >= `SAND_SHOCK_HEAT` (9) becomes when something cold touches it - **on contact, no roll** |
 | `thaws` | snow, 4 | chance/256 per step per adjacent **liquid** cell that it gives up and becomes `heats_to` |
 | `SAND_AMBIENT_HEAT` | 3 | not a field - where room temperature sits on the 0-15 scale, so that **cold has somewhere to go** |
+| `conducts >> SPREAD_SHIFT` | glass, 220>>3 = 27 | chance/256 that a cell off ambient drags a neighbour of the same kind one level towards itself, when they differ by 2 or more |
 
 `thaws` is a second trigger for the transformation `heat_chance` already
 drives, and needs its own number because one cannot serve both. Snow beside
@@ -171,6 +172,47 @@ cell now, the way fire reaches out to its neighbours. Melting (`thaws`)
 stays there too, but for a different reason: a neighbour scan per liquid
 cell would land on the commonest material on the board, where a scan per
 snow cell lands on something that arrives in drifts.
+
+### Temperature spreads along the material
+
+A chilled cell drags its neighbours down and a heated one pulls them up,
+which is what `conducts` has always meant - applied *within* the material
+rather than only to whatever is on the far side of it.
+
+Without it the effect was real and nearly invisible. Only the single cell a
+flake touched ever changed, and barely: snow melts after a chill or two and
+`cools` pulls the cell straight back towards ambient, so it hovered one
+level off and nobody could see it on a 184x224 board. Spreading turns that
+into a patch of frost creeping outward from where the snow landed.
+
+Two things keep it from destroying the mechanic, and both were found by
+breaking them:
+
+- **Scaled down hard.** At the full `conducts` value a pane goes isothermal
+  within a step or two, and a wall that is all one temperature cannot be
+  hot inside and cold outside. Measured: a pane under lava never reached
+  melting at all, because heat was shared out faster than any cell could
+  bank it. `SPREAD_SHIFT` is 3, so 27 in 256 rather than 220.
+- **Only across a gap of 2 or more.** A difference of one is left alone, so
+  a smooth gradient across a wall survives instead of collapsing flat.
+
+It is derived from `conducts` rather than being its own field because it is
+the same physical property - a material that carries a fire's heat well
+carries its own temperature well - and two independent numbers could
+disagree about a material for no reason anyone could explain.
+
+### What chilling costs the cold material
+
+Taking heat out of something **above** room temperature costs the cold
+material its own `heats_to`: snow that cooled a glowing pane for free would
+be an unlimited heat sink arriving in a light drift.
+
+Pushing cold *into* something at or below room temperature costs nothing,
+because nothing was absorbed. That distinction is load-bearing rather than
+pedantic - without it, snow melted on contact with ordinary cold glass at
+the rate tuned for standing beside a fire, which makes a snowbank
+impossible to keep anywhere near the one building material it exists to be
+used against.
 
 ### The threshold is a visible state
 

@@ -4021,6 +4021,95 @@ static void test_snow_frosts_a_resting_pane(void)
         "resting one");
 }
 
+/* Cold spreads THROUGH the glass, past the cells the snow is touching.
+ *
+ * Without this the effect was real and nearly invisible: only the single
+ * cell under a flake ever changed, and it barely changed, because snow
+ * melts after a chill or two and `cools` drags the cell straight back
+ * towards ambient. One cell one level off ambient is not something anyone
+ * spots on a 184x224 board.
+ *
+ * Spreading it makes a patch of frost that creeps outward from where the
+ * snow landed, which is both what frost looks like and what makes the
+ * state readable. It is the same `conducts` that carries a fire's heat
+ * through a wall, applied within the material - scaled down hard, because
+ * at its own value a pane goes isothermal in a step or two and a wall that
+ * is all one temperature cannot be hot inside and cold outside. */
+static void test_frost_spreads_beyond_the_snow_touching_it(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, GLASS);
+    }
+    /* Snow on the middle two cells only. */
+    const int lo = W / 2 - 1, hi = W / 2;
+    for (int x = lo; x <= hi; x++) {
+        sand_set(&s, x, H - 3, SNOW);
+    }
+
+    int reached = 0;
+    for (int i = 0; i < 600 && !reached; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            /* Strictly outside the snow's own footprint and its two
+             * immediate sides, so this cannot pass on direct contact. */
+            if (x >= lo - 1 && x <= hi + 1) {
+                continue;
+            }
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_GLASS &&
+                CELL_VARIANT(c) < SAND_AMBIENT_HEAT) {
+                reached = 1;
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(reached,
+        "cold must travel along the pane to cells no snow ever touched - a "
+        "single chilled cell one level off ambient is a state change nobody "
+        "can see");
+}
+
+/* Snow keeps on ordinary cold glass.
+ *
+ * It did not, briefly, and the report was exact: snow turned to water on
+ * contact with glass when it never used to. Chilling had just been moved
+ * so that it reaches panes at rest, and chilling costs the cold material
+ * its own `heats_to` - so snow started paying the price tuned for standing
+ * beside a FIRE in exchange for pushing a resting pane one level cooler.
+ *
+ * The cost now tracks what was actually absorbed: taking heat out of
+ * something above room temperature melts snow, pushing cold into something
+ * at or below it does not. Otherwise a snowbank cannot be kept anywhere
+ * near the one building material it is meant to be used against. */
+static void test_snow_keeps_on_ordinary_cold_glass(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, GLASS);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 3, SNOW);
+    }
+    const int flakes = count_cells_of(MAT_SNOW);
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(flakes, count_cells_of(MAT_SNOW),
+        "snow resting on glass at room temperature must not melt - it pays "
+        "for heat it takes, and there was none to take");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_WATER),
+        "and it must leave no water behind, which is how the melting showed "
+        "up on the board");
+}
+
 /* Frost fades. It is a state, not a scar.
  *
  * Ambient is a resting point that gets approached from BOTH sides, which
@@ -4057,6 +4146,113 @@ static void test_a_frosted_pane_warms_back_to_room_temperature(void)
         "the same `cools` drift that brings a hot one down, running the "
         "other way");
 }
+
+/* Lava on one side of a wall, snow on the other: it cracks.
+ *
+ * The scenario the mechanism exists for, end to end and with nothing
+ * pre-set - hold lava against a glass wall until it glows, then bank snow
+ * on the far face. Every other shock test places a pane at a chosen
+ * temperature, which tests the rule but assumes the pane can get hot at
+ * all; here the heat has to arrive from a real source, through the
+ * material, and reach the same cell the snow is touching.
+ *
+ * A vertical wall, deliberately. Laid flat with lava on top there is
+ * nowhere for the snow to be except on top of the lava, where it flashes
+ * off without ever meeting the hot cell - which is exactly what happens on
+ * the board if you pour snow into an open basin rather than banking it
+ * against the outside.
+ *
+ * The ORDER is the other half and the second block asserts it. Snow
+ * present from the start fights the ramp instead of exploiting it:
+ * chilling is faster than heating, so the wall never arrives at the
+ * threshold and just sits there, warm on one face and frosted on the
+ * other. Heat first, chill second. */
+static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
+{
+    const int wall = W / 2;
+
+    /* --- heat it first ---------------------------------------------- */
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = 1; y < H - 1; y++) {
+        sand_set(&s, wall, y, GLASS);
+    }
+    for (int y = H - 3; y < H - 1; y++) {
+        for (int x = 1; x < wall; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+
+    /* Soak until THE CELL THE SNOW WILL TOUCH is hot, not until any glass
+     * anywhere is. Waiting on hottest_glass() passes as soon as some cell
+     * up the wall gets there, which need not be the one being chilled a
+     * moment later - a fixture that tests the wrong cell reports on the
+     * wrong thing. */
+    const int face = H - 2;
+    int i;
+    for (i = 0; i < 4000; i++) {
+        const cell_t c = sand_at(&s, wall, face);
+        if (CELL_MATERIAL(c) == MAT_GLASS &&
+            CELL_VARIANT(c) >= SAND_SHOCK_HEAT) {
+            break;
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GLASS,
+        CELL_MATERIAL(sand_at(&s, wall, face)),
+        "fixture check: the wall cell being tested must survive the soak - "
+        "if lava melted it there is nothing left to shatter");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SAND_SHOCK_HEAT,
+        CELL_VARIANT(sand_at(&s, wall, face)),
+        "fixture check: lava held against a glass wall has to drive THAT "
+        "cell past the shock threshold on its own, or the rest proves "
+        "nothing about heat arriving from a real source");
+
+    const int sand_before = count_cells_of(MAT_SAND);
+    sand_set(&s, wall + 1, face, SNOW);
+
+    int cracked = 0;
+    for (int k = 0; k < 30 && !cracked; k++) {
+        sand_step(&s, 0, 1000, 0);
+        cracked = count_cells_of(MAT_SAND) > sand_before;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(cracked,
+        "snow banked against a wall that lava has heated from the far side "
+        "must crack it - the gradient works whichever side the heat came "
+        "from, which is the whole point of it being a gradient");
+
+    /* --- and without snow it never cracks at all --------------------- */
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = 1; y < H - 1; y++) {
+        sand_set(&s, wall, y, GLASS);
+    }
+    for (int y = H - 3; y < H - 1; y++) {
+        for (int x = 1; x < wall; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+
+    const int dry_sand_before = count_cells_of(MAT_SAND);
+    for (int k = 0; k < 900; k++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(dry_sand_before, count_cells_of(MAT_SAND),
+        "the identical wall with no snow must never shatter, however long "
+        "the lava works on it - lava MELTS glass and only cold SHATTERS it, "
+        "and a test that cannot tell those apart would pass on a board "
+        "where snow did nothing at all");
+}
+
+
 
 /* The same snow on a cold pane does nothing at all.
  *
@@ -6622,7 +6818,10 @@ void run_sand_suite(void)
     RUN_TEST(test_snow_shatters_a_glowing_pane_into_sand);
     RUN_TEST(test_cold_glass_is_unharmed_by_snow);
     RUN_TEST(test_snow_frosts_a_resting_pane);
+    RUN_TEST(test_lava_one_side_snow_the_other_cracks_the_wall);
     RUN_TEST(test_a_frosted_pane_warms_back_to_room_temperature);
+    RUN_TEST(test_frost_spreads_beyond_the_snow_touching_it);
+    RUN_TEST(test_snow_keeps_on_ordinary_cold_glass);
     RUN_TEST(test_the_shock_threshold_is_exact);
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);

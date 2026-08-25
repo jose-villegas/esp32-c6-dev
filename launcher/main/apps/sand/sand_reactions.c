@@ -483,10 +483,21 @@ static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
 
-        /* The exchange runs both ways. A material that chilled its
-         * neighbours for nothing would be an unlimited heat sink arriving
-         * in a light drift, so it pays with its own heats_to. */
-        if (try_heat_transform(s, x, y, w, h)) {
+        /* The exchange runs both ways, but ONLY when there was actually
+         * heat to take. A material that cooled a glowing pane for nothing
+         * would be an unlimited heat sink arriving in a light drift, so
+         * taking heat out of something above room temperature costs it its
+         * own heats_to.
+         *
+         * Pushing cold INTO something at or below room temperature is not
+         * absorbing heat and does not cost anything. Without that
+         * distinction snow melted on contact with ordinary cold glass -
+         * at the rate tuned for standing next to a fire - which made a
+         * snowbank impossible to keep on a glass shelf and read, fairly,
+         * as a bug. It appeared the moment chilling started reaching
+         * resting panes; before that, snow only ever paid when it had
+         * genuinely cooled something hot. */
+        if (temp > SAND_AMBIENT_HEAT && try_heat_transform(s, x, y, w, h)) {
             return false;
         }
     }
@@ -494,6 +505,24 @@ static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
 }
 
 
+
+/* How much slower temperature spreads ALONG a material than a fire's heat
+ * crosses it: `conducts` shifted right by this much.
+ *
+ * `conducts` is 220 for glass and stone, tuned for the question "does a
+ * flame on one side of this wall reach what is on the other side" - which
+ * wants to be nearly certain. Spreading a cell's own temperature to its
+ * neighbour at that rate makes the material ISOTHERMAL within a step or
+ * two, and a wall that is all one temperature cannot be hot on the inside
+ * and cold on the outside, which is the entire mechanic. Measured: at the
+ * full rate a pane under lava never reached melting at all, because the
+ * heat was shared out faster than any one cell could bank it.
+ *
+ * Derived from `conducts` rather than being its own field, because it IS
+ * the same physical property - a material that carries a fire's heat well
+ * carries its own temperature well - and two independent numbers could
+ * disagree about a material for no reason anyone could explain. */
+#define SPREAD_SHIFT 3
 
 /* One cell whose temperature is not room temperature: it relaxes back
  * towards it.
@@ -512,10 +541,61 @@ static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
  * Returns whether the cell still differs from ambient, which is what keeps
  * s->may_have_temperature honest. */
 static bool step_one_tempered_cell(sand_t *s, uint8_t *row, int x, int y,
-                                   const reaction_t *r)
+                                   int w, int h, const reaction_t *r)
 {
     const cell_t c = row[x];
     const uint8_t temp = CELL_VARIANT(c);
+
+    /* SPREAD ALONG THE MATERIAL first. A pane is a sheet of the same
+     * stuff, so a cell that has been chilled drags its neighbours down and
+     * a cell that has been heated pulls them up - which is what `conducts`
+     * has always meant, applied within the material rather than only to
+     * what is on the far side of it.
+     *
+     * Without this, only the single cell a flake is touching ever changes,
+     * and it barely changes: snow melts after a chill or two, so the cell
+     * sits one level off ambient and the colour shift is almost invisible.
+     * Spreading turns that into a patch of frost creeping outward from
+     * where the snow landed, which is both what it should look like and
+     * what makes the state readable at a glance.
+     *
+     * PUSHED onto neighbours rather than pulled from them, because pulling
+     * would mean a cell at ambient needing a turn to notice a frosted
+     * neighbour - and a cell at ambient never gets one. The same shape of
+     * bug as chilling being driven from the warm side.
+     *
+     * Only across a gap of 2 or more. A difference of one is left alone,
+     * so a smooth gradient across a wall survives instead of collapsing to
+     * a single flat temperature - which would erase the hot-inside,
+     * cold-outside difference the whole mechanic runs on. */
+    if (r->conducts != 0) {
+        for (int d = 0; d < 4; d++) {
+            const int nx = x + reaction_dirs[d][0];
+            const int ny = y + reaction_dirs[d][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            const cell_t n = s->cells[nat];
+            if (CELL_IS_EMPTY(n) || reaction_of(n)->heat_ramp == 0) {
+                continue;
+            }
+            const uint8_t nt = CELL_VARIANT(n);
+            const int gap = (int)temp - (int)nt;
+            if (gap > -2 && gap < 2) {
+                continue;
+            }
+            if ((int)(rng_next(&s->rng) & 0xFF) >=
+                (r->conducts >> SPREAD_SHIFT)) {
+                continue;
+            }
+            s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n),
+                                      (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
+            s->may_have_temperature = true;
+            mark_rows(s, ny, ny);
+            wake_block_and_neighbors(s, nx, ny);
+        }
+    }
 
     if (r->cools == 0 || (int)(rng_next(&s->rng) & 0xFF) >= r->cools) {
         return temp != SAND_AMBIENT_HEAT;
@@ -979,7 +1059,7 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
          * variant test. */
         if (r->heat_ramp != 0) {
             if (CELL_VARIANT(c) != SAND_AMBIENT_HEAT &&
-                step_one_tempered_cell(s, row, x, y, r)) {
+                step_one_tempered_cell(s, row, x, y, w, h, r)) {
                 found |= FOUND_TEMPERATURE;
             }
             continue;
