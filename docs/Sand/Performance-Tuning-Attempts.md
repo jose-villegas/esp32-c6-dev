@@ -613,6 +613,9 @@ calling absolutely needs to be inlined somewhere else.
   today, including the gas material's own section.
 - [`Adding-a-Material.md`](Adding-a-Material.md) — the practical
   checklist this campaign's gas-material findings fed directly into.
+- [`Architecture.md`](Architecture.md) — the device-verification workflow
+  section there is the "how to reproduce a number in this file" version
+  of the numbers here, written down as one exact command sequence.
 - [Display-and-Rendering.md](../Notes/Display-and-Rendering.md) — the
   parallel `gfx_dirty.h`/`row_runs.h` cap sweeps.
 - [Optimization-Playbook.md](../Notes/Optimization-Playbook.md) — several

@@ -37,9 +37,12 @@ purpose:
 - **Liquid** (`KIND_LIQUID`, e.g. water): a *fill level*, 1-15
   (`MASS_MAX`). This is what lets water level itself using only its
   immediate neighbours - see [The water model](#the-water-model) below.
-- **Transient** (not implemented yet - fire, steam): would be *life
-  remaining*, counting down to nothing. Reusing the nibble is what makes
-  that free instead of needing its own byte.
+- **Transient** (`decay != 0`, e.g. gas, fire): *life remaining*, counting
+  down to nothing. Reusing the nibble is what makes that free instead of
+  needing its own byte - see [Gas: the same primitives, upside
+  down](#gas-the-same-primitives-upside-down) and
+  [`Adding-a-Material.md`](Adding-a-Material.md) for how gas and fire
+  both use this.
 
 ## Materials are a flash-resident table, not code
 
@@ -372,6 +375,9 @@ several small functions instead of one large one.
   in the same folder as this file.
 - `docs/Sand/Adding-a-Material.md` - the practical how-to for adding a
   new material, worked through end to end against a real one (gas).
+- [`Architecture.md`](Architecture.md) - a single-page, diagram-first map
+  of the whole app: the pipeline, the sleeping system, the material
+  table, and the exact hops to get a real number off the device.
 - `docs/Testing-Guide.md` - how the host and device test suites work, and
   why release builds carry none of the test code.
 - `launcher/tools/cognitive_complexity.py` - the complexity analyzer

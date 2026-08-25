@@ -219,3 +219,6 @@ The gas tests are a reasonable template for a new `KIND`:
   above.
 - `docs/Testing-Guide.md` — the host/device test split this guide's
   testing section assumes.
+- [`Architecture.md`](Architecture.md) — the "what KIND should this be"
+  decision diagram there is this guide's step 2 as a picture, plus the
+  exact device-verification commands step 6 assumes you already know.
