@@ -179,6 +179,69 @@ const material_t materials[MATERIAL_MAX] = {
          * KIND_STATIC material and left at zero, same as stone's own row. */
     },
 
+    [MAT_STEAM] = {
+        .name    = "Steam",
+        .kind    = KIND_GAS,        /* rises and disperses through the
+                                     * same pass gas and fire do
+                                     * (sand_step_gas() dispatches on
+                                     * kind, not material ID) - lighter
+                                     * and faster-dispersing than either
+                                     * via the figures below, not a
+                                     * different mechanism. Doubles as
+                                     * smoke: a fire's smoke and a
+                                     * kettle's steam want exactly the
+                                     * same "pale, light, rises, fades"
+                                     * behaviour, and a second gas
+                                     * material would be a second row for
+                                     * no visible gain - see
+                                     * reaction_t.smoke in material.h. */
+
+        .density = 5,               /* below gas (10) and fire (15), so
+                                     * both of those can rise through and
+                                     * displace steam, mixing through it
+                                     * - can_enter() requires strictly
+                                     * greater density to displace, so
+                                     * the reverse is not true: steam
+                                     * cannot displace gas or fire. The
+                                     * same already-accepted
+                                     * one-directional limitation
+                                     * can_enter() has everywhere else -
+                                     * see conduct_heat()'s own comment
+                                     * in sand_reactions.c for the one
+                                     * place this limitation actually
+                                     * bites (steam trapped at the
+                                     * bottom of standing water). */
+        .slip    = 255,             /* no resistance, same reasoning as
+                                     * gas's own row */
+        .repose  = 0,
+        .scatter = 140,             /* above both gas's 120 and fire's
+                                     * 120 - a wispier, more turbulent
+                                     * rise, reading as steam rather than
+                                     * smoke. Starting point, not final -
+                                     * tune on device like every other
+                                     * constant here. */
+
+        .decay    = 24,             /* matches ember's own figure as a
+                                     * starting point, tune independently
+                                     * later - roughly 160 steps, ~2.7s
+                                     * at ~60fps, so a wisp of steam
+                                     * visibly fades rather than either
+                                     * lingering or vanishing at once. */
+        .buoyancy = 160,            /* noticeably faster than gas's 96 or
+                                     * fire's 96 - steam should read as
+                                     * rising eagerly off a boiling pot,
+                                     * not drifting the way gas does.
+                                     * Starting point, not final - tune
+                                     * on device like every other
+                                     * constant here. */
+        .sight    = 20,             /* wider than gas's 16 - a puff of
+                                     * steam disperses generously rather
+                                     * than staying a tight column the
+                                     * way fire's own 5 does. Starting
+                                     * point, not final - tune on device
+                                     * like every other constant here. */
+    },
+
     [MAT_EMBER] = {
         .name    = "Ember",
         .kind    = KIND_STATIC,     /* what wood chars into - stays put and
@@ -211,7 +274,7 @@ const material_t materials[MATERIAL_MAX] = {
                                      * does. */
     },
 
-    /* Slots 8-15 are unused and left zeroed except for these, which make an
+    /* Slots 9-15 are unused and left zeroed except for these, which make an
      * unknown material inert rather than undefined: it never moves and nothing
      * can displace it. Designated initialisers zero the rest. */
     [MAT_COUNT ... MATERIAL_MAX - 1] = {
@@ -252,9 +315,23 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .burns = 1,     /* the one heat source that exists today - see
                          * sand_reactions.c's dispatch, which now keys off
                          * this instead of CELL_MATERIAL(c) == MAT_FIRE */
-        /* .quench_to left at 0: touching water still just vanishes, the
-         * same behaviour fire always had before steam existed - see
-         * material.h's own comment on quench_to. */
+
+        .smoke = 40,    /* chance in 256 that a burnt-out fire cell leaves
+                         * MAT_STEAM behind - smoke, physically the same
+                         * material a kettle's steam is (see MAT_STEAM's
+                         * own row above). Lower than ember's 90: a flame
+                         * guttering out on its own is a smaller, briefer
+                         * event than a whole ember finishing a slow
+                         * burn. Starting point, not final - tune on
+                         * device like every other constant here. */
+
+        .quench_to = MAT_STEAM,   /* touching water no longer just
+                                  * vanishes - it boils off, at the cost
+                                  * of a unit of the water's own mass
+                                  * (see step_one_burning_cell() in
+                                  * sand_reactions.c). Steam is a
+                                  * byproduct, not a free lunch: a pot
+                                  * boiled dry should eventually run dry. */
     },
 
     [MAT_WOOD] = {
@@ -274,7 +351,16 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * sand_reactions.c's dispatch, which is why that
                          * now keys off reaction_t.burns rather than
                          * CELL_MATERIAL(c) == MAT_FIRE */
-        /* .quench_to left at 0 for the same reason fire's is, above. */
+
+        .smoke = 90,    /* well above fire's 40: a whole ember finishing
+                         * its slow burn is a bigger, more definite event
+                         * than a flame guttering out, and should leave
+                         * smoke behind far more often. Starting point,
+                         * not final - tune on device like every other
+                         * constant here. */
+
+        .quench_to = MAT_STEAM,   /* same reasoning as fire's own row -
+                                  * see there. */
 
         .flare = 48,    /* chance in 256, per step, that this ember emits
                          * a MAT_FIRE cell into an empty cardinal neighbour
@@ -339,13 +425,17 @@ static const gfx_color_t palette[256] = {
                                     * is life remaining, same trick gas
                                     * already uses */
     SHADES(0x3A2616, 0x7A5230),   /* wood  - dark grain to lit grain */
+    SHADES(0x5A6470, 0xE6EEF6),   /* steam - variant is life remaining, so
+                                    * a dying wisp is grey and a fresh one
+                                    * is near-white; same trick fire and
+                                    * gas already use */
     SHADES(0x2A0A00, 0xFF7A28),   /* ember - dying char to glowing orange,
                                     * deliberately redder and darker than
                                     * fire's own yellow-white so a
                                     * smouldering log reads differently
                                     * from the flame above it */
     UNUSED, UNUSED, UNUSED, UNUSED,
-    UNUSED, UNUSED, UNUSED, UNUSED,
+    UNUSED, UNUSED, UNUSED,
 };
 
 const gfx_color_t *material_palette(void)

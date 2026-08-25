@@ -1611,6 +1611,7 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
 #define GAS   CELL_MAKE(MAT_GAS,   8)
 #define FIRE  CELL_MAKE(MAT_FIRE,  8)
 #define WOOD  CELL_MAKE(MAT_WOOD,  8)
+#define STEAM CELL_MAKE(MAT_STEAM, 8)
 #define EMBER CELL_MAKE(MAT_EMBER, 8)
 
 /* Total AMOUNT of a material, not the number of cells holding it.
@@ -2653,8 +2654,9 @@ static void test_extinguishing_wins_over_igniting(void)
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 3)),
-        "fire touching water must be extinguished");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "fire touching water must be extinguished, and now becomes steam "
+        "rather than simply vanishing - see reaction_t.quench_to");
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 4, 3)),
         "extinguishing must win outright over igniting - a gas neighbour "
         "must not catch fire in the same step the fire that would have "
@@ -2811,19 +2813,39 @@ static void test_liquid_wins_over_smothering(void)
     sand_set(&s, 3, 2, STONE);
     sand_set(&s, 2, 3, STONE);
     sand_set(&s, 4, 3, STONE);
+    /* The two upward diagonals also need blocking, not just the three
+     * cardinal sides above - the straight-up cell being blocked leaves
+     * try_slide()'s own diagonal fallback free to carry fire out to
+     * (2,2) or (4,2) before reactions ever runs, now that the assertion
+     * below checks WHAT fire became rather than merely that (3,3) ended
+     * up empty (which a fire that drifted away would also satisfy,
+     * masking exactly this - confirmed: this is what the first version
+     * of this test, without these two lines, actually did). Mirrors
+     * test_fire_is_not_smothered_with_a_gap's identical reasoning. */
+    sand_set(&s, 2, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
     sand_set(&s, 3, 4, WATER);
-    sand_set(&s, 3, 5, STONE);   /* floor, so water does not fall away
-                                  * before reactions checks it */
+    /* Floor plus both down-diagonal neighbours, not the floor alone -
+     * WATER here is CELL_MAKE(MAT_WATER, 8), not a full MASS_MAX cell,
+     * and move_liquid_grain() can hand its entire mass to a single open
+     * down-diagonal in one main-sweep call, draining (3,4) before
+     * reactions ever gets a turn to see it - see
+     * test_creating_steam_arms_the_gas_pass's identical fix for the
+     * full reasoning. */
+    sand_set(&s, 3, 5, STONE);
+    sand_set(&s, 2, 5, STONE);
+    sand_set(&s, 4, 5, STONE);
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 3)),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
         "fire touching water on even one side must extinguish via the "
-        "liquid rule - smothered() itself would have said no here too "
-        "(it explicitly excludes liquid neighbours from counting "
-        "towards a smother, even though water is denser than fire), so "
-        "this confirms that exclusion does not accidentally block the "
-        "liquid path from still working");
+        "liquid rule (becoming steam, not simply vanishing - see "
+        "reaction_t.quench_to) - smothered() itself would have said no "
+        "here too (it explicitly excludes liquid neighbours from "
+        "counting towards a smother, even though water is denser than "
+        "fire), so this confirms that exclusion does not accidentally "
+        "block the liquid path from still working");
 }
 
 static void test_igniting_a_neighbour_marks_its_row_dirty(void)
@@ -3087,6 +3109,133 @@ static void test_an_ember_flares_fire_into_an_empty_neighbour(void)
         "neighbour - at 48 in 256 per step, 200 steps is comfortably "
         "enough that never seeing one means try_flare() is broken, not "
         "unlucky");
+}
+
+static void test_quenching_costs_the_water_a_unit_of_mass(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX - 1,
+        CELL_VARIANT(sand_at(&s, 4, 3)),
+        "the liquid neighbour that quenches a burning cell must lose "
+        "exactly one unit of its own mass, not the whole cell - a fire "
+        "should cost a pot a sip of water per step boiled, not a gulp");
+}
+
+static void test_steam_rises_and_disperses(void)
+{
+    fixture();
+    sand_set(&s, 3, H - 1, STEAM);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM,
+        CELL_MATERIAL(sand_at(&s, 3, H - 2)),
+        "with ordinary gravity pointing down, steam rises - the same "
+        "KIND_GAS movement gas and fire already have");
+}
+
+static void test_creating_steam_arms_the_gas_pass(void)
+{
+    fixture();
+    sand_set_buoyancy(&s, 0);   /* keep fire from rising away before
+                                 * reactions quenches it this same step -
+                                 * mirrors test_fire_is_not_smothered_by_gas's
+                                 * own use of this technique */
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 3, 4, WATER);
+    /* Floor plus both down-diagonal neighbours, not the floor alone:
+     * move_liquid_grain() tries down, then down-the-slope both ways, and
+     * a mostly-empty cell (WATER here is CELL_MAKE(MAT_WATER, 8), not a
+     * full MASS_MAX) can hand its ENTIRE mass to a single open diagonal
+     * in one main-sweep call, draining (3,4) completely before
+     * reactions ever gets a turn to check it for a liquid neighbour
+     * (confirmed: this is exactly what the first version of this test,
+     * with only the floor blocked, actually did). */
+    sand_set(&s, 3, 5, STONE);
+    sand_set(&s, 2, 5, STONE);
+    sand_set(&s, 4, 5, STONE);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "setup: quenching must have produced steam, with no other gas "
+        "anywhere on the grid that could accidentally arm may_have_gas "
+        "some OTHER way and mask the bug this test exists to catch");
+
+    sand_set_buoyancy(&s, 255);   /* steam's own turn to rise, forced
+                                   * deterministic the same way every
+                                   * other single-step gas-movement test
+                                   * in this suite is */
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 2)),
+        "steam created by place_reacted() must actually be able to rise "
+        "on its very next chance - if may_have_gas was not latched for "
+        "it, sand_step_gas() early-returns and the cell sits frozen on "
+        "the grid forever, a bug this test's empty-grid setup is built "
+        "specifically to catch (see place_reacted()'s own comment in "
+        "sand_reactions.c)");
+}
+
+static void test_burnt_out_fire_can_leave_smoke(void)
+{
+    fixture();
+    sand_set_decay(&s, 255);
+    sand_set_buoyancy(&s, 0);   /* keep every fire cell pinned in place
+                                 * rather than rising or spreading into
+                                 * whatever gaps open up as neighbours
+                                 * burn out around it - not required for
+                                 * correctness (a drifting fire cell
+                                 * still burns out and can still leave
+                                 * smoke wherever it ends up), but it
+                                 * keeps this deterministic rather than
+                                 * merely probable */
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, FIRE);
+        }
+    }
+
+    /* Checked after EVERY step, not just once at the end, and for a
+     * reason worth spelling out: s->decay is a single override that
+     * applies to every material at once (see sand_set_decay()), not
+     * just fire, so a freshly created steam cell is JUST as forced to
+     * decay away as the fire that made it - it does not get to sit
+     * still and wait to be inspected. sand_set(FIRE) here (unlike
+     * sand_spawn()) also skips random_cell()'s "fresh transient starts
+     * at full life" rule, so these cells start at CELL_MAKE(..., 8), not
+     * 15 - they burn out around step 8, not step 15. A loop that ran a
+     * comfortable margin PAST that (as
+     * test_an_ember_burns_out_over_time's does, deliberately, to give a
+     * late flare room to also finish decaying) would just as
+     * deliberately give any steam created around step 8 enough of that
+     * same margin to fully decay away AGAIN before the check ever runs -
+     * the opposite of comfortable here. Checking every step catches
+     * steam the moment it exists, however long it goes on to live. */
+    bool found_steam = false;
+    for (int i = 0; i < 2 * (MATERIAL_VARIANTS - 1) && !found_steam; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_steam; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STEAM) {
+                    found_steam = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(found_steam,
+        "a whole grid of fire burning out at once (40 in 256 smoke "
+        "chance per cell) must leave at least one MAT_STEAM cell behind "
+        "- not seeing a single one across 64 cells means smoke is "
+        "broken, not unlucky");
 }
 
 /* --- conservation ------------------------------------------------------- */
@@ -3971,6 +4120,10 @@ void run_sand_suite(void)
     RUN_TEST(test_an_ember_does_not_rise);
     RUN_TEST(test_an_ember_burns_out_over_time);
     RUN_TEST(test_an_ember_flares_fire_into_an_empty_neighbour);
+    RUN_TEST(test_quenching_costs_the_water_a_unit_of_mass);
+    RUN_TEST(test_steam_rises_and_disperses);
+    RUN_TEST(test_creating_steam_arms_the_gas_pass);
+    RUN_TEST(test_burnt_out_fire_can_leave_smoke);
 
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);

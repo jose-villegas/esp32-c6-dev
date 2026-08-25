@@ -81,6 +81,7 @@ typedef enum {
     MAT_GAS,
     MAT_FIRE,
     MAT_WOOD,
+    MAT_STEAM,
     MAT_EMBER,
     MAT_COUNT
 } material_id_t;

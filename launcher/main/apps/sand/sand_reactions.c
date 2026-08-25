@@ -79,6 +79,18 @@
  * stone (200) qualifies, so burying a log in sand will not put it out.
  * That is an accepted limitation, not a bug to chase: only decay, or
  * water, ends an ember today.
+ *
+ * QUENCHING NOW PRODUCES STEAM, AT A COST
+ *
+ * A burning cell touched by water used to simply vanish. It still gets
+ * put out in one touch - that generosity is unchanged - but now becomes
+ * MAT_STEAM instead of CELL_EMPTY (reaction_t.quench_to), and the liquid
+ * neighbour that did the quenching pays a unit of its own mass for the
+ * privilege (pay_quench_cost(), below). Steam doubles as smoke: a
+ * burnt-out cell can also leave one behind on its own (reaction_t.smoke),
+ * no water required - one material for both "the fire went out" and "the
+ * pot is boiling", since both want the same pale, light, rising, fading
+ * cell.
  *===========================================================================*/
 
 #include "sand_priv.h"
@@ -253,37 +265,80 @@ static inline bool try_flare(sand_t *s, int x, int y, int w, int h,
     return false;
 }
 
+/* The liquid neighbour that just quenched a burning cell pays for it:
+ * one unit of its own mass, gone. Steam is a byproduct, not a free
+ * lunch - without this, a fire could boil an entire pool dry one cell at
+ * a time for nothing, which reads as the water simply vanishing rather
+ * than a pot boiling. One unit (of the 15 a full cell holds) keeps that
+ * slow: a puddle quenching a whole line of fire noticeably shrinks, but
+ * does not evaporate outright on contact. Mirrors give_mass()'s own
+ * "written as CELL_EMPTY rather than a zero variant" rule (sand_liquid.c)
+ * for the same reason: a zero variant would leave the material nibble
+ * claiming an occupied cell holding nothing. */
+static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w)
+{
+    const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
+    const cell_t n = s->cells[at];
+    const int mass = CELL_VARIANT(n) - 1;
+    s->cells[at] = (mass > 0) ? CELL_MAKE(CELL_MATERIAL(n), mass) : CELL_EMPTY;
+    mark_rows(s, ny, ny);
+    wake_block_and_neighbors(s, nx, ny);
+}
+
 /* One burning cell's turn, in priority order: burn down first (a cell
  * that vanishes this step gets no turn to react further - it cannot
- * both die and spread the same step); extinguish if any neighbour is a
- * liquid (wins outright over everything below, even if a flammable
- * neighbour or three smothering ones also touch this cell); extinguish
- * again if every neighbour smothers it (true burial - see smothered()
- * above, this is the only way sand puts fire out, since sand passes
- * through it uneventfully otherwise, the same way it already passes
- * through gas); otherwise ignite every non-empty, flammable neighbour
- * found - a cell touching fuel on three sides lights all three, not just
- * one - and, if this material flares (ember, not fire), roll for that
- * too. Ignition and flaring are independent of each other rather than
- * either/or: a burning cell can perfectly well do both in the same
- * step. */
+ * both die and spread the same step, but it can leave smoke behind, see
+ * reaction_t.smoke and place_reacted() above); extinguish if any
+ * neighbour is a liquid (wins outright over everything below, even if a
+ * flammable neighbour or three smothering ones also touch this cell) -
+ * the burning cell becomes reaction_t.quench_to (steam, today) rather
+ * than simply vanishing, and the liquid that did it pays a unit of mass
+ * for the privilege (see pay_quench_cost() above); extinguish again if
+ * every neighbour smothers it (true burial - see smothered() above,
+ * this is the only way sand puts fire out, since sand passes through it
+ * uneventfully otherwise, the same way it already passes through gas);
+ * otherwise ignite every non-empty, flammable neighbour found - a cell
+ * touching fuel on three sides lights all three, not just one - and, if
+ * this material flares (ember, not fire), roll for that too. Ignition
+ * and flaring are independent of each other rather than either/or: a
+ * burning cell can perfectly well do both in the same step. */
 static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
                                   int w, int h)
 {
     cell_t grain = row[x];
     const material_t *mat = material_of(grain);
     const uint8_t mat_id  = CELL_MATERIAL(grain);
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
 
     if (!tick_decay(s, row, x, y, &grain, mat, mat_id)) {
-        return true;    /* burned out - already woken, nothing left to react */
+        /* Burned out. tick_decay() already cleared the cell and woke it -
+         * this only adds smoke on top, via place_reacted(), which
+         * overwrites the CELL_EMPTY tick_decay() just wrote and repeats
+         * the same wake/dirty bookkeeping. That double wake is harmless
+         * (mark_rows()/wake_block_and_neighbors() are both idempotent
+         * within a step) and far simpler than threading a "did it
+         * already wake this cell" flag back out of a shared, hot-header
+         * helper for a cold pass's cosmetic byproduct. */
+        const uint8_t smoke = reactions[mat_id].smoke;
+        if (smoke != 0 && (int)(rng_next(&s->rng) & 0xFF) < smoke) {
+            place_reacted(s, x, y, at, MAT_STEAM);
+        }
+        return true;
     }
 
     for (int d = 0; d < 4; d++) {
-        if (neighbor_is_liquid(s, x + reaction_dirs[d][0],
-                               y + reaction_dirs[d][1], w, h)) {
-            row[x] = CELL_EMPTY;
-            mark_rows(s, y, y);
-            wake_block_and_neighbors(s, x, y);
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if (neighbor_is_liquid(s, nx, ny, w, h)) {
+            const material_id_t quench_to = reactions[mat_id].quench_to;
+            if (quench_to != 0) {
+                place_reacted(s, x, y, at, quench_to);
+            } else {
+                row[x] = CELL_EMPTY;
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            }
+            pay_quench_cost(s, nx, ny, w);
             return true;
         }
     }
