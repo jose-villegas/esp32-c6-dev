@@ -4361,6 +4361,76 @@ static void test_lava_one_side_snow_the_other_cracks_the_wall(void)
 
 
 
+/* One shock takes the whole pane, not one cell of it.
+ *
+ * Shattering used to convert a single cell, so breaking a pane needed as
+ * many separate successful shocks as it had cells - and each one needs
+ * something cold touching glass that is still hot, at the moment it
+ * touches. Getting that to happen once is the interesting part; needing it
+ * sixty times in the same place is attrition, and on the board it read as
+ * thermal shock barely working.
+ *
+ * It is also what glass does. A pane does not crumble cell by cell as each
+ * part independently decides to - a crack starts somewhere and travels. */
+static void test_one_shock_cracks_the_whole_pane(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* A pane the full width, hot, with a single flake at one END. */
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, MATERIAL_VARIANTS - 1));
+    }
+    sand_set(&s, 0, H - 3, SNOW);
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
+        "a crack started at one end of a pane must run the length of it - "
+        "the far end going too is the whole point, and it is why one "
+        "successful shock is enough to matter");
+}
+
+/* But it does not jump a gap.
+ *
+ * The crack follows the material, so two panes that are not touching are
+ * two panes. Without this the previous test passes just as well against
+ * "any shock shatters all glass on the board", which would make glass
+ * unusable anywhere near anything cold. */
+static void test_a_crack_does_not_jump_to_a_separate_pane(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* Two panes with a clear gap between them. */
+    const int gap = W / 2;
+    int far_side = 0;
+    for (int x = 0; x < W; x++) {
+        if (x == gap || x == gap + 1) {
+            continue;
+        }
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, MATERIAL_VARIANTS - 1));
+        if (x > gap) {
+            far_side++;
+        }
+    }
+    sand_set(&s, 0, H - 3, SNOW);
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(far_side, count_cells_of(MAT_GLASS),
+        "the pane on the other side of the gap must be untouched - a crack "
+        "runs through the material it is in, not through the air beside it");
+}
+
 /* The same snow on a cold pane does nothing at all.
  *
  * Which is what makes the rule about a GRADIENT rather than about snow
@@ -7333,6 +7403,8 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_cools_on_a_board_with_no_fire_at_all);
     RUN_TEST(test_freshly_fused_glass_starts_cold);
     RUN_TEST(test_snow_shatters_a_glowing_pane_into_sand);
+    RUN_TEST(test_one_shock_cracks_the_whole_pane);
+    RUN_TEST(test_a_crack_does_not_jump_to_a_separate_pane);
     RUN_TEST(test_cold_glass_is_unharmed_by_snow);
     RUN_TEST(test_snow_frosts_a_resting_pane);
     RUN_TEST(test_lava_one_side_snow_the_other_cracks_the_wall);

@@ -151,6 +151,29 @@ one and drains it to nothing, `chills` belongs to the cold one and drains a
 neighbour. They also cannot share a number - snow's 40 against glass's 6 is
 what lets a snowbank win a race that ambient cooling always loses.
 
+### A crack runs through the pane
+
+Shattering converts the whole connected run of the material, not one cell,
+up to `CRACK_MAX` (256) cells per shock.
+
+One cell at a time meant breaking a pane took as many separate successful
+shocks as it had cells - and each one needs something cold touching glass
+that is still hot, at the moment it touches. Getting that to happen once is
+the interesting part; needing it sixty times in the same place is
+attrition, and on the board it read as thermal shock barely working.
+Measured on the vessel scene, the mean panes broken went from **2.8 to
+29.8** with nothing else changed.
+
+It is also what glass does. A pane does not crumble cell by cell as each
+part independently decides to; a crack starts somewhere and travels, and
+the pane goes at once.
+
+The crack deliberately does **not** re-check temperature as it spreads -
+the stress it releases is the whole pane's, and a crack does not stop
+because the far end of the sheet was cooler. The temperature test belongs
+where the crack *starts*. It does follow the material, so two panes that
+are not touching are two panes.
+
 ### Shock runs in both directions
 
 Thermal shock is a large temperature **change**, not a high temperature. For

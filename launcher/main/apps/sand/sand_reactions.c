@@ -348,6 +348,11 @@ static inline bool touches_air(const sand_t *s, int x, int y, int w, int h)
     return false;
 }
 
+/* Defined below, beside the cold cell that is its other caller - a crack
+ * can start from either direction of shock, and this is the earlier one. */
+static void crack_run(sand_t *s, int x, int y, int w, int h,
+                      material_id_t from, material_id_t into);
+
 /* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
  * bounds and the roll succeeds - heat WITHOUT burning.
  *
@@ -387,7 +392,8 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
          * breaks on contact, which is what makes "chill it, then heat it" a
          * thing the player can actually aim. */
         if (r->shatters_to != 0 && CELL_VARIANT(n) <= SAND_SHOCK_COLD) {
-            place_reacted(s, nx, ny, at, (material_id_t)r->shatters_to);
+            crack_run(s, nx, ny, w, h, (material_id_t)CELL_MATERIAL(n),
+                      (material_id_t)r->shatters_to);
             return true;
         }
         if ((int)(rng_next(&s->rng) & 0xFF) >= r->heat_ramp) {
@@ -416,6 +422,68 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
     }
     place_reacted(s, nx, ny, at, (material_id_t)r->heats_to);
     return true;
+}
+
+/* How far a single crack runs. A drawn vessel is a few dozen cells and a
+ * hand-drawn wall rarely more than a couple of hundred, so this shatters
+ * everything anyone actually builds while keeping the worst case bounded:
+ * a screen filled edge to edge with glass would otherwise turn the whole
+ * board over in one step.
+ *
+ * Also the size of the frontier, as uint16 indices - 512 bytes of stack,
+ * which is why it is not simply "the whole grid". */
+#define CRACK_MAX 256
+
+/* A crack, once started, RUNS. Converts the connected run of `from` cells
+ * reachable from (x, y) into `into`, up to CRACK_MAX of them.
+ *
+ * Shattering used to convert one cell, which meant breaking a pane took as
+ * many separate successful shocks as it had cells - and each one needs a
+ * cold thing touching glass that is still hot, at the moment it touches.
+ * Getting that to happen once is the interesting part; getting it to
+ * happen sixty times in the same place is just attrition, and on the board
+ * it read as thermal shock barely working at all.
+ *
+ * It is also what shattering looks like. Glass does not crumble cell by
+ * cell as each part of it independently decides to; a crack starts
+ * somewhere and travels, and the pane goes at once.
+ *
+ * Deliberately does NOT check temperature as it spreads. The stress that
+ * releases is the whole pane's, not each cell's - a crack does not stop
+ * because the far end of the sheet happened to be cooler. The temperature
+ * test belongs at the point the crack STARTS, which is where it is. */
+static void crack_run(sand_t *s, int x, int y, int w, int h,
+                      material_id_t from, material_id_t into)
+{
+    uint16_t frontier[CRACK_MAX];
+    int top = 0, done = 0;
+
+    const size_t first = (size_t)y * (size_t)w + (size_t)x;
+    place_reacted(s, x, y, first, into);
+    frontier[top++] = (uint16_t)first;
+
+    while (top > 0 && done < CRACK_MAX) {
+        const uint16_t at = frontier[--top];
+        const int cx = (int)(at % (unsigned)w);
+        const int cy = (int)(at / (unsigned)w);
+        done++;
+
+        for (int d = 0; d < 4; d++) {
+            const int nx = cx + reaction_dirs[d][0];
+            const int ny = cy + reaction_dirs[d][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            if (CELL_MATERIAL(s->cells[nat]) != from) {
+                continue;
+            }
+            place_reacted(s, nx, ny, nat, into);
+            if (top < CRACK_MAX) {
+                frontier[top++] = (uint16_t)nat;
+            }
+        }
+    }
 }
 
 /* One cell that is COLD. It does two things to its four neighbours: melts
@@ -477,7 +545,8 @@ static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
          * gate it is the same one that cools it - so rolling first usually
          * talked a pane down below the threshold instead of breaking it. */
         if (temp >= SAND_SHOCK_HEAT && nr->shatters_to != 0) {
-            place_reacted(s, nx, ny, nat, (material_id_t)nr->shatters_to);
+            crack_run(s, nx, ny, w, h, (material_id_t)CELL_MATERIAL(n),
+                      (material_id_t)nr->shatters_to);
             if (try_heat_transform(s, x, y, w, h)) {
                 return false;   /* and this cell melted paying for it */
             }
