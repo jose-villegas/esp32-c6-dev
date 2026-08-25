@@ -70,9 +70,23 @@ typedef uint8_t cell_t;
 
 #define MATERIAL_VARIANTS   16
 
+/* WHERE ROOM TEMPERATURE SITS on a heat-ramping material's 0-15 variant.
+ *
+ * Not 0, and that is the whole point. With ambient at the bottom of the
+ * range there is no such thing as colder than resting: a pane at 0 touched
+ * by snow has nothing to lose, so it cannot change and cannot show that
+ * anything happened. Snow beside glass looked identical to snow beside
+ * nothing, which is exactly what it was.
+ *
+ * Ambient in the middle gives cold somewhere to go. Below it a pane is
+ * FROSTED and visibly pale; above it, warming; far enough above, glowing
+ * and about to break. Three levels of frost is not much resolution, but it
+ * is the difference between a state you can see and one you cannot, and
+ * the levels above ambient are the ones doing the interesting work. */
+#define SAND_AMBIENT_HEAT 3
+
 /* The heat level at or above which a cell with `shatters_to` cracks rather
- * than merely cooling when something cold touches it - see
- * step_one_hot_cell() in sand_reactions.c.
+ * than merely cooling when something cold touches it.
  *
  * Lives here rather than beside the code that uses it because THREE things
  * have to agree on it: the rule, the palette (glass's ramp changes colour
@@ -81,12 +95,14 @@ typedef uint8_t cell_t;
  * sand_reactions.c, which is how the number and the colour would have
  * drifted apart the first time either moved.
  *
- * 6 of 15, not 10. At 10 a pane had to be two thirds of the way to melting
- * before snow would do anything to it, which on the board reads as snow
- * doing nothing at all - it takes a held fire to get there, and snow
- * chills on contact, so the player pours a drift and watches the pane cool
- * back down instead of breaking. */
-#define SAND_SHOCK_HEAT 6
+ * SIX LEVELS ABOVE AMBIENT, which is what it has always really been - it
+ * read as 6 while ambient was 0 and reads as 9 now that ambient is 3. The
+ * gap is the tuned quantity; the absolute number is bookkeeping. It was
+ * briefly ten levels above ambient, which meant a pane had to be most of
+ * the way to melting before snow would touch it - and snow chills on
+ * contact, so the player poured a drift and watched a basin cool instead
+ * of break. */
+#define SAND_SHOCK_HEAT (SAND_AMBIENT_HEAT + 6)
 
 /* A liquid cell holds between 1 and 15. Zero is not a very empty cell - it is
  * no cell at all, and must be written as CELL_EMPTY, or the material nibble

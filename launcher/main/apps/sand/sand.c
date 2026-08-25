@@ -59,12 +59,13 @@ static cell_t random_cell(sand_t *s, material_id_t material)
     if (materials[material].decay != 0) {
         return CELL_MAKE(material, MATERIAL_VARIANTS - 1);
     }
-    /* A heat-ramping material's variant is HEAT, not a shade either, and a
-     * fresh cell of it is COLD. Random would hand the player a pane that is
-     * already half melted, and MATERIAL_VARIANTS - 1 would hand them one
-     * that melts on the next step. */
+    /* A heat-ramping material's variant is a TEMPERATURE, not a shade
+     * either, and a fresh cell of it is at ROOM temperature - not at the
+     * bottom of its range, which now means frosted. Random would hand the
+     * player a pane that is already half melted, and MATERIAL_VARIANTS - 1
+     * would hand them one that melts on the next step. */
     if (reactions[material].heat_ramp != 0) {
-        return CELL_MAKE(material, 0);
+        return CELL_MAKE(material, SAND_AMBIENT_HEAT);
     }
     return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
 }

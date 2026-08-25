@@ -35,7 +35,7 @@ that row:
 | `0` (immortal) and `kind == KIND_POWDER` | a shade (cosmetic texture) | sand |
 | `0` (immortal) and `kind == KIND_LIQUID` | fill level, 1-15 | water |
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
-| `heat_ramp != 0` | **heat, 0-15** - a temperature, and the palette index, so the cell's colour *is* its heat | glass |
+| `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -114,10 +114,11 @@ a quantity a cell carries.
 | Field | On | Meaning |
 | --- | --- | --- |
 | `heat_ramp` | glass, 12 | chance/256 per step per adjacent heat source to climb one level. **Non-zero is what makes the variant a temperature** rather than a shade |
-| `cools` | glass, 6 | chance/256 to lose a level with nothing heating it |
-| `chills` | snow, 40 | chance/256 to pull a level out of a hot *neighbour*; non-zero also marks the material **cold** |
-| `shatters_to` | glass, sand | what a cell at heat >= `SAND_SHOCK_HEAT` (6) becomes when something cold touches it - **on contact, no roll** |
+| `cools` | glass, 6 | chance/256 to move one level **towards `SAND_AMBIENT_HEAT`** - down if hot, up if frosted |
+| `chills` | snow, 40 | chance/256 to pull a level out of a *neighbour* that has a temperature, down to 0; non-zero also marks the material **cold** |
+| `shatters_to` | glass, sand | what a cell at temperature >= `SAND_SHOCK_HEAT` (9) becomes when something cold touches it - **on contact, no roll** |
 | `thaws` | snow, 4 | chance/256 per step per adjacent **liquid** cell that it gives up and becomes `heats_to` |
+| `SAND_AMBIENT_HEAT` | 3 | not a field - where room temperature sits on the 0-15 scale, so that **cold has somewhere to go** |
 
 `thaws` is a second trigger for the transformation `heat_chance` already
 drives, and needs its own number because one cannot serve both. Snow beside
@@ -148,6 +149,28 @@ fields, because they sit on different materials: `cools` belongs to the hot
 one and drains it to nothing, `chills` belongs to the cold one and drains a
 neighbour. They also cannot share a number - snow's 40 against glass's 6 is
 what lets a snowbank win a race that ambient cooling always loses.
+
+### Room temperature is in the middle
+
+`SAND_AMBIENT_HEAT` is 3, not 0, and the reason is entirely about what can
+be seen. With ambient at the bottom of the range there is no such thing as
+colder than resting: chilling a pane at 0 changes no number, so it changes
+no colour, and snow sitting on glass looks exactly like snow sitting on
+nothing.
+
+Putting ambient at 3 gives cold somewhere to go. 0-2 is **frost** - pale,
+near white, the way cold glass actually goes - and it fades, because
+`cools` moves a cell *towards* ambient from either side rather than only
+downwards. Frost is a state, not a scar.
+
+The same change fixed a second half of the same bug. Chilling used to be
+driven from the warm cell, and a warm cell only gets a turn when it is
+already off ambient - so a pane at rest never looked at the snow on top of
+it and could not be chilled at all. Chilling is driven from the **cold**
+cell now, the way fire reaches out to its neighbours. Melting (`thaws`)
+stays there too, but for a different reason: a neighbour scan per liquid
+cell would land on the commonest material on the board, where a scan per
+snow cell lands on something that arrives in drifts.
 
 ### The threshold is a visible state
 
@@ -184,6 +207,8 @@ back to cold in ~610 steps once the fire is gone.
 ```mermaid
 graph LR
     Sand["SAND"] -->|"heat_chance 16<br/>(memoryless)"| Glass["GLASS<br/>heat 0"]
+    Frost["GLASS<br/>0-2 frosted"] -->|"cools, drifts back"| Glass
+    Glass -->|"chills 40"| Frost
     Glass -->|"heat_ramp 12<br/>climbs"| Hot["GLASS<br/>heat 15 - glowing"]
     Hot -->|"cools 6<br/>when the fire stops"| Glass
     Hot -->|"melts"| Lava["LAVA"]
@@ -198,6 +223,7 @@ graph LR
     style Hot fill:#8a3d3d,color:#fff
     style Lava fill:#8a3d3d,color:#fff
     style Warm fill:#8a3d3d,color:#fff
+    style Frost fill:#3d6b8a,color:#fff
     style Snow fill:#5a5a5a,color:#fff
     style Water fill:#3d6b8a,color:#fff
 ```

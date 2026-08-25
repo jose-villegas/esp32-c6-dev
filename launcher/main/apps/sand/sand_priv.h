@@ -350,8 +350,12 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     if (r->dissolves) {
         s->may_have_dissolver = true;
     }
+    /* Off ambient in EITHER direction is work to do: a frosted pane has to
+     * warm back up just as a hot one has to cool down. At ambient exactly
+     * there is nothing to relax towards, and snow reaching it is what
+     * starts it moving again. */
     if (r->chills != 0 ||
-        (r->heat_ramp != 0 && CELL_VARIANT(cell) != 0)) {
+        (r->heat_ramp != 0 && CELL_VARIANT(cell) != SAND_AMBIENT_HEAT)) {
         s->may_have_temperature = true;
     }
 }

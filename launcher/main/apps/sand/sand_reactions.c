@@ -233,7 +233,8 @@ static inline void place_reacted(sand_t *s, int x, int y, size_t at,
      * cool teal glass, glows as the flame keeps working on it, and only
      * then runs. */
     s->cells[at] = CELL_MAKE(mat, reactions[mat].heat_ramp != 0
-                                      ? 0 : MATERIAL_VARIANTS - 1);
+                                      ? SAND_AMBIENT_HEAT
+                                      : MATERIAL_VARIANTS - 1);
 
     latch_content_flags(s, s->cells[at]);
 
@@ -404,125 +405,131 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
     return true;
 }
 
-/* One cell that is COLD: it melts if a liquid is touching it.
+/* One cell that is COLD. It does two things to its four neighbours: melts
+ * against a liquid, and pulls the temperature out of anything that holds
+ * one - cracking it instead if it is hot enough.
  *
- * The mirror of step_one_hot_cell(), and driven from the same side - the
- * cell that is going to change - rather than from the liquid. Driving it
- * from the liquid would mean a neighbour scan on every liquid cell on the
- * board, which is the commonest material there is and the hottest loop
- * here; from the snow it costs a scan per snow cell, and snow arrives in
- * drifts rather than in oceans.
+ * BOTH are driven from the cold side, and the chilling half only moved
+ * here after snow beside a resting pane turned out to do nothing at all.
+ * Driven from the warm cell, chilling could only reach panes that were
+ * ALREADY off ambient, because that is the only time a warm cell gets a
+ * turn - so a pane at room temperature never looked at the snow on top of
+ * it and could never be pulled below room temperature. Fire reaches out to
+ * its neighbours for exactly the same reason.
  *
- * Nothing here consults a temperature: liquid is warm BY DEFINITION,
- * because nothing except glass has one to consult. That is also why any
- * liquid counts rather than water alone - oil or acid leaving snow
- * untouched would need explaining in a way that melting does not.
+ * Melting is here rather than on the liquid for a different reason: a scan
+ * per liquid cell would be a scan on the commonest material on the board
+ * and the hottest loop in the program, where a scan per snow cell is a
+ * scan on something that arrives in drifts.
+ *
+ * Nothing here consults the liquid's temperature: liquid is warm BY
+ * DEFINITION, because nothing except glass has one to consult. That is
+ * also why any liquid counts rather than water alone - oil or acid leaving
+ * snow untouched would need explaining in a way that melting does not.
  *
  * Returns whether the cell survived, which keeps may_have_temperature
  * honest. */
 static bool step_one_cold_cell(sand_t *s, int x, int y, int w, int h,
                                const reaction_t *r)
 {
-    if (r->thaws == 0 || r->heats_to == 0 || !s->may_have_liquid) {
-        return true;
-    }
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
         if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
             continue;
         }
-        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-        if (CELL_IS_EMPTY(n) ||
-            materials[CELL_MATERIAL(n)].kind != KIND_LIQUID) {
-            continue;
-        }
-        if ((int)(rng_next(&s->rng) & 0xFF) >= r->thaws) {
-            continue;
-        }
-        place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
-                      (material_id_t)r->heats_to);
-        return false;
-    }
-    return true;
-}
-
-/* One cell that is holding heat: it cools, a cold neighbour pulls heat out
- * of it faster, and if it is hot enough when that happens it shatters.
- *
- * Driven from the HOT cell rather than from the cold one, which is the
- * opposite of how burning works - a flame reaches out to its neighbours.
- * The reason is that cooling has to happen with no neighbour involved at
- * all, so this cell needs a turn regardless; once it has one, doing the
- * chill scan here as well costs nothing extra.
- *
- * Returns whether it still holds heat afterwards, which is what keeps
- * s->may_have_temperature honest. */
-static bool step_one_hot_cell(sand_t *s, uint8_t *row, int x, int y,
-                              int w, int h, const reaction_t *r)
-{
-    const cell_t c = row[x];
-    uint8_t heat = CELL_VARIANT(c);
-
-    /* A cold neighbour first: it is the faster of the two drains, and the
-     * only one that can destroy the cell outright. */
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
         if (CELL_IS_EMPTY(n)) {
             continue;
         }
         const reaction_t *nr = reaction_of(n);
-        if (nr->chills == 0) {
-            continue;
-        }
-        /* SHOCK DOES NOT WAIT FOR THE COOLING ROLL. Contact is enough,
-         * provided the cell is already hot enough, and the difference is
-         * the whole feel of the thing. Rolling for it first meant a drift
-         * poured onto a glowing pane spent several steps cooling it - and
-         * cooling is what takes it BELOW the threshold, so the common
-         * outcome was a pane that quietly went cold instead of breaking.
-         * Cracking is the fast path and cooling is the slow one, which is
-         * also the right way round physically. */
-        if (heat >= SAND_SHOCK_HEAT && r->shatters_to != 0) {
-            try_heat_transform(s, nx, ny, w, h);   /* the cold side pays */
+
+        /* MELTING, from any liquid - see reaction_t.thaws. */
+        if (r->thaws != 0 && r->heats_to != 0 &&
+            materials[CELL_MATERIAL(n)].kind == KIND_LIQUID &&
+            (int)(rng_next(&s->rng) & 0xFF) < r->thaws) {
             place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
-                          (material_id_t)r->shatters_to);
+                          (material_id_t)r->heats_to);
             return false;
         }
 
-        if ((int)(rng_next(&s->rng) & 0xFF) >= nr->chills) {
+        if (r->chills == 0 || nr->heat_ramp == 0) {
+            continue;
+        }
+        const uint8_t temp = CELL_VARIANT(n);
+
+        /* SHOCK, which does not wait for the chilling roll. Contact is
+         * enough when the neighbour is hot enough, and the roll that would
+         * gate it is the same one that cools it - so rolling first usually
+         * talked a pane down below the threshold instead of breaking it. */
+        if (temp >= SAND_SHOCK_HEAT && nr->shatters_to != 0) {
+            place_reacted(s, nx, ny, nat, (material_id_t)nr->shatters_to);
+            if (try_heat_transform(s, x, y, w, h)) {
+                return false;   /* and this cell melted paying for it */
+            }
             continue;
         }
 
-        /* The exchange runs both ways. Snow that chilled a glowing pane for
-         * nothing would be an unlimited heat sink made of a material that
-         * arrives in a light drift, so it pays for what it removed: its own
-         * heats_to fires, which is what melts it to water. */
-        try_heat_transform(s, nx, ny, w, h);
-
-        if (heat > 0) {
-            heat--;
+        if (temp == 0) {
+            continue;           /* already as cold as this scale goes */
         }
-        break;      /* one chill per cell per step, like every other roll */
-    }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= r->chills) {
+            continue;
+        }
 
-    if (heat > 0 && r->cools != 0 &&
-        (int)(rng_next(&s->rng) & 0xFF) < r->cools) {
-        heat--;
-    }
+        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(temp - 1));
+        s->may_have_temperature = true;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
 
-    if (heat != CELL_VARIANT(c)) {
-        row[x] = CELL_MAKE(CELL_MATERIAL(c), heat);
-        mark_rows(s, y, y);
-        wake_block_and_neighbors(s, x, y);
+        /* The exchange runs both ways. A material that chilled its
+         * neighbours for nothing would be an unlimited heat sink arriving
+         * in a light drift, so it pays with its own heats_to. */
+        if (try_heat_transform(s, x, y, w, h)) {
+            return false;
+        }
     }
-    return heat > 0;
+    return true;
 }
+
+
+
+/* One cell whose temperature is not room temperature: it relaxes back
+ * towards it.
+ *
+ * BOTH directions, at the same `cools` rate. A hot pane cools and a
+ * frosted one warms up, because ambient is a resting point rather than a
+ * floor - which is what putting cold BELOW ambient buys, and what makes
+ * frost something that fades rather than something permanent.
+ *
+ * Chilling and shattering used to live here and now belong to the cold
+ * cell, because this only runs for cells ALREADY off ambient: a resting
+ * pane never got a turn, so it could never be pulled below room
+ * temperature by a neighbour. That is exactly why snow beside a glass
+ * basin appeared to do nothing at all.
+ *
+ * Returns whether the cell still differs from ambient, which is what keeps
+ * s->may_have_temperature honest. */
+static bool step_one_tempered_cell(sand_t *s, uint8_t *row, int x, int y,
+                                   const reaction_t *r)
+{
+    const cell_t c = row[x];
+    const uint8_t temp = CELL_VARIANT(c);
+
+    if (r->cools == 0 || (int)(rng_next(&s->rng) & 0xFF) >= r->cools) {
+        return temp != SAND_AMBIENT_HEAT;
+    }
+
+    const uint8_t next = (uint8_t)(temp > SAND_AMBIENT_HEAT ? temp - 1
+                                                            : temp + 1);
+    row[x] = CELL_MAKE(CELL_MATERIAL(c), next);
+    mark_rows(s, y, y);
+    wake_block_and_neighbors(s, x, y);
+    return next != SAND_AMBIENT_HEAT;
+}
+
+
 
 /* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
  * flammable material, and the roll for it succeeds. Returns whether it
@@ -970,8 +977,9 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
          * any other neighbour of a flame, so the common case - a board full
          * of glass and one candle - walks past nearly all of it on a
          * variant test. */
-        if (r->heat_ramp != 0 && CELL_VARIANT(c) != 0) {
-            if (step_one_hot_cell(s, row, x, y, w, h, r)) {
+        if (r->heat_ramp != 0) {
+            if (CELL_VARIANT(c) != SAND_AMBIENT_HEAT &&
+                step_one_tempered_cell(s, row, x, y, r)) {
                 found |= FOUND_TEMPERATURE;
             }
             continue;

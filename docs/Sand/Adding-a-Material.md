@@ -377,7 +377,7 @@ flowchart TD
     Acid -->|"dissolvable 60"| Stone
     Sand["SAND"] -->|"heats_to, 16\n(needs sustained heat)"| Glass["GLASS\nimmune to acid"]
     Glass -->|"heat_ramp - long exposure"| Lava
-    Glass -->|"shatters_to, at heat 6+
+    Glass -->|"shatters_to, at heat 9+
 on contact, no roll"| Sand
     Snow["SNOW
 cold"] -->|"heats_to 120 near fire

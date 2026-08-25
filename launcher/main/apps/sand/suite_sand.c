@@ -2072,11 +2072,15 @@ static void test_a_tipped_basin_keeps_its_sand(void)
  * surface is. */
 #define OIL   CELL_MAKE(MAT_OIL,  8)
 #define LAVA  CELL_MAKE(MAT_LAVA, 8)
-/* Heat 0, not a shade. Glass is the one material whose variant is a
- * TEMPERATURE (material.h's top comment), so the 8 this used to carry
+/* Room temperature, not a shade. Glass is the one material whose variant
+ * is a TEMPERATURE (material.h's top comment), so the 8 this used to carry
  * silently placed every pane in these tests at half melt - and, worse,
- * placed it hot enough that a stray flake of snow would shatter it. */
-#define GLASS CELL_MAKE(MAT_GLASS, 0)
+ * placed it hot enough that a stray flake of snow would shatter it.
+ *
+ * SAND_AMBIENT_HEAT rather than 0, because 0 is no longer "at rest": it is
+ * the bottom of the frost range, so a pane placed there would start out
+ * looking chilled and spend the first steps of every test warming up. */
+#define GLASS CELL_MAKE(MAT_GLASS, SAND_AMBIENT_HEAT)
 #define SNOW  CELL_MAKE(MAT_SNOW,  8)
 
 #define CONDUCT_REACH_TEST 32
@@ -3771,12 +3775,14 @@ static void test_glass_forgets_a_fire_that_went_out(void)
             }
         }
     }
-    for (int i = 0; i < 3000 && hottest_glass() > 0; i++) {
+    for (int i = 0; i < 3000 && hottest_glass() > SAND_AMBIENT_HEAT; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, hottest_glass(),
-        "with the fire gone the pane must drain all the way back to cold");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest_glass(),
+        "with the fire gone the pane must drain all the way back to room "
+        "temperature - which is SAND_AMBIENT_HEAT, not 0, since 0 now means "
+        "frosted");
 }
 
 /* And it drains on a board where nothing is burning and nothing dissolves.
@@ -3797,13 +3803,13 @@ static void test_glass_cools_on_a_board_with_no_fire_at_all(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1, hottest_glass(),
         "fixture check: the pane starts at the top of its ramp");
 
-    for (int i = 0; i < 3000 && hottest_glass() > 0; i++) {
+    for (int i = 0; i < 3000 && hottest_glass() > SAND_AMBIENT_HEAT; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, hottest_glass(),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest_glass(),
         "hot glass must cool with no fire and no acid anywhere on the "
-        "board - heat is its own reason to run the reactions pass");
+        "board - temperature is its own reason to run the reactions pass");
 }
 
 /* Glass made by heat arrives COLD.
@@ -3837,9 +3843,10 @@ static void test_freshly_fused_glass_starts_cold(void)
 
     TEST_ASSERT_TRUE_MESSAGE(made,
         "fixture check: fire over sand has to make some glass");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, hottest_glass(),
-        "glass fused out of sand must start at heat 0 - starting full "
-        "would melt it to lava on the following step");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest_glass(),
+        "glass fused out of sand must start at room temperature - starting "
+        "full would melt it to lava on the following step, and starting at "
+        "0 would hand the player a pane that begins life frosted");
 }
 
 /* Snow on a glowing pane cracks it, and it goes back to being sand.
@@ -3959,6 +3966,96 @@ static void test_glass_looks_different_at_the_shock_threshold(void)
         "the biggest colour change along glass's ramp has to land exactly "
         "where its behaviour changes - a pane that snow will shatter must "
         "not look like one that snow will merely cool");
+}
+
+/* A resting pane beside snow gets COLDER, and shows it.
+ *
+ * The report that produced this: "I still don't see any colour change of
+ * glass when near snow." There was none to see, and it was not a rendering
+ * problem. Ambient used to be 0, the bottom of the variant range, so a
+ * pane at rest had nothing to lose - chilling it changed no number, so it
+ * changed no colour, and snow beside glass was indistinguishable from snow
+ * beside nothing.
+ *
+ * Two things had to change for this to be observable, and both are
+ * asserted here: room temperature had to move off the floor so cold has
+ * somewhere to go, and chilling had to be driven from the SNOW, because a
+ * pane at rest never gets a turn of its own and so never looked at what
+ * was sitting on it. */
+static void test_snow_frosts_a_resting_pane(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, GLASS);      /* at rest, not heated */
+        sand_set(&s, x, H - 3, SNOW);
+    }
+
+    int coldest = MATERIAL_VARIANTS;
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 1; x < W - 1; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_GLASS && CELL_VARIANT(c) < coldest) {
+                coldest = CELL_VARIANT(c);
+            }
+        }
+    }
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(SAND_AMBIENT_HEAT, coldest,
+        "snow resting on a pane at room temperature must pull it BELOW "
+        "room temperature - if ambient is the bottom of the scale there is "
+        "nothing to see, and the player gets no sign that snow and glass "
+        "interact at all");
+
+    /* And the palette has to disagree about the two, or the number moving
+     * is still invisible. */
+    const gfx_color_t *pal = material_palette();
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(
+        pal[MAT_GLASS * MATERIAL_VARIANTS + SAND_AMBIENT_HEAT],
+        pal[MAT_GLASS * MATERIAL_VARIANTS + coldest],
+        "and a frosted pane must not be drawn in the same colour as a "
+        "resting one");
+}
+
+/* Frost fades. It is a state, not a scar.
+ *
+ * Ambient is a resting point that gets approached from BOTH sides, which
+ * is what makes putting cold below it work at all - otherwise the first
+ * snowfall would leave every pane it touched permanently pale. */
+static void test_a_frosted_pane_warms_back_to_room_temperature(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0));   /* fully frosted */
+    }
+
+    int coldest = 0;
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&s, 0, 1000, 0);
+        coldest = MATERIAL_VARIANTS;
+        for (int x = 1; x < W - 1; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_GLASS && CELL_VARIANT(c) < coldest) {
+                coldest = CELL_VARIANT(c);
+            }
+        }
+        if (coldest >= SAND_AMBIENT_HEAT) {
+            break;
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, coldest,
+        "a frosted pane left alone must warm back to room temperature - "
+        "the same `cools` drift that brings a hot one down, running the "
+        "other way");
 }
 
 /* The same snow on a cold pane does nothing at all.
@@ -6524,6 +6621,8 @@ void run_sand_suite(void)
     RUN_TEST(test_freshly_fused_glass_starts_cold);
     RUN_TEST(test_snow_shatters_a_glowing_pane_into_sand);
     RUN_TEST(test_cold_glass_is_unharmed_by_snow);
+    RUN_TEST(test_snow_frosts_a_resting_pane);
+    RUN_TEST(test_a_frosted_pane_warms_back_to_room_temperature);
     RUN_TEST(test_the_shock_threshold_is_exact);
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);

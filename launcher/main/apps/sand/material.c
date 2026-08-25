@@ -867,48 +867,60 @@ const reaction_t reactions[MATERIAL_MAX] = {
 #define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
 
 /* Glass, whose variant is a TEMPERATURE rather than a shade, so this is a
- * temperature scale - and one that CHANGES DIRECTION at the level where
- * the material's behaviour changes. Below SAND_SHOCK_HEAT a pane cools
- * when something cold touches it; at or above it, it cracks. That is the
- * one thing about glass the player has to be able to see, and a smooth
- * ramp hid it: a pane at 5 and a pane at 6 behave completely differently
- * and looked nearly identical.
+ * temperature scale - with room temperature in the MIDDLE of it and two
+ * different things happening on either side.
  *
- * So cold blue creeps up to a flat neutral over the first six levels -
- * warming, not yet dangerous - and then the ramp jumps into a glow and
- * climbs to lava's own brightest colour, which is what a pane at 15 is
- * about to become. "It is orange" now means "snow will break this". */
-#define GLASS_COLD    0x1E5A78
+ * Below SAND_AMBIENT_HEAT a pane has been chilled and is FROSTED: pale,
+ * near white, the way cold glass actually goes. Those three levels exist
+ * entirely so that "snow is making this colder" is something the player
+ * can see. With ambient at the bottom of the range there was nothing below
+ * it, so chilling a resting pane changed no number and therefore no
+ * colour, and snow beside glass looked exactly like snow beside nothing.
+ *
+ * Above ambient it warms towards a flat neutral, and at SAND_SHOCK_HEAT
+ * the ramp BREAKS into a glow and climbs to lava's own brightest, which is
+ * what a pane at 15 is about to become. The break is deliberate and it is
+ * the largest colour step in the ramp: at that level the material stops
+ * merely cooling when something cold touches it and starts shattering
+ * instead, and a pane at 8 and a pane at 9 behaving completely differently
+ * while looking nearly identical is not a rule anyone can play against.
+ *
+ *     0 .. 2   frosted, pale       - colder than the room
+ *     3        AMBIENT             - freshly drawn, at rest
+ *     4 .. 8   warming             - cools back down if left alone
+ *     9 .. 15  glowing             - snow SHATTERS this on contact
+ */
+#define GLASS_FROST   0xD6EEF8
+#define GLASS_AMBIENT 0x2E6B85
 #define GLASS_NEUTRAL 0x7E8E86
 #define GLASS_GLOW    0xC8701E
 #define GLASS_MOLTEN  0xFFD873
 
-#define GLASS_SHADES                                                      \
-    SEG(GLASS_COLD, GLASS_NEUTRAL, 0, SAND_SHOCK_HEAT),                   \
-    SEG(GLASS_COLD, GLASS_NEUTRAL, 1, SAND_SHOCK_HEAT),                   \
-    SEG(GLASS_COLD, GLASS_NEUTRAL, 2, SAND_SHOCK_HEAT),                   \
-    SEG(GLASS_COLD, GLASS_NEUTRAL, 3, SAND_SHOCK_HEAT),                   \
-    SEG(GLASS_COLD, GLASS_NEUTRAL, 4, SAND_SHOCK_HEAT),                   \
-    SEG(GLASS_COLD, GLASS_NEUTRAL, 5, SAND_SHOCK_HEAT),                   \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  0, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  1, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  2, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  3, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  4, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  5, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  6, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  7, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  8, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
-    SEG(GLASS_GLOW, GLASS_MOLTEN,  9, MATERIAL_VARIANTS - SAND_SHOCK_HEAT)
+#define GLASS_SHADES                                                        \
+    SEG(GLASS_FROST,   GLASS_AMBIENT, 0, SAND_AMBIENT_HEAT + 1),            \
+    SEG(GLASS_FROST,   GLASS_AMBIENT, 1, SAND_AMBIENT_HEAT + 1),            \
+    SEG(GLASS_FROST,   GLASS_AMBIENT, 2, SAND_AMBIENT_HEAT + 1),            \
+    SEG(GLASS_FROST,   GLASS_AMBIENT, 3, SAND_AMBIENT_HEAT + 1),            \
+    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 1, 6),                                \
+    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 2, 6),                                \
+    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 3, 6),                                \
+    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 4, 6),                                \
+    SEG(GLASS_AMBIENT, GLASS_NEUTRAL, 5, 6),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  0, 7),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  1, 7),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  2, 7),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  3, 7),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  4, 7),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  5, 7),                                \
+    SEG(GLASS_GLOW,    GLASS_MOLTEN,  6, 7)
 
-/* The ramp above is written out by hand, so it only matches the rule if
- * the split lands where the rule does. */
-_Static_assert(SAND_SHOCK_HEAT == 6,
-               "glass's palette is built as 6 cool entries then 10 hot "
-               "ones; move SAND_SHOCK_HEAT and the colour stops marking "
-               "the level where a pane starts shattering");
-
-/* One material's sixteen variants, darkest to lightest. */
+/* The ramp above is written out by hand, so it only lines up with the rule
+ * if the two splits land where the rule's two levels are. */
+_Static_assert(SAND_AMBIENT_HEAT == 3 && SAND_SHOCK_HEAT == 9,
+               "glass's palette is built as 4 frosted-to-ambient entries, "
+               "5 warming ones and 7 glowing ones; move SAND_AMBIENT_HEAT "
+               "or SAND_SHOCK_HEAT and the colours stop marking the levels "
+               "where the behaviour changes");
 #define SHADES(lo, hi)                                                    \
     GFX_RGB(LERP(lo, hi,  0)), GFX_RGB(LERP(lo, hi,  1)),                 \
     GFX_RGB(LERP(lo, hi,  2)), GFX_RGB(LERP(lo, hi,  3)),                 \
