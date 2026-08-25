@@ -91,7 +91,7 @@ it stay.
 
 | Material | `flammability` | `needs_air` | `ignites_to` | `burns` | `conducts` | `residue` | `quench_to` | `flare` | `dissolves` | `dissolvable` | `heats_to` |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| sand | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | **200** | **glass** (8) |
+| sand | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | **200** | **glass** (16) |
 | stone | 0 | - | - | 0 | 220 | 0 | - | 0 | 0 | **60** | - |
 | gas | 255 | - | fire | 0 | 0 | 0 | - | 0 | 0 | 0 | - |
 | fire | 0 | - | - | 1 | 0 | 40 | steam | 0 | 0 | 0 | - |

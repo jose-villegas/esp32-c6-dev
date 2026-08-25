@@ -3683,7 +3683,7 @@ static void test_sand_turns_to_glass_under_sustained_heat(void)
 
     TEST_ASSERT_TRUE_MESSAGE(made,
         "sand held against a flame must eventually become glass - slowly, "
-        "at heat_chance 8, so it is something you set up and wait for "
+        "slowly, so it is something you set up and wait for "
         "rather than something a stray spark does to a dune");
 }
 

@@ -594,13 +594,26 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .dissolvable = 200,
 
         .heats_to    = MAT_GLASS,
-        .heat_chance = 8,    /* 8 in 256 per adjacent heat source per step,
-                              * so roughly 32 steps of sustained contact
-                              * with a single flame. Deliberately slow -
-                              * glass should be something you set up and
-                              * wait for, not something that happens
-                              * whenever a spark lands on a dune. Wood's
-                              * own 6 is the reference: about as patient.
+        .heat_chance = 16,   /* 16 in 256 per adjacent heat source per
+                              * step. Deliberately slow - glass should be
+                              * something you set up and wait for, not
+                              * something that happens whenever a spark
+                              * lands on a dune - but 8 was slower than
+                              * that, not just patient.
+                              *
+                              * Measured on a bed of eleven sand cells
+                              * under a held flame, steps to half the bed
+                              * and then all of it:
+                              *
+                              *     8 -> 52, 184     24 -> 17,  51
+                              *    16 -> 18, 137     32 -> 17,  27
+                              *
+                              * 16 brings the first visible progress in
+                              * about a third of the time while leaving
+                              * full conversion a couple of seconds' work.
+                              * 24 and up collapse that second number to
+                              * well under a second, which turns glass
+                              * into something a passing spark makes.
                               * Starting point, not final - tune on device
                               * like every other constant here. */
     },
