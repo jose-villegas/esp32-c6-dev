@@ -4236,6 +4236,89 @@ static void test_wood_and_steam_grain_count_is_conserved(void)
     }
 }
 
+/* --- dirty rows: nothing changes without saying so ---------------------- */
+
+/* The invariant the renderer depends on, asserted directly for every
+ * material rather than inferred from the passes that maintain it.
+ *
+ * app_sand.c only repaints rows whose dirty_rows byte is set, so a cell
+ * that changes on a row nobody marked is a pixel left stale on the panel
+ * until something else happens to redraw that band. That failure is
+ * invisible in every other test here - the grid is right, only the screen
+ * is wrong - and it is exactly the kind of thing that gets noticed on
+ * device and not before.
+ *
+ * TRANSIENT materials are the reason this is worth a test of its own.
+ * A grain of sand changes when it moves, and a move is hard to forget
+ * about. Fire, gas, steam and smoke also change when they merely AGE:
+ * tick_decay() rewrites the variant nibble in place, the palette turns
+ * that into a different colour, and nothing has moved at all. A pass that
+ * remembered to mark its moves and forgot to mark its decay would look
+ * perfectly correct right up until a flame stopped fading on screen. */
+static void assert_every_change_is_marked(material_id_t m, int steps,
+                                          const char *what)
+{
+    static uint8_t seen[W * H];
+
+    fixture();
+    sand_track_dirty_rows(&s, dirty);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 0, STONE);
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = 0; y < H; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, W - 1, y, STONE);
+    }
+    for (int y = 2; y <= 4; y++) {
+        for (int x = 2; x < W - 2; x++) {
+            sand_set(&s, x, y, CELL_MAKE(m, MATERIAL_VARIANTS - 1));
+        }
+    }
+
+    for (int i = 0; i < steps; i++) {
+        memcpy(seen, s.cells, sizeof seen);
+        memset(dirty, 0, sizeof dirty);   /* the renderer clears as it draws */
+        sand_step(&s, 0, 1000, 0);
+
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (seen[y * W + x] == s.cells[y * W + x]) {
+                    continue;
+                }
+                /* The whole byte, not just the material nibble: a cell
+                 * that only faded still has to be repainted. */
+                TEST_ASSERT_TRUE_MESSAGE(dirty[y] != 0, what);
+            }
+        }
+    }
+}
+
+static void test_every_cell_change_marks_its_row_dirty(void)
+{
+    assert_every_change_is_marked(MAT_SAND, 120,
+        "a sand grain must never change on a row left unmarked");
+    assert_every_change_is_marked(MAT_WATER, 120,
+        "a water cell must never change on a row left unmarked");
+    assert_every_change_is_marked(MAT_GAS, 240,
+        "a gas cell must never change on a row left unmarked - it AGES as "
+        "well as moving, and a fade is a repaint too");
+    assert_every_change_is_marked(MAT_FIRE, 240,
+        "a fire cell must never change on a row left unmarked");
+    assert_every_change_is_marked(MAT_SMOKE, 240,
+        "a smoke cell must never change on a row left unmarked");
+    assert_every_change_is_marked(MAT_STEAM, 240,
+        "a steam cell must never change on a row left unmarked");
+    assert_every_change_is_marked(MAT_OIL, 120,
+        "an oil cell must never change on a row left unmarked");
+    assert_every_change_is_marked(MAT_LAVA, 240,
+        "a lava cell must never change on a row left unmarked");
+}
+
 /* --- conservation ------------------------------------------------------- */
 
 static void test_grains_are_never_created_or_destroyed(void)
@@ -5146,6 +5229,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_boiler_end_to_end);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
+    RUN_TEST(test_every_cell_change_marks_its_row_dirty);
     RUN_TEST(test_grains_are_never_created_or_destroyed);
     RUN_TEST(test_a_grain_keeps_its_shade_as_it_falls);
 
