@@ -124,6 +124,8 @@ The registers, from the X-Powers datasheet:
 | Enable | `0x41` (INTEN2), bit 3 = power key short press |
 | Status | `0x49` (INTSTS2), same bit |
 | Clear | write a **one** back to the bit |
+| Thresholds | `0x27` (IRQLEVEL/OFFLEVEL/ONLEVEL): bits 5:4 `irqlevel` = long-press IRQ threshold (`00`=1s, `01`=1.5s, `10`=2s, `11`=2.5s); bits 3:2 `offlevel` = power-off threshold (`00`=4s, `01`=6s, `10`=8s, `11`=10s); bits 1:0 `onlevel` = power-on threshold (`00`=128ms, `01`=512ms, `10`=1s, `11`=2s) |
+| Power-off enable | `0x22` bit 1 `btn_pwroff_en` (`0`=disabled, `1`=enabled); bit 0 `btn_pwroff_mode` (`0`=power off, `1`=restart) when it fires |
 
 Two traps in that. Clearing is write-one, not write-zero — the intuitive
 "write 0 to clear" leaves the flag set and the button appears stuck down
@@ -131,8 +133,16 @@ forever. And clearing with `0xFF` would wipe every other latched event
 (charging, battery insertion) that something else may care about, so clear only
 the bit you consumed.
 
-A **long** press is the PMU's own power-off. That is hardware and firmware
-cannot override it.
+The long-press interrupt (1-2.5 s, `0x27` bits 5:4) and the PMU's own
+power-off (4-10 s, `0x27` bits 3:2) are separate, independently configurable
+thresholds, not the same event. Power-off is further gated by `0x22` bit 1,
+which firmware can clear entirely. `0x22` and `0x27` default from EFUSE/POR, so
+what a given board actually boots with is not knowable from the datasheet
+alone; `buttons.c` reads and logs the decoded values once at startup so this
+is checkable in the field rather than assumed. Today firmware enables only the
+short-press interrupt and leaves the power-off enable at its default, so as
+shipped a long PWR hold still cuts power - but that is a default left in
+place, not a hardware limit firmware is powerless against.
 
 Both arrive through `input_t` alongside touch, so an app never polls anything
 itself. Polling runs at 50 Hz in its own task, deliberately decoupled from the

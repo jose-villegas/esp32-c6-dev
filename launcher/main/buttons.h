@@ -20,8 +20,12 @@
  *   fetched over the shared I2C bus and then cleared. So it is an EVENT, not
  *   a level, and reporting a `down` state for it would be a fiction.
  *
- * A long press on PWR is handled by the PMU itself and cuts power. That is
- * hardware behaviour and nothing here can override it.
+ * By default the PMU also powers itself off on a long PWR hold - REG 0x27
+ * (irqlevel/offlevel/onlevel) sets that at 4-10 s, independently of the
+ * 1-2.5 s long-press *interrupt* in the same register, and REG 0x22 bit 1
+ * (btn_pwroff_en) is what turns the power-off behaviour on at all. Firmware
+ * could clear that bit and take the long press for itself; today it does
+ * neither, and only the short-press interrupt is enabled (see buttons.c).
  *===========================================================================*/
 #pragma once
 
@@ -33,12 +37,26 @@
  * happened; `down` is the level. Edges are what UI code almost always wants -
  * using the level to toggle something would flip it every frame it was held.
  *
- * For PWR, `down` and `released` are always false: the PMU reports a completed
- * press and never tells us the button is being held. */
+ * For PWR, `down` and `released` are always false: only the short-press
+ * interrupt is enabled (see buttons.c), so a completed press is all that
+ * arrives today. The PMU also has rising- and falling-edge interrupts (REG
+ * 0x41/0x49 bits 0 and 1) that would make a `down` level reconstructible if
+ * something ever needed one - it is a firmware choice not to, not a hardware
+ * limit. */
 typedef struct {
     bool down;
     bool pressed;
     bool released;
+
+    /* Fires exactly once when the button has been held past BUTTON_HOLD_US -
+     * see button_fsm.h for the full contract, including that a hold consumes
+     * the release edge above so the two never fire for the same press.
+     *
+     * BOOT-only: always false for PWR. Not because the PMU can't tell - it is
+     * the same "not enabled" situation as `down` and `released` above - but
+     * because nothing enables the long-press interrupt (REG 0x41/0x49 bit 2)
+     * to drive it from. */
+    bool held;
 } button_t;
 
 /* Starts the polling task. Safe to call when the PMU is absent - the BOOT

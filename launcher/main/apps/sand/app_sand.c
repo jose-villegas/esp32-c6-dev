@@ -147,9 +147,10 @@ static screen_t screen;
  * eraser in the cycle. Two reasons, and both are about which button does what:
  *
  *   BOOT is a plain GPIO with no side effects, so it is the safe one to press
- *   repeatedly. A LONG press on PWR cuts power at the PMU - that is hardware
- *   and firmware cannot override it - which is a poor property for the control
- *   used most often.
+ *   repeatedly. PWR's PMU powers the board off on a long hold by default (REG
+ *   0x27 offlevel, 4-10 s) - firmware could disable that via REG 0x22 bit 1,
+ *   but nothing here does, so as shipped a long hold on PWR still cuts power,
+ *   which is a poor property for the control used most often.
  *
  *   Keeping erase out of the cycle means returning from it lands back on the
  *   material already chosen, instead of walking through all of them.

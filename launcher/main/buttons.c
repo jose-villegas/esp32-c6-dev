@@ -35,9 +35,24 @@ static const char *TAG = "buttons";
  *   bit 1  power key falling edge
  *   bit 2  power key long press
  *   bit 3  power key short press
- * Only the short press is wanted. A long press is the PMU's own power-off and
- * is not ours to interpret. */
+ * Only the short press is enabled. The long press is a separate interrupt at
+ * its own threshold (REG 0x27 bits 5:4, irqlevel - 1/1.5/2/2.5 s) and nothing
+ * here needs it yet. Power-off is a different threshold again (REG 0x27 bits
+ * 3:2, offlevel - 4/6/8/10 s), gated by its own enable bit (REG 0x22 bit 1,
+ * btn_pwroff_en) that firmware could clear - this bit does not touch it. */
 #define AXP2101_PKEY_SHORT   (1u << 3)
+
+/* REG 0x27, IRQLEVEL/OFFLEVEL/ONLEVEL setting - three independent thresholds
+ * packed into one register: bits 5:4 the long-press IRQ above, bits 3:2 the
+ * PMU's own power-off, bits 1:0 power-on. Read-only here; see pmu_init(). */
+#define AXP2101_REG_LEVELS   0x27
+
+/* REG 0x22, bit 1 btn_pwroff_en - enables PWRON held past OFFLEVEL as a
+ * power-off source at all - and bit 0 btn_pwroff_mode - power-off (0) vs
+ * restart (1) when it fires. Both default from EFUSE/POR, so what a given
+ * board actually boots with isn't knowable from the datasheet; only logged
+ * here, never written. */
+#define AXP2101_REG_PWROFF   0x22
 
 /* 50 Hz. Fast enough that a press never feels missed, slow enough that the I2C
  * read is nothing next to the rest of the frame - and deliberately decoupled
@@ -112,6 +127,28 @@ static void pmu_init(void)
 
     pmu_ready = true;
     ESP_LOGI(TAG, "PWR button via AXP2101, BOOT button on GPIO %d", BOOT_GPIO);
+
+    /* Log what this board's PMU actually boots with. 0x22 and 0x27 default
+     * from EFUSE/POR, so this is not something the datasheet can answer and
+     * the only way to know is to ask the chip, once, here. Observation only -
+     * neither register is written. */
+    uint8_t levels = 0, pwroff = 0;
+    if (pmu_read(AXP2101_REG_LEVELS, &levels) && pmu_read(AXP2101_REG_PWROFF, &pwroff)) {
+        static const char *irq_level[4] = { "1s", "1.5s", "2s", "2.5s" };
+        static const char *off_level[4] = { "4s", "6s", "8s", "10s" };
+        static const char *on_level[4]  = { "128ms", "512ms", "1s", "2s" };
+        const uint8_t irqlevel     = (levels >> 4) & 0x3;
+        const uint8_t offlevel     = (levels >> 2) & 0x3;
+        const uint8_t onlevel      = levels & 0x3;
+        const bool    pwroff_en    = (pwroff & (1u << 1)) != 0;
+        const bool    pwroff_mode  = (pwroff & (1u << 0)) != 0;
+        ESP_LOGI(TAG, "AXP2101 PWR thresholds: irqlevel %s, offlevel %s, onlevel %s, "
+                       "pwroff_en %d, pwroff_mode %s",
+                 irq_level[irqlevel], off_level[offlevel], on_level[onlevel],
+                 pwroff_en, pwroff_mode ? "restart" : "power-off");
+    } else {
+        ESP_LOGW(TAG, "Could not read AXP2101 0x22/0x27 - PWR thresholds unknown");
+    }
 }
 
 static bool pmu_take_short_press(void)
@@ -185,10 +222,14 @@ void buttons_read(button_t *boot, button_t *power)
     boot->down     = button_fsm_is_down(&boot_fsm);
     boot->pressed  = button_fsm_take_pressed(&boot_fsm);
     boot->released = button_fsm_take_released(&boot_fsm);
+    boot->held     = button_fsm_take_held(&boot_fsm);
 
-    power->down     = false;   /* the PMU reports events, never a held state */
+    /* Not a level because only the short-press interrupt is enabled, not
+     * because the PMU cannot report one - see buttons.h. */
+    power->down     = false;
     power->pressed  = power_pressed;
     power->released = false;
+    power->held     = false;   /* long-press interrupt is not enabled - see buttons.h */
     power_pressed   = false;
 
     portEXIT_CRITICAL(&lock);
