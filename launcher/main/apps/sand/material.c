@@ -368,12 +368,18 @@ const material_t materials[MATERIAL_MAX] = {
                               * flame can shove around. Sand (60) still
                               * sinks straight through it. */
 
-        .mobility = 90,      /* VISCOSITY, inverted - see material.h. Oil
-                              * moves on roughly a third of its steps
-                              * where water moves on all of them, so it
-                              * crawls, lags behind a tilt, and holds a
-                              * slope for a moment instead of levelling
-                              * instantly.
+        .mobility = 140,     /* VISCOSITY, inverted - see material.h. Oil
+                              * moves on a bit over half its steps where
+                              * water moves on all of them, so it lags
+                              * behind a tilt and holds a slope for a
+                              * moment instead of levelling instantly.
+                              *
+                              * Measured as steps for a column to spread
+                              * to the far wall: water 8, oil 18. It was
+                              * 90 (24 steps), which read as sludge
+                              * rather than as oil - clearly slower than
+                              * water is the point, not clearly slower
+                              * than everything.
                               *
                               * This is also what stops oil and water
                               * tearing through each other. The two
@@ -406,6 +412,31 @@ const material_t materials[MATERIAL_MAX] = {
         .slip    = 255,
         .repose  = 0,
         .scatter = 0,
+
+        .mobility = 30,      /* VISCOSITY, inverted - see material.h, and
+                              * the slowest thing on the board by a wide
+                              * margin: 108 steps to spread as far as
+                              * water goes in 8. Molten rock creeping,
+                              * which is most of what makes lava read as
+                              * dangerous rather than as orange water.
+                              *
+                              * This row had NO mobility at all until it
+                              * was noticed on device. The field arrived
+                              * for gases and only grew a liquid reader
+                              * later, and an unset byte is zero. That did
+                              * not freeze lava outright - the
+                              * wall-rebound splash moves liquid without
+                              * consulting the gate - but it made it
+                              * twelve times slower than intended,
+                              * measured at 249 steps to cross what takes
+                              * 20 here. Slow enough to look deliberate,
+                              * which is why it lasted. Zero now reads as
+                              * free-flowing so the next liquid to forget
+                              * this errs towards water, where the mistake
+                              * is obvious - see liquid_may_move() in
+                              * sand_liquid.c.
+                              * Starting point, not final - tune on device
+                              * like every other constant here. */
 
         .decay   = 0,        /* MUST stay 0, and this is not a style
                               * choice. decay != 0 is what switches the

@@ -120,6 +120,32 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
 static inline bool liquid_may_move(sand_t *s, uint8_t id)
 {
     const int m = (s->mobility >= 0) ? s->mobility : materials[id].mobility;
+
+    /* Zero reads as NO VISCOSITY here, not as "never moves", and the
+     * direction of that default is the whole point. `mobility` began as a
+     * gas-only field, so a liquid that does not set it is a liquid whose
+     * row predates liquids reading it at all - and the honest thing for
+     * such a row to do is behave the way every liquid did before the
+     * field had a second reader, which is to flow freely.
+     *
+     * Read the other way it is a trap, and this is not hypothetical:
+     * lava's row was written before liquids read this and left it unset,
+     * so lava spent a while at an effective mobility of zero. Measured,
+     * that was not quite frozen - a column still crept sideways, reaching
+     * a point in 249 steps that takes 20 at its intended figure, because
+     * the wall-rebound splash moves liquid without consulting this gate.
+     * Twelve times too slow reads as "extremely viscous" rather than as
+     * broken, which is exactly why it survived being looked at on a
+     * device.
+     *
+     * That is the argument for the default failing towards water: a
+     * material that quietly flows too fast is obvious, and a material
+     * that quietly flows too slow is a plausible-looking design choice.
+     * See test_every_liquid_declares_a_mobility, which catches the
+     * omission in the table rather than trying to catch it in motion. */
+    if (m == 0) {
+        return true;
+    }
     return m >= 255 || (int)(rng_next(&s->rng) & 0xFF) < m;
 }
 

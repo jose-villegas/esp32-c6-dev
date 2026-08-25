@@ -3519,27 +3519,66 @@ static void test_water_still_puts_fire_out(void)
  * Measured as steps for a tall column to reach the far wall: water 8,
  * oil 28 when this was written. Held to "oil takes at least twice as
  * long" so ordinary tuning does not trip it. */
+/* Every liquid must DECLARE a mobility, checked in the table rather than
+ * in motion.
+ *
+ * This exists because one did not. `mobility` arrived as a gas-only field
+ * and only grew a liquid reader later, so lava's row - written before
+ * that - left it unset, and an unset byte is zero.
+ *
+ * The obvious test is behavioural: place a column and assert it spreads.
+ * That was written first and it does not work, which is worth recording.
+ * A mobility of zero does not actually freeze a liquid, because the
+ * wall-rebound splash moves liquid without consulting the gate - lava at
+ * zero still crossed the same distance, in 249 steps against 20. Any
+ * budget loose enough not to be flaky is loose enough to let that pass,
+ * and any budget tight enough to catch it is pinning a performance figure
+ * rather than an invariant.
+ *
+ * So this checks the table instead. Nonzero is not a claim about the
+ * right value - only that somebody chose one, which is precisely the step
+ * that got skipped. */
+static void test_every_liquid_declares_a_mobility(void)
+{
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        if (materials[m].kind != KIND_LIQUID) {
+            continue;
+        }
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "%s is a liquid and must set its own `mobility` - leaving "
+                 "it unset does not read as an error, it reads as a very "
+                 "viscous liquid, which is how it lasts",
+                 materials[m].name);
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(0, materials[m].mobility, msg);
+    }
+}
+
 static void test_oil_flows_more_slowly_than_water(void)
 {
     int steps[2];
     const material_id_t liquids[2] = { MAT_WATER, MAT_OIL };
 
+    /* On `wide` (32 cells across), not the 8-wide default fixture. Over
+     * six cells of travel both liquids arrive in the same four steps and
+     * the difference is pure quantisation; the ratio only means anything
+     * across a real distance. */
     for (int k = 0; k < 2; k++) {
-        fixture();
-        sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
-        for (int x = 0; x < W; x++) {
-            sand_set(&s, x, H - 1, STONE);
+        sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 5u);
+        sand_set_mobility(&wide, SAND_MOBILITY_PER_MATERIAL);
+        for (int x = 0; x < WIDE_W; x++) {
+            sand_set(&wide, x, WIDE_H - 1, STONE);
         }
-        for (int y = 1; y <= H - 2; y++) {
-            for (int x = 1; x <= 2; x++) {
-                sand_set(&s, x, y, CELL_MAKE(liquids[k], MASS_MAX));
+        for (int y = 1; y <= WIDE_H - 2; y++) {
+            for (int x = 1; x <= 4; x++) {
+                sand_set(&wide, x, y, CELL_MAKE(liquids[k], MASS_MAX));
             }
         }
 
         steps[k] = -1;
-        for (int i = 1; i <= 2000 && steps[k] < 0; i++) {
-            sand_step(&s, 0, 1000, 0);
-            if (!CELL_IS_EMPTY(sand_at(&s, W - 2, H - 2))) {
+        for (int i = 1; i <= 3000 && steps[k] < 0; i++) {
+            sand_step(&wide, 0, 1000, 0);
+            if (!CELL_IS_EMPTY(sand_at(&wide, WIDE_W - 2, WIDE_H - 2))) {
                 steps[k] = i;
             }
         }
@@ -3547,10 +3586,14 @@ static void test_oil_flows_more_slowly_than_water(void)
             "setup: both liquids must eventually reach the far wall");
     }
 
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(steps[0] * 2, steps[1],
-        "oil must take at least twice as long as water to spread the "
-        "same distance - before `mobility` had a liquid reader the two "
-        "were indistinguishable");
+    /* Half again, not double: oil is 140 against water's 255 and lands
+     * around twice the time, but this is a "they are distinguishable"
+     * assertion rather than a pin on the current figures, and oil is
+     * deliberately tunable towards water. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE((steps[0] * 3) / 2, steps[1],
+        "oil must take clearly longer than water to spread the same "
+        "distance - before `mobility` had a liquid reader the two were "
+        "indistinguishable");
 }
 
 static void test_oil_trapped_under_water_floats_to_the_surface(void)
@@ -5210,6 +5253,7 @@ void run_sand_suite(void)
     RUN_TEST(test_oil_does_not_put_fire_out);
     RUN_TEST(test_water_still_puts_fire_out);
     RUN_TEST(test_oil_trapped_under_water_floats_to_the_surface);
+    RUN_TEST(test_every_liquid_declares_a_mobility);
     RUN_TEST(test_oil_flows_more_slowly_than_water);
     RUN_TEST(test_lava_does_not_decay_away);
     RUN_TEST(test_water_freezes_lava_into_stone);
