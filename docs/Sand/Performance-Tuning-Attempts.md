@@ -1071,6 +1071,300 @@ flip passes" is true of this build rather than settled for ever.
 
 ---
 
+## The tenth attempt: the last 675 us, and where they actually were
+
+Three attempts had ended by saying the same thing in different words: what
+is left is the movement itself, and closing the gap means *examining fewer
+cells*, not accounting for them more cheaply. This attempt took that at
+face value and went looking for cells that did not need examining. It
+found 17,024 of them per step, in the pass nobody had profiled since it
+changed shape, and the mixed scene came inside its budget for the first
+time - taking the device to **`SELFTEST_COMPLETE failures=0`**, every
+frame budget met, with no budget touched.
+
+It also spent three device rounds re-learning the eighth attempt's oldest
+trap, on a change that altered no semantics whatsoever. That part is at
+the end, and it is the more transferable half.
+
+### Step 0: the phase split had moved, and nobody had re-taken it
+
+The ninth attempt's closing summary described the mixed scene as ~74% main
+sweep / ~25% liquid pass. That number came from the eighth attempt, taken
+*before* `ROW_NO_LIQUID` was deleted. Deleting it made the cross-flow pass
+walk all 224 rows every step instead of ~120, and the split moved a long
+way:
+
+| mixed scene, per step | wake | **sweep** | **liquid** | gas | react | settle |
+|---|---:|---:|---:|---:|---:|---:|
+| eighth attempt (pre-deletion) | 2 | **11322 (74%)** | **3804 (25%)** | 1 | 1 | 8 |
+| re-taken here | 2 | **7071 (57%)** | **5215 (42%)** | 1 | 1 | 7 |
+
+The pass that had just been made *correct*ly cheaper in absolute terms had
+become the second-biggest thing in the step in relative terms, and the
+stale figure would have pointed the whole attempt at the sweep. **A phase
+split is invalidated by any change to the phases, including a change that
+made one of them faster.**
+
+Host-side counters on the exact device scenarios (no flash cycle) then
+priced what each pass looks at:
+
+| mixed scene, per step | main sweep | cross-flow pass |
+|---|---:|---:|
+| cells examined | 39,244 | **41,216** (the whole grid) |
+| ... empty | 25,961 (66%) | 27,888 |
+| ... static/gas | 841 | - |
+| ... non-liquid occupied | - | 7,046 |
+| ... liquid | 6,282 | 6,282 |
+| ... powder | 6,160 | - |
+
+Two numbers sitting next to each other decided the rest of the attempt:
+the cross-flow pass reads **every cell of the grid** and only 15% of them
+hold anything it can act on. Dividing the measured phase times by these
+counts across the mixed and water scenarios gives ~95 ns for a cell the
+pass rejects and ~300 ns for one it works on - so the 34,934 rejections
+cost ~3.3 ms of the 5.2 ms pass. **That was the target.**
+
+### Experiment 1: the material table into DRAM. Genuinely neutral.
+
+`materials[]` is `const`, so it lived in flash `.rodata` behind the same
+32 KB cache as all the code, and `material_of()` reads it per occupied
+cell in `step_one_grain()` and per non-empty target in `can_enter()`. The
+second attempt had planned "const tables to DRAM" as a later IRAM stage
+and never reached it; `sand_liquid.c`'s own `liquid_mask()` comment
+records a per-cell read of this table costing five and a half
+milliseconds. It looked like the cheapest possible win.
+
+`DRAM_ATTR` on the definition, `#ifdef DEVICE_BUILD`-gated so the host
+build still compiles, placement verified by address before timing
+anything - `materials` moved from `0x420xxxxx` to `0x40810834`, 192 bytes
+of a very comfortable ~347 KB of free DIRAM. Two identical captures:
+
+| | baseline | DRAM | |
+|---|---:|---:|---|
+| mixed scene | 12675 | 12635 | -0.3% |
+| screen of water | 13698 | 13628 | -0.5% |
+| settled-pile flip | 5947 | 5944 | -0.05% |
+| full-size step | 5856 | 5854 | -0.03% |
+| settled screen | 260 | 260 | 0% |
+
+Measured again later on top of experiment 3's build, it reproduced the
+same tiny margin (mixed 11295 -> 11256). Consistent, always in the same
+direction, and **an order of magnitude smaller than this target's
+documented flash-layout swing**, which is to say indistinguishable from
+zero by anything this project can measure. **Reverted**, because a change
+that cannot be shown to do anything is churn, and the shipped tree should
+be the tree the numbers came from.
+
+The finding is not "DRAM is useless" but the same one the eighth
+attempt's IRAM experiment reached about code: **the 32 KB cache was not
+missing on this table either.** 192 bytes read constantly stay resident.
+The five-and-a-half-millisecond disaster `liquid_mask()` commemorates was
+a sixteen-entry *scan* touching the whole table per cell - a completely
+different access pattern from one indexed read, and the lesson does not
+transfer between them.
+
+### Experiment 2: letting the cross-flow pass skip settled blocks. Killed by its own derivation.
+
+The obvious skip, and the one this round was briefed to try: the main
+sweep already skips settled blocks via `block_state`; give the cross-flow
+pass the same test using the same bits. The derivation was written before
+any code, and it found two holes - one that the suite already catches, and
+one that nothing catches and that no guard makes cheap enough to be worth
+having.
+
+**Hole A, staleness.** The pass runs *after* the main sweep and *before*
+`finalize_settling()`, so it reads last step's settled bits - the same
+contract the sweep lives with. It is not the same risk, though, and the
+asymmetry is the point. The sweep's skip is safe because a settled block's
+contents provably could not move; by the time the cross-flow pass runs,
+the sweep has already moved things, possibly *into* a block still marked
+settled. `test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in` -
+written in the ninth attempt for a different reason - fails immediately on
+a build with this skip in it. Guardable (also test `BLOCK_ACTIVE`), but
+not for free.
+
+**Hole B, the perpendicular.** This one is fatal and nothing in the suite
+sees it. The settled bits are indexed by *gravity's dithered direction*
+(`BLOCK_SETTLED_NEAREST`/`OTHER`). Cross-flow does not use that direction
+at all: it alternates along the perpendicular every step (`liquid_flip`),
+independently. Under straight-down gravity the dither never varies, so
+every step sets the same settled bit while the perpendicular flips every
+step.
+
+Now consider a pool that is imbalanced in only one direction - two cells,
+mass 15 and 5, with a wall outside them. Under `perp = -x` nothing in it
+has a legal move: the left cell looks left at a wall, the right cell looks
+left at a *higher* neighbour. Nothing moves, nowhere near it moves, and
+`finalize_settling()` gives the block its settled bit at the end of that
+step. The next step uses `perp = +x`, where the right cell *would* hand
+over 5 - but the block is now settled and the skip would step over it.
+Forever.
+
+Measured on the host rather than argued, with a throwaway build (both
+numbers are the same fixture, 12 steps):
+
+| step | baseline: left/right, block | with settled-block skip |
+|---:|---|---|
+| 0 | 15 / 5, SETTLED | 15 / 5, SETTLED |
+| 1 | **10 / 10**, awake | 15 / 5, SETTLED |
+| 2-11 | 10 / 10, SETTLED | **15 / 5, SETTLED** |
+
+A permanently frozen imbalance, in a scenario that reads as completely
+ordinary. Guarding it would mean making the settled bits perpendicular-
+aware as well as gravity-aware - four combinations instead of two, a block
+qualifying only after being quiet in all of them.
+
+**And the payoff was never there anyway**, which the step-0 counters said
+before the derivation finished. On the mixed scene only **1,971 of 41,216
+examined cells (4.8%) fall in settled blocks, and exactly zero of them
+hold liquid.** The skip would cost 1,344 block-state loads a step to avoid
+1,971 cheap cell tests. Not written. **Two reasons to stop, either of
+which was sufficient, and both were free.**
+
+### Experiment 3: what the sweep already knows
+
+The counters had also priced the alternative, in the same run. Two
+candidate skip structures, both "examine fewer cells", measured as
+ceilings before either was coded:
+
+| mixed scene | cells skippable per step | of examined |
+|---|---:|---:|
+| per-block occupancy counts, main sweep | 4,300 | 11.0% |
+| per-block liquid presence, cross-flow pass | **17,024** | **41.3%** |
+
+Four times the ceiling, on the test that was actually failing - and with a
+maintenance bill in the *shape the ninth attempt says to demand*. Per-block
+occupancy counts are O(moves) to keep true, across a dozen mutation sites,
+with count drift as the failure mode. Per-block liquid presence is O(blocks):
+**the main sweep already reads every cell of every awake block**, so noting
+"there was liquid in this one" is a register OR per occupied cell and a
+single store per block - the same shape as the `moved_here` flag sitting
+next to it. Nobody is charged per move. The briefed experiment 3 (occupancy
+counts in the sweep) was dropped on those two numbers without a device
+round.
+
+`BLOCK_HAS_LIQUID` is cleared each step for exactly the blocks the sweep is
+about to re-establish it for, and left alone for a settled block the sweep
+will skip - safe, because nothing in a settled block moved.
+
+**The one non-obvious part is that the bit cannot be read raw.** Liquid can
+arrive in a block *after* the sweep has walked it: the sweep runs bottom-up,
+so a grain falling across a block-row boundary lands in a block already
+scanned and found dry. So a second bit, `BLOCK_LIQUID_NEAR`, is the first
+expanded to a block's 8 neighbours by one pass over the 24 blocks. That is
+sufficient because liquid moves at most one cell in the sweep and at most
+`SAND_LIQUID_SIGHT` (8) in the cross-flow pass, both well inside a 32-wide
+block - so wherever it can arrive, the block that was *seen* holding it is
+that block or an immediate neighbour. The invariant, written above
+`BLOCK_HAS_LIQUID` in `sand_priv.h`, is therefore not "the bit is exact"
+but **"every liquid cell sits in a block whose NEAR bit is set"** - and the
+contrapositive is what the skip uses, including for the `found_any` test
+that arms `may_have_liquid`.
+
+**The suite did not cover that, and the gap had teeth.** With the expansion
+removed, all 194 existing tests still passed. The failure it hides is not a
+one-step delay: a single water cell falling out of its block empties its
+source, so the pass finds liquid *nowhere*, sets `may_have_liquid = false`,
+and switches cross-flow off permanently with water still on the screen.
+`test_water_falling_into_the_next_block_down_still_spreads` is built to
+produce exactly that - two block-rows, one cell of water, a stone shelf
+below the boundary so only cross-flow can move it - and was **verified to
+fail before it was kept**, reporting a single frozen cell against several
+when correct.
+
+Two identical captures, and the three benchmark scenarios evolve to
+byte-identical grids before and after:
+
+| Test | Budget | Round-3 baseline | Shipped |
+|---|---:|---:|---:|
+| mixed scene | 12000 | 12675 **FAIL** | **11167 PASS** (-11.9%) |
+| screen of water | 16000 | 13698 | 13288 |
+| settled-pile flip | 6500 | 5947 | 5969 |
+| full-size step | 6000 | 5856 | 5876 |
+| settled screen | 300 | 260 | 259 |
+| fire cascade | 350000 | 304455 | 316117 |
+| screen of fire | 250000 | 213871 | 217221 |
+
+`SELFTEST_COMPLETE failures=1` -> **`failures=0`**. Every frame budget this
+project has ever written is met, and not one of them was ever raised.
+
+### The three rounds this cost, and why they are the useful part
+
+The change above measured 11295 us the first time it ran. Then it was
+tidied - a stale comment, a genuine bug in a rarely-taken branch, and a
+split-up of the two functions the project's own
+`tools/cognitive_complexity.py` had started flagging - and re-measured at
+**12702**, back over budget, with the water benchmark up 14%.
+
+Nothing about the simulation had changed. Host checksums were identical.
+The temptation was to write it off as this target's documented flash-layout
+noise and start bisecting blindly. **What made it diagnosable was a control
+already in the capture**: the three benchmarks that touch no liquid at all
+came back *byte-identical* - 5876 / 5969 / 259, to the microsecond. A
+global layout shift cannot do that. Only the liquid path had moved, so the
+cause was in the liquid path.
+
+It was one line, and it was this file's own eighth attempt wearing new
+clothes. The tidy-up had turned
+
+```c
+if (s->block_state == NULL) {
+    return equalise_one_block(...);   /* early return */
+}
+...the block loop, calling equalise_one_block again...
+```
+
+into an `if`/`else`, purely for readability. **`equalise_one_block()` is
+`static inline` with two call sites either way** - but the restructuring
+was enough to change what GCC did with it, and the eighth attempt has the
+general form of this already written down: a `static` function with exactly
+one call site is inlined unconditionally
+(`-finline-functions-called-once`); add or reshape call sites and only the
+size heuristics are left, and they decline bodies this large. There it cost
+2 ms on a function the failing test never even called. Here it cost 1.8 ms
+on the pass the whole attempt was about.
+
+The fix was to stop having two call sites at all: express "no block bits to
+consult" as a NULL `brow` pointer inside the *same* loop, rather than as a
+separate whole-row branch. One call site, one loop-invariant test.
+**11137 us** - better than the version before the tidy-up, and the
+complexity score came down as a side effect rather than at a price.
+
+Three things worth carrying:
+
+1. **Keep a control in every capture.** The seven frame-budget tests are not
+   seven measurements of the same thing; three of them never touch liquid.
+   That accident is what turned "the layout moved, who knows" into "the
+   liquid path moved, go look at the liquid path" in one capture.
+2. **Readability refactors are performance changes on this target.** Not
+   might-be: this one cost 14% on a benchmark, with the compiler's inlining
+   decision as the whole mechanism. The `cognitive_complexity.py` score is a
+   hotspot finder, and it is worth acting on - but on a hot path it has to be
+   re-measured on device exactly like any other change, and the version that
+   ships is the version that was measured.
+3. **The final restructuring was better on both axes**, which is the note to
+   end on rather than "complexity work is dangerous." Removing the second
+   call site removed the duplicated branch *and* the inlining cliff. When a
+   tidy-up costs performance, the tidy-up is usually not finished.
+
+### Where this leaves it
+
+There is no failing budget left, so there is no next optimisation this file
+can point at with a number attached - and the honest thing is to say so
+rather than manufacture one. The thinnest margin is `full_size_step` at
+~2.1%, which is a *risk* to watch rather than a target to chase, and the
+lesson immediately above is what to reach for the next time an innocent
+change moves it.
+
+If a future material or feature does put a budget back over, the
+step-0 method here is the part to repeat before anything else: re-take the
+phase split (it goes stale the moment a phase changes), then count what each
+phase *examines* against what it *acts on*, on the host, in the scenario that
+is actually failing. Both experiments this attempt declined to run were
+declined on counters that took ten seconds to produce.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

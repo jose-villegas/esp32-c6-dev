@@ -134,6 +134,45 @@ surrounding experiment had made the function's body trivial enough that
 being inlined or not no longer mattered, which is a different finding than
 "the attribute doesn't work."
 
+**The corollary nobody applies in time: a readability refactor is an
+inlining change.** Restructuring an early return into an `if`/`else`,
+hoisting a shared span of a loop into a helper, splitting a function
+because a complexity metric flagged it — none of these alter semantics, and
+all of them can alter what the compiler decides to fold. One such tidy-up
+here, semantics-identical and host-checksum-identical, cost 14% of a
+benchmark. So: re-measure a refactor of a hot path on real hardware exactly
+like any other change, and *ship the version you measured*. The happy
+ending is worth stating too — the fix was to remove the second call site
+entirely rather than revert the tidy-up, which came out both faster than
+the original and simpler than either. **When a readability change costs
+performance, the readability change is usually not finished.**
+
+---
+
+## Keep something in the benchmark set that the change cannot touch
+
+Benchmarks are usually chosen to *cover* the system, so they tend to
+overlap: every one of them exercises the hot path, because that is the
+point. That makes a whole class of regression undiagnosable. When every
+number moves at once, "my change was slower" and "the binary landed
+differently in cache" produce the same evidence, and the only way out is
+blind bisection.
+
+The fix is nearly free: make sure at least one benchmark in the suite
+exercises a path the change provably cannot reach, and read it first.
+
+Here, a change confined to the liquid code regressed everything by 6–14%,
+which looked exactly like this target's well-documented flash-layout noise.
+Three of the seven frame-budget tests place no liquid at all — and they came
+back *byte-identical to the microsecond*. A global layout shift cannot leave
+three numbers untouched. That single observation converted "something got
+slower somewhere" into "the regression is inside the liquid path" in one
+capture, and the cause was found in minutes.
+
+Read the controls before the headline number. If the controls moved too, the
+finding is about the build, not the change — and that is worth knowing early,
+because it means the code under test is not the thing to go read.
+
 ---
 
 ## A "free" function call can still cost a full register-spill

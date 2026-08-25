@@ -102,7 +102,7 @@ flowchart TD
     Start(["sand_step(s, gx, gy, jostle)"]) --> Mom["update_momentum()"]
     Mom --> Dith["dithered gravity direction\n(free fall -> early return)"]
     Dith --> Sweep["Main gravity sweep\nstep_one_row() per row\n(sand + water's DOWN move)"]
-    Sweep --> Liq["sand_step_liquids()\ncross-flow + wall rebound"]
+    Sweep --> Liq["sand_step_liquids()\ncross-flow + wall rebound\n(skips blocks with no liquid near)"]
     Liq --> GasCheck{"may_have_gas?"}
     GasCheck -- yes --> Gas["sand_step_gas()\nrise + disperse\n(gas, fire)"]
     GasCheck -- no --> React
@@ -159,6 +159,21 @@ tests. Two settled bits, not one
 (`BLOCK_SETTLED_NEAREST`/`BLOCK_SETTLED_OTHER`), because gravity's
 direction is dithered between two ring directions each step, and a block
 settled under one might not be under the other.
+
+`block_state` carries two more bits, for a different question the same
+grid answers cheaply. `BLOCK_HAS_LIQUID` is set by the main sweep - which
+reads every cell of every awake block anyway - when it sees a liquid cell,
+and `BLOCK_LIQUID_NEAR` is that bit expanded to a block's 8 neighbours by
+one pass over the blocks. `sand_step_liquids()`'s cross-flow pass skips
+the block-columns whose NEAR bit is clear, which took it from reading all
+41,216 cells of the grid every step to reading only the ~59% that could
+possibly matter. The expansion is what makes it sound: liquid moves one
+cell in the sweep and at most `SAND_LIQUID_SIGHT` (8) in the cross-flow
+pass, so anywhere it can arrive after its own block was walked belongs to
+a neighbour of the block that was seen holding it. See `sand_priv.h` for
+the invariant in full, and
+`test_water_falling_into_the_next_block_down_still_spreads` for the
+fixture that fails without the expansion.
 
 Block size (`SAND_BLOCK_W=32`, `SAND_BLOCK_H=64`, `sand.h`) was swept
 across six candidate pairs on real hardware, not guessed - see the
@@ -274,18 +289,18 @@ grep -E "FAIL|SELFTEST_COMPLETE" /path/to/output.txt
 ```
 
 `SELFTEST_COMPLETE failures=N` is the number that matters. As of this
-writing the accepted baseline is **`failures=1`** - the mixed
-sand/water/stone-X flip, which was given a deliberately-below-measured
-budget on purpose, as a reduction target rather than a safety margin (see
-the table below); anything beyond that count is a real regression.
+writing the accepted baseline is **`failures=0`**: every frame budget is
+met. Anything above zero is now a real regression - there is no longer a
+known-failing row to explain away.
 
-It was `failures=3` for a long time, and the two that came off are worth
-knowing about, because neither budget moved to make it happen: the
-settled-pile flip and the screen of water both came inside budget in the
-ninth tuning attempt, which found that per-move row bookkeeping was 40% of
-the flip and then that the cache that bookkeeping protected
-(`ROW_NO_LIQUID`) cost more than it saved and deleted it outright. See
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
+It was `failures=3` for a long time, and all three came off without a
+single budget moving, which is the part worth knowing. The settled-pile
+flip and the screen of water came in during the ninth tuning attempt,
+which found that per-move row bookkeeping was 40% of the flip and then
+that the cache it protected (`ROW_NO_LIQUID`) cost more than it saved and
+deleted it outright. The mixed scene came in during the tenth, which gave
+the cross-flow pass a block-shaped skip for the cells that hold no liquid.
+See [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 ## The seven device frame-budget tests
 
@@ -296,33 +311,31 @@ comment for the reasoning behind its specific budget.
 
 | Test | Scenario | Budget | Last measured |
 |---|---|---|---|
-| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | ~5855 µs (thin - watch it) |
+| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | ~5876 µs (thin - watch it) |
 | `test_a_screen_of_settled_sand_costs_almost_nothing` | Entire grid full of sand, nothing moving | 300 µs | ~260 µs |
-| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | ~5947 µs (was 8996 and failing until the ninth attempt) |
-| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | **~12675 µs (deliberate reduction target, not a regression)** |
-| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 16000 µs | ~13698 µs (was 16141 and failing until the ninth attempt) |
-| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~304500 µs |
+| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | ~5969 µs (was 8996 and failing until the ninth attempt) |
+| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | ~11167 µs (was 15144 and failing until the tenth attempt) |
+| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 16000 µs | ~13288 µs (was 16141 and failing until the ninth attempt) |
+| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~316000 µs |
 | `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~214000-231000 µs (varies with flash-cache layout - see below) |
 
-One row is marked **FAIL**, and that is the known, accepted baseline, not
-something to chase down reflexively - `failures=1` on a clean capture
-means "as expected," not "something is broken." The mixed scene is a
-budget nothing has met *yet*, set below the measurement on purpose to keep
-pressure on future optimization work rather than silently ratchet the
-number up to match the code. It has come from 26.2% over to 5.6% over
-without the budget moving.
+Every row passes, and no budget was ever raised to make that true - the
+mixed scene in particular was set 21% *below* what the code could do when
+it was written, deliberately, as a reduction target rather than a safety
+margin, and it went from 26.2% over to 7.0% under without the number
+moving. That is the standard to hold the next one to.
 
-Two rows to watch rather than celebrate. `full_size_step` sits at ~2.4%
+One row to watch rather than celebrate: `full_size_step` sits at ~2.1%
 under its budget, thin enough that an unrelated code change can flip it
 purely by moving where things land in flash - it has crossed twice in this
-project's history for exactly that reason. And the settled-pile flip's own
-margin (~8.5%) is inside the range this target's flash-layout sensitivity
-has been measured to swing. If a capture ever shows `failures=2` or more,
-check whether the number that moved actually moved *much* (not the ordinary
-~2-5%, occasionally more, flash-layout noise this project has already
-characterised - see
+project's history for exactly that reason. If a capture ever shows a
+failure, check whether the number that moved actually moved *much* (not the
+ordinary ~2-5%, occasionally more, flash-layout noise this project has
+already characterised - see
 [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)) before
-assuming a real regression.
+assuming a real regression. The tenth attempt measured a 14% swing on the
+water benchmark from a restructuring that changed no semantics at all, so
+"much" has a wide floor here.
 
 The last two rows are new territory this session opened, not a template
 that existed before: there was no gas- or fire-specific frame-budget
