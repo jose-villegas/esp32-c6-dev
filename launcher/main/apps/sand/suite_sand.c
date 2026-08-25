@@ -3652,6 +3652,58 @@ static void test_acid_eats_through_stone(void)
         "held would leave glass with nothing to do");
 }
 
+/* Glass conducts heat, the same as stone.
+ *
+ * It did not, and the omission was invisible: glass had no reactions[] row
+ * at all, so `conducts` defaulted to 0 and heat stopped dead at it. A
+ * stone vessel over a flame boiled its contents and a glass one did
+ * not - backwards, given glass is the vessel you have to MAKE and the only
+ * one acid cannot eat.
+ *
+ * An absent row reads as "this material has no reactions", which is
+ * correct for most materials and was wrong for this one. Nothing warns
+ * about it, which is what this test is for.
+ *
+ * Asserted against stone rather than as an absolute figure: the two are
+ * meant to be interchangeable thermally, so that choosing between them is
+ * a decision about acid and nothing else. */
+static void test_glass_conducts_heat_like_stone(void)
+{
+    TEST_ASSERT_EQUAL_INT_MESSAGE(reactions[MAT_STONE].conducts,
+                                  reactions[MAT_GLASS].conducts,
+        "glass must conduct heat as well as stone - a glass vessel over a "
+        "flame has to boil what is in it, and glass differing from stone "
+        "on any axis but acid makes the choice between them a guess");
+
+    /* And in the simulation, not only in the table: a sealed vessel with
+     * water in it and fire underneath. */
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, GLASS);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 3, GLASS);          /* the vessel's base */
+    }
+    for (int x = 2; x < W - 2; x++) {
+        sand_set(&s, x, H - 4, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    bool boiled = false;
+    for (int i = 0; i < 400 && !boiled; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
+                sand_set(&s, x, H - 2, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        boiled = count_cells_of(MAT_STEAM) > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(boiled,
+        "fire under a glass base must boil the water above it, exactly as "
+        "it does under a stone one");
+}
+
 /* Sand plus sustained heat makes glass: reaction_t.heats_to, which is a
  * phase change rather than combustion and so is kept apart from
  * flammability/ignites_to. Sand does not catch fire, and calling the field
@@ -5756,6 +5808,7 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_does_not_dissolve_its_container);
     RUN_TEST(test_acid_eats_through_stone);
     RUN_TEST(test_sand_turns_to_glass_under_sustained_heat);
+    RUN_TEST(test_glass_conducts_heat_like_stone);
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);

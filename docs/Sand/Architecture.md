@@ -100,7 +100,7 @@ it stay.
 | oil | 50 | **1** | fire | 0 | 0 | 0 | - | 0 | 0 | 0 | - |
 | lava | 0 | - | - | **1** | 0 | 0 | **stone** | 16 | 0 | 0 | - |
 | acid | 0 | - | - | 0 | 0 | 0 | - | 0 | **60** | 0 | - |
-| glass | 0 | - | - | 0 | 0 | 0 | - | 0 | 0 | **0 (immune)** | - |
+| glass | 0 | - | - | 0 | **220** | 0 | - | 0 | 0 | **0 (immune)** | - |
 
 Six things in that table are worth reading twice:
 

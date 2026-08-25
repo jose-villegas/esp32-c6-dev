@@ -618,6 +618,23 @@ const reaction_t reactions[MATERIAL_MAX] = {
                               * like every other constant here. */
     },
 
+    [MAT_GLASS] = {
+        /* Conducts exactly as well as stone, and the sameness is the
+         * point: glass and stone should differ in ONE thing - what acid
+         * does to them - so choosing between them is a decision about
+         * acid and nothing else. A second axis of difference would make
+         * the choice a guess.
+         *
+         * It had no row at all until this was noticed, which meant
+         * conducts defaulted to 0 and heat simply stopped at glass. A
+         * stone vessel over a flame boiled its contents and a glass one
+         * did not - backwards, since glass is the vessel you have to make
+         * and the only one that survives acid. Nothing announced it: an
+         * absent row reads as "no reactions", which is right for most
+         * materials and was wrong for this one. */
+        .conducts = 220,
+    },
+
     [MAT_STONE] = {
         .dissolvable = 60,   /* Stone gives way to acid now, just slowly -
                               * well under sand's 200, so a wall holds for

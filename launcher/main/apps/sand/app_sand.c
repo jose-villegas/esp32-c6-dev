@@ -13,9 +13,10 @@
  * cell is a square block of `cell` x `cell` pixels, and `cell` is chosen from
  * the boot menu rather than fixed: HIGH (2 px) gives a 184 x 224 grid, or
  * 41 KB; MEDIUM (3 px, the default) gives 122 x 149, or 18 KB; LOW (4 px)
- * gives 92 x 112, or 10 KB. All three still read as grains rather than
- * bricks - the choice trades fineness for the step budget a finer grid
- * costs, not for whether it looks right.
+ * gives 92 x 112, or 10 KB; VERY LOW (6 px) gives 61 x 74, or about 4.5 KB.
+ * All four still read as grains rather than bricks - the choice trades
+ * fineness for the step budget a finer grid costs, not for whether it looks
+ * right.
  *
  * Every allocation below is sized for the finest quality (2 px) regardless of
  * which one is active, so switching quality on the menu never reallocates
@@ -29,7 +30,9 @@
  * right and bottom edges, not an out-of-bounds write. At 2 px it divides
  * both evenly and there is no margin at all, but at 3 px it does not: 122 * 3
  * = 366 and 149 * 3 = 447, leaving a 2 px strip on the right and a 1 px strip
- * on the bottom that the grid never touches. That is harmless only because
+ * on the bottom that the grid never touches. At 6 px the margin is the
+ * largest of any tier: 61 * 6 = 366 and 74 * 6 = 444, a 2 px strip on the
+ * right and a 4 px strip on the bottom. That is harmless only because
  * the colour of an empty cell and the menu's background are the same value,
  * 0x0A0C14 - see COL_BACKGROUND - so the untouched strip is indistinguishable
  * from the screen around it. start_sim() still clears the screen explicitly
@@ -65,9 +68,10 @@ static const char *TAG = "sand";
  * see the comment on `quality` itself. */
 typedef struct { const char *name; int cell; } quality_t;
 static const quality_t qualities[] = {
-    { "HIGH",   2 },
-    { "MEDIUM", 3 },
-    { "LOW",    4 },
+    { "HIGH",     2 },
+    { "MEDIUM",   3 },
+    { "LOW",      4 },
+    { "VERY LOW", 6 },
 };
 #define QUALITY_COUNT ((int)(sizeof(qualities) / sizeof(qualities[0])))
 #define QUALITY_DEFAULT 1        /* MEDIUM */
@@ -102,8 +106,18 @@ static screen_t screen;
 
 /* Centered, absolutely-placed pair of buttons - see draw_menu(). UI_ROW_HEIGHT
  * is the shared row metric from ui.h, used here so the menu's buttons match
- * the height every other app UI's rows use. */
-#define MENU_BTN_W    240
+ * the height every other app UI's rows use.
+ *
+ * MENU_BTN_W is sized to the longest quality label plus margin: "QUALITY:
+ * VERY LOW" is 17 characters, which at GFX_CHAR_W (16 px, see gfx.h) is
+ * 272 px of text. mu_draw_control_text() in microui.c centers a button's
+ * label and clips it to the button's own rect via mu_push_clip_rect() rather
+ * than wrapping or shrinking it, so a label wider than its button is chopped
+ * off at both ends with no warning and no crash. 300 leaves 34 px margins
+ * either side of the panel (GFX_WIDTH 368) and 28 px of slack around the
+ * longest label - if a future quality tier needs a longer label than this,
+ * check its width against this number before assuming it will fit. */
+#define MENU_BTN_W    300
 #define MENU_BTN_H    UI_ROW_HEIGHT
 #define MENU_BTN_GAP  20
 
@@ -489,14 +503,30 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
  * see their bound as a constant, and this is the hottest loop in the app,
  * running once per visible pixel of every changed row. Dispatching through a
  * switch gives each arm a literal `n`, so every quality level still gets the
- * unrolled version instead of paying for a runtime-bounded loop here. */
+ * unrolled version instead of paying for a runtime-bounded loop here.
+ *
+ * Every entry in qualities[] must have a matching case here. This switch
+ * does not derive its arms from that table - it cannot, since n has to be a
+ * compile-time constant - so the two are kept in sync by hand, and adding a
+ * quality tier without adding its case is silent breakage: the build stays
+ * clean, but the grid is stepped at the new cell size while still being
+ * painted at whatever size the default arm falls back to. */
 static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
                       const uint8_t *row)
 {
     switch (cell) {
     case 2:  paint_row_n(fb, pal, cy, row, 2); break;
     case 3:  paint_row_n(fb, pal, cy, row, 3); break;
-    default: paint_row_n(fb, pal, cy, row, 4); break;
+    case 4:  paint_row_n(fb, pal, cy, row, 4); break;
+    case 6:  paint_row_n(fb, pal, cy, row, 6); break;
+    /* Not reachable for any cell size in qualities[] above - if it is ever
+     * hit, that table grew an entry this switch does not know about, which
+     * is a bug there, not here. Falls back to the finest size (2) rather
+     * than the coarsest, because 2 is the only n guaranteed to stay inside
+     * every buffer regardless of what cell/grid_w/grid_h actually are, so a
+     * missing case shows up as a visibly wrong render confined to the
+     * buffer instead of as an out-of-bounds write past it. */
+    default: paint_row_n(fb, pal, cy, row, 2); break;
     }
 }
 
@@ -722,12 +752,22 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * defined in cells, so a finger's-width brush stays a finger's width on
      * screen at every quality - a cell-based radius would instead have
      * covered twice the physical area at LOW that it does at HIGH, since a
-     * LOW cell is twice as many pixels across. */
+     * LOW cell is twice as many pixels across.
+     *
+     * Rounded to nearest (+ cell / 2 before dividing) rather than truncated,
+     * because this is a physical size in pixels being converted to a count
+     * of cells, and plain integer division biases that count small at every
+     * quality where cell does not divide the radius evenly - a small bias at
+     * 3 or 4 px, and a 40% shrink at 6 px, where 10 / 6 truncates to 1
+     * instead of rounding to 2. Never rounds to 0 for any quality in the
+     * table: the smallest result is POUR_RADIUS_PX at the coarsest cell,
+     * (10 + 3) / 6 = 2. */
     for (int i = 0; i < applications; i++) {
         if (erasing) {
-            sand_erase(&sim, cx, cy, ERASE_RADIUS_PX / cell);
+            sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
         } else {
-            sand_spawn(&sim, cx, cy, POUR_RADIUS_PX / cell, brushes[brush]);
+            sand_spawn(&sim, cx, cy, (POUR_RADIUS_PX + cell / 2) / cell,
+                      brushes[brush]);
         }
     }
 }
