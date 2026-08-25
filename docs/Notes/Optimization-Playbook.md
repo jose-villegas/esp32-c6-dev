@@ -251,6 +251,49 @@ majority of the time.
 
 ---
 
+## A skip structure has two costs — count the one nobody bills for
+
+Everything above is about the cost of skipping at the wrong *granularity*.
+There is a second cost, and it is easy to miss because it is charged to a
+completely different piece of code: **keeping the structure true.** The skip
+is paid for by whoever reads it. The invalidation is paid for by whoever
+*changes anything at all* — including code that never benefits from the skip
+and often does not know it exists.
+
+Concretely, from this repo: a per-row "this row is empty of liquid, don't
+scan it" flag. Correct, and its skip was real — it let a levelling pass skip
+about 104 of 224 rows every step. Keeping it honest meant wiping three bytes
+of row state on **every move of every material, anywhere on the grid**, since
+any write could in principle put liquid in a row. Counted on a host, on the
+worst-case benchmark: 33,426 bytes written per step to avoid 104 row scans —
+and those scans were cheap, a bitmask test per cell that bailed immediately.
+Deleting the flag outright, and the whole array behind it, took that
+benchmark from 17.9 ms per step to 13.1 ms and fixed two failing budgets at
+once. Three separate attempts to make the *invalidation* cheaper preceded
+that, each well-reasoned; the answer was that the cache should not exist.
+
+**The question to ask of any dirty/settled/proved-empty flag is not only "is
+this the right unit," but "who pays to keep it true, how often, compared to
+how often it is read."** A structure maintained by a pass that already runs
+at a fixed rate (once per region per frame) is almost always fine. A
+structure maintained per *event*, where events outnumber the units being
+skipped by one or two orders of magnitude, is suspect on arithmetic alone —
+and the arithmetic is cheap to do, from counters on a host, before writing
+any code. Do it especially for structures that predate the measurements
+around them: this one had quietly outlived the reason it was introduced, and
+nobody had re-checked the trade since.
+
+**A corollary that caught this repo out twice in the same investigation:
+strictly less work is not automatically less time.** Two variants were built
+that provably did fewer operations — verified by counters, on identical
+simulation output — and both measured *slower* on the real target, because
+the extra branch changed how the compiler laid out the hot function and the
+instruction cache did the rest. Counting the work tells you whether a change
+*should* help, which is worth knowing before you build it. Only the target
+tells you whether it *did*.
+
+---
+
 ## A change proven safe is not the same as a change proven fast
 
 A tempting shortcut once a coarse, conservative version of some check

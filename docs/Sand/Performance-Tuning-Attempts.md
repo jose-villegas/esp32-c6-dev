@@ -821,6 +821,256 @@ expensive is this function" but "is this function called."
 
 ---
 
+## The ninth attempt: the bookkeeping was bigger than the thing it protected
+
+The eighth attempt ended by measuring, and then declining to act on, one
+number: stubbing `mark_rows()` to a no-op took the settled-pile flip from
+8931 us to 5343. Per-successful-move row bookkeeping was **40% of the
+failing benchmark**, spent clearing three `row_state` bytes to invalidate
+`ROW_NO_LIQUID` - a "this row holds no liquid" cache - on a screen with no
+liquid anywhere on it. It left the narrowing "as a decision rather than a
+change," with a warning attached: the same one-line-shaped idea had already
+burned three attempts on this sleeping machinery, so whatever came next
+needed its derivation done before any code was written.
+
+This attempt did that, twice, and then found the real answer was neither of
+the two narrowings it had derived. **The cache was not worth having at
+all.** Removing it outright - not narrowing what clears it, deleting the
+whole mechanism - beat every version of keeping it, on every benchmark, and
+took the device from `failures=3` to `failures=1` without a budget moving.
+
+### Experiment A: skip the clearing when there is provably no liquid
+
+The derivation, written before the code and reproduced in full above
+`mark_rows()` in `sand_priv.h` at the time, is a five-step chain and every
+step is load-bearing:
+
+1. `row_state` carries exactly one bit and has exactly one reader,
+   `equalise_liquids()`. A stale bit can only ever mislead that pass.
+2. While `may_have_liquid` is false there is no liquid in the grid, so
+   every `ROW_NO_LIQUID` bit is trivially still true whatever moves - a
+   swap cannot conjure liquid into a dry row.
+3. The flag only goes false in `equalise_liquids()`, when a **full** sweep
+   found none. The rows that sweep skipped were skipped because their own
+   bit was set, i.e. proved dry earlier and untouched since - so "found
+   none" really does mean none anywhere. This is the step the whole
+   argument rests on, and it is the one worth re-reading, because it looks
+   circular and is not: the bit's own invariant is what makes the skip
+   sound, and the skip is what makes the flag sound.
+4. Liquid can only ENTER an empty-of-liquid grid through `sand_set()` or
+   `try_spawn_one()`, the only two outside writers, and both set the flag
+   BEFORE calling `mark_move()`. The very first liquid placement is made
+   with the gate already open and clears its own rows.
+5. While the flag is false `equalise_liquids()` never runs at all, so
+   nobody reads the bits until the placement in (4) turns it back on.
+
+Measured, two identical captures: the settled-pile flip went **8996 ->
+6207 us and passed its 6500 budget for the first time**. But
+`full_size_step` crossed the other way, 5801 -> 6121, from passing to
+failing, and water and mixed both got ~3-4% worse - all reproducible.
+
+**Why that happened, and the fix, are worth more than the experiment.**
+The first version spelled the gate `if (s->may_have_liquid && s->row_state
+!= NULL)`. That is one more load than the `if (s->row_state != NULL)` it
+replaced, paid on every call - and on a screen of water the flag is always
+true, so the extra load is paid ~11,000 times a step and never saves
+anything. Folding both conditions into a single derived pointer
+(`row_state`, or NULL while there is provably no liquid) kept the hot path
+at exactly the one load it always did. Rewritten that way: flip 6069,
+`full_size_step` 5980 (passing again), water 17860, mixed 16043.
+
+Water and mixed had now moved by more than the first version had moved
+them, in the same direction, which needed explaining rather than shrugging
+at. **A control build settled it**: same code, same structure, gate wired
+permanently open - baseline semantics exactly. It measured water 17860 and
+mixed 16044, *identical* to the real build. The gate costs those two
+scenarios nothing whatsoever; their movement was the flash-layout
+sensitivity this project has characterised before, produced by the extra
+code existing at all. On that same layout the gate is worth 9240 -> 6069 on
+the flip.
+
+One follow-up probe, a negative result worth recording so nobody repeats
+it: moving the new struct field to the END of `sand_t`, so no existing
+field's offset shifts, measured **identical to the microsecond** on every
+benchmark. The layout cost is the added code, not the added field.
+
+Shipped. Device failures stayed at 3, but a different 3 - the flip came in,
+and it came in by 32%.
+
+### Experiment B: clear only when the move actually moved liquid
+
+The finer narrowing. After A, `mark_rows()`'s remaining cost falls entirely
+on scenes that DO hold liquid, where a screen of sand beside a pool pays
+full price for every grain of sand that moves, protecting a cache only the
+pool can invalidate. Only a move that relocates liquid can make a
+`ROW_NO_LIQUID` bit wrong.
+
+**The correctness trap, derived first.** `move_to()` is a SWAP: sand
+entering a water cell sends that water back UP into the row the sand came
+from, which may have been proved dry moments earlier. So the displaced cell
+matters as much as the mover. `move_to()` was changed to report which it
+was - free, because `can_enter()` already does the material lookup for a
+non-empty target, and an empty target settles it on a value already in a
+register. The mover being a liquid cannot happen on this path, and that is
+a structural fact rather than luck: `step_one_grain()` sends `KIND_LIQUID`
+to `move_liquid_grain()` and returns before these primitives are reached,
+and `sand_step_gas()` only ever hands them cells it has checked are
+`KIND_GAS`.
+
+**No existing test reached that trap.** The sleeping/liquid tests use water
+alone; the sand-through-water tests run with sleeping off, so `row_state`
+did not exist in them and no bit was ever set. Nothing in the suite
+combined the two.
+`test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in` was written to
+close that gap, built so only cross-flow can spread the displaced water (a
+full pool leaves it no room below and none down either slope), and
+**verified to fail with the clear suppressed** - it reported exactly 1
+water cell, frozen, against 2 or more when correct. That verification is
+the part that matters: a new test that has never been seen to fail is not
+yet a test.
+
+Result, two identical captures: flip 5684, `full_size_step` 5593, water
+17643 - and **mixed 16043 -> 18330**, a 14% regression on the one scenario
+the experiment existed to help.
+
+**A host probe, ten seconds, no flash cycle, explained it, and is the
+finding of this section.** Driving the mixed benchmark's exact scenario on
+a laptop with counters compiled in, narrowed versus un-narrowed:
+
+| | narrowed | un-narrowed |
+|---|---:|---:|
+| final grid checksum | 1026727129 | **1026727129** |
+| row-clearing calls / step | **0** | 6160 |
+| equalise rows scanned / step | **93.0** | 115.0 |
+| `give_mass()` transfers / step | 6282 | 6282 |
+
+Identical simulation, and the narrowed build does **strictly less work** -
+6160 fewer row-clearing calls and 22 fewer 184-cell row scans per step -
+while measuring 2701 us slower. Not a different evolution doing more work
+elsewhere; not the branch either, since respelling the comparison as a bit
+test produced byte-identical function sizes. Just code placement: that one
+condition moved `try_slide_impl` from 838 to 998 bytes and `sand_step()`
+from 2724 to 2822, and this target's 32 KB instruction cache did the rest.
+
+**Reverted.** The lesson is this file's oldest one wearing its third set of
+clothes. "Provably correct is not provably fast" was the batching attempt;
+"provably safe is not provably worth it" was staggering; this one is
+**provably less work is not provably faster** - and it is the sharpest of
+the three, because here the work reduction was counted exactly, on the real
+scenario, and still lost. The test survived the revert.
+
+### What actually won: deleting the cache
+
+Experiment C was briefed narrowly - measure `mark_rows()`'s share of the
+water benchmark first, and if it is significant, try the deferral shape
+`equalise_one_row()` already uses (mark once per row instead of once per
+transfer). The measurement was taken first, on the host, and killed the
+proposed fix before it was written:
+
+| water benchmark, per step | |
+|---|---:|
+| `mark_rows()` calls | 11,142 |
+| ... of which from `give_mass()` | 11,130 (99.9%) |
+| `move_liquid_grain()` calls | ~11,130 |
+| `row_state` bytes written | 33,426 |
+| equalise rows scanned / skipped | 120.5 / 103.5 (of 224) |
+
+The per-transfer marking is **already** one call per grain - a liquid grain
+averages a single successful transfer - so deferring per-transfer to
+per-grain saves no calls, and would write five row bytes where three were
+written. Dead on arrival, for free, with no flash cycle.
+
+**But the same table asks a better question, in two numbers sitting right
+next to each other:** 33,426 row-state bytes written per step, to save
+scanning 104 of 224 rows. That is not a hunch, it is the arithmetic of the
+probe that had just been run - and those row scans are *cheap*, because
+`equalise_one_row_cell()` bails on a bitmask test per cell. Paying
+O(moves) to save O(dry rows) is the wrong shape when moves outnumber rows
+by fifty to one.
+
+Deleting the mechanism entirely is trivially correct - it only ever let a
+pass SKIP rows, and scanning every row is always safe - so this needed no
+derivation, only a measurement. Two identical captures:
+
+| | before | after |
+|---|---:|---:|
+| screen of water | 17860 | **13130** |
+| mixed scene | 16043 | **12096** |
+| settled-pile flip | 6069 | 5630 |
+| full-size step | 5980 | 5540 |
+| settled screen | 260 | 258 |
+
+Every number improved. Water passed its budget for the first time in this
+project's history.
+
+**Shipped as a real deletion, not a disabled flag.** With `ROW_NO_LIQUID`
+gone, `row_state` has no bits left, so the entire row-shaped buffer went
+with it: `sand_enable_sleeping()` takes only `blocks` now, `wake_span()` is
+deleted, `mark_rows()` is two byte writes into `dirty_rows` and nothing
+else, and experiment A's own derived pointer came out too - A narrowed
+bookkeeping that no longer exists to narrow. Block sleeping is untouched:
+that one costs O(blocks) per step, not O(moves), and has always earned it.
+Re-measured after the cleanup - the deletion moved flash layout again, ~4%
+in the same direction across the board, by now an expected tax rather than
+a surprise:
+
+| Test | Budget | Round-2 baseline | Shipped |
+|---|---:|---:|---:|
+| settled-pile flip | 6500 | 8996 **FAIL** | **5947 PASS** |
+| screen of water | 16000 | 16141 **FAIL** | **13698 PASS** |
+| mixed scene | 12000 | 15144 **FAIL** | 12675 **FAIL** (-5.6%) |
+| full-size step | 6000 | 5801 PASS | 5855 PASS |
+| settled screen | 300 | 259 PASS | 260 PASS |
+| fire cascade | 350000 | 321339 PASS | 304455 PASS |
+| screen of fire | 250000 | 221396 PASS | 213871 PASS |
+
+`SELFTEST_COMPLETE failures=3` -> **`failures=1`**, no budget touched.
+
+### The lesson, and where the remaining gap is
+
+Three experiments aimed at making a cache's invalidation cheaper, and the
+answer was that the cache should not exist. That is the fourth attempt's
+push-to-pull lesson in a new key - *when a hot path resists being optimised
+in place, question the path* - except the escape here was not relocating
+the work but deleting the thing the work served.
+
+**A skip structure has two costs, and this file had only ever accounted for
+one of them.** The coarse-skip-structure lesson in
+[Optimization-Playbook.md](../Notes/Optimization-Playbook.md) is entirely
+about the cost of skipping at the wrong *granularity*. It says nothing
+about the cost of *maintaining* the structure, which is charged to whoever
+changes anything, not to whoever benefits from the skip. `ROW_NO_LIQUID`
+was correct, and its skip was real, and it lost anyway because the
+maintenance bill was 33,426 byte-writes a step and the benefit was 104
+cheap row scans. The question to ask of any dirty/settled/proved-empty flag
+is not only "is this the right unit" but **"who pays to keep it true, how
+often, compared to who reads it."** Block sleeping passes that test
+easily - a fixed O(blocks) pass per step, read by the whole sweep.
+`ROW_NO_LIQUID` never did, and nobody had checked, because the structure
+predated the measurement culture that would have caught it.
+
+**The remaining gap.** The mixed scene misses by 675 us (5.6%), down from
+3144 us (26.2%). From the eighth attempt's phase split it is ~74% main
+sweep / ~25% liquid pass, and from this attempt's host counters its sweep
+does 6160 sand moves and 6282 liquid transfers a step across 39,244 cells
+examined. There is no bookkeeping left in that path to remove -
+`mark_rows()` is two stores, and `dirty_rows` is NULL in the benchmark, so
+in practice it is two predicted branches. What is left is the movement
+itself, which the eighth attempt already priced at roughly 3.2 ms per step
+per 10,304 grains moved. Closing 675 us means moving fewer grains or
+examining fewer cells, not accounting for them more cheaply - a different
+kind of change from anything this campaign has tried, and the honest next
+question rather than a fourth pass at the same machinery.
+
+Two smaller things flagged rather than fixed. `full_size_step` passes by
+2.4%, thin enough that an unrelated change can flip it on flash layout
+alone - it has done so twice in this file already, including once inside
+this very attempt. And the flip's new 8.5% margin is itself inside the
+swing this target has been measured to produce from code placement, so "the
+flip passes" is true of this build rather than settled for ever.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

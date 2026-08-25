@@ -274,12 +274,18 @@ grep -E "FAIL|SELFTEST_COMPLETE" /path/to/output.txt
 ```
 
 `SELFTEST_COMPLETE failures=N` is the number that matters. As of this
-writing the accepted baseline is **`failures=3`** - two frame-budget
-tests (flip, water) have been over their own budget since before gas or
-fire existed, and a third (the mixed sand/water/stone-X flip) was given
-a deliberately-below-measured budget on purpose, as a reduction target
-rather than a safety margin (see the table below); anything beyond that
-count is a real regression.
+writing the accepted baseline is **`failures=1`** - the mixed
+sand/water/stone-X flip, which was given a deliberately-below-measured
+budget on purpose, as a reduction target rather than a safety margin (see
+the table below); anything beyond that count is a real regression.
+
+It was `failures=3` for a long time, and the two that came off are worth
+knowing about, because neither budget moved to make it happen: the
+settled-pile flip and the screen of water both came inside budget in the
+ninth tuning attempt, which found that per-move row bookkeeping was 40% of
+the flip and then that the cache that bookkeeping protected
+(`ROW_NO_LIQUID`) cost more than it saved and deleted it outright. See
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 ## The seven device frame-budget tests
 
@@ -290,26 +296,33 @@ comment for the reasoning behind its specific budget.
 
 | Test | Scenario | Budget | Last measured |
 |---|---|---|---|
-| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | ~5800 µs |
-| `test_a_screen_of_settled_sand_costs_almost_nothing` | Entire grid full of sand, nothing moving | 300 µs | passes |
-| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | **~8996 µs (pre-existing FAIL)** |
-| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | **~15144 µs (deliberate reduction target, not a regression)** |
-| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 16000 µs | **~16141 µs (pre-existing FAIL)** |
-| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~321340 µs |
-| `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~221000-231000 µs (varies with flash-cache layout - see below) |
+| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | ~5855 µs (thin - watch it) |
+| `test_a_screen_of_settled_sand_costs_almost_nothing` | Entire grid full of sand, nothing moving | 300 µs | ~260 µs |
+| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | ~5947 µs (was 8996 and failing until the ninth attempt) |
+| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | **~12675 µs (deliberate reduction target, not a regression)** |
+| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 16000 µs | ~13698 µs (was 16141 and failing until the ninth attempt) |
+| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~304500 µs |
+| `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~214000-231000 µs (varies with flash-cache layout - see below) |
 
-Three rows are marked **FAIL**, and that is the known, accepted
-baseline, not something to chase down reflexively - `failures=3` on a
-clean capture means "as expected," not "something is broken." Two of
-them (flip, water) are budgets the code has never actually met; the
-third (the mixed scene) is a budget nothing has met *yet*, set below
-the real 15144 µs measurement on purpose to keep pressure on future
-optimization work rather than silently ratchet the number up to match
-the code. If a capture ever shows `failures=4` or more, or any of the
-three FAILing numbers jumps sharply (not the ordinary ~2-5% flash-layout
-noise this project has already characterised - see
-[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)),
-that is the real signal to investigate.
+One row is marked **FAIL**, and that is the known, accepted baseline, not
+something to chase down reflexively - `failures=1` on a clean capture
+means "as expected," not "something is broken." The mixed scene is a
+budget nothing has met *yet*, set below the measurement on purpose to keep
+pressure on future optimization work rather than silently ratchet the
+number up to match the code. It has come from 26.2% over to 5.6% over
+without the budget moving.
+
+Two rows to watch rather than celebrate. `full_size_step` sits at ~2.4%
+under its budget, thin enough that an unrelated code change can flip it
+purely by moving where things land in flash - it has crossed twice in this
+project's history for exactly that reason. And the settled-pile flip's own
+margin (~8.5%) is inside the range this target's flash-layout sensitivity
+has been measured to swing. If a capture ever shows `failures=2` or more,
+check whether the number that moved actually moved *much* (not the ordinary
+~2-5%, occasionally more, flash-layout noise this project has already
+characterised - see
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md)) before
+assuming a real regression.
 
 The last two rows are new territory this session opened, not a template
 that existed before: there was no gas- or fire-specific frame-budget
