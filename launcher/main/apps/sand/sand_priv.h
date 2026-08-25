@@ -76,6 +76,61 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
 #define BLOCK_SETTLED_OTHER   0x2
 #define BLOCK_ACTIVE          0x4
 
+/* Whether the main sweep saw a liquid cell in this block, and whether this
+ * block or any of its 8 neighbours did - the pair that lets the cross-flow
+ * pass skip whole block-wide spans instead of testing every cell of the grid.
+ * Two bits, not one, because the expansion cannot be done at write time: the
+ * sweep sets HAS_LIQUID per block as it goes, and a single pass over the
+ * blocks turns that into NEAR before equalise_liquids() reads it. Writing the
+ * expansion directly would need a "did I already expand from here" guard that
+ * a neighbour's expansion would spoil.
+ *
+ * HAS_LIQUID is cleared each step (compute_settled_bit()) for every block the
+ * sweep is about to examine, and left alone for a SETTLED block, which the
+ * sweep skips and therefore cannot re-establish it for. That is safe because a
+ * settled block's contents did not move.
+ *
+ * THE INVARIANT, which is what the skip actually rests on: every liquid cell
+ * is in a block whose NEAR bit is set. Two cases. Either the sweep saw it, and
+ * that block's own HAS_LIQUID is set; or it arrived in that block after the
+ * sweep had already walked it, in which case it came from a source cell that
+ * the sweep DID see, one cell away - or up to SAND_LIQUID_SIGHT (8) away for a
+ * cross-flow transfer, still well under SAND_BLOCK_W - so the source block is
+ * this block or an immediate neighbour, and the expansion covers it. Liquid
+ * entering the grid from outside (sand_set(), try_spawn_one()) goes through
+ * mark_move(), which clears the settled bits on a 3x3 of blocks, so the next
+ * sweep is guaranteed to walk the block and see it. Nothing else in the
+ * simulation creates a liquid cell: sand_reactions.c only ever writes
+ * MAT_FIRE, and sand_gas.c moves gas.
+ *
+ * The contrapositive is what equalise_liquids() uses: a block with NEAR clear
+ * provably holds no liquid at all, so skipping its cells changes nothing -
+ * including the found_any/may_have_liquid conclusion drawn from that pass. */
+#define BLOCK_HAS_LIQUID      0x8
+#define BLOCK_LIQUID_NEAR     0x10
+
+/* Which materials are liquid, as a bitmask over the nibble.
+ *
+ * Shared by sand.c's sweep (to maintain BLOCK_HAS_LIQUID) and sand_liquid.c's
+ * two passes. Asking materials[id].kind per cell instead is what this exists
+ * to avoid: measured, that alone put a screen of motionless SAND from 17 us to
+ * five and a half milliseconds. Sixteen bits in a register answers the same
+ * question for nothing.
+ *
+ * Called a couple of times per STEP, never per cell, so the sixteen-entry
+ * build is free - checked by reading the call sites during the eighth attempt
+ * rather than assumed. */
+static inline uint16_t liquid_mask(void)
+{
+    uint16_t mask = 0;
+    for (int m = 0; m < MATERIAL_MAX; m++) {
+        if (materials[m].kind == KIND_LIQUID) {
+            mask |= (uint16_t)(1u << m);
+        }
+    }
+    return mask;
+}
+
 static inline int block_of(const sand_t *s, int x, int y)
 {
     return (y / SAND_BLOCK_H) * s->block_cols + (x / SAND_BLOCK_W);
@@ -157,6 +212,31 @@ static inline bool any_neighbor_active(const sand_t *s, int bx, int by)
                 continue;
             }
             if (s->block_state[ny * s->block_cols + nx] & BLOCK_ACTIVE) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+/* Whether block (bx,by) or any of its up to 8 neighbours was seen holding
+ * liquid this step - the expanded form of BLOCK_HAS_LIQUID that
+ * sand_liquid.c's cross-flow pass actually skips on. Deliberately the same
+ * shape as any_neighbor_active() above, and called from the same kind of
+ * place: once per block per step, from a pass that is already O(blocks). It
+ * counts the block ITSELF as well, which that one does not - "did a NEIGHBOUR
+ * move" and "is there liquid anywhere near" are different questions. */
+static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
+                                                 int by)
+{
+    const int lo_x = (bx > 0) ? bx - 1 : bx;
+    const int hi_x = (bx + 1 < s->block_cols) ? bx + 1 : bx;
+    const int lo_y = (by > 0) ? by - 1 : by;
+    const int hi_y = (by + 1 < s->block_rows) ? by + 1 : by;
+
+    for (int ny = lo_y; ny <= hi_y; ny++) {
+        for (int nx = lo_x; nx <= hi_x; nx++) {
+            if (s->block_state[ny * s->block_cols + nx] & BLOCK_HAS_LIQUID) {
                 return true;
             }
         }

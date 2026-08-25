@@ -16,23 +16,9 @@
 
 #include "sand_priv.h"
 
-/* Which materials are liquid, as a bitmask over the nibble.
- *
- * Both passes below look at every cell in the grid, and asking
- * materials[id].kind is a read from a table in flash - a likely cache miss,
- * per cell, per step. Measured, that alone put a screen of motionless SAND
- * from 17 us to five and a half milliseconds. Sixteen bits in a register
- * answers the same question for nothing. */
-static uint16_t liquid_mask(void)
-{
-    uint16_t mask = 0;
-    for (int m = 0; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind == KIND_LIQUID) {
-            mask |= (uint16_t)(1u << m);
-        }
-    }
-    return mask;
-}
+/* liquid_mask() - which materials are liquid, as a bitmask over the nibble -
+ * moved to sand_priv.h (still static inline) now that sand.c's own sweep needs
+ * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
 /* Add `amount` of `id` to a cell that is either empty or already that same
  * material. Mass is only ever moved, never made: every caller subtracts the
@@ -361,24 +347,79 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
     return true;
 }
 
+/* One block-column's x-span within one row of the cross-flow pass, mirroring
+ * step_one_block() in sand.c - the unit this pass can now skip whole. */
+static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
+                                      int cx_from, int cx_to, int x_step,
+                                      int px, int py, int dx, int dy,
+                                      int sight, uint16_t is_liquid,
+                                      bool *touched, int *touched_x0,
+                                      int *touched_x1)
+{
+    bool any_liquid = false;
+
+    for (int x = cx_from; x != cx_to; x += x_step) {
+        if (equalise_one_row_cell(s, row, x, y, px, py, dx, dy, sight,
+                                  is_liquid, touched, touched_x0,
+                                  touched_x1)) {
+            any_liquid = true;
+        }
+    }
+    return any_liquid;
+}
+
 /* One row's share of cross-flow. Returns whether it held any liquid, which
  * the caller needs in order to know whether the whole pass found anything -
  * that is what arms may_have_liquid, and it is now this return value's only
- * job. It used to also decide whether the row earned a ROW_NO_LIQUID bit;
- * see equalise_liquids() below for where that went. */
-static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
-                             int x_step, int px, int py, int dx, int dy,
-                             int sight, uint16_t is_liquid)
+ * job. It used to also decide whether the row earned a ROW_NO_LIQUID bit; see
+ * equalise_liquids() below for where that went.
+ *
+ * Walked by BLOCK-COLUMN rather than by cell - exactly the shape
+ * step_one_row() in sand.c has always used for the main sweep, and for the
+ * same reason: a block with no liquid in it or beside it has nothing here to
+ * decide, so none of its cells need to be read at all. The skip is
+ * BLOCK_LIQUID_NEAR; see sand_priv.h for the invariant that makes it sound,
+ * and equalise_liquids() below for where the bit is computed.
+ *
+ * When sleeping is disabled (block_state is NULL) there are no bits to read,
+ * so no block is ever skipped and this walks the same cells in the same order
+ * the flat per-cell version did. Written as a NULL `brow` rather than a
+ * separate whole-row branch on purpose, and it is worth saying why, because
+ * the obvious spelling costs 8% of the water benchmark: a second call site for
+ * equalise_one_block() is enough to lose the inlining a single one gets
+ * unconditionally (`-finline-functions-called-once`), which is the same trap
+ * that silently un-inlined try_slide_impl() in the eighth attempt - see
+ * docs/Sand/Performance-Tuning-Attempts.md. One call site, one branch on a
+ * pointer that is loop-invariant, and the cost is nothing. */
+static bool equalise_one_row(sand_t *s, int y, int w, int x_step, int px,
+                             int py, int dx, int dy, int sight,
+                             uint16_t is_liquid)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
     bool any_liquid = false;
     bool touched = false;
     int  touched_x0 = 0, touched_x1 = 0;
 
-    for (int x = x_from; x != x_to; x += x_step) {
-        if (equalise_one_row_cell(s, row, x, y, px, py, dx, dy, sight,
-                                  is_liquid, &touched, &touched_x0,
-                                  &touched_x1)) {
+    /* Unsigned cast for the division-by-power-of-two reason documented in
+     * docs/Notes/Optimization-Playbook.md, the same as further down. */
+    const uint8_t *brow = (s->block_state != NULL)
+        ? s->block_state + (size_t)((unsigned)y / SAND_BLOCK_H) *
+                           (size_t)s->block_cols
+        : NULL;
+    const int bx_from = (x_step > 0) ? 0 : s->block_cols - 1;
+    const int bx_to   = (x_step > 0) ? s->block_cols : -1;
+
+    for (int bx = bx_from; bx != bx_to; bx += x_step) {
+        if (brow != NULL && (brow[bx] & BLOCK_LIQUID_NEAR) == 0) {
+            continue;
+        }
+        const int lo = bx * SAND_BLOCK_W;
+        const int hi = (lo + SAND_BLOCK_W < w) ? lo + SAND_BLOCK_W : w;
+        if (equalise_one_block(s, row, y,
+                               (x_step > 0) ? lo : hi - 1,
+                               (x_step > 0) ? hi : lo - 1,
+                               x_step, px, py, dx, dy, sight, is_liquid,
+                               &touched, &touched_x0, &touched_x1)) {
             any_liquid = true;
         }
     }
@@ -398,10 +439,39 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_from, int x_to,
     return any_liquid;
 }
 
+/* Turn the sweep's per-block BLOCK_HAS_LIQUID observation into the
+ * BLOCK_LIQUID_NEAR bit equalise_one_row() skips on: a block is NEAR if it or
+ * any of its up to 8 neighbours holds liquid. One pass over the blocks, 24 of
+ * them at the shipped grid size, run once per step - O(blocks), not O(moves),
+ * which is the whole reason this skip structure is affordable where
+ * ROW_NO_LIQUID was not (ninth attempt, Performance-Tuning-Attempts.md).
+ *
+ * Expanded by one block for the same reason every other wake in this codebase
+ * is: liquid moves at most one cell in the sweep and at most SAND_LIQUID_SIGHT
+ * (8, well inside a 32-wide block) in this pass, so anywhere it can arrive
+ * after its own block was walked is a neighbour of the block that was seen
+ * holding it. See sand_priv.h's comment above BLOCK_HAS_LIQUID for the full
+ * invariant. */
+static void mark_liquid_neighbourhoods(sand_t *s)
+{
+    for (int by = 0; by < s->block_rows; by++) {
+        for (int bx = 0; bx < s->block_cols; bx++) {
+            uint8_t *slot = &s->block_state[by * s->block_cols + bx];
+            *slot = block_or_neighbour_has_liquid(s, bx, by)
+                  ? (uint8_t)(*slot | BLOCK_LIQUID_NEAR)
+                  : (uint8_t)(*slot & ~BLOCK_LIQUID_NEAR);
+        }
+    }
+}
+
 static void equalise_liquids(sand_t *s, const int *perp, int sight,
                              int dx, int dy)
 {
     bool found_any = false;
+
+    if (s->block_state != NULL) {
+        mark_liquid_neighbourhoods(s);
+    }
 
     const int px = perp[0];
     const int py = perp[1];
@@ -415,29 +485,40 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
     const int y_to   = (py > 0) ? -1    : h;
     const int y_step = (py > 0) ? -1    : 1;
 
-    const int x_from = (px > 0) ? w - 1 : 0;
-    const int x_to   = (px > 0) ? -1    : w;
-    const int x_step = (px > 0) ? -1    : 1;
+    /* Only the direction now, not a from/to range: since each row walks
+     * block-columns (see equalise_one_row()), every span works out its own
+     * cell range from x_step and its own bounds - the same shape sweep_x_order()
+     * in sand.c ended up with for the main sweep, for the same reason. */
+    const int x_step = (px > 0) ? -1 : 1;
 
-    /* Every row, every step. There used to be a per-row "proved dry" cache
-     * (ROW_NO_LIQUID) letting this skip rows a previous sweep had found
-     * empty of liquid. It was removed in the ninth attempt: keeping it
+    /* Every row, every step - but not every CELL of every row: each row skips
+     * the block-columns whose BLOCK_LIQUID_NEAR is clear (see
+     * equalise_one_row()).
+     *
+     * There used to be a per-row "proved dry" cache (ROW_NO_LIQUID) letting
+     * this skip whole rows. It was removed in the ninth attempt: keeping it
      * honest meant wiping three bytes of row_state on every liquid transfer
-     * anywhere on the grid - 33,426 byte writes a step on the water
-     * benchmark - to save scanning about 104 of 224 rows, and the device
-     * measured the bookkeeping as costing far more than the scans it
-     * avoided (water 17860 -> 13130 us just from deleting it). See
+     * anywhere on the grid - 33,426 byte writes a step on the water benchmark
+     * - to save scanning about 104 of 224 rows, and the device measured the
+     * bookkeeping as costing far more than the scans it avoided (water 17860
+     * -> 13130 us just from deleting it). The block-shaped skip that replaced
+     * it is the same idea with the maintenance bill the old one failed:
+     * BLOCK_HAS_LIQUID is established by a sweep that was going to read those
+     * cells anyway, and turned into BLOCK_LIQUID_NEAR by one pass over 24
+     * blocks. Nothing is charged per move. See
      * docs/Sand/Performance-Tuning-Attempts.md. */
     for (int y = y_from; y != y_to; y += y_step) {
-        if (equalise_one_row(s, y, w, x_from, x_to, x_step, px, py, dx, dy,
+        if (equalise_one_row(s, y, w, x_step, px, py, dx, dy,
                              sight, is_liquid)) {
             found_any = true;
         }
     }
 
     /* Looked everywhere and found none, so stop looking until some is placed.
-     * Every row really was walked this pass - there is no skip cache any
-     * more - so this needs no argument beyond the loop above. */
+     * Sound despite the block skipping above, and this is the one place where
+     * that needs saying: a skipped block has BLOCK_LIQUID_NEAR clear, and the
+     * invariant in sand_priv.h is that every liquid cell sits in a block whose
+     * NEAR bit is set - so a skipped block provably held nothing to find. */
     if (!found_any) {
         s->may_have_liquid = false;
     }

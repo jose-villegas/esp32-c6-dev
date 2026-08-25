@@ -1276,6 +1276,71 @@ static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
         "instead of levelling out along the row");
 }
 
+
+/* Block-shaped skipping in the cross-flow pass (BLOCK_LIQUID_NEAR, see
+ * sand_priv.h) rests on one claim: every liquid cell sits in a block whose
+ * NEAR bit is set. The interesting way for that to be false is liquid ARRIVING
+ * in a block the sweep has already walked and found dry - which is why the bit
+ * is expanded to a block's 8 neighbours rather than used raw.
+ *
+ * This is the fixture that makes the un-expanded version fail, and it was
+ * verified to fail before it was kept: with the expansion removed it reports
+ * exactly 1 water cell, frozen, against several when correct. Two block-ROWS
+ * are the point - the sweep walks the lower one first, so a cell falling
+ * across the boundary lands behind it - and a single cell of water is the
+ * point too: it empties its source block completely as it goes, so the source
+ * block's own bit does not accidentally cover the destination. Without the
+ * expansion the pass then finds no liquid anywhere, concludes may_have_liquid
+ * is false, and switches itself off for good with the water still on screen.
+ */
+#define CROSS_BLOCK_W 40
+#define CROSS_BLOCK_H 80
+#define CROSS_BLOCK_COLS ((CROSS_BLOCK_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define CROSS_BLOCK_ROWS ((CROSS_BLOCK_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+
+static void test_water_falling_into_the_next_block_down_still_spreads(void)
+{
+    uint8_t *cells  = malloc((size_t)CROSS_BLOCK_W * CROSS_BLOCK_H);
+    uint8_t *blocks = malloc((size_t)CROSS_BLOCK_COLS * CROSS_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(cells);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t g;
+    sand_init(&g, cells, CROSS_BLOCK_W, CROSS_BLOCK_H, 3u);
+    sand_enable_sleeping(&g, blocks);
+
+    /* A stone shelf one row below the block boundary, so the water comes to
+     * rest inside the LOWER block with nowhere gravity-ward left to go -
+     * only cross-flow can move it after that. */
+    for (int x = 0; x < CROSS_BLOCK_W; x++) {
+        sand_set(&g, x, SAND_BLOCK_H + 1, CELL_MAKE(MAT_STONE, 8));
+    }
+    /* One full cell of water, in the last row of the UPPER block. */
+    sand_set(&g, 5, SAND_BLOCK_H - 1, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    int water_cells = 0;
+    for (int x = 0; x < CROSS_BLOCK_W; x++) {
+        const cell_t c = sand_at(&g, x, SAND_BLOCK_H);
+        if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
+            water_cells++;
+        }
+    }
+
+    free(cells);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, water_cells,
+        "water that falls into a block the sweep had already walked must "
+        "still be found by the cross-flow pass - the block-liquid bit has to "
+        "be read expanded to a block's neighbours, or the pass skips the "
+        "block the water landed in and then concludes there is no water on "
+        "the grid at all");
+}
+
 /* At the real screen size, SAND_BLOCK_W/H (16x64) do NOT evenly divide
  * 184x224 - the last block-column is 8 cells wide instead of 16, and the
  * last block-row is 32 cells tall instead of 64. No other test in this
@@ -3708,6 +3773,7 @@ void run_sand_suite(void)
     RUN_TEST(test_sideways_tilt_wakes_only_the_disturbed_column);
     RUN_TEST(test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range);
     RUN_TEST(test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in);
+    RUN_TEST(test_water_falling_into_the_next_block_down_still_spreads);
     RUN_TEST(test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks);
     RUN_TEST(test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size);
     RUN_TEST(test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size);

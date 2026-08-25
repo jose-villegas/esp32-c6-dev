@@ -651,19 +651,32 @@ static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
     }
 
     const int n = s->block_cols * s->block_rows;
+    const uint8_t bit = (dx == load_dx && dy == load_dy)
+                      ? BLOCK_SETTLED_NEAREST : BLOCK_SETTLED_OTHER;
     if (jostle > 0 ||
         load_dx != s->last_load_dx || load_dy != s->last_load_dy) {
+        /* A mass wake leaves nothing settled, so the sweep will walk every
+         * block and re-establish BLOCK_HAS_LIQUID for all of them - clearing
+         * it here along with everything else is exactly right. */
         memset(s->block_state, 0, (size_t)n);
     } else {
         for (int i = 0; i < n; i++) {
-            s->block_state[i] &= (uint8_t)~BLOCK_ACTIVE;
+            uint8_t v = (uint8_t)(s->block_state[i] & ~BLOCK_ACTIVE);
+            /* BLOCK_HAS_LIQUID is the sweep's own observation, so it is
+             * cleared for exactly the blocks the sweep is about to make it
+             * afresh. A block it will SKIP keeps last time's answer, which is
+             * still true: nothing in a settled block moved. See the invariant
+             * above BLOCK_HAS_LIQUID in sand_priv.h. */
+            if ((v & bit) == 0) {
+                v &= (uint8_t)~BLOCK_HAS_LIQUID;
+            }
+            s->block_state[i] = v;
         }
     }
     s->last_load_dx = load_dx;
     s->last_load_dy = load_dy;
 
-    return (dx == load_dx && dy == load_dy)
-         ? BLOCK_SETTLED_NEAREST : BLOCK_SETTLED_OTHER;
+    return bit;
 }
 
 /* Which way to step through a row's blocks, mirroring sweep_x_order()'s
@@ -701,6 +714,12 @@ typedef struct {
     const int  *slide_a, *slide_b;
     int         load_dx, load_dy, jostle;
     int         by;
+    /* Which materials are liquid, as a bitmask over the nibble - the same
+     * trick, and the same reason, as sand_liquid.c's liquid_mask(): the sweep
+     * has to answer "is this cell liquid?" per occupied cell to maintain
+     * BLOCK_HAS_LIQUID, and a shift-and-mask on a register answers it without
+     * a second read of the material table. */
+    uint16_t    is_liquid;
     bool      (*driven)[2];
 } sweep_ctx_t;
 
@@ -725,10 +744,18 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
     }
 
     bool moved_here = false;
+    unsigned saw_liquid = 0;
     for (int x = cx_from; x != cx_to; x += ctx->x_step) {
-        if (CELL_IS_EMPTY(ctx->row[x])) {
+        const cell_t c = ctx->row[x];
+        if (CELL_IS_EMPTY(c)) {
             continue;
         }
+        /* Accumulated in a register and stored once per block below, the same
+         * shape as moved_here - the whole point of BLOCK_HAS_LIQUID is that
+         * keeping it true costs O(blocks) per step rather than O(moves), the
+         * question docs/Sand/Performance-Tuning-Attempts.md's ninth attempt
+         * says to ask of any skip structure before building it. */
+        saw_liquid |= (unsigned)(ctx->is_liquid >> CELL_MATERIAL(c)) & 1u;
         if (step_one_grain(ctx->s, ctx->row, ctx->prow, ctx->arow, ctx->brow,
                            x, ctx->y, ctx->w, ctx->dx, ctx->dy, ctx->slide_a,
                            ctx->slide_b, ctx->load_dx, ctx->load_dy,
@@ -737,8 +764,10 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
         }
     }
 
-    if (moved_here && ctx->s->block_state != NULL) {
-        ctx->s->block_state[ctx->by * ctx->s->block_cols + bx] |= BLOCK_ACTIVE;
+    if ((moved_here || saw_liquid) && ctx->s->block_state != NULL) {
+        ctx->s->block_state[ctx->by * ctx->s->block_cols + bx] |=
+            (uint8_t)((moved_here ? BLOCK_ACTIVE : 0) |
+                      (saw_liquid ? BLOCK_HAS_LIQUID : 0));
     }
 }
 
@@ -754,7 +783,8 @@ static void step_one_block(const sweep_ctx_t *ctx, int bx)
 static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
                          const int *slide_a, const int *slide_b, int x_step,
                          int load_dx, int load_dy, int jostle,
-                         uint8_t settled_bit, bool driven[MATERIAL_MAX][2])
+                         uint8_t settled_bit, uint16_t is_liquid,
+                         bool driven[MATERIAL_MAX][2])
 {
     sweep_ctx_t ctx = {
         .s = s,
@@ -766,6 +796,7 @@ static void step_one_row(sand_t *s, int y, int w, int dx, int dy,
         .slide_a = slide_a, .slide_b = slide_b,
         .load_dx = load_dx, .load_dy = load_dy, .jostle = jostle,
         .by = y / SAND_BLOCK_H,
+        .is_liquid = is_liquid,
         .driven = driven,
     };
 
@@ -878,10 +909,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int *const perp_b = ring[(i_stable + 6) & 7];
 
     const int w = s->w;
+    const uint16_t is_liquid = liquid_mask();
 
     for (int y = y_from; y != y_to; y += y_step) {
         step_one_row(s, y, w, dx, dy, slide_a, slide_b, x_step,
-                    load_dx, load_dy, jostle, settled_bit, driven);
+                    load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
     }
 
     /* Everything about a liquid that is NOT gravity-ward: cross-flow, and
