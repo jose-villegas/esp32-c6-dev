@@ -4893,6 +4893,12 @@ static void test_shaking_spreads_a_pile_sideways(void)
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
+/* How much of the mixed-material scene is left empty, so a gravity flip has
+ * somewhere to launch into. Everything below it is divided evenly between
+ * every material in the table - see
+ * test_a_gravity_flip_on_every_material_at_once_stays_sane. */
+#define EMPTY_SHARE_PERCENT 33
+
 /* The worst case: every cell on the screen moving at once.
  *
  * Historically this budget was set from a principle (stay well under the
@@ -5269,18 +5275,35 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
 
-    /* Ordered so that neighbouring bands react: gas over fire over wood
-     * feeds ignition, acid sits directly on sand, lava meets water. The
-     * top third is left clear so there is somewhere to launch into when
-     * gravity inverts - same reasoning as the other flip tests. */
-    static const material_id_t bands[] = {
-        MAT_GAS, MAT_FIRE, MAT_WOOD, MAT_SMOKE, MAT_STEAM,
-        MAT_OIL, MAT_ACID, MAT_SAND, MAT_LAVA, MAT_WATER, MAT_STONE,
-    };
-    const int n_bands = (int)(sizeof bands / sizeof bands[0]);
-
-    const int top = REAL_H / 3;                  /* clear headroom above */
+    /* The scene is DERIVED from materials[], not listed here: a share of
+     * the board left empty, and the rest divided evenly into one band per
+     * real material, in enum order.
+     *
+     * Naming them by hand is the obvious way and it rots. This test was
+     * written listing eleven materials while MAT_EMBER was already in the
+     * table - so the "every material at once" scene quietly covered eleven
+     * of twelve and still produced a confident number. Nothing catches
+     * that except someone noticing.
+     *
+     * Derived, a new material joins this scene on the commit that adds it,
+     * with an even share, and there is nothing to keep in sync. The cost
+     * is the hand-picked adjacency the list used to have - but enum order
+     * already puts fire next to wood and lava next to acid, and on a
+     * settling, flipping board with every material present the reactive
+     * pairs meet anyway.
+     *
+     * The empty share is not arbitrary: the flip needs somewhere to launch
+     * into, the same reasoning as the other flip tests. */
+    const int first = MAT_EMPTY + 1;
+    const int n_bands = MAT_COUNT - first;
+    const int top = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
     const int band_h = (REAL_H - top) / n_bands;
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, band_h,
+        "the grid must be tall enough to give every material a band - if "
+        "the material table outgrows the board this scene needs "
+        "rethinking, rather than silently dropping the last few");
+
     for (int b = 0; b < n_bands; b++) {
         const int y0 = top + b * band_h;
         const int y1 = (b == n_bands - 1) ? REAL_H : y0 + band_h;
@@ -5290,7 +5313,7 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
                  * goes through random_cell(), so a liquid arrives full, a
                  * transient arrives at full life and a powder gets a
                  * shade - the same cells a real pour produces. */
-                sand_spawn(&real, x, y, 0, bands[b]);
+                sand_spawn(&real, x, y, 0, (material_id_t)(first + b));
             }
         }
     }
