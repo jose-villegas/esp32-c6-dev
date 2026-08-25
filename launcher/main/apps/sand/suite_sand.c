@@ -1210,6 +1210,82 @@ static void test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range(voi
         "levelling silently stops partway across");
 }
 
+/* The one case where a move of something that is NOT a liquid still
+ * relocates liquid, and therefore still has to clear ROW_NO_LIQUID.
+ *
+ * move_to() (sand_priv.h) is a SWAP: sand entering a water cell sends that
+ * water back up into the row the sand came from. That row may well have
+ * been proved dry and marked ROW_NO_LIQUID moments earlier - it was, right
+ * up until the swap - and a row wrongly believed dry is skipped by
+ * equalise_liquids() for ever, because nothing that can happen to still
+ * water clears the bit again.
+ *
+ * This test exists because that bit is under active pressure to be cleared
+ * less often. mark_rows() already skips the clear entirely when there is no
+ * liquid anywhere (see its liquid-gate comment), and the obvious next
+ * narrowing - clear only when the move actually moved liquid - was built
+ * and measured and then reverted for being slower, not for being wrong.
+ * The next person to try it will need exactly this scenario, so it is left
+ * behind as a permanent guard rather than removed with the experiment.
+ *
+ * No test covered it before: the sleeping/liquid tests above use water
+ * alone, and the sand-through-water tests (test_sand_sinks_through_water
+ * and friends) run with sleeping off, so row_state does not exist in them
+ * at all and no ROW_NO_LIQUID bit is ever set.
+ *
+ * The setup is built so that ONLY cross-flow can spread the displaced
+ * water, which is what makes the assertion sharp. The pool is full
+ * (MASS_MAX), so once the water is pushed up it has no room below it and
+ * no room down either slope - move_liquid_grain() inside the main sweep
+ * can do nothing with it. If the row it landed in is awake, cross-flow
+ * halves it into a neighbour on the very next pass and the row holds two
+ * water cells; if that row is still marked dry, it holds exactly the one
+ * cell the swap put there, for ever. The sand is dropped from the top row
+ * rather than placed on the surface on purpose: sand_set() clears rows
+ * itself, so a grain placed directly above the pool would clear the very
+ * bit this test needs set. Falling from three rows up gives the cross-flow
+ * pass a step to re-prove the landing row dry before the swap happens. */
+static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
+{
+    fixture();
+    sand_enable_sleeping(&s, sleep_blocks, sleep_rows);
+    sand_clear(&s);
+
+    /* A full pool, two rows deep. Full matters: nothing in it has anywhere
+     * to flow, so it settles and every row above it gets ROW_NO_LIQUID. */
+    for (int y = H - 2; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* Spelled out rather than the SAND shorthand, which this file does not
+     * define until the material tests further down. */
+    sand_set(&s, 1, 0, CELL_MAKE(MAT_SAND, 8));
+    for (int i = 0; i < 40; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int water_cells_in_the_row_above_the_pool = 0;
+    for (int x = 0; x < W; x++) {
+        const cell_t c = sand_at(&s, x, H - 3);
+        if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
+            water_cells_in_the_row_above_the_pool++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1,
+        water_cells_in_the_row_above_the_pool,
+        "sand sinking into a pool swaps water up into the row it came from, "
+        "which by then believes it is dry - that swap has to clear "
+        "ROW_NO_LIQUID for the row it lands in, or cross-flow skips it for "
+        "ever and the displaced water sits in the single cell it was pushed "
+        "into instead of levelling out along the row");
+}
+
 /* At the real screen size, SAND_BLOCK_W/H (16x64) do NOT evenly divide
  * 184x224 - the last block-column is 8 cells wide instead of 16, and the
  * last block-row is 32 cells tall instead of 64. No other test in this
@@ -3668,6 +3744,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_block_wakes_when_disturbed_diagonally);
     RUN_TEST(test_sideways_tilt_wakes_only_the_disturbed_column);
     RUN_TEST(test_liquid_cross_flow_wakes_only_the_blocks_it_touches_by_range);
+    RUN_TEST(test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in);
     RUN_TEST(test_block_indices_stay_in_range_at_the_real_screens_partial_edge_blocks);
     RUN_TEST(test_block_indices_stay_in_range_after_flipping_a_settled_pile_at_the_real_size);
     RUN_TEST(test_block_indices_stay_in_range_for_a_falling_screen_of_water_at_the_real_size);
