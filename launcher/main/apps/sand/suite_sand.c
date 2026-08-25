@@ -5695,23 +5695,98 @@ static void test_shaking_spreads_a_pile_sideways(void)
 
 /* --- on the real grid, on the real chip --------------------------------- */
 
+/* Must match app_sand.c. Duplicated rather than shared because sand.h has no
+ * business knowing the screen size - see the note at the top of sand.h.
+ *
+ * Outside the DEVICE_BUILD block below, along with the tiling that uses it,
+ * so the host can check the SHAPE of the mixed-material scene even though
+ * only the device can time it. */
+#define REAL_W 184
+#define REAL_H 224
+
+/* How much of the mixed-material scene is left empty, so a gravity flip has
+ * somewhere to launch into. */
+#define EMPTY_SHARE_PERCENT 33
+
+/* Which material lands on cell (x, y) in the all-pairs tiling.
+ *
+ * Bands were the first attempt and covered far less than they looked like
+ * they did: stacking materials in horizontal strips puts only the
+ * vertically-adjacent pairs in contact, and measured, just 20 of the 66
+ * possible pairs ever met. Two thirds of the reactions this simulation can
+ * perform never fired in the scene whose whole purpose is to fire all of
+ * them.
+ *
+ * This tiles instead. Horizontal neighbours in row y differ by `stride`,
+ * and successive rows step through every possible difference, so every pair
+ * of materials ends up adjacent somewhere and the pattern wraps without a
+ * seam.
+ *
+ * One copy, called by both the device test that times the scene and the
+ * host test that checks its coverage. Written out twice they could drift,
+ * and the host check would then be verifying a pattern nobody runs. */
+static inline int all_pairs_material_at(int x, int y, int first, int n_mats)
+{
+    const int stride = (y % (n_mats - 1)) + 1;
+    return first + ((x * stride + y) % n_mats);
+}
+
+/* Every pair of materials really is adjacent somewhere in that scene.
+ *
+ * The property the scene exists for, and until now it was a number somebody
+ * measured by hand once and wrote in a comment - "66 of 66" - taken on
+ * faith through two subsequent materials. It is derived from MAT_COUNT, so
+ * it should survive adding one, but "should" is what a test is for: a
+ * tiling that quietly lost coverage would leave the worst case measuring
+ * less than it claims while still passing its own budget.
+ *
+ * Host-side, because coverage is a property of the pattern and needs no
+ * clock. Only the timing has to happen on the chip. */
+static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
+{
+    const int first  = MAT_EMPTY + 1;
+    const int n_mats = MAT_COUNT - first;
+    const int top    = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
+    const int want   = (n_mats * (n_mats - 1)) / 2;
+
+    /* One bit per unordered pair. */
+    static bool seen[MATERIAL_MAX][MATERIAL_MAX];
+    memset(seen, 0, sizeof seen);
+
+    int found = 0;
+    for (int y = top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = all_pairs_material_at(x, y, first, n_mats);
+            const int nb[2] = {
+                x + 1 < REAL_W ? all_pairs_material_at(x + 1, y, first, n_mats) : m,
+                y + 1 < REAL_H ? all_pairs_material_at(x, y + 1, first, n_mats) : m,
+            };
+            for (int k = 0; k < 2; k++) {
+                const int a = m < nb[k] ? m : nb[k];
+                const int b = m < nb[k] ? nb[k] : m;
+                if (a != b && !seen[a][b]) {
+                    seen[a][b] = true;
+                    found++;
+                }
+            }
+        }
+    }
+
+    char why[160];
+    snprintf(why, sizeof why,
+             "the mixed-material scene must put all %d pairs of %d "
+             "materials in contact - it reached %d, so some reaction it "
+             "claims to exercise never fires in it",
+             want, n_mats, found);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(want, found, why);
+}
+
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
 #include "esp_log.h"
 #include "esp_timer.h"
-
-/* Must match app_sand.c. Duplicated rather than shared because sand.h has no
- * business knowing the screen size - see the note at the top of sand.h. */
-#define REAL_W 184
-#define REAL_H 224
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-
-/* How much of the mixed-material scene is left empty, so a gravity flip has
- * somewhere to launch into. Everything below it is divided evenly between
- * every material in the table - see
- * test_a_gravity_flip_on_every_material_at_once_stays_sane. */
-#define EMPTY_SHARE_PERCENT 33
 
 /* The worst case: every cell on the screen moving at once.
  *
@@ -6089,30 +6164,16 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
 
-    /* The scene is DERIVED from materials[], and laid out so that every
-     * PAIR of materials touches - not merely every material appearing
-     * somewhere.
+    /* The scene is DERIVED from materials[] and laid out by
+     * all_pairs_material_at() so that every PAIR of materials touches -
+     * not merely every material appearing somewhere. See that function
+     * for why bands were not enough, and
+     * test_the_mixed_scene_puts_every_material_pair_in_contact, which
+     * checks the coverage on the host rather than leaving it a claim in
+     * a comment.
      *
-     * Bands were the first attempt and covered far less than they looked
-     * like they did: stacking twelve materials in horizontal strips puts
-     * only the eleven vertically-adjacent pairs in contact, and measured,
-     * just 20 of the 66 possible pairs ever met. Two thirds of the
-     * reactions this simulation can perform never fired in the scene
-     * whose whole purpose is to fire all of them.
-     *
-     * This tiles a pattern instead. Cell (x, y) takes material
-     * (x * stride + y) mod n, where stride is (y mod (n-1)) + 1 - so
-     * horizontal neighbours in row y differ by `stride`, and successive
-     * rows step through every possible difference. Every pair of
-     * materials therefore ends up adjacent somewhere, and the pattern
-     * wraps to fill the board without a seam.
-     *
-     * Measured on the real 184x224 grid: 66 of 66 pairs in contact
-     * against the bands' 20, and 0.90 ms per step against 0.55 - a
-     * genuinely harder scene, which is the point of a worst case.
-     *
-     * A share of the board is still left empty (EMPTY_SHARE_PERCENT), so
-     * the flip has somewhere to launch into - the same reasoning as the
+     * A share of the board is left empty (EMPTY_SHARE_PERCENT) so the
+     * flip has somewhere to launch into - the same reasoning as the
      * other flip tests. */
     const int first = MAT_EMPTY + 1;
     const int n_mats = MAT_COUNT - first;
@@ -6122,11 +6183,8 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
         "the pattern below needs at least two materials to interleave");
 
     for (int y = top; y < REAL_H; y++) {
-        /* 1..n_mats-1, so over successive rows every difference between
-         * material indices occurs at least once. */
-        const int stride = (y % (n_mats - 1)) + 1;
         for (int x = 0; x < REAL_W; x++) {
-            const int m = first + ((x * stride + y) % n_mats);
+            const int m = all_pairs_material_at(x, y, first, n_mats);
             /* sand_spawn() with radius 0 rather than sand_set(): it goes
              * through random_cell(), so a liquid arrives full, a transient
              * arrives at full life and a powder gets a shade - the same
@@ -6162,19 +6220,33 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     free(big);
     free(blocks);
 
-    /* 54000 us: a REDUCTION TARGET, not headroom. Measured at 60091 us on
-     * device (2026-08-25), and set 10% below that deliberately, so this
-     * fails today and stops failing only when the code gets faster. That
-     * is the same thing the mixed-scene budget above does, and the reason
-     * that one went from 26.2% over to 7.0% under without the number ever
-     * moving.
+    /* 54000 us: a REDUCTION TARGET, not headroom. Set 10% below a measured
+     * 60091 us so this fails today and stops failing only when the code
+     * gets faster. That is the same thing the mixed-scene budget above
+     * does, and the reason that one went from 26.2% over to 7.0% under
+     * without the number ever moving.
      *
-     * It replaces a guess. The first figure here was 100000, picked with
-     * no hardware; the second was 300000, extrapolated from the
-     * full-screen-fire scene's known device cost by assuming the
-     * host-to-device ratio carried across scenes. It does not: fire
-     * measures ~318x host, this scene ~63x, so the extrapolation was four
-     * times too pessimistic and predicted 226-244 ms against an actual
+     * THE 60091 IS STALE, AND KNOWINGLY SO. It was taken on 2026-08-25
+     * against a scene of TWELVE materials covering 66 pairs. There are
+     * fourteen now - glass and snow - so the same derived scene covers 91
+     * pairs, and the reactions pass has gained a per-cell branch and a
+     * second kind of participant (cells with a temperature) since. The
+     * scene this number describes no longer exists.
+     *
+     * The number is deliberately NOT adjusted for that. A reduction target
+     * moved to accommodate the code is no longer a target, and this file
+     * has already been burned twice by figures that were reasoned about
+     * rather than measured - 100000 picked with no hardware, then 300000
+     * extrapolated from another scene's ratio, which came out four times
+     * too pessimistic. The right correction is a fresh device capture, not
+     * an estimate.
+     *
+     * So read a failure here carefully: it may be the regression it always
+     * meant, or it may be two extra materials in a harder scene. Re-measure
+     * before concluding either.
+     *
+     * On the extrapolation that produced 300000: fire measures ~318x host
+     * and this scene ~63x, so it predicted 226-244 ms against an actual
      * 60 ms. Worth remembering before anyone extrapolates again - on this
      * chip the ratio is dominated by cache behaviour the host does not
      * model, and it is scene-specific. */
@@ -6456,6 +6528,7 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
     RUN_TEST(test_reinitialising_forgets_the_old_board);
     RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
     RUN_TEST(test_snow_painted_into_water_melts);
