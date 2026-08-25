@@ -3369,8 +3369,18 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
      * the part that is moving costs anything; a whole screen collapsing at
      * once lasts a fraction of a second. Sustained, this would not be
      * acceptable - and if it ever becomes sustained, this number should be
-     * argued down rather than up. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(16000, (int)per_step,
+     * argued down rather than up.
+     *
+     * Tightened 16000 -> 14000 once the tenth attempt's block-liquid skip
+     * landed this at 13288 us, reproduced byte-identically across two
+     * captures. A deliberately thin margin: nearby builds of the previous
+     * mechanism measured up to 13698 us purely from flash layout, so 14000
+     * is ~2% over the worst recent observation - the same knowing bet
+     * FULL_STEP_BUDGET_US documents. If a rebuild that does not touch the
+     * liquid pass flips this, check the liquid-free benchmarks first (they
+     * are the layout controls - see Optimization-Playbook.md) and loosen
+     * this rather than misread layout noise as a simulation regression. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(14000, (int)per_step,
         "a screen-wide collapse of water must still land inside a frame or "
         "two - the search across the flow is the thing to suspect");
 }
