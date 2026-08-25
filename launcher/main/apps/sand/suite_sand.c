@@ -5124,6 +5124,107 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
         "down to this - a target to optimize toward, not yet the reality");
 }
 
+/* Every material at once, then a gravity flip.
+ *
+ * The other budget tests each isolate one thing - a settled pile, a
+ * screen of water, a fire cascade. This one deliberately does not: the
+ * board is banded with a share of EVERY material, arranged so the
+ * reactive pairs actually touch (fire against wood and gas, acid against
+ * sand, lava against water), and then gravity is inverted. That makes
+ * every pass in sand_step() do real work in the same step - the main
+ * sweep on powders and liquids, sand_step_liquids()' cross-flow,
+ * sand_step_gas()' rise and spread, and sand_step_reactions() dispatching
+ * both burning and dissolving cells - which no single-material scene
+ * does.
+ *
+ * It is the scene that catches a cost that only appears in combination:
+ * a pass that is cheap alone but interacts badly with another's wake
+ * pattern, or a per-cell branch that is well predicted in a uniform
+ * scene and mispredicted in a mixed one.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET, and must not be treated as one.
+ * Every other figure in this file is a measured number with the
+ * measurement written beside it; this one was written without access to
+ * the device, so it is a deliberately loose SANITY CEILING - wide enough
+ * that it cannot pass as tuned, tight enough to catch something
+ * catastrophic like an accidental quadratic. Replace it with a real
+ * figure from `run_device_tests.sh`, and say what was measured, the first
+ * time anyone runs this on hardware. */
+static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 23u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    /* Ordered so that neighbouring bands react: gas over fire over wood
+     * feeds ignition, acid sits directly on sand, lava meets water. The
+     * top third is left clear so there is somewhere to launch into when
+     * gravity inverts - same reasoning as the other flip tests. */
+    static const material_id_t bands[] = {
+        MAT_GAS, MAT_FIRE, MAT_WOOD, MAT_SMOKE, MAT_STEAM,
+        MAT_OIL, MAT_ACID, MAT_SAND, MAT_LAVA, MAT_WATER, MAT_STONE,
+    };
+    const int n_bands = (int)(sizeof bands / sizeof bands[0]);
+
+    const int top = REAL_H / 3;                  /* clear headroom above */
+    const int band_h = (REAL_H - top) / n_bands;
+    for (int b = 0; b < n_bands; b++) {
+        const int y0 = top + b * band_h;
+        const int y1 = (b == n_bands - 1) ? REAL_H : y0 + band_h;
+        for (int y = y0; y < y1; y++) {
+            for (int x = 0; x < REAL_W; x++) {
+                /* sand_spawn() with radius 0 rather than sand_set(): it
+                 * goes through random_cell(), so a liquid arrives full, a
+                 * transient arrives at full life and a powder gets a
+                 * shade - the same cells a real pour produces. */
+                sand_spawn(&real, x, y, 0, bands[b]);
+            }
+        }
+    }
+
+    /* Let it get going - long enough for the reactions to be under way and
+     * the liquids to have found their levels, so the flip lands on a live
+     * scene rather than a freshly painted one. */
+    for (int i = 0; i < 120; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 20;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, -1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "gravity flip with every material at once, "
+                             "%dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    /* Freed BEFORE the assertion, deliberately. Unity longjmps out of a
+     * failing assert, so a free() after one never runs - which on this
+     * device's no-PSRAM heap leaked ~41 KB and starved every later
+     * malloc()-based test. That is a real thing that happened to the
+     * mixed-scene test above; the fix belongs in every test shaped like
+     * this one, not just the one that got caught. */
+    free(big);
+    free(blocks);
+
+    /* Sanity ceiling, NOT a budget - see this test's own comment. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(100000, (int)per_step,
+        "a mixed-material flip must not cost anything like 100ms a step - "
+        "this is a catastrophe detector, not a frame budget, and wants "
+        "replacing with a measured figure the first time it runs on real "
+        "hardware");
+}
+
 static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
 {
     /* The worst case sand_step_reactions() can face, not a synthetic one:
@@ -5431,6 +5532,7 @@ void run_sand_suite(void)
     RUN_TEST(test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget);
     RUN_TEST(test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_water_fits_in_the_frame_budget);
+    RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);
 #endif

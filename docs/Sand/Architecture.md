@@ -379,12 +379,19 @@ deleted it outright. The mixed scene came in during the tenth, which gave
 the cross-flow pass a block-shaped skip for the cells that hold no liquid.
 See [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
-## The seven device frame-budget tests
+## The eight device frame-budget tests
 
 All `#ifdef DEVICE_BUILD`-only, in `suite_sand.c`, run against the real
 184x224 grid rather than the 8x8 host-test fixture. Each one's number
 came from an actual device capture, not a guess - see each test's own
 comment for the reasoning behind its specific budget.
+
+**One exception, clearly marked.** The mixed-material flip at the bottom
+was written without access to hardware, so its figure is a loose sanity
+ceiling rather than a budget: wide enough that it cannot be mistaken for
+a tuned number, tight enough to catch an accidental quadratic. It needs
+replacing with a real capture the first time anyone runs
+`run_device_tests.sh` after it landed.
 
 | Test | Scenario | Budget | Last measured |
 |---|---|---|---|
@@ -395,12 +402,16 @@ comment for the reasoning behind its specific budget.
 | `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 14000 µs (tightened from 16000 after the tenth attempt) | ~13288 µs (was 16141 and failing until the ninth attempt) |
 | `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~316000 µs |
 | `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~214000-231000 µs (varies with flash-cache layout - see below) |
+| `test_a_gravity_flip_on_every_material_at_once_stays_sane` | Bands of **all eleven** movable materials, reactive pairs touching, settled then flipped - every pass doing real work in one step | 100000 µs **(sanity ceiling, not a budget)** | **never measured - needs a device run** |
 
-Every row passes, and no budget was ever raised to make that true - the
-mixed scene in particular was set 21% *below* what the code could do when
-it was written, deliberately, as a reduction target rather than a safety
-margin, and it went from 26.2% over to 7.0% under without the number
-moving. That is the standard to hold the next one to.
+Every measured row passes, and no budget was ever raised to make that
+true - the mixed scene in particular was set 21% *below* what the code
+could do when it was written, deliberately, as a reduction target rather
+than a safety margin, and it went from 26.2% over to 7.0% under without
+the number moving. That is the standard to hold the next one to, and the
+reason the unmeasured row above is labelled rather than quietly given a
+plausible-looking figure: a budget nobody measured is worse than no
+budget, because it looks like one.
 
 One row to watch rather than celebrate: `full_size_step` sits at ~2.1%
 under its budget, thin enough that an unrelated code change can flip it
