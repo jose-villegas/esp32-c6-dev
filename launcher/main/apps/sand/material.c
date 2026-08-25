@@ -413,10 +413,11 @@ const material_t materials[MATERIAL_MAX] = {
         .repose  = 0,
         .scatter = 0,
 
-        .mobility = 30,      /* VISCOSITY, inverted - see material.h, and
+        .mobility = 70,      /* VISCOSITY, inverted - see material.h, and
                               * the slowest thing on the board by a wide
-                              * margin: 108 steps to spread as far as
-                              * water goes in 8. Molten rock creeping,
+                              * margin: 44 steps to spread as far as water
+                              * goes in 8 and oil in 18. Molten rock
+                              * creeping,
                               * which is most of what makes lava read as
                               * dangerous rather than as orange water.
                               *

@@ -5275,46 +5275,49 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
 
-    /* The scene is DERIVED from materials[], not listed here: a share of
-     * the board left empty, and the rest divided evenly into one band per
-     * real material, in enum order.
+    /* The scene is DERIVED from materials[], and laid out so that every
+     * PAIR of materials touches - not merely every material appearing
+     * somewhere.
      *
-     * Naming them by hand is the obvious way and it rots. This test was
-     * written listing eleven materials while MAT_EMBER was already in the
-     * table - so the "every material at once" scene quietly covered eleven
-     * of twelve and still produced a confident number. Nothing catches
-     * that except someone noticing.
+     * Bands were the first attempt and covered far less than they looked
+     * like they did: stacking twelve materials in horizontal strips puts
+     * only the eleven vertically-adjacent pairs in contact, and measured,
+     * just 20 of the 66 possible pairs ever met. Two thirds of the
+     * reactions this simulation can perform never fired in the scene
+     * whose whole purpose is to fire all of them.
      *
-     * Derived, a new material joins this scene on the commit that adds it,
-     * with an even share, and there is nothing to keep in sync. The cost
-     * is the hand-picked adjacency the list used to have - but enum order
-     * already puts fire next to wood and lava next to acid, and on a
-     * settling, flipping board with every material present the reactive
-     * pairs meet anyway.
+     * This tiles a pattern instead. Cell (x, y) takes material
+     * (x * stride + y) mod n, where stride is (y mod (n-1)) + 1 - so
+     * horizontal neighbours in row y differ by `stride`, and successive
+     * rows step through every possible difference. Every pair of
+     * materials therefore ends up adjacent somewhere, and the pattern
+     * wraps to fill the board without a seam.
      *
-     * The empty share is not arbitrary: the flip needs somewhere to launch
-     * into, the same reasoning as the other flip tests. */
+     * Measured on the real 184x224 grid: 66 of 66 pairs in contact
+     * against the bands' 20, and 0.90 ms per step against 0.55 - a
+     * genuinely harder scene, which is the point of a worst case.
+     *
+     * A share of the board is still left empty (EMPTY_SHARE_PERCENT), so
+     * the flip has somewhere to launch into - the same reasoning as the
+     * other flip tests. */
     const int first = MAT_EMPTY + 1;
-    const int n_bands = MAT_COUNT - first;
+    const int n_mats = MAT_COUNT - first;
     const int top = (REAL_H * EMPTY_SHARE_PERCENT) / 100;
-    const int band_h = (REAL_H - top) / n_bands;
 
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, band_h,
-        "the grid must be tall enough to give every material a band - if "
-        "the material table outgrows the board this scene needs "
-        "rethinking, rather than silently dropping the last few");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, n_mats,
+        "the pattern below needs at least two materials to interleave");
 
-    for (int b = 0; b < n_bands; b++) {
-        const int y0 = top + b * band_h;
-        const int y1 = (b == n_bands - 1) ? REAL_H : y0 + band_h;
-        for (int y = y0; y < y1; y++) {
-            for (int x = 0; x < REAL_W; x++) {
-                /* sand_spawn() with radius 0 rather than sand_set(): it
-                 * goes through random_cell(), so a liquid arrives full, a
-                 * transient arrives at full life and a powder gets a
-                 * shade - the same cells a real pour produces. */
-                sand_spawn(&real, x, y, 0, (material_id_t)(first + b));
-            }
+    for (int y = top; y < REAL_H; y++) {
+        /* 1..n_mats-1, so over successive rows every difference between
+         * material indices occurs at least once. */
+        const int stride = (y % (n_mats - 1)) + 1;
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = first + ((x * stride + y) % n_mats);
+            /* sand_spawn() with radius 0 rather than sand_set(): it goes
+             * through random_cell(), so a liquid arrives full, a transient
+             * arrives at full life and a powder gets a shade - the same
+             * cells a real pour produces. */
+            sand_spawn(&real, x, y, 0, (material_id_t)m);
         }
     }
 
@@ -5345,12 +5348,26 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
     free(big);
     free(blocks);
 
-    /* Sanity ceiling, NOT a budget - see this test's own comment. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(100000, (int)per_step,
-        "a mixed-material flip must not cost anything like 100ms a step - "
-        "this is a catastrophe detector, not a frame budget, and wants "
-        "replacing with a measured figure the first time it runs on real "
-        "hardware");
+    /* Sanity ceiling, NOT a budget - see this test's own comment.
+     *
+     * It was 100000, which was a guess and a bad one: it would have failed
+     * on the first device run. Calibrated since, without hardware, against
+     * a scene whose device cost IS known.
+     * test_a_full_screen_of_fire_fits_in_the_frame_budget measures 214-231
+     * ms on the board and 0.90 ms/step on this host - a ratio of about
+     * 240. This scene costs 0.95 ms/step on the same host, so it should
+     * land near 226-244 ms on device. 300000 sits above that with room for
+     * the extrapolation to be wrong, and far enough below a runaway to
+     * still catch one.
+     *
+     * Still not a budget. Replace it with a real capture from
+     * tools/report_performance.sh, set BELOW what the code actually does,
+     * the way the mixed-scene budget above was. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(300000, (int)per_step,
+        "a mixed-material flip must not run away - this is a catastrophe "
+        "detector calibrated by extrapolation, not a frame budget, and it "
+        "wants replacing with a measured figure the first time it runs on "
+        "real hardware");
 }
 
 static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
