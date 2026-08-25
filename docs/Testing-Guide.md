@@ -14,13 +14,11 @@ Living document: update it when the approach changes.
 ./launcher/test/run_device_tests.sh   # every suite, on the board, host-triggered
 ```
 
-**On Windows, in Git Bash**, `idf.py` cannot run at all, so the build and
-flash half of that second script refuses rather than silently flashing
-nothing. Two ways round it: collect from firmware already on the board
-with `run_device_tests.sh --no-flash` (its collection step is plain
-Python and works fine here), or use a wrapper that does the whole job by
-shelling out to PowerShell (see
-[`Sand/Architecture.md`](Sand/Architecture.md#verifying-performance-on-real-hardware)):
+**On Windows**, `idf.py` cannot run under Git Bash, so the build/flash
+half of that second script refuses. Either collect from what is already
+on the board (`run_device_tests.sh --no-flash` - collection is plain
+Python and works fine here), or use a wrapper, which is a `.sh` that
+shells out to PowerShell:
 
 ```sh
 ./launcher/tools/report_test_results.sh   # pass/fail for every suite  -> tools/results/

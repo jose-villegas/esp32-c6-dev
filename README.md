@@ -44,9 +44,9 @@ idf.py -p <PORT> flash monitor
                                         # runs every suite on the actual chip
 ```
 
-On Windows in Git Bash, ESP-IDF cannot be driven directly - use the
-one-click wrappers, which handle that and write a markdown report into
-`launcher/tools/results/`:
+`idf.py` cannot run under Git Bash, so on Windows use the wrappers in
+`launcher/tools/` - `.sh` scripts that shell out to PowerShell and write a
+markdown report into `launcher/tools/results/`:
 
 ```bash
 ./launcher/tools/build_flash.sh        # build + flash the release firmware

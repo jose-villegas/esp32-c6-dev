@@ -273,56 +273,26 @@ all, which is most of a frame's cost."
 
 ## Verifying performance on real hardware
 
-### Start here: the one-click scripts
-
-**There is a script for each of these. Reach for it before reading any
-further.** All four are Bash entry points, safe to run from Git Bash, and
-each one handles the ESP-IDF/PowerShell dance described below on your
-behalf.
+### Use the scripts in `launcher/tools/`
 
 | Want to... | Run | Produces |
 |---|---|---|
-| put the current code on the board | `launcher/tools/build_flash.sh [PORT]` | release firmware, flashed |
-| get **performance** numbers | `launcher/tools/report_performance.sh [PORT]` | `tools/results/performance_<ts>.md` - every frame-budget test with scenario, budget, measured, headroom, pass/fail |
-| get **pass/fail** for every suite | `launcher/tools/report_test_results.sh [PORT]` | `tools/results/test_results_<ts>.md` |
-| capture the raw console only | `python launcher/tools/sweeps/capture_selftest.py OUT.txt --port PORT` | the unparsed self-test output |
+| flash the current code | `tools/build_flash.sh [PORT]` | release firmware on the board |
+| performance numbers | `tools/report_performance.sh [PORT]` | `tools/results/performance_<ts>.md` |
+| pass/fail for every suite | `tools/report_test_results.sh [PORT]` | `tools/results/test_results_<ts>.md` |
+| raw console capture | `python tools/sweeps/capture_selftest.py OUT.txt --port PORT` | unparsed self-test output |
 
-The two `report_*` scripts build and flash `build.diag`, capture the run,
-write a markdown table, and **restore `build.release` afterwards
-regardless of outcome** - so they are safe to run against a board you
-then want to use.
+**They are `.sh` files that shell out to PowerShell, and that is all they
+are for**: `idf.py` cannot run under Git Bash, so anything that builds or
+flashes has to cross into PowerShell first. The next section is that
+problem in detail, and the rest of this one is what the scripts are doing
+on your behalf.
 
-The performance report is **generated from a real capture and the current
-source**, which makes it the authority over the hand-maintained table
-further down this page. That table is a convenience; when the two
-disagree, the generated one is right. Its parser finds any
-`static void test_*(void)` inside the `#ifdef DEVICE_BUILD` block that
-calls `TEST_ASSERT_LESS_THAN_MESSAGE`, and pairs it with an `ESP_LOGI`
-line tagged `device_tests` containing a microsecond figure - so a new
-budget test appears in the report automatically, with no change to the
-tooling.
-
-### The one constraint behind all of it
-
-**`idf.py` cannot run under Git Bash.** That is the whole problem, and
-everything above is a consequence of it:
-
-- Anything that BUILDS or FLASHES must go through PowerShell. The
-  wrappers do that for you; `test/run_device_tests.sh` does not, so it
-  refuses outright rather than silently flashing nothing (`idf.py` exits
-  *successfully* without building under MSys, which would report a
-  confident pass for code that was never compiled).
-- Anything that only READS THE SERIAL PORT is plain Python and works fine
-  from Git Bash - including `test/run_device_tests.sh --no-flash`.
-
-So from Git Bash there are two honest routes: use a `tools/` wrapper and
-get the whole thing in one command, or build and flash from PowerShell
-and then collect with `--no-flash`.
-
-### The mechanics, for when a script is not enough
-
-The rest of this section is what the wrappers are doing, kept because
-something eventually breaks and the wrapper stops being enough.
+The two `report_*` scripts also restore `build.release` afterwards, so
+they are safe to run against a board you then want to use. Their output
+is generated from a real capture and the current source, which makes it
+the authority over the hand-maintained table further down this page - and
+a new budget test appears in it automatically, with no tooling change.
 
 ### The trap: `idf.py` cannot run from Git Bash, at all
 
