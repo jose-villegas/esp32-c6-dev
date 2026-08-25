@@ -116,7 +116,7 @@ a quantity a cell carries.
 | `heat_ramp` | glass, 12 | chance/256 per step per adjacent heat source to climb one level. **Non-zero is what makes the variant a temperature** rather than a shade |
 | `cools` | glass, 6 | chance/256 to lose a level with nothing heating it |
 | `chills` | snow, 40 | chance/256 to pull a level out of a hot *neighbour*; non-zero also marks the material **cold** |
-| `shatters_to` | glass, sand | what a cell at heat >= 10 becomes when something cold touches it |
+| `shatters_to` | glass, sand | what a cell at heat >= `SAND_SHOCK_HEAT` (6) becomes when something cold touches it - **on contact, no roll** |
 | `thaws` | snow, 4 | chance/256 per step per adjacent **liquid** cell that it gives up and becomes `heats_to` |
 
 `thaws` is a second trigger for the transformation `heat_chance` already
@@ -149,9 +149,37 @@ one and drains it to nothing, `chills` belongs to the cold one and drains a
 neighbour. They also cannot share a number - snow's 40 against glass's 6 is
 what lets a snowbank win a race that ambient cooling always loses.
 
-**Measured** (host, 2026-08-25): lava held against one face of a pane melts
-it in 550-1150 steps depending on seed; a pane at full heat drains back to
-cold in ~610 steps once the fire is gone.
+### The threshold is a visible state
+
+Cooling is gradual and takes a roll; **shattering is not**. A cold neighbour
+touching a cell at or above `SAND_SHOCK_HEAT` breaks it the same step, with
+no roll at all.
+
+Shock used to wait for the `chills` roll, and that roll is also what *cools*
+the pane - so the usual outcome of pouring snow on a hot basin was that the
+pane quietly cooled below the threshold instead of breaking, and nothing
+appeared to happen. Cracking is the fast path now and cooling is the slow
+one, which is the right way round physically as well.
+
+That leaves a rule where one heat level decides everything - a pane at 5 is
+untouchable and a pane at 6 breaks instantly - so **the player has to be
+able to see which side of the line a pane is on**. Glass's palette is
+therefore not a smooth ramp: it runs cold blue to a flat neutral over levels
+0-5, then jumps into a glow and climbs to lava's brightest at 15. The
+largest colour change along the ramp is exactly at the threshold, so
+*orange means snow will break this*.
+
+Three things have to agree on that number - the rule, the palette and the
+tests - which is why it is `SAND_SHOCK_HEAT` in `material.h` rather than a
+private `#define` beside the code. A `_Static_assert` fails the build if it
+moves without the palette, and a test asserts the widest colour step in the
+ramp still lands on it.
+
+**Measured** (host, 2026-08-25): lava held under a cold pane makes it
+shatterable in 42-84 steps and molten in 633-818 - fragile quickly, melted
+slowly, which is the useful split. Snow on a pane at or above the threshold
+breaks every cell in 1 step; below it, never. A pane at full heat drains
+back to cold in ~610 steps once the fire is gone.
 
 ```mermaid
 graph LR
@@ -160,6 +188,8 @@ graph LR
     Hot -->|"cools 6<br/>when the fire stops"| Glass
     Hot -->|"melts"| Lava["LAVA"]
     Hot -->|"shatters_to<br/>+ anything that chills"| Sand
+    Warm["GLASS<br/>heat 6 - glowing"] -->|"shatters_to<br/>on contact"| Sand
+    Glass -->|"heat 6"| Warm
     Snow["SNOW"] -->|"heats_to 120 near fire<br/>thaws 4 in any liquid"| Water["WATER"]
     Snow -.->|"chills 40"| Hot
 
@@ -167,6 +197,7 @@ graph LR
     style Glass fill:#3d6b8a,color:#fff
     style Hot fill:#8a3d3d,color:#fff
     style Lava fill:#8a3d3d,color:#fff
+    style Warm fill:#8a3d3d,color:#fff
     style Snow fill:#5a5a5a,color:#fff
     style Water fill:#3d6b8a,color:#fff
 ```

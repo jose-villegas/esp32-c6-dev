@@ -404,13 +404,6 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
     return true;
 }
 
-/* Heat far enough up the ramp that a sudden chill cracks the cell rather
- * than merely cooling it. 10 of 15 - high enough that a pane has to be
- * visibly glowing before snow will shatter it, so the player can see the
- * condition they are creating, and low enough that it does not turn into a
- * race against melting. */
-#define SHOCK_HEAT 10
-
 /* One cell that is COLD: it melts if a liquid is touching it.
  *
  * The mirror of step_one_hot_cell(), and driven from the same side - the
@@ -487,6 +480,21 @@ static bool step_one_hot_cell(sand_t *s, uint8_t *row, int x, int y,
         if (nr->chills == 0) {
             continue;
         }
+        /* SHOCK DOES NOT WAIT FOR THE COOLING ROLL. Contact is enough,
+         * provided the cell is already hot enough, and the difference is
+         * the whole feel of the thing. Rolling for it first meant a drift
+         * poured onto a glowing pane spent several steps cooling it - and
+         * cooling is what takes it BELOW the threshold, so the common
+         * outcome was a pane that quietly went cold instead of breaking.
+         * Cracking is the fast path and cooling is the slow one, which is
+         * also the right way round physically. */
+        if (heat >= SAND_SHOCK_HEAT && r->shatters_to != 0) {
+            try_heat_transform(s, nx, ny, w, h);   /* the cold side pays */
+            place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
+                          (material_id_t)r->shatters_to);
+            return false;
+        }
+
         if ((int)(rng_next(&s->rng) & 0xFF) >= nr->chills) {
             continue;
         }
@@ -497,11 +505,6 @@ static bool step_one_hot_cell(sand_t *s, uint8_t *row, int x, int y,
          * heats_to fires, which is what melts it to water. */
         try_heat_transform(s, nx, ny, w, h);
 
-        if (heat >= SHOCK_HEAT && r->shatters_to != 0) {
-            place_reacted(s, x, y, (size_t)y * (size_t)w + (size_t)x,
-                          (material_id_t)r->shatters_to);
-            return false;
-        }
         if (heat > 0) {
             heat--;
         }

@@ -3865,19 +3865,100 @@ static void test_snow_shatters_a_glowing_pane_into_sand(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    /* MOST of the pane, not all of it, and the difference is a real race
-     * rather than slack in the test. Snow that chills melts into water,
-     * water is a liquid, and a liquid thaws the snow next to it - so a
-     * bank eats itself from the puddle outward and can run out one cell
-     * short. Nine seeds in ten clear all six panes here and seed 12345
-     * leaves one standing, which is the behaviour, not a defect in it. */
-    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SAND) >= panes / 2,
-        "snow packed onto panes at the top of their heat ramp must shatter "
-        "most of them, and shattered glass must come back as SAND - that "
-        "is what closes the loop heat opened");
-    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_GLASS) < panes,
-        "and at least one pane has to actually go, or nothing was shocked "
-        "at all");
+    /* ALL of them, and it takes one step. This asked for "most" while
+     * shock had to win a cooling roll first: the roll that decided whether
+     * to crack was the same roll that cooled the pane, so a drift often
+     * talked a pane down below the threshold instead of breaking it, and a
+     * bank eating itself from its own meltwater could run a cell short.
+     * Contact alone is enough now. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
+        "snow touching panes above the shock threshold must shatter every "
+        "one of them");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(panes, count_cells_of(MAT_SAND),
+        "and shattered glass must come back as SAND - that is what closes "
+        "the loop heat opened, so the player can un-make the material");
+}
+
+/* The threshold is sharp, and it is the ONLY thing that decides.
+ *
+ * One level below it a pane is untouchable and one level above it breaks
+ * on contact, which is a strange rule to have unless the player can see
+ * which side of the line a pane is on - which is what the colour test
+ * below is for. The two belong together: this one fixes the behaviour to
+ * SAND_SHOCK_HEAT, that one fixes the appearance to the same number. */
+static void test_the_shock_threshold_is_exact(void)
+{
+    const int panes = W - 2;
+
+    for (int heat = SAND_SHOCK_HEAT - 1; heat <= SAND_SHOCK_HEAT; heat++) {
+        fixture();
+        sand_clear(&s);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+        }
+        for (int x = 1; x < W - 1; x++) {
+            sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, (uint8_t)heat));
+            sand_set(&s, x, H - 3, SNOW);
+        }
+
+        for (int i = 0; i < 60; i++) {
+            sand_step(&s, 0, 1000, 0);
+        }
+
+        if (heat < SAND_SHOCK_HEAT) {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(panes, count_cells_of(MAT_GLASS),
+                "a pane one level BELOW the shock threshold must survive "
+                "snow - it only cools, which is what makes the threshold "
+                "mean something");
+        } else {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
+                "and a pane exactly AT the threshold must break");
+        }
+    }
+}
+
+/* And the biggest colour change in glass's ramp is at that same level.
+ *
+ * Glass is the one material whose variant the player has to be able to
+ * read, because it is the only one where the variant changes what the
+ * material DOES rather than how it looks. A smooth ramp hid that: a pane
+ * at 5 and a pane at 6 behave completely differently and looked nearly
+ * identical, so pouring snow on a basin that was not quite hot enough
+ * produced no reaction and no explanation for it.
+ *
+ * Asserted as "the largest step in the ramp", not "these two colours
+ * differ", because any two entries of a gradient differ. The claim worth
+ * defending is that this break is the one you notice. */
+static void test_glass_looks_different_at_the_shock_threshold(void)
+{
+    const gfx_color_t *pal = material_palette();
+
+    int gap[MATERIAL_VARIANTS] = { 0 };
+    for (int v = 1; v < MATERIAL_VARIANTS; v++) {
+        const gfx_color_t a = pal[MAT_GLASS * MATERIAL_VARIANTS + v - 1];
+        const gfx_color_t b = pal[MAT_GLASS * MATERIAL_VARIANTS + v];
+        /* Stored byte-swapped for the panel - see GFX_RGB in gfx_color.h. */
+        const uint16_t ua = (uint16_t)((a >> 8) | (a << 8));
+        const uint16_t ub = (uint16_t)((b >> 8) | (b << 8));
+        const int dr = ((ua >> 11) & 0x1F) - ((ub >> 11) & 0x1F);
+        const int dg = ((ua >>  5) & 0x3F) - ((ub >>  5) & 0x3F);
+        const int db = ( ua        & 0x1F) - ( ub        & 0x1F);
+        gap[v] = (dr < 0 ? -dr : dr) * 2 +
+                 (dg < 0 ? -dg : dg) +
+                 (db < 0 ? -db : db) * 2;
+    }
+
+    int widest = 1;
+    for (int v = 2; v < MATERIAL_VARIANTS; v++) {
+        if (gap[v] > gap[widest]) {
+            widest = v;
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_SHOCK_HEAT, widest,
+        "the biggest colour change along glass's ramp has to land exactly "
+        "where its behaviour changes - a pane that snow will shatter must "
+        "not look like one that snow will merely cool");
 }
 
 /* The same snow on a cold pane does nothing at all.
@@ -3920,7 +4001,7 @@ static void test_snow_melts_where_it_chills(void)
         sand_set(&s, x, H - 1, STONE);
     }
     for (int x = 1; x < W - 1; x++) {
-        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 10 - 1));
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, SAND_SHOCK_HEAT - 1));
         sand_set(&s, x, H - 3, SNOW);
     }
     const int flakes = count_cells_of(MAT_SNOW);
@@ -6371,6 +6452,8 @@ void run_sand_suite(void)
     RUN_TEST(test_freshly_fused_glass_starts_cold);
     RUN_TEST(test_snow_shatters_a_glowing_pane_into_sand);
     RUN_TEST(test_cold_glass_is_unharmed_by_snow);
+    RUN_TEST(test_the_shock_threshold_is_exact);
+    RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
     RUN_TEST(test_reinitialising_forgets_the_old_board);

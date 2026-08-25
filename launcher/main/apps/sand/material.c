@@ -862,6 +862,52 @@ const reaction_t reactions[MATERIAL_MAX] = {
      (LERP_CH(lo, hi,  8, sh) <<  8) |                                    \
       LERP_CH(lo, hi,  0, sh))
 
+/* A ramp for `n` steps between two colours, for a material that needs its
+ * sixteen entries built in more than one piece. */
+#define SEG(lo, hi, i, n) GFX_RGB(LERP(lo, hi, ((i) * 15) / ((n) - 1)))
+
+/* Glass, whose variant is a TEMPERATURE rather than a shade, so this is a
+ * temperature scale - and one that CHANGES DIRECTION at the level where
+ * the material's behaviour changes. Below SAND_SHOCK_HEAT a pane cools
+ * when something cold touches it; at or above it, it cracks. That is the
+ * one thing about glass the player has to be able to see, and a smooth
+ * ramp hid it: a pane at 5 and a pane at 6 behave completely differently
+ * and looked nearly identical.
+ *
+ * So cold blue creeps up to a flat neutral over the first six levels -
+ * warming, not yet dangerous - and then the ramp jumps into a glow and
+ * climbs to lava's own brightest colour, which is what a pane at 15 is
+ * about to become. "It is orange" now means "snow will break this". */
+#define GLASS_COLD    0x1E5A78
+#define GLASS_NEUTRAL 0x7E8E86
+#define GLASS_GLOW    0xC8701E
+#define GLASS_MOLTEN  0xFFD873
+
+#define GLASS_SHADES                                                      \
+    SEG(GLASS_COLD, GLASS_NEUTRAL, 0, SAND_SHOCK_HEAT),                   \
+    SEG(GLASS_COLD, GLASS_NEUTRAL, 1, SAND_SHOCK_HEAT),                   \
+    SEG(GLASS_COLD, GLASS_NEUTRAL, 2, SAND_SHOCK_HEAT),                   \
+    SEG(GLASS_COLD, GLASS_NEUTRAL, 3, SAND_SHOCK_HEAT),                   \
+    SEG(GLASS_COLD, GLASS_NEUTRAL, 4, SAND_SHOCK_HEAT),                   \
+    SEG(GLASS_COLD, GLASS_NEUTRAL, 5, SAND_SHOCK_HEAT),                   \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  0, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  1, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  2, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  3, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  4, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  5, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  6, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  7, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  8, MATERIAL_VARIANTS - SAND_SHOCK_HEAT), \
+    SEG(GLASS_GLOW, GLASS_MOLTEN,  9, MATERIAL_VARIANTS - SAND_SHOCK_HEAT)
+
+/* The ramp above is written out by hand, so it only matches the rule if
+ * the split lands where the rule does. */
+_Static_assert(SAND_SHOCK_HEAT == 6,
+               "glass's palette is built as 6 cool entries then 10 hot "
+               "ones; move SAND_SHOCK_HEAT and the colour stops marking "
+               "the level where a pane starts shattering");
+
 /* One material's sixteen variants, darkest to lightest. */
 #define SHADES(lo, hi)                                                    \
     GFX_RGB(LERP(lo, hi,  0)), GFX_RGB(LERP(lo, hi,  1)),                 \
@@ -965,7 +1011,7 @@ static const gfx_color_t palette[256] = {
                                     * the density ladder but they are
                                     * adjacent on screen the moment
                                     * something fizzes */
-    SHADES(0x3E8A99, 0xFFC24A),   /* glass - NOT a shade ramp. Glass is the
+    GLASS_SHADES,                 /* glass - NOT a shade ramp. Glass is the
                                     * one material whose variant is HEAT
                                     * (material.h's top comment), so this
                                     * ramp is a temperature scale and a
