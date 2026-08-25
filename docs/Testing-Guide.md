@@ -14,6 +14,19 @@ Living document: update it when the approach changes.
 ./launcher/test/run_device_tests.sh   # every suite, on the board, host-triggered
 ```
 
+**On Windows, in Git Bash, use the wrappers instead** - `run_device_tests.sh`
+needs `idf.py` for both its build and its collection step, and ESP-IDF
+refuses to run under Git Bash at all (see
+[`Sand/Architecture.md`](Sand/Architecture.md#verifying-performance-on-real-hardware)):
+
+```sh
+./launcher/tools/report_test_results.sh   # pass/fail for every suite  -> tools/results/
+./launcher/tools/report_performance.sh    # frame-budget numbers       -> tools/results/
+```
+
+Both build and flash the diagnostics variant, capture the run, write a
+markdown report, and restore `build.release` afterwards.
+
 The second builds the diagnostics variant, flashes it, collects results over
 the console and exits non-zero on failure — so it works in CI. On Windows,
 ESP-IDF cannot be driven from Git Bash, so build and flash from PowerShell and

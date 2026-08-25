@@ -273,9 +273,51 @@ all, which is most of a frame's cost."
 
 ## Verifying performance on real hardware
 
-This is the part that isn't written down anywhere else as a single
-sequence, and the part most likely to cost a future session real time
-rediscovering.
+### Start here: the one-click scripts
+
+**There is a script for each of these. Reach for it before reading any
+further.** All four are Bash entry points, safe to run from Git Bash, and
+each one handles the ESP-IDF/PowerShell dance described below on your
+behalf.
+
+| Want to... | Run | Produces |
+|---|---|---|
+| put the current code on the board | `launcher/tools/build_flash.sh [PORT]` | release firmware, flashed |
+| get **performance** numbers | `launcher/tools/report_performance.sh [PORT]` | `tools/results/performance_<ts>.md` - every frame-budget test with scenario, budget, measured, headroom, pass/fail |
+| get **pass/fail** for every suite | `launcher/tools/report_test_results.sh [PORT]` | `tools/results/test_results_<ts>.md` |
+| capture the raw console only | `python launcher/tools/sweeps/capture_selftest.py OUT.txt --port PORT` | the unparsed self-test output |
+
+The two `report_*` scripts build and flash `build.diag`, capture the run,
+write a markdown table, and **restore `build.release` afterwards
+regardless of outcome** - so they are safe to run against a board you
+then want to use.
+
+The performance report is **generated from a real capture and the current
+source**, which makes it the authority over the hand-maintained table
+further down this page. That table is a convenience; when the two
+disagree, the generated one is right. Its parser finds any
+`static void test_*(void)` inside the `#ifdef DEVICE_BUILD` block that
+calls `TEST_ASSERT_LESS_THAN_MESSAGE`, and pairs it with an `ESP_LOGI`
+line tagged `device_tests` containing a microsecond figure - so a new
+budget test appears in the report automatically, with no change to the
+tooling.
+
+### Why `test/run_device_tests.sh` is not on that list
+
+Because it does not work from Git Bash, and both `README.md` and
+`docs/Testing-Guide.md` will happily send you to it. It needs `idf.py`
+for its collection step as well as its build step, so it hits the
+`MSYSTEM` wall below even with `--no-flash`. It is the right entry point
+from PowerShell or CI, and the wrong one from the shell most of this
+work actually happens in.
+
+That mismatch has cost real time more than once, which is the reason this
+section now opens with the table above instead of with the mechanics.
+
+### The mechanics, for when a script is not enough
+
+The rest of this section is what the scripts are doing, kept because
+something eventually breaks and the wrapper stops being enough.
 
 ### The trap: `idf.py` cannot run from Git Bash, at all
 
