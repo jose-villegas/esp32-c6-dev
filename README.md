@@ -3,6 +3,7 @@
 [![Host Tests](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/host-tests.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/host-tests.yml)
 [![Build (Release)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-release.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-release.yml)
 [![Build (Diagnostics)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-diagnostics.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/build-diagnostics.yml)
+[![Shell Scripts](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/shell-scripts.yml/badge.svg)](https://github.com/jose-villegas/esp32-c6-dev/actions/workflows/shell-scripts.yml)
 
 A custom app shell for the [Waveshare
 ESP32-C6-Touch-AMOLED-1.8](https://www.waveshare.com/) board — no PSRAM, a

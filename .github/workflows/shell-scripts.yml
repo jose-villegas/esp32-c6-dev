@@ -1,0 +1,73 @@
+name: Shell Scripts
+
+# Every .sh in the repo, checked on Linux - which is the only place some of
+# it can be checked at all.
+#
+# Development happens on Windows in Git Bash, where /bin/sh is bash wearing
+# a hat: `sh -n` there accepts bashisms that a real POSIX shell rejects, and
+# tools/idf.sh's non-Windows branch is never taken. Both gaps close here for
+# free, on a runner that was already going to exist.
+#
+# Own workflow file, like the other three, purely so it gets its own badge -
+# GitHub exposes whole-workflow badges and never per-job ones. See
+# host-tests.yml's top comment.
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    name: Lint and POSIX check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Ubuntu's /bin/sh IS dash, so this is a genuine POSIX parse - unlike
+      # the same command run from Git Bash, which cannot fail this way.
+      - name: POSIX syntax check every #!/bin/sh script
+        run: |
+          set -eu
+          status=0
+          for f in $(git ls-files '*.sh'); do
+            if head -1 "$f" | grep -q '/bin/sh'; then
+              printf 'dash -n %s ... ' "$f"
+              if dash -n "$f"; then echo ok; else echo FAILED; status=1; fi
+            fi
+          done
+          exit $status
+
+      - name: bash syntax check every #!/usr/bin/env bash script
+        run: |
+          set -eu
+          status=0
+          for f in $(git ls-files '*.sh'); do
+            if head -1 "$f" | grep -q 'bash'; then
+              printf 'bash -n %s ... ' "$f"
+              if bash -n "$f"; then echo ok; else echo FAILED; status=1; fi
+            fi
+          done
+          exit $status
+
+      # -S error to begin with: a floor, not a ceiling. shellcheck's style
+      # and info findings on scripts written before it was wired up are worth
+      # fixing, but not worth failing the build over on the day it lands -
+      # raise this to warning once they are cleared rather than leaving the
+      # gate permanently soft.
+      - name: shellcheck (errors)
+        run: shellcheck -S error $(git ls-files '*.sh')
+
+  idf-sh:
+    name: tools/idf.sh on a POSIX host
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The one thing Windows development cannot test about its own tooling.
+      # See launcher/tools/ci_check_idf_sh.sh for what it asserts and why.
+      - uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: release-v5.5
+          target: esp32c6
+          path: launcher
+          command: sh tools/ci_check_idf_sh.sh
