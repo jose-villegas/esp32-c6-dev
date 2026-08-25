@@ -101,9 +101,6 @@ const material_t materials[MATERIAL_MAX] = {
                                * dispersing faster/further than water
                                * levels, given both use the same
                                * equalise_*() mechanism. */
-
-        .flammable = true,     /* the one fuel that exists today - see
-                                * sand_reactions.c */
     },
 
     [MAT_FIRE] = {
@@ -161,8 +158,6 @@ const material_t materials[MATERIAL_MAX] = {
         .sight    = 5,          /* noticeably tighter than gas's 16 -
                                 * "tighter instead of sparse". Starting
                                 * point, not final - tune on device */
-
-        .flammable = false,     /* fire does not re-ignite adjacent fire */
     },
 
     /* Slots 6-15 are unused and left zeroed except for these, which make an
@@ -172,6 +167,43 @@ const material_t materials[MATERIAL_MAX] = {
         .name    = "?",
         .kind    = KIND_STATIC,
         .density = 255,
+    },
+};
+
+/*=============================================================================
+ * The reaction table - see material.h's own comment on reaction_t for why
+ * this is a second table rather than more fields on materials[] above.
+ *
+ * Rows not given here default to all-zero, which reads correctly for every
+ * field: never catches, never a heat source, never conducts, never smokes,
+ * vanishes on quench, never flares. Adding a material that does not react
+ * at all - most of them - costs nothing here.
+ *===========================================================================*/
+
+const reaction_t reactions[MATERIAL_MAX] = {
+    [MAT_GAS] = {
+        /* 255: gas catches the instant fire touches it, and - because
+         * try_ignite() checks for 255 before ever drawing a random number -
+         * costs no RNG draw doing it, exactly as a plain boolean flammable
+         * flag used to. That is what keeps every existing gas/fire test,
+         * and the device frame-budget captures that depend on their exact
+         * random sequence, bit-identical after this table split. */
+        .flammability = 255,
+        .ignites_to   = MAT_FIRE,   /* the only fuel today; written out
+                                     * explicitly rather than relying on
+                                     * the "0 reads as MAT_FIRE" default,
+                                     * since MAT_FIRE is what should be
+                                     * here regardless of which enum value
+                                     * happens to be 0 */
+    },
+
+    [MAT_FIRE] = {
+        .burns = 1,     /* the one heat source that exists today - see
+                         * sand_reactions.c's dispatch, which now keys off
+                         * this instead of CELL_MATERIAL(c) == MAT_FIRE */
+        /* .quench_to left at 0: touching water still just vanishes, the
+         * same behaviour fire always had before steam existed - see
+         * material.h's own comment on quench_to. */
     },
 };
 

@@ -120,7 +120,15 @@ static inline bool try_ignite(sand_t *s, int nx, int ny, int w, int h)
     }
     const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
     const cell_t n = s->cells[at];
-    if (CELL_IS_EMPTY(n) || !material_of(n)->flammable) {
+    /* flammability == 0 is this table's spelling of "not flammable at
+     * all" - material.h's own bool `flammable` field, before the
+     * reaction properties moved to their own table. A nonzero-but-below-
+     * 255 chance (a material that catches slowly rather than instantly)
+     * is not wired up to an actual roll yet - nothing in the table has a
+     * value like that today, so this stays a plain presence check for
+     * now, and gets its dice roll the moment a material that needs one
+     * exists. */
+    if (CELL_IS_EMPTY(n) || reaction_of(n)->flammability == 0) {
         return false;
     }
     s->cells[at] = CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1);

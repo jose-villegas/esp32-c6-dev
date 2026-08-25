@@ -18,8 +18,8 @@
  *
  * For a powder it is a SHADE, so a pile has texture rather than reading as one
  * flat block of colour. For a LIQUID it is a FILL LEVEL, 1 to 15 - how much
- * water is in that cell. For a transient material - fire, steam - it will be
- * LIFE REMAINING, counting down to nothing.
+ * water is in that cell. For a transient material - gas, fire, steam, ember -
+ * it will be LIFE REMAINING, counting down to nothing.
  *
  * The fill level is what lets water level itself using nothing but its
  * immediate neighbours. A cell that is either full or empty cannot split, so a
@@ -166,15 +166,6 @@ typedef struct {
      * material leaves it at zero. */
     uint8_t sight;
 
-    /* Whether an adjacent fire cell can ignite this material - see
-     * sand_reactions.c. A material property, not a kind: fuel isn't
-     * about how something moves, so a future flammable material of any
-     * kind (solid, powder, whatever) opts in with this one field, no new
-     * pass code. False for everything but the one fuel that exists today
-     * (gas) - including fire itself, which must not re-ignite adjacent
-     * fire. */
-    bool flammable;
-
     /* Cold: for the UI, never touched by the simulation. Last, so it cannot
      * push the movement fields out of the first cache line. */
     const char *name;
@@ -188,6 +179,84 @@ extern const material_t materials[MATERIAL_MAX];
 static inline const material_t *material_of(cell_t c)
 {
     return &materials[CELL_MATERIAL(c)];
+}
+
+/* How a material behaves in a fire - read ONLY by sand_reactions.c.
+ *
+ * A separate table rather than more fields on material_t, deliberately:
+ * material_t is read several times per cell per step from the main sweep,
+ * and its own comment above explains why keeping that row inside a cache
+ * line matters. None of the fields below are read by any movement code, so
+ * paying for them in the hot table's stride would be paying for nothing.
+ * The cost of the split is that adding a material is now potentially two
+ * rows instead of one - worth it, and the reason for it is here rather
+ * than left to be rediscovered. */
+typedef struct {
+    /* Chance in 256, per adjacent burning cell, per step, that this
+     * material catches fire. 0 means it never burns. 255 means it catches
+     * the instant fire touches it - and, importantly, costs no random
+     * number at all (see try_ignite()), so a material at 255 leaves the
+     * RNG stream exactly as it was before this field existed. That is
+     * what keeps gas's behaviour, and every existing gas/fire test and
+     * device timing, bit-identical. */
+    uint8_t flammability;
+
+    /* What this material becomes when it catches - a material_id_t,
+     * narrowed. Gas flashes straight to MAT_FIRE; a slower-catching fuel
+     * can char into something else instead, so it stays put and keeps
+     * burning rather than turning into a flame that immediately floats
+     * away (see MAT_WOOD's own row and sand_reactions.c's top comment for
+     * why that distinction exists at all). 0 (MAT_EMPTY) is read as
+     * MAT_FIRE, so a flammable material that does not care what it turns
+     * into gets the obvious default for free. */
+    uint8_t ignites_to;
+
+    /* Nonzero: this material IS a heat source, and sand_step_reactions()
+     * gives it a turn - decaying, quenching, smothering, igniting
+     * neighbours. Replaces the old `CELL_MATERIAL(c) != MAT_FIRE`
+     * dispatch, which cannot express two burning materials at once.
+     * Still keyed off the material, NOT off `kind`: fire is KIND_GAS and
+     * a future burning solid could be KIND_STATIC, and both of those
+     * kinds are shared with materials that must not burn (gas, stone). */
+    uint8_t burns;
+
+    /* Chance in 256, per step, per burning neighbour, that heat crosses a
+     * cell of this material to the cell one further along the same
+     * direction - see conduct_heat() in sand_reactions.c. Meaningless for
+     * anything that never sits between a fire and something worth heating;
+     * left at zero for everything but the one material that exists to be
+     * a heat conductor. */
+    uint8_t conducts;
+
+    /* Chance in 256 that a burnt-out cell of this material leaves
+     * MAT_STEAM behind instead of nothing - smoke, physically the same
+     * "pale, light, rises, fades" material a kettle's steam is, so one
+     * material does both jobs instead of two rows for the same shape. */
+    uint8_t smoke;
+
+    /* What this material becomes when a liquid touches it - a
+     * material_id_t, narrowed. 0 means it simply vanishes, which is what
+     * every burning material did before steam existed. */
+    uint8_t quench_to;
+
+    /* Chance in 256, per step, that this material emits a MAT_FIRE cell
+     * into an adjacent empty cell. Meaningless for anything that is not a
+     * static heat source with nothing above it - left at zero for
+     * everything but the one material that needs to look like it is
+     * licking a flame upward while staying put itself. */
+    uint8_t flare;
+} reaction_t;
+
+/* Indexed by the material nibble, same as materials[] - `const`, so it
+ * costs no RAM either. Rows not given here default to all-zero
+ * (designated initializers zero the rest), which reads correctly for
+ * every field above: never catches, never a heat source, never conducts,
+ * never smokes, vanishes on quench, never flares. */
+extern const reaction_t reactions[MATERIAL_MAX];
+
+static inline const reaction_t *reaction_of(cell_t c)
+{
+    return &reactions[CELL_MATERIAL(c)];
 }
 
 /*---------------------------------------------------------------------------
