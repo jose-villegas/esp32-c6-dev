@@ -281,7 +281,7 @@ So the split is not really two materials, it is two *palettes* that
 happen to need a material each: steam is cool and bright, smoke is warm
 and dim, and a fresh puff of smoke tops out dimmer than a dying wisp of
 steam so the two stay separable even where they overlap. The small
-differences in `decay`, `buoyancy` and `sight` are flavour on top - if
+differences in `decay`, `mobility` and `sight` are flavour on top - if
 you find yourself re-merging these rows on the entirely correct
 observation that they are nearly identical,
 `test_quenching_makes_steam_but_burning_out_makes_smoke` is there to
@@ -309,7 +309,7 @@ Two things about where it lives are the interesting part:
 
 - **It is deliberately not in `can_enter()`.** That predicate is the
   hottest thing in the project, read several times per cell per step
-  from the main sweep; a buoyancy special case there would be paid for
+  from the main sweep; a mobility special case there would be paid for
   by every falling grain of sand on the board forever. In the gas pass
   it costs one comparison, only for gas cells, only in a pass already
   gated behind `may_have_gas`, and only on cells whose ordinary rise was

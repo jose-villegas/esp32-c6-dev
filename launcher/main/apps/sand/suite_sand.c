@@ -2599,7 +2599,7 @@ static void test_gas_decaying_away_marks_its_row_dirty(void)
 {
     dirty_fixture();
     sand_set_decay(&s, 255);
-    sand_set_buoyancy(&s, 0);   /* stay put, so the vanish lands at a
+    sand_set_mobility(&s, 0);   /* stay put, so the vanish lands at a
                                  * known row instead of wherever it drifted */
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 4, 0, MAT_GAS),
@@ -2801,7 +2801,7 @@ static void test_fire_is_not_smothered_with_a_gap(void)
 static void test_fire_is_not_smothered_by_gas(void)
 {
     fixture();
-    sand_set_buoyancy(&s, 0);   /* keep fire (and the surrounding gas)
+    sand_set_mobility(&s, 0);   /* keep fire (and the surrounding gas)
                                  * from rising away before reactions
                                  * checks smothering this same step -
                                  * equalise_gas()'s own spread sub-pass
@@ -3159,7 +3159,7 @@ static void test_steam_rises_and_disperses(void)
 static void test_creating_steam_arms_the_gas_pass(void)
 {
     fixture();
-    sand_set_buoyancy(&s, 0);   /* keep fire from rising away before
+    sand_set_mobility(&s, 0);   /* keep fire from rising away before
                                  * reactions quenches it this same step -
                                  * mirrors test_fire_is_not_smothered_by_gas's
                                  * own use of this technique */
@@ -3184,7 +3184,7 @@ static void test_creating_steam_arms_the_gas_pass(void)
         "anywhere on the grid that could accidentally arm may_have_gas "
         "some OTHER way and mask the bug this test exists to catch");
 
-    sand_set_buoyancy(&s, 255);   /* steam's own turn to rise, forced
+    sand_set_mobility(&s, 255);   /* steam's own turn to rise, forced
                                    * deterministic the same way every
                                    * other single-step gas-movement test
                                    * in this suite is */
@@ -3203,7 +3203,7 @@ static void test_burnt_out_fire_can_leave_smoke(void)
 {
     fixture();
     sand_set_decay(&s, 255);
-    sand_set_buoyancy(&s, 0);   /* keep every fire cell pinned in place
+    sand_set_mobility(&s, 0);   /* keep every fire cell pinned in place
                                  * rather than rising or spreading into
                                  * whatever gaps open up as neighbours
                                  * burn out around it - not required for
@@ -3511,6 +3511,48 @@ static void test_water_still_puts_fire_out(void)
  * material and a liquid never consults can_enter(), so without
  * sink_through_lighter_liquid() the two simply block each other and oil
  * trapped under water stays there forever. */
+/* Viscosity: liquids used to read no rate field at all, so every liquid
+ * flowed at exactly the same speed and oil behaved like coloured water.
+ * material.h's `mobility` is that rate - read by a gas as buoyancy and by
+ * a liquid as viscosity inverted.
+ *
+ * Measured as steps for a tall column to reach the far wall: water 8,
+ * oil 28 when this was written. Held to "oil takes at least twice as
+ * long" so ordinary tuning does not trip it. */
+static void test_oil_flows_more_slowly_than_water(void)
+{
+    int steps[2];
+    const material_id_t liquids[2] = { MAT_WATER, MAT_OIL };
+
+    for (int k = 0; k < 2; k++) {
+        fixture();
+        sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+        }
+        for (int y = 1; y <= H - 2; y++) {
+            for (int x = 1; x <= 2; x++) {
+                sand_set(&s, x, y, CELL_MAKE(liquids[k], MASS_MAX));
+            }
+        }
+
+        steps[k] = -1;
+        for (int i = 1; i <= 2000 && steps[k] < 0; i++) {
+            sand_step(&s, 0, 1000, 0);
+            if (!CELL_IS_EMPTY(sand_at(&s, W - 2, H - 2))) {
+                steps[k] = i;
+            }
+        }
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(-1, steps[k],
+            "setup: both liquids must eventually reach the far wall");
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(steps[0] * 2, steps[1],
+        "oil must take at least twice as long as water to spread the "
+        "same distance - before `mobility` had a liquid reader the two "
+        "were indistinguishable");
+}
+
 static void test_oil_trapped_under_water_floats_to_the_surface(void)
 {
     fixture();
@@ -3776,7 +3818,7 @@ static void test_quenching_makes_steam_but_burning_out_makes_smoke(void)
      * than asserting on a single roll. */
     fixture();
     sand_set_decay(&s, 255);
-    sand_set_buoyancy(&s, 0);
+    sand_set_mobility(&s, 0);
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, FIRE);
     }
@@ -3804,7 +3846,7 @@ static void test_quenching_makes_steam_but_burning_out_makes_smoke(void)
 static void test_stone_conducts_heat_into_water_beyond_it(void)
 {
     fixture();
-    sand_set_buoyancy(&s, 0);   /* keep fire from rising away before it
+    sand_set_mobility(&s, 0);   /* keep fire from rising away before it
                                  * gets a turn to conduct - same
                                  * technique used throughout this
                                  * section */
@@ -3830,7 +3872,7 @@ static void test_stone_conducts_heat_into_water_beyond_it(void)
 static void test_stone_does_not_conduct_fire_into_empty_space(void)
 {
     fixture();
-    sand_set_buoyancy(&s, 0);
+    sand_set_mobility(&s, 0);
     sand_set_conduction(&s, 255);
     sand_set(&s, 3, 3, FIRE);
     sand_set(&s, 4, 3, STONE);
@@ -3855,7 +3897,7 @@ static void test_stone_does_not_conduct_fire_into_empty_space(void)
  * wall `wall_len` cells thick starting at column 2, and one water cell
  * just past it - boxes the water (floor plus both down-diagonals, see
  * test_creating_steam_arms_the_gas_pass) so it cannot drain away before
- * conduction gets a look at it, and pins fire with buoyancy rather than
+ * conduction gets a look at it, and pins fire with mobility rather than
  * physically boxing it in, since a physical box dense enough to also
  * stop the diagonal slides would make every side of fire denser than
  * fire itself and smother it outright (confirmed: this is what the
@@ -3864,7 +3906,7 @@ static void test_stone_does_not_conduct_fire_into_empty_space(void)
 static int build_boiler_room(int wall_len)
 {
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
-    sand_set_buoyancy(&wide, 0);
+    sand_set_mobility(&wide, 0);
 
     const int y = 2;
     const int fire_x  = 1;
@@ -3926,7 +3968,7 @@ static void test_conduction_stops_at_the_reach_cap(void)
     static uint8_t cap_cells[CAP_W * CAP_H];
     sand_t cap;
     sand_init(&cap, cap_cells, CAP_W, CAP_H, 3u);
-    sand_set_buoyancy(&cap, 0);
+    sand_set_mobility(&cap, 0);
     sand_set_conduction(&cap, 255);
 
     const int y = 2;
@@ -4010,14 +4052,14 @@ static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
  * climbing from the hot base - instead of steam appearing at the surface
  * from nowhere.
  *
- * sand_set_buoyancy(&wide, 0) keeps the newly made steam still for the
+ * sand_set_mobility(&wide, 0) keeps the newly made steam still for the
  * duration, so this measures WHERE the boil happened rather than where
  * the bubble had got to by the time it was inspected. */
 static void test_boiling_converts_the_cell_nearest_the_heat(void)
 {
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
-    sand_set_buoyancy(&wide, 0);
+    sand_set_mobility(&wide, 0);
 
     const int x = 5;
     const int fire_y = 6, stone_y = 5, water_top = 1, water_bottom = 4;
@@ -4089,11 +4131,11 @@ static void test_the_boiler_end_to_end(void)
      * except the fuel here is KIND_STATIC and never drifts itself, only
      * the spark that lights it could.
      *
-     * sand_set_buoyancy(&s, 0) alone is NOT enough here, and it is worth
+     * sand_set_mobility(&s, 0) alone is NOT enough here, and it is worth
      * knowing why: it only blocks sub-pass 1 of sand_step_gas() (the
      * rise/diagonal-slide attempt), not sub-pass 2 (equalise_gas()'s
      * sideways spread), which is gated on has_room_above() - "is
-     * there room to rise" - not on buoyancy at all. The spark's own row
+     * there room to rise" - not on mobility at all. The spark's own row
      * sits one below the stone slab's bottom, so the cell directly
      * above it is real stone, not open sky: has_room_above() correctly
      * reports false, so equalise_gas() does NOT defer to sub-pass 1 the
@@ -4110,7 +4152,7 @@ static void test_the_boiler_end_to_end(void)
      * to send it. */
     sand_set(&wide, x - 2, wood_y, STONE);
     sand_set_flammability(&wide, 255);
-    sand_set_buoyancy(&wide, 0);
+    sand_set_mobility(&wide, 0);
     sand_set(&wide, x - 1, wood_y, FIRE);
     sand_step(&wide, 0, 1000, 0);
 
@@ -4122,7 +4164,7 @@ static void test_the_boiler_end_to_end(void)
      * (material.c's stone row) working through a slab as thick as the
      * app's own pour brush actually draws, not a forced one. */
     sand_set_flammability(&wide, SAND_FLAMMABILITY_PER_MATERIAL);
-    sand_set_buoyancy(&wide, SAND_BUOYANCY_PER_MATERIAL);
+    sand_set_mobility(&wide, SAND_MOBILITY_PER_MATERIAL);
 
     for (int i = 0; i < 300; i++) {
         sand_step(&wide, 0, 1000, 0);
@@ -5085,6 +5127,7 @@ void run_sand_suite(void)
     RUN_TEST(test_oil_does_not_put_fire_out);
     RUN_TEST(test_water_still_puts_fire_out);
     RUN_TEST(test_oil_trapped_under_water_floats_to_the_surface);
+    RUN_TEST(test_oil_flows_more_slowly_than_water);
     RUN_TEST(test_lava_does_not_decay_away);
     RUN_TEST(test_water_freezes_lava_into_stone);
     RUN_TEST(test_lava_does_not_put_fire_out);

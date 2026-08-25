@@ -107,7 +107,7 @@
  * can see for themselves there is nothing there to have boiled. The two
  * rows differ mostly in their palettes (cool and bright for steam, warm
  * and dim for smoke - see material.c), which is the actual payload of
- * the split; the small differences in decay, buoyancy and sight are
+ * the split; the small differences in decay, mobility and sight are
  * flavour on top.
  *
  * THE BOILER: HEAT CONDUCTS, FIRE DOES NOT PASS THROUGH STONE

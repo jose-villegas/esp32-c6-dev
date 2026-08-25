@@ -125,7 +125,7 @@ typedef struct {
 
     int      scatter;      /* see sand_set_scatter() */
     int      decay;        /* see sand_set_decay() */
-    int      buoyancy;     /* see sand_set_buoyancy() */
+    int      mobility;     /* see sand_set_mobility() */
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
 } sand_t;
@@ -439,7 +439,7 @@ void sand_set_conduction(sand_t *s, int chance);
 #define SAND_CONDUCTION_PER_MATERIAL (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
- * chance in 256 - see material.h's `buoyancy` field. 255, the default,
+ * chance in 256 - see material.h's `mobility` field. 255, the default,
  * makes gas rise exactly one cell per step it can, the same deterministic
  * guarantee sand's own fall makes - most tests that place a gas grain and
  * step once want to reason about exactly where it lands, the same reason
@@ -448,12 +448,12 @@ void sand_set_conduction(sand_t *s, int chance);
  * the way scatter and decay are - "off" for a rise-gate means "never
  * rises", the opposite of a safe default here).
  *
- * Pass SAND_BUOYANCY_PER_MATERIAL to use each material's own figure from
+ * Pass SAND_MOBILITY_PER_MATERIAL to use each material's own figure from
  * the table instead - what the app wants, for gas's actual lazy drift.
  * Any other value overrides all of them, which is what a test that
  * specifically wants to watch that drift wants instead. */
-void sand_set_buoyancy(sand_t *s, int chance);
-#define SAND_BUOYANCY_PER_MATERIAL (-1)
+void sand_set_mobility(sand_t *s, int chance);
+#define SAND_MOBILITY_PER_MATERIAL (-1)
 
 /* Advance one frame.
  *

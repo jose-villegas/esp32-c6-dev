@@ -301,7 +301,7 @@ static void sand_enter(void)
     sand_set_decay(&sim, SAND_DECAY_PER_MATERIAL);
     /* Per-material too - only gas has a figure below full speed, so this
      * is a no-op for sand, water and stone. */
-    sand_set_buoyancy(&sim, SAND_BUOYANCY_PER_MATERIAL);
+    sand_set_mobility(&sim, SAND_MOBILITY_PER_MATERIAL);
 
     sand_track_dirty_rows(&sim, dirty_rows);
 

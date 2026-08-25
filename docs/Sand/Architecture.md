@@ -54,10 +54,10 @@ crash anything, only sit there as an immovable block.
 | 1 | sand | `KIND_POWDER` | falls | `repose=7` (~35°), `slip=96` |
 | 2 | water | `KIND_LIQUID` | falls | `slip=255` (no resistance) |
 | 3 | stone | `KIND_STATIC` | never | `density=200`, undisplaceable |
-| 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `buoyancy=96` |
+| 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `mobility=96` |
 | 5 | fire | `KIND_GAS` | rises | `sight=5` (tighter), `decay=96` (shorter life), reacts via a second pass (below) |
 | 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own |
-| 7 | steam | `KIND_GAS` | rises | `sight=20`, `buoyancy=160` (fastest); water that got hot |
+| 7 | steam | `KIND_GAS` | rises | `sight=20`, `mobility=160` (fastest); water that got hot |
 | 8 | smoke | `KIND_GAS` | rises | `sight=24` (widest), `decay=16` (longest-lived); fuel that burned out |
 | 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
@@ -131,7 +131,7 @@ flowchart TD
     D -- "whole grain" --> F{"Falls with gravity,\nor rises against it?"}
     F -- "falls" --> G["KIND_POWDER\n(sand)"]
     F -- "rises" --> H["KIND_GAS\n(gas, fire, steam)"]
-    H --> I["Tune per-material:\nsight (spread), decay\n(lifespan), buoyancy\n(rise speed)"]
+    H --> I["Tune per-material:\nsight (spread), decay\n(lifespan), mobility\n(rise speed)"]
 
     style C fill:#5a5a5a,color:#fff
     style E fill:#3d6b8a,color:#fff

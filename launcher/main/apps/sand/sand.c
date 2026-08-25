@@ -101,7 +101,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->last_load_dy = 0;
     s->scatter      = 0;
     s->decay        = 0;
-    s->buoyancy     = 255;  /* full speed by default - see sand_set_buoyancy() */
+    s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->mom_x_q8 = 0;
@@ -431,12 +431,12 @@ void sand_set_decay(sand_t *s, int chance)
     }
 }
 
-void sand_set_buoyancy(sand_t *s, int chance)
+void sand_set_mobility(sand_t *s, int chance)
 {
     if (chance < 0) {
-        s->buoyancy = SAND_BUOYANCY_PER_MATERIAL;
+        s->mobility = SAND_MOBILITY_PER_MATERIAL;
     } else {
-        s->buoyancy = chance > 255 ? 255 : chance;
+        s->mobility = chance > 255 ? 255 : chance;
     }
 }
 

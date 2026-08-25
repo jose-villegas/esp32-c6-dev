@@ -153,14 +153,35 @@ typedef struct {
      * material of a different kind could reuse this without a second field. */
     uint8_t decay;
 
-    /* Chance in 256, per step, that a gas grain attempts its spontaneous
-     * rise/slide at all - see sand_gas.c's step_one_gas_grain(). 255 rises
-     * every step it can, exactly like sand falls; lower values sit still
-     * on the steps the roll misses, for a slower, lazier drift. Ignored
-     * while jostled (jostle != 0) - shaking bypasses this the same way it
-     * bypasses slide_chance()'s own resistance. Meaningless outside a gas
-     * pass, so every other material leaves it at zero. */
-    uint8_t buoyancy;
+    /* Chance in 256, per step, that this cell attempts to move AT ALL.
+     * 255 means it moves every step it can, exactly like sand falls;
+     * lower values sit still on the steps the roll misses. Ignored while
+     * jostled (jostle != 0) - shaking bypasses this the same way it
+     * bypasses slide_chance()'s own resistance.
+     *
+     * Two kinds read it, and it is worth knowing they are the same idea
+     * under different names:
+     *
+     *   KIND_GAS     BUOYANCY. How eagerly a grain rises. See
+     *                step_one_gas_grain() in sand_gas.c.
+     *   KIND_LIQUID  VISCOSITY, inverted. Water at 255 flows freely;
+     *                oil at 90 is syrupy, moving on roughly a third of
+     *                its steps. See move_liquid_grain() and
+     *                equalise_liquids() in sand_liquid.c.
+     *
+     * Liquids ignored this field entirely until oil arrived, which meant
+     * every liquid flowed at exactly the same rate - a real complaint
+     * about how oil and water looked together, and the reason this field
+     * grew a second reader rather than the struct growing a field. There
+     * was room for neither: material_t is read several times per cell per
+     * step from the main sweep (see this file's own struct comment), and
+     * on the 32-bit target a ninth byte would push its stride from 12 to
+     * 16. A field that already meant "chance this cell tries to move"
+     * needed no second copy to mean it for a second kind.
+     *
+     * Powders leave it at zero and never read it: a grain of sand falls
+     * whenever it can, and its resistance is `slip`/`repose` instead. */
+    uint8_t mobility;
 
     /* How far along the perpendicular a KIND_GAS material's spread pass
      * (equalise_gas() in sand_gas.c) will look for an empty cell to hop

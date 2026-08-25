@@ -99,6 +99,30 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  * by step_one_block()'s `moved_here` from this function's return value,
  * same as every other kind of grain - see mark_move()'s comment in
  * sand_priv.h for why nothing further is needed here. */
+/* Whether a liquid cell gets to act at all this step - material.h's
+ * `mobility` field, which a liquid reads as viscosity inverted. Water is
+ * 255 and therefore always moves; oil is 90 and moves on about a third
+ * of its steps, so it crawls.
+ *
+ * s->mobility mirrors the other per-material overrides and DEFAULTS TO
+ * 255, not to "per material" - which matters more here than it looks. It
+ * means a test that does not ask for viscosity gets a liquid that moves
+ * every step, exactly as every liquid did before this field had a second
+ * reader, so nothing that was written against the old behaviour has to
+ * know this exists. sand_set_mobility(SAND_MOBILITY_PER_MATERIAL) is what
+ * the real app calls to opt in.
+ *
+ * No jostle bypass, unlike the gas pass: move_liquid_grain() is called
+ * from the main sweep and never sees the jostle value. Shaking a viscous
+ * liquid therefore does not thin it, which is a limitation rather than a
+ * decision - it just needs the argument threading through if it ever
+ * matters. */
+static inline bool liquid_may_move(sand_t *s, uint8_t id)
+{
+    const int m = (s->mobility >= 0) ? s->mobility : materials[id].mobility;
+    return m >= 255 || (int)(rng_next(&s->rng) & 0xFF) < m;
+}
+
 /* Two DIFFERENT liquids meeting, resolved by density: the denser one
  * sinks and the lighter one is pushed up into the cell it vacated. Whole
  * cells, swapped - not the mass transfer everything else in this file
@@ -129,7 +153,28 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
  *
  * Strictly denser, mirroring can_enter()'s own rule: two liquids at equal
  * density block each other, which is the correct answer and not a case
- * worth special-casing. */
+ * worth special-casing.
+ *
+ * NOT paced by viscosity, unlike everything else a liquid does, and that
+ * exception is the whole reason this comment is long.
+ *
+ * Gating this on `mobility` is the obvious thing - a sluggish liquid
+ * ought to separate sluggishly - and it was tried, and it was measured,
+ * and it was wrong. Slowing the swap does not slow separation so much as
+ * PREVENT it: with the exchange and the levelling both throttled, a
+ * tilted pair settles into a diagonal shear running with the tilt and
+ * stays there. Not slow convergence - a fixed point. Two thousand steps
+ * later the interface was still a staircase, where the ungated version
+ * had a flat surface inside forty.
+ *
+ * The reading that makes sense of it: separation is not motion of one
+ * liquid, it is the two of them being in the wrong ORDER. Sorting is a
+ * correction, not a journey, and there is nothing for viscosity to
+ * resist. What viscosity properly slows is a liquid flowing under its
+ * own weight - falling, running downhill, finding its level - and those
+ * are gated, in move_liquid_grain() and equalise_one_cell() below. Let
+ * the layers form promptly and then let each of them level at its own
+ * pace, and both effects come out right at once. */
 static inline bool sink_through_lighter_liquid(sand_t *s, uint8_t *row,
                                                uint8_t *prow, int x, int y,
                                                int tx, int ty, int w,
@@ -173,11 +218,35 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     /* DOWN first, so a liquid falls before it spreads. */
     const int tx0 = x + dx, ty0 = y + dy;
 
-    /* Before any of the mass bookkeeping: if what is directly below is a
-     * DIFFERENT, lighter liquid, the two trade places whole and this
-     * grain's turn is over. Returning here rather than falling through
-     * matters - row[x] now holds the OTHER liquid, and the mass
-     * accounting below would happily overwrite it with this one. */
+    /* Viscosity, once, for everything this grain does under its own
+     * weight this step - the fall and both slides. Rolling per attempt
+     * instead would make a sluggish liquid jitter between its three
+     * options rather than simply moving less often.
+     *
+     * Deliberately AFTER nothing and BEFORE the density swap below, which
+     * is exempt - see sink_through_lighter_liquid()'s own comment for why
+     * sorting two liquids into the right order is not the kind of motion
+     * viscosity should resist. */
+    if (!liquid_may_move(s, mat_id)) {
+        return false;
+    }
+
+    /* Before any of the mass bookkeeping: if what is directly
+     * gravity-ward is a DIFFERENT, lighter liquid, the two trade places
+     * whole and this grain's turn is over. Returning here rather than
+     * falling through matters - row[x] now holds the OTHER liquid, and
+     * the mass accounting below would happily overwrite it with this one.
+     *
+     * Only the straight gravity-ward direction, and it was worth checking
+     * that. Offering the swap the two diagonal slides as well - the same
+     * three directions the mass flow below uses - looks like it should
+     * help a tilted pair sort itself out faster. Measured, it does the
+     * opposite: the boundary between the two liquids came out roughly
+     * 60% MORE ragged (its spread along the gravity axis went from 6,600
+     * to 10,800 in one box size and 9,000 to 13,600 in another), because
+     * three chances a step to swap churns the interface faster than the
+     * levelling passes can flatten it. One direction, and let
+     * equalise_liquids() do the smoothing. */
     if (sink_through_lighter_liquid(s, row, prow, x, y, tx0, ty0, w, grain,
                                     &materials[mat_id])) {
         return true;
@@ -334,6 +403,12 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     }
     if (!neighbour_is_lower(s, x, y, px, py, id, mass)) {
         return false;
+    }
+    if (!liquid_may_move(s, id)) {
+        return false;   /* viscosity applies to levelling too - without it
+                         * a syrupy liquid would still find its own level
+                         * instantly sideways, which is most of what
+                         * "runny" looks like */
     }
 
     int lowest, at;

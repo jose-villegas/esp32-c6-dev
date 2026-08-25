@@ -28,7 +28,7 @@
  *
  * Gas rising through standing LIQUID is its own problem, solved by
  * try_bubble() below rather than by the shared movement primitives -
- * can_enter() cannot express buoyancy, and it is far too hot a predicate
+ * can_enter() cannot express mobility, and it is far too hot a predicate
  * to teach it. See that function's own comment.
  *
  * Whole-grain also means gas cannot THIN a saturated pocket the way water
@@ -71,7 +71,7 @@ static uint16_t gas_mask(void)
  * BLOCK_ACTIVE bookkeeping (it is not walked by step_one_block() at all).
  *
  * Unlike a powder, the whole attempt is gated behind material.h's
- * `buoyancy` roll first (jostle == 0 only - shaking bypasses it, same as
+ * `mobility` roll first (jostle == 0 only - shaking bypasses it, same as
  * every other resistance here): a grain that misses the roll just sits
  * this step, decay tick aside, which is what makes gas rise at a lazy
  * drift instead of sand's instant one-cell-per-step. */
@@ -79,7 +79,7 @@ static uint16_t gas_mask(void)
  *
  * This is the one movement in the whole simulation that runs against
  * can_enter()'s rule rather than through it, and it needs to, because that
- * rule cannot express buoyancy. can_enter() only ever lets a DENSER mover
+ * rule cannot express mobility. can_enter() only ever lets a DENSER mover
  * displace a LIGHTER target - which is right for sand sinking through
  * water, and exactly backwards for steam rising through it. Worse, a
  * liquid never consults can_enter() at all: room_in() (sand_liquid.c)
@@ -91,7 +91,7 @@ static uint16_t gas_mask(void)
  *
  * Deliberately NOT solved by touching can_enter(). That predicate is the
  * hottest thing in the project, read several times per cell per step from
- * the main sweep, and a buoyancy special case there would be paid for by
+ * the main sweep, and a mobility special case there would be paid for by
  * every falling grain of sand on the board forever. Here it costs one
  * comparison, only for gas cells, only in a pass already gated behind
  * may_have_gas, and only on the cells whose ordinary rise was already
@@ -131,7 +131,7 @@ static bool try_bubble(sand_t *s, uint8_t *row, uint8_t *prow, int x, int y,
                          * still cannot bubble through sand or stone */
     }
     if (density >= tm->density) {
-        return false;   /* buoyancy, and the inverse of can_enter()'s own
+        return false;   /* mobility, and the inverse of can_enter()'s own
                          * test: only something LIGHTER than the liquid
                          * rises through it. A gas as heavy as the liquid
                          * would just sit, which is the correct answer */
@@ -162,13 +162,13 @@ static bool step_one_gas_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return true;    /* vanished - already woken, nothing left to move */
     }
 
-    /* s->buoyancy mirrors s->scatter's own override (see
-     * sand_set_buoyancy()), but defaults to 255 (always) rather than 0 -
+    /* s->mobility mirrors s->scatter's own override (see
+     * sand_set_mobility()), but defaults to 255 (always) rather than 0 -
      * "off" for a rise-gate means "never rises", which would break every
      * test that places gas and expects a deterministic one-cell move. */
-    const int buoyancy = (s->buoyancy >= 0) ? s->buoyancy : mat->buoyancy;
+    const int mobility = (s->mobility >= 0) ? s->mobility : mat->mobility;
     const bool try_moving = jostle != 0 ||
-                            (int)(rng_next(&s->rng) & 0xFF) < buoyancy;
+                            (int)(rng_next(&s->rng) & 0xFF) < mobility;
 
     bool moved = false;
     if (try_moving && jostle == 0) {

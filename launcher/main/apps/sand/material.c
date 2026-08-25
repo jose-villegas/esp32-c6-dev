@@ -36,6 +36,13 @@ const material_t materials[MATERIAL_MAX] = {
         .slip    = 255,
         .repose  = 0,
         .scatter = 0,
+
+        .mobility = 255,     /* VISCOSITY, inverted - see material.h's own
+                              * comment on the field. Water is the runny
+                              * one and moves on every step it can, which
+                              * is exactly what every liquid did before
+                              * this field had a second reader, so water's
+                              * behaviour is unchanged by its arrival. */
     },
 
     [MAT_STONE] = {
@@ -78,7 +85,7 @@ const material_t materials[MATERIAL_MAX] = {
                                * Starting point, not final - tune on device
                                * like every other constant here. */
 
-        .buoyancy = 96,        /* ~2.7 steps average between rises - was 32
+        .mobility = 96,        /* ~2.7 steps average between rises - was 32
                                * (~8 steps average), measured on device as
                                * too sluggish to read as rising at all.
                                * Visibly slower than sand's instant
@@ -151,7 +158,7 @@ const material_t materials[MATERIAL_MAX] = {
                                 * faster than gas fades. Starting point,
                                 * not final - tune on device like every
                                 * other constant here. */
-        .buoyancy = 96,         /* matches gas's own figure as a
+        .mobility = 96,         /* matches gas's own figure as a
                                 * starting point - tune independently if
                                 * fire should rise faster/slower than
                                 * gas once seen in motion */
@@ -175,7 +182,7 @@ const material_t materials[MATERIAL_MAX] = {
                                      * Starting point, not final - tune on
                                      * device like every other constant
                                      * here. */
-        /* slip/repose/scatter/decay/buoyancy/sight all meaningless for a
+        /* slip/repose/scatter/decay/mobility/sight all meaningless for a
          * KIND_STATIC material and left at zero, same as stone's own row. */
     },
 
@@ -240,7 +247,7 @@ const material_t materials[MATERIAL_MAX] = {
                                      * at ~60fps, so a wisp of steam
                                      * visibly fades rather than either
                                      * lingering or vanishing at once. */
-        .buoyancy = 160,            /* noticeably faster than gas's 96 or
+        .mobility = 160,            /* noticeably faster than gas's 96 or
                                      * fire's 96 - steam should read as
                                      * rising eagerly off a boiling pot,
                                      * not drifting the way gas does.
@@ -304,7 +311,7 @@ const material_t materials[MATERIAL_MAX] = {
                                      * Starting point, not final - tune
                                      * on device like every other
                                      * constant here. */
-        .buoyancy = 120,            /* between gas's 96 and steam's 160 -
+        .mobility = 120,            /* between gas's 96 and steam's 160 -
                                      * smoke climbs, but lazily, where
                                      * steam comes off a boil eagerly.
                                      * Starting point, not final - tune
@@ -360,6 +367,25 @@ const material_t materials[MATERIAL_MAX] = {
                               * Above fire's 15 so it is not something a
                               * flame can shove around. Sand (60) still
                               * sinks straight through it. */
+
+        .mobility = 90,      /* VISCOSITY, inverted - see material.h. Oil
+                              * moves on roughly a third of its steps
+                              * where water moves on all of them, so it
+                              * crawls, lags behind a tilt, and holds a
+                              * slope for a moment instead of levelling
+                              * instantly.
+                              *
+                              * This is also what stops oil and water
+                              * tearing through each other. The two
+                              * separate by swapping whole cells
+                              * (sink_through_lighter_liquid()), and that
+                              * swap runs at the pace of the SLOWER of the
+                              * pair - so the interface settles over a
+                              * second or so instead of thrashing every
+                              * step, which is what it did when every
+                              * liquid was equally runny. Starting point,
+                              * not final - tune on device like every
+                              * other constant here. */
 
         /* The same "no resistance" values water uses, and for the same
          * reason: a liquid does not slide, pile or scatter, it flows

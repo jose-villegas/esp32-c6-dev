@@ -230,7 +230,7 @@ bugs to chase:
   needs *strictly* greater density to displace. Two materials at the
   same density simply stop each other dead. Steam sits at 5 and smoke
   at 7 for exactly this reason - nothing else depends on the gap.
-- **Buoyancy is not expressible in `can_enter()`, and needed its own
+- **Mobility is not expressible in `can_enter()`, and needed its own
   code.** Steam (5) cannot *enter* water (30) - the rule wants a denser
   mover - and water will not fall into steam either, because `room_in()`
   refuses a cell holding a different material outright. Between them a
@@ -545,7 +545,7 @@ not the state you set it up in.
 
 `MAT_STEAM` and `MAT_SMOKE` have nearly identical `materials[]` rows.
 Both are light gases that rise, spread and fade; their densities differ
-by 2, their decay and buoyancy by a little. By every argument this
+by 2, their decay and mobility by a little. By every argument this
 document otherwise makes, they should be **one** material - and they
 were, at first.
 
@@ -697,7 +697,7 @@ number goes in a comment next to the constant and the probe is disposable.
 - **Test overrides are wiped by `sand_init()`.** `sand_set_decay()` and
   friends must be called *after* any fixture helper that re-inits the
   grid internally.
-- **`sand_set_buoyancy(&s, 0)` does not fully pin a gas cell.** It gates
+- **`sand_set_mobility(&s, 0)` does not fully pin a gas cell.** It gates
   only sub-pass 1 of `sand_step_gas()`; `equalise_gas()`'s sideways
   spread is gated on `has_room_above()` instead. A cell with blocked "up"
   and an open side still drifts. See `test_the_boiler_end_to_end`'s
