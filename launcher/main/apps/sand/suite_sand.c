@@ -1621,6 +1621,7 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
  * variant on something: see GLASS and STONE above. */
 #define WOOD  CELL_MAKE(MAT_WOOD,  0)
 #define STEAM CELL_MAKE(MAT_STEAM, 8)
+#define SMOKE CELL_MAKE(MAT_SMOKE, 8)
 /* A LIT log. Wood's variant is how much of it is left to burn, so this is
  * what ember used to be - see reaction_t.burn_decay. */
 #define EMBER CELL_MAKE(MAT_WOOD, MATERIAL_VARIANTS - 1)
@@ -5135,6 +5136,83 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
  * The extended range: sixteen materials behind the last slot.
  * =================================================================== */
 
+/* Hot gas warms what it touches - convection.
+ *
+ * It is here for what it makes VISIBLE rather than for what it achieves.
+ * Measured three times against whether it helps shatter glass, it does
+ * not: warmer air costs snow its life, because a pane above room
+ * temperature charges snow for touching it, and snow is the scarce thing.
+ *
+ * What it does do is make heat reach where conduction cannot. Measured on
+ * a stone flue with a wood fire at the bottom, the top of the flue sits at
+ * ambient without it and one to two levels above with - the difference
+ * between a chimney that is stone cold at the top and one that is warm,
+ * which is only worth anything now that stone shows its temperature. */
+static void test_hot_gas_warms_what_it_touches(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    /* A stone slab with nothing but steam against it - no fire, no
+     * conduction path, nothing else that could account for the heat. */
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 2, STONE);
+    }
+    for (int i = 0; i < 300; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, STEAM);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int hottest = 0;
+    for (int x = 0; x < W; x++) {
+        const cell_t c = sand_at(&s, x, H - 2);
+        if (CELL_MATERIAL(c) == MAT_STONE && CELL_VARIANT(c) > hottest) {
+            hottest = CELL_VARIANT(c);
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(SAND_AMBIENT_HEAT, hottest,
+        "steam resting against stone must warm it - there is no fire here "
+        "and nothing to conduct through, so the gas is the only thing that "
+        "could have");
+}
+
+/* But it is not a fire: it lights nothing.
+ *
+ * The cheap way to get this heating was to give smoke `burns`, which would
+ * have made a chimney full of smoke set light to a wooden roof. Convection
+ * is a separate field for that reason, and the difference is worth a test
+ * rather than a comment. */
+static void test_hot_gas_does_not_set_fire_to_anything(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_flammability(&s, SAND_FLAMMABILITY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 2, WOOD);
+    }
+    for (int i = 0; i < 400; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, SMOKE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    for (int x = 0; x < W; x++) {
+        TEST_ASSERT_FALSE_MESSAGE(cell_is_burning(sand_at(&s, x, H - 2)),
+            "smoke must not light wood - it warms things that hold a "
+            "temperature and does nothing else, which is the whole reason "
+            "it is not simply `burns`");
+    }
+}
+
 /* ===================================================================
  * Dirt: soaking, drying, and sand turning into soil.
  * =================================================================== */
@@ -7759,6 +7837,8 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_hot_gas_warms_what_it_touches);
+    RUN_TEST(test_hot_gas_does_not_set_fire_to_anything);
     RUN_TEST(test_wet_sand_becomes_dirt_and_spends_the_water);
     RUN_TEST(test_dirt_takes_on_moisture_and_dries_out_again);
     RUN_TEST(test_new_dirt_starts_dry);

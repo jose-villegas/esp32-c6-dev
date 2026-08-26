@@ -583,6 +583,39 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
     return held != 0 || beside_liquid;
 }
 
+/* One cell of hot GAS, warming whatever around it holds a temperature.
+ *
+ * Gated on may_have_temperature by the caller, so on a board with nothing
+ * that can hold one this costs a predicted-false branch per gas cell and
+ * no scan at all. */
+static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
+                                  const reaction_t *r)
+{
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n) || reaction_of(n)->heat_ramp == 0) {
+            continue;
+        }
+        const uint8_t t = CELL_VARIANT(n);
+        if (t + 1 >= MATERIAL_VARIANTS) {
+            continue;       /* melting is the ramp's job, not convection's */
+        }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= r->warms) {
+            continue;
+        }
+        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(t + 1));
+        s->may_have_temperature = true;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
+    }
+}
+
 /* One cell that is COLD. It does two things to its four neighbours: melts
  * against a liquid, and pulls the temperature out of anything that holds
  * one - cracking it instead if it is hot enough.
@@ -1338,6 +1371,14 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
             if (step_one_cold_cell(s, x, y, w, h, r)) {
                 found |= FOUND_TEMPERATURE;
             }
+            continue;
+        }
+        /* Hot gas warms what it touches, but only where there is something
+         * that can hold a temperature - otherwise every wisp of smoke on
+         * the board pays for a neighbour scan to find nothing. */
+        if (r->warms != 0 && s->may_have_temperature) {
+            step_one_warming_cell(s, x, y, w, h, r);
+            found |= FOUND_TEMPERATURE;
             continue;
         }
         /* Soaking and drying. Reached by sand and dirt, which are on most

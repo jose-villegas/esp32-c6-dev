@@ -552,6 +552,29 @@ typedef struct {
      * without a temperature scale on anything but the glass itself. */
     uint8_t chills;
 
+    /* CONVECTION: hot gas warming what it touches. Chance in 256 per step
+     * that this material raises the temperature of a neighbour that has
+     * one - without igniting anything, quenching anything, or being a heat
+     * source in any other sense.
+     *
+     * It is NOT `burns`, which was the cheap way to get the same heating
+     * and would have had smoke setting wood alight.
+     *
+     * This was measured three times against whether it helped SHATTER
+     * glass, and three times it did not - warmer air costs snow its life,
+     * because a pane above room temperature charges snow for touching it,
+     * and snow is the scarce thing. It is here for a different reason:
+     * heat rising into a vessel and warming it is TRUE, and it is now
+     * visible, because glass and stone both show their temperature. The
+     * rates are modest for exactly that reason - enough to see, not enough
+     * to make the cold side worthless.
+     *
+     * High relative to the ramps around it because the carriers are
+     * TRANSIENT. A wisp of smoke has to deposit what it is worth during a
+     * life measured in steps; a rate tuned as though it would sit there
+     * indefinitely deposits nothing before it is gone. */
+    uint8_t warms;
+
     /* Chance in 256 per step, per adjacent LIQUID cell, that this material
      * gives up and becomes `heats_to`. Snow melting in water.
      *

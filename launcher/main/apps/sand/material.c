@@ -753,6 +753,18 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .thaws       = 4,
     },
 
+    /* Steam and smoke have rows here only for convection - they are
+     * byproducts that react with nothing else, which is the usual reason a
+     * material skips this table entirely. */
+    [MAT_STEAM] = {
+        .warms = 48,   /* the hotter carrier: water that has just boiled */
+    },
+
+    [MAT_SMOKE] = {
+        .warms = 28,   /* cooler than steam and far longer lived, so a
+                        * lower rate spread over more steps */
+    },
+
     [MAT_STONE] = {
         /* Stone carries a temperature exactly as glass does - its variant
          * is heat, it frosts, it glows, and a cold shock cracks it into
