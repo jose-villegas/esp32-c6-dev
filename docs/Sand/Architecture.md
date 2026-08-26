@@ -236,6 +236,28 @@ keeping because they are the only measurement of the scene as played:
 | ambient + 3 | 17 |
 | ambient + 2 | 25 |
 
+### What the host can and cannot check
+
+`run_tests.sh` skips every `apps/<name>/app_*.c`: those talk to gfx, the IMU
+and the frame loop, so they cannot link on a laptop and there is nothing to
+run. Right for testing, and it left a hole in *checking* - nothing compiled
+them at all until a full device build.
+
+`check_app_sources.sh` closes it. Syntax-only, with stand-in headers in
+`launcher/test/stubs/` for the handful of IDF and BSP things those files
+include, and `run_tests.sh` runs it first. Nothing is linked and nothing
+runs; it catches what a compiler catches - undeclared identifiers, bad
+types, wrong format strings - which is the class that was getting through.
+
+It found its own reason for existing: a rendering change referred to three
+identifiers declared further down the file, the host suite passed, a
+`-fsyntax-only` pass over `suite_sand.c` passed, and the error surfaced on
+the device where it stopped an unrelated performance run.
+
+Not a substitute for building on device. A stub declares only what the real
+header is used for, so a new IDF call needs a line adding to it first -
+which is deliberate, and should be a decision rather than a surprise.
+
 ### The material budget, and what is left
 
 A cell is one byte: four bits of material, four of variant. Zero is empty,

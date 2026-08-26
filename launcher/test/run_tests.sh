@@ -90,6 +90,12 @@ for f in "$MAIN_DIR"/apps/*/*.c; do
 $f"
 done
 
+# The hardware-facing app_*.c files are excluded from SOURCES above because
+# they cannot link here - which also meant nothing compiled them at all
+# until a full device build. Compile-check them first, so a change that
+# does not build is caught here rather than on the board.
+"$TEST_DIR/check_app_sources.sh"
+
 mkdir -p "$BUILD_DIR"
 OUT="$BUILD_DIR/host_tests"
 

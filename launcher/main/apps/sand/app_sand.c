@@ -494,6 +494,38 @@ static inline unsigned cell_hash(int cx, int cy)
     return h;
 }
 
+/* A band of light travelling across anything hatched.
+ *
+ * This replaces a version that aligned the shine to the board's tilt. That
+ * was a nicer idea and it never became visible: the direction was right,
+ * the repaint was right by the end, and three rounds of looking at it on
+ * the device still could not see it. Two diagonals of single pixels
+ * differing only in WHICH way they lean is simply not a difference the eye
+ * picks up on a 184x224 grid, however correct the arithmetic underneath.
+ *
+ * Movement is a difference the eye cannot miss, which is the whole reason
+ * to prefer this. The band sweeps, so the glass is doing something.
+ *
+ * SHINE_PERIOD is the distance between bands measured along the diagonal,
+ * SHINE_WIDTH how thick one is, and SHINE_STEP_MS how often it advances by
+ * one pixel. About four seconds for a band to reach where the one before
+ * it started. */
+#define SHINE_PERIOD   96
+#define SHINE_WIDTH     2
+#define SHINE_STEP_MS  40
+
+static int      shine_offset;
+static uint32_t shine_elapsed_ms;
+
+/* Which rows had anything hatched in them last time they were painted, so
+ * a tick of the shine can repaint those and leave the rest alone.
+ *
+ * Without this the shine would have to claim the whole screen every time it
+ * moved, which at SHINE_STEP_MS is far too often to be affordable. A row
+ * that is not repainted keeps its last answer, which stays true: nothing in
+ * it changed, so whatever glass it had it still has. */
+static uint8_t row_has_shine[GRID_H_MAX];
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
@@ -660,37 +692,6 @@ static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     return n;
 }
 
-/* A band of light travelling across anything hatched.
- *
- * This replaces a version that aligned the shine to the board's tilt. That
- * was a nicer idea and it never became visible: the direction was right,
- * the repaint was right by the end, and three rounds of looking at it on
- * the device still could not see it. Two diagonals of single pixels
- * differing only in WHICH way they lean is simply not a difference the eye
- * picks up on a 184x224 grid, however correct the arithmetic underneath.
- *
- * Movement is a difference the eye cannot miss, which is the whole reason
- * to prefer this. The band sweeps, so the glass is doing something.
- *
- * SHINE_PERIOD is the distance between bands measured along the diagonal,
- * SHINE_WIDTH how thick one is, and SHINE_STEP_MS how often it advances by
- * one pixel. About four seconds for a band to reach where the one before
- * it started. */
-#define SHINE_PERIOD   96
-#define SHINE_WIDTH     2
-#define SHINE_STEP_MS  40
-
-static int      shine_offset;
-static uint32_t shine_elapsed_ms;
-
-/* Which rows had anything hatched in them last time they were painted, so
- * a tick of the shine can repaint those and leave the rest alone.
- *
- * Without this the shine would have to claim the whole screen every time it
- * moved, which at SHINE_STEP_MS is far too often to be affordable. A row
- * that is not repainted keeps its last answer, which stays true: nothing in
- * it changed, so whatever glass it had it still has. */
-static uint8_t row_has_shine[GRID_H_MAX];
 
 /* Advances the travelling shine, and says whether it moved. */
 static bool advance_shine(uint32_t dt_ms)
