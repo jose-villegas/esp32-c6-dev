@@ -9002,14 +9002,16 @@ static void test_the_lava_stress_scene_reaches_every_reaction_it_claims(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    int glass = 0, fire = 0, steam = 0, stone = 0;
+    int glass = 0, fire = 0, steam = 0, stone = 0, extended = 0;
     for (int y = 0; y < REAL_H; y++) {
         for (int x = 0; x < REAL_W; x++) {
-            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            const cell_t c = sand_at(&s, x, y);
+            const int m = CELL_MATERIAL(c);
             if (m == MAT_GLASS)      glass++;
             else if (m == MAT_FIRE)  fire++;
             else if (m == MAT_STEAM) steam++;
             else if (m == MAT_STONE) stone++;
+            if (cell_is_extended(c)) extended++;
         }
     }
 
@@ -9030,6 +9032,25 @@ static void test_the_lava_stress_scene_reaches_every_reaction_it_claims(void)
         "water reaching the lava through the chute should have quenched "
         "some of it to stone - a low count here means the chute let the "
         "water perch instead of falling through");
+
+    /* This scene already has both ingredients a plant needs sitting in it -
+     * wood, and sand that could take up water and become soil - and yet it
+     * never grows one: the roof water reaches the lava through the chute
+     * and flashes straight to steam before it ever gets to wet the sand,
+     * so no dirt is ever made and the wood stays dry for the whole run.
+     * That is an accident of how this scene happens to be tuned, not a
+     * property anyone has checked - and the plant materials are under
+     * active development, so pin it here instead of leaving it to keep
+     * holding by luck. The device test beside this one gets its frame
+     * budget pegged from a hardware capture of this same scene; if plant
+     * growth ever starts happening inside that measured window, the
+     * number being pegged would quietly stop describing what the test
+     * claims to measure. This assertion is what makes that change
+     * announce itself instead of passing silently. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, extended,
+        "the lava stress scene should not be growing any plants - if it "
+        "is, the device test's frame budget is no longer measuring the "
+        "scene it claims to");
 }
 
 /* An edge-to-edge checkerboard of smoke and steam, with one spark of fire
