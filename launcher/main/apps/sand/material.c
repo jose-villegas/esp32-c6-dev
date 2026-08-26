@@ -1731,7 +1731,17 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
 
         .grows       = 12,
         .hardens_to  = MAT_WOOD,
-        .clings_to   = MAT_WOOD,   /* and it is part of one, which is the
+        .clings_to   = MAT_WOOD,
+
+        /* What hardening leaves behind: a trunk two cells wider than a
+         * stick at the foot, and foliage round the top of it.
+         *
+         * 110 in 256 per candidate space, over the five upward directions
+         * of the top three cells of the run - so a crown of three or four
+         * leaves, varying, rather than a fixed rosette. */
+        .canopy      = 110,
+        .canopy_to   = MATX(MATX_LEAF),
+        .trunk_girth = 2,   /* and it is part of one, which is the
                                     * same material here and will not be
                                     * once foliage exists */
         .harden_run  = 6,

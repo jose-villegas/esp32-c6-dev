@@ -789,6 +789,27 @@ typedef struct {
      * actually happens. */
     uint8_t clings_to;
 
+    /* What a run of this leaves BEHIND when it hardens, and how much:
+     * `canopy` is a chance in 256 per candidate space around the top of
+     * the new trunk, `canopy_to` is the cell spec to put there.
+     *
+     * It exists because hardening is the only moment that holds a whole
+     * run - foot, length and direction - in one place. After it, the tree
+     * has no green cells low down at all: everything that grew is timber,
+     * and growth is the only thing that makes cells. So nothing working
+     * through ordinary growth can ever leaf a crown or fatten a trunk;
+     * both have to happen here or not at all.
+     *
+     * `canopy_to` is a cell spec rather than a material id, like
+     * `shatters_to` and `sprouts_to`, because what a tree puts out is an
+     * extended material whose identity is its low nibble. */
+    uint8_t canopy;
+    uint8_t canopy_to;
+
+    /* How much wider than one cell a hardened run may be at its foot,
+     * tapering to nothing at its top. Zero leaves a stick. */
+    uint8_t trunk_girth;
+
     /* SPROUTING: chance/256 per step that this material, standing in soil
      * with water in it, puts a cell of `sprouts_to` into an empty space
      * beside it - and spends a level of that soil's moisture doing it.

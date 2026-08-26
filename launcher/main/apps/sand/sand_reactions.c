@@ -1031,6 +1031,11 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
  * the board looking for a tip. */
 #define GROW_REACH 48
 
+/* How much of the top of a hardened run gets foliage hung round it. Three
+ * is a crown rather than a tuft, and small enough that the whole shaping
+ * pass stays a handful of writes. */
+#define CANOPY_SPAN 3
+
 /* How far down through soil a plant's roots reach for water. Deep enough
  * to survive a bed draining under it, short enough that a tree cannot
  * drink from the far side of the board. */
@@ -1651,27 +1656,137 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * it only counted when the cell that grew happened to be the one at
      * the foot, which for a stem of n cells is about one time in n. One in
      * eight, deliberately, rather than one in however tall it is. */
-    if (rng_below(&s->rng, 8) != 0) {
+    /* Hinted TAKEN, and that is a performance note rather than a
+     * comment. Everything below is the shaping pass, which is the largest
+     * block in this function and runs on one growth in eight of the few
+     * that get this far. Unhinted, GCC is free to splice it into the
+     * middle of a function that runs once per plant cell per step; the
+     * same mistake one branch along in sand_liquid.c cost 26% of a
+     * benchmark with the simulation byte-identical either way. See
+     * docs/Sand/Tuning-At-a-Glance.md. */
+    if (__builtin_expect(rng_below(&s->rng, 8) != 0, 1)) {
         return true;
     }
 
-    /* Variant 0, explicitly: a trunk is wood that GREW, not wood that
-     * caught. place_reacted() would hand it MATERIAL_VARIANTS - 1, which
-     * for wood is burn progress at its maximum - every tree that reached
-     * this line burned to nothing over the next couple of hundred steps,
-     * on a board with no fire anywhere on it. */
+    /* THE SHAPING PASS.
+     *
+     * Hardening is the only moment that holds a whole run at once, and
+     * after it the tree has no green left low down - every cell that grew
+     * is timber, and growth is the only thing that makes cells. So this is
+     * the one place a trunk can be given girth or a crown can be given
+     * leaves; anything trying to do either through ordinary growth is
+     * working on a part of the tree that no longer exists.
+     *
+     * Three things, in one walk from the foot up:
+     *
+     *   the run becomes wood      - variant 0, explicitly. place_reacted()
+     *                               would hand it MATERIAL_VARIANTS - 1,
+     *                               which for wood is burn progress at its
+     *                               maximum: every tree that reached this
+     *                               line used to burn to nothing over the
+     *                               next couple of hundred steps, on a
+     *                               board with no fire on it.
+     *   it gets THICKER at the
+     *   foot than at the top      - tapered by index along the run, not by
+     *                               `lift`. Using lift is what killed the
+     *                               growth-time version of this: after the
+     *                               first hardening every green cell sits
+     *                               on a wood column, so its lift is at
+     *                               least that column's height and the
+     *                               allowance is zero for the rest of the
+     *                               tree's life. The index is the honest
+     *                               measure of how far up the trunk this
+     *                               is.
+     *   the top gets a CANOPY     - foliage, which is a material of its
+     *                               own precisely so that it cannot grow;
+     *                               see MATX_LEAF.
+     *
+     * The last cell of the run is left green. Hardening the whole thing
+     * takes the stem's growing point with it, and wood does not grow, so a
+     * seedling became a post the moment it was tall enough. */
+    const int up_i = ring_of(ux, uy);
+    const int hard = (trunk > 1) ? trunk - 1 : trunk;
+
+    int topx[CANOPY_SPAN], topy[CANOPY_SPAN];
+    int ntop = 0;
+
     cx = fx;
     cy = fy;
-    for (int i = 0; i < trunk; i++) {
+    for (int i = 0; i < hard; i++) {
         int nx = 0, ny = 0;
         const bool more = stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny);
         place_cell(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx,
                    CELL_MAKE(r->hardens_to, 0));
+
+        /* Girth, tapering linearly to nothing by the top - measured
+         * against the LENGTH of this run rather than in fixed steps. A
+         * fixed step is only a taper for a run about as long as the step
+         * assumed: at one cell per three, a run of twenty stays at full
+         * width for fifteen of them and hardens a slab. Measured that
+         * way, twelve hardenings laid 90 cells of girth and the trees ran
+         * together; proportionally it is 6 or 7 each and they do not. */
+        const int span = (hard > 1) ? hard - 1 : 1;
+        const int extra = (int)r->trunk_girth * (span - i) / span;
+        for (int g = 1; g <= extra; g++) {
+            const int sidei = (g & 1) ? 2 : 6;      /* square on, both ways */
+            const int *gd = ring_dir(up_i + sidei);
+            const int gx = cx + gd[0] * ((g + 1) / 2);
+            const int gy = cy + gd[1] * ((g + 1) / 2);
+            if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
+                continue;
+            }
+            const size_t gat = (size_t)gy * (size_t)w + (size_t)gx;
+            if (!CELL_IS_EMPTY(s->cells[gat])) {
+                continue;
+            }
+            place_cell(s, gx, gy, gat, CELL_MAKE(r->hardens_to, 0));
+        }
+
+        /* A rolling window of the last few, so the crown can be hung once
+         * the cells below it are wood - doing it before would leave
+         * foliage in the fan stem_next() is still walking. */
+        if (ntop < CANOPY_SPAN) {
+            topx[ntop] = cx;
+            topy[ntop] = cy;
+            ntop++;
+        } else {
+            for (int k = 1; k < CANOPY_SPAN; k++) {
+                topx[k - 1] = topx[k];
+                topy[k - 1] = topy[k];
+            }
+            topx[CANOPY_SPAN - 1] = cx;
+            topy[CANOPY_SPAN - 1] = cy;
+        }
+
         if (!more) {
             break;
         }
         cx = nx;
         cy = ny;
+    }
+
+    /* The crown. Five upward directions round each of the remembered
+     * cells - straight on, both diagonals, and square out either way. */
+    if (r->canopy != 0 && r->canopy_to != 0) {
+        static const int crown[5] = { 7, 0, 1, 2, 6 };
+        for (int t = 0; t < ntop; t++) {
+            for (int c = 0; c < 5; c++) {
+                const int *cd = ring_dir(up_i + crown[c]);
+                const int lx = topx[t] + cd[0], ly = topy[t] + cd[1];
+                if ((unsigned)lx >= (unsigned)w ||
+                    (unsigned)ly >= (unsigned)h) {
+                    continue;
+                }
+                const size_t lat = (size_t)ly * (size_t)w + (size_t)lx;
+                if (!CELL_IS_EMPTY(s->cells[lat])) {
+                    continue;
+                }
+                if ((int)(rng_next(&s->rng) & 0xFF) >= r->canopy) {
+                    continue;
+                }
+                place_reacted(s, lx, ly, lat, r->canopy_to);
+            }
+        }
     }
     return true;
 }

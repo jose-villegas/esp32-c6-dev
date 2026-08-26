@@ -6771,6 +6771,187 @@ static void test_a_plant_rooted_on_stone_does_not_drink(void)
 }
 
 
+
+/* Hardening leaves a CROWN behind.
+ *
+ * Hardening is the only moment that holds a whole run at once, and after it
+ * the tree has no green left low down - everything that grew is timber, and
+ * growth is the only thing that makes cells. So a canopy has to be hung
+ * here or nowhere; anything trying to leaf a tree through ordinary growth
+ * is working on a part of it that no longer exists.
+ *
+ * Reported as branches spawning "and many times just be wood". */
+static void test_a_hardened_trunk_is_left_with_foliage(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    int leafed = 0;
+    for (int i = 0; i < 3000 && !leafed; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&s, 0, 1000, 0);
+
+        for (int y = 0; y < H && !leafed; y++) {
+            for (int x = 0; x < W; x++) {
+                if (sand_at(&s, x, y) == MATX(MATX_LEAF)) {
+                    leafed = 1;
+                    break;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(leafed,
+        "a tree that hardens into wood must be left with foliage on it - "
+        "nothing else can put any there, because hardening consumes every "
+        "green cell it walks and wood does not grow");
+}
+
+/* And a hardened run is WIDER at its foot than at its top.
+ *
+ * "Plant should also widen as it grows, so it is interesting that wood is
+ * just a stick." It was: thickening happened during growth, gated on how
+ * far the growing cell was from the ground, and after the first hardening
+ * every green cell sits on a wood column - so its lift is at least that
+ * column's height and the allowance is zero for the rest of the tree's
+ * life. Thickening was structurally dead the moment a tree first became a
+ * tree.
+ *
+ * The taper is the half that is easy to lose. A trunk of uniform width is
+ * a pillar, passes any "is it thick" assert, and looks nothing like a
+ * tree - so this measures both ends and compares them, rather than
+ * measuring one and hoping. */
+static void test_a_hardened_trunk_is_thicker_at_the_foot(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    int foot = 0, top = 0;
+    for (int i = 0; i < 3000; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&s, 0, 1000, 0);
+
+        /* Widest wood row anywhere, against the widest in the top half. */
+        for (int y = 0; y < H - 2; y++) {
+            int wide = 0;
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WOOD) {
+                    wide++;
+                }
+            }
+            if (wide > foot) {
+                foot = wide;
+            }
+            if (y < (H - 2) / 2 && wide > top) {
+                top = wide;
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, foot,
+        "a hardened trunk must be more than one cell wide somewhere - "
+        "thickening during growth cannot reach a tree that has already "
+        "hardened, so it has to happen as the wood is laid");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(top, foot,
+        "and it must be WIDER at the foot than up in the branches - a "
+        "trunk of uniform width is a pillar, and passes every assert that "
+        "only asks whether it is thick");
+}
+
+/* The last cell of a run stays green.
+ *
+ * Hardening the whole run takes the stem's growing point with it, and wood
+ * does not grow - so a seedling became a post the moment it was tall
+ * enough, and the only way back was budding at the foot. Leaving the tip
+ * means the tree carries on from where it stiffened.
+ *
+ * Checked as "there is still a plant cell immediately above the highest
+ * wood", at the first step any wood exists at all. Two things make that
+ * the right assert rather than a count of green cells: a count passes on a
+ * build that hardened the whole run and happened to have a limb somewhere
+ * else on the tree, and the canopy hung by the same pass is MATX_LEAF, not
+ * plant, so it cannot stand in for the tip either.
+ *
+ * "Immediately above" means any of the three gravity-opposite directions,
+ * because a stem wanders - see stem_next(). */
+static void test_hardening_leaves_the_growing_tip_alive(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    int checked = 0;
+    for (int i = 0; i < 4000 && !checked; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&s, 0, 1000, 0);
+
+        if (count_cells_of(MAT_WOOD) == 0) {
+            continue;
+        }
+        checked = 1;
+
+        /* Highest wood on the board - lowest y, gravity being downward. */
+        int wx = -1, wy = H;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WOOD && y < wy) {
+                    wx = x;
+                    wy = y;
+                }
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(wx >= 0, "there is wood, so it has a top");
+
+        int tipped = 0;
+        static const int ux[3] = { 0, -1, 1 };
+        for (int d = 0; d < 3; d++) {
+            const int nx = wx + ux[d], ny = wy - 1;
+            if ((unsigned)nx >= (unsigned)W || ny < 0) {
+                continue;
+            }
+            if (sand_at(&s, nx, ny) == MATX(MATX_PLANT)) {
+                tipped = 1;
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(tipped,
+            "the highest wood of a freshly hardened run must have the "
+            "run's green tip just above it - harden the whole run and the "
+            "growing point goes with it, and wood does not grow");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(checked, "the tree has to have hardened at all");
+}
+
 /* --- foliage -------------------------------------------------------------- */
 
 /* A leaf on a tree never multiplies, and never moves.
@@ -11370,6 +11551,9 @@ void run_sand_suite(void)
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
     RUN_TEST(test_a_plant_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_plant_rooted_on_stone_does_not_drink);
+    RUN_TEST(test_a_hardened_trunk_is_left_with_foliage);
+    RUN_TEST(test_a_hardened_trunk_is_thicker_at_the_foot);
+    RUN_TEST(test_hardening_leaves_the_growing_tip_alive);
     RUN_TEST(test_a_leaf_neither_spreads_nor_falls);
     RUN_TEST(test_a_leaf_with_no_tree_withers_away);
     RUN_TEST(test_a_leaf_drains_standing_water_into_the_soil);
