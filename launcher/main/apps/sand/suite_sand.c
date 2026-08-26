@@ -7640,6 +7640,48 @@ static void test_the_right_extended_materials_are_speckled(void)
     }
 }
 
+
+/* The three airborne materials agree with themselves about weight, speed
+ * and lifetime.
+ *
+ * Steam is the lightest and quickest and should be the first to go; a
+ * heavy flammable gas should pool and wait. For a long time it was the
+ * other way round on the last of those three - gas faded in about 120
+ * steps, steam in 160, smoke in 240 - so the heaviest, slowest thing in
+ * the air was also the first to disappear, and a pocket of gas could not
+ * be built with.
+ *
+ * Asserted on the TABLE rather than by watching cells fade. Three
+ * populations decaying past each other is a slow and noisy way to check a
+ * fact that is written down in one place, and this is the same reasoning
+ * as the acid test above: nonzero is not a claim about the right value,
+ * only that somebody chose one and that the three still agree. */
+static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
+{
+    /* Lighter rises faster. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(materials[MAT_SMOKE].density,
+        materials[MAT_STEAM].density, "steam must be lighter than smoke");
+    TEST_ASSERT_LESS_THAN_MESSAGE(materials[MAT_GAS].density,
+        materials[MAT_SMOKE].density, "smoke must be lighter than gas");
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_SMOKE].mobility,
+        materials[MAT_STEAM].mobility, "steam must move faster than smoke");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_GAS].mobility,
+        materials[MAT_SMOKE].mobility, "smoke must move faster than gas");
+
+    /* And the lighter it is, the sooner it is gone: decay is a chance to
+     * tick DOWN, so a bigger figure is a shorter life. */
+    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_SMOKE].decay,
+        materials[MAT_STEAM].decay,
+        "steam must fade sooner than smoke - it condenses, it does not "
+        "linger");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_GAS].decay,
+        materials[MAT_SMOKE].decay,
+        "and smoke sooner than gas - the heaviest, slowest thing in the "
+        "air must be the last to go, or a pocket of it cannot be built "
+        "with");
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -11654,6 +11696,7 @@ void run_sand_suite(void)
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
+    RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);

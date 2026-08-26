@@ -76,7 +76,32 @@ const material_t materials[MATERIAL_MAX] = {
         .scatter = 120,      /* well above sand's 40 - a visibly turbulent,
                                * wispy rise rather than a rigid column */
 
-        .decay   = 32,        /* 15 ticks needed to clear a fresh grain,
+        /* THE LONGEST-LIVED thing in the air, where it had been the
+         * shortest.
+         *
+         * The three airborne materials already agree about weight and
+         * speed: steam is lightest and quickest (density 5, mobility
+         * 160), smoke sits between (7, 120), gas is heaviest and slowest
+         * (10, 96). Their lifetimes disagreed with all of it - gas faded
+         * in about 120 steps against steam's 160 and smoke's 240, so the
+         * heavy gas that ought to settle in a hollow was the first of the
+         * three to go.
+         *
+         * Six is roughly 640 steps, about twenty seconds, two and a half
+         * times smoke's. Steam condenses, smoke disperses, and a heavy
+         * flammable gas pools and waits - which is what makes a pocket of
+         * it something to build a trap out of rather than a puff of
+         * colour.
+         *
+         * Measured, and it costs less than it looks. Half a screen of gas
+         * runs about 450 us a step while it is alive, at either figure:
+         * at equal population the per-step cost is the same. What a
+         * longer life changes is how long the population stays high - at
+         * 32 that screen is down to three cells by step 240, at 6 it is
+         * still 20,589. Every budget here is per-step, so nothing on the
+         * scoreboard moves; a room full of gas simply stays expensive for
+         * twenty seconds instead of five, which is the player's doing. */
+        .decay   = 6,         /* 15 ticks needed to clear a fresh grain,
                                * 256/32 = 8 steps average between ticks -
                                * ~120 steps, around 2 seconds at this app's
                                * ~60fps step rate. Gas is whole-grain, not
@@ -155,7 +180,10 @@ const material_t materials[MATERIAL_MAX] = {
                                  * turbulent rise, tune independently
                                  * later if it should read differently */
 
-        .decay    = 96,        /* shorter life than gas's 32: 15 ticks *
+        .decay    = 96,        /* much the shortest life in the air, and
+                                * with gas now the longest the gap is
+                                * wider than the 32 this used to cite:
+                                * 15 ticks *
                                 * 256/96 (~2.7 steps average between
                                 * ticks) ~= 40 steps, under a second at
                                 * ~60fps - fire burns out noticeably
