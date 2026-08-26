@@ -243,20 +243,56 @@ so there are **15 material slots** and **14 are in use** - sand, water,
 stone, gas, fire, wood, steam, smoke, ember, oil, lava, acid, glass, snow.
 One free.
 
-Four ways to make more room, cheapest first - and one that looks like a
-way and is not.
+Four ways to make more room, cheapest first - two of which mostly do not,
+and one that looks like a way and is not. The short version: the extended
+range is the real answer, and the single remaining full-physics slot should
+be saved for something that has to move or carry a variant.
 
 **Reinterpret a nibble.** Free, and already the pattern: liquids read the
 variant as fill, transients as life remaining, glass and stone as
 temperature. A material needing two small quantities can split its own
-nibble. This costs nothing and is the default answer.
+nibble.
 
-**Make a material a state of another.** Ember is wood's burn state rather
-than its own paintable thing. A slot is only really spent when the player
-has to *choose* the material; anything reached by reacting can often be a
-variant of what it came from. Smoke and steam are near-identical rows kept
-apart for narrative reasons, and are the obvious candidates if a slot is
-ever needed badly.
+This adds no slots - it removes the *need* for one. Glass carrying a
+temperature is why there is no separate "hot glass" material, and stone
+getting its speckle from a position hash is why it could give its variant
+up for the same thing. Always ask this first, because the answer costs
+nothing.
+
+**Make a material a state of another - rarely possible, and worth knowing
+why.** The tables are indexed by the MATERIAL NIBBLE alone. `material_of()`
+and `reaction_of()` both take the id and nothing else, so two states of one
+material get the same `density`, `decay`, `burns`, `flammability` and every
+other field. A state that behaves differently cannot be a state.
+
+Ember is the example, and it is an example of the limit rather than of the
+technique - **ember does occupy a slot**. It differs from wood in seven
+fields:
+
+| | wood | ember |
+| --- | --- | --- |
+| `decay` | 0 | 24 |
+| `burns` | 0 | 1 |
+| `flammability` | 6 | 0 |
+| `ignites_to` | ember | - |
+| `residue` | 0 | 90 |
+| `quench_to` | - | steam |
+| `flare` | 0 | 48 |
+
+Wood does not decay, does not burn and does not flare; ember does all
+three. There is nowhere for those to live except a second row, so ember
+is its own material that merely happens not to be paintable - which saves
+the player a press in the brush list and saves no space at all.
+
+Smoke and steam are not the free merge they look like either. Their
+reaction rows are identical, but their movement rows differ in five fields
+- density 7 against 5, scatter 150/140, decay 16/24, mobility 120/160,
+sight 24/20 - because steam is meant to be the lighter, faster,
+shorter-lived one. Merging them would make one of them move like the other.
+
+So this saves a slot only when two states share *every* field and differ in
+something the variant already carries. That is a narrow case, and nothing
+in the table currently meets it.
 
 **Add an extended range behind the last slot.** Not built, but the layout
 already allows it and it is the cheapest way to a large number of new
