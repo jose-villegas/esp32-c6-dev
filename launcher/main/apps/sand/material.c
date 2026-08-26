@@ -1615,14 +1615,20 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
     case MAT_EXTENDED:
         /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
-         * its own falls through to the flat palette entry below. */
-        switch (v) {
-        case MATX_PLANT: out[0] = plant_grain[hash & 7u]; break;
-        case MATX_LEAF:  out[0] = leaf_grain[hash & 7u];  break;
-        case MATX_ICE:   out[0] = ice_grain[hash & 7u];   break;
-        default:         out[0] = 0;                      break;
-        }
-        if (out[0] != 0) {
+         * its own falls through to the flat palette entry below.
+         *
+         * Left as a guard plus a ternary chain rather than respelled as a
+         * switch, which is what adding a third material to it wanted. This
+         * runs per painted cell, and in this codebase a respelling of a
+         * hot branch is a performance change: an if/else rewrite elsewhere
+         * cost 14% through the inlining cliff, and a single unhinted
+         * branch cost 26% of a benchmark with the simulation byte-
+         * identical either way. Ship the shape that was measured - see
+         * docs/Sand/Tuning-At-a-Glance.md. */
+        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
+            out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
+                   : (v == MATX_LEAF)  ? leaf_grain[hash & 7u]
+                                       : ice_grain[hash & 7u];
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
