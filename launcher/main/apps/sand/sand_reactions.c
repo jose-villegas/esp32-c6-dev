@@ -870,20 +870,90 @@ static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
         }
         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
         const cell_t n = s->cells[nat];
-        if (CELL_IS_EMPTY(n) || reaction_of(n)->heat_ramp == 0) {
+        if (CELL_IS_EMPTY(n)) {
             continue;
         }
-        const uint8_t t = CELL_VARIANT(n);
-        if (t + 1 >= MATERIAL_VARIANTS) {
-            continue;       /* melting is the ramp's job, not convection's */
+        const reaction_t *nr = reaction_of(n);
+
+        /* Something that BANKS heat climbs one level. */
+        if (nr->heat_ramp != 0) {
+            const uint8_t t = CELL_VARIANT(n);
+            if (t + 1 >= MATERIAL_VARIANTS) {
+                continue;   /* melting is the ramp's job, not convection's */
+            }
+            if ((int)(rng_next(&s->rng) & 0xFF) >= r->warms) {
+                continue;
+            }
+            s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(t + 1));
+            s->may_have_temperature = true;
+            mark_rows(s, ny, ny);
+            wake_block_and_neighbors(s, nx, ny);
+            continue;
+        }
+
+        /* And something that CANNOT bank it melts outright.
+         *
+         * This branch was missing, and the gap had a shape worth naming:
+         * convection only ever knew how to warm a material whose variant
+         * is a temperature - glass and stone. Ice and snow have no such
+         * variant to climb. Ice structurally cannot: it is an extended
+         * material, so its low nibble is which material it IS, with no
+         * room left to hold a temperature at all.
+         *
+         * So steam walked straight past ice, and a boiler under a sheet of
+         * it did nothing - which is what it looked like on the device, and
+         * is wrong for the only reason that matters: steam is water at a
+         * hundred degrees and ice is water at zero.
+         *
+         * try_heat_transform() has had this second, memoryless branch all
+         * along for heat arriving by contact or through a wall. This is
+         * the same transform, reached by the third route.
+         *
+         * Only for something COLD, though - `chills`, which in this
+         * table is what being cold means. Not for anything with a
+         * heats_to at all, which was the first shape of this and is far
+         * too wide: sand's heats_to is glass, so a smoke cloud drifting
+         * over a dune would slowly vitrify it. Warm air thaws; it does
+         * not fire a kiln. Ice and snow are the whole of what this is
+         * for, and both of them chill.
+         *
+         * BOTH gates, deliberately. The gas has to be willing (`warms`)
+         * and the target has to be meltable at its own rate
+         * (`heat_chance`), so convection melts more slowly than a flame
+         * touching the same cell would. That is not only physical, it is
+         * a debt to the thermal-shock tuning: warmer air already costs
+         * snow its life, and snow is the scarce half of "chill it, then
+         * heat it". One gate would have made every boiler on the board a
+         * snow-eater. */
+        if (nr->chills == 0 || nr->heats_to == 0 || nr->heat_chance == 0) {
+            continue;
         }
         if ((int)(rng_next(&s->rng) & 0xFF) >= r->warms) {
             continue;
         }
-        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(t + 1));
-        s->may_have_temperature = true;
-        mark_rows(s, ny, ny);
-        wake_block_and_neighbors(s, nx, ny);
+        /* A QUARTER of the target's own rate. Convection is the weakest
+         * of the three ways heat arrives - weaker than a flame against
+         * the cell, weaker than heat conducted through a wall - and it
+         * has to be, because of what it eats.
+         *
+         * What it eats is snow, which is measured rather than argued.
+         * A snowfield under a drifting smoke plume loses half itself in
+         * 46 steps at the full rate and 98 at a quarter; the same field
+         * under steam, 56 against 78. Snow is the scarce half of "chill
+         * it, then heat it" - the whole thermal-shock mechanic is built
+         * on having some - and a smoke cloud that clears a snowfield in
+         * a second and a half is a boiler by accident.
+         *
+         * The scene this branch was written for barely notices the
+         * difference: a sheet of ice over a real boiler halves in 130
+         * steps at a quarter rate against 120 at full, because there the
+         * limit is how much steam reaches the ice, not how hard each
+         * contact rolls. So the quarter costs the case it was for
+         * nothing at all, and buys snow twice its life. */
+        if ((int)(rng_next(&s->rng) & 0xFF) >= (nr->heat_chance >> 2)) {
+            continue;
+        }
+        place_reacted(s, nx, ny, nat, (material_id_t)nr->heats_to);
     }
 }
 

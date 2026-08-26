@@ -138,8 +138,11 @@ typedef struct {
      * bare screen still has to reach the floor. */
     bool     may_have_faller;
 
-    /* Whether a cell with a non-zero heat_ramp - stone, glass, anything
-     * that can hold a temperature at all - exists anywhere on the grid.
+    /* Whether anything a hot gas could ACT on exists anywhere on the
+     * grid: something that banks heat and can climb a level (stone,
+     * glass), or something cold that cannot bank it and thaws outright
+     * instead (ice, snow).
+     *
      * A different question from may_have_temperature above: that one asks
      * whether something is currently OFF ambient and needs its ramp
      * ticked; this one asks whether there is anything to warm in the

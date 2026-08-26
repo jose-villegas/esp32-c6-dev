@@ -410,9 +410,20 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
         (r->heat_ramp != 0 && CELL_VARIANT(cell) != SAND_AMBIENT_HEAT)) {
         s->may_have_temperature = true;
     }
-    /* Something that can HOLD a temperature, which is a different question
-     * from something that HAS one - ambient counts. Convection's gate. */
-    if (r->heat_ramp != 0) {
+    /* Something a hot gas could ACT on, which is a different question
+     * from something that has a temperature now - ambient counts.
+     * Convection's gate.
+     *
+     * Two shapes of it, because convection has two things it can do.
+     * Something that banks heat climbs a level; something cold that
+     * cannot bank it thaws outright. Ice was invisible here while this
+     * asked only about heat_ramp, and structurally always would have
+     * been - an extended material's low nibble is which material it is,
+     * so it has no variant left to hold a temperature in. A sheet of ice
+     * over a boiler sat there untouched unless some unrelated stone
+     * happened to be on the board to open the gate for it. */
+    if (r->heat_ramp != 0 ||
+        (r->chills != 0 && r->heats_to != 0 && r->heat_chance != 0)) {
         s->may_have_heat_holder = true;
     }
     /* Wet, or something to get wet from. A liquid arms it because that is

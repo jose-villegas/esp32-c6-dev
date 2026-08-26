@@ -7853,6 +7853,92 @@ static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
         "with");
 }
 
+
+/* Steam melts ice. Ordinary gas does not.
+ *
+ * Reported from a scene anyone would build: lava in a pan, water poured on
+ * to make a boiler, a sheet of ice above it - and the steam rising into
+ * the ice did nothing at all.
+ *
+ * The gap was that convection only knew how to warm a material whose
+ * variant IS a temperature. Glass and stone bank heat and climb a level at
+ * a time; ice cannot, and structurally never will, because it is an
+ * extended material whose low nibble is which material it is. There is no
+ * room left in the cell to hold a temperature. So hot gas walked straight
+ * past it, while a flame touching the same cell melted it at once -
+ * try_heat_transform() has always had a second, memoryless branch for
+ * exactly this, and convection had simply never learned it.
+ *
+ * The negative half is what pins the gas's own gate: plain gas has no
+ * `warms` at all, and must leave ice alone however much of it there is. */
+static void test_steam_melts_ice_and_plain_gas_does_not(void)
+{
+    const int cx = W / 2, cy = H / 2;
+
+    for (int pass = 0; pass < 2; pass++) {
+        const material_id_t air = pass ? MAT_GAS : MAT_STEAM;
+
+        fixture();
+        sand_clear(&s);
+        sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+        sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+        sand_set(&s, cx, cy, MATX(MATX_ICE));
+        /* A bystanding grain of sand, on a floor so it stays put. Wood,
+         * not stone: stone banks heat, and this board must have nothing
+         * on it that holds a temperature, or the reachability half of
+         * the test below would be answered by the floor. */
+        sand_set(&s, cx + 3, cy + 1, CELL_MAKE(MAT_WOOD, 0));
+        sand_set(&s, cx + 3, cy, CELL_MAKE(MAT_SAND, 4));
+
+        int melted = 0;
+        for (int i = 0; i < 3000 && !melted; i++) {
+            /* Held in a bath of it, replenished, so the question is only
+             * whether contact does anything - not whether a rising gas
+             * happens to still be there. */
+            for (int y = cy - 1; y <= cy + 1; y++) {
+                for (int x = cx - 1; x <= cx + 4; x++) {
+                    if (CELL_IS_EMPTY(sand_at(&s, x, y))) {
+                        sand_set(&s, x, y,
+                                 CELL_MAKE(air, MATERIAL_VARIANTS - 1));
+                    }
+                }
+            }
+            sand_step(&s, 0, 1000, 0);
+            melted = (sand_at(&s, cx, cy) != MATX(MATX_ICE));
+        }
+
+        /* And the branch is a THAW, not a melt: sand's heats_to is
+         * glass, so a version of this that asked only "can it be heated
+         * into something" had a smoke cloud slowly vitrifying every dune
+         * it drifted over. Warm air thaws cold things; it does not fire
+         * a kiln. */
+        int glass = 0;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_GLASS) {
+                    glass++;
+                }
+            }
+        }
+        TEST_ASSERT_EQUAL_MESSAGE(0, glass,
+            "warm air must not turn sand into glass - convection thaws "
+            "what is cold, it does not fire a kiln");
+
+        if (air == MAT_STEAM) {
+            TEST_ASSERT_TRUE_MESSAGE(melted,
+                "steam must melt ice - it is water at a hundred degrees "
+                "and ice is water at zero, and a boiler under a sheet of "
+                "it did nothing at all");
+        } else {
+            TEST_ASSERT_FALSE_MESSAGE(melted,
+                "but plain gas must not - it carries no heat, and if "
+                "convection skipped its own `warms` gate then every gas "
+                "on the board would be a thaw");
+        }
+    }
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -11868,6 +11954,7 @@ void run_sand_suite(void)
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
+    RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
