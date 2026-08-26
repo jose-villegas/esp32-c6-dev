@@ -2052,6 +2052,201 @@ round found came from stubbing one function and reverting it.
 
 ---
 
+## The thirteenth attempt: two scenes for the shape of load nothing measured
+
+Everything the suite had a benchmark for by the twelfth attempt was a
+transient of one kind or another - a burst of activity that ran its
+course and then went quiet. Nothing measured a heat source left running,
+and nothing had put the thermal shock mechanism in front of the
+reactions pass at any scale bigger than a single pane. This attempt adds
+two scenes, committed together because they are designed as a pair and
+say so in each other's source comments: a burst of damage that runs its
+course, and a sustained steady state that has to keep producing without
+exhausting either its fuel or its water.
+
+**The most recent device capture is still the one the eleventh and
+twelfth attempts already called stale, and this attempt did not add a
+new one.** Nothing below is device-verified. Every number in this
+section is host-only.
+
+### Scene one: the thermal shock lattice
+
+The lattice is 480 glass-ringed compartments, 20 columns by 24 rows of
+9x9 tiles on the 184x224 grid. Each ring is 20 cells - the perimeter of
+a 6x6 square - well under `crack_run()`'s `CRACK_MAX` of 256.
+
+Every ring is painted at variant 2, 3 or 4 - strictly between
+`SAND_SHOCK_COLD` (1) and `SAND_SHOCK_HEAT` (5) - for both families
+identically, so no compartment is born already qualifying for a crack.
+An earlier draft used an asymmetric range reaching down to 0 and 1 and
+had one family born pre-shattered, through the shock direction it was
+not meant to be exercising.
+
+The left ten columns pair a burning-wood trigger outside the ring with a
+cold payload (ice or snow) inside; the right ten pair an ice trigger
+outside with a hot payload (burning wood or lava) inside. The family
+split is a payload/trigger matrix, not proof that either half exercises
+one direction only. Cross-contamination is real physics here, not a
+scene bug: each ring's own contents conduct around the ring (glass
+`conducts` is 220), so both shock directions run in both halves from
+step 1. Measured on step 1, the intended-direction counters read 14
+(left, cold arriving at hot glass) and 26 (right, heat arriving at cold
+glass); the unintended ones read 12 and 10 in the same step.
+
+What proves each direction fires is a pair of counters in the host test
+that read the two crack branches' own preconditions directly - glass at
+or above `SAND_SHOCK_HEAT` with a cardinal neighbour that chills
+(`step_one_cold_cell()`), glass at or below `SAND_SHOCK_COLD` with a
+cardinal neighbour that is burning (`try_heat_transform()`). Both
+branches are roll-free once their precondition holds, which is what
+makes a precondition count meaningful rather than a probability. Both
+stand on all ten measured steps.
+
+Ten measured steps, and the reason is the point of the scene: new cullet
+has to keep arriving across the window. Charging each step's new cullet
+to a third of the window - steps 1-3, 4-6, 7-10 - ten steps split 54.1 /
+28.9 / 17.0 per cent (8,061 / 4,313 / 2,535 cells of 14,909). Twelve,
+fifteen and twenty steps put the last third at 11.8, 11.5 and 13.6 per
+cent as the first crack wave takes over more and more of the total; eight
+steps split honestly into thirds leave it at 11.0. Ten is the only window
+measured where the tail still clears 15%.
+
+The cullet tally needs a sticky "was ever cullet" mask rather than a live
+count: sand's `heats_to` is glass, so a fallen shard near a hot payload
+re-fuses and can crack again, and a naive per-step delta on a live count
+goes negative exactly when the scene is busiest.
+
+At the end of the window: 2,568 cullet cells in the left half and 3,618
+in the right, spread across 190 of 240 left-hand compartments and 238 of
+240 right-hand ones; 2,362 water, 2,253 steam, 4,329 fire, 3,414 glass;
+the cell count has grown from the 23,040 painted to 29,435 (burning wood
+and lava flare fresh fire into empty neighbours, so the assertion is a
+floor, not conservation).
+
+The left half's rings do not melt inside the window, and that is
+measured rather than assumed: the first left-half lava cell appears at
+step 16, and there are 123 of them by step 40. The right half's own hot
+payloads do legitimately melt some of its glass - that glass reaches the
+top of its heat ramp inside the window.
+
+The scene grows no plants and the host test pins that, in line with the
+standing decision to keep the plant materials out of perf scenes. The
+pin has to name `MATX_PLANT` specifically rather than reuse the lava
+stress scene's plain `cell_is_extended()` form, because this scene
+paints ice - an extended cell - on purpose.
+
+### Scene two: the boiler
+
+The boiler from `test_the_boiler_end_to_end` scaled from one column to
+the whole grid: 3-cell stone side walls the full depth of the basin, an
+11-row stone slab, 30 rows of water above it, and 4 rows of burner
+underneath - lava on the left half, burning wood on the right.
+
+Eleven rows is the pour brush's real thickness, the same figure the
+small end-to-end test uses. `conduct_heat()` attenuates at about 0.86
+per cell of depth it crosses, so slab thickness is the throttle on the
+boil rate: eleven rows is what makes the rate last the window instead of
+exhausting the basin partway through. Measured, a one-row slab drops the
+basin to 2,570 cells of water by the end of the same window.
+
+Two burners on purpose: lava never decays, so it is the steady source;
+wood burns down (`burn_decay` 24) so the ember path is covered by the
+same scene. All 356 wood cells painted are still lit at the end of the
+window.
+
+Twenty settle steps, then thirty measured, sampled at 0, 7, 15, 22 and
+30 steps in. Twenty rather than the ten the four-liquid scene uses
+because a basin takes longer to reach a steady boil than a liquid stack
+takes to start mixing: at ten steps the board is still filling with its
+first flush of steam (295 cells), at twenty it is boiling at a rate that
+then holds.
+
+The four quarters lose 206, 211, 215 and 157 cells of water. 3,958 cells
+are left at the end - 83% of the 4,747 the window started with, 74% of
+the 5,340 painted. Steam goes 593 to 1,445, and the first steam above
+the basin's rim appears late in the window, reaching 80 cells by the
+last step. Both halves boil at the same rate within five cells (392 lost
+on the lava side, 397 on the wood side).
+
+The heat-holder count is constant at 2,228, exactly the stone count, for
+every step of the window.
+
+The cell count is asserted as a floor, not an equality, and that is a
+finding rather than a preference. The enclosure leaves flare almost
+nowhere to put fresh fire, and the count does sit exactly at its
+window-start 8,280 for the first twenty steps of the window - then the
+boil opens gaps in the water above the slab, flare reaches them, and it
+climbs to 8,343 by the end. At the shorter ten-step settle an earlier
+draft used, exact conservation held by a single step: total step 41 is
+where the count first moves, and that draft stopped at 40.
+
+### The ceilings
+
+There are now five provisional sanity ceilings in the file, not three,
+and thirteen device frame-budget tests, not eleven. The five: four
+liquids 150,000 µs, lava stress 150,000 µs, screen of smoke and steam
+400,000 µs, thermal shock lattice 400,000 µs, boiler 80,000 µs. None has
+ever run on hardware; all five must be re-pegged at about 9-10% over the
+measured number the first time they do.
+
+What is new is how the two new ceilings were chosen. They are not
+extrapolated from the host timings - this file already records one
+extrapolation that came out four times too pessimistic - and they are
+not chosen from the host figures at all. The step counts are fixed by
+the host guards, and the ceiling is then whatever keeps the whole run
+inside the device's five-second task watchdog with a second to spare:
+ten steps at 400,000 µs is four seconds, fifty steps (20 settle + 30
+measured) at 80,000 µs is four seconds. The step count and the ceiling
+are one decision; raising either alone breaks the arithmetic. An earlier
+draft of the boiler used a round 100,000 µs, which at fifty steps is
+exactly the watchdog's own five seconds, which is not a margin.
+
+### Host timings, and what they are worth
+
+Best-of-5 with the five scenes interleaved in one session, on the same
+host harness the twelfth attempt characterised as drifting up to 40%
+within a single run: thermal shock lattice 1,199 µs/step, lava stress
+824, four liquids 763, smoke and steam 647, boiler 218. A relative
+signal only - the lattice is the most expensive of the five and the
+boiler the cheapest - and deliberately not converted into a device
+prediction.
+
+### Verification by breaking
+
+Both host guards were checked the way this suite requires: 24 of their
+33 assertions were individually watched fail, most by breaking the scene
+rather than the threshold - removing every chilling material kills the
+cold-onto-hot counter; painting every ring at the same temperature
+instead of the {2,3,4} spread drops the last third below its floor
+(which is what makes the spread a stagger lever rather than decoration);
+a one-row slab exhausts the basin; a lava-only burner leaves the ember
+assertion nothing to find; stretching the window to twenty steps trips
+the no-melt assertion at step 16. The nine not individually reddened are
+the two tests' warming-gate assertions (they can only go red on a
+regression in the simulation's own `may_have_*` bookkeeping, which is
+exactly their purpose) and one right-half water-loss assertion that is
+the mirror expression of the left-half one, which was reddened.
+
+### What this attempt is worth carrying
+
+**A window length can be a measured decision rather than a round
+number**, and here it was the only one that kept the tail of the
+timeline honest.
+
+**Bucketing arithmetic and window length are one decision, not two:** an
+earlier draft graded a 2/2/4 split as if it were thirds, and the
+assertion still passed.
+
+**An exact-conservation assertion that holds by one step is not an
+assertion, it is a coincidence with a countdown on it.** A floor said
+the true thing.
+
+**Cross-talk between two halves of a scene can be real physics rather
+than a scene bug;** the fix is to assert the intended direction fires,
+not that contamination is zero.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

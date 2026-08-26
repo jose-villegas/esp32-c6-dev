@@ -1,12 +1,15 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-twelve numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+thirteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
 budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
 budget met, none ever raised**; a wave of new materials then put four back over, and
-the eleventh sorted the accident from the feature. The prose file holds the full
-derivations and is the authority when the two disagree; this page is for a first read,
-a refresher, or finding which attempt taught the lesson you half-remember.
+the eleventh sorted the accident from the feature. The twelfth found a gate that could
+never close; the thirteenth shipped no optimisation at all, measuring the two shapes
+of thermal load nothing had measured yet — a shock and a steady boil. The prose file
+holds the full derivations and is the authority when the two disagree; this page is
+for a first read, a refresher, or finding which attempt taught the lesson you
+half-remember.
 
 ---
 
@@ -39,11 +42,13 @@ Attempt 11 fixed the water and mixed regressions in full on the host and took
 about 10% off each fire benchmark. **None of that is device-verified** — the
 next capture is what settles it.
 
-The suite now has **eleven** device frame-budget tests, not eight. Attempt 12
+The suite now has **thirteen** device frame-budget tests, not eight. Attempt 12
 added three of them — four liquids, a lava stress scene, a screen of smoke
-and steam — with provisional sanity ceilings guessed rather than measured,
-and **none of the three has ever run on hardware.** Their rows cannot appear
-in the scoreboard above until a capture exists; when one does, all three
+and steam, at 150,000 µs, 150,000 µs and 400,000 µs — and attempt 13 added
+two more — a thermal shock lattice at 400,000 µs and a boiler at 80,000 µs.
+All five are provisional sanity ceilings guessed rather than measured, and
+**none of the five has ever run on hardware.** Their rows cannot appear
+in the scoreboard above until a capture exists; when one does, all five
 ceilings still need re-pegging from that first measurement, whether they
 pass or not.
 
@@ -73,6 +78,7 @@ the next person from re-running them.
 | 10 | 🟢 | Tell the cross-flow pass where water isn't | The sweep already reads every awake cell — a per-block liquid bit is free. One neighbour ring makes it sound; the pass skips **41%** of its cells. Failures **1 → 0**. |
 | 11 | 🟢 | A feature wave, and one branch in the wrong place | Rebuilt and re-timed all 75 commits of the wave on the host: water's whole regression is **one commit, one branch**, and the branch never even says no. GCC had spliced its cold blocks into the hot path — hinting them cold recovers **26%**, simulation byte-identical. Fire's is diffuse and genuine; the reactions pass **doubled**, and the gas pass nobody suspected is 60% of it. |
 | 12 | 🟠 | A mask that measured nothing, and a gate that never closed | Three new benchmarks put the reaction engine under cross-material load for the first time. A per-cell "can this react" mask measured **−0.1%** where the counters promised 19.3% of cells were skippable — too cheap to be worth skipping. The real find: a convection gate that could never close on smoke or steam, costing **41,215 neighbour scans a step** on a screen of gas — fixed with a flag that arms and is never cleared, **−7.1%**. Measure-by-deleting also priced the gas pass's sight scan at **15-18%** of the fire benchmarks — the next round's target, not yet built. |
+| 13 | 🟢 | Two scenes for the shape of load nothing had measured | Everything benchmarked so far was a transient; nothing measured a heat source left running. A thermal shock lattice (480 glass-ringed compartments) and a boiler (a stone basin held at a sustained boil) shipped as a pair, each with a host guard whose assertions were checked by breaking the scene: **24 of 33** individually turned red. Ten steps was a measured decision, not a round one — the only window where the last third of new cullet still clears **15%** of the total instead of trailing off. An earlier boiler draft's exact-conservation count held by **one step**; a floor replaced it. No optimisation shipped — two device ceilings added, both provisional. |
 
 ---
 

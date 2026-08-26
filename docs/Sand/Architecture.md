@@ -1007,14 +1007,14 @@ deleted it outright. The mixed scene came in during the tenth, which gave
 the cross-flow pass a block-shaped skip for the cells that hold no liquid.
 See [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
-## The eleven device frame-budget tests
+## The thirteen device frame-budget tests
 
 All `#ifdef DEVICE_BUILD`-only, in `suite_sand.c`, run against the real
-184x224 grid rather than the 8x8 host-test fixture. Eight of the eleven
+184x224 grid rather than the 8x8 host-test fixture. Eight of the thirteen
 have a real device number behind them - see each test's own comment for
-the reasoning behind its specific budget. The three added by the twelfth
-attempt do not yet; their ceilings are provisional guesses, flagged as
-such below.
+the reasoning behind its specific budget. The five added by the twelfth
+and thirteenth attempts do not yet; their ceilings are provisional
+guesses, flagged as such below.
 
 Two of them are **reduction targets** rather than headroom - set below
 what the code could do when they were written, on purpose, so they fail
@@ -1039,6 +1039,8 @@ are host-measured predictions from the eleventh attempt and are
 | `test_four_liquids_reacting_at_once_fits_in_the_frame_budget` | Water, oil, acid and lava painted upside down (densest on top) so every layer migrates through every other one instead of settling quiet, run at the app's own per-material scatter, decay and mobility | 150000 µs (**provisional sanity ceiling**, not a tuned budget) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
 | `test_the_lava_stress_scene_fits_in_the_frame_budget` | A lava reservoir under a water roof with sand/wood/oil columns between them, one column in four left empty as a chute so the roof water reaches the lava inside the window | 150000 µs (**provisional sanity ceiling**, not a tuned budget) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
 | `test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget` | A full grid of smoke and steam, checkerboarded, with one flame - the only benchmark holding either gas's convection behaviour in quantity | 400000 µs (**provisional sanity ceiling**, not a tuned budget) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
+| `test_the_thermal_shock_scene_fits_in_the_frame_budget` | 480 glass-ringed compartments, each with a shatter trigger outside the ring and a payload inside, both thermal shock directions firing across the lattice from step 1 | 400000 µs (**provisional sanity ceiling**, not a tuned budget; paired with the 10-step window for the watchdog arithmetic) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
+| `test_the_boiler_scene_fits_in_the_frame_budget` | A stone basin of 30 rows of water on an 11-row slab over lava and burning-wood burners, run as a sustained steady state (20 settle steps, 30 measured) | 80000 µs (**provisional sanity ceiling**, not a tuned budget; 50 steps at that ceiling is four seconds against the five-second watchdog) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
 
 Four of the eight budgeted rows fail as of that capture, and no budget was ever raised to make
 any row pass - the mixed scene in particular was set 21% *below* what
@@ -1081,7 +1083,7 @@ not interchangeable (the redesign that made fire move like gas changed
 the steady-state cost without touching the transition cost at all - see
 "Corrections" in the plan history if you want the full trace of why).
 
-The three provisional rows below them are a different kind of new: not a
+The five provisional rows below them are a different kind of new: not a
 pattern to copy so much as an open question to close. Nobody has run
 them on hardware, so unlike every other row in this table their "last
 measured" column has no number in it at all - re-pegging them from a
