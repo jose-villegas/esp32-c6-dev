@@ -30,21 +30,34 @@ its own measurement. No bars this round: by construction every row sits at
 ~111% of its target, and the honest visualization is the gap itself. A row
 turns to pass only when its tenth is genuinely won.
 
-| Test | Measured (2026-08-26) | Target | To close |
+| Test | Measured (2026-08-26 clean) | Target | To close |
 |---|---:|---:|---:|
-| Settled screen, nothing moves | 260 µs | 235 | 25 µs |
-| Full-size step, all falling | 6,434 µs | 5,800 | 634 µs |
-| Gravity flip, settled pile | 6,529 µs | 5,900 | 629 µs |
-| Mixed scene flip | 12,999 µs | 11,700 | 1,299 µs |
-| Screen of water collapsing | 16,043 µs | 14,400 | 1,643 µs |
-| Boiler, sustained boil | 31,529 µs | 28,500 | 3,029 µs |
-| Every material at once | 74,911 µs | 67,500 | 7,411 µs |
-| Thermal shock lattice | 106,650 µs | 96,000 | 10,650 µs |
-| Lava stress scene | 121,377 µs | 109,000 | 12,377 µs |
-| Four liquids reacting | 125,430 µs | 113,000 | 12,430 µs |
-| Smoke + steam screen | 141,189 µs | 127,000 | 14,189 µs |
-| Full screen of fire, steady | 295,533 µs | 266,000 | 29,533 µs |
-| Fire cascade through gas | 506,666 µs | 456,000 | 50,666 µs |
+| Settled screen, nothing moves | 262 µs | 235 | 27 µs |
+| Full-size step, all falling | 6,451 µs | 5,800 | 651 µs |
+| Gravity flip, settled pile | 6,546 µs | 5,900 | 646 µs |
+| Mixed scene flip | 14,391 µs | 11,700 | 2,691 µs |
+| Screen of water collapsing | 18,667 µs | 14,400 | 4,267 µs |
+| Boiler, sustained boil | 32,667 µs | 28,500 | 4,167 µs |
+| Every material at once | 78,617 µs | 67,500 | 11,117 µs |
+| Thermal shock lattice | 98,738 µs | 89,000 | 9,738 µs |
+| Four liquids reacting | 124,336 µs | 112,000 | 12,336 µs |
+| Lava stress scene | 127,386 µs | 109,000 | 18,386 µs |
+| Smoke + steam screen | 141,444 µs | 127,000 | 14,444 µs |
+| Full screen of fire, steady | 297,220 µs | 266,000 | 31,220 µs |
+| Fire cascade through gas | 412,718 µs | 456,000 | **passes**, +9.5% |
+
+The measured column was refreshed from `performance_20260826_183646` — the
+first watchdog-free capture (zero contamination possible, see attempt 15),
+taken after the fourteenth attempt's surface-angle fix landed. Three
+things it moved: the two contaminated rows were re-pegged from their first
+clean numbers (four liquids 113,000 → 112,000; thermal shock 96,000 →
+89,000 — its old number carried ~7,900 µs of watchdog console I/O); the
+water and mixed rows now carry the fourteenth attempt's real device cost
+(+16% and +11%, roughly double its host prediction — the fifteenth
+attempt's host-vs-device lesson, again); and the fire cascade came in
+94,000 µs *below* its baseline and now passes — evidence its 506,666
+baseline was itself a contaminated row the survey missed, making its
+456,000 target a re-peg candidate (≈371,500) awaiting a decision.
 
 Two findings from that capture, unresolved at re-base time and first in
 line for the next round: attempt 11's host-measured water/mixed recovery
