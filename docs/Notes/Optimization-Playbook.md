@@ -462,6 +462,87 @@ allocated and take every later test down with it.**
 
 ---
 
+## A host-validated win is a hypothesis until the target measures it
+
+Bisecting or A/B-ing a change on a development machine is cheap and fast,
+and it is tempting to treat a clean host result as the answer. It is not
+the answer — it is a measurement of the host's cost function, which is not
+the same function the target machine runs.
+
+Concretely: a branch hint (`__builtin_expect`) that told the compiler which
+side of a comparison was overwhelmingly likely moved a benchmark by 25% on
+the development host and by 0.43% on the embedded target it actually shipped
+to — both figures the hint's own effect against the same unhinted baseline
+on each machine — disassembling both objects to confirm the hint changed
+exactly what it was supposed to change on each. The gap is not measurement
+noise and it is not the hint failing to work on the target — it worked
+exactly as designed on both machines. The two machines simply price the same
+source change differently: the host's number was dominated by whether the
+cold code sat between the hot path's entry and its work in the instruction
+stream (a block-layout question, decided by the linker and the branch
+predictor), while the target's number was dominated by how many instructions
+the hot path actually executes per call (an instruction-count question,
+decided by the compiler's codegen). The hint fixed the first problem
+completely and barely touched the second, because the second was never the
+hint's problem to fix — the target's cost had moved to a different part of
+the function while nobody was measuring it there.
+
+**The corollary matters as much as the headline:** when a host bisect
+attributes a regression to a single commit, that attribution is itself
+scoped to the host's cost function. A commit the host bisect clears is not
+necessarily innocent on the target — the target may be paying for a
+completely different line in the same window, one the host's cost function
+does not weight highly enough to show up as a step. Treat a host bisect's
+output as "here is where the host's regression is," not "here is where the
+regression is," and confirm the attributed commit against the target
+before trusting it as the fix.
+
+---
+
+## A benchmark that shares a console with a watchdog is measuring the console
+
+A timing loop and a hardware watchdog can interact in a way that neither
+one's author anticipated, if both are active on the same board at once and
+nobody checked whether their windows can overlap. The shape: a benchmark
+loop that never yields long enough for a lower-priority task to run,
+combined with a watchdog whose warning handler prints a diagnostic to the
+same console the benchmark's own output goes to. If the benchmark's timer
+brackets the whole loop with a single start/stop pair, and the watchdog's
+periodic dump lands anywhere inside that bracket, the console I/O the dump
+performs gets charged to the benchmark's own elapsed time — because as far
+as the timer is concerned, it is still inside the measured window when the
+dump runs.
+
+The consequence is silent and can be large. One instance of this measured
+inflation up to 2.6× on the affected rows, with nothing in the report to
+distinguish a contaminated number from a clean one — both are just a
+number, and both look equally plausible on their own.
+
+**It does not average out, and repeating the capture does not reveal it.**
+This is not jitter. Given a fixed image, a fixed build, and a fixed RNG
+seed, the collision between the watchdog's fixed interval and the
+benchmark's own fixed timing is deterministic: the same rows collide with
+the same offsets every time, so a second capture of the same image
+reproduces the exact same wrong number. A number that survives a
+repeat-the-capture sanity check has ruled out random noise; it has not
+ruled out a systematic collision with something else running on the board.
+
+Detecting it is arithmetic against the two known periods — if the
+watchdog's dump interval and the benchmark's own step timing are both
+known, the rows whose windows can contain a dump boundary are computable
+in advance, or a captured log can be scanned after the fact for the dump's
+own signature (a register-dump banner, a task-name string) landing between
+a benchmark's start and stop markers. Either way the fix belongs in
+reporting or configuration, not inside the measured code: flag or discard
+a row whose window collided, or remove the watchdog from the image doing
+the measuring (as its own change, against its own fresh baseline, since
+disabling a watchdog changes the image's layout too). **Never feed the
+watchdog from inside the code being timed** — silencing the symptom by
+touching the measured path changes what is being measured, which is a
+worse kind of wrong than a visible collision.
+
+---
+
 ## Related
 
 - [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) — the falling-sand app's

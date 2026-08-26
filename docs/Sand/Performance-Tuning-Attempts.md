@@ -2546,6 +2546,390 @@ grid size; only the time to reach it scaled.
 
 ---
 
+## The fifteenth attempt: two loose ends closed, and a watchdog counting itself in
+
+This round is attribution, not optimisation: nothing here was expected to
+move a number, only to say honestly why two numbers had already moved on
+their own. The 2026-08-26 re-base capture left two findings unresolved in
+its own notes - the two liquid-free controls up roughly 10% against a
+build fifty commits older, and the eleventh attempt's 26% host-measured
+viscosity-gate win showing nothing on the device that flashed it. Both
+are attributed below. Neither is what it looked like from the host side
+alone.
+
+Every device number in this section predates 4bdcf77, the fourteenth
+attempt's surface-angle fix, which moves the water scene by about +8% at
+axis gravity - the one gravity every budget in this file runs at. A later
+capture must not be read against this section's table without accounting
+for that.
+
+### Step 0: the stale build, pinned exactly
+
+The device capture behind this round carries no commit hash of its own -
+only the raw list of every self-test it ran, 272 names. Matching that
+list against the `RUN_TEST()` names declared at each candidate commit
+narrows the possibilities to exactly three - `8b750a3`, `4011392`,
+`4b5168c` - and rules out `4fe0d04`, which declares two tests the capture
+never ran. None of the three differs in any code the five benchmarks in
+this round execute, so `4b5168c` is used throughout as the capture's true
+commit. The tool doing the matching is `pin_commit.py`.
+
+The method was then checked rather than trusted: `4b5168c` was rebuilt
+from a fresh worktree a day later and re-captured.
+
+| test | stale (2026-08-25) | rebuilt 4b5168c (2026-08-26) |
+|---|---:|---:|
+| full-size step | 5,867 | 5,866 |
+| settled screen | 267 | 267 |
+| settled-pile flip | 5,959 | 5,959 |
+| mixed scene flip | 12,876 | 12,876 |
+| screen of water | 16,052 | 16,052 |
+
+One microsecond on one row, from two builds a day apart in separate
+worktrees. The method is sound, and the flashing environment is not a
+variable this round needs to account for.
+
+### Finding A, and the four things it is not
+
+The +9.6% on the two liquid-free controls (5,867 → 6,434 us on the
+full-size step, 5,959 → 6,529 on the settled-pile flip, on a device that
+repeats itself to ±4 us on a fixed image) is real, and everything checked
+underneath it says the same thing: it is not new work.
+
+First, no new work at all. A host harness reproduces every benchmark
+scenario and rebuilds and re-times it at each of the 64 commits between
+`4b5168c` and `649e732`, three rounds of best-of-two because this harness
+drifts as much as 40% within a session. The final-grid checksum is
+identical at every single commit, for all three scenes it tracks - full
+`5029d1c5`, pile `16a28aa5`, water `d748747d`. The entire materials wave
+changes nothing about how these three scenes evolve.
+
+Second, no new work, counted. Host counters compiled into the real
+`sand.c` and `sand_priv.h` at HEAD, over the measured window only, put
+both controls at 10,304 grains, 10,304 falls tried, 10,304 succeeded, 0
+slides, 10,304 `can_enter()` calls a step - and every one of those calls
+takes the `CELL_IS_EMPTY` early-out. Zero non-empty targets, in either
+scene, ever. The one hot-path source change in the whole window - the
+branch `e03aabd` added to `can_enter()` - never executes here.
+
+Third, no new pass. `sand_step_reactions()` picked up five new reasons to
+run across the wave, and a counter in the real `sand_reactions.c` at HEAD
+says it runs zero of ten steps on the full-size step and zero of twenty
+on the pile flip. Sand latches none of the new flags.
+
+Fourth, `sand_step` is the same function. Device objects, compiled with
+the exact flags out of `launcher/build/compile_commands.json`, put
+`sand_step` at 923 instructions, 2,748 → 2,730 bytes, 183 sp-relative
+slots and 163 branches at both `4b5168c` and HEAD - net zero, across the
+three commits that touch it at all (`e03aabd` +1, `75c2c76` 0, `5f26728`
+-1). `gcov` over the measured window, `__gcov_reset` before the timed
+loop and `__gcov_dump` after, gives the exact set of source lines the
+controls execute, and the object's DWARF line table says where they
+landed: 601 of 923 hot instructions at `4b5168c`, 600 of 923 at HEAD, 76
+and 74 hot cache lines - the same executed-path footprint at both ends.
+The material table underneath it is unchanged too: `sizeof(material_t)`
+is 16 bytes at every commit, and `kind`/`density`/`slip`/`scatter`/
+`mobility` all sit in its first eight. (`sizeof(sand_t)` does grow, 112 →
+128 bytes, which is what churns `sand_step`'s immediates - but it is a
+stack object in SRAM, not the table.)
+
+Same instructions, same quantity, same data, same grid - and 567 us more
+of it on the full-size step, 570 on the pile flip, on a device that
+repeats itself to 4 us. Nothing inside the sand app explains it.
+
+A host bisect over the same window does show steps: both controls sit
+around 24.7 us/step from `4b5168c` through `db73630`, jump at `9f5144b`
+(+23%) and again at `e03aabd` (+32%), then fall back at `6865812`,
+`7372a2f` and `5f26728` to land near 30.5 at HEAD. Two commits with an
+identical `sand.c` object measure 6.8% apart on this harness (`1c4f3db`
+32.4 vs `ca1d374` 30.3), which is this harness's noise floor - so the
+jumps are real, but the harness cannot say which device commit they
+belong to. At `9f5144b` the device object's `sand_step` is byte-identical
+to the previous commit's, and x86's `sand_step` is 4,112 bytes at both
+ends of the window while only its address moves, `0x1530` → `0x1870`.
+Two different compilers, two different layout lotteries. The host can
+say this is placement and not work; it cannot say which device commit
+did it.
+
+The device bisect can. Every row below is clean of the watchdog collision
+described later in this section:
+
+| commit | full-size | settled | pile flip | mixed | water |
+|---|---:|---:|---:|---:|---:|
+| `4b5168c` (stale / D3) | 5,866 | 267 | 5,959 | 12,876 | 16,052 |
+| `db73630` (D2) | - | 267 | 5,959 | - | 16,051 |
+| `6865812` (D4) | 5,866 | 267 | 5,959 | 12,876 | 16,305 |
+| `e03aabd` (D5) | 6,167 | 260 | 6,260 | 12,717 | 15,710 |
+| `649e732` (HEAD) | 6,434 | 260 | 6,529 | 12,999 | 16,043 |
+
+| step | full-size | pile flip |
+|---|---:|---:|
+| `4b5168c` → `6865812` (43 commits, ~7,000 lines, full relink) | +0 | +0 |
+| `6865812` → `e03aabd` (one commit) | +301 | +301 |
+| `e03aabd` → `649e732` (27 commits) | +267 | +269 |
+
+53% of the total sits in `e03aabd`, "Stop powders falling through each
+other, and give dirt a grain," on both controls, to the microsecond, in
+one commit. Its only change to anything either control runs is one line
+in `can_enter()`:
+
+```c
+-    return t->kind != KIND_STATIC && mover_density > t->density;
++    return (t->kind == KIND_LIQUID || t->kind == KIND_GAS) &&
++           mover_density > t->density;
+```
+
+and the host counters above already proved that line is never reached in
+either scene - all 10,304 `can_enter()` calls a step take the
+`CELL_IS_EMPTY` early-out, zero non-empty targets, on both sides of the
+commit. The simulation is byte-identical either side of it. What changed
+is what GCC emitted around it: `sand_step` goes from 923 to 924
+instructions at that commit, `try_slide_impl` - a function neither
+control ever calls - from 263 to 271, and by HEAD the same 923
+instructions carry a wholly different schedule. The remaining +267/+269
+is spread across the 27 commits after it, where `sand_step`'s object
+changes twice more (`75c2c76`, `5f26728`); not bisected further.
+
+This is the eleventh attempt's lesson one level up. That round found a
+branch costing 26% of a benchmark by sitting between the entry and the
+work it never needed to guard. This one is a line that never executes at
+all, in either control benchmark, costing about 5% (301 of 5,866 and 301
+of 5,959) by changing how the compiler scheduled the function around it.
+
+### Layout, finally calibrated
+
+Four separate relinks, all measured to the microsecond, moved the sand
+controls by exactly zero:
+
+| relink | scope | result |
+|---|---|---|
+| `4b5168c` → `db73630` | 28 commits, 4,048 lines of `main/` | pile flip 5,959 → 5,959 |
+| `4b5168c` → `6865812` | 43 commits, ~7,000 lines | full 5,866 → 5,866, pile 5,959 → 5,959 |
+| HEAD → B1 | `sand_liquid.c` 1,104 → 1,102 bytes | 6,434 / 260 / 6,529 unchanged |
+| HEAD → B4 | `sand_liquid.c` 1,104 → 1,012 bytes | 6,434 / 260 / 6,529 unchanged |
+
+That narrows a standing assumption rather than overturning it. The
+3.2-vs-3.9-ms pair both the playbook
+([`Optimization-Playbook.md`](../Notes/Optimization-Playbook.md), the
+instruction-cache section) and this file's own map
+([`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md), "The layout lottery")
+carry - two builds that never touched the hot function, 20% apart purely
+from where unrelated code landed in flash - demonstrably happened once,
+and nothing here re-runs that benchmark to say otherwise. What this round
+adds is narrower: for these two control scenes specifically, four
+relinks of substantial size - one of them 4,048 lines across 28 commits -
+moved neither control at all. Treating "any relink can move a control by
+something like 20%" as a blanket rule is too pessimistic for these two
+scenes; it is not shown to be wrong anywhere else it has been observed.
+
+The playbook's own escape clause is doing real work here, and it is
+worth saying so directly: "treat differences under about 20% as noise
+unless they reproduce" would otherwise throw out this entire round, since
+both the controls' +9.6% and the whole viscosity gate's 2.2% on device
+are far under 20%. What makes them signal rather than noise is exactly
+the device's own repeatability - ±4 us on a fixed image - so a difference
+that small, surviving a full relink or a rebuild in a fresh worktree, is
+the reproduction the clause asks for. The 20% figure was always about a
+difference that has not yet been shown to reproduce, not about a floor
+beneath which nothing can be trusted.
+
+There is one place the layout lottery is real here, and it is smaller
+than the standing figure by an order of magnitude. Between `4b5168c` and
+`6865812`, water moves 16,052 → 16,305 us, +1.6%, on a liquid path that
+is otherwise 100% opcode-identical in position: `move_liquid_grain`,
+`sand_step_liquids` and `rebound_wall` carry the same instructions in the
+same order at both commits, and only their immediates differ, from
+`sand_t` growing 112 → 128 bytes. The standing assumption was too
+pessimistic for these two controls, and roughly right in kind - if not in
+size - for water.
+
+`D4` (`6865812`) and `D5` (`e03aabd`) each needed one byte-level change to
+compile the diag image at all - `char why[144];` widened to `char
+why[192];` in `suite_sand.c`, a test-only message buffer, present exactly
+once at both commits, the same buffer `2743880` later widens at HEAD. No
+benchmark path touches it. Treating that as measurement-neutral is not an
+assumption here; it is the layout finding just above - a relink of this
+size moves these two controls by zero.
+
+### Finding B: the host was measuring a different thing
+
+The eleventh attempt's viscosity-gate hint measured a 26% recovery on the
+host, and round five never reached a device to check it against. This
+round did, and the hint genuinely works there too - just not for the same
+reason.
+
+Disassembling `move_liquid_grain` out of the real device object at HEAD
+confirms the hint moves exactly the blocks it was built to move.
+Unhinted, the function is 1,102 bytes, with the cold "too viscous to
+move" blocks spliced in at offsets `0xb6` and `0xce`, between hot code at
+`0x2a`-`0xb4` and more hot code from `0xfa`, with early returns at `0xf8`
+and `0x1de`. Hinted, the function is 1,104 bytes and those same blocks
+sit at `0x24c` and `0x264` - at the tail, out of the hot path's way, with
+the returns following them. Both pairs of offsets are exactly what commit
+`505b43a` recorded when it landed. With the gate deleted outright, the
+function is 1,012 bytes with a single return at `0x324`.
+
+The device A/B against the host's own:
+
+| build | device water, us/step | host water, us/step |
+|---|---:|---:|
+| hint present (HEAD) | 16,043 | 77.3 |
+| hint removed (B1) | 16,113 | 103.4 |
+| gate deleted (B4) | 15,759 | 74.2 |
+
+Every percentage below is against the same baseline on each machine - the
+unhinted number, 16,113 us on device and 103.4 us on host:
+
+| | device (of 16,113 us) | host (of 103.4 us) |
+|---|---:|---:|
+| the gate's full cost | 354 us (2.2%) | 29.2 us (28%) |
+| the hint's share of it | 70 us (20%) | 26.1 us (89%) |
+| left unrecovered | 284 us (80%) | 3.1 us (11%) |
+
+**The device pays for the gate's work; the host paid for the gate's
+placement.** Round five measured the placement, fixed the placement, and
+the placement turned out to be 89% of the cost on the machine it was
+measured on and 20% of a much larger cost on the machine that ships - the
+hint leaves 284 us on the device's table where it leaves 3.1 us on the
+host's.
+
+The device's real water regression - 13,288 us at `9209b1b`, the tenth
+attempt's own baseline, to 16,052 at `4b5168c` - was never the gate; the
+entire gate is worth 354 us. It is `move_liquid_grain` nearly tripling,
+129 to 369 instructions, in a function called about 11,130 times a step,
+across four commits of the same feature wave:
+
+| commit | change | `move_liquid_grain`, instructions |
+|---|---|---:|
+| `0378703` | (the 13,288 build) | 129 |
+| `cd91136` | Add oil, lava and ash | 253 (+124) |
+| `726ca63` | Give liquids a viscosity | 286 (+33) |
+| `6519f01` | Give lava a mobility | 289 (+3) |
+| `8b750a3` | Add interfacial drag | 369 (+80) |
+
++2,764 us over 11,130 calls a step is about 248 ns a call, roughly 40
+cycles at 160 MHz - the executed share of the 240 instructions added. The
+device paid for new liquid physics spread over four commits. The host's
+own bisect put the whole regression on `726ca63` alone, because the
+host's cost function is dominated by block layout and the device's is
+dominated by instruction count - two machines measuring two different
+things, and agreeing on neither the size nor the location of the cost.
+
+### Two corrections to the record
+
+1. The eleventh attempt's headline - "the two liquid budgets were an
+   accident, in one commit, in one branch, and are recovered in full" -
+   is true on the host and false on the device, and this round is what
+   supplies the device numbers to say so. The hint reaches the
+   deleted-gate ceiling on the host, 74.5 against 74.7, which is recovery
+   in every sense that matters there. On the device the same hint
+   recovers 70 of the gate's 354 us (20%) and leaves 284 us behind (80%)
+   as the cost of work the gate now genuinely does that it did not do
+   before viscosity existed.
+2. That same attempt's other host figure, "the liquid-free controls
+   stayed flat on host (34.0 / 33.9 / 34.2)," was never evidence.
+   `scan.sh` walks one scene per run (`head -1`), so the controls were
+   never walked across the feature wave at all; those three numbers are a
+   round-4 result compared across sessions, which that attempt's own
+   closing note already calls "not usable at all."
+
+Both belong here rather than in a footnote, following the convention the
+twelfth attempt set: a fact discovered to be wrong gets fixed in the
+change that would otherwise build on it.
+
+### The measurement bug underneath all of it
+
+The self-test's main task never yields during a benchmark. IDLE starves,
+and `task_wdt` prints a full register dump to the console every five
+seconds regardless. Every benchmark in this suite brackets its whole loop
+with `esp_timer_get_time()`, so a dump that lands inside that window is
+charged straight to the simulation - by up to 2.6x, silently, with
+nothing in the report to say so.
+
+It is deterministic, not a fluke of timing: same image, same offsets,
+same collisions, every time.
+
+- `performance_20260826_150930` and `_151301`, the same image captured
+  twice, both contaminated on the same two rows - four liquids and
+  thermal shock.
+- D3 and the 2026-08-25 stale capture, the same commit, both contaminated
+  on the screen of fire at the same 42,040 ms mark.
+- H0's two captures, identical down to `elapsed_ms=78414`.
+- D4's two captures, identical including `failures=5 elapsed_ms=47445`.
+
+Repeating a capture does not shake the contamination off; it reproduces
+it exactly, which is what makes it easy to trust a bad number the second
+time it comes back the same.
+
+Across this round's own device batches the collision hit different rows
+depending on the image: B1 caught four liquids and thermal shock; B4
+caught screen of fire, four liquids and thermal shock; D2 caught
+full-size step, mixed scene and the every-material flip. Every row used
+above in this section was checked against the collision windows first and
+is clean; the contaminated rows were discarded rather than corrected,
+since there is no way to subtract a register dump's console-I/O cost
+after the fact.
+
+One caveat on the detector itself: it can only flag a collision inside a
+capture it actually finished reading, so a capture that stops partway
+reads as clean rather than as unchecked. D5's second capture is the case
+in point - it ends at the screen of water, 479 lines against the first
+capture's 594 and six watchdog dumps recorded against nine - and reports
+zero contaminated rows where the first D5 capture correctly reports the
+screen of fire. Every row both captures do contain agrees to the
+microsecond, with identical collision timestamps, so this is not a
+counter-example to the determinism above; it is a reminder that "no
+collision found" and "capture complete" are two different claims.
+
+The consequence sits in the current budgets. The `649e732` re-base
+derived every one of its thirteen targets from the `150930` capture, and
+two of those rows are contaminated ones - four liquids, pegged from
+125,430, and thermal shock, pegged from 106,650. Both budgets are too
+loose by whatever the console I/O cost that day, and neither is changed
+here: the budgets had just been re-based when this round started, and
+loosening or tightening one is not this round's call to make.
+
+The fix is reporting-side, not benchmark-side: detect the collision from
+the log (a register-dump signature inside a timing window) and flag the
+row, or turn the watchdog off in the diag image entirely
+(`CONFIG_ESP_TASK_WDT_INIT=n` in `sdkconfig.defaults.diag`) as its own
+commit against its own fresh baseline, since that changes the image's
+layout and every number in it. What must not happen is feeding the
+watchdog from inside the measured loop - that stops the contamination by
+changing what is being measured, which is a worse kind of wrong than
+leaving it visible.
+
+### What this attempt is worth carrying
+
+**A host-validated win is a hypothesis about the device until the device
+measures it.** The viscosity-gate hint was 26% on the host and real on
+the device too - but a different amount, recovered from a different
+mechanism, and if this round had trusted round five's host number instead
+of flashing it, the device's 284 us of unrecovered gate cost would still
+be unexplained today.
+
+**A line that never executes can still cost the device 5% through what
+the compiler does around it.** `e03aabd`'s branch is unreachable in both
+control scenes, proven by host counters that see zero non-empty targets
+in 10,304 calls a step, and it still moved both controls by about 301 us
+apiece by changing `sand_step`'s instruction schedule. Nothing about the
+branch's logic explains that; only its presence in the source does.
+
+**A control benchmark proves a change added no work. It does not prove
+the change added no cost.** Four separate relinks moved these two
+controls by exactly zero, which is real evidence against the standing
+layout-lottery figure - but `e03aabd` shows the controls can still move
+for a third reason that is neither new work nor layout: the same
+instructions, differently scheduled.
+
+**A benchmark harness that shares a console with a watchdog is measuring
+the console.** The contamination is deterministic and up to 2.6x, and two
+of the current budgets were pegged from rows that carry it. A number that
+reproduces exactly on a second capture has ruled out noise; it has not
+ruled out a watchdog collision, which reproduces exactly too.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

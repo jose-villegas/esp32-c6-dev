@@ -1,7 +1,7 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-fourteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+fifteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
 budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
 budget met, none ever raised**; a wave of new materials then put four back over, and
 the eleventh sorted the accident from the feature. The twelfth found a gate that could
@@ -9,10 +9,13 @@ never close; the thirteenth shipped no optimisation at all, measuring the two sh
 of thermal load nothing had measured yet — a shock and a steady boil. The fourteenth
 went the other way on purpose: it spent host time it did not have to, buying back a
 settled surface's true angle from a fix (30335ae, predating this campaign) that had
-quantised it to 0/45/90 degrees without anyone pricing the trade. The prose file
-holds the full derivations and is the authority when the two disagree; this page is
-for a first read, a refresher, or finding which attempt taught the lesson you
-half-remember.
+quantised it to 0/45/90 degrees without anyone pricing the trade. The fifteenth
+shipped no code at all — it was a fresh device capture chasing down two loose ends
+the eleventh attempt and the 2026-08-26 re-base had left open, and it found both,
+plus a watchdog that had been charging its own console output to the benchmarks
+it was meant to be guarding. The prose file holds the full derivations and is the
+authority when the two disagree; this page is for a first read, a refresher, or
+finding which attempt taught the lesson you half-remember.
 
 ---
 
@@ -67,6 +70,11 @@ device capture, in the wrong direction**, by something in the neighbourhood of t
 and this round's cost lands on every liquid cell whether or not the gravity it runs
 under ever leaves the axis.
 
+**That prediction still stands, untested.** The fifteenth attempt's device captures
+are all pre-4bdcf77 — the attribution round it ran chased two older findings, not
+this one, and none of its numbers include the fourteenth attempt's fix. The next
+device capture taken after 4bdcf77 lands is the one that tests it.
+
 ---
 
 ## The campaign, one line per attempt
@@ -91,6 +99,7 @@ the next person from re-running them.
 | 12 | 🟠 | A mask that measured nothing, and a gate that never closed | Three new benchmarks put the reaction engine under cross-material load for the first time. A per-cell "can this react" mask measured **−0.1%** where the counters promised 19.3% of cells were skippable — too cheap to be worth skipping. The real find: a convection gate that could never close on smoke or steam, costing **41,215 neighbour scans a step** on a screen of gas — fixed with a flag that arms and is never cleared, **−7.1%**. Measure-by-deleting also priced the gas pass's sight scan at **15-18%** of the fire benchmarks — the next round's target, not yet built. |
 | 13 | 🟢 | Two scenes for the shape of load nothing had measured | Everything benchmarked so far was a transient; nothing measured a heat source left running. A thermal shock lattice (480 glass-ringed compartments) and a boiler (a stone basin held at a sustained boil) shipped as a pair, each with a host guard whose assertions were checked by breaking the scene: **24 of 33** individually turned red. Ten steps was a measured decision, not a round one — the only window where the last third of new cullet still clears **15%** of the total instead of trailing off. An earlier boiler draft's exact-conservation count held by **one step**; a floor replaced it. No optimisation shipped — two device ceilings added, both provisional. |
 | 14 | 🟠 | Two rays, dithered in space instead of time | Cross-flow's nearest-axis fix (30335ae) was correct but unpriced: a settled surface could only ever be perpendicular to one of eight directions, so it quantised to 0/45/90 — measured as two values across the whole tilt range, ≈0.00 below 22.5° and ≈0.94 above. The near-vertical octant couldn't tilt at all: its ray is horizontal, and a horizontal ray moves mass only within a row. The fix moves the dither from TIME into SPACE — a fixed per-column pattern choosing between two rays — and compares gravitational potential rather than raw mass. Cost: **+8%** on host water at the axis gravity every benchmark uses, **+29-37%** off-axis, which no budget measures. Slow alternation was rejected on a measurement: switching axis on a settled pool costs **1,582** units of churn against the flicker guard's own ceiling of 60. |
+| 15 | 🟠 | Two loose ends closed, and a watchdog counting itself in | An attribution round — no code shipped. Pinned the stale 2026-08-25 capture to `4b5168c` by matching its 272 self-test names against `RUN_TEST()` declarations at each candidate, then validated the method by rebuilding that commit fresh a day later: four rows exact, one off by **1 µs**. The liquid-free controls' **+9.6%**: byte-identical simulation and unchanged instruction count end to end, then isolated by device bisect to one commit, `e03aabd` — a line that **never executes** in either control, costing **~5%** purely from how GCC rescheduled `sand_step` around it once it existed. Round five's 28% host win: real on device too, confirmed by `objdump` moving exactly the blocks it should — but only **20%** of the gate's cost there, because the device's real water regression was `move_liquid_grain` **nearly tripling** across four separate commits, not the gate. Underneath both: a task watchdog silently charging its own console dump to the benchmark loop it shares a UART with, **up to 2.6×**, deterministically — two of the current thirteen budgets were pegged from contaminated rows and are too loose by an unknown amount. |
 
 ---
 
