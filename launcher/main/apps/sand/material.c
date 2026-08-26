@@ -1661,11 +1661,15 @@ static const gfx_color_t wood_grain[8] = {
  * other, and half of what makes it read as a canopy rather than as more
  * stem is that it is not one flat green.
  *
- * Worth knowing before reaching for the withering chain below: on a
- * living tree the yellow and brown stages below never happen at all.
- * Foliage is sheltered_by wood, every leaf on a tree touches some, and
- * shelter stops withering outright rather than slowing it - so a healthy
- * tree is 100% green and its colour is entirely this pair. */
+ * Still most of what a tree's colour is, though no longer all of it.
+ * This pair was the whole of it for as long as the WITHERING chain was
+ * the only way a leaf could change: foliage is sheltered_by wood, every
+ * leaf on a tree touches some, and shelter stops withering outright - so
+ * a healthy tree measured 100% green through five different withering
+ * configurations. Senescence is what reaches it now, and a watered crown
+ * runs about 11% turned, so the gold and brown below are worth as much
+ * care as this pair rather than being decoration for a case that never
+ * came up. See reaction_t.senesces. */
 #define LEAF_DARK   0x468F26
 #define LEAF_LIGHT  0x8CD24E
 
