@@ -4927,7 +4927,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                     "glass is hatched, so its body, its lines and their "
                     "crossings must all differ - equal ones paint a flat "
                     "pane and the shine vanishes");
-            } else if (m == MAT_STONE || m == MAT_DIRT) {
+            } else if (m == MAT_STONE) {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_SPECKLED, pat, why);
             } else if (m == MAT_WOOD) {
                 /* Speckled only while UNLIT. A burning log is a glow, and
@@ -5401,7 +5401,7 @@ static void test_dirt_takes_on_moisture_and_dries_out_again(void)
         sand_step(&s, 0, 1000, 0);
         for (int x = 0; x < W; x++) {
             const cell_t c = sand_at(&s, x, H - 2);
-            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_VARIANT(c) > wettest) {
+            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_MOISTURE(c) > wettest) {
                 wettest = CELL_VARIANT(c);
             }
         }
@@ -5424,7 +5424,7 @@ static void test_dirt_takes_on_moisture_and_dries_out_again(void)
         still_wet = 0;
         for (int x = 0; x < W; x++) {
             const cell_t c = sand_at(&s, x, H - 2);
-            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_VARIANT(c) != 0) {
+            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_MOISTURE(c) != 0) {
                 still_wet = 1;
             }
         }
@@ -5439,11 +5439,14 @@ static void test_dirt_takes_on_moisture_and_dries_out_again(void)
  * The variant is moisture, so a random shade would hand the player soil
  * that arrives already watered - the fourth meaning this variant can carry
  * and the fourth time a random shade would have been wrong. */
-static void test_new_dirt_starts_dry(void)
+static void test_new_dirt_starts_dry_in_a_random_tone(void)
 {
     fixture();
     sand_clear(&s);
-    sand_spawn(&s, W / 2, H / 2, 1, MAT_DIRT);
+    sand_spawn(&s, W / 2, H / 2, 2, MAT_DIRT);
+
+    int seen[SOIL_TONES];
+    memset(seen, 0, sizeof seen);
 
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -5451,11 +5454,98 @@ static void test_new_dirt_starts_dry(void)
             if (CELL_MATERIAL(c) != MAT_DIRT) {
                 continue;
             }
-            TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_VARIANT(c),
-                "painted dirt must arrive bone dry - its variant is "
-                "moisture, not a shade");
+            TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(c),
+                "painted dirt must arrive bone dry - the low bits of its "
+                "variant are moisture, and soil that arrives watered is "
+                "fertile ground for free");
+            seen[CELL_SOIL_TONE(c)] = 1;
         }
     }
+
+    /* The other half of the variant is a carried tone, and unlike the
+     * moisture it IS random - it is what makes a poured bank keep the
+     * pattern it was poured with instead of sliding under a texture
+     * pinned to the screen. */
+    for (int t = 0; t < SOIL_TONES; t++) {
+        TEST_ASSERT_TRUE_MESSAGE(seen[t],
+            "a brushful of dirt must use every tone - one tone is a flat "
+            "fill, which is what the screen-space grain was there to hide");
+    }
+}
+
+
+/* Soil's tone is CARRIED, and wetting it must not repaint it.
+ *
+ * This is the whole reason the tone is in the cell rather than hashed from
+ * screen position: it has to travel with the grain, so a poured bank keeps
+ * the pattern it was poured with and the strata show the shape of the
+ * pile. A tone that got recomputed - from position, or from the moisture,
+ * or clobbered by a soak that wrote the whole variant - would put the
+ * texture back on the screen where it started.
+ *
+ * The moisture assert is half the test: without it, code that never
+ * touched the variant at all would pass. */
+static void test_soil_keeps_its_tone_through_wetting_and_drying(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    uint8_t tone[W];
+    for (int x = 0; x < W; x++) {
+        tone[x] = (uint8_t)(x % SOIL_TONES);
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, tone[x], 0));
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    int ever_wet = 0;
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) != MAT_DIRT) {
+                continue;
+            }
+            if (CELL_MOISTURE(c) != 0) {
+                ever_wet = 1;
+            }
+            TEST_ASSERT_EQUAL_INT_MESSAGE(tone[x], CELL_SOIL_TONE(c),
+                "soil must keep the tone it was laid down with, however "
+                "wet it gets - a tone that is recomputed or overwritten is "
+                "a texture pinned to the screen again");
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(ever_wet,
+        "the soil has to have actually got wet, or this passes on soil "
+        "nothing ever happened to");
+}
+
+/* And the two tones have to LOOK different.
+ *
+ * Everything above is bookkeeping if the palette paints them the same, and
+ * nothing else would notice - the whole point of the bit is visual. Checked
+ * at every wetness, because the ramps are built per tone and a mistake in
+ * one end of one of them would otherwise hide. */
+static void test_the_two_soil_tones_are_different_colours(void)
+{
+    const gfx_color_t *pal = material_palette();
+
+    for (unsigned m = 0; m <= SOIL_MOISTURE_MAX; m++) {
+        const cell_t lo = CELL_SOIL(MAT_DIRT, 0, m);
+        const cell_t hi = CELL_SOIL(MAT_DIRT, 1, m);
+        char why[96];
+        snprintf(why, sizeof why, "soil tones at moisture %u", m);
+        TEST_ASSERT_TRUE_MESSAGE(pal[lo] != pal[hi], why);
+    }
+
+    /* And wetness still has to read, or the stain a watering leaves is
+     * invisible and the tone has eaten the ramp it was added beside. */
+    TEST_ASSERT_TRUE_MESSAGE(
+        pal[CELL_SOIL(MAT_DIRT, 0, 0)] !=
+        pal[CELL_SOIL(MAT_DIRT, 0, SOIL_MOISTURE_MAX)],
+        "dry soil and saturated soil of the SAME tone must differ - the "
+        "wetness ramp is how a watered patch shows at all");
 }
 
 /* Nothing soaks unless the simulation is told to let it.
@@ -5511,7 +5601,7 @@ static void test_a_wetting_front_spreads_past_the_cells_it_touched(void)
     }
     /* One saturated grain of soil at one end, and no water anywhere: what
      * spreads has to be what that one cell is holding. */
-    sand_set(&s, 0, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+    sand_set(&s, 0, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
 
     for (int i = 0; i < 400; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -5547,8 +5637,8 @@ static void test_moisture_is_conserved_as_it_spreads(void)
         sand_set(&s, x, H - 1, STONE);
         sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
     }
-    sand_set(&s, 0, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
-    const int placed = MATERIAL_VARIANTS - 1;
+    sand_set(&s, 0, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    const int placed = (int)SOIL_MOISTURE_MAX;
 
     /* Drying only ever removes moisture, so the total can fall but must
      * never rise above what was put in. */
@@ -5560,7 +5650,7 @@ static void test_moisture_is_conserved_as_it_spreads(void)
             for (int x = 0; x < W; x++) {
                 const cell_t c = sand_at(&s, x, y);
                 if (CELL_MATERIAL(c) == MAT_DIRT) {
-                    total += CELL_VARIANT(c);
+                    total += CELL_MOISTURE(c);
                 }
             }
         }
@@ -5589,7 +5679,7 @@ static void test_soil_a_wetting_front_converts_is_handed_a_real_share(void)
         sand_set(&s, x, H - 1, STONE);
         sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
     }
-    sand_set(&s, 0, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+    sand_set(&s, 0, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
 
     /* Caught the step it happens, before drying has taken any of it. */
     int handed = -1;
@@ -5597,12 +5687,12 @@ static void test_soil_a_wetting_front_converts_is_handed_a_real_share(void)
         sand_step(&s, 0, 1000, 0);
         const cell_t c = sand_at(&s, 1, H - 2);
         if (CELL_MATERIAL(c) == MAT_DIRT) {
-            handed = CELL_VARIANT(c);
+            handed = CELL_MOISTURE(c);
         }
     }
     TEST_ASSERT_TRUE_MESSAGE(handed >= 0,
         "the grain beside saturated soil must become soil at all");
-    TEST_ASSERT_TRUE_MESSAGE(handed >= 4,
+    TEST_ASSERT_TRUE_MESSAGE(handed >= (int)SOIL_MOISTURE_MAX / 2,
         "and must be handed a real share of what wet it - a grain born "
         "holding 1 is below the level it needs to wet anything itself, "
         "which makes every cell the front converts a dead end");
@@ -5626,7 +5716,7 @@ static void test_a_plant_on_wet_soil_grows_upward(void)
 
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
     }
     sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
 
@@ -5666,8 +5756,8 @@ static void test_a_plant_on_dry_soil_stays_where_it_is(void)
         sand_set(&s, x, H - 1, STONE);
         sand_set(&s, x, H - 2, x == W / 2 + 1 ? STONE
                              : x > W / 2 + 1
-                                 ? CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1)
-                                 : CELL_MAKE(MAT_DIRT, 0));
+                                 ? CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)
+                                 : CELL_SOIL(MAT_DIRT, 0, 0));
     }
     sand_set(&s, 1, H - 3, MATX(MATX_PLANT));
 
@@ -5707,7 +5797,7 @@ static void test_a_tall_plant_hardens_into_wood_that_is_not_alight(void)
 
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
     }
     sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
 
@@ -8214,7 +8304,9 @@ void run_sand_suite(void)
     RUN_TEST(test_hot_gas_does_not_set_fire_to_anything);
     RUN_TEST(test_wet_sand_becomes_dirt_and_spends_the_water);
     RUN_TEST(test_dirt_takes_on_moisture_and_dries_out_again);
-    RUN_TEST(test_new_dirt_starts_dry);
+    RUN_TEST(test_new_dirt_starts_dry_in_a_random_tone);
+    RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
+    RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_a_wetting_front_spreads_past_the_cells_it_touched);
     RUN_TEST(test_soil_a_wetting_front_converts_is_handed_a_real_share);

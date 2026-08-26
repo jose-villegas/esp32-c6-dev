@@ -1003,6 +1003,25 @@ const reaction_t reactions[MATERIAL_MAX] = {
 #define DIRT_WET 0x3A2A18
 #define DIRT_RGB(v) LERP(DIRT_DRY, DIRT_WET, v)
 
+/* One tone of soil: the dry and wet ends shifted together, so a bank shows
+ * its strata whether it is parched or sodden. Tone 0 is the darker. */
+#define SOIL_TONE_LO(rgb) LERP((rgb), 0x000000, 3)
+#define SOIL_TONE_HI(rgb) LERP((rgb), 0xFFFFFF, 2)
+
+#define SOIL_END(t, rgb) ((t) ? SOIL_TONE_HI(rgb) : SOIL_TONE_LO(rgb))
+
+/* Eight steps of wetness at one tone, which is half of dirt's palette
+ * block; the other half is the same thing at the other tone. */
+#define SOIL_RAMP(t)                                                       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  0)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  2)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  4)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  6)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  9)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 11)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 13)),       \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 15))
+
 #define WOOD_UNLIT 0x5A3D24
 #define WOOD_CHAR  0x2A0A00
 #define WOOD_GLOW  0xFF7A28
@@ -1228,15 +1247,18 @@ static const gfx_color_t palette[256] = {
                                     * into, and the transformation lands
                                     * without a visible seam */
     [MAT_DIRT * MATERIAL_VARIANTS] =
-    SHADES(DIRT_DRY, DIRT_WET),   /* dirt - the variant is MOISTURE, not a
-                                    * shade, so this is a wetness ramp: dry
-                                    * dusty tan at 0 through to dark damp
-                                    * earth at 15. Wet soil really is
-                                    * darker than dry, so the direction is
-                                    * not a choice - and it means a watered
-                                    * patch is visible as a dark stain
-                                    * rather than being a number only the
-                                    * plants can see */
+    /* dirt - TWO wetness ramps, one per carried tone, because the variant
+     * is a tone in the top bit and moisture in the low three (see
+     * SOIL_MOISTURE_BITS). Dry dusty tan at 0 through to dark damp earth
+     * at 7, twice. Wet soil really is darker than dry, so the direction is
+     * not a choice - and it means a watered patch reads as a dark stain
+     * rather than being a number only the plants can see.
+     *
+     * The two tones are what the grain used to be, moved from the renderer
+     * into the cell. They are a little further apart than stone's speckle:
+     * soil is the least uniform thing on the board, and the variation is
+     * most of what says so. */
+    SOIL_RAMP(0), SOIL_RAMP(1),
     [MAT_SNOW * MATERIAL_VARIANTS] =
     SHADES(0xC6D8E4, 0xFFFFFF),   /* snow  - a powder, so a shade ramp
                                     * again, and a narrow one: cold blue
@@ -1447,30 +1469,12 @@ static const gfx_color_t stone_speckle[MATERIAL_VARIANTS][8] = {
     GFX_RGB(LERP(LERP(WOOD_UNLIT, 0x000000, 3),                            \
                  LERP(WOOD_UNLIT, 0xFFFFFF, 2), (k) * 15 / 7))
 
-/* Dirt's grain. Its variant is moisture, so like stone and wood it has no
- * shade of its own to vary, and a bank of it was one flat fill per wetness
- * level - which reads as painted card rather than as earth.
- *
- * Wider than stone's speckle, not narrower. Soil is the least uniform
- * thing on the board: it is sand and clay and rot mixed together, and the
- * variation is most of what says so. */
-#define DIRT_GRAIN(v, k)                                                   \
-    GFX_RGB(LERP(LERP(DIRT_RGB(v), 0x000000, 4),                           \
-                 LERP(DIRT_RGB(v), 0xFFFFFF, 3), (k) * 15 / 7))
-
-#define DIRT_GRAIN_ROW(v)                                                  \
-    { DIRT_GRAIN(v, 0), DIRT_GRAIN(v, 1), DIRT_GRAIN(v, 2),                \
-      DIRT_GRAIN(v, 3), DIRT_GRAIN(v, 4), DIRT_GRAIN(v, 5),                \
-      DIRT_GRAIN(v, 6), DIRT_GRAIN(v, 7) }
-
-static const gfx_color_t dirt_grain[MATERIAL_VARIANTS][8] = {
-    DIRT_GRAIN_ROW(0),  DIRT_GRAIN_ROW(1),  DIRT_GRAIN_ROW(2),
-    DIRT_GRAIN_ROW(3),  DIRT_GRAIN_ROW(4),  DIRT_GRAIN_ROW(5),
-    DIRT_GRAIN_ROW(6),  DIRT_GRAIN_ROW(7),  DIRT_GRAIN_ROW(8),
-    DIRT_GRAIN_ROW(9),  DIRT_GRAIN_ROW(10), DIRT_GRAIN_ROW(11),
-    DIRT_GRAIN_ROW(12), DIRT_GRAIN_ROW(13), DIRT_GRAIN_ROW(14),
-    DIRT_GRAIN_ROW(15),
-};
+/* Dirt has no grain table. It used to, hashed from screen position like
+ * stone's and wood's, and that is only right for a material that never
+ * moves: dirt falls and piles, so the texture stayed pinned to the screen
+ * while the dirt slid under it - a repeating pattern the board scrolled
+ * through rather than anything belonging to the soil. Its tone lives in
+ * the cell now, and the palette draws it. */
 
 static const gfx_color_t wood_grain[8] = {
     WOOD_GRAIN(0), WOOD_GRAIN(1), WOOD_GRAIN(2), WOOD_GRAIN(3),
@@ -1501,11 +1505,6 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
     case MAT_STONE:
         out[0] = edge ? stone_edge_speckle[v][hash & 7u]
                       : stone_speckle[v][hash & 7u];
-        out[1] = out[0];
-        out[2] = out[0];
-        return MATERIAL_SPECKLED;
-    case MAT_DIRT:
-        out[0] = dirt_grain[v][hash & 7u];
         out[1] = out[0];
         out[2] = out[0];
         return MATERIAL_SPECKLED;

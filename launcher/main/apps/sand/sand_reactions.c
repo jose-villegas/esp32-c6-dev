@@ -538,7 +538,10 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
                                   int w, int h, const reaction_t *r)
 {
     const cell_t c = row[x];
-    const uint8_t held = CELL_VARIANT(c);
+    /* Only the low bits - the top one is soil's carried tone, and reading
+     * the whole nibble as wetness would make half of all freshly poured
+     * dirt look sodden and feed plants that were never watered. */
+    const uint8_t held = CELL_MOISTURE(c);
     bool beside_liquid = false;
 
     const int soaks = (s->soak >= 0) ? s->soak : r->soaks;
@@ -566,17 +569,21 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
 
             if (r->soaks_to != 0) {
                 /* Becomes something else, holding the one unit it just
-                 * took - wet sand turning into soil. */
+                 * took - wet sand turning into soil. The tone comes from
+                 * the grain's own shade, so a dune that gets rained on
+                 * turns to soil without losing the pattern it was poured
+                 * with. */
                 s->cells[(size_t)y * (size_t)w + (size_t)x] =
-                    CELL_MAKE(r->soaks_to, 1);
+                    CELL_SOIL(r->soaks_to,
+                              CELL_VARIANT(c) >> SOIL_MOISTURE_BITS, 1);
                 latch_content_flags(s, s->cells[(size_t)y * (size_t)w +
                                                 (size_t)x]);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
                 return true;
             }
-            if (held + 1 < MATERIAL_VARIANTS) {
-                row[x] = CELL_MAKE(CELL_MATERIAL(c), held + 1);
+            if (held < SOIL_MOISTURE_MAX) {
+                row[x] = CELL_WITH_MOISTURE(c, held + 1);
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
             }
@@ -593,11 +600,10 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
      * a cell touching the LIQUID converted, so the wet dirt that formed
      * was a wall between the water and everything behind it.
      *
-     * A quarter of the soaking rate, so water reaching soil is always
-     * faster than soil passing it along - a patch spreads outward from
-     * where it was watered rather than everywhere at once. And only ever
-     * downhill in moisture, by two or more, which is what stops two damp
-     * cells passing the same level back and forth forever. */
+     * It runs at the full soaking rate. It was a quarter of it, on the
+     * reasoning that water reaching soil should always outpace soil
+     * passing it along - true, and it made the front so slow that the two
+     * were indistinguishable from "nothing happens". */
     const int spread = soaks;
 
     /* `dries` is what MARKS a variant as moisture. Sand soaks but does not
@@ -650,22 +656,25 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
             if (nr->soaks_to != 0) {
                 /* Dry sand beside wet soil becomes soil - and is handed
                  * enough to go on wetting ITS neighbours, which is what
-                 * turns a puddle into a spreading patch of earth. */
+                 * turns a puddle into a spreading patch of earth. It keeps
+                 * its own shade as the new soil's tone. */
                 give = held / 2;
-                s->cells[nat] = CELL_MAKE(nr->soaks_to, (uint8_t)give);
+                s->cells[nat] = CELL_SOIL(nr->soaks_to,
+                                          CELL_VARIANT(n) >> SOIL_MOISTURE_BITS,
+                                          (uint8_t)give);
                 latch_content_flags(s, s->cells[nat]);
             } else if (CELL_MATERIAL(n) == CELL_MATERIAL(c)) {
-                give = (held - CELL_VARIANT(n)) / 2;
+                give = (held - CELL_MOISTURE(n)) / 2;
                 if (give == 0) {
                     continue;           /* already even with this one */
                 }
-                s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n),
-                                          (uint8_t)(CELL_VARIANT(n) + give));
+                s->cells[nat] = CELL_WITH_MOISTURE(
+                    n, (uint8_t)(CELL_MOISTURE(n) + give));
             } else {
                 continue;
             }
 
-            row[x] = CELL_MAKE(CELL_MATERIAL(c), (uint8_t)(held - give));
+            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - give));
             mark_rows(s, y, y);
             mark_rows(s, ny, ny);
             wake_block_and_neighbors(s, x, y);
@@ -676,7 +685,7 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
 
     if (r->dries != 0 && held != 0 &&
         (int)(rng_next(&s->rng) & 0xFF) < r->dries) {
-        row[x] = CELL_MAKE(CELL_MATERIAL(c), held - 1);
+        row[x] = CELL_WITH_MOISTURE(c, held - 1);
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return held - 1 != 0;
@@ -770,7 +779,7 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
         if (CELL_IS_EMPTY(n)) {
             continue;
         }
-        if (reaction_of(n)->dries != 0 && CELL_VARIANT(n) != 0) {
+        if (reaction_of(n)->dries != 0 && CELL_MOISTURE(n) != 0) {
             soil_at = (int)nat;
             break;
         }
@@ -812,8 +821,8 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     wake_block_and_neighbors(s, gx, gy);
 
     const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_MAKE(CELL_MATERIAL(soil),
-                                  (uint8_t)(CELL_VARIANT(soil) - 1));
+    s->cells[soil_at] = CELL_WITH_MOISTURE(soil,
+                                           (uint8_t)(CELL_MOISTURE(soil) - 1));
     mark_rows(s, soil_at / w, soil_at / w);
 
     /* HARDENING. Counted from the bottom of the column - the cell whose

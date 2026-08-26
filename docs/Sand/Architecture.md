@@ -36,6 +36,8 @@ that row:
 | `0` (immortal) and `kind == KIND_LIQUID` | fill level, 1-15 | water |
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
 | `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass, stone |
+| `burn_decay != 0` | **how much is left to burn**; 0 is unlit, and anything else means the cell is on fire | wood |
+| `dries != 0` | **a carried tone in the top bit, moisture 0-7 in the low three** - the one variant that is split, see below | dirt |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -45,9 +47,11 @@ for the exact budget.
 
 ## The material table, today
 
-9 of 16 slots used; the other 7 are zeroed to an inert inline material
-(`kind = KIND_STATIC`, `density = 255`) so a corrupt cell byte can never
-crash anything, only sit there as an immovable block.
+All 16 slots are now spoken for: 14 ordinary materials, id 15 given over
+to the extended range (below), and id 0 is empty. Slots that hold nothing
+are zeroed to an inert inline material (`kind = KIND_STATIC`,
+`density = 255`) so a corrupt cell byte can never crash anything, only sit
+there as an immovable block.
 
 | Slot | Material | `kind` | Rises/falls | Notable fields |
 |---|---|---|---|---|
@@ -57,15 +61,16 @@ crash anything, only sit there as an immovable block.
 | 3 | stone | `KIND_STATIC` | never | `density=200`, undisplaceable. Carries a **temperature** like glass, but never melts and never shatters - acid is the only thing that destroys it |
 | 4 | gas | `KIND_GAS` | rises | `sight=16`, `decay=32`, `mobility=96` |
 | 5 | fire | `KIND_GAS` | rises | `sight=5` (tighter), `decay=96` (shorter life), reacts via a second pass (below) |
-| 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own |
+| 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own. Its variant is **burn progress**, which is what let ember stop being a slot of its own - a burning log is wood with a non-zero variant. Also what a plant hardens into |
 | 7 | steam | `KIND_GAS` | rises | `sight=20`, `mobility=160` (fastest); water that got hot |
 | 8 | smoke | `KIND_GAS` | rises | `sight=24` (widest), `decay=16` (longest-lived); fuel that burned out |
-| 9 | ember | `KIND_STATIC` | never | `density=150`, `decay=24`; what wood chars into, reacts alongside fire |
+| 9 | dirt | `KIND_POWDER` | falls | `density=62` (just above sand); soaks up any liquid and dries out again. Variant is a **tone plus moisture** - the one split nibble. Took the slot ember gave up |
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
 | 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
-| 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat, and the only material whose variant is a temperature |
-| 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material. Melts in any liquid, keeps indefinitely on dry ground
+| 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat. Carries a temperature, like stone, and unlike stone it shatters on thermal shock |
+| 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material. Melts in any liquid, keeps indefinitely on dry ground |
+| 15 | *extended* | one shared row | - | not a material: the low nibble names one of sixteen more. `MATX_ICE`, `MATX_PLANT` so far |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -274,8 +279,19 @@ be saved for something that has to move or carry a variant.
 
 **Reinterpret a nibble.** Free, and already the pattern: liquids read the
 variant as fill, transients as life remaining, glass and stone as
-temperature. A material needing two small quantities can split its own
-nibble.
+temperature, wood as how far along it has burned. A material needing two
+small quantities can split its own nibble - dirt does, and how it got
+there is the useful part.
+
+Moisture had all four bits and used the bottom of them. Measured over six
+waterings of a dirt bank, 99.98% of soil cells sat at 7 or below: the
+diffusion spreads water thin almost at once, so saturation is a state soil
+passes THROUGH rather than one it sits in. The top bit was dead, and
+measuring that is what turned "dirt needs a carried shade, and there are no
+bits" into a bit that was already there.
+
+Worth doing in that order. The counter-argument to splitting is always that
+the range is needed, and it is usually asserted rather than measured.
 
 This adds no slots - it removes the *need* for one. Glass carrying a
 temperature is why there is no separate "hot glass" material, and stone

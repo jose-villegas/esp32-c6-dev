@@ -74,12 +74,18 @@ static cell_t random_cell(sand_t *s, material_id_t material)
     if (reactions[material].burn_decay != 0) {
         return CELL_MAKE(material, 0);
     }
-    /* A material that dries has MOISTURE in its variant, and a fresh cell
-     * of it is bone dry. Fourth meaning the variant can carry, and the
-     * fourth reason a random shade would be wrong - it would hand the
-     * player soil that arrives already watered. */
+    /* A material that dries has MOISTURE in its variant - but only in the
+     * low three bits of it. The top bit is a carried tone, and that one
+     * IS random, which is the whole point: it is what makes a poured bank
+     * of soil keep the pattern it was poured with instead of sliding
+     * under a texture pinned to the screen.
+     *
+     * So this is the one variant that is part random shade and part
+     * something else, and the two halves have to be picked separately:
+     * random tone, bone-dry moisture. Fresh soil that arrived already
+     * watered would hand the player fertile ground for free. */
     if (reactions[material].dries != 0) {
-        return CELL_MAKE(material, 0);
+        return CELL_SOIL(material, rng_below(&s->rng, SOIL_TONES), 0);
     }
     return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
 }

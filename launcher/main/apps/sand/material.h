@@ -83,6 +83,48 @@ typedef uint8_t cell_t;
  * and about to break. Three levels of frost is not much resolution, but it
  * is the difference between a state you can see and one you cannot, and
  * the levels above ambient are the ones doing the interesting work. */
+/* SOIL packs TWO things into its four bits: a carried tone in the top
+ * bit and moisture in the low three.
+ *
+ * Moisture alone had the whole nibble, and the top half of it was dead.
+ * Measured over six waterings of a dirt bank, 99.98% of soil cells sat at
+ * 7 or below and 94.6% at 3 or below - half-the-difference diffusion
+ * spreads water thin almost immediately, so saturation is a state soil
+ * passes through rather than one it sits in. Three bits cost 0.02% of
+ * observed states.
+ *
+ * What the freed bit buys is the one thing soil could not have: a shade
+ * that TRAVELS WITH THE GRAIN. Dirt was drawn with a positional hash, like
+ * stone and wood, and that is fine for materials that never move - but
+ * dirt falls and piles, so the texture stayed nailed to the screen while
+ * the dirt slid underneath it. Reported as "the dirt shading even seems to
+ * be related to screen pos, the pattern repeats", which is exactly what a
+ * screen-space hash is.
+ *
+ * A carried tone instead means a poured bank keeps the pattern it was
+ * poured with, and the strata show the shape of the pile - the thing sand
+ * has always done with its shade, and the thing dirt was missing. It costs
+ * no render-side work at all, because palette[] is indexed by the whole
+ * cell byte: the tone and the wetness ramp are simply different entries. */
+#define SOIL_MOISTURE_BITS  3
+#define SOIL_MOISTURE_MAX   ((1u << SOIL_MOISTURE_BITS) - 1u)
+#define SOIL_TONES          (MATERIAL_VARIANTS >> SOIL_MOISTURE_BITS)
+
+#define CELL_MOISTURE(c)    ((uint8_t)(CELL_VARIANT(c) & SOIL_MOISTURE_MAX))
+#define CELL_SOIL_TONE(c)   ((uint8_t)(CELL_VARIANT(c) >> SOIL_MOISTURE_BITS))
+
+/* Same cell, same tone, different wetness. */
+#define CELL_WITH_MOISTURE(c, m)                                          \
+    CELL_MAKE(CELL_MATERIAL(c),                                           \
+              (uint8_t)((CELL_VARIANT(c) & ~SOIL_MOISTURE_MAX) |          \
+                        ((m) & SOIL_MOISTURE_MAX)))
+
+/* And soil built from scratch, tone and wetness given separately. */
+#define CELL_SOIL(mat, tone, m)                                           \
+    CELL_MAKE((mat), (uint8_t)((((tone) & (SOIL_TONES - 1))               \
+                                    << SOIL_MOISTURE_BITS) |              \
+                               ((m) & SOIL_MOISTURE_MAX)))
+
 #define SAND_AMBIENT_HEAT 3
 
 /* The heat level at or above which a cell with `shatters_to` cracks rather
