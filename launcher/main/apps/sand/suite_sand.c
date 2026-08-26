@@ -6588,9 +6588,9 @@ static void test_a_plant_rooted_on_stone_does_not_drink(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_OIL),
-        "oil walled in above a plant must stay there - a plant drinks "
-        "water, and a rule that takes any liquid pipes a slick into the "
-        "ground as moisture");
+        "oil walled in above a plant must stay there - a plant drinks "
+        "water, and a rule that takes any liquid pipes a slick into the "
+        "ground as moisture");
 }
 
 /* --- growing ------------------------------------------------------------- */
@@ -8758,6 +8758,278 @@ static void test_the_mixed_scene_puts_every_material_pair_in_contact(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(want, found, why);
 }
 
+/* --- three more scenes, built once and shared with a device benchmark --- */
+
+/* A previous round of this project spent three device rounds optimising a
+ * function a failing benchmark never actually called - the benchmark timed
+ * a scene that did not exercise the code it claimed to. The rule that came
+ * out of it: a benchmark must be proven to run the reactions it claims to
+ * measure, and "proven" means a host test that builds the SAME scene
+ * through the SAME builder and checks the reactions really fired, not a
+ * comment asserting they do. The three scenes below follow that shape -
+ * see all_pairs_material_at() above for where the pattern started. */
+
+/* Four liquids of different density, painted upside down. Left alone in
+ * their own settled order - lava at the bottom, oil on top, water and acid
+ * between - the four of them stratify within a few steps and the scene
+ * goes quiet: each layer finds its level and the interfaces that were
+ * doing the reacting stop touching. Painted INVERTED instead - lava on
+ * top, then acid, then water, then oil at the bottom - every layer has to
+ * migrate through every other layer to reach where density wants it, so
+ * the interfaces stay in contact and reacting for the whole measured
+ * window instead of resolving into inert bands.
+ *
+ * One copy, called by both the device test that times it and the host test
+ * below that checks the reactions it claims to keep alive actually are. */
+static void build_four_liquid_scene(sand_t *s)
+{
+    const int top = REAL_H / 6;                 /* headroom above the pour */
+    for (int y = top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int band = ((y - top) * 4) / (REAL_H - top);
+            const material_id_t m = (band == 0) ? MAT_LAVA
+                                   : (band == 1) ? MAT_ACID
+                                   : (band == 2) ? MAT_WATER : MAT_OIL;
+            sand_set(s, x, y, CELL_MAKE(m, MASS_MAX));
+        }
+    }
+}
+
+/* The property the scene above exists for: that inverting the density
+ * order really does keep the reactions running instead of merely moving
+ * where they happen. Host-side, same reasoning as
+ * test_the_mixed_scene_puts_every_material_pair_in_contact - coverage is a
+ * property of the scene and needs no clock, only the timing needs the
+ * chip.
+ *
+ * Runs with the app's own per-material scatter, decay and mobility rather
+ * than the defaults, because app_sand.c does too - see the device test
+ * below for why that setting matters here specifically. */
+static void test_the_four_liquid_scene_keeps_reacting_after_settling(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 29u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+    build_four_liquid_scene(&s);
+
+    for (int i = 0; i < 10; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int stone = 0, steam = 0, fire = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_STONE)      stone++;
+            else if (m == MAT_STEAM) steam++;
+            else if (m == MAT_FIRE)  fire++;
+        }
+    }
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, stone,
+        "lava quenched by water should still be leaving a good showing of "
+        "stone at the end of the window - if it isn't, the scene has gone "
+        "quiet and the device test beside it is measuring almost nothing");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, steam,
+        "water boiled and fire quenched should still be leaving a good "
+        "showing of steam at the end of the window - if it isn't, the "
+        "scene has gone quiet and the device test beside it is measuring "
+        "almost nothing");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, fire,
+        "oil ignited by lava should still be leaving a good showing of "
+        "fire at the end of the window - if it isn't, the scene has gone "
+        "quiet and the device test beside it is measuring almost nothing");
+}
+
+/* A lava reservoir on the floor, a water slab on the roof, and between them
+ * repeating six-cell columns of sand, wood and oil with every fourth
+ * column left empty as a chute. Lava is the reaction-richest material in
+ * the simulation - it is a heat source, it quenches to stone in water, it
+ * boils water to steam, it turns sand to glass by heat, it ignites both
+ * wood and oil, and it flares - so this puts all six of those in one scene
+ * instead of spending one test per reaction.
+ *
+ * The empty column matters more than it looks. Without it, the roof water
+ * perches on top of the columns and takes most of a minute to reach the
+ * lava, so the quench and boil reactions - two of the six this scene
+ * exists to exercise - never fire inside the measured window at all. With
+ * it, water has somewhere to fall straight through, and reaches the lava
+ * while the scene is still burning. */
+static void build_lava_stress_scene(sand_t *s)
+{
+    /* floor: a lava reservoir */
+    for (int y = (REAL_H * 3) / 4; y < REAL_H; y++)
+        for (int x = 0; x < REAL_W; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    /* middle: repeating columns six cells wide - sand, wood, oil, then a
+     * gap - deliberately, not an oversight, see the comment above. */
+    for (int y = REAL_H / 3; y < (REAL_H * 3) / 4; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int col = (x / 6) % 4;
+            if (col == 0)      sand_set(s, x, y, SAND_FIRST_SHADE);
+            else if (col == 1) sand_set(s, x, y, CELL_MAKE(MAT_WOOD, 0));
+            else if (col == 2) sand_set(s, x, y, CELL_MAKE(MAT_OIL, MASS_MAX));
+            /* col == 3 is the chute - left empty on purpose */
+        }
+    }
+
+    /* roof: a water slab */
+    for (int y = 0; y < REAL_H / 6; y++)
+        for (int x = 0; x < REAL_W; x++)
+            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+}
+
+/* All six reactions the scene above exists to cover really do fire in it,
+ * checked the same way test_the_four_liquid_scene_keeps_reacting_after_-
+ * settling checks its own scene: build it through the same function the
+ * device test uses, step it the same number of times, and count. */
+static void test_the_lava_stress_scene_reaches_every_reaction_it_claims(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 37u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+    build_lava_stress_scene(&s);
+
+    for (int i = 0; i < 30; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int glass = 0, fire = 0, steam = 0, stone = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_GLASS)      glass++;
+            else if (m == MAT_FIRE)  fire++;
+            else if (m == MAT_STEAM) steam++;
+            else if (m == MAT_STONE) stone++;
+        }
+    }
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(400, glass,
+        "sand converting under sustained heat should have left a good "
+        "showing of glass");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(400, fire,
+        "wood and oil igniting against the lava should have left a good "
+        "showing of fire");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(20, steam,
+        "water reaching the lava through the chute should have boiled some "
+        "of it to steam - a low count here means the chute let the water "
+        "perch instead of falling through");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(5, stone,
+        "water reaching the lava through the chute should have quenched "
+        "some of it to stone - a low count here means the chute let the "
+        "water perch instead of falling through");
+}
+
+/* An edge-to-edge checkerboard of smoke and steam, with one spark of fire
+ * in a bottom corner. The same "deliberately synthetic worst case, not
+ * something the pour brush can produce" framing as the two full-screen
+ * fire tests below already use for an edge-to-edge screen of fire: no
+ * scene a user can actually paint packs the whole grid with gas, but the
+ * reactions pass has to survive the case where one does.
+ *
+ * What this catches that neither of those two does: fire and plain gas
+ * have no convection behaviour, but smoke and steam do - they warm what
+ * they touch - and no benchmark in this suite has ever put either of them
+ * on screen in quantity before. This is the scene where the reactions
+ * pass's per-cell neighbour work for gases actually runs.
+ *
+ * Left at the DEFAULT scatter, decay and mobility - deliberately NOT the
+ * per-material settings build_four_liquid_scene() uses above. At
+ * per-material decay the smoke and steam fade away within the measured
+ * window, and the scene stops being the steady worst case it exists to
+ * be. */
+static void build_smoke_and_steam_scene(sand_t *s)
+{
+    for (int y = 0; y < REAL_H; y++)
+        for (int x = 0; x < REAL_W; x++)
+            sand_set(s, x, y, ((x + y) & 1) ? CELL_MAKE(MAT_SMOKE, 8)
+                                             : CELL_MAKE(MAT_STEAM, 8));
+    sand_set(s, REAL_W / 2, REAL_H - 1, CELL_MAKE(MAT_FIRE, 8));
+}
+
+/* The scene above really is still a gas screen at the end of the measured
+ * window, not one that quietly emptied itself into something else - and
+ * cells are conserved throughout, the same setup check the two full-screen
+ * fire tests below make of their own scenes. */
+static void test_the_smoke_and_steam_scene_stays_a_gas_screen(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 31u);
+    sand_enable_sleeping(&s, blocks);
+
+    build_smoke_and_steam_scene(&s);
+    const int total = REAL_W * REAL_H;
+
+    for (int i = 0; i < 10; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int smoke = 0, steam = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_SMOKE)      smoke++;
+            else if (m == MAT_STEAM) steam++;
+        }
+    }
+    const int count = sand_count(&s);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(total, count,
+        "cells must only ever convert material, never appear or vanish, "
+        "across a screen of smoke and steam");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(5000, smoke,
+        "the scene should still be mostly smoke and steam at the end of "
+        "the window - a low count means this has decayed into something "
+        "the device test beside it no longer measures");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(5000, steam,
+        "the scene should still be mostly smoke and steam at the end of "
+        "the window - a low count means this has decayed into something "
+        "the device test beside it no longer measures");
+}
+
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
 #include "esp_log.h"
@@ -9368,6 +9640,209 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
         "same ballpark as measured - not a real-time promise, but a "
         "real regression guard");
 }
+
+/* Every material at once above flips gravity on a settled scene; this one
+ * never lets the scene settle in the first place. Four liquids of
+ * different density are painted upside down (build_four_liquid_scene()
+ * above, shared with test_the_four_liquid_scene_keeps_reacting_after_-
+ * settling, which is what proves this really does keep reacting rather
+ * than just claiming to) so lava, acid, water and oil spend the whole
+ * measured window migrating past each other instead of settling into
+ * inert bands - see that function's comment for why upside down is what
+ * makes that true.
+ *
+ * This is also the only benchmark in this file, besides the deliberate-
+ * reduction-target gravity-flip-on-every-material test above, that runs
+ * with sand_set_mobility(SAND_MOBILITY_PER_MATERIAL) - the setting
+ * app_sand.c itself actually calls. A liquid's mobility decides how often
+ * it refuses to move at all (oil refuses about two moves in three), and
+ * until this test existed nothing in this file was holding the app's own
+ * liquid path to any budget - the gravity-flip test above runs at that
+ * setting too, but it is graded as a reduction target, not a real ceiling.
+ * Four liquids at once, at the app's own mobility, is now that benchmark.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET. Nobody has run this test on
+ * hardware yet, so - same as the every-material gravity flip above - this
+ * is a deliberately loose SANITY CEILING: wide enough that it cannot pass
+ * as tuned, tight enough to catch something catastrophic like an
+ * accidental quadratic. It is not extrapolated from the host timing
+ * either - the every-material test above already tells that story once
+ * (a number reasoned from another scene's device/host ratio came out four
+ * times too pessimistic against what the chip actually did), and there is
+ * no reason to repeat the mistake here. Replace this with a real figure -
+ * about 9-10% over the measured number, the method this file's other
+ * budgets document - the first time this runs on a device, and say what
+ * was measured. */
+static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 29u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_four_liquid_scene(&real);
+
+    /* Settle first - the same "let it get going" step as the every-material
+     * flip test above, so the measured window lands on a live scene. */
+    for (int i = 0; i < 10; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 20;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "four liquids reacting at once, %dx%d: %lld "
+                             "us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(150000, (int)per_step,
+        "four liquids reacting under the app's own per-material mobility "
+        "must stay in the same ballpark as this provisional ceiling - see "
+        "the comment above for why it is provisional");
+}
+
+/* A lava reservoir, a water roof, and columns of sand, wood and oil between
+ * them (build_lava_stress_scene() above, shared with
+ * test_the_lava_stress_scene_reaches_every_reaction_it_claims, which
+ * proves all six reactions this scene exists for really do fire in it).
+ * Lava is the reaction-richest material in the simulation, and this scene
+ * puts every reaction it takes part in - quenching, boiling, glassing,
+ * igniting wood, igniting oil, flaring - in front of the reactions pass at
+ * once, across a scene big enough to keep them going for the whole
+ * measured window rather than one that burns out in the first few steps.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET, for the same reason as the
+ * liquid-scene test above: nobody has run this on hardware yet. It is a
+ * deliberately loose SANITY CEILING, not extrapolated from host timings -
+ * this file has already been burned once by an extrapolated figure that
+ * came out four times too pessimistic against the real device number, and
+ * there is no reason to repeat that here. Replace it with a real figure -
+ * about 9-10% over the measured number, the method this file's other
+ * budgets document - the first time this runs on a device, and say what
+ * was measured. */
+static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 37u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_lava_stress_scene(&real);
+
+    for (int i = 0; i < 30; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 20;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "lava stress scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(150000, (int)per_step,
+        "the lava stress scene must stay in the same ballpark as this "
+        "provisional ceiling - see the comment above for why it is "
+        "provisional");
+}
+
+/* A full screen of smoke and steam with one spark of fire
+ * (build_smoke_and_steam_scene() above, shared with
+ * test_the_smoke_and_steam_scene_stays_a_gas_screen, which proves the
+ * scene conserves cells and is still a gas screen at the end of the
+ * window rather than one that decayed into something else). Smoke and
+ * steam are the only materials in this simulation with convection
+ * behaviour - they warm what they touch - and no benchmark in this file
+ * has ever put either of them on screen in quantity before this one.
+ *
+ * Ten measured steps, not twenty: the same reason
+ * test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget
+ * and test_a_full_screen_of_fire_fits_in_the_frame_budget above use ten -
+ * a full grid of gas is the most expensive thing this simulation does per
+ * step, and a previous round of this project tripped the device's
+ * five-second task watchdog with a test that ran too many steps across a
+ * full screen. No settling steps either - the scene is the worst case
+ * from the moment it is painted.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET, for the same reason as the two
+ * device tests above: nobody has run this on hardware yet. It is a
+ * deliberately loose SANITY CEILING, not extrapolated from host timings -
+ * an extrapolated figure elsewhere in this file already came out four
+ * times too pessimistic against the real device number, which is
+ * reason enough not to try that again here. Replace it with a real
+ * figure - about 9-10% over the measured number, the method this file's
+ * other budgets document - the first time this runs on a device, and say
+ * what was measured. */
+static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 31u);
+    sand_enable_sleeping(&real, blocks);
+
+    build_smoke_and_steam_scene(&real);
+    const int total = REAL_W * REAL_H;
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 10;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "screen of smoke and steam, %dx%d: %lld us "
+                             "per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    /* Read before the frees below, asserted after - the same fix
+     * test_a_gravity_flip_on_every_material_at_once_stays_sane documents:
+     * Unity longjmps out of a failing assert, so an assert ahead of
+     * free() would skip it and leak ~41 KB on this device's no-PSRAM
+     * heap. */
+    const int count = sand_count(&real);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(total, count,
+        "setup: cells must only ever convert material, never appear or "
+        "vanish, across a screen of smoke and steam");
+    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
+        "a full screen of smoke and steam must stay in the same ballpark "
+        "as this provisional ceiling - see the comment above for why it "
+        "is provisional");
+}
 #endif /* DEVICE_BUILD */
 
 /* --- suite -------------------------------------------------------------- */
@@ -9571,6 +10046,9 @@ void run_sand_suite(void)
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
+    RUN_TEST(test_the_four_liquid_scene_keeps_reacting_after_settling);
+    RUN_TEST(test_the_lava_stress_scene_reaches_every_reaction_it_claims);
+    RUN_TEST(test_the_smoke_and_steam_scene_stays_a_gas_screen);
     RUN_TEST(test_reinitialising_forgets_the_old_board);
     RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
     RUN_TEST(test_snow_painted_into_water_melts);
@@ -9632,6 +10110,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_gravity_flip_on_every_material_at_once_stays_sane);
     RUN_TEST(test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget);
     RUN_TEST(test_a_full_screen_of_fire_fits_in_the_frame_budget);
+    RUN_TEST(test_four_liquids_reacting_at_once_fits_in_the_frame_budget);
+    RUN_TEST(test_the_lava_stress_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
 #endif
 }
 
