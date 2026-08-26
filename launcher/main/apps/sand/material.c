@@ -1939,6 +1939,18 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * plant's now, not twice it: a stem being stouter than a leaf was
          * the old reasoning, and slowing the green stage down to the
          * floor - see below - used up the difference. */
+        /* OLD AGE, and the only reason a living tree ever changes
+         * colour - see reaction_t.senesces. A chance in 65536, so a leaf
+         * holds its green for roughly 32000 steps.
+         *
+         * Tuned against the CROWN rather than against a clock, because the
+         * two are coupled: leaves are replaced only by sprouting and by a
+         * canopy landing, so senescing faster than that supply just thins
+         * the tree. Measured over six watered trees, this holds the crown
+         * at 85% of the size it had when nothing aged, with 12% of it
+         * turned at any moment. Doubling it gives 21% turned for a crown
+         * at 67%, which is a barer tree than the colour is worth. */
+        .senesces     = 2,
         .withers      = 1,    /* the floor, so a SHED leaf stays green
                                 * as long as the encoding can express -
                                 * 256 steps against the 128 it had. A
@@ -1961,18 +1973,37 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
      * past, unable to grow - and differ only in colour, in how readily
      * they burn, and in what they turn into next.
      *
-     * Neither is `sheltered_by` anything. Shelter is what keeps a LIVING
-     * leaf on a tree through a dry spell; once a leaf has started to dry,
-     * finding itself beside a trunk again should not bring it back. */
+     * Both ARE `sheltered_by` wood, which they did not used to be. The
+     * old reasoning was that shelter should not bring a drying leaf back
+     * - but shelter never brought anything back; it only stops a cell
+     * dying of thirst, and a dead leaf hanging on a branch is exactly
+     * what happens in life.
+     *
+     * It matters now because senescence took over the clock. Without
+     * shelter these two were dying of drought long before they had
+     * finished their stage, and a crown showed about a quarter of the
+     * gold the numbers were tuned for. A DETACHED one still dries and
+     * goes, which is the case the old comment was really describing. */
     [MATX_LEAF_DRY] = {
         .clings_to    = MAT_WOOD,
+        .sheltered_by = MAT_WOOD,
         .drinks       = 40,     /* still lets water through to the roots */
-        /* SLOWER than the green stage it came from, not faster. The
-         * first cut had each step quicker than the last, and the yellow
-         * was over before you could see it - measured, a crown of eight
-         * showed at most one yellow cell at any sample. A leaf spends
-         * most of its dying being visibly dead. */
-        .withers      = 1,
+
+        /* TWELVE times the green stage's rate, so a leaf is green for
+         * most of its life and then turns quickly - which is both what a
+         * leaf does and what makes the turning legible: a stage nobody
+         * is ever in is a colour nobody ever sees.
+         *
+         * This reverses an earlier reading, and the reversal is the
+         * point. Under `withers` the dying stages had to be made SLOWER
+         * than the green one, because green was the shortest of the
+         * three and the yellow was over before it could be seen. Under
+         * senescence green is by far the longest - 32000 steps against
+         * this one's 2700 - so the ratio that used to starve the yellow
+         * now feeds it. Measured on a watered crown: 1.4 gold cells
+         * standing at any moment, where the old chain produced zero. */
+        .senesces     = 24,
+        .withers      = 1,      /* the drought path, at its floor */
         .withers_to   = MATX(MATX_LEAF_DEAD),
         .flammability = 140,    /* drier than green, and it shows */
         .dissolvable  = 245,
@@ -1980,7 +2011,11 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
 
     [MATX_LEAF_DEAD] = {
         .clings_to    = MAT_WOOD,
+        .sheltered_by = MAT_WOOD,
         .drinks       = 40,
+        .senesces     = 32,     /* the briefest stage of the three */
+        .renews_to    = MATX(MATX_LEAF),   /* ...and then round again, on
+                                            * a tree still being watered */
         .withers      = 1,
         .withers_to   = 0,      /* and then it is gone */
         .flammability = 200,    /* tinder */

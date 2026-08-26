@@ -6598,10 +6598,20 @@ static void test_loose_greenery_withers_a_stem_lignifies_a_crown_stays(void)
         "a scrap of green on bare stone must eventually go - it can "
         "neither drink nor lean on a trunk, and nothing else on the board "
         "would ever have cleared it away");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, 5, H - 2),
-        "but FOLIAGE touching wood must stay, however dry it gets - a tree "
-        "in a drought keeps its leaves, and a leaf cannot fall, so nothing "
-        "else would ever clear a crown whose trunk had burned away");
+    /* Still foliage of SOME stage. Which one is not this test's business
+     * and is no longer fixed: senescence can age it green to gold to
+     * brown while it sits there, and that is a different mechanism with
+     * its own test. What matters here is that drought did not take it. */
+    {
+        const cell_t crown = sand_at(&s, 5, H - 2);
+        TEST_ASSERT_TRUE_MESSAGE(crown == MATX(MATX_LEAF) ||
+                                 crown == MATX(MATX_LEAF_DRY) ||
+                                 crown == MATX(MATX_LEAF_DEAD),
+            "but FOLIAGE touching wood must stay, however dry it gets - a "
+            "tree in a drought keeps its leaves, and a leaf cannot fall, so "
+            "nothing else would ever clear a crown whose trunk had burned "
+            "away");
+    }
     /* And green GROWTH touching wood LIGNIFIES. It must not stay green -
      * sheltered growth that never dies is how every stem that failed to
      * finish its run stayed on the tree for ever, which is what the
@@ -7946,6 +7956,101 @@ static void test_steam_melts_ice_and_plain_gas_does_not(void)
                 "but plain gas must not - it carries no heat, and if "
                 "convection skipped its own `warms` gate then every gas "
                 "on the board would be a thaw");
+        }
+    }
+}
+
+
+/* A LIVING tree turns, and a watered one grows the leaf back.
+ *
+ * The ageing chain existed for a long time and no tree ever used it. A
+ * leaf is sheltered_by wood and can drink through the trunk, and
+ * withering asks both of those questions before it does anything - so a
+ * leaf on a tree anyone would actually grow answered "safe" to both, for
+ * ever. Five withering configurations were measured against a growing
+ * tree and every one produced exactly zero yellow cells: the numbers were
+ * a dial that was not connected.
+ *
+ * Senescence is the connection. It asks nothing about the weather, on the
+ * grounds that a leaf turns in the rain as readily as in a drought.
+ *
+ * The second half is what stops that being a slow death. A mature tree
+ * has finished growing, so nothing replaces what the chain removes -
+ * measured over 90000 steps, a watered tree held 61 cells of timber while
+ * its crown fell from 11 leaves to 3. The end of the chain therefore
+ * renews IN PLACE where there is still water to pay for it, which is why
+ * the two halves have to be tested together: either alone is wrong. */
+static void test_a_crown_turns_and_a_watered_one_grows_back(void)
+{
+    const int cx = W / 2;
+    /* Five leaves, so the first turn arrives in a fifth of the time one
+     * would take - the green stage is deliberately tens of thousands of
+     * steps long. */
+    const int lx[5] = { cx - 1, cx + 1, cx - 1, cx + 1, cx };
+    const int ly[5] = { H - 4,  H - 4,  H - 5,  H - 5,  H - 6 };
+
+    for (int pass = 0; pass < 2; pass++) {
+        const bool watered = (pass == 0);
+
+        fixture();
+        sand_clear(&s);
+        sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, watered ? SOIL_MOISTURE_MAX : 0));
+        }
+        for (int y = H - 5; y < H - 2; y++) {
+            sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+        }
+        for (int i = 0; i < 5; i++) {
+            sand_set(&s, lx[i], ly[i], MATX(MATX_LEAF));
+        }
+
+        bool turned = false, lost = false;
+        for (int i = 0; i < 90000; i++) {
+            if (watered) {
+                for (int x = 0; x < W; x++) {
+                    sand_set(&s, x, H - 2,
+                             CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+                }
+            }
+            sand_step(&s, 0, 1000, 0);
+            for (int k = 0; k < 5; k++) {
+                const cell_t c = sand_at(&s, lx[k], ly[k]);
+                if (c == MATX(MATX_LEAF_DRY) || c == MATX(MATX_LEAF_DEAD)) {
+                    turned = true;
+                }
+                if (CELL_IS_EMPTY(c)) {
+                    lost = true;
+                }
+            }
+            if (turned && (lost || !watered)) {
+                /* nothing further to learn from this pass */
+                if (!watered && lost) {
+                    break;
+                }
+            }
+        }
+
+        TEST_ASSERT_TRUE_MESSAGE(turned,
+            "a leaf on a living tree must age - it is sheltered and it can "
+            "drink, so withering will never touch it, and without "
+            "senescence the whole yellow-and-brown chain is unreachable on "
+            "any tree anyone would grow");
+
+        if (watered) {
+            TEST_ASSERT_FALSE_MESSAGE(lost,
+                "but a WATERED crown must not thin - the end of the chain "
+                "renews in place where there is water to pay for it, and "
+                "without that a mature tree slowly goes bald while being "
+                "watered, having already stopped growing");
+        } else {
+            TEST_ASSERT_TRUE_MESSAGE(lost,
+                "while a crown with no water under it must come off - "
+                "renewal is something a watered tree does, and a leaf that "
+                "reaches the end of the chain with nothing to drink is "
+                "simply finished");
         }
     }
 }
@@ -11965,7 +12070,8 @@ void run_sand_suite(void)
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
-    RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
+    RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
+    RUN_TEST(test_a_crown_turns_and_a_watered_one_grows_back);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
