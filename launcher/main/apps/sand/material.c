@@ -1900,8 +1900,10 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * with no `falls`, a crown whose trunk burns away would hang in
          * the air permanently. Withering handles it, and `clings_to`
          * above is what stops a living tree shedding - a leaf touching
-         * wood is safe however dry the ground gets. Twice the plant's
-         * rate: a stem is stouter than a leaf. */
+         * wood is safe however dry the ground gets. The same rate as the
+         * plant's now, not twice it: a stem being stouter than a leaf was
+         * the old reasoning, and slowing the green stage down to the
+         * floor - see below - used up the difference. */
         .withers      = 1,    /* the floor, so a SHED leaf stays green
                                 * as long as the encoding can express -
                                 * 256 steps against the 128 it had. A
