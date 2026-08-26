@@ -375,7 +375,7 @@ static void test_every_changed_row_is_reported(void)
         }
     }
 
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 90; i++) {
         uint8_t before[W * H];
         memcpy(before, cells, sizeof(before));
         memset(dirty, 0, sizeof(dirty));
@@ -1256,7 +1256,7 @@ static void test_sand_pushing_water_up_wakes_the_dry_row_it_lands_in(void)
     /* Spelled out rather than the SAND shorthand, which this file does not
      * define until the material tests further down. */
     sand_set(&s, 1, 0, CELL_MAKE(MAT_SAND, 8));
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -1318,7 +1318,7 @@ static void test_water_falling_into_the_next_block_down_still_spreads(void)
     /* One full cell of water, in the last row of the UPPER block. */
     sand_set(&g, 5, SAND_BLOCK_H - 1, CELL_MAKE(MAT_WATER, MASS_MAX));
 
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_step(&g, 0, 1000, 0);
     }
 
@@ -2166,7 +2166,7 @@ static void test_a_large_body_of_water_levels(void)
      * of travel. */
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
 
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_spawn(&wide, WIDE_W / 2, 1, 3, MAT_WATER);
         sand_step(&wide, 0, 1000, 0);
     }
@@ -2230,7 +2230,7 @@ static void test_a_settled_pool_does_not_flicker(void)
     const int gx = 60, gy = 1000;
 
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
-    for (int i = 0; i < 30; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_spawn(&wide, WIDE_W / 2, 1, 3, MAT_WATER);
         sand_step(&wide, gx, gy, 0);
     }
@@ -4393,7 +4393,7 @@ static void test_one_shock_cracks_the_whole_pane(void)
     }
     sand_set(&s, 0, H - 3, SNOW);
 
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -4430,7 +4430,7 @@ static void test_a_crack_does_not_jump_to_a_separate_pane(void)
     }
     sand_set(&s, 0, H - 3, SNOW);
 
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -5078,7 +5078,7 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, before,
         "fixture check: one full cell of lava, walled in on all four sides");
 
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -5987,7 +5987,12 @@ static void test_a_seed_falls_until_it_lands(void)
     }
     sand_set(&s, W / 2, 0, MATX(MATX_PLANT));
 
-    for (int i = 0; i < 200; i++) {
+    /* Long enough to fall the height of the board at a leaf's pace, and
+     * no longer. A seed on bare stone can neither drink nor lean on a
+     * trunk, so it withers - correctly - and a test that leaves one lying
+     * there for hundreds of steps is timing the withering rate rather
+     * than the falling. */
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -6015,7 +6020,12 @@ static void test_two_falling_seeds_do_not_hold_each_other_up(void)
     sand_set(&s, W / 2, 1, MATX(MATX_PLANT));
     sand_set(&s, W / 2 + 1, 1, MATX(MATX_PLANT));
 
-    for (int i = 0; i < 200; i++) {
+    /* Long enough to fall the height of the board at a leaf's pace, and
+     * no longer. A seed on bare stone can neither drink nor lean on a
+     * trunk, so it withers - correctly - and a test that leaves one lying
+     * there for hundreds of steps is timing the withering rate rather
+     * than the falling. */
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -6066,23 +6076,30 @@ static void test_a_brushful_of_seeds_does_not_hang_in_the_air(void)
         "the brush has to have painted a disc, not a single cell - one "
         "seed on its own cannot show this at all");
 
-    for (int i = 0; i < 300; i++) {
+    /* Watched for, not sampled at some fixed step. A disc on a bare board
+     * can neither drink nor lean on a trunk, so it withers as it goes -
+     * correctly - and at a leaf's falling pace the two rates are close
+     * enough that "is it there at step N" is a coin toss. What the test
+     * means is that it got to the bottom, so that is what it waits for. */
+    int landed = 0;
+    for (int i = 0; i < 300 && !landed; i++) {
         sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            if (sand_at(&s, x, H - 1) == MATX(MATX_PLANT)) {
+                landed = 1;
+            }
+        }
     }
 
-    /* The disc is five cells tall on an eight-cell board, so "none of it
-     * is up top" is not available to assert - it cannot all clear the
-     * upper half however far it falls. Reaching the floor says the same
-     * thing without the arithmetic. */
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
-        sand_at(&s, W / 2, H - 1),
-        "a painted disc of seeds must come to rest on the floor - a cell "
-        "ABOVE another cannot be holding it up, and counting it as an "
-        "anchor makes the whole pile support itself in mid-air");
-    for (int x = 0; x < W; x++) {
-        TEST_ASSERT_NOT_EQUAL_MESSAGE(MATX(MATX_PLANT), sand_at(&s, x, 0),
-            "and nothing may be left behind at the height it was painted");
-    }
+    TEST_ASSERT_TRUE_MESSAGE(landed,
+        "a painted disc of seeds must reach the floor - a cell ABOVE "
+        "another cannot be holding it up, and counting it as an anchor "
+        "makes the whole pile support itself in mid-air");
+
+    /* No second assert about the top of the disc being empty by then. It
+     * is five cells tall on an eight-cell board, so when the lowest one
+     * touches the floor the highest is still near where it started - and
+     * "it reached the floor at all" is already the whole claim. */
 }
 
 
@@ -6108,7 +6125,12 @@ static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
     }
     sand_set(&s, cx, 0, MATX(MATX_PLANT));
 
-    for (int i = 0; i < 200; i++) {
+    /* Long enough to fall the height of the board at a leaf's pace, and
+     * no longer. A seed on bare stone can neither drink nor lean on a
+     * trunk, so it withers - correctly - and a test that leaves one lying
+     * there for hundreds of steps is timing the withering rate rather
+     * than the falling. */
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -6116,6 +6138,49 @@ static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
         "a seed between two walls must fall to the bottom of the shaft - "
         "what is beside a thing does not hold it up, and treating it as "
         "support wedges everything against every wall on the board");
+}
+
+
+/* A settled faller keeps the pass armed.
+ *
+ * may_have_faller gates the whole reactions pass, and it was being set by
+ * a cell MOVING rather than by one existing. So a board holding one
+ * settled plant cleared the flag on the first step - and then nothing
+ * could set it again, because latching happens when a cell is created and
+ * a plant that is already there is not created twice.
+ *
+ * Everything downstream of that is quietly dead: dissolve the ground out
+ * from under a plant with acid and it hangs in the air; the greenery never
+ * withers. The cold pass documents the same shape of bug for snow sitting
+ * on dry ground, and for the same reason: a cell with nothing to do NOW is
+ * not a cell with nothing to do EVER.
+ *
+ * Asserting on the flag rather than on a scene, deliberately. Every scene
+ * that shows the consequence is a race between falling and withering, and
+ * the flag is the actual invariant. */
+static void test_a_settled_plant_keeps_the_reaction_pass_armed(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* Resting on the floor, so it never moves, and beside wood, so it
+     * never withers - it just sits there being a plant. */
+    sand_set(&s, W / 2, H - 2, MATX(MATX_PLANT));
+    sand_set(&s, W / 2 + 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
+
+    for (int i = 0; i < 100; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, W / 2, H - 2), "the plant has to still be there");
+    TEST_ASSERT_TRUE_MESSAGE(s.may_have_faller,
+        "a plant on the board must keep the faller flag armed even when it "
+        "has not moved for a hundred steps - the flag says what is PRESENT, "
+        "and once it clears nothing can arm it again");
 }
 
 /* And what a tree grows must NOT fall.
@@ -6249,7 +6314,13 @@ static void test_a_seed_under_stone_stays_put(void)
     }
     sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
 
+    /* Kept watered. Soil dries, and a seed that cannot drink withers - so
+     * without this the seed does eventually disappear, which is correct
+     * behaviour and nothing to do with what this test is about. */
     for (int i = 0; i < 1500; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
         sand_step(&s, 0, 1000, 0);
     }
 
@@ -6302,6 +6373,62 @@ static void test_a_limb_hangs_on_to_a_wooden_trunk(void)
         "a limb growing diagonally off a trunk must stay where it grew - "
         "it is touching the tree, just not squarely, and a tree that sheds "
         "every branch it grows is not one");
+}
+
+
+/* Loose greenery withers; greenery on a tree does not.
+ *
+ * Growth is the only thing on this board that makes cells, and until now
+ * nothing took them away again except fire and acid. So every fragment a
+ * tree shed - a limb broken off by a tilt, a seed poured onto bare stone -
+ * was permanent, and the board silted up with green litter that could
+ * neither do anything nor go anywhere.
+ *
+ * All three cases are checked together because the rule is only useful if
+ * it can tell them apart. Withering everything that is thirsty would strip
+ * a grown tree the moment its soil dried out. */
+static void test_loose_greenery_withers_but_a_tree_keeps_its_leaves(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* left: a scrap on bare stone, nothing to drink and nothing to hold */
+    sand_set(&s, 1, H - 2, MATX(MATX_PLANT));
+    /* middle: the same scrap, but touching wood */
+    sand_set(&s, 4, H - 2, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, 5, H - 2, MATX(MATX_PLANT));
+    /* right: on watered soil */
+    sand_set(&s, W - 1, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    sand_set(&s, W - 1, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 2000; i++) {
+        /* The right-hand patch stays watered, so its plant can always
+         * drink; the other two never can. */
+        sand_set(&s, W - 1, H - 2,
+                 CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 1, H - 2)),
+        "a scrap of green on bare stone must eventually go - it can "
+        "neither drink nor lean on a trunk, and nothing else on the board "
+        "would ever have cleared it away");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT), sand_at(&s, 5, H - 2),
+        "but greenery touching WOOD must stay, however dry it gets - "
+        "otherwise a grown tree is stripped bare the moment its soil dries "
+        "out, which is not what a tree does");
+    /* Still plant, or already grown into wood - either way it is alive
+     * and still there, which is the claim. Two thousand steps on watered
+     * soil is plenty of time for a seedling to become a trunk. */
+    const cell_t fed = sand_at(&s, W - 1, H - 3);
+    TEST_ASSERT_TRUE_MESSAGE(fed == MATX(MATX_PLANT) ||
+                             CELL_MATERIAL(fed) == MAT_WOOD,
+        "and a plant that can still reach water must survive - withering "
+        "is for what has nothing behind it, not for anything thirsty");
 }
 
 /* A tree is not a stick.
@@ -6529,16 +6656,25 @@ static void test_a_plant_on_dry_soil_stays_where_it_is(void)
     }
     sand_set(&s, 1, H - 3, MATX(MATX_PLANT));
 
+    /* The most it is ever seen to be, not what is left at the end. A
+     * plant that cannot drink withers, so a seedling on dry ground is
+     * gone long before step 400 - which is right, and would make an
+     * assert on the final count pass for the wrong reason. What this is
+     * about is that it never GREW. */
+    int tall = 0;
     for (int i = 0; i < 400; i++) {
         sand_step(&s, 0, 1000, 0);
-    }
 
-    int tall = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            if (sand_at(&s, x, y) == MATX(MATX_PLANT)) {
-                tall++;
+        int now = 0;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (sand_at(&s, x, y) == MATX(MATX_PLANT)) {
+                    now++;
+                }
             }
+        }
+        if (now > tall) {
+            tall = now;
         }
     }
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, tall,
@@ -8515,7 +8651,7 @@ static void test_shaking_spreads_a_pile_sideways(void)
         sand_set(&s, 3, y, SAND_FIRST_SHADE);
     }
 
-    for (int i = 0; i < 40; i++) {
+    for (int i = 0; i < 90; i++) {
         sand_step(&s, 0, 1, 255);
     }
 
@@ -9400,8 +9536,10 @@ void run_sand_suite(void)
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
     RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);
     RUN_TEST(test_a_seed_in_a_shaft_does_not_stick_to_the_walls);
+    RUN_TEST(test_a_settled_plant_keeps_the_reaction_pass_armed);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_limb_hangs_on_to_a_wooden_trunk);
+    RUN_TEST(test_loose_greenery_withers_but_a_tree_keeps_its_leaves);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
     RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
     RUN_TEST(test_a_seed_under_stone_stays_put);

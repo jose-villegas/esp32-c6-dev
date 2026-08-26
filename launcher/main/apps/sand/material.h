@@ -740,6 +740,23 @@ typedef struct {
      * board answers it differently. */
     uint8_t falls;
 
+    /* WITHERING: chance/256 per step that this cell simply ceases to
+     * exist, when it can neither reach water through its own roots nor
+     * lean on a neighbour of whatever it hardens into.
+     *
+     * Growth is the only thing on this board that MAKES cells, and until
+     * now nothing took them away again except fire and acid. So every
+     * fragment a tree shed - a limb broken off by a tilt, a seed poured
+     * onto bare stone - was permanent, and the board slowly filled with
+     * green litter that could never do anything or go anywhere.
+     *
+     * The "or wood" half is what keeps it from being cruel. A grown tree
+     * whose soil has dried out keeps its foliage, because the foliage is
+     * touching the trunk; what withers is loose greenery with no tree and
+     * no water behind it, which is exactly the stuff that should not be
+     * lying around. */
+    uint8_t withers;
+
     /* And what a long enough straight run of it turns into: `hardens_to`
      * once `harden_run` cells line up along the gravity axis.
      *

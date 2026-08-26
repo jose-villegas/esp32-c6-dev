@@ -1330,6 +1330,50 @@ static bool shove_aside(sand_t *s, int gx, int gy, int dx, int dy,
     return true;
 }
 
+/* One cell of something that WITHERS: it goes, if it can neither drink
+ * nor lean on a trunk.
+ *
+ * Growth is the only thing here that creates cells, and nothing but fire
+ * and acid removed them - so every scrap a tree shed was permanent litter.
+ * This is the other end of that.
+ *
+ * Touching wood is checked first and is by far the commoner answer, which
+ * matters: it is eight cell reads, where finding water is a walk. A tree
+ * standing in soil that has dried out keeps every leaf. */
+static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
+                                    const reaction_t *r)
+{
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const cell_t self = s->cells[at];
+
+    if (r->hardens_to != 0) {
+        for (int d = 0; d < 8; d++) {
+            const int *nd = ring_dir(d);
+            const int nx = x + nd[0], ny = y + nd[1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->hardens_to) {
+                return false;         /* part of a tree; it stays */
+            }
+        }
+    }
+
+    int lift = 0;
+    if (find_water(s, x, y, w, h, r, self, &lift, false) >= 0) {
+        return false;                 /* it can still drink */
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->withers) {
+        return false;
+    }
+
+    s->cells[at] = SAND_EMPTY;
+    mark_rows(s, y, y);
+    wake_block_and_neighbors(s, x, y);
+    return true;
+}
+
 /* One cell of something that GROWS.
  *
  * It grows from the TIP of whatever column of itself this cell belongs to,
@@ -2416,10 +2460,24 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
          * grow from and no soil to look at - and because the cheapest
          * answer for everything else on the board is one zero field. */
         if (r->falls != 0) {
+            /* Armed by the cell EXISTING, not by it moving. A landed seed
+             * reported nothing, so on a board holding one settled plant
+             * the flag cleared and the whole pass stopped running - and
+             * then nothing could start it again. Dissolve the ground out
+             * from under a plant with acid and it hung in the air, which
+             * is the same shape of bug the cold pass documents for snow
+             * on dry ground. */
+            found |= FOUND_FALLER;
             if (step_one_falling_cell(s, x, y, w, h, r)) {
-                found |= FOUND_FALLER;
                 continue;
             }
+        }
+        /* Withering. Not gated on may_have_moisture, deliberately: the
+         * cells this is for are the ones with no water anywhere near
+         * them, on boards that may have none at all. */
+        if (r->withers != 0 &&
+            step_one_withering_cell(s, x, y, w, h, r)) {
+            continue;
         }
         /* Drinking, before growing: a leaf standing in a puddle should
          * move that water into the ground whether or not the tree has any

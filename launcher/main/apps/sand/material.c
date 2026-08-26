@@ -1695,13 +1695,25 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
         .hardens_to  = MAT_WOOD,
         .harden_run  = 6,
 
-        /* And it POURS. Every step it is in the air, so a handful of seeds
-         * scattered over a bed behaves like a handful of seeds rather than
-         * hanging wherever the brush left them. It cannot be a KIND_POWDER
-         * to get that - see reaction_t.falls - and would not want to be:
-         * this rule leaves a grown stem standing, because what is under a
-         * stem is more stem. */
-        .falls       = 255,
+        /* And it POURS, so a handful of seeds scattered over a bed
+         * behaves like a handful of seeds rather than hanging wherever the
+         * brush left them. It cannot be a KIND_POWDER to get that - see
+         * reaction_t.falls - and would not want to be: this rule leaves a
+         * grown stem standing, because what is under a stem is more stem.
+         *
+         * About one step in three, not every step. A grain of sand falls a
+         * cell per step and a leaf should not: at full speed a loose scrap
+         * of green crossed the board faster than the eye follows, which
+         * reads as teleporting rather than as falling. */
+        .falls       = 85,
+
+        /* The slowest rate this scale can express, and it wants to be.
+         * Measured, forty scraps on bare stone: at 3 in 256 half of them
+         * were gone by step 60 - two seconds - and a seed poured onto dry
+         * soil died before its water arrived. At 1 the half-life is about
+         * six seconds, which gives a player time to fetch the watering can
+         * and still clears the litter from a broken tree inside twenty. */
+        .withers     = 1,
 
         /* And it burns, which is most of the point of growing a tree. Well
          * above wood's 6: green growth catches far more readily than
