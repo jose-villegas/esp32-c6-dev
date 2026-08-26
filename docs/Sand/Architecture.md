@@ -971,11 +971,32 @@ that is where the eleventh attempt found them:
   *higher* than 390158, since 19% of its growth landed after that
   capture was taken.
 
-One tooling note, flagged rather than fixed: the generated report reads
-the every-material budget as "300000", which is a number that appears in
-that test's *comment prose* describing a discarded estimate, not the
-assertion's argument. The report tool matches a number near the test
-name. Worth knowing before trusting a budget column.
+This failing set is otherwise unchanged by the twelfth attempt. That
+round added three more device tests - four liquids reacting at once, a
+lava stress scene, a screen of smoke and steam - and **their outcomes
+are simply unknown**: none of the three has ever run on hardware. Their
+ceilings were chosen to be generous on purpose, so all three are
+expected to pass; if one of them fails on the first capture, read that
+as the ceiling having been guessed wrong, not as a regression, and
+re-peg it from the number that capture measures. **All three must be
+re-pegged from that first capture regardless of whether they pass or
+fail** - a guessed ceiling that happens to pass is still a guess, not a
+budget.
+
+One tooling note that has since been corrected: the eleventh attempt
+flagged the generated report as reading the every-material budget as
+"300000", a number that appears in that test's *comment prose*
+describing a discarded estimate, and suspected the report tool was
+matching a number near the test name rather than the assertion's
+argument. **That bug does not exist.** Run against the current source,
+the tool returns all eleven budgets correctly, 54,000 included. The
+stale capture's report said 300,000 because the build that was flashed
+*asserted* 300,000 at the time - the tool was reading the assertion
+correctly, and the source had simply changed since. A report is a
+measurement of a tree too; "the tool is wrong" was diagnosed from a
+report generated against different source. See the twelfth tuning
+attempt in
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
 It was `failures=3` for a long time, and all three came off without a
 single budget moving, which is the part worth knowing. The settled-pile
@@ -986,12 +1007,14 @@ deleted it outright. The mixed scene came in during the tenth, which gave
 the cross-flow pass a block-shaped skip for the cells that hold no liquid.
 See [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
 
-## The eight device frame-budget tests
+## The eleven device frame-budget tests
 
 All `#ifdef DEVICE_BUILD`-only, in `suite_sand.c`, run against the real
-184x224 grid rather than the 8x8 host-test fixture. Each one's number
-came from an actual device capture, not a guess - see each test's own
-comment for the reasoning behind its specific budget.
+184x224 grid rather than the 8x8 host-test fixture. Eight of the eleven
+have a real device number behind them - see each test's own comment for
+the reasoning behind its specific budget. The three added by the twelfth
+attempt do not yet; their ceilings are provisional guesses, flagged as
+such below.
 
 Two of them are **reduction targets** rather than headroom - set below
 what the code could do when they were written, on purpose, so they fail
@@ -1013,8 +1036,11 @@ are host-measured predictions from the eleventh attempt and are
 | `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | 390158 µs - **FAIL**; expected to still fail, possibly higher than this, and recommended for re-pegging |
 | `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | 286720 µs - **FAIL**; expected to still fail and recommended for re-pegging |
 | `test_a_gravity_flip_on_every_material_at_once_stays_sane` | A wrapped tile of **every** material, laid out so all material pairs touch, settled then flipped - every pass doing real work at once | 54000 µs (**reduction target**, 10% under measured) | 60091 µs, measured against the older 300000 budget and passing there; **expected to fail** against 54000 on HEAD |
+| `test_four_liquids_reacting_at_once_fits_in_the_frame_budget` | Water, oil, acid and lava painted upside down (densest on top) so every layer migrates through every other one instead of settling quiet, run at the app's own per-material scatter, decay and mobility | 150000 µs (**provisional sanity ceiling**, not a tuned budget) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
+| `test_the_lava_stress_scene_fits_in_the_frame_budget` | A lava reservoir under a water roof with sand/wood/oil columns between them, one column in four left empty as a chute so the roof water reaches the lava inside the window | 150000 µs (**provisional sanity ceiling**, not a tuned budget) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
+| `test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget` | A full grid of smoke and steam, checkerboarded, with one flame - the only benchmark holding either gas's convection behaviour in quantity | 400000 µs (**provisional sanity ceiling**, not a tuned budget) | **never measured on hardware; ceiling is provisional and must be re-pegged from the first capture** |
 
-Four rows fail as of that capture, and no budget was ever raised to make
+Four of the eight budgeted rows fail as of that capture, and no budget was ever raised to make
 any row pass - the mixed scene in particular was set 21% *below* what
 the code could do when it was written, deliberately, as a reduction
 target rather than a safety margin, and it went from 26.2% over to 7.0%
@@ -1044,16 +1070,23 @@ assuming a real regression. The tenth attempt measured a 14% swing on the
 water benchmark from a restructuring that changed no semantics at all, so
 "much" has a wide floor here.
 
-The last two rows are new territory this session opened, not a template
-that existed before: there was no gas- or fire-specific frame-budget
-test until fire needed one, because gas shipped without a dedicated
-worst-case perf test at all. If a future material needs its own, these
-two are the closest things to a pattern to copy - one for a worst-case
-*transition* (like the cascade), one for worst-case *steady state* (like
-the full-screen-of-fire test), since those two numbers are not
-interchangeable (the redesign that made fire move like gas changed the
-steady-state cost without touching the transition cost at all - see
+The two fire rows were new territory when they were written, not a
+template that existed before: there was no gas- or fire-specific
+frame-budget test until fire needed one, because gas shipped without a
+dedicated worst-case perf test at all. If a future material needs its
+own, these two are the closest things to a pattern to copy - one for a
+worst-case *transition* (like the cascade), one for worst-case *steady
+state* (like the full-screen-of-fire test), since those two numbers are
+not interchangeable (the redesign that made fire move like gas changed
+the steady-state cost without touching the transition cost at all - see
 "Corrections" in the plan history if you want the full trace of why).
+
+The three provisional rows below them are a different kind of new: not a
+pattern to copy so much as an open question to close. Nobody has run
+them on hardware, so unlike every other row in this table their "last
+measured" column has no number in it at all - re-pegging them from a
+first capture is the next thing this table needs, whatever that capture
+says.
 
 ## Related
 

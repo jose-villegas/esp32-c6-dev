@@ -1687,6 +1687,371 @@ sitting in the way.
 
 ---
 
+## The twelfth attempt: a mask that measured nothing, and a gate that never closed
+
+The eleventh attempt closed with the two liquid budgets recovered on the
+host, the two fire budgets diagnosed as genuine feature cost and
+recommended for re-pegging rather than chased, and a loose end named
+explicitly: the reactions pass had doubled across the feature wave, but
+it is the gas pass - unchanged since round four - that is 60% of the
+full-screen-of-fire benchmark. This round had two halves. The first gave
+the reaction engine its own cross-material benchmarks, which it had
+never had. The second went looking for cells the reactions pass could
+skip. It found some, built the skip, and measured it at zero. The
+attempt's real finding came from a different question entirely - whether
+a gate the code already had could ever close - and it could not.
+
+**The most recent device capture is now roughly fifty commits stale**,
+the same capture the eleventh attempt diagnosed as such, and nothing
+below is device-verified. Every number in this section is host-only or,
+where marked, a guess awaiting its first flash.
+
+### Half one: three benchmarks for a pass that had none
+
+The suite's perf tests covered single materials and one sand/water/stone
+mix. None of them put the reaction engine under cross-material load, so
+the pass that doubled during the eleventh attempt's feature wave had no
+benchmark of its own to have caught it doubling.
+
+Each new benchmark's scene builder is factored out of the
+`#ifdef DEVICE_BUILD` block and shared with a HOST test that runs the
+same scene for the same number of steps and asserts the reactions
+actually fired. That pattern already existed for the mixed scene's
+all-pairs tiling; it is worth re-using for the reason the eighth attempt
+gave it its name: that attempt spent three device rounds optimising a
+function the failing benchmark never called, and a host test that proves
+the scene exercises what it claims to is the cheap guard against
+repeating that. All three host tests were verified to fail when their
+scene was deliberately broken.
+
+**Four liquids reacting at once.** Water, oil, acid and lava, painted
+upside down - lava on top, then acid, then water, then oil at the
+bottom. The reasoning is the interesting part: the four liquids have
+different densities, so painted in their own settled order they
+stratify and the scene goes quiet within a few steps, measuring almost
+nothing. Inverted, every layer has to migrate through every other one,
+so the interfaces stay in contact and reacting for the whole window.
+Measured on a host harness, the scene is still producing 245 cells of
+stone (lava quenched by water), 209 of steam and 204 of fire (oil
+ignited by lava) at the end of the measured window, and those figures
+are flat from step 10 through step 60 - it reaches a steady churn rather
+than a stop. Ten settling steps, twenty measured.
+
+This is also the test that closes a coverage gap, and the record needs
+a small correction on the way there. The eleventh attempt recorded that
+no performance test takes the `sand_set_mobility(SAND_MOBILITY_PER_MATERIAL)`
+path the real app runs. That was not quite right - the every-material
+flip already did. What was true, and is the point worth keeping, is that
+no test with a real *budget* did; the every-material flip is held to a
+deliberate reduction target instead. The four-liquid scene runs at the
+app's own per-material scatter, decay and mobility, so the app's liquid
+mobility path now has a budgeted benchmark behind it.
+
+**A lava stress scene.** Lava is the reaction-richest material there is:
+a heat source, it quenches to stone in water, boils water to steam,
+turns sand to glass by heat, ignites wood and oil, and flares. The scene
+is a lava reservoir on the floor, repeating six-cell columns of sand,
+wood and oil standing in it, and a water slab as a roof. Every fourth
+column is left empty on purpose, and that detail is what makes the test
+work: without a chute the roof water perches on the columns and takes
+most of a minute to reach the lava, so quench and boil - two of the six
+reactions the scene exists to exercise - never fire inside the measured
+window. With it, water reaches the lava while the scene is still
+burning. Across the measured window (thirty settling steps, twenty
+measured) glass climbs from about 782 to 1132 cells, fire runs at
+1300-2000, and steam and stone reach 79 and 26.
+
+**A screen of smoke and steam.** A full grid of both, checkerboarded,
+with one flame. What it catches that nothing else does: the two existing
+fire benchmarks are made of fire and gas, and neither has any convection
+behaviour; smoke and steam do - they warm what they touch - and no
+benchmark in this suite had ever held either in quantity. It runs at the
+default scatter, decay and mobility rather than the per-material ones,
+because at per-material decay the gases fade inside the window and it
+stops being the steady worst case it exists to be. Ten measured steps
+rather than twenty, the same choice the full-screen-of-fire test makes,
+because a full screen of gas is the most expensive step this simulation
+has and the device's task watchdog has a five-second window - the third
+attempt already tripped it once with a test that ran too many steps on a
+full grid. Conserves all 41,216 cells.
+
+**All three ceilings are guesses and say so in the source.** 150,000 µs
+for each of the two liquid scenes and 400,000 µs for the gas screen,
+labelled as loose sanity ceilings rather than budgets - wide enough not
+to pass as tuned, tight enough to catch something catastrophic like an
+accidental quadratic. They are deliberately not extrapolated from host
+timings: this file already records one extrapolation that came out four
+times too pessimistic, because the host-to-device ratio is dominated by
+cache behaviour the host does not model and is scene-specific besides.
+**All three must be re-pegged at about 9-10% over the measured number
+the first time they run on hardware** - the method this file's other
+budgets already document.
+
+### Half two, first: counting what the reactions pass could skip
+
+Counters were taken before any code, on the host, on each benchmark's
+exact scenario: of the non-empty cells the reactions pass walks, how
+many does its own branch chain leave with nothing at all to do?
+
+| scene | non-empty walked per step | cells the chain leaves idle |
+|---|---:|---:|
+| full screen of fire | 41,216 | 0 - every cell is burning |
+| every material at once, flipped | 22,200 | 4,278 (19.3%) |
+| screen of smoke and steam | 41,216 | 0 - all 41,215 gas cells take the convection branch |
+| four liquids | 34,491 | 17,111 (49.6%) |
+| mixed scene flip, screen of water | - | the pass never runs at all |
+| fire cascade through gas | 41,216 | 41,215 at pass entry only - see below |
+
+The fire cascade's figure is the one to read carefully. The counters
+sample the grid at pass entry, and during that single step the cascade
+converts gas to fire ahead of its own scan pointer, so the pass itself
+sees almost none of those cells idle by the time it reaches them. **A
+count taken before a pass is not a count of what the pass does.**
+
+Per material, out of the sixteen rows: only water, oil, gas and ice are
+incapable of initiating any reaction (empty is skipped before the row is
+ever read). Stone and glass are not inert - they carry a heat ramp.
+Smoke and steam are not inert - they warm.
+
+### Experiment 1: a per-cell "does this material react at all" mask. Worth nothing.
+
+The idea was the cheapest possible skip: a 16-bit mask, in the shape of
+the existing `liquid_mask()`, tested before touching the cell's reaction
+row, so an inert cell never pays the second table read the eleventh
+attempt identified as the reactions pass's structural cost. Built both
+ways and measured on the host:
+
+| scene | change |
+|---|---:|
+| every material at once, flipped | **−0.1%** |
+| full screen of fire | +1.2% |
+| four liquids | −1.5% |
+
+All inside the noise - including the every-material flip, the very scene
+where the counters said 19.3% of the walked cells were skippable.
+
+The reason is worth keeping. Those 19.3% were already cheap. An inert
+cell falls out of the branch chain after a handful of well-predicted
+tests on fields the compiler has already loaded; a mask test plus its
+own loads costs about the same as what it removes. **This is this file's
+oldest lesson in its fourth set of clothes - "provably less work is not
+provably faster" - and this time it was cheaper than ever to learn,
+because the mask never had to reach a device.**
+
+There is a second, independent reason it could not have shipped as
+built. To skip a smoke cell the mask has to know whether
+`may_have_temperature` is armed, so the flag-aware version snapshots the
+`may_have_*` flags once at the top of the pass. Those flags are armed
+*during* the pass, by `latch_content_flags()`, whenever a reaction
+creates a cell - so a cell that would have taken the drinks, grows or
+warms branch later in the same pass gets skipped by a stale mask.
+Measured: different final grids on both liquid scenes. Making it exact
+means reading the flags per cell, which is precisely what the unmodified
+code already does. **Not shipped.**
+
+### Experiment 2: per-block reactive bits. Declined on the counters, before any code.
+
+The tenth attempt's presence-bit pattern was the fallback if whole
+blocks of gas turned out to be idle. The same counters rule it out: the
+idle cells are scattered by material - water and oil interleaved through
+the scene - not clustered into blocks, and the two fire benchmarks have
+no idle cells at all. There is no block-shaped skip to find, so there
+was nothing to run the maintenance ledger on.
+
+### Experiment 3: the convection gate. Shipped.
+
+This is the change that came out of the round's original question - can
+the pass skip neighbour work for gases and smoke or steam - and the
+answer turned out to be yes, but for a different reason than the skip
+the round was designed around.
+
+`step_one_warming_cell()`'s own comment promised that on a board with
+nothing that can hold a temperature, convection costs "a predicted-false
+branch per gas cell and no scan at all". It never did, and the gate it
+named cannot close on a board holding smoke or steam, for two
+independent reasons: `latch_content_flags()` arms `may_have_temperature`
+for any material with a non-zero `warms`, and smoke and steam both have
+one, so placing either arms it; and the convection branch reports
+`FOUND_TEMPERATURE` unconditionally whenever it is taken, which re-arms
+the flag every step. Armed on placement, re-armed by its own use.
+
+So every gas cell ran a four-neighbour scan - two table reads each - to
+discover the board holds nothing with a heat ramp. On the new screen of
+smoke and steam that is 41,215 cells of it, every step, for ever.
+
+The fix is a second flag, `may_have_heat_holder`, armed by
+`latch_content_flags()` for any cell with a non-zero `heat_ramp` at any
+variant, ANDed onto the existing gate rather than replacing it. It
+answers the question the comment was describing. **It is safe by
+construction rather than by measurement:** with the flag false no
+heat-ramp cell has ever been written to the grid, and the scan skips
+every neighbour whose heat ramp is zero before drawing a random number
+or mutating anything, so on such a board the scan provably does nothing
+at all - which means suppressing it cannot change the grid or the
+random-number stream. Confirmed: all eight scenes evolve to
+byte-identical grids.
+
+**The load-bearing detail, and the one that had to be measured rather
+than reasoned:** the flag is armed and never cleared. Clearing it at the
+end of the pass like the other five flags is the obvious next thing to
+write and it is wrong. A heat-ramp cell can be created mid-pass, behind
+the scan pointer - lava quenching into stone is exactly that - so the
+walk never reports it and the end-of-pass clear would erase what
+`latch_content_flags()` armed a line earlier, with nothing left to ever
+re-arm it. A build with that clear in it measured a different simulation
+from the baseline on both liquid scenes; the arm-only version is
+byte-identical on all eight. The maintenance ledger, which this file
+demands of any such flag, answers itself: nobody pays any per-step
+upkeep at all. The one cost is that a board which once held stone or
+glass and no longer does keeps paying the scan - which is exactly what
+it pays today without the flag, so it can only fail to help, never hurt.
+A test built on the mid-pass creation case guards it, and was verified
+to fail without the arming.
+
+Host, best of six runs with the two builds interleaved: **the screen of
+smoke and steam 890.8 → 827.9 µs/step (−7.1%)**, every other scene
+inside the noise. The win is narrow and scene-shaped, and it is worth
+being explicit about that: it lands on boards that have never held
+stone or glass, and a board with a wall on it pays exactly what it
+always paid.
+
+### Experiment 4: where the fire benchmarks' cost actually is. Measured, not built.
+
+The eleventh attempt ended by pointing at the gas pass - 60% of the
+full-screen-of-fire benchmark, and unchanged since round four - and
+calling it a design question. This round put a number on the largest
+piece of it, by deleting it: `find_nearest_empty()` stubbed to return 0
+immediately (temporary experiment, reverted).
+
+| scene, host µs/step | committed | without the sight scan | |
+|---|---:|---:|---:|
+| fire cascade through gas | 1834.0 | 1497.2 | **−18.4%** |
+| full screen of fire | 1249.7 | 1061.6 | **−15.1%** |
+| screen of smoke and steam | 825.0 | 700.7 | **−15.1%** |
+| smoke and steam over stone | 913.4 | 783.6 | −14.2% |
+| every material at once | 1485.9 | 1371.1 | −7.7% |
+| four liquids | 700.2 | 678.9 | −3.0% |
+| mixed scene flip | 71.6 | 71.7 | +0.1% |
+
+**That is the single biggest item any round has found in the fire
+benchmarks.** The mechanism: on a packed screen `has_room_above()`
+fails, `neighbour_is_open()` then succeeds - because the neighbour is
+more of the same gas - and `find_nearest_empty()` walks the material's
+full `sight` (5 cells for fire, 20 for smoke, 24 for steam) through
+identical gas to return 0.
+
+State plainly that no cheap early-out is available, and why: knowing in
+advance that the scan will fail means knowing whether an empty cell lies
+within sight, which is an occupancy question, and every structure that
+answers it - a per-block "this block holds an empty cell" bit maintained
+by the sweep, with the tenth attempt's NEAR ring to make it sound - is a
+design rather than a one-line guard. Left as the next round's target,
+with the number attached. This also sharpens the eleventh attempt's
+re-pegging recommendation, which stands unchanged: it is the gas pass,
+not the reactions pass, that these two budgets are really measuring.
+
+### The round-five deferred item, closed rather than deferred again
+
+Merging the burning cell's separate four-neighbour walks was carried
+over from the eleventh attempt as worth about 5% on the host. Re-read,
+it is not available: `try_ignite()` and `try_heat_transform()` already
+share one walk. What remains is the quench scan and `smothered()`, and
+each returns from the whole function when it fires - a cell being
+quenched must not first ignite its neighbours - so merging them changes
+what each mechanism observes, which is an observable ordering change
+rather than a refactor. Closed with the reason rather than carried
+again.
+
+### Two corrections to the record
+
+Both belong in this section rather than a footnote; this project's
+convention is that a fact discovered to be wrong gets fixed in the same
+change that would otherwise build on it.
+
+1. **The `report_performance.py` budget mis-parse does not exist.** The
+   eleventh attempt recorded that the tool reads the every-material
+   test's budget as "300000" - a number appearing in that test's comment
+   prose - rather than the 54,000 in its assertion, and flagged it as a
+   tooling bug that would make captures quietly lie. Run against the
+   current source the tool returns all eleven budgets correctly, 54,000
+   included. The stale capture's report said 300,000 because the build
+   that was flashed *asserted* 300,000 at the time; the tool was reading
+   the assertion correctly and the source has changed since. There was
+   never a bug. The general point is the eleventh attempt's own, turned
+   on itself: a report is a measurement of a tree too, and "the tool is
+   wrong" was diagnosed from a report generated against different
+   source.
+2. The per-material mobility coverage claim, described in Half One
+   above.
+
+### A note on the host harness that every number above depends on
+
+Worth recording as a limit on the method rather than buried: within a
+single run of the harness the same static scene drifts upward by as
+much as 40% from the first scene measured to the last, and a
+single-step scene varies by about ±7% between runs. Every comparison in
+this section is best-of-N with the two builds *interleaved* in the same
+session; a host wall-clock number compared across sessions is not
+usable at all. Host timing was already documented here as a relative
+signal only - this is how relative it is.
+
+### Plants, ruled out of scope mid-round
+
+The plant materials - `MATX_PLANT` and the mechanisms around it
+(`drinks`, `grows`, `sprouts`, withering, the whole-tree support walk) -
+were taken out of this round's scope while it was running, because
+they are under active visual development and their behaviour is about
+to change. Two consequences, both deliberate:
+
+**No new benchmark measures a plant, and the one scene that could have
+grown one now says so.** The lava stress scene contains wood, and sand
+that could in principle become wet soil, which is everything a sprout
+needs. It never actually grows one - the roof water reaches the lava
+and flashes to steam rather than wetting the sand, so no soil is ever
+made and the wood stays dry for the whole run. That was an accident of
+tuning rather than a property anyone checked, and a benchmark whose
+cost quietly started including plant growth would be pegged against
+unfinished behaviour with nobody the wiser. Its host test now asserts
+that no extended-range cell exists at the end of the run, so if the
+plant work changes that, it announces itself instead of drifting into
+a budget.
+
+**Nothing plant-specific was optimised, and the counters that touch
+plants are recorded here as observations for whoever picks that up.**
+On the every-material flip, 523 cells per step - 2.4% of the non-empty
+cells the pass walks - reach the `drinks` branch, and none reach
+`grows` or `sprouts` in that scene. Of the sixteen extended reaction
+rows only two are non-inert, `MATX_ICE` and `MATX_PLANT`; the other
+fourteen are all-zero. That is the whole of what this round can say
+about plant cost, and it is deliberately thin: the counters here
+classify each cell by the *first* branch it matches, and the plant
+branches sit at the end of the dispatch chain, so this method
+systematically under-reports them. Pricing them properly wants
+measure-by-deleting per mechanism, the way the eleventh attempt priced
+the reaction mechanisms - which is a round of its own, once the
+behaviour has stopped moving.
+
+### What this attempt is worth carrying
+
+**The round's designed optimisation measured zero, and its real finding
+came from a comment that turned out to be false.** Reading the gate a
+comment claimed to implement, and checking whether it could ever close,
+found more than the skip structure the round was built around.
+
+**Counting what a pass could skip is not the same as counting what
+skipping would save.** 19.3% of cells were skippable and skipping them
+was worth −0.1%, because the cells were cheap. Ask what the skipped work
+*costs*, not just how much of it there is.
+
+**A count taken at pass entry is not a count of what the pass does,
+when the pass mutates as it walks** - the fire cascade row above is
+exactly that trap.
+
+**Measure-by-deleting keeps earning its place.** The biggest number this
+round found came from stubbing one function and reverting it.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

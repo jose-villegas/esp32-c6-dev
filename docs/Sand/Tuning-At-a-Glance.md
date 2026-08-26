@@ -1,7 +1,7 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-eleven numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+twelve numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
 budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
 budget met, none ever raised**; a wave of new materials then put four back over, and
 the eleventh sorted the accident from the feature. The prose file holds the full
@@ -39,6 +39,14 @@ Attempt 11 fixed the water and mixed regressions in full on the host and took
 about 10% off each fire benchmark. **None of that is device-verified** — the
 next capture is what settles it.
 
+The suite now has **eleven** device frame-budget tests, not eight. Attempt 12
+added three of them — four liquids, a lava stress scene, a screen of smoke
+and steam — with provisional sanity ceilings guessed rather than measured,
+and **none of the three has ever run on hardware.** Their rows cannot appear
+in the scoreboard above until a capture exists; when one does, all three
+ceilings still need re-pegging from that first measurement, whether they
+pass or not.
+
 Fixed RNG seeds make identical builds reproduce these numbers to the microsecond.
 What moves them *between* builds is flash layout, not chance — see
 [the layout lottery](#the-layout-lottery) below.
@@ -64,6 +72,7 @@ the next person from re-running them.
 | 09 | 🟢 | Delete the row cache | `ROW_NO_LIQUID` cost **33,426 writes/step** to save 104 cheap row scans. The whole `row_state` buffer went. Failures **3 → 1**. |
 | 10 | 🟢 | Tell the cross-flow pass where water isn't | The sweep already reads every awake cell — a per-block liquid bit is free. One neighbour ring makes it sound; the pass skips **41%** of its cells. Failures **1 → 0**. |
 | 11 | 🟢 | A feature wave, and one branch in the wrong place | Rebuilt and re-timed all 75 commits of the wave on the host: water's whole regression is **one commit, one branch**, and the branch never even says no. GCC had spliced its cold blocks into the hot path — hinting them cold recovers **26%**, simulation byte-identical. Fire's is diffuse and genuine; the reactions pass **doubled**, and the gas pass nobody suspected is 60% of it. |
+| 12 | 🟠 | A mask that measured nothing, and a gate that never closed | Three new benchmarks put the reaction engine under cross-material load for the first time. A per-cell "can this react" mask measured **−0.1%** where the counters promised 19.3% of cells were skippable — too cheap to be worth skipping. The real find: a convection gate that could never close on smoke or steam, costing **41,215 neighbour scans a step** on a screen of gas — fixed with a flag that arms and is never cleared, **−7.1%**. Measure-by-deleting also priced the gas pass's sight scan at **15-18%** of the fire benchmarks — the next round's target, not yet built. |
 
 ---
 
@@ -251,6 +260,7 @@ names the attempt that paid for it.
 | **Layout is not only about inlining — it is about block order.** A branch that costs nothing to evaluate can still cost 26% by sitting between the entry and the work. `objdump` the device object; look at what is *between*, not just at what exists. | 11 |
 | **Bisect on the host.** Rebuilding and re-timing a commit range costs twenty minutes and no flash cycles, and answers the question a regression actually poses — *when did this start* — with a byte-identical simulation either side. | 11 |
 | **A capture measures a tree, not a project.** Check the flashed build against the code before diagnosing anything with it. This one was fifty commits stale and said so nowhere. | 11 |
+| **Count what skipping *saves*, not just what is skippable.** 19.3% of cells were provably idle and skipping them measured −0.1%, because the cells were already cheap to fall through. | 12 |
 
 ---
 
