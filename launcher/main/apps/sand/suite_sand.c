@@ -7066,7 +7066,11 @@ static void test_every_material_has_a_palette_block(void)
                 set++;
             }
         }
-        char why[144];
+        /* 192, not 144: the device build's -Werror=format-truncation
+         * proves 144 can clip the tail of this message for a long
+         * material name, and a clipped diagnostic is exactly the kind
+         * of silent failure this test exists to make loud. */
+        char why[192];
         snprintf(why, sizeof why,
                  "%s (id %d) has %d of %d palette entries set - a block "
                  "that is missing or misaligned renders black, and black "
