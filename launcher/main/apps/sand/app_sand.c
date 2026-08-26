@@ -506,18 +506,28 @@ static inline unsigned cell_hash(int cx, int cy)
  * Movement is a difference the eye cannot miss, which is the whole reason
  * to prefer this. The band sweeps, so the glass is doing something.
  *
- * SHINE_PERIOD is the distance between bands measured along the diagonal,
- * SHINE_WIDTH how thick one is, and the band moves SHINE_STEP_PX every
- * SHINE_STEP_MS. Just under two seconds for a band to reach where the one
- * before it started.
+ * SHINE_PERIOD is the distance between bands along the diagonal, and the
+ * band moves SHINE_STEP_PX every SHINE_STEP_MS - about 1.3 seconds for one
+ * band to reach where the one before it started.
+ *
+ * ITS WIDTH IS ONE CELL, not a number of pixels, which is why no constant
+ * for it appears here. Measured in pixels it was two cells thick at the
+ * finest quality and two thirds of one at the coarsest, so the same glass
+ * looked like a different material depending on a setting that has nothing
+ * to do with it. paint_row_n() already receives the cell size as `n`, and
+ * `n` is a compile-time constant at each of its call sites, so scaling by
+ * it costs nothing at all.
+ *
+ * The period stays in PIXELS on purpose: the screen is the same size at
+ * every quality, so pixel spacing is what keeps the same number of bands
+ * across it. 64 rather than a rounder number because it is a power of two,
+ * which turns the per-pixel wrap into a mask.
  *
  * Speed comes from the step SIZE, not from ticking more often, and the
  * difference is not cosmetic: every tick repaints all the rows holding
- * glass, so halving SHINE_STEP_MS would double that cost, while doubling
- * SHINE_STEP_PX is free. At this width the band still reads as sliding
- * rather than jumping. */
-#define SHINE_PERIOD   96
-#define SHINE_WIDTH     4
+ * glass, so halving SHINE_STEP_MS would double that cost while doubling
+ * SHINE_STEP_PX is free. */
+#define SHINE_PERIOD   64      /* power of two - see the mask below */
 #define SHINE_STEP_MS  40
 #define SHINE_STEP_PX   2
 
@@ -619,21 +629,23 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                    (((diff + dx - dy) & 7) == 0);
 
                 /* SHINE: a band travelling along the diagonal, advanced on
-                 * a clock rather than aimed by anything. Modulo by
-                 * SHINE_PERIOD, which is not a power of two - affordable
-                 * because this loop only runs for hatched materials, and
-                 * only glass is hatched. */
-                int along = (base + dx + dy + shine_offset) % SHINE_PERIOD;
-                if (along < 0) {
-                    along += SHINE_PERIOD;
-                }
+                 * a clock rather than aimed by anything. A mask rather
+                 * than a modulo because SHINE_PERIOD is a power of two,
+                 * and it is fine on the values left of the origin -
+                 * two's complement shifts the phase, which nothing here
+                 * can tell from any other phase.
+                 *
+                 * `< n` is the width: one CELL, so the band looks the same
+                 * at every quality setting. n is a compile-time constant
+                 * here, so this is a comparison against a literal. */
+                const int along = (base + dx + dy + shine_offset)
+                                  & (SHINE_PERIOD - 1);
 
                 /* The band wins wherever it falls, including over the
                  * grain - it is the bright thing, and letting the grain
                  * override it would put dark notches through a highlight. */
                 p[dy * GFX_WIDTH + dx] =
-                    (along < SHINE_WIDTH) ? col[2]
-                                          : (grain ? col[1] : col[0]);
+                    (along < n) ? col[2] : (grain ? col[1] : col[0]);
             }
         }
     }
@@ -710,7 +722,7 @@ static bool advance_shine(uint32_t dt_ms)
     const uint32_t steps = shine_elapsed_ms / SHINE_STEP_MS;
     shine_elapsed_ms -= steps * SHINE_STEP_MS;
     shine_offset = (int)(((unsigned)shine_offset + steps * SHINE_STEP_PX)
-                         % SHINE_PERIOD);
+                         & (SHINE_PERIOD - 1));
     return true;
 }
 
