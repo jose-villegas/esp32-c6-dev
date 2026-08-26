@@ -9129,6 +9129,711 @@ static void test_the_smoke_and_steam_scene_stays_a_gas_screen(void)
         "the device test beside it no longer measures");
 }
 
+/* A lattice of glass-walled compartments - 20 columns by 24 rows, 480 in
+ * all - each one a ring of glass around a single payload, with a shatter
+ * trigger sitting just outside the ring rather than inside it. Every other
+ * thermal-shock test in this file places one pane at a chosen temperature
+ * and drops one cold or hot thing next to it; this scene exists to ask
+ * what the mechanism does at the scale the pour brush can actually
+ * produce, with hundreds of panes cracking, draining and re-heating at
+ * once instead of one.
+ *
+ * THE INVARIANT THAT MAKES THE SCENE HONEST: every ring is painted at
+ * variant 2, 3 or 4 - strictly between SAND_SHOCK_COLD (1) and
+ * SAND_SHOCK_HEAT (5) - so no compartment is born already qualifying for
+ * a crack. An earlier draft of this scene used an asymmetric range that
+ * reached down to 0 and 1, and it was a real dead end: those rings
+ * shattered on step 1, through whichever shock direction their family was
+ * NOT meant to be exercising, before the outside trigger had ramped
+ * anything at all - the scene was testing its own setup rather than the
+ * mechanism. Starting strictly inside the gap is also the stagger lever:
+ * step_one_cold_cell() moves a pane one level per successful roll, so a
+ * ring at 2 is one chill from the cold threshold and a ring at 4 is
+ * three - and the same distances the other way round for the climb to
+ * SAND_SHOCK_HEAT - so the 480 compartments do not all cross at once
+ * even though they are all built from the same two triggers.
+ *
+ * WHY THE COMPARTMENTS ARE SEPARATED: each ring is 20 cells, far under
+ * crack_run()'s CRACK_MAX of 256, and what keeps one shock from reaching
+ * a neighbouring compartment's glass at all is the tile's own layout, not
+ * the grid's leftover margin: lx 0 and ly 0-1 are left empty and the
+ * trigger takes lx 1, lx 8 and ly 8, so the nearest glass in the next
+ * tile is three cells away with a trigger and empty space in between.
+ * (The four spare columns and eight spare rows - 20x9 is 180 of 184 and
+ * 24x9 is 216 of 224 - are unused margin along the right and bottom
+ * edges, and separate nothing.) See test_a_crack_does_not_jump_to_a_-
+ * separate_pane, which is the same guarantee this scene leans on at 480x
+ * the scale.
+ *
+ * WHY LAVA IS A PAYLOAD AND NEVER A TRIGGER: lava is a liquid, and an
+ * outside trigger sits in a bare one-cell-wide U with nothing under it
+ * from below the grid - a liquid there would simply drain away before it
+ * ever got to test anything. The two outside triggers are instead the
+ * materials that hold still on their own: burning wood (KIND_STATIC) and
+ * ice (KIND_STATIC). Lava only ever appears as a payload, sitting inside
+ * a box that can actually hold it. This is a deliberate departure from
+ * the original sketch for this scene, which asked for lava as an outside
+ * trigger too - it does not survive contact with how liquids move.
+ *
+ * WHAT THE FAMILY SPLIT DOES AND DOES NOT DO: the left ten columns
+ * (family C) pair a burning-wood trigger with a cold payload - ice or
+ * snow - so they are BUILT to favour the cold-onto-hot direction, and the
+ * right ten columns (family H) pair an ice trigger with a hot payload -
+ * wood or lava - to favour hot-onto-cold. MEASURED, the split is not
+ * pure: family C's own cold payload chills its ring past SAND_SHOCK_COLD
+ * from the inside, so hot-onto-cold fires there too, and family H's own
+ * hot payload pushes its ring past SAND_SHOCK_HEAT from the inside, so
+ * cold-onto-hot fires there as well. Both directions run in both halves
+ * from step 1. The split earns its place as the payload/trigger MATRIX -
+ * four combinations of {cold, hot} outside x {cold, hot} inside, laid out
+ * so every compartment has an outside push and an inside push in the same
+ * or opposite sense - not as proof that either half exercises only one
+ * direction. What actually proves each direction fires is the pair of
+ * counters in the host test below, which look at the mechanism's own
+ * precondition directly rather than trusting the geometry to imply it.
+ *
+ * What this measures that nothing else in this file does: heat_ramp
+ * climbing through hundreds of independent panes at once, in-glass
+ * conduction along each ring, crack_run() firing under sustained load
+ * instead of once, and the mixed aftermath of that all at once -
+ * meltwater, steam, escaping fire and falling cullet sharing the same
+ * screen.
+ *
+ * Runs at the app's own per-material scatter, decay and mobility, the
+ * same choice build_lava_stress_scene() makes above and for the same
+ * reason: app_sand.c does too. */
+static void build_thermal_shock_scene(sand_t *s)
+{
+    for (int tr = 0; tr < 24; tr++) {
+        for (int tc = 0; tc < 20; tc++) {
+            const int ox = tc * 9, oy = tr * 9;
+            const bool family_c = (tc < 10);
+            const int ring_temp = 2 + (tc % 3);   /* {2,3,4} */
+
+            /* glass ring: perimeter of lx in [2,7], ly in [2,7] */
+            for (int ly = 2; ly <= 7; ly++) {
+                for (int lx = 2; lx <= 7; lx++) {
+                    if (lx != 2 && lx != 7 && ly != 2 && ly != 7) {
+                        continue;
+                    }
+                    sand_set(s, ox + lx, oy + ly,
+                             CELL_MAKE(MAT_GLASS, (uint8_t)ring_temp));
+                }
+            }
+
+            /* the trigger, outside the box: a U under and beside it */
+            const cell_t trigger = family_c ? CELL_MAKE(MAT_WOOD, MASS_MAX)
+                                            : MATX(MATX_ICE);
+            for (int ly = 2; ly <= 8; ly++) {
+                sand_set(s, ox + 1, oy + ly, trigger);
+                sand_set(s, ox + 8, oy + ly, trigger);
+            }
+            for (int lx = 2; lx <= 7; lx++) {
+                sand_set(s, ox + lx, oy + 8, trigger);
+            }
+
+            /* the payload, inside */
+            const bool low = (tr & 1) != 0;
+            const cell_t payload = family_c
+                ? (low ? MATX(MATX_ICE) : CELL_MAKE(MAT_SNOW, MASS_MAX))
+                : (low ? CELL_MAKE(MAT_WOOD, MASS_MAX)
+                       : CELL_MAKE(MAT_LAVA, MASS_MAX));
+            const int ly0 = low ? 5 : 3;
+            for (int ly = ly0; ly <= ly0 + 1; ly++) {
+                for (int lx = 3; lx <= 6; lx++) {
+                    sand_set(s, ox + lx, oy + ly, payload);
+                }
+            }
+        }
+    }
+}
+
+/* The two shock directions - cold arriving at hot glass in
+ * step_one_cold_cell(), heat arriving at cold glass in try_heat_-
+ * transform() - are different code paths that can break independently
+ * and have (see test_heat_arriving_at_frosted_glass_cracks_it, which
+ * exists for exactly that reason). This scene claims to exercise both at
+ * once across the whole lattice, and the two counters below check that
+ * claim directly rather than trusting the payload/trigger matrix to
+ * imply it - see build_thermal_shock_scene()'s comment for why the
+ * matrix alone is not that proof.
+ *
+ * d1_ready counts MAT_GLASS cells at variant >= SAND_SHOCK_HEAT with a
+ * cardinal neighbour whose reaction_of() has chills != 0 - exactly
+ * step_one_cold_cell()'s shock precondition, which takes no roll once it
+ * holds. d2_ready is its mirror: MAT_GLASS cells at variant <=
+ * SAND_SHOCK_COLD with a cardinal neighbour that cell_is_burning(), which
+ * is try_heat_transform()'s precondition, also roll-free. Roll-free is
+ * the whole reason to count preconditions rather than cracks: a standing
+ * precondition is a fact about the board, not a probability, so a
+ * non-zero count is real evidence that direction is live. It is not quite
+ * a promise that those exact panes break next step - the movement passes
+ * run first, and a drift or a melting block can leave the pane before the
+ * reactions pass reaches it - which is why the assertions below grade
+ * these on HOW MANY STEPS the precondition stands, not on a count.
+ *
+ * Both are counted after every one of the 10 measured steps, because the
+ * claim is that each direction keeps firing across the window, not just
+ * once at the start.
+ *
+ * WHY TEN STEPS, AND WHY THIRDS OF (step - 1) / 3: the window is graded
+ * by charging each step's new cullet to one third of it - steps 1-3, 4-6,
+ * 7-10 - and ten is the shortest window where the LAST third still earns
+ * a real share of the total. Measured, ten steps split 54.1 / 28.9 /
+ * 17.0 percent; twelve, fifteen and twenty all push the tail under 15 as
+ * the early cracking dominates more and more of the run (11.8, 11.5 and
+ * 13.6 percent), and eight steps split honestly into thirds leaves the
+ * last one at 11.0. The divisor and the step count are one decision:
+ * change the window without changing /3 and the buckets stop being
+ * thirds at all, which is exactly how an earlier draft came to grade a
+ * 2/2/4 split as if it were 3/3/4.
+ *
+ * The cullet tally needs a STICKY mask - a cell that was ever cullet,
+ * tracked separately from what is cullet right now - and that is a real
+ * finding rather than a stylistic choice. Cullet is MAT_SAND at a variant
+ * SAND_CULLET_BASE or higher, and it is not inert: sand.heats_to is
+ * MAT_GLASS, so a fallen shard sitting near a hot payload can re-fuse
+ * into glass and later crack again. A naive per-step delta on a live
+ * MAT_SAND count goes negative the moment that happens, undercounting
+ * exactly the churn this scene exists to show. The sticky mask only ever
+ * grows, so "new cullet this third" stays a meaningful, non-negative
+ * quantity even while individual cells are cycling glass -> cullet ->
+ * glass under the payload's heat. */
+static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    uint8_t *ever_cullet = malloc((size_t)REAL_W * (size_t)REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(ever_cullet);
+    memset(ever_cullet, 0, (size_t)REAL_W * (size_t)REAL_H);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 41u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+    build_thermal_shock_scene(&s);
+    const int painted = sand_count(&s);
+
+    static const int dx[4] = { 1, -1, 0, 0 };
+    static const int dy[4] = { 0, 0, 1, -1 };
+
+    int d1_steps_nonzero = 0, d2_steps_nonzero = 0;
+    int sticky_total_before = 0;
+    int third_gain[3] = { 0, 0, 0 };
+
+    for (int step = 1; step <= 10; step++) {
+        sand_step(&s, 0, 1000, 0);
+
+        int d1 = 0, d2 = 0;
+        for (int y = 0; y < REAL_H; y++) {
+            for (int x = 0; x < REAL_W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (CELL_MATERIAL(c) != MAT_GLASS) {
+                    continue;
+                }
+                const int v = CELL_VARIANT(c);
+                bool near_chiller = false, near_burner = false;
+                for (int d = 0; d < 4; d++) {
+                    const int nx = x + dx[d], ny = y + dy[d];
+                    if ((unsigned)nx >= (unsigned)REAL_W ||
+                        (unsigned)ny >= (unsigned)REAL_H) {
+                        continue;
+                    }
+                    const cell_t n = sand_at(&s, nx, ny);
+                    if (CELL_IS_EMPTY(n)) {
+                        continue;
+                    }
+                    if (reaction_of(n)->chills != 0)  near_chiller = true;
+                    if (cell_is_burning(n))           near_burner  = true;
+                }
+                if (v >= SAND_SHOCK_HEAT && near_chiller) d1++;
+                if (v <= SAND_SHOCK_COLD && near_burner)  d2++;
+            }
+        }
+        if (d1 > 0) d1_steps_nonzero++;
+        if (d2 > 0) d2_steps_nonzero++;
+
+        /* Grow the sticky mask, then charge the growth to this step's
+         * third of the window - see the comment above for why the mask
+         * has to be sticky rather than a live per-step count. */
+        for (int y = 0; y < REAL_H; y++) {
+            for (int x = 0; x < REAL_W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (CELL_MATERIAL(c) == MAT_SAND &&
+                    CELL_VARIANT(c) >= SAND_CULLET_BASE) {
+                    ever_cullet[(size_t)y * REAL_W + (size_t)x] = 1;
+                }
+            }
+        }
+        int sticky_total = 0;
+        for (size_t i = 0; i < (size_t)REAL_W * REAL_H; i++) {
+            sticky_total += ever_cullet[i];
+        }
+        int third = step - 1;
+        third /= 3;
+        if (third > 2) third = 2;
+        third_gain[third] += sticky_total - sticky_total_before;
+        sticky_total_before = sticky_total;
+    }
+
+    int cullet_left = 0, cullet_right = 0;
+    int water = 0, steam = 0, fire = 0, matx_plant = 0, heat_holders = 0;
+    int lava_left = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            const int m = CELL_MATERIAL(c);
+            const bool left_half = x < REAL_W / 2;
+            if (m == MAT_SAND && CELL_VARIANT(c) >= SAND_CULLET_BASE) {
+                if (left_half) cullet_left++; else cullet_right++;
+            }
+            if      (m == MAT_WATER) water++;
+            else if (m == MAT_STEAM) steam++;
+            else if (m == MAT_FIRE)  fire++;
+            else if (m == MAT_LAVA && left_half) lava_left++;
+            if (cell_is_extended(c) && CELL_VARIANT(c) == MATX_PLANT) {
+                matx_plant++;
+            }
+            if (!CELL_IS_EMPTY(c) && reaction_of(c)->heat_ramp != 0) {
+                heat_holders++;
+            }
+        }
+    }
+
+    /* Distinct TILES (of the 240 per half) that have gained at least one
+     * cullet cell over the window - a coarser, per-compartment measure
+     * that a handful of very active tiles cannot satisfy on their own,
+     * unlike the raw cell counts above. */
+    int distinct_left = 0, distinct_right = 0;
+    for (int tr = 0; tr < 24; tr++) {
+        for (int tc = 0; tc < 20; tc++) {
+            bool has_cullet = false;
+            for (int ly = 0; ly < 9 && !has_cullet; ly++) {
+                for (int lx = 0; lx < 9 && !has_cullet; lx++) {
+                    const int x = tc * 9 + lx, y = tr * 9 + ly;
+                    if (x >= REAL_W || y >= REAL_H) {
+                        continue;
+                    }
+                    if (ever_cullet[(size_t)y * REAL_W + (size_t)x]) {
+                        has_cullet = true;
+                    }
+                }
+            }
+            if (has_cullet) {
+                if (tc < 10) distinct_left++; else distinct_right++;
+            }
+        }
+    }
+
+    const int sand_count_now = sand_count(&s);
+    const bool temperature_flag  = s.may_have_temperature;
+    const bool heat_holder_flag  = s.may_have_heat_holder;
+
+    free(big);
+    free(blocks);
+    free(ever_cullet);
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(4, d1_steps_nonzero,
+        "the cold-onto-hot direction (step_one_cold_cell()'s shock "
+        "precondition) must really be firing across most of the window - "
+        "if this is low, family H's ice trigger and family C's own cold "
+        "payload have stopped reaching hot glass and this scene is no "
+        "longer exercising the direction it claims to");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(4, d2_steps_nonzero,
+        "the hot-onto-cold direction (try_heat_transform()'s shock "
+        "precondition) must really be firing across most of the window - "
+        "kept as a SEPARATE assertion from the one above for the same "
+        "reason test_heat_arriving_at_frosted_glass_cracks_it is kept "
+        "separate from its mirror: the two directions are different code "
+        "and break independently");
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1500, cullet_left,
+        "the left half of the lattice must be producing cullet in "
+        "quantity, not just in one corner of it");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1500, cullet_right,
+        "the right half of the lattice must be producing cullet in "
+        "quantity, not just in one corner of it");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(100, distinct_left,
+        "shattering must be spread across many compartments in the left "
+        "half, not concentrated in a few tiles that happen to be "
+        "unusually active");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(100, distinct_right,
+        "shattering must be spread across many compartments in the right "
+        "half, not concentrated in a few tiles that happen to be "
+        "unusually active");
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1500, third_gain[0],
+        "the first third of the window must already be producing new "
+        "cullet - see the sticky-mask comment above for why this counts "
+        "distinct cells that have EVER been cullet rather than a live "
+        "snapshot, which would undercount once fallen shards start "
+        "re-fusing near the payload's heat");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1500, third_gain[1],
+        "the middle third of the window must still be producing new "
+        "cullet - shattering has to be staggered across the window "
+        "rather than all landing in the first couple of steps");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1500, third_gain[2],
+        "the last third of the window must still be producing new "
+        "cullet - if this is low while the first third is not, the "
+        "lattice went quiet early and the device benchmark beside this "
+        "test is measuring a scene that has already settled");
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1000, water,
+        "meltwater from ice and snow must still be showing at the end of "
+        "the window");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(800, steam,
+        "steam from meltwater meeting a hot payload must still be "
+        "showing at the end of the window");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2000, fire,
+        "fire escaping broken compartments must still be showing at the "
+        "end of the window");
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(painted, sand_count_now,
+        "cells must never be net-destroyed - this is deliberately a "
+        "FLOOR, not a conservation check: burning wood and lava both "
+        "flare fresh MAT_FIRE into empty neighbours, so the live count "
+        "is expected to grow past what was painted, exactly as it does "
+        "in the lava stress and four-liquid scenes above, neither of "
+        "which asserts conservation either");
+
+    /* Model: the lava stress scene's own plant pin above. This scene
+     * makes meltwater and has sand about (both plain and cullet), so wet
+     * soil is reachable in principle; the plant materials are under
+     * active development, and if growth ever starts happening inside
+     * this measured window, the frame budget the device benchmark beside
+     * this test is pegging from a hardware capture would quietly stop
+     * describing the scene it claims to. This assertion is what makes
+     * that change announce itself instead of passing silently.
+     *
+     * Also note this scene cannot reuse the lava stress scene's plain
+     * cell_is_extended(c) form: this scene's own payload uses
+     * MATX(MATX_ICE), which IS an extended cell, so the pin has to name
+     * MATX_PLANT specifically or it would fail on the ice this scene
+     * paints on purpose. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, matx_plant,
+        "the thermal shock lattice should not be growing any plants - if "
+        "it is, the device test's frame budget is no longer measuring "
+        "the scene it claims to, and the ice payload means the usual "
+        "cell_is_extended() plant pin cannot be reused here as-is");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, lava_left,
+        "family C's rings (the left half) must not have melted into "
+        "lava inside this window - measured, those rings do keep "
+        "climbing under their own payload and trigger's heat, and the "
+        "first left-half lava cell appears at step 16 (123 of them by "
+        "step 40), which is a second, independent reason this window is "
+        "kept to 10 steps rather than left to run longer");
+
+    /* step_one_warming_cell()'s call site is gated on three things at
+     * once - r->warms, may_have_temperature and may_have_heat_holder -
+     * see sand_reactions.c, the branch a previous tuning round added
+     * that third flag for. The four assertions below pin all three, plus
+     * the physical fact behind the last of them (something on the board
+     * really can hold a temperature, not merely a flag saying so).
+     * Asserting them together is what proves the warming path is
+     * genuinely reachable in this scene rather than skipped by a gate
+     * that happens to be shut. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, steam,
+        "setup for the warming-gate check below: there must be steam on "
+        "the board for the gate to be worth anything");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, heat_holders,
+        "setup for the warming-gate check below: there must be cells "
+        "that can hold a temperature (glass, here) for the gate to be "
+        "worth anything");
+    TEST_ASSERT_TRUE_MESSAGE(temperature_flag,
+        "may_have_temperature must be armed by this scene, or "
+        "step_one_warming_cell()'s call site is never reached at all");
+    TEST_ASSERT_TRUE_MESSAGE(heat_holder_flag,
+        "may_have_heat_holder must be armed by this scene too - "
+        "may_have_temperature alone is not the gate; a previous tuning "
+        "round added this second flag specifically because the first one "
+        "arms itself the moment anything with a temperature is painted, "
+        "which is not the same claim as there being something around "
+        "that can actually hold one");
+}
+
+/* The boiler from test_the_boiler_end_to_end, scaled from one column to
+ * the whole 184x224 grid and run as a SUSTAINED STEADY STATE rather than
+ * a transient - the opposite of build_thermal_shock_scene() above,
+ * deliberately, so the pair covers both shapes of thermal load this
+ * simulation has to handle: a burst of damage that runs its course, and
+ * a heat source left running that has to keep producing without either
+ * exhausting its fuel or its water.
+ *
+ * The slab is 11 rows thick, the pour brush's real thickness - the same
+ * figure test_the_boiler_end_to_end uses, and for the same reason.
+ * conduct_heat() attenuates at roughly 0.86 per cell of depth it has to
+ * cross, so slab thickness is the THROTTLE on how fast the basin can
+ * boil: eleven rows is what keeps the rate sustainable across the whole
+ * measured window instead of exhausting the basin partway through it.
+ *
+ * TWO BURNERS ON PURPOSE: lava never decays, so it is the steady heat
+ * source; wood burns down (burn_decay 24) and is there so the OTHER heat
+ * source path - an ember rather than a permanent liquid - is covered by
+ * the same scene instead of needing a second one. Measured, all 356 wood
+ * cells painted are still lit at the end of the window, and both halves
+ * of the basin boil at close to the same rate - see the host test's
+ * per-half assertions.
+ *
+ * WHY THE BOILING RATE IS SELF-SUSTAINING: steam made at the slab is
+ * lighter than the water sitting above it, so try_bubble() (sand_gas.c)
+ * swaps it upward one cell at a time and water falls back down onto the
+ * slab to be boiled in its turn. The basin keeps refilling its own hot
+ * face on its own; no extra geometry - chutes, gaps, anything - is
+ * needed to make that happen, unlike build_lava_stress_scene() above,
+ * which needs its chute for exactly this reason.
+ *
+ * WHY THE BURNER IS FULLY ENCLOSED (stone side walls the full depth of
+ * the basin, a stone slab, the grid floor underneath): so that flare has
+ * almost nowhere to put fresh fire, and the cell count therefore says
+ * something about the boil rather than about how much empty space
+ * happened to be lying around.
+ *
+ * "Almost" is the honest word, and it is why the host test below asserts
+ * a FLOOR on the count rather than an equality. Measured: the count sits
+ * exactly at its window-start value for the first twenty steps of the
+ * measured window and then starts climbing, reaching 8343 from 8280 by
+ * the end of it - the boil has by then opened enough gaps in the water
+ * above the slab for flare to reach them. An equality would simply fail
+ * here - and it is worth knowing that it held for the shorter settle an
+ * earlier draft of this scene used only by a SINGLE step: total step 41
+ * is where the count first moves, and that draft stopped at 40. That is
+ * not a margin worth building an assertion on. */
+static void build_boiler_scene(sand_t *s)
+{
+    const int burn_h = 4, slab_h = 11, water_h = 30;
+    const int burn_top  = REAL_H - burn_h;          /* 220 */
+    const int slab_top  = burn_top - slab_h;        /* 209 */
+    const int water_top = slab_top - water_h;       /* 179 */
+
+    /* basin walls, full depth */
+    for (int y = water_top; y < REAL_H; y++) {
+        for (int x = 0; x < 3; x++) {
+            sand_set(s, x, y, STONE);
+            sand_set(s, REAL_W - 1 - x, y, STONE);
+        }
+    }
+    /* two burners under one slab */
+    for (int y = burn_top; y < REAL_H; y++) {
+        for (int x = 3; x <= REAL_W - 4; x++) {
+            sand_set(s, x, y, (x < REAL_W / 2) ? CELL_MAKE(MAT_LAVA, MASS_MAX)
+                                               : CELL_MAKE(MAT_WOOD, MASS_MAX));
+        }
+    }
+    /* the slab */
+    for (int y = slab_top; y < burn_top; y++) {
+        for (int x = 3; x <= REAL_W - 4; x++) {
+            sand_set(s, x, y, STONE);
+        }
+    }
+    /* the water */
+    for (int y = water_top; y < slab_top; y++) {
+        for (int x = 3; x <= REAL_W - 4; x++) {
+            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+}
+
+/* The boiler above really does keep boiling for the whole window rather
+ * than front-loading its output and going quiet, checked the same way
+ * the other scenes in this section are: build it through the same
+ * function the device test uses, step it the same number of times, and
+ * measure.
+ *
+ * 20 settle steps first - twice the "let it get going" allowance
+ * test_four_liquids_reacting_at_once_fits_in_the_frame_budget gives its
+ * own scene, because a basin takes longer to reach a steady boil than a
+ * liquid stack takes to start mixing: at ten steps the board is still
+ * filling with the first flush of steam (295 cells of it), at twenty it
+ * is boiling at a rate that then holds for the whole window.
+ *
+ * Then 30 measured steps, sampled at 0, 7, 15, 22 and 30 steps into the
+ * measured window - four intervals, so the per-quarter loss assertions
+ * below can catch a basin that boils hard at first and then tails off,
+ * which a single before/after comparison could not. Measured, the four
+ * quarters lose 206, 211, 215 and 157 cells of water: level enough to
+ * call it steady, and the assertions are held at 100 so ordinary
+ * quarter-to-quarter variation does not read as a stall. */
+static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 43u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+    build_boiler_scene(&s);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int water_window_start = 0, steam_window_start = 0;
+    int water_left_start = 0, water_right_start = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_WATER) {
+                water_window_start++;
+                if (x < REAL_W / 2) water_left_start++; else water_right_start++;
+            } else if (m == MAT_STEAM) {
+                steam_window_start++;
+            }
+        }
+    }
+    const int count_at_window_start = sand_count(&s);
+
+    int water_at_checkpoint[5];
+    water_at_checkpoint[0] = water_window_start;
+    const int checkpoints[4] = { 7, 15, 22, 30 };
+    int next_checkpoint = 0;
+
+    for (int i = 1; i <= 30; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (next_checkpoint < 4 && i == checkpoints[next_checkpoint]) {
+            int w = 0;
+            for (int y = 0; y < REAL_H; y++) {
+                for (int x = 0; x < REAL_W; x++) {
+                    if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WATER) w++;
+                }
+            }
+            water_at_checkpoint[next_checkpoint + 1] = w;
+            next_checkpoint++;
+        }
+    }
+
+    int water = 0, steam = 0, stone = 0, burning_wood = 0;
+    int stone_off_ambient = 0, extended = 0;
+    int water_left = 0, water_right = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            const int m = CELL_MATERIAL(c);
+            const bool left_half = x < REAL_W / 2;
+            if (m == MAT_WATER) {
+                water++;
+                if (left_half) water_left++; else water_right++;
+            } else if (m == MAT_STEAM) {
+                steam++;
+            } else if (m == MAT_STONE) {
+                stone++;
+                if (CELL_VARIANT(c) != SAND_AMBIENT_HEAT) stone_off_ambient++;
+            } else if (m == MAT_WOOD && cell_is_burning(c)) {
+                burning_wood++;
+            }
+            if (cell_is_extended(c)) extended++;
+        }
+    }
+
+    const int sand_count_now = sand_count(&s);
+    const bool temperature_flag = s.may_have_temperature;
+    const bool heat_holder_flag = s.may_have_heat_holder;
+
+    free(big);
+    free(blocks);
+
+    for (int q = 0; q < 4; q++) {
+        const int lost = water_at_checkpoint[q] - water_at_checkpoint[q + 1];
+        char why[320];
+        snprintf(why, sizeof why,
+                 "the boiler must still be boiling in quarter %d of the "
+                 "measured window (lost %d cells of water there) - a "
+                 "quiet quarter means the basin exhausted its heat or "
+                 "its water before the window was over, and this is "
+                 "meant to be a STEADY state, not a transient", q, lost);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(100, lost, why);
+    }
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(3500, water,
+        "the basin must not be exhausted by the end of the window - "
+        "measured, 3958 cells of water are left, 83% of what the window "
+        "started with and 74% of what was painted, which is what makes "
+        "this a steady state rather than another transient like the "
+        "thermal shock lattice above");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(800, steam,
+        "steam production must be sustained through to the end of the "
+        "window");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(steam_window_start, steam,
+        "steam must have grown over the measured window, not merely be "
+        "present - a count that matches the window's starting steam "
+        "would mean production had already stalled by the time "
+        "measurement began");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(200, stone_off_ambient,
+        "the slab must be genuinely carrying a temperature by the end of "
+        "the window - this is the proof that heat is arriving at the "
+        "water by conduction THROUGH the slab, not by some other route");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(300, burning_wood,
+        "the second burner must still be alight at the end of the "
+        "window, or the \"two heat sources\" claim this scene makes only "
+        "holds for part of it");
+
+    /* Both halves boil, not just the lava-fed one - the wood-fed half's
+     * ember has to be pulling its own weight too. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(200,
+        water_left_start - water_left,
+        "the left (lava-fed) half of the basin must have lost a real "
+        "amount of water over the window");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(200,
+        water_right_start - water_right,
+        "the right (wood-fed) half of the basin must have lost a real "
+        "amount of water over the window - a low loss here would mean "
+        "the ember burner is not pulling its share and the \"two "
+        "burners\" claim only holds on one side");
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(count_at_window_start, sand_count_now,
+        "cells must never be net-destroyed here - a FLOOR, not the exact "
+        "conservation test_a_screen_of_smoke_and_steam_fits_in_the_frame_"
+        "budget makes of its own scene, because this one has a burner in "
+        "it. The stone enclosure (side walls, slab, grid floor) leaves "
+        "flare almost nowhere to put fresh fire, and measured the count "
+        "holds at its window-start 8280 for twenty steps before the boil "
+        "opens gaps above the slab and it climbs to 8343 - see "
+        "build_boiler_scene()'s comment. Water boiling to steam and steam "
+        "condensing back are both one-for-one, so a count BELOW the "
+        "window's start means cells went missing, which is a different "
+        "and much worse thing than flare adding a few");
+
+    /* Same reasoning as the thermal shock lattice's plant pin above, and
+     * the plain cell_is_extended() form works here, unlike there,
+     * because this scene paints no extended material at all. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, extended,
+        "the boiler scene should not contain any extended cells - if it "
+        "does, either the scene changed to paint one on purpose (update "
+        "this test) or something is growing that this benchmark was "
+        "never meant to measure");
+
+    /* The same check on step_one_warming_cell()'s three-part call-site
+     * gate as the thermal shock lattice's host test above - the branch a
+     * previous tuning round added may_have_heat_holder for. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, steam,
+        "setup for the warming-gate check below: there must be steam on "
+        "the board for the gate to be worth anything");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, stone,
+        "setup for the warming-gate check below: there must be cells "
+        "that can hold a temperature (stone, here) for the gate to be "
+        "worth anything");
+    TEST_ASSERT_TRUE_MESSAGE(temperature_flag,
+        "may_have_temperature must be armed by this scene, or "
+        "step_one_warming_cell()'s call site is never reached at all");
+    TEST_ASSERT_TRUE_MESSAGE(heat_holder_flag,
+        "may_have_heat_holder must be armed by this scene too - see the "
+        "thermal shock lattice's host test above for why this second "
+        "flag is not redundant with the first");
+}
+
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
 #include "esp_log.h"
@@ -9942,6 +10647,162 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
         "as this provisional ceiling - see the comment above for why it "
         "is provisional");
 }
+
+/* 480 glass compartments (build_thermal_shock_scene() above, shared with
+ * test_the_thermal_shock_scene_shatters_in_both_directions, which proves
+ * both shock directions really fire across the lattice and that the
+ * aftermath - meltwater, steam, escaping fire, falling cullet - is still
+ * alive at the end of the window rather than one this scene claims to
+ * measure but has actually gone quiet). No settling steps: the lattice is
+ * already at its most active the moment it is painted, since every ring
+ * starts strictly between the two shock thresholds and every trigger
+ * starts touching its ring from step 1.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET. Nobody has run this on hardware
+ * yet, so - same as the other four scenes' device tests in this file -
+ * this is a deliberately loose SANITY CEILING: wide enough that it cannot
+ * pass as tuned, tight enough to catch something catastrophic like an
+ * accidental quadratic. It is not extrapolated from the host timing
+ * either - this file has already been burned once by an extrapolated
+ * figure that came out four times too pessimistic against what the chip
+ * actually did, and there is no reason to repeat that mistake here.
+ * Replace this with a real figure - about 9-10% over the measured
+ * number, the method this file's other budgets document - the first
+ * time this runs on a device, and say what was measured.
+ *
+ * The watchdog reasoning here is stronger than it was for the three
+ * scenes above: ten steps, and no settling step to spend any of the
+ * window on first. Host timing, best-of-5 and interleaved with the other
+ * four scenes so nothing is measured while the machine is still warming
+ * up, ranks this scene the most expensive of the five - 1199 us/step
+ * against 824 for the lava stress scene, 763 for four liquids reacting,
+ * 647 for the smoke-and-steam screen and 218 for the boiler. That host
+ * number is a RELATIVE signal only, telling us this scene costs more
+ * than its siblings on the same machine - it is deliberately NOT
+ * extrapolated to a device figure, for the reason given above, and the
+ * absolute figures are worth little in any case: host wall-clock on this
+ * project drifts up to 40% within a single harness run, which is why
+ * they are taken best-of-N with the builds interleaved.
+ *
+ * The step count is not chosen against those numbers at all. It is fixed
+ * at ten by the host guard beside this test - see that test's comment on
+ * why the cullet timeline only splits into honest thirds at ten - and
+ * the CEILING is then what gets chosen: ten steps at 400000 us is four
+ * seconds total, which stays inside the device's five-second task
+ * watchdog even in the worst case the assertion allows. The two are one
+ * decision - raise the step count without lowering the ceiling and this
+ * stops being a safe bet. */
+static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 41u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_thermal_shock_scene(&real);
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 10;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "thermal shock lattice, %dx%d: %lld us per "
+                             "step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
+        "the thermal shock lattice must stay in the same ballpark as "
+        "this provisional ceiling - see the comment above for why it is "
+        "provisional, and for the watchdog arithmetic that ties this "
+        "ceiling to the 10-step window");
+}
+
+/* The boiler scaled to the whole grid and run as a sustained steady state
+ * (build_boiler_scene() above, shared with test_the_boiler_scene_keeps_-
+ * boiling_across_the_window, which proves the basin keeps boiling for
+ * the whole measured window, both burners are still contributing at the
+ * end of it, and no cells go missing - the enclosed-burner property that
+ * host test explains and this one relies on).
+ *
+ * 20 settle steps, then 30 measured - matching the host test's own
+ * window exactly, so what this times is what that one already proved
+ * really is a sustained boil rather than a burst that has mostly spent
+ * itself by the time the measured window starts.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET, for the same reason as the other
+ * four device tests in this section: nobody has run this on hardware
+ * yet. It is a deliberately loose SANITY CEILING, not extrapolated from
+ * host timings - this file has already been burned once by an
+ * extrapolated figure that came out four times too pessimistic against
+ * the real device number, which is reason enough not to try that again
+ * here. Replace it with a real figure - about 9-10% over the measured
+ * number, the method this file's other budgets document - the first
+ * time this runs on a device, and say what was measured.
+ *
+ * Fifty steps in total (20 settle + 30 measured) at the 80000 us ceiling
+ * this test asserts is four seconds, which stays inside the device's
+ * five-second task watchdog even in the worst case the assertion allows
+ * - the same step-count-and-ceiling-as-a-pair reasoning the thermal
+ * shock lattice's device test above documents, and the reason the
+ * ceiling here is 80000 rather than the round 100000 an earlier draft
+ * used: at 100000, fifty steps is exactly the watchdog's own five
+ * seconds, which is not a margin. Host timing, best-of-5 and
+ * interleaved, ranks this scene the CHEAPEST of the five at 218 us/step
+ * against 1199 for the thermal shock lattice - which is why it can
+ * afford fifty steps where that one is held to ten: a scene costing
+ * about a fifth as much per step buys back the same watchdog margin with
+ * five times the steps. */
+static void test_the_boiler_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 43u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_boiler_scene(&real);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 30;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "boiler scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(80000, (int)per_step,
+        "the boiler scene must stay in the same ballpark as this "
+        "provisional ceiling - see the comment above for why it is "
+        "provisional, and for the watchdog arithmetic that ties this "
+        "ceiling to the 50-step total window");
+}
 #endif /* DEVICE_BUILD */
 
 /* --- suite -------------------------------------------------------------- */
@@ -10148,6 +11009,8 @@ void run_sand_suite(void)
     RUN_TEST(test_the_four_liquid_scene_keeps_reacting_after_settling);
     RUN_TEST(test_the_lava_stress_scene_reaches_every_reaction_it_claims);
     RUN_TEST(test_the_smoke_and_steam_scene_stays_a_gas_screen);
+    RUN_TEST(test_the_thermal_shock_scene_shatters_in_both_directions);
+    RUN_TEST(test_the_boiler_scene_keeps_boiling_across_the_window);
     RUN_TEST(test_reinitialising_forgets_the_old_board);
     RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
     RUN_TEST(test_snow_painted_into_water_melts);
@@ -10213,6 +11076,8 @@ void run_sand_suite(void)
     RUN_TEST(test_four_liquids_reacting_at_once_fits_in_the_frame_budget);
     RUN_TEST(test_the_lava_stress_scene_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
+    RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
 #endif
 }
 
