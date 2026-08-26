@@ -78,7 +78,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
 "
 
 echo "=== Capturing self-test output ==="
-python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT"
+python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
 
 echo "=== Generating performance report ==="
 python "$SCRIPT_DIR/report_performance.py" "$RAW_CAPTURE" "$OUT_MD" \
