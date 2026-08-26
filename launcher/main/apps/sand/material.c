@@ -1398,12 +1398,16 @@ static const gfx_color_t palette[256] = {
                                     * a block of it should read as solid
                                     * and cold, where snow reads as loose */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_PLANT] =
-    GFX_RGB(0x4E9A38),            /* plant - a green with some yellow in
-                                    * it, so it reads as growth rather
-                                    * than as the dark of a conifer.
-                                    * Nothing else on the board is green
-                                    * except gas, which is paler and
-                                    * moves */
+    GFX_RGB(0x55672D),            /* plant - OLIVE, pulled most of the
+                                    * way to wood's brown: a stem is
+                                    * timber that has not arrived yet,
+                                    * and every one of these cells is on
+                                    * its way to being some. It used to
+                                    * be a vivid green, which read as new
+                                    * growth all over the trunk and made
+                                    * the whole tree glow. The leaves
+                                    * keep the green - they are the part
+                                    * meant to catch the eye */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] =
     GFX_RGB(0x7FC94B),            /* leaf - the same green gone lighter and
                                     * yellower, so a crown separates from
@@ -1632,8 +1636,24 @@ static const gfx_color_t wood_grain[8] = {
  * light and shade and half-dead leaves; ice is one substance, and its
  * variation is facets catching the light rather than any real difference
  * in colour. */
-#define PLANT_DARK  0x35701F
-#define PLANT_LIGHT 0x74C25A
+/* The stem is OLIVE, not green: about 55% of the way from the green it
+ * used to be towards wood's unlit 0x5A3D24, which is what a shoot part
+ * way to being bark actually looks like.
+ *
+ * Reported as trees reading too bright. The stem is the right thing to
+ * move rather than the foliage, because of what a stem IS here: every
+ * one of these cells is on its way to being wood, either by finishing
+ * its run or by drying out and lignifying. Colouring it as timber that
+ * has not arrived yet says that, where a green as vivid as the leaves
+ * said the opposite - that the trunk was covered in new growth.
+ *
+ * Luminance, since brightness was the complaint: the band was 85 to 159
+ * of 255 and is now 75 to 123, against wood's own 67. A stem now sits
+ * beside the trunk instead of on top of it. The leaves are untouched and
+ * are still the bright thing in a tree, which is correct - they are the
+ * only part that is supposed to catch the eye. */
+#define PLANT_DARK  0x495422
+#define PLANT_LIGHT 0x778746
 
 /* Foliage: lighter and yellower than the stem, and a wider spread than
  * either of the others. A crown is sunlit on one side and shaded on the
