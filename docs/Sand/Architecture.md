@@ -378,6 +378,19 @@ the scheme forbids, and is not: its growth is **spatial**. It occupies more
 cells rather than filling up a counter, so the thing being accumulated is
 the shape on the grid, which needs no bits at all.
 
+The shared `kind` gave way the same way. A plant has to be poured like a
+grain, and it cannot be a `KIND_POWDER` to manage it: that row is shared,
+so ice would fall too - and a plant is its own stem, so a column of powder
+six cells tall would slump the moment it grew. It falls in the **cold
+pass** instead, under a rule that only moves a cell into empty space, and
+the board answers that differently for a seed in mid-air than for a stem
+standing on more stem. The same trick lets a shoot shove loose cover
+aside on its way up, which the sweep would never have done for it.
+
+So the honest limit is narrower than "static": what an extended material
+cannot have is anything the HOT path would need to read. Everything else
+is available at cold-pass prices.
+
 The cost is that a stateless material has to READ what it would otherwise
 have stored. A plant cannot know how tall it is, so it walks its own column
 to find the tip before growing and walks it again to decide whether the run

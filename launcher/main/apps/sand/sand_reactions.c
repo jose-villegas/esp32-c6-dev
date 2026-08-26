@@ -902,6 +902,16 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
      * ground - a chain of limbs hanging off a limb is not a shape a tree
      * grows into, and if it ever were, it falling is the right answer.
      *
+     * And the neighbour ABOVE is not an anchor, which is the third go at
+     * this rule and the one that matters. A cell above cannot hold
+     * anything up, and counting it makes the test circular: the cell above
+     * qualifies as "standing on something" because the thing it is
+     * standing on is the very cell doing the asking. Two seeds stacked
+     * vertically each held the other, so a brushful of them hung in the
+     * air exactly where it was painted - reported as the plant only
+     * falling when water was poured over it, which is the reactions pass
+     * being woken for some other reason and finding the pile still there.
+     *
      * Said generically, so it belongs to the material rather than to the
      * plant: more of yourself, or what you harden into. */
     const cell_t self = s->cells[at];
@@ -910,6 +920,9 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
         const int ay = y + reaction_dirs[d][1];
         if ((unsigned)ax >= (unsigned)w || (unsigned)ay >= (unsigned)h) {
             continue;
+        }
+        if (ax == x - s->last_load_dx && ay == y - s->last_load_dy) {
+            continue;                 /* what is above holds nothing up */
         }
         const cell_t a = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
         if (a != self &&
@@ -1128,6 +1141,71 @@ static bool stem_next(sand_t *s, int x, int y, int ux, int uy, int w, int h,
     return false;
 }
 
+/* How far a shoot will shove to get out from under something. Two or
+ * three cells of cover is what burying a seed actually looks like; the
+ * bound is here so a plant under half the board does not walk it. */
+#define PUSH_REACH 8
+
+/* Make room at (gx, gy) by shoving whatever is there along (dx, dy).
+ *
+ * A seed covered over with soil could not grow at all: the cell it wanted
+ * was occupied, and occupied was the end of it. Which is wrong for the
+ * one material on the board whose whole job is to come up through the
+ * ground - burying a seed and watering it is how you plant one, and it was
+ * the one way to guarantee nothing happened.
+ *
+ * So the run gets pushed instead. Walk along the growth direction while
+ * the cells are things a shoot could displace - powders, liquids, gases,
+ * anything not STATIC - until an empty one turns up, then shift the whole
+ * run one step into it. Nothing is created or destroyed, the cover ends up
+ * one cell higher, and a shoot stops dead at stone or wood or at another
+ * tree, which is what those are for.
+ *
+ * Returns whether (gx, gy) is now free. */
+static bool shove_aside(sand_t *s, int gx, int gy, int dx, int dy,
+                        int w, int h)
+{
+    int ex = gx, ey = gy;
+    int run = 0;
+
+    while (run < PUSH_REACH) {
+        if ((unsigned)ex >= (unsigned)w || (unsigned)ey >= (unsigned)h) {
+            return false;             /* shoved into the wall */
+        }
+        const cell_t c = s->cells[(size_t)ey * (size_t)w + (size_t)ex];
+        if (CELL_IS_EMPTY(c)) {
+            break;                    /* somewhere to put it all */
+        }
+        if (material_of(c)->kind == KIND_STATIC) {
+            return false;             /* will not budge */
+        }
+        ex += dx;
+        ey += dy;
+        run++;
+    }
+    if (run == 0) {
+        return true;                  /* was empty to begin with */
+    }
+    if (run >= PUSH_REACH) {
+        return false;                 /* too much of it to lift */
+    }
+
+    /* Back to front, so nothing is overwritten before it has moved. */
+    for (int i = 0; i < run; i++) {
+        const int tx = ex, ty = ey;
+        ex -= dx;
+        ey -= dy;
+        s->cells[(size_t)ty * (size_t)w + (size_t)tx] =
+            s->cells[(size_t)ey * (size_t)w + (size_t)ex];
+        mark_rows(s, ty, ty);
+        wake_block_and_neighbors(s, tx, ty);
+    }
+    s->cells[(size_t)gy * (size_t)w + (size_t)gx] = SAND_EMPTY;
+    mark_rows(s, gy, gy);
+    wake_block_and_neighbors(s, gx, gy);
+    return true;
+}
+
 /* One cell of something that GROWS.
  *
  * It grows from the TIP of whatever column of itself this cell belongs to,
@@ -1284,9 +1362,24 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
         return true;
     }
+    /* Only a SHOOT shoves - the leading cell, carrying on the way it was
+     * already going. A branch does not tunnel sideways through a bank and
+     * a trunk does not widen by pushing the ground apart; what a buried
+     * seed does is come up.
+     *
+     * That distinction is also the whole limit on it. Being able to push
+     * through soil means growth is no longer held back by having to find
+     * empty space, and empty space was quietly doing a lot of the
+     * limiting: with every kind of growth allowed to shove, four seeds in
+     * a watered bed grew 220 cells of timber, most of it inside the soil
+     * where nothing could have reached before. Restricted to the tip, the
+     * same scene grows trees that come up out of the ground. */
+    const bool shoot = (site == run - 1) && !thicken;
+
     const size_t gat = (size_t)gy * (size_t)w + (size_t)gx;
-    if (!CELL_IS_EMPTY(s->cells[gat])) {
-        return true;                  /* something in the way */
+    if (!CELL_IS_EMPTY(s->cells[gat]) &&
+        !(shoot && shove_aside(s, gx, gy, dx, dy, w, h))) {
+        return true;                  /* in the way, and will not move */
     }
 
     /* Grow, and spend the water. */

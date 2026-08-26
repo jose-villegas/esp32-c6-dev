@@ -5978,6 +5978,49 @@ static void test_two_falling_seeds_do_not_hold_each_other_up(void)
     }
 }
 
+
+/* A whole BRUSHFUL of seeds falls, not just one or two.
+ *
+ * The brush paints a disc, and a disc is the shape that breaks a careless
+ * attachment rule. Two seeds side by side were already covered - each is
+ * an anchor for the other only if it is standing on something, and
+ * neither is. Two seeds STACKED were not, and they are worse: the upper
+ * one qualifies as an anchor because it has something under it, and the
+ * something is the very cell asking whether it may fall. The pair holds
+ * itself up, and so does everything painted around it.
+ *
+ * Reported as the plant only falling when water was poured over it, which
+ * is the reactions pass being woken for another reason and finding the
+ * pile exactly where the brush left it. */
+static void test_a_brushful_of_seeds_does_not_hang_in_the_air(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    sand_spawn_cell(&s, W / 2, 2, 2, MATX(MATX_PLANT));
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_EXTENDED) > 4,
+        "the brush has to have painted a disc, not a single cell - one "
+        "seed on its own cannot show this at all");
+
+    for (int i = 0; i < 300; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* The disc is five cells tall on an eight-cell board, so "none of it
+     * is up top" is not available to assert - it cannot all clear the
+     * upper half however far it falls. Reaching the floor says the same
+     * thing without the arithmetic. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, W / 2, H - 1),
+        "a painted disc of seeds must come to rest on the floor - a cell "
+        "ABOVE another cannot be holding it up, and counting it as an "
+        "anchor makes the whole pile support itself in mid-air");
+    for (int x = 0; x < W; x++) {
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(MATX(MATX_PLANT), sand_at(&s, x, 0),
+            "and nothing may be left behind at the height it was painted");
+    }
+}
+
 /* And what a tree grows must NOT fall.
  *
  * The other half of the same rule, and the reason it cannot simply be
@@ -6030,6 +6073,92 @@ static void test_a_growing_tree_does_not_shed_what_it_grows(void)
         }
     }
     TEST_ASSERT_TRUE_MESSAGE(grown > 0, "the tree has to have grown at all");
+}
+
+
+/* A BURIED seed comes up through the soil.
+ *
+ * Which is how you plant one - drop a seed, cover it over, water it - and
+ * it was the one arrangement guaranteed to do nothing at all. Growth put
+ * its new cell in empty space, and a buried seed has none: the cell it
+ * wanted was occupied, and occupied was the end of the matter.
+ *
+ * A shoot shoves instead. The run of loose material above it shifts up one
+ * and the shoot takes the space, which is why the soil count is checked as
+ * carefully as the emergence - a shoot that ATE its way out would pass the
+ * first assert perfectly and quietly hollow out every bank on the board. */
+static void test_a_buried_seed_comes_up_through_the_soil(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        for (int y = H - 5; y < H - 1; y++) {
+            sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, x & 1,
+                                         y >= H - 3 ? SOIL_MOISTURE_MAX : 0));
+        }
+    }
+    /* Two rows of soil on top of it. */
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+    const int soil = count_cells_of(MAT_DIRT);
+
+    int up = 0;
+    for (int i = 0; i < 1500 && !up; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            for (int y = 0; y <= H - 6; y++) {
+                if (sand_at(&s, x, y) == MATX(MATX_PLANT) ||
+                    CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WOOD) {
+                    up = 1;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(up,
+        "a seed under two rows of watered soil must reach daylight - "
+        "burying a seed and watering it is how you plant one, and it was "
+        "the one way to guarantee nothing happened");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(soil, count_cells_of(MAT_DIRT),
+        "and it must SHOVE the soil aside, not eat it - a shoot that "
+        "consumed its cover would tunnel every bank on the board hollow "
+        "while passing every other test here");
+}
+
+/* But it will not push through stone.
+ *
+ * The other half of the same rule, and what keeps shoving from being a
+ * licence to go anywhere: a shoot displaces loose things - powders,
+ * liquids, gases - and stops dead at anything STATIC. Without that, a seed
+ * under a flagstone lifts it. */
+static void test_a_seed_under_stone_stays_put(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        sand_set(&s, x, H - 4, STONE);          /* a lid */
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 1500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
+        "a seed with a stone lid over it must stay one seed - a shoot "
+        "shoves what is loose and stops at what is not, or it lifts "
+        "flagstones");
+    for (int x = 0; x < W; x++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(STONE, sand_at(&s, x, H - 4),
+            "and the lid must still be where it was put");
+    }
 }
 
 /* A tree is not a stick.
@@ -8942,8 +9071,11 @@ void run_sand_suite(void)
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
     RUN_TEST(test_a_seed_falls_until_it_lands);
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
+    RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
+    RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
+    RUN_TEST(test_a_seed_under_stone_stays_put);
     RUN_TEST(test_a_stem_that_wanders_still_hardens);
     RUN_TEST(test_a_bare_trunk_in_wet_ground_buds_again);
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
