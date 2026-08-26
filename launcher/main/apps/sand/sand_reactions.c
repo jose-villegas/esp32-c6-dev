@@ -576,8 +576,12 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
             }
             const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
             const cell_t n = s->cells[nat];
+            /* A liquid that WETS things, which is water and nothing
+             * else. Taking a unit of any KIND_LIQUID is the obvious rule
+             * and it soaked oil, acid and lava into the ground alike. */
             if (CELL_IS_EMPTY(n) ||
-                materials[CELL_MATERIAL(n)].kind != KIND_LIQUID) {
+                materials[CELL_MATERIAL(n)].kind != KIND_LIQUID ||
+                reaction_of(n)->wets == 0) {
                 continue;
             }
             beside_liquid = true;
@@ -1147,7 +1151,8 @@ static bool step_one_drinking_cell(sand_t *s, int x, int y, int w, int h,
         }
         const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
         if (!CELL_IS_EMPTY(n) &&
-            materials[CELL_MATERIAL(n)].kind == KIND_LIQUID) {
+            materials[CELL_MATERIAL(n)].kind == KIND_LIQUID &&
+            reaction_of(n)->wets != 0) {
             lx = nx;
             ly = ny;
             break;

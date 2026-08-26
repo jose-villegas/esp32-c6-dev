@@ -5548,6 +5548,56 @@ static void test_the_two_soil_tones_are_different_colours(void)
         "wetness ramp is how a watered patch shows at all");
 }
 
+
+/* Only WATER wets what it touches.
+ *
+ * `soaks` belongs to sand and soil, and the obvious way to write it - take
+ * a unit of any adjacent KIND_LIQUID - reads perfectly and is wrong for
+ * three of the four liquids on this board. Measured before the fix, a bank
+ * of sand under oil turned entirely into saturated soil; so did one under
+ * LAVA. Reported as oil soaking, which it was, along with everything else.
+ *
+ * Wetness is not the same question as fluidity, and only the liquid knows
+ * the answer, so it is the liquid that carries the flag.
+ *
+ * Oil is the liquid to test with. Acid dissolves sand and lava fuses it,
+ * so with either of those "the sand is gone" proves nothing about
+ * soaking; oil leaves it alone entirely, which is the point. */
+static void test_only_water_wets_what_it_touches(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 6));
+        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 1, 0));
+        sand_set(&s, x, H - 4, CELL_MAKE(MAT_OIL, MASS_MAX));
+    }
+
+    for (int i = 0; i < 800; i++) {
+        sand_step(&s, 0, 1000, 0);
+
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (CELL_MATERIAL(c) != MAT_DIRT) {
+                    continue;
+                }
+                TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(c),
+                    "soil under OIL must stay bone dry - oil is a liquid "
+                    "and is not wet, and the absorbing side cannot tell "
+                    "the difference on its own");
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SAND) > 0,
+        "and sand under oil must still be sand - it turned into a bank of "
+        "saturated soil, which is the same bug seen from the other end");
+}
+
 /* Nothing soaks unless the simulation is told to let it.
  *
  * The override exists because soaking is a property of sand, and half the
@@ -6386,6 +6436,34 @@ static void test_a_plant_rooted_on_stone_does_not_drink(void)
         "a plant standing on bare stone has nowhere to put a drink, so "
         "the water must stay - drinking is conduction into the ground, "
         "not a way of making water disappear");
+
+    /* Nor does it drink OIL, however good the ground beneath it is. The
+     * same rule as soaking and the same reason: only the liquid knows
+     * whether it is wet, and a plant asking for "any adjacent liquid"
+     * would siphon a slick into the soil as moisture. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+    sand_set(&s, cx - 1, H - 3, STONE);
+    sand_set(&s, cx + 1, H - 3, STONE);
+    sand_set(&s, cx - 1, H - 4, STONE);
+    sand_set(&s, cx + 1, H - 4, STONE);
+    sand_set(&s, cx, H - 3, MATX(MATX_PLANT));
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_OIL, MASS_MAX));
+
+    for (int i = 0; i < 900; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_OIL),
+        "oil walled in above a plant must stay there - a plant drinks "
+        "water, and a rule that takes any liquid pipes a slick into the "
+        "ground as moisture");
 }
 
 /* --- growing ------------------------------------------------------------- */
@@ -9310,6 +9388,7 @@ void run_sand_suite(void)
     RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
     RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
+    RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_plant_and_ice_are_speckled_and_nothing_else_is);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);

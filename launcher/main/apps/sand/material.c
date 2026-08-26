@@ -28,6 +28,7 @@ const material_t materials[MATERIAL_MAX] = {
     },
 
     [MAT_WATER] = {
+
         .name    = "Water",
         .kind    = KIND_LIQUID,
         .density = 30,       /* lighter than sand, so sand sinks through it */
@@ -530,7 +531,18 @@ const material_t materials[MATERIAL_MAX] = {
  *===========================================================================*/
 
 const reaction_t reactions[MATERIAL_MAX] = {
-    [MAT_ACID] = {
+    /* Water's only reaction row, and it exists for one field.
+     *
+     * Everything water does to other materials - quenching a fire,
+     * boiling into steam, melting snow - is driven from the OTHER side,
+     * which is why it had no row here at all. Wetting is driven from the
+     * other side too, and that is exactly the problem: `soaks` belongs to
+     * sand and soil, and they cannot tell water from oil. */
+    [MAT_WATER] = {
+        .wets        = 1,
+    },
+
+    [MAT_ACID] = {
         /* The only thing that dissolves anything. 60 in 256 is roughly
          * one bite every four steps per acid cell, which eats a pile of
          * sand at a pace you can watch rather than one that removes it

@@ -680,6 +680,22 @@ typedef struct {
      * One field pair rather than two mechanisms because it is one thing
      * happening - something absorbing water - and the only question is
      * whether the thing it absorbed into already existed. */
+    /* WETTING, on the LIQUID's side: whether this liquid is the sort of
+     * thing that soaks into something. Water is; oil, lava and acid are
+     * not.
+     *
+     * It has to be said explicitly because the absorbing side cannot tell.
+     * `soaks` is a property of sand and soil, and the obvious way to write
+     * the rule - take a unit of any adjacent KIND_LIQUID - reads perfectly
+     * and is wrong for three of the four liquids on the board. A bank of
+     * sand under oil turned entirely into saturated soil, and so did one
+     * under LAVA. Reported as oil soaking, which it was, along with
+     * everything else.
+     *
+     * Wetness is not the same question as fluidity, and only the liquid
+     * knows the answer. */
+    uint8_t wets;
+
     uint8_t soaks;
     uint8_t soaks_to;
 
