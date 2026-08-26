@@ -9,3 +9,14 @@
 # glance, without having to know that relationship.
 CONFIG_LAUNCHER_SELFTEST=y
 CONFIG_LAUNCHER_DEVELOPMENT=y
+
+# No task watchdog in the diag image. The self-test runs everything in the
+# main task without yielding, so IDLE starvation is expected rather than a
+# fault - and the fifteenth tuning attempt proved the watchdog's only real
+# effect here: its 5-second register dumps land inside benchmark timing
+# windows and their console I/O gets charged to the simulation, inflating
+# individual rows by up to 2.6x, silently and deterministically (the same
+# image reboots to the same offsets, so repeating a capture reproduces the
+# same wrong number - two budgets were once pegged from such rows). The
+# release image keeps its watchdog; this is diag-only.
+CONFIG_ESP_TASK_WDT_INIT=n
