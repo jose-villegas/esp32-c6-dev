@@ -717,9 +717,6 @@ static uint8_t compute_settled_bit(sand_t *s, int jostle, int dx, int dy,
             s->block_state[i] = v;
         }
     }
-    s->last_load_dx = load_dx;
-    s->last_load_dy = load_dy;
-
     return bit;
 }
 
@@ -919,6 +916,16 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
 
     const uint8_t settled_bit = compute_settled_bit(s, jostle, dx, dy,
                                                     load_dx, load_dy);
+
+    /* Remembered AFTER compute_settled_bit() has compared against it, and
+     * OUTSIDE it, which is the point: it used to be set in there, past an
+     * early return taken whenever block sleeping is off. That made it a
+     * fact about the sleeping bookkeeping rather than about the board, and
+     * anything else asking which way is down - growth, for one - read (0,0)
+     * on any grid without block_state. It is the settled direction of the
+     * step just taken, so it is written once the step has decided it. */
+    s->last_load_dx = load_dx;
+    s->last_load_dy = load_dy;
 
     bool driven[MATERIAL_MAX][2];
     compute_driven(driven, slide_a, slide_b, gx, gy);

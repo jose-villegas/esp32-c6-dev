@@ -1254,7 +1254,13 @@ static const gfx_color_t palette[256] = {
                                     * white, and flat rather than speckled:
                                     * a block of it should read as solid
                                     * and cold, where snow reads as loose */
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0x4E9A38),            /* plant - a green with some yellow in
+                                    * it, so it reads as growth rather
+                                    * than as the dark of a conifer.
+                                    * Nothing else on the board is green
+                                    * except gas, which is paler and
+                                    * moves */
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
@@ -1527,7 +1533,8 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
  * above is shared, so everything that distinguishes one from another lives
  * either here or in the palette. */
 static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
-    [MATX_ICE] = "Ice",
+    [MATX_ICE]   = "Ice",
+    [MATX_PLANT] = "Plant",
 };
 
 const char *material_name(cell_t c)
@@ -1562,6 +1569,36 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
         .heats_to    = MAT_WATER,
         .heat_chance = 90,
         .thaws       = 2,
+    },
+
+    [MATX_PLANT] = {
+        /* Grows on wet soil, against gravity, and turns to wood where it
+         * gets tall. The whole reason it can be an extended material is
+         * that none of that needs a variant: growth is SPATIAL - it
+         * occupies more cells rather than filling up a counter - so the
+         * low nibble stays free to say which extended material it is.
+         *
+         * 40 in 256 per step is one cell every six or seven steps while
+         * there is moisture to spend, and there is only ever as much of
+         * that as somebody watered in. Soil that dries out stops a tree
+         * where it stands.
+         *
+         * Six in a line becomes wood. Low enough that a sapling turns into
+         * a trunk while you are watching it, high enough that a plant
+         * creeping over flat ground never does. */
+        .grows       = 40,
+        .hardens_to  = MAT_WOOD,
+        .harden_run  = 6,
+
+        /* And it burns, which is most of the point of growing a tree. Well
+         * above wood's 6: green growth catches far more readily than
+         * seasoned timber, and it flashes to flame rather than charring,
+         * because there is not enough of it in one cell to smoulder. */
+        .flammability = 40,
+
+        .dissolvable  = 220,   /* softer than wood's 160 - acid goes
+                                * through leaves faster than through a
+                                * plank */
     },
 };
 

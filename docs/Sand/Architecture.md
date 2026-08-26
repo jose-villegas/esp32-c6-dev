@@ -333,7 +333,7 @@ variant was spare. Steam and smoke fail on both counts at once.
 
 **Add an extended range behind the last slot** - *built*. Material id 15 is
 `MAT_EXTENDED`, and a cell carrying it reads its low nibble as naming one of
-sixteen further materials. The first is `MATX_ICE`.
+sixteen further materials. So far: `MATX_ICE` and `MATX_PLANT`.
 
 Three facts make it free in the sweep, and all three are properties of how
 the tables are already indexed:
@@ -352,9 +352,23 @@ What they cannot have is their own **physics** or a **variant**. They share
 one `density`, `kind`, `slip`, `repose` and `scatter`, because that is the
 row the hot path reads; and the low nibble is spent naming which one they
 are, so there is nothing left for a shade, a fill level, a life or a
-temperature. That confines them to inert static solids - coloured brick,
-decorative block, an ore that acid or fire treats differently, anything
-whose job is to be built with and reacted to rather than to move.
+temperature.
+
+The obvious reading of that is "inert static solids only" - coloured brick,
+decorative block, an ore that acid or fire treats differently. That is what
+this said, and the plant is the counter-example that improved it. A plant
+grows, which sounds like exactly the sort of accumulating per-cell state
+the scheme forbids, and is not: its growth is **spatial**. It occupies more
+cells rather than filling up a counter, so the thing being accumulated is
+the shape on the grid, which needs no bits at all.
+
+The cost is that a stateless material has to READ what it would otherwise
+have stored. A plant cannot know how tall it is, so it walks its own column
+to find the tip before growing and walks it again to decide whether the run
+is long enough to harden - the same run-scan the glass crack already used.
+That is the trade the extended range actually offers: not "no state", but
+**state you are willing to re-derive from the grid, in the cold pass, every
+time you need it**.
 
 Painting one needs `sand_spawn_cell()` rather than `sand_spawn()`: an
 extended material cannot be named by a `material_id_t` at all, because its

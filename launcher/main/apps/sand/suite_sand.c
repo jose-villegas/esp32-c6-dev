@@ -5486,6 +5486,251 @@ static void test_soaking_is_off_unless_asked_for(void)
         "existed");
 }
 
+
+/* A wetting front has to REACH.
+ *
+ * Moisture used to move one level per hop and only downhill by two or
+ * more, and a grain converted by wet soil was born holding exactly 1 - one
+ * short of the 2 it needed to pass anything on. So the front died at the
+ * first ring of new soil, every time, however much water was behind it.
+ * Reported as "the diffusion of wet sand to dirt is either too slow or
+ * reaches a range limit now", which is precisely what it was.
+ *
+ * Moving half the difference instead is the ordinary way a diffusion
+ * settles, and it is what this test pins: soil several cells away from
+ * anything the water touched must still end up wet. */
+static void test_a_wetting_front_spreads_past_the_cells_it_touched(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+    /* One saturated grain of soil at one end, and no water anywhere: what
+     * spreads has to be what that one cell is holding. */
+    sand_set(&s, 0, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int reach = -1;
+    for (int x = 0; x < W; x++) {
+        if (CELL_MATERIAL(sand_at(&s, x, H - 2)) == MAT_DIRT) {
+            reach = x;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(reach >= 3,
+        "one saturated cell of soil must wet sand several cells away, not "
+        "just the grain it touches - a front that hands over one level and "
+        "leaves the receiver below the threshold to pass it on stops dead "
+        "at the first ring");
+}
+
+/* And it must reach WITHOUT inventing water.
+ *
+ * The obvious way to make a front travel further is to give the receiver
+ * more than the donor gives up, which spreads beautifully and quietly
+ * creates moisture out of nothing - and moisture is what a plant spends,
+ * so it would mean one watering could grow a forest. Half the difference
+ * is exactly conservative; this is what says so. */
+static void test_moisture_is_conserved_as_it_spreads(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+    sand_set(&s, 0, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+    const int placed = MATERIAL_VARIANTS - 1;
+
+    /* Drying only ever removes moisture, so the total can fall but must
+     * never rise above what was put in. */
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+
+        int total = 0;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (CELL_MATERIAL(c) == MAT_DIRT) {
+                    total += CELL_VARIANT(c);
+                }
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(total <= placed,
+            "spreading moisture must move it, not multiply it - a front "
+            "that gains on every hop is a watering can that fills itself");
+    }
+}
+
+
+/* And what it hands over is a SHARE, not a token.
+ *
+ * This is the half of the front that reach alone does not pin down. Soil
+ * converted by a passing wetting front used to be born holding exactly 1,
+ * which is one short of the 2 it needs to wet anything itself - so every
+ * new grain was a dead end, and the patch only ever crept outward as fast
+ * as the original wet cell could top up the grain next to it. Half the
+ * difference means a new grain arrives able to carry the front on. */
+static void test_soil_a_wetting_front_converts_is_handed_a_real_share(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+    sand_set(&s, 0, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+
+    /* Caught the step it happens, before drying has taken any of it. */
+    int handed = -1;
+    for (int i = 0; i < 400 && handed < 0; i++) {
+        sand_step(&s, 0, 1000, 0);
+        const cell_t c = sand_at(&s, 1, H - 2);
+        if (CELL_MATERIAL(c) == MAT_DIRT) {
+            handed = CELL_VARIANT(c);
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(handed >= 0,
+        "the grain beside saturated soil must become soil at all");
+    TEST_ASSERT_TRUE_MESSAGE(handed >= 4,
+        "and must be handed a real share of what wet it - a grain born "
+        "holding 1 is below the level it needs to wet anything itself, "
+        "which makes every cell the front converts a dead end");
+}
+
+/* --- growing ------------------------------------------------------------- */
+
+/* A plant on wet soil climbs.
+ *
+ * It has no variant to grow WITH - the low nibble is which extended
+ * material it is - so it grows by occupying cells, walking to the tip of
+ * its own column and putting the new one beyond that. This is the test
+ * that the walk happens at all: without it a plant could only ever be one
+ * cell tall, because the moment it grew, the new cell would be out of
+ * reach of the ground and nothing further could happen. */
+static void test_a_plant_on_wet_soil_grows_upward(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int tall = 0;
+    for (int y = 0; y < H; y++) {
+        const cell_t c = sand_at(&s, W / 2, y);
+        if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
+            tall++;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(tall >= 3,
+        "a plant standing on watered soil must climb away from the ground "
+        "- growth is spatial for a material with no variant to spend");
+}
+
+/* And on dry soil it does not.
+ *
+ * Water is the whole limit on how far a tree gets, so soil with nothing in
+ * it has to stop one. Without this the plant is not a plant, it is a
+ * self-replicating material that fills the screen. */
+static void test_a_plant_on_dry_soil_stays_where_it_is(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    /* Wet soil on the far side of a stone divider, so the board as a
+     * whole HAS moisture on it - otherwise may_have_moisture is clear, the
+     * growth branch is never reached, and the test would pass on the
+     * strength of a pass gate rather than on the plant looking at the
+     * ground it is actually standing on. */
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, x == W / 2 + 1 ? STONE
+                             : x > W / 2 + 1
+                                 ? CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1)
+                                 : CELL_MAKE(MAT_DIRT, 0));
+    }
+    sand_set(&s, 1, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int tall = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (sand_at(&s, x, y) == MATX(MATX_PLANT)) {
+                tall++;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, tall,
+        "a plant on bone-dry soil must stay a seedling - moisture is the "
+        "only thing limiting how tall a tree gets");
+}
+
+/* A tall enough plant becomes a trunk - and the trunk is not on fire.
+ *
+ * Wood's variant is its BURN PROGRESS, and the general placement helper
+ * hands a new cell MATERIAL_VARIANTS - 1, which is right for a fill level
+ * or a life counter and means "well alight" for wood. That is deliberate
+ * where the reaction is fire making an ember of a log; it is catastrophic
+ * here. Every tree that reached this height burned to nothing over the
+ * next couple of hundred steps, on a board with no flame anywhere on it,
+ * so the assert on the variant matters as much as the one on the
+ * material. */
+static void test_a_tall_plant_hardens_into_wood_that_is_not_alight(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_DIRT, MATERIAL_VARIANTS - 1));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int wood = 0;
+    for (int y = 0; y < H; y++) {
+        const cell_t c = sand_at(&s, W / 2, y);
+        if (CELL_MATERIAL(c) != MAT_WOOD) {
+            continue;
+        }
+        wood++;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_VARIANT(c),
+            "a trunk is wood that GREW, not wood that caught - wood's "
+            "variant is burn progress, and a log placed at the top of it "
+            "burns away on a board with no fire on it");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(wood > 0,
+        "a plant that grows a full run tall must harden into wood");
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -7971,6 +8216,12 @@ void run_sand_suite(void)
     RUN_TEST(test_dirt_takes_on_moisture_and_dries_out_again);
     RUN_TEST(test_new_dirt_starts_dry);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
+    RUN_TEST(test_a_wetting_front_spreads_past_the_cells_it_touched);
+    RUN_TEST(test_soil_a_wetting_front_converts_is_handed_a_real_share);
+    RUN_TEST(test_moisture_is_conserved_as_it_spreads);
+    RUN_TEST(test_a_plant_on_wet_soil_grows_upward);
+    RUN_TEST(test_a_plant_on_dry_soil_stays_where_it_is);
+    RUN_TEST(test_a_tall_plant_hardens_into_wood_that_is_not_alight);
     RUN_TEST(test_every_material_has_a_palette_block);
     RUN_TEST(test_ice_is_its_own_colour);
     RUN_TEST(test_an_extended_material_survives_being_painted);

@@ -175,7 +175,7 @@ static const cell_t brushes[] = {
     CELL_MAKE(MAT_OIL, 0),   CELL_MAKE(MAT_LAVA, 0),
     CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
     CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
-    MATX(MATX_ICE),
+    MATX(MATX_ICE),      MATX(MATX_PLANT),
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 

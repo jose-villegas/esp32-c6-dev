@@ -620,6 +620,35 @@ typedef struct {
      * dry - which is why random_cell() has to know. */
     uint8_t dries;
 
+    /* GROWING. Chance in 256 per step that this material, touching soil
+     * with moisture in it, extends by one cell - and spends one level of
+     * that soil's moisture doing it. Water is what a plant grows ON, so
+     * water is what limits how far it gets.
+     *
+     * It grows AGAINST gravity, from the top of whatever column of itself
+     * it is part of rather than from the cell that happened to roll. That
+     * matters because a plant has no per-cell state to grow WITH: it is an
+     * extended material, so its low nibble is its identity and there is no
+     * variant left to hold a stem's height or a growth counter. Walking to
+     * the tip is how a stateless material still makes a tree instead of a
+     * one-cell shrub. */
+    uint8_t grows;
+
+    /* And what a long enough straight run of it turns into: `hardens_to`
+     * once `harden_run` cells line up along the gravity axis.
+     *
+     * A stem that has grown tall becomes a trunk. Measured along gravity
+     * only, so a creeper spreading sideways stays soft - "grew tall enough
+     * to be wood" is the reading, and a horizontal mat hardening into a
+     * plank floor is not.
+     *
+     * It also closes a loop that already existed: wood burns, and since
+     * burning became a STATE of wood rather than its own material, a tree
+     * can catch, be rained on halfway, and leave the soft growth around it
+     * alive. None of that needed anything new. */
+    uint8_t hardens_to;
+    uint8_t harden_run;
+
     /* What a THERMALLY SHOCKED cell of this material becomes: hot enough to
      * be near the top of its ramp, and touching something that `chills`.
      *
@@ -651,6 +680,7 @@ extern const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT];
 /* The extended materials, by low nibble. */
 typedef enum {
     MATX_ICE = 0,
+    MATX_PLANT,
 } material_extended_t;
 
 /* What to call one cell, decoding the extended range. materials[].name is

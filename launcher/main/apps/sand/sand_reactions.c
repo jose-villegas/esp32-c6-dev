@@ -225,14 +225,23 @@ static const int reaction_dirs[4][2] = {
  * field - heats_to, ignites_to, shatters_to, quench_to - is a uint8_t, so
  * MATX(k) fits in one with nothing to change. Without this an extended
  * material could only ever be painted, never made. */
+/* Write one cell and do the four things every write owes the rest of the
+ * simulation: latch the content flags that gate the passes, mark the row
+ * dirty for the renderer, and wake this block and its neighbours so a
+ * settled region notices. Every placement here goes through it. */
+static inline void place_cell(sand_t *s, int x, int y, size_t at, cell_t c)
+{
+    s->cells[at] = c;
+    latch_content_flags(s, c);
+    mark_rows(s, y, y);
+    wake_block_and_neighbors(s, x, y);
+}
+
 static inline void place_reacted(sand_t *s, int x, int y, size_t at,
                                  uint8_t spec)
 {
     if (spec >= (MAT_EXTENDED << 4)) {
-        s->cells[at] = (cell_t)spec;     /* identity IS the low nibble */
-        latch_content_flags(s, (cell_t)spec);
-        mark_rows(s, y, y);
-        wake_block_and_neighbors(s, x, y);
+        place_cell(s, x, y, at, (cell_t)spec);   /* identity IS low nibble */
         return;
     }
     const material_id_t mat = (material_id_t)spec;
@@ -248,14 +257,17 @@ static inline void place_reacted(sand_t *s, int x, int y, size_t at,
      * that can be created mid-fire. The reading is nice too: sand turns to
      * cool teal glass, glows as the flame keeps working on it, and only
      * then runs. */
-    s->cells[at] = CELL_MAKE(mat, reactions[mat].heat_ramp != 0
-                                      ? SAND_AMBIENT_HEAT
-                                      : MATERIAL_VARIANTS - 1);
-
-    latch_content_flags(s, s->cells[at]);
-
-    mark_rows(s, y, y);
-    wake_block_and_neighbors(s, x, y);
+    /* Note what MATERIAL_VARIANTS - 1 means for wood, whose variant is
+     * burn progress: a log placed by a reaction is placed ALIGHT. That is
+     * deliberate and load-bearing - it is how a log catches, now that an
+     * ember is a state of wood rather than its own material - but it is
+     * only right for a product of fire. Anything that makes wood without
+     * setting it on fire, such as a plant hardening into a trunk, has to
+     * say so, and uses place_cell() with the variant it means. */
+    place_cell(s, x, y, at,
+               CELL_MAKE(mat, reactions[mat].heat_ramp != 0
+                                  ? SAND_AMBIENT_HEAT
+                                  : MATERIAL_VARIANTS - 1));
 }
 
 /* Whether (nx, ny) is in bounds and holds a liquid that actually puts
@@ -572,6 +584,96 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
         }
     }
 
+    /* MOISTURE SPREADS. A wet cell hands a level to a drier soaker beside
+     * it, and hands it to dry SAND by turning that sand into more of
+     * itself - which is the difference between a puddle leaving a crust
+     * one cell thick and a puddle soaking outward into a patch of soil.
+     *
+     * Reported as dirt not diffusing what it drinks, and it did not: only
+     * a cell touching the LIQUID converted, so the wet dirt that formed
+     * was a wall between the water and everything behind it.
+     *
+     * A quarter of the soaking rate, so water reaching soil is always
+     * faster than soil passing it along - a patch spreads outward from
+     * where it was watered rather than everywhere at once. And only ever
+     * downhill in moisture, by two or more, which is what stops two damp
+     * cells passing the same level back and forth forever. */
+    const int spread = soaks;
+
+    /* `dries` is what MARKS a variant as moisture. Sand soaks but does not
+     * dry - its variant is a shade - so without this the shade would be
+     * read as wetness and a dune would convert itself to soil from the
+     * inside out.
+     *
+     * And `spread` is checked BEFORE the roll, not by rolling and losing.
+     * Drawing a random number here would advance the RNG for every soaking
+     * cell on the board whether or not anything could come of it, shifting
+     * every downstream decision - which is exactly how this first went in,
+     * and it broke sand sinking through fire, a scene with no moisture in
+     * it at all. try_ignite() has the same note for the same reason. */
+    if (r->dries != 0 && held >= 2 && spread != 0 &&
+        (int)(rng_next(&s->rng) & 0xFF) < spread) {
+        for (int d = 0; d < 4; d++) {
+            const int nx = x + reaction_dirs[d][0];
+            const int ny = y + reaction_dirs[d][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            const cell_t n = s->cells[nat];
+            if (CELL_IS_EMPTY(n)) {
+                continue;
+            }
+            const reaction_t *nr = reaction_of(n);
+            if (nr->soaks == 0) {
+                continue;               /* not something that drinks */
+            }
+
+            /* HALF THE DIFFERENCE, not one level.
+             *
+             * Handing over a single level and requiring a drop of two to do
+             * it makes a front that dies about seven cells out: each hop
+             * costs the donor a level and leaves the receiver one step
+             * above the floor, so the gradient runs out long before the
+             * water does. Worse, a converted grain was born holding 1 -
+             * below the >= 2 needed to pass anything on - so the outermost
+             * ring of new soil was always a dead end, and drying took it
+             * back to nothing within a few hundred steps.
+             *
+             * Moving half the gap instead is the ordinary way a diffusion
+             * settles: it is still exactly conservative, it still cannot
+             * oscillate (half of a gap of one is zero, so neighbours that
+             * have evened out stop trading), and a saturated cell now
+             * reaches as far as its water can rather than as far as the
+             * step size allows. */
+            int give;
+            if (nr->soaks_to != 0) {
+                /* Dry sand beside wet soil becomes soil - and is handed
+                 * enough to go on wetting ITS neighbours, which is what
+                 * turns a puddle into a spreading patch of earth. */
+                give = held / 2;
+                s->cells[nat] = CELL_MAKE(nr->soaks_to, (uint8_t)give);
+                latch_content_flags(s, s->cells[nat]);
+            } else if (CELL_MATERIAL(n) == CELL_MATERIAL(c)) {
+                give = (held - CELL_VARIANT(n)) / 2;
+                if (give == 0) {
+                    continue;           /* already even with this one */
+                }
+                s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n),
+                                          (uint8_t)(CELL_VARIANT(n) + give));
+            } else {
+                continue;
+            }
+
+            row[x] = CELL_MAKE(CELL_MATERIAL(c), (uint8_t)(held - give));
+            mark_rows(s, y, y);
+            mark_rows(s, ny, ny);
+            wake_block_and_neighbors(s, x, y);
+            wake_block_and_neighbors(s, nx, ny);
+            return true;
+        }
+    }
+
     if (r->dries != 0 && held != 0 &&
         (int)(rng_next(&s->rng) & 0xFF) < r->dries) {
         row[x] = CELL_MAKE(CELL_MATERIAL(c), held - 1);
@@ -614,6 +716,144 @@ static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
     }
+}
+
+/* How tall one plant may get, and how far the walk to its tip may run.
+ * A bound rather than a rule: growth stops when the soil dries, which is
+ * the real limit - this only keeps a cold pass from walking the height of
+ * the board looking for a tip. */
+#define GROW_REACH 48
+
+/* One cell of something that GROWS.
+ *
+ * It grows from the TIP of whatever column of itself this cell belongs to,
+ * against gravity, and pays for it with a level of moisture out of soil
+ * touching THIS cell. Which is a strange-sounding arrangement until you
+ * see what it is working around: a plant is an extended material, so its
+ * low nibble is which material it is and there is no variant left to hold
+ * a stem's height, its vigour, or how much water has reached it. It has no
+ * per-cell state at all.
+ *
+ * Walking to the tip is how a stateless material still makes a tree. The
+ * cell at the bottom is the one that can reach the soil, so it is the one
+ * that rolls and pays; the cell at the top is the one with room, so it is
+ * the one that grows. Without the walk a plant could only ever be one cell
+ * tall - the moment it grew, the new cell would be out of reach of the
+ * ground and nothing further could happen.
+ *
+ * A run that grows tall enough hardens into `hardens_to`, measured along
+ * the gravity axis so a creeper spreading sideways stays soft. */
+static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
+                                  const reaction_t *r)
+{
+    const cell_t self = s->cells[(size_t)y * (size_t)w + (size_t)x];
+
+    /* Which way is up. last_load_dx/dy is the direction the sweep settled
+     * under this step, so inside the simulation it is current - unlike in
+     * the renderer, where a frame can pass without a step. */
+    const int ux = -s->last_load_dx;
+    const int uy = -s->last_load_dy;
+    if (ux == 0 && uy == 0) {
+        return true;                  /* free fall: no up to grow towards */
+    }
+
+    /* Soil touching THIS cell, with something in it to spend. */
+    int soil_at = -1;
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        if (reaction_of(n)->dries != 0 && CELL_VARIANT(n) != 0) {
+            soil_at = (int)nat;
+            break;
+        }
+    }
+    if (soil_at < 0) {
+        return true;                  /* nothing to drink */
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->grows) {
+        return true;
+    }
+
+    /* Walk to the tip of this column. */
+    int tx = x, ty = y;
+    for (int i = 0; i < GROW_REACH; i++) {
+        const int nx = tx + ux, ny = ty + uy;
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            return true;
+        }
+        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] != self) {
+            break;
+        }
+        tx = nx;
+        ty = ny;
+    }
+
+    const int gx = tx + ux, gy = ty + uy;
+    if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
+        return true;
+    }
+    const size_t gat = (size_t)gy * (size_t)w + (size_t)gx;
+    if (!CELL_IS_EMPTY(s->cells[gat])) {
+        return true;                  /* something in the way */
+    }
+
+    /* Grow, and spend the water. */
+    s->cells[gat] = self;
+    latch_content_flags(s, self);
+    mark_rows(s, gy, gy);
+    wake_block_and_neighbors(s, gx, gy);
+
+    const cell_t soil = s->cells[soil_at];
+    s->cells[soil_at] = CELL_MAKE(CELL_MATERIAL(soil),
+                                  (uint8_t)(CELL_VARIANT(soil) - 1));
+    mark_rows(s, soil_at / w, soil_at / w);
+
+    /* HARDENING. Counted from the bottom of the column - the cell whose
+     * gravity-ward neighbour is not more of the same - so a run is
+     * measured once however many of its cells grew this step. */
+    if (r->hardens_to == 0 || r->harden_run == 0) {
+        return true;
+    }
+    const int bx = x - ux, by = y - uy;
+    if ((unsigned)bx < (unsigned)w && (unsigned)by < (unsigned)h &&
+        s->cells[(size_t)by * (size_t)w + (size_t)bx] == self) {
+        return true;                  /* not the bottom; someone else counts */
+    }
+
+    int run = 0, cx = x, cy = y;
+    while (run < GROW_REACH &&
+           (unsigned)cx < (unsigned)w && (unsigned)cy < (unsigned)h &&
+           s->cells[(size_t)cy * (size_t)w + (size_t)cx] == self) {
+        run++;
+        cx += ux;
+        cy += uy;
+    }
+    if (run < r->harden_run) {
+        return true;
+    }
+
+    /* Variant 0, explicitly: a trunk is wood that GREW, not wood that
+     * caught. place_reacted() would hand it MATERIAL_VARIANTS - 1, which
+     * for wood is burn progress at its maximum - every tree that reached
+     * this line burned to nothing over the next couple of hundred steps,
+     * on a board with no fire anywhere on it. */
+    cx = x;
+    cy = y;
+    for (int i = 0; i < run; i++) {
+        place_cell(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx,
+                   CELL_MAKE(r->hardens_to, 0));
+        cx += ux;
+        cy += uy;
+    }
+    return true;
 }
 
 /* One cell that is COLD. It does two things to its four neighbours: melts
@@ -1406,6 +1646,14 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
          * may_have_liquid inside, and only then a neighbour scan. */
         if ((r->soaks != 0 || r->dries != 0) &&
             step_one_soaking_cell(s, row, x, y, w, h, r)) {
+            found |= FOUND_MOISTURE;
+            continue;
+        }
+        /* Growing. Reached only where there is soil with water in it,
+         * which is what may_have_moisture already tracks - a plant on dry
+         * ground costs one field test and nothing else. */
+        if (r->grows != 0 && s->may_have_moisture) {
+            step_one_growing_cell(s, x, y, w, h, r);
             found |= FOUND_MOISTURE;
         }
     }

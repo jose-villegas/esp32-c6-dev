@@ -682,6 +682,39 @@ latches every flag the new material needs, in the same independent-`if`
 shape `sand_set()` uses (an `else if` chain would shadow one - a material
 can need more than one flag at once).
 
+### And the variant it is born holding is a decision, not a default
+
+`place_reacted()` takes a material, not a cell, so it has to pick the new
+variant itself. It picks `MATERIAL_VARIANTS - 1`, which is right for a
+**fill level** (a new pool of water is full) and for a **life** (a new
+wisp of smoke has its whole life ahead of it) and wrong for every variant
+that *accumulates towards* an end state instead of draining from one.
+Heat has always been special-cased for this reason: a pane of glass born
+at the top of its melt ramp would run to lava on the next step.
+
+Burn progress is the same shape and was not. Wood's variant is how far
+along it has burned, so `place_reacted(..., MAT_WOOD)` places a log
+**already well alight** - which is exactly right when the reaction is fire
+making an ember of a log, and catastrophic when it is a plant hardening
+into a trunk. Every tree that grew tall enough to become wood burned to
+nothing over the next couple of hundred steps, on a board with no flame
+anywhere on it.
+
+The general fix would be to make wood born-cold, and it is wrong: it
+breaks ignition, which is the one caller that *means* the maximum. The
+variant is not a property of the material, it is a property of the
+**reaction**. So the shared bookkeeping was split out into `place_cell()`,
+which takes a whole `cell_t`, and a caller that has an opinion about the
+variant states it:
+
+```c
+place_cell(s, cx, cy, at, CELL_MAKE(r->hardens_to, 0));   /* grew, not caught */
+```
+
+Both go through the same latch/mark/wake, so nothing is lost. If you add a
+reaction whose product has an accumulating variant - heat, burn progress,
+moisture - say what it starts at.
+
 ---
 
 ## Lesson: the obvious material is sometimes the wrong one
