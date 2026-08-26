@@ -343,7 +343,7 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     if (mat->kind == KIND_GAS) {
         s->may_have_gas = true;
     }
-    if (r->burns) {
+    if (cell_is_burning(cell)) {
         s->may_have_burning = true;
     }
     if (r->dissolves) {
@@ -398,6 +398,36 @@ static inline void mark_move(sand_t *s, int x0, int y0, int x1, int y1)
  * three-attempt story) - measured before and after this extraction on
  * device rather than assumed safe, since it is small enough that a
  * regression was thought unlikely but not impossible. */
+/* The counting-down half of tick_decay(), at a rate the caller chooses.
+ *
+ * Split out for materials whose variant is life but whose movement row
+ * says decay 0 - wood, which is not a transient and must not be treated as
+ * one by anything else, but does count down while it is burning. */
+static inline bool tick_decay_at(sand_t *s, uint8_t *row, int x, int y,
+                                 cell_t *grain, uint8_t mat_id, int decay)
+{
+    if (decay == 0) {
+        return true;
+    }
+    const uint32_t r = rng_next(&s->rng);
+    if ((int)(r & 0xFF) >= decay) {
+        return true;
+    }
+
+    const uint8_t life = CELL_VARIANT(*grain);
+    if (life <= 1) {
+        row[x] = CELL_EMPTY;
+        mark_rows(s, y, y);
+        wake_block_and_neighbors(s, x, y);
+        return false;
+    }
+
+    *grain = CELL_MAKE(mat_id, life - 1);
+    row[x] = *grain;
+    mark_rows(s, y, y);
+    return true;
+}
+
 static inline bool tick_decay(sand_t *s, uint8_t *row, int x, int y,
                               cell_t *grain, const material_t *mat,
                               uint8_t mat_id)

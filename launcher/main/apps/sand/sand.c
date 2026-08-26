@@ -67,6 +67,13 @@ static cell_t random_cell(sand_t *s, material_id_t material)
     if (reactions[material].heat_ramp != 0) {
         return CELL_MAKE(material, SAND_AMBIENT_HEAT);
     }
+    /* A material that burns only while lit has HOW MUCH IS LEFT TO BURN in
+     * its variant, and a fresh one is not on fire. A random shade would
+     * hand the player a log that is already half burnt - and, at variant
+     * 0 being the only unlit value, mostly one that is already alight. */
+    if (reactions[material].burn_decay != 0) {
+        return CELL_MAKE(material, 0);
+    }
     return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
 }
 

@@ -1614,9 +1614,16 @@ static void test_a_lagging_grain_is_not_left_asleep(void)
 #define SAND  CELL_MAKE(MAT_SAND,  8)
 #define GAS   CELL_MAKE(MAT_GAS,   8)
 #define FIRE  CELL_MAKE(MAT_FIRE,  8)
-#define WOOD  CELL_MAKE(MAT_WOOD,  8)
+/* UNLIT. Wood's variant is how much of it is left to burn, so the 8 this
+ * used to carry now places a log that is already alight - which flares
+ * fire, and turned a grain-conservation test into a count that grew.
+ * Third macro in this file to be caught by a material spending its
+ * variant on something: see GLASS and STONE above. */
+#define WOOD  CELL_MAKE(MAT_WOOD,  0)
 #define STEAM CELL_MAKE(MAT_STEAM, 8)
-#define EMBER CELL_MAKE(MAT_EMBER, 8)
+/* A LIT log. Wood's variant is how much of it is left to burn, so this is
+ * what ember used to be - see reaction_t.burn_decay. */
+#define EMBER CELL_MAKE(MAT_WOOD, MATERIAL_VARIANTS - 1)
 
 /* Total AMOUNT of a material, not the number of cells holding it.
  *
@@ -3064,7 +3071,7 @@ static void test_wood_eventually_catches_and_becomes_an_ember(void)
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EMBER, CELL_MATERIAL(sand_at(&s, 4, 3)),
+    TEST_ASSERT_TRUE_MESSAGE(cell_is_burning(sand_at(&s, 4, 3)),
         "wood forced to catch (flammability=255) must char into an "
         "ember, not flash straight to MAT_FIRE - fire is KIND_GAS and "
         "would float away on the very next gas pass, dissolving the log "
@@ -3081,9 +3088,8 @@ static void test_an_ember_does_not_rise(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EMBER,
-        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
-        "an ember is KIND_STATIC, unlike fire - it must stay exactly "
+    TEST_ASSERT_TRUE_MESSAGE(cell_is_burning(sand_at(&s, 3, H - 1)),
+        "a burning log is KIND_STATIC, unlike fire - it must stay exactly "
         "where it was placed rather than rising the way fire (KIND_GAS) "
         "does");
 }
@@ -3093,8 +3099,9 @@ static void test_an_ember_burns_out_over_time(void)
     fixture();
     sand_set_decay(&s, 255);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_spawn(&s, 3, 3, 0, MAT_EMBER),
-        "setup: exactly one ember cell placed");
+    sand_set(&s, 3, 3, EMBER);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_count(&s),
+        "setup: exactly one burning log placed");
 
     /* Twice an ember's own full life, not once: reaction_t.flare (no test
      * override exists for it - see the note on why smoke/flare get none)
@@ -3118,7 +3125,7 @@ static void test_an_ember_flares_fire_into_an_empty_neighbour(void)
 {
     fixture();
     /* Decay left off (the default) - see material.c's own comment on
-     * MAT_EMBER's decay figure and test_an_ember_burns_out_over_time
+     * wood's burn_decay figure and test_an_ember_burns_out_over_time
      * above; this test wants an ember that lives long enough to get many
      * tries at the flare roll, not one racing its own burn-out. */
     sand_set(&s, 3, 3, EMBER);
@@ -6230,7 +6237,7 @@ static void test_the_boiler_end_to_end(void)
     sand_set(&wide, x - 1, wood_y, FIRE);
     sand_step(&wide, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EMBER, CELL_MATERIAL(sand_at(&wide, x, wood_y)),
+    TEST_ASSERT_TRUE_MESSAGE(cell_is_burning(sand_at(&wide, x, wood_y)),
         "setup: the wood must have caught and charred into an ember");
 
     /* Back to realistic behaviour for the boiler itself - the whole

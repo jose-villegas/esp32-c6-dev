@@ -754,6 +754,13 @@ static inline bool try_ignite(sand_t *s, int nx, int ny, int w, int h)
     if (r->flammability == 0) {
         return false;
     }
+    /* Already alight. Without this a flame beside a burning log would keep
+     * re-igniting it - place_reacted() writes a FULL variant, so every hit
+     * would reset how much was left to burn and the log would never go
+     * out. */
+    if (r->burn_decay != 0 && CELL_VARIANT(n) != 0) {
+        return false;
+    }
     if (r->needs_air && !touches_air(s, nx, ny, w, h)) {
         return false;   /* buried in more of itself - a pool of fuel burns
                          * at its surface, not through its volume */
@@ -1073,7 +1080,17 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
     const uint8_t mat_id  = CELL_MATERIAL(grain);
     const size_t at = (size_t)y * (size_t)w + (size_t)x;
 
-    if (!tick_decay(s, row, x, y, &grain, mat, mat_id)) {
+    /* A material that burns only while lit counts its VARIANT down at its
+     * own rate, rather than the movement table's `decay` - which stays 0
+     * for it, because wood is not a transient. It does not disappear on
+     * its own; it disappears because it burned. */
+    const reaction_t *rx = reaction_of(grain);
+    const bool lit_state = rx->burn_decay != 0;
+    const int burn_rate = (s->decay >= 0) ? s->decay : rx->burn_decay;
+
+    if (lit_state
+        ? !tick_decay_at(s, row, x, y, &grain, mat_id, burn_rate)
+        : !tick_decay(s, row, x, y, &grain, mat, mat_id)) {
         /* Burned out. tick_decay() already cleared the cell and woke it -
          * this only adds smoke on top, via place_reacted(), which
          * overwrites the CELL_EMPTY tick_decay() just wrote and repeats
@@ -1099,8 +1116,17 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
         if (neighbor_quenches(s, nx, ny, w, h)) {
-            const uint8_t quench_to = reaction_of(grain)->quench_to;
-            if (quench_to != 0) {
+            const uint8_t quench_to = rx->quench_to;
+            if (lit_state) {
+                /* Water on a burning log puts it OUT. The log is still
+                 * there, just no longer alight - which is only expressible
+                 * now that being alight is a state of the wood rather than
+                 * a different material. Ember had to name something to
+                 * become, because the ember WAS the fire. */
+                row[x] = CELL_MAKE(mat_id, 0);
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            } else if (quench_to != 0) {
                 place_reacted(s, x, y, at, quench_to);
             } else {
                 row[x] = CELL_EMPTY;
@@ -1130,7 +1156,9 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
      * doing the burning. */
     if (mat->kind != KIND_LIQUID &&
         smothered(s, x, y, w, h, mat->density)) {
-        row[x] = CELL_EMPTY;
+        /* Burying a burning log smothers the BURN, not the log. Same
+         * reasoning as quenching one. */
+        row[x] = lit_state ? CELL_MAKE(mat_id, 0) : CELL_EMPTY;
         mark_rows(s, y, y);
         wake_block_and_neighbors(s, x, y);
         return true;
@@ -1199,7 +1227,7 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
             continue;
         }
         const reaction_t *r = reaction_of(c);
-        if (r->burns) {
+        if (cell_is_burning(c)) {
             found |= FOUND_BURNING;
             step_one_burning_cell(s, row, x, y, w, h);
             continue;

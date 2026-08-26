@@ -235,14 +235,20 @@ touching either material. Fire is `KIND_GAS`, so a wood cell that became
 fire would float away on the very next `sand_step_gas()` pass, leaving a
 hole where the log was; a log would dissolve into rising flames that
 drift off, often before they get a turn to ignite the next log along.
-`MAT_EMBER` fixes this by splitting the two jobs fire was doing at once:
-the ember is `KIND_STATIC` and stays exactly where the wood was - it
-keeps igniting neighbours, keeps decaying, and eventually burns out, all
-without moving - while the flame licking up off it (`reaction_t.flare`)
-is ordinary, separate `MAT_FIRE`, purely for looks and for reaching fuel
-stacked above. "Wood burning below, flame above" falls out of two
-materials each doing one simple thing, not one material trying to be
-both a heat source and a moving flame simultaneously. Wood's own
+Burning wood fixes this by splitting the two jobs fire was doing at once.
+A lit log is `KIND_STATIC` and stays exactly where it was - it keeps
+igniting neighbours, keeps counting down, and eventually burns out, all
+without moving - while the flame licking up off it (`reaction_t.flare`) is
+ordinary, separate `MAT_FIRE`, purely for looks and for reaching fuel
+stacked above. "Wood burning below, flame above" falls out of two simple
+things, not one material trying to be a heat source and a moving flame at
+the same time.
+
+Being alight is a STATE of the wood (`reaction_t.burn_decay`), held in its
+variant, rather than a second material. It was `MAT_EMBER` for a long time
+and behaved identically; folding it back in freed a slot and made "water
+puts a log out" expressible - the log is still there, just no longer
+alight, which an ember could never be because the ember *was* the fire. Wood's own
 `flammability` (6 in 256) makes catching a slow negotiation rather than
 an instant flash - roughly 43 steps of contact with a single flame
 before it takes, so a log has to actually burn rather than vanish on

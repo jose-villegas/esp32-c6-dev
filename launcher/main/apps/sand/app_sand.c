@@ -158,11 +158,11 @@ static screen_t screen;
  * A stand-in until the palette overlay; without some way to choose, water and
  * stone exist and cannot be reached.
  *
- * MAT_WOOD only, not MAT_STEAM or MAT_EMBER: every entry here costs the
- * player a button press to cycle past, so only materials someone actually
- * paints belong. Wood is something you build a fire out of; steam is a
- * byproduct you watch happen, and ember is a burn state wood passes
- * through on its own, not a material anyone chooses directly - see
+ * MAT_WOOD but not MAT_STEAM: every entry here costs the player a button
+ * press to cycle past, so only materials someone actually paints belong.
+ * Wood is something you build a fire out of; steam is a byproduct you
+ * watch happen. Burning wood is not listed either, because it is a STATE
+ * of wood rather than a material - see reaction_t.burn_decay, and
  * docs/Sand/Adding-a-Material.md for this as a worked example. */
 /* Whole CELLS rather than material ids, because an extended material
  * cannot be named by an id - its low nibble is its identity (MATX() in

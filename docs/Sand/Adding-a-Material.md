@@ -689,11 +689,24 @@ before it gets a turn to ignite the log next to it. The burn stalls or
 races depending on nothing the player did. The symptom is not even
 obviously wrong at a glance, because fire *is* supposed to rise.
 
-`MAT_EMBER` splits wood's burn into two jobs rather than asking one
-material to do both: a `KIND_STATIC` heat source that stays exactly where
-the wood was (igniting, decaying, conducting, burning out, all without
-moving), plus an ordinary `MAT_FIRE` flame it periodically flares upward
+The fix is to split the burn into two jobs rather than ask one thing to do
+both: a `KIND_STATIC` heat source that stays exactly where the wood was -
+igniting, counting down, conducting, burning out, all without moving - plus
+an ordinary `MAT_FIRE` flame it periodically flares upward
 (`reaction_t.flare`) purely for looks.
+
+That static heat source used to be its own material, `MAT_EMBER`. It is now
+a STATE of wood: `reaction_t.burn_decay` makes wood burn while its variant
+is non-zero, and the variant is how much is left to burn. The behaviour is
+identical - the same 24-in-256 countdown, the same flare, the same smoke -
+and it stopped costing a material slot.
+
+Which is the more useful lesson, because ember spent a long time looking
+like it had to be a material. It differed from wood in seven fields, and
+only ONE of them (`decay`) was in the movement table; the other six were
+reactions. What forces a slot is not "behaves differently" - it is needing
+a different row in the table the SWEEP reads, since that is indexed by the
+material nibble alone. A state the variant can carry does not need one.
 
 **The question this leaves for the next material:** when something reacts
 into another material, ask whether the reacted-into material's own

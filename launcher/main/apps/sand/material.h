@@ -161,7 +161,6 @@ typedef enum {
     MAT_WOOD,
     MAT_STEAM,
     MAT_SMOKE,
-    MAT_EMBER,
     MAT_OIL,
     MAT_LAVA,
     MAT_ACID,
@@ -383,6 +382,29 @@ typedef struct {
      * kinds are shared with materials that must not burn (gas, stone). */
     uint8_t burns;
 
+    /* BURNING AS A STATE RATHER THAN A MATERIAL. Non-zero means this
+     * material burns while its VARIANT is non-zero, and that variant is
+     * how much of it is left to burn - counted down at this chance in 256
+     * per step, exactly as `decay` counts a transient down.
+     *
+     * Wood is the one that has it, and it exists because ember used to be
+     * a whole material for this. Ember differed from wood in seven fields
+     * and only ONE of them - decay - was in the movement table; the other
+     * six were reactions. It was, in other words, wood in a different
+     * state, and it cost a slot because the tables are indexed by the
+     * material nibble alone and there was nowhere else for a state to
+     * live.
+     *
+     * There is now: the variant. Wood spends its shade on burn progress
+     * the way glass spends its on temperature, the dispatch in
+     * step_one_reacting_row() asks whether this cell is lit rather than
+     * whether this material burns, and ember stops needing to exist.
+     *
+     * `burns` and `burn_decay` are different claims and must not be
+     * confused. `burns` means ALWAYS a heat source - fire, lava. This
+     * means SOMETIMES, and the variant says when. */
+    uint8_t burn_decay;
+
     /* Chance in 256, per step, per burning neighbour, that heat crosses
      * ONE cell of this material - see conduct_heat() in
      * sand_reactions.c. Rolled again for every further cell of the same
@@ -597,6 +619,7 @@ static inline bool cell_is_extended(cell_t c)
     return CELL_MATERIAL(c) == MAT_EXTENDED;
 }
 
+
 /* The reaction row for a cell, decoding the extended range.
  *
  * The one place that has to know MAT_EXTENDED exists, and it can afford
@@ -604,12 +627,28 @@ static inline bool cell_is_extended(cell_t c)
  * pass. material_of() deliberately does NOT decode - the sweep reads it
  * per cell per step, and all sixteen extended materials sharing one
  * physics row is exactly what keeps that a single shift and index. */
+/* Whether this cell is a heat source RIGHT NOW.
+ *
+ * Two different claims, deliberately in one place. `burns` means always -
+ * fire, lava. `burn_decay` means while lit, and the variant says whether
+ * it is. Writing the pair out by hand at each of the places that dispatch
+ * on it is how the two would drift, and the one that matters most is the
+ * may_have_burning latch: get it wrong there and a burning log never wakes
+ * the reactions pass at all. */
+static inline bool cell_is_burning(cell_t c);
+
 static inline const reaction_t *reaction_of(cell_t c)
 {
     if (cell_is_extended(c)) {
         return &extended_reactions[CELL_VARIANT(c)];
     }
     return &reactions[CELL_MATERIAL(c)];
+}
+
+static inline bool cell_is_burning(cell_t c)
+{
+    const reaction_t *r = reaction_of(c);
+    return r->burns != 0 || (r->burn_decay != 0 && CELL_VARIANT(c) != 0);
 }
 
 /*---------------------------------------------------------------------------

@@ -261,10 +261,10 @@ which is deliberate, and should be a decision rather than a surprise.
 ### The material budget, and what is left
 
 A cell is one byte: four bits of material, four of variant. Zero is empty,
-so there are **15 material slots** and **15 are in use** - the last being
-`MAT_EXTENDED`, which is not a material but a doorway to sixteen more - sand, water,
-stone, gas, fire, wood, steam, smoke, ember, oil, lava, acid, glass, snow,
-and then `MAT_EXTENDED`. No ordinary slots free; sixteen extended ones, of
+so there are **15 material slots**: **13 ordinary materials**, one free,
+and `MAT_EXTENDED` - which is not a material but a doorway to sixteen more - sand, water,
+stone, gas, fire, wood, steam, smoke, oil, lava, acid, glass, snow, and
+then `MAT_EXTENDED`. One ordinary slot free, and sixteen extended ones of
 which one is used.
 
 Four ways to make more room, cheapest first - two of which mostly do not,
@@ -283,15 +283,15 @@ getting its speckle from a position hash is why it could give its variant
 up for the same thing. Always ask this first, because the answer costs
 nothing.
 
-**Make a material a state of another - rarely possible, and worth knowing
-why.** The tables are indexed by the MATERIAL NIBBLE alone. `material_of()`
-and `reaction_of()` both take the id and nothing else, so two states of one
-material get the same `density`, `decay`, `burns`, `flammability` and every
-other field. A state that behaves differently cannot be a state.
+**Make a material a state of another - possible when the VARIANT can carry
+it.** The tables are indexed by the material nibble alone, so two states of
+one material get the same `density`, `slip`, `repose` and `scatter` - every
+field the sweep reads. What separates a state that works from one that does
+not is which table the differences live in, and whether the variant is free
+to say which state a cell is in.
 
-Ember is the example, and it is an example of the limit rather than of the
-technique - **ember does occupy a slot**. It differs from wood in seven
-fields:
+Ember is the worked example, and it went both ways. It was a material for a
+long time, and it differed from wood in seven fields:
 
 | | wood | ember |
 | --- | --- | --- |
@@ -303,20 +303,33 @@ fields:
 | `quench_to` | - | steam |
 | `flare` | 0 | 48 |
 
-Wood does not decay, does not burn and does not flare; ember does all
-three. There is nowhere for those to live except a second row, so ember
-is its own material that merely happens not to be paintable - which saves
-the player a press in the brush list and saves no space at all.
+Only ONE of the seven - `decay` - is in the movement table. The other six
+are reactions, read in the cold pass. And wood's variant was doing nothing
+but holding a shade.
 
-Smoke and steam are not the free merge they look like either. Their
-reaction rows are identical, but their movement rows differ in five fields
-- density 7 against 5, scatter 150/140, decay 16/24, mobility 120/160,
-sight 24/20 - because steam is meant to be the lighter, faster,
-shorter-lived one. Merging them would make one of them move like the other.
+So ember is now a state: `burn_decay` makes wood burn while its variant is
+non-zero, that variant is how much is left to burn, and the dispatch asks
+`cell_is_burning(c)` rather than whether the material burns. `decay` stays
+0 in wood's movement row, because wood is not a transient - it does not
+disappear on its own, it disappears because it burned. Identical behaviour,
+one slot back, and one thing that was not expressible before: **water puts
+a log out**, leaving the log. An ember could never be put out, because the
+ember *was* the fire and quenching it had to replace it with something.
 
-So this saves a slot only when two states share *every* field and differ in
-something the variant already carries. That is a narrow case, and nothing
-in the table currently meets it.
+The general rule this leaves: what forces a slot is not "behaves
+differently", it is needing a different row in the table the SWEEP reads,
+or having no spare variant to say which state a cell is in.
+
+Smoke and steam are NOT the same opportunity, and the contrast is the
+useful part. Their reaction rows are identical, but they differ in five
+fields - density 7 against 5, scatter 150/140, decay 16/24, mobility
+120/160, sight 24/20 - and **every one is in the movement table**, because
+steam is meant to be the lighter, faster, shorter-lived one. Worse, both
+already spend their variant on life remaining, so there is nothing left to
+say which of the two a cell is.
+
+Ember worked because its differences were mostly cold-table and wood's
+variant was spare. Steam and smoke fail on both counts at once.
 
 **Add an extended range behind the last slot** - *built*. Material id 15 is
 `MAT_EXTENDED`, and a cell carrying it reads its low nibble as naming one of

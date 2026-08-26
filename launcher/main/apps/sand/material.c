@@ -1,3 +1,6 @@
+#include <stddef.h>   /* NULL - material.h does not pull it in, and
+                      * whether anything else does is a property of
+                      * the toolchain rather than of this file */
 #include "material.h"
 
 /*=============================================================================
@@ -323,38 +326,6 @@ const material_t materials[MATERIAL_MAX] = {
                                      * holding a column. Starting point,
                                      * not final - tune on device like
                                      * every other constant here. */
-    },
-
-    [MAT_EMBER] = {
-        .name    = "Ember",
-        .kind    = KIND_STATIC,     /* what wood chars into - stays put and
-                                     * keeps burning in place rather than
-                                     * floating off as a flame would. See
-                                     * sand_reactions.c's top comment for
-                                     * why this is a genuinely different
-                                     * material from fire rather than wood
-                                     * just igniting straight to MAT_FIRE. */
-        .density = 150,             /* same as wood - it is charred wood,
-                                     * still a solid log's worth of mass
-                                     * sitting in the same cell */
-
-        .decay = 24,                /* roughly 15 * (256/24) ~= 160 steps,
-                                     * ~2.7s at this app's ~60fps step rate
-                                     * - a log that visibly smoulders
-                                     * rather than one that either lingers
-                                     * forever or gutters out at once.
-                                     * Starting point, not final - tune on
-                                     * device like every other constant
-                                     * here.
-                                     *
-                                     * Worth knowing rather than chasing as
-                                     * a bug: at density 150, an ember is
-                                     * essentially never smother()'d - that
-                                     * predicate needs all four neighbours
-                                     * STRICTLY denser, and only stone (200)
-                                     * qualifies. Burying a log in sand will
-                                     * not put it out; only decay, or water,
-                                     * does. */
     },
 
     [MAT_OIL] = {
@@ -857,44 +828,56 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * MAT_FIRE the way gas does). Starting point, not final - tune
          * on device like every other constant here. */
         .flammability = 6,
-        .ignites_to   = MAT_EMBER,   /* chars, does not flash - see
-                                      * sand_reactions.c's top comment */
-        .dissolvable  = 160,         /* slower than sand's 200: a plank
-                                      * holds out a moment longer than a
-                                      * loose pile does */
+
+        /* Ignites into ITSELF. Wood's variant is how much of it is left to
+         * burn, so catching fire means going to a full one - which is
+         * exactly what place_reacted() writes - rather than becoming some
+         * other material.
+         *
+         * This is where ember used to be, and where it went. It was a
+         * whole material for the state of wood that is on fire, and it
+         * differed from wood in seven fields of which only decay was in
+         * the movement table. A state that needs its own row costs a slot;
+         * a state the variant can hold does not. */
+        .ignites_to   = MAT_WOOD,
+
+        /* 24 in 256 per step across 15 levels is ~160 steps, about 2.7s at
+         * this app's step rate - a log that visibly smoulders rather than
+         * one that either lingers forever or guts out at once. Ember's own
+         * figure, kept: the burn did not change, only where it lives. */
+        .burn_decay   = 24,
+
+        .residue   = 90,          /* well above fire's 40: a whole log
+                                   * finishing its burn is a bigger, more
+                                   * definite event than a flame guttering
+                                   * out, and should leave smoke far more
+                                   * often */
+
+        .quench_to = 0,           /* water on a burning log puts it OUT
+                                   * rather than replacing it - the log is
+                                   * still there, just no longer alight,
+                                   * which is what step_one_burning_cell()
+                                   * does for a burn_decay material. Ember
+                                   * named MAT_STEAM here because there was
+                                   * nothing left to put out: the ember WAS
+                                   * the fire, so quenching it had to
+                                   * replace it with something. */
+
+        .flare     = 48,          /* chance in 256 per step that a burning
+                                   * log emits a MAT_FIRE cell into an
+                                   * empty cardinal neighbour. Wood is
+                                   * KIND_STATIC and would otherwise be a
+                                   * glowing brick with no flame licking
+                                   * off it; the emitted fire rises on its
+                                   * own through sand_step_gas(), so "wood
+                                   * burning below, flame above" falls out
+                                   * of this one field */
+
+        .dissolvable  = 160,      /* slower than sand's 200: a plank holds
+                                   * out a moment longer than a loose pile
+                                   * does */
     },
 
-    [MAT_EMBER] = {
-        .dissolvable = 160,  /* what is left of a burning log gives way
-                              * the same as the log would */
-
-        .burns = 1,     /* a second heat source, alongside fire - see
-                         * sand_reactions.c's dispatch, which is why that
-                         * now keys off reaction_t.burns rather than
-                         * CELL_MATERIAL(c) == MAT_FIRE */
-
-        .residue = 90,  /* well above fire's 40: a whole ember finishing
-                         * its slow burn is a bigger, more definite event
-                         * than a flame guttering out, and should leave
-                         * smoke behind far more often. Starting point,
-                         * not final - tune on device like every other
-                         * constant here. */
-
-        .quench_to = MAT_STEAM,   /* same reasoning as fire's own row -
-                                  * see there. */
-
-        .flare = 48,    /* chance in 256, per step, that this ember emits
-                         * a MAT_FIRE cell into an empty cardinal neighbour
-                         * - an ember is KIND_STATIC and would otherwise be
-                         * a glowing brick with no flame licking up off it.
-                         * The emitted fire is ordinary MAT_FIRE and rises
-                         * on its own through sand_step_gas(), so "wood
-                         * burning below, flame above" falls out of this
-                         * one field rather than needing any upward-aware
-                         * code in sand_reactions.c. Starting point, not
-                         * final - tune on device like every other
-                         * constant here. */
-    },
 };
 
 /*=============================================================================
@@ -945,6 +928,29 @@ const reaction_t reactions[MATERIAL_MAX] = {
  * TUNE - every trial move meant re-cutting sixteen entries by hand. It is
  * a number that wants trying at several values against a real board, so
  * the palette follows it instead of guarding it. */
+/* Wood, whose variant is HOW MUCH IS LEFT TO BURN rather than a shade.
+ *
+ * Zero is unlit timber and is the only value a drawn or unburnt log ever
+ * has; one to fifteen is a log on fire, counting down. So this is not a
+ * ramp at all - it is one colour followed by a ramp, and the jump between
+ * them is the point: a log is either alight or it is not, and that should
+ * not be a judgement call.
+ *
+ * The burn ramp is ember's own, kept exactly: dying char through glowing
+ * orange, deliberately redder and darker than fire's yellow-white so a
+ * smouldering log reads differently from the flame licking off it.
+ *
+ * Wood loses its grain to this, the same trade stone made for temperature,
+ * and gets it back the same way - see material_colours(), which speckles
+ * unlit wood from the cell's position. */
+#define WOOD_UNLIT 0x5A3D24
+#define WOOD_CHAR  0x2A0A00
+#define WOOD_GLOW  0xFF7A28
+
+#define WOOD_BURN(i) GFX_RGB(LERP(WOOD_CHAR, WOOD_GLOW, ((i) - 1) * 15 / 14))
+
+#define WOOD_SHADES                                                            GFX_RGB(WOOD_UNLIT),                                                       WOOD_BURN(1),  WOOD_BURN(2),  WOOD_BURN(3),  WOOD_BURN(4),                 WOOD_BURN(5),  WOOD_BURN(6),  WOOD_BURN(7),  WOOD_BURN(8),                 WOOD_BURN(9),  WOOD_BURN(10), WOOD_BURN(11), WOOD_BURN(12),                WOOD_BURN(13), WOOD_BURN(14), WOOD_BURN(15)
+
 /* Stone's ramp, built the same way glass's is and meaning the same things
  * at the same levels - see the glass block below for why the splits are
  * computed from the constants rather than written out.
@@ -1055,7 +1061,11 @@ static const gfx_color_t palette[256] = {
                                     * lit is bright yellow-white; variant
                                     * is life remaining, same trick gas
                                     * already uses */
-    SHADES(0x3A2616, 0x7A5230),   /* wood  - dark grain to lit grain */
+    WOOD_SHADES,                  /* wood - variant 0 is UNLIT and every
+                                    * other value is how much is left to
+                                    * burn, so this ramp is one colour of
+                                    * timber followed by a burn ramp. See
+                                    * WOOD_SHADES above */
     SHADES(0x6E8496, 0xF2FAFF),   /* steam - variant is life remaining, so
                                     * a dying wisp is a cool blue-grey and
                                     * a fresh one is almost white; same
@@ -1098,11 +1108,6 @@ static const gfx_color_t palette[256] = {
                                     * reason they are separate materials,
                                     * so it is worth a test rather than a
                                     * good intention. */
-    SHADES(0x2A0A00, 0xFF7A28),   /* ember - dying char to glowing orange,
-                                    * deliberately redder and darker than
-                                    * fire's own yellow-white so a
-                                    * smouldering log reads differently
-                                    * from the flame above it */
     SHADES(0x6E5A22, 0x14100A),   /* oil   - a liquid's variant is FILL
                                     * LEVEL, not life, so this runs the
                                     * same way water's does: a thin film
