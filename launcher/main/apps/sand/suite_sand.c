@@ -2025,14 +2025,49 @@ static void test_a_tipped_basin_pours_its_water_out(void)
         sand_step(&pour, 1000, 300, 0);
     }
 
-    /* Nearly all of it, rather than every last unit. A few cells of film can
-     * cling in the corners, and demanding a perfectly dry basin would be
-     * pinning an exact outcome rather than testing that it pours. */
+    /* Not held/10. That threshold encoded the OLD bug rather than the
+     * physics: under this gravity the basin's right-hand wall (stone at
+     * x=12, y=8..13, floor stone at y=13) is a FLOOR, and the corner at
+     * (11,12) is a genuine pocket - the only way out is to climb to y<=7
+     * and go over the wall's top corner at (12,7). The level plane through
+     * that spill corner is (x-12)*1000 + (y-7)*300 > 0 for "below the
+     * plane", and within the region mass_in_basin() measures (x 6..11,
+     * y 8..12) only (11,11) and (11,12) satisfy it - two cells, 30 units of
+     * the 144 this basin started with. No correct simulation can empty this
+     * basin below that 30, so held/10 = 14 was never a reachable target; it
+     * was only ever met while cross-flow treated a vertical ray as level and
+     * let water climb the wall for nothing. The fix leaves 51: those 30
+     * physically-trapped units plus about 1.4 cells of residual film, which
+     * is the levelling rule's own dead band - a transfer moves whole mass
+     * units, so up to one unit of level difference can persist at each hop
+     * of a chain, and the escape route out of this corner is a four-hop
+     * chain. 75 sits above the fix's 51 with room, and still below anything
+     * that would call a heaped-up basin a pour. */
     const long left = mass_in_basin();
-    TEST_ASSERT_LESS_THAN_MESSAGE((int)(held / 10), (int)left,
-        "held on its side, a basin of water must almost entirely empty - "
-        "water has no angle of repose, so a lump left behind is it behaving "
-        "like a powder");
+    TEST_ASSERT_LESS_THAN_MESSAGE(75, (int)left,
+        "held on its side, a basin of water must pour rather than heap - 75 "
+        "is set above the ~30 units this tilt physically traps in the low "
+        "corner, not at the old held/10 threshold, which no correct "
+        "simulation of this scene could ever meet");
+
+    /* The property the count above is only a proxy for: what water is left
+     * must sit in the LOW CORNER, not spread across the basin floor the way
+     * a powder heaps. Verified on the fix: the water that remains is only at
+     * x=10 and x=11, so x<=9 - more than half the basin floor's width - must
+     * be completely dry. This is the stronger statement of "water has no
+     * angle of repose": not just that little is left, but that what is left
+     * has the SHAPE a puddle in a pocket has, not the shape a pile has. */
+    for (int y = POUR_H - 6; y < POUR_H - 1; y++) {
+        for (int x = 6; x <= 9; x++) {
+            const cell_t c = sand_at(&pour, x, y);
+            char why[128];
+            snprintf(why, sizeof why,
+                     "water heaped at (%d,%d), away from the low corner - "
+                     "that is a powder's shape, not a liquid's", x, y);
+            TEST_ASSERT_FALSE_MESSAGE(
+                !CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER, why);
+        }
+    }
 }
 
 static void test_a_tipped_basin_keeps_its_sand(void)
@@ -2266,6 +2301,148 @@ static void test_a_settled_pool_does_not_flicker(void)
         "a settled pool must not swing large amounts of mass around once "
         "level - the reported symptom was water that looked settled "
         "visibly changing colour and resettling, over and over");
+}
+
+/* Settles a w x h pool of water under (gx, gy) for `steps` steps, then
+ * reports how much its surface tilts: the difference between the total
+ * water mass held in the leftmost w/8 columns and the rightmost w/8
+ * columns, in units of 1/1024 of a cell of depth per cell of x.
+ *
+ * Grid and block array are malloc()'d and freed here rather than static, so
+ * this can be called at several different sizes - see the big-grid tests
+ * above (e.g. test_the_four_liquid_scene_keeps_reacting_after_settling) for
+ * the same shape. */
+static int settled_surface_slope_q10(int w, int h, int gx, int gy, int steps)
+{
+    uint8_t *cells  = malloc((size_t)w * (size_t)h);
+    uint8_t *blocks = malloc((size_t)((w + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              (size_t)((h + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    /* Free whatever succeeded BEFORE asserting, not after - see 565f72e.
+     * TEST_ASSERT_NOT_NULL(blocks) alone would longjmp straight past both
+     * frees and leak `cells` for the rest of that boot if the second
+     * allocation ever came back NULL, and this helper is called eight
+     * times in one test, so it would leak eight times over. */
+    if (cells == NULL || blocks == NULL) {
+        free(cells);
+        free(blocks);
+        TEST_FAIL_MESSAGE("need a grid and a block map to settle a pool "
+                           "and measure its slope, and at least one of "
+                           "the two failed to allocate");
+    }
+
+    sand_t s;
+    sand_init(&s, cells, w, h, 41u);
+    sand_enable_sleeping(&s, blocks);
+
+    /* The bottom h/3 rows, full width, at MASS_MAX, and then ONE more row
+     * above that at mass 7. The part-full row matters: a volume that
+     * happens to divide exactly into full rows has no partially-filled cell
+     * anywhere, and a partial cell is the only thing cross-flow can move -
+     * such a pool sits dead still at any tilt, on HEAD as well as the fix,
+     * because there is nothing for either ray to transfer. A real pool
+     * always has a ragged surface, and this is what gives the fixture one. */
+    const int full_rows = h / 3;
+    for (int y = h - full_rows; y < h; y++) {
+        for (int x = 0; x < w; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    for (int x = 0; x < w; x++) {
+        sand_set(&s, x, h - full_rows - 1, CELL_MAKE(MAT_WATER, 7));
+    }
+
+    for (int i = 0; i < steps; i++) {
+        sand_step(&s, gx, gy, 0);
+    }
+
+    const int q = w / 8;
+    long lo = 0, hi = 0;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < q; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
+                lo += CELL_VARIANT(c);
+            }
+        }
+        for (int x = w - q; x < w; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
+                hi += CELL_VARIANT(c);
+            }
+        }
+    }
+
+    free(cells);
+    free(blocks);
+
+    /* An end-to-end difference of two eighths, deliberately, rather than a
+     * regression fitted over every column: it is blind ON PURPOSE to the
+     * surface's own +/-1 cell texture and to a few columns running dry at
+     * the shallow end, both of which would swamp a per-column measure with
+     * noise that has nothing to do with the angle. Multiplied out in
+     * `long` - (hi-lo) runs to about 40000 on the biggest fixture here, and
+     * *1024 does not overflow a long - then cast down to the int this
+     * returns. */
+    return (int)(((long)(hi - lo) * 1024) / ((long)q * (w - q) * MASS_MAX));
+}
+
+static void test_a_pool_settles_at_the_angle_it_is_tilted_to(void)
+{
+    /* The reported bug: a settled liquid surface only ever came out
+     * perfectly flat or snapped to the 45-degree diagonal, never anywhere
+     * in between - because equalise_liquids() levelled along a single ray
+     * taken perpendicular to the NEAREST of the eight gravity directions,
+     * so a settled surface could only ever be perpendicular to one of
+     * those eight, and quantised to 0/45/90 degrees. It is worst at the
+     * app's VERY LOW quality setting, whose grid is 368/6 x 448/6 = 61x74 -
+     * which is why 61x74 is one of the fixtures below by name, not a round
+     * number picked for convenience.
+     *
+     * Two tilts are needed, not one: 20 and 26 degrees sit either side of
+     * the 22.5-degree boundary between two of the eight octants, and the
+     * old behaviour failed them in OPPOSITE directions - flat below the
+     * boundary (the nearest direction was still the axis) and snapped to
+     * the diagonal above it (the nearest direction became the diagonal).
+     * A fix that only moved the boundary rather than removing it could pass
+     * one of these and fail the other.
+     *
+     * Measured on the host, all four fixtures, 2500 steps, this q10 slope
+     * against the true one:
+     *   on the fix:  20deg 0.262-0.369 (true 0.364); 26deg 0.394-0.479 (true 0.488)
+     *   before it:   20deg 0.012-0.032 (dead flat);  26deg 0.645-0.941 (snapped
+     *                                                 to the diagonal)
+     * so the band asserted below, 0.15 to 0.58 (154 to 594 in q10), is green
+     * on the fix at every fixture with at least 0.10 of margin, and red
+     * before it at every fixture in both directions. */
+    static const struct { int w, h; } fixtures[] = {
+        { 32, 20 }, { 40, 28 }, { 61, 74 }, { 92, 56 },
+    };
+    const int steps = 2500;
+
+    for (size_t i = 0; i < sizeof fixtures / sizeof fixtures[0]; i++) {
+        const int w = fixtures[i].w, h = fixtures[i].h;
+        char why[256];
+
+        /* 20 degrees: true slope 0.364, 373 in q10. */
+        const int slope20 = settled_surface_slope_q10(w, h, 342, 939, steps);
+        snprintf(why, sizeof why,
+                 "%dx%d fixture at 20 degrees: measured slope %d (q10), "
+                 "expected roughly 373 (true slope 0.364) - flat near 0 "
+                 "means the surface snapped to the axis, the old bug below "
+                 "the octant boundary", w, h, slope20);
+        TEST_ASSERT_GREATER_THAN_MESSAGE(154, slope20, why);
+        TEST_ASSERT_LESS_THAN_MESSAGE(594, slope20, why);
+
+        /* 26 degrees: true slope 0.488, 500 in q10. */
+        const int slope26 = settled_surface_slope_q10(w, h, 422, 906, steps);
+        snprintf(why, sizeof why,
+                 "%dx%d fixture at 26 degrees: measured slope %d (q10), "
+                 "expected roughly 500 (true slope 0.488) - close to 1024 "
+                 "means the surface snapped to the diagonal, the old bug "
+                 "above the octant boundary", w, h, slope26);
+        TEST_ASSERT_GREATER_THAN_MESSAGE(154, slope26, why);
+        TEST_ASSERT_LESS_THAN_MESSAGE(594, slope26, why);
+    }
 }
 
 /* --- momentum: the wall-rebound splash ----------------------------------- */
@@ -10942,6 +11119,7 @@ void run_sand_suite(void)
     RUN_TEST(test_water_puddles_where_sand_heaps);
     RUN_TEST(test_a_large_body_of_water_levels);
     RUN_TEST(test_a_settled_pool_does_not_flicker);
+    RUN_TEST(test_a_pool_settles_at_the_angle_it_is_tilted_to);
     RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
     RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
 

@@ -552,13 +552,57 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
                        const int *slide_a, const int *slide_b,
                        cell_t grain, uint8_t mat_id);
 
+/* How a liquid levels: the direction of the true surface, and what climbing
+ * one step of it costs.
+ *
+ * A pool's true perpendicular to gravity almost never lines up with one of
+ * the eight ring directions - it lies somewhere between an axis direction
+ * and the diagonal beside it. `ax` is that axis ray, perpendicular to
+ * whichever of gx/gy dominates; `dg` is the diagonal ray next to it, on the
+ * side the tilt leans. Between the two of them, every tilt from dead flat to
+ * exactly 45 degrees is bracketed.
+ *
+ * `q_q8` decides which ray a given column (or row, when gravity is mostly
+ * sideways) takes, as a fixed pattern in SPACE, 0-256 for 0-100%. This is
+ * the whole trick. Commit 30335ae pinned cross-flow to the nearest axis to
+ * kill a flicker where dithering the axis in TIME let a settled pool see a
+ * different axis - and so a different verdict on which way is down - on
+ * almost every step, swinging half its mass back and forth. Dithering the
+ * same choice in SPACE instead of in time gives a settled pool the identical
+ * answer on every step, because each column always takes the same ray, so
+ * nothing flickers - but the mix of rays across the pool still reads as the
+ * true angle instead of snapping to one of eight.
+ *
+ * `bias_ax_q8`/`bias_dg_q8` are what one step of the matching ray costs in
+ * gravitational potential: the mass a level surface gains per step of that
+ * ray, in 1/256 units. A cell reached by a ray that is not exactly
+ * perpendicular to gravity sits a little higher or lower along the true
+ * "down" than the cell it started from, and so a level surface should hold
+ * a little more or less mass there even though nothing moved; the bias is
+ * that difference, and find_shallowest() (sand_liquid.c) carries the
+ * running total so a multi-step walk compares LEVEL rather than raw mass.
+ *
+ * Both halves reduce, bit for bit, to the single-ray raw-mass rule that came
+ * before, at the two gravities that rule already handled correctly: at
+ * exactly axis-aligned gravity q_q8 is 0 and bias_ax_q8 is 0, so only the
+ * axis ray is ever taken and it costs nothing extra; at exactly 45 degrees
+ * q_q8 is 256 and bias_dg_q8 is 0, so only the diagonal ray is ever taken
+ * and it too costs nothing extra. That is why every existing test at those
+ * two gravities was unaffected by this change. */
+typedef struct {
+    int ax[2];        /* the axis ray - perpendicular to the dominant axis */
+    int dg[2];        /* the diagonal ray beside it, the way the tilt leans */
+    int q_q8;         /* how often a column takes the diagonal ray, 0-256   */
+    int bias_ax_q8;   /* mass a level surface gains per step of each ray,   */
+    int bias_dg_q8;   /*   in 1/256 units - zero when the ray is level      */
+} xflow_t;
+
 /* Defined in sand_liquid.c: the whole of a step's liquid work that does NOT
  * belong inside the main sweep - cross-flow levelling and the wall-rebound
- * splash. Called once from sand_step(), after that sweep finishes.
- * `perp_a`/`perp_b` are the two directions across the flow; `dx`/`dy` is
- * gravity's own dithered direction this step. */
-void sand_step_liquids(sand_t *s, const int *perp_a, const int *perp_b,
-                       int dx, int dy);
+ * splash. Called once from sand_step(), after that sweep finishes. `flow`
+ * describes how this liquid levels - see xflow_t; `dx`/`dy` is gravity's own
+ * dithered direction this step. */
+void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy);
 
 /* Defined in sand_gas.c: a gas grain's whole step - rising (reusing
  * try_fall_or_scatter()/try_slide() below, direction-inverted) then

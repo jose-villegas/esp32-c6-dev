@@ -445,9 +445,19 @@ static inline bool has_room_below(const sand_t *s, int x, int y, int dx,
  * holds the same amount, so the overwhelming majority of cells answer here
  * in one comparison instead of walking the full sight distance. Only the
  * cells along a real imbalance look further, and those are the only ones
- * with anywhere to send anything. */
+ * with anywhere to send anything.
+ *
+ * That early-out depends on `there < MASS_MAX` staying part of the test,
+ * not just the level comparison beside it. Once a bias is in play an
+ * EQUAL-mass neighbour can legitimately read as lower - the bias is what
+ * makes a settled surface tilt at all - so the plain "is it lower" half of
+ * the test alone would send every interior cell of a full pool on a full
+ * sight walk, the exact cost this function exists to avoid. A full
+ * neighbour has no room regardless of any bias, so `there < MASS_MAX`
+ * rejects it in one comparison and keeps the early-out intact. */
 static inline bool neighbour_is_lower(const sand_t *s, int x, int y, int px,
-                                      int py, uint8_t id, int mass)
+                                      int py, uint8_t id, int mass,
+                                      int bias_q8)
 {
     const int nx = x + px;
     const int ny = y + py;
@@ -455,18 +465,31 @@ static inline bool neighbour_is_lower(const sand_t *s, int x, int y, int px,
         return false;
     }
     const cell_t n = s->cells[(size_t)ny * (size_t)s->w + (size_t)nx];
-    return CELL_IS_EMPTY(n) || (CELL_MATERIAL(n) == id && CELL_VARIANT(n) < mass);
+    /* A cell of some OTHER material reads as full, which rejects it on the
+     * same comparison that rejects a full one of our own - one branch for
+     * both, rather than the two the obvious spelling costs. */
+    const int there = CELL_IS_EMPTY(n) ? 0
+                    : (CELL_MATERIAL(n) == id ? CELL_VARIANT(n) : MASS_MAX);
+    return there < MASS_MAX && (there << 8) - bias_q8 < (mass << 8);
 }
 
 /* The shallowest place this liquid can reach along (px, py), within `sight`
- * cells, and how many steps away it is. Flow stops at anything that is not
- * the same liquid, so it cannot reach through a wall. */
-static inline void find_shallowest(const sand_t *s, int x, int y, int px,
-                                   int py, int sight, uint8_t id, int mass,
-                                   int *lowest, int *at)
+ * cells, how many steps away it is, and the level drop to it, in 1/256 mass
+ * units - which is what the caller halves to decide the transfer. "Shallowest"
+ * now means lowest in LEVEL, not lowest in mass: a farther cell that is
+ * physically fuller can still be lower once the bias accumulated by the
+ * steps to reach it is taken into account, and it is that cell, not the
+ * merely-lightest one, that this walk returns. Flow stops at anything that
+ * is not the same liquid, so it cannot reach through a wall. */
+static inline int find_shallowest(const sand_t *s, int x, int y, int px,
+                                  int py, int sight, uint8_t id, int mass,
+                                  int bias_q8, int *lowest, int *at)
 {
-    *lowest = mass;
-    *at = 0;
+    const int mine = mass << 8;
+    int best = mine;
+    int carried = 0;
+    int low = mass;
+    int k_at = 0;
 
     for (int k = 1; k <= sight; k++) {
         const int sx = x + px * k;
@@ -486,14 +509,26 @@ static inline void find_shallowest(const sand_t *s, int x, int y, int px,
             break;
         }
 
-        if (there < *lowest) {
-            *lowest = there;
-            *at = k;
-            if (there == 0) {
-                break;      /* nothing is lower than dry */
-            }
+        carried -= bias_q8;
+        const int level = (there << 8) + carried;
+        if (level < best) {
+            best = level;
+            low  = there;
+            k_at = k;
+        }
+        if (there == 0) {
+            break;          /* nothing is lower than dry */
         }
     }
+
+    /* Written once, after the walk, rather than through the pointers inside
+     * it: the walk tracks its best find in locals as it goes, and this
+     * function now hands back three results rather than two, one of them
+     * the return value itself - keeping all three together at the exit
+     * reads better than three stores scattered through the loop. */
+    *lowest = low;
+    *at = k_at;
+    return mine - best;
 }
 
 /* One cell's share of cross-flow. Returns whether it gave anything, and
@@ -506,12 +541,13 @@ static inline void find_shallowest(const sand_t *s, int x, int y, int px,
 static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
                                      int px, int py, int dx, int dy,
                                      int sight, uint8_t id, int mass,
+                                     int bias_q8,
                                      bool *stayed_in_row, int *touched_x)
 {
     if (has_room_below(s, x, y, dx, dy, id)) {
         return false;
     }
-    if (!neighbour_is_lower(s, x, y, px, py, id, mass)) {
+    if (!neighbour_is_lower(s, x, y, px, py, id, mass, bias_q8)) {
         return false;
     }
     if (!liquid_may_move(s, id)) {
@@ -522,13 +558,35 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     }
 
     int lowest, at;
-    find_shallowest(s, x, y, px, py, sight, id, mass, &lowest, &at);
+    const int drop_q8 = find_shallowest(s, x, y, px, py, sight, id, mass,
+                                        bias_q8, &lowest, &at);
 
-    /* Half the difference. Handing over everything would only move the
-     * imbalance rather than settle it - the two would trade places for
-     * ever. */
-    const int give = (mass - lowest) / 2;
-    if (at == 0 || give <= 0) {
+    /* Half the difference in LEVEL, not in mass - `drop_q8` is a level drop
+     * in 1/256 mass units (see find_shallowest()), and handing over all of
+     * it would only move the imbalance rather than settle it, the two would
+     * trade places for ever. `>> 9` is a halving and a q8-to-whole-mass
+     * conversion done in one shift: when bias_q8 is zero (an axis-aligned or
+     * exactly-45-degree ray - see build_xflow()) drop_q8 is exactly
+     * (mass - lowest) << 8, and >> 9 on that is bit-for-bit the old
+     * `(mass - lowest) / 2`, because (2k*256) >> 9 == k and
+     * ((2k+1)*256) >> 9 == k. */
+    int give = drop_q8 >> 9;
+    if (__builtin_expect(at == 0 || give <= 0, 1)) {
+        return false;
+    }
+    /* Two clamps the old rule never needed, because it only ever moved half
+     * of a difference in MASS and so could not overrun either end. A level
+     * difference can be far larger than the mass on hand or the room at the
+     * far end - a steep tilt puts several cells of head between two cells
+     * eight apart - so both ends are pinned here. Cold: on a body of water
+     * that is finding its level, the ordinary transfer is a unit or two. */
+    if (__builtin_expect(give > MASS_MAX - lowest, 0)) {
+        give = MASS_MAX - lowest;
+    }
+    if (__builtin_expect(give > mass, 0)) {
+        give = mass;
+    }
+    if (__builtin_expect(give <= 0, 0)) {
         return false;
     }
 
@@ -539,7 +597,7 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
     row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give) : CELL_EMPTY;
 
-    *stayed_in_row = (py == 0);
+    *stayed_in_row = (ty == y);
     if (*stayed_in_row) {
         *touched_x = tx;
     } else {
@@ -571,7 +629,8 @@ static inline void union_touched_x(bool *touched, int *x0, int *x1,
  * to keep that loop's own complexity down, not because this is reused
  * elsewhere. */
 static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
-                                         int px, int py, int dx, int dy,
+                                         bool diagonal, const xflow_t *r,
+                                         int dx, int dy,
                                          int sight, uint16_t is_liquid,
                                          bool *touched, int *touched_x0,
                                          int *touched_x1)
@@ -585,10 +644,19 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
         return false;
     }
 
+    /* Which of the two rays this cell levels along - resolved HERE, past the
+     * two checks above, and not in the block loop that calls this: most of
+     * the cells a scanned block holds are empty or not liquid, and picking a
+     * ray for them cost about 10% of the whole host water benchmark step
+     * versus choosing it after those checks. */
+    const int px = diagonal ? r->dg[0] : r->ax[0];
+    const int py = diagonal ? r->dg[1] : r->ax[1];
+    const int bias_q8 = diagonal ? r->bias_dg_q8 : r->bias_ax_q8;
+
     bool stayed_in_row = false;
     int  tx = 0;
     if (equalise_one_cell(s, row, x, y, px, py, dx, dy, sight, id,
-                          CELL_VARIANT(c), &stayed_in_row, &tx) &&
+                          CELL_VARIANT(c), bias_q8, &stayed_in_row, &tx) &&
         stayed_in_row) {
         /* Marking is deferred when the flow stays inside one row, which is
          * every orientation where gravity has no sideways component - much
@@ -609,15 +677,29 @@ static inline bool equalise_one_row_cell(sand_t *s, uint8_t *row, int x, int y,
  * step_one_block() in sand.c - the unit this pass can now skip whole. */
 static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
                                       int cx_from, int cx_to, int x_step,
-                                      int px, int py, int dx, int dy,
+                                      const xflow_t *r, int dx, int dy,
                                       int sight, uint16_t is_liquid,
                                       bool *touched, int *touched_x0,
                                       int *touched_x1)
 {
     bool any_liquid = false;
 
+    const int q_q8 = r->q_q8;
+
+    /* Which columns take the diagonal ray: a fixed pattern in space, of
+     * density q_q8/256 - see xflow_t. Along the axis the ray does not move
+     * in, the answer is the same for the whole span, so it is settled once
+     * here rather than per cell; along the other, it walks by q_q8 a cell,
+     * which is the same running remainder a line-drawer keeps. */
+    const bool x_major = (r->ax[0] != 0);
+    int pat = x_major ? ((q_q8 * cx_from) & 255) : ((q_q8 * y) & 255);
+    const int pat_step = x_major ? ((x_step > 0) ? q_q8 : -q_q8) : 0;
+
     for (int x = cx_from; x != cx_to; x += x_step) {
-        if (equalise_one_row_cell(s, row, x, y, px, py, dx, dy, sight,
+        const bool diagonal = (pat < q_q8);
+        pat = (pat + pat_step) & 255;
+        if (equalise_one_row_cell(s, row, x, y, diagonal, r,
+                                  dx, dy, sight,
                                   is_liquid, touched, touched_x0,
                                   touched_x1)) {
             any_liquid = true;
@@ -649,8 +731,8 @@ static inline bool equalise_one_block(sand_t *s, uint8_t *row, int y,
  * that silently un-inlined try_slide_impl() in the eighth attempt - see
  * docs/Sand/Performance-Tuning-Attempts.md. One call site, one branch on a
  * pointer that is loop-invariant, and the cost is nothing. */
-static bool equalise_one_row(sand_t *s, int y, int w, int x_step, int px,
-                             int py, int dx, int dy, int sight,
+static bool equalise_one_row(sand_t *s, int y, int w, int x_step,
+                             const xflow_t *r, int dx, int dy, int sight,
                              uint16_t is_liquid)
 {
     uint8_t *row = s->cells + (size_t)y * (size_t)w;
@@ -676,7 +758,7 @@ static bool equalise_one_row(sand_t *s, int y, int w, int x_step, int px,
         if (equalise_one_block(s, row, y,
                                (x_step > 0) ? lo : hi - 1,
                                (x_step > 0) ? hi : lo - 1,
-                               x_step, px, py, dx, dy, sight, is_liquid,
+                               x_step, r, dx, dy, sight, is_liquid,
                                &touched, &touched_x0, &touched_x1)) {
             any_liquid = true;
         }
@@ -722,7 +804,7 @@ static void mark_liquid_neighbourhoods(sand_t *s)
     }
 }
 
-static void equalise_liquids(sand_t *s, const int *perp, int sight,
+static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
                              int dx, int dy)
 {
     bool found_any = false;
@@ -731,8 +813,11 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
         mark_liquid_neighbourhoods(s);
     }
 
-    const int px = perp[0];
-    const int py = perp[1];
+    /* Sweep order is pinned by the ray that leaves the row/column, which is
+     * the diagonal one - the axis ray never leaves its own row, so it is
+     * safe under either order. */
+    const int px = f->dg[0];
+    const int py = f->dg[1];
     const int w  = s->w;
     const int h  = s->h;
 
@@ -766,7 +851,7 @@ static void equalise_liquids(sand_t *s, const int *perp, int sight,
      * blocks. Nothing is charged per move. See
      * docs/Sand/Performance-Tuning-Attempts.md. */
     for (int y = y_from; y != y_to; y += y_step) {
-        if (equalise_one_row(s, y, w, x_step, px, py, dx, dy,
+        if (equalise_one_row(s, y, w, x_step, f, dx, dy,
                              sight, is_liquid)) {
             found_any = true;
         }
@@ -859,18 +944,33 @@ static void rebound_wall(sand_t *s, int edge, int count, int to,
     }
 }
 
-void sand_step_liquids(sand_t *s, const int *perp_a, const int *perp_b,
-                       int dx, int dy)
+void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
 {
     if (!s->may_have_liquid) {
         return;
     }
 
+    /* The two senses across the flow are exact opposites of each other, so
+     * the reverse one is the forward one negated - directions and the
+     * potential each step costs alike. */
+    xflow_t run;
+    if (s->liquid_flip) {
+        run.ax[0] =  flow->ax[0]; run.ax[1] =  flow->ax[1];
+        run.dg[0] =  flow->dg[0]; run.dg[1] =  flow->dg[1];
+        run.bias_ax_q8 =  flow->bias_ax_q8;
+        run.bias_dg_q8 =  flow->bias_dg_q8;
+    } else {
+        run.ax[0] = -flow->ax[0]; run.ax[1] = -flow->ax[1];
+        run.dg[0] = -flow->dg[0]; run.dg[1] = -flow->dg[1];
+        run.bias_ax_q8 = -flow->bias_ax_q8;
+        run.bias_dg_q8 = -flow->bias_dg_q8;
+    }
+    run.q_q8 = flow->q_q8;
+
     /* Cross-flow, in its own pass and alternating which way each step - so a
      * tilted pool levels both ways instead of walking into one corner. See
      * equalise_liquids(). */
-    equalise_liquids(s, s->liquid_flip ? perp_a : perp_b,
-                     SAND_LIQUID_SIGHT, dx, dy);
+    equalise_liquids(s, &run, SAND_LIQUID_SIGHT, dx, dy);
     s->liquid_flip = !s->liquid_flip;
 
     /* And let a hard flick splash liquid back off whichever wall it just

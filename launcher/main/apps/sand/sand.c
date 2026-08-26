@@ -873,6 +873,70 @@ static void finalize_settling(sand_t *s, uint8_t settled_bit)
     }
 }
 
+/* The two rays a liquid levels along, and what one step of each costs in
+ * gravitational potential. See xflow_t.
+ *
+ * Whichever of gx/gy has the larger magnitude picks the major ray: `ax`
+ * always runs perpendicular to that dominant axis. `dg`, the diagonal
+ * partner, is the ring neighbour on the side the tilt actually leans - it
+ * is built from the same two signs as `ax` rather than looked up, so it is
+ * always the correct one of the two diagonals next to that axis, never the
+ * one on the far side.
+ *
+ * `q_q8` is the raw ratio of the smaller gravity component to the larger,
+ * scaled to 0-256 - the TANGENT of the tilt, which is exactly the slope of
+ * the level line. This is deliberately the raw ratio and not
+ * diagonal_weight()'s angle correction above: diagonal_weight() answers
+ * "where does the true angle sit between two octants", which is what
+ * dithering gravity's own direction needs, but what is wanted here is the
+ * line's slope, not the angle's position - and the raw ratio already IS
+ * that slope.
+ *
+ * Both biases are built from one shared pair of per-axis constants, `bx`
+ * and `by` - the gravity direction scaled to a mass unit - rather than each
+ * being worked out separately for its own ray. That is what makes the level
+ * field exactly consistent: find_shallowest() walks a loop of comparisons
+ * across cells that can be reached by either ray, and a shared (bx, by)
+ * guarantees those comparisons agree with each other no matter which ray
+ * got each cell there, the way two independently-rounded biases could not
+ * promise.
+ *
+ * `im_len()`'s ~4% approximation (see intmath.h) is fine here for the same
+ * reason it is fine everywhere else in this file: nothing reads a bias to
+ * that precision, only its sign and rough size. The one thing that DOES
+ * matter - a bias of exactly zero when a ray is exactly level - comes from
+ * bx*ax0 + by*ax1 (or the dg equivalent) landing on exactly zero by simple
+ * cancellation, a property of the dot product that does not depend on the
+ * length at all. */
+static void build_xflow(xflow_t *f, int gx, int gy)
+{
+    const int ax = im_abs(gx), ay = im_abs(gy);
+    const int sx = im_sign(gx), sy = im_sign(gy);
+
+    if (ay >= ax) {
+        /* Gravity is mostly vertical: the level surface runs mostly across. */
+        f->ax[0] = (sx >= 0) ? 1 : -1;  f->ax[1] = 0;
+        f->dg[0] = f->ax[0];            f->dg[1] = (sy >= 0) ? -1 : 1;
+        f->q_q8 = (ay != 0) ? (ax * 256) / ay : 0;
+    } else {
+        /* Gravity is mostly sideways: the level surface runs mostly up. */
+        f->ax[0] = 0;                   f->ax[1] = (sy >= 0) ? -1 : 1;
+        f->dg[0] = (sx >= 0) ? 1 : -1;  f->dg[1] = f->ax[1];
+        f->q_q8 = (ay * 256) / ax;
+    }
+
+    const int len = im_len(gx, gy);
+    if (len == 0) {
+        f->bias_ax_q8 = 0;
+        f->bias_dg_q8 = 0;
+        return;
+    }
+    const int bx = (MASS_MAX * 256 * gx) / len;
+    const int by = (MASS_MAX * 256 * gy) / len;
+    f->bias_ax_q8 = bx * f->ax[0] + by * f->ax[1];
+    f->bias_dg_q8 = bx * f->dg[0] + by * f->dg[1];
+}
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     update_momentum(s, gx, gy);
@@ -949,6 +1013,9 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
     const int *const perp_a = ring_dir(i_stable + 2);
     const int *const perp_b = ring_dir(i_stable + 6);
 
+    xflow_t flow;
+    build_xflow(&flow, gx, gy);
+
     const int w = s->w;
     const uint16_t is_liquid = liquid_mask();
 
@@ -963,7 +1030,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * since a cross-flow or rebound move can still touch a block the main
      * sweep left quiet - BLOCK_ACTIVE has to reflect the WHOLE step, not
      * just the sweep's share of it. */
-    sand_step_liquids(s, perp_a, perp_b, dx, dy);
+    sand_step_liquids(s, &flow, dx, dy);
 
     /* Same reasoning, same slot, for gas: rising is not gravity-ward, so it
      * cannot join the main sweep either - see sand_step_gas()'s own
