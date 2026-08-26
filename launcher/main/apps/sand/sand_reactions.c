@@ -1702,8 +1702,20 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * middle of a function that runs once per plant cell per step; the
      * same mistake one branch along in sand_liquid.c cost 26% of a
      * benchmark with the simulation byte-identical either way. See
-     * docs/Sand/Tuning-At-a-Glance.md. */
-    if (__builtin_expect(rng_below(&s->rng, 8) != 0, 1)) {
+     * docs/Sand/Tuning-At-a-Glance.md.
+     *
+     * ONE IN FOUR, measured over eight trees. It was one in eight, chosen
+     * before the shaping pass existed - back when hardening produced a
+     * bare stick and delaying it was all that kept trees from being
+     * posts. Now that hardening also lays girth and hangs a crown, a
+     * shorter delay is better on every count: green stem halves (33 cells
+     * to 23), columns of stem hugging a trunk halve (8 to 4), and there
+     * is MORE wood rather than less (195 to 213), because a leader that
+     * turns to timber promptly goes on growing from its new tip. One in
+     * two is too far - wood falls to 166, since runs harden before they
+     * are long and wood does not grow. */
+    if (__builtin_expect((int)(rng_next(&s->rng) & 0xFF) >= r->harden_chance,
+                         1)) {
         return true;
     }
 
@@ -1807,9 +1819,22 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     /* The crown. Five upward directions round each of the remembered
      * cells - straight on, both diagonals, and square out either way. */
     if (r->canopy != 0 && r->canopy_to != 0) {
-        static const int crown[5] = { 7, 0, 1, 2, 6 };
+        /* Four directions, NOT five: everything up and out, but never
+         * straight along the run.
+         *
+         * Straight on is where the leader wants to go next, and a leaf put
+         * there caps the trunk. The stem then grows around it, and the run
+         * is left SPLIT - the cells below the leaf and the cells above it
+         * are two separate runs, and neither reaches `harden_run` again.
+         * So the tree stops turning into wood and just accumulates green,
+         * which is what "stacking plant" looked like: a seven-cell column
+         * of stem beside the trunk, chopped in two by one leaf, unable to
+         * harden either half. Tagging each placement with the arm that
+         * made it is what found it - the whole column was HEIGHT growth,
+         * not the branches or the buds it looked like. */
+        static const int crown[4] = { 7, 1, 2, 6 };
         for (int t = 0; t < ntop; t++) {
-            for (int c = 0; c < 5; c++) {
+            for (int c = 0; c < 4; c++) {
                 const int *cd = ring_dir(up_i + crown[c]);
                 const int lx = topx[t] + cd[0], ly = topy[t] + cd[1];
                 if ((unsigned)lx >= (unsigned)w ||

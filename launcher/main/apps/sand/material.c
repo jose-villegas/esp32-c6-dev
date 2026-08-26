@@ -1765,6 +1765,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
                                     * same material here and will not be
                                     * once foliage exists */
         .harden_run  = 6,
+        .harden_chance = 64,      /* one in four; measured */
 
         /* And it POURS, so a handful of seeds scattered over a bed
          * behaves like a handful of seeds rather than hanging wherever the

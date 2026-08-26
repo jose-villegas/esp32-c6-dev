@@ -772,6 +772,15 @@ typedef struct {
     uint8_t hardens_to;
     uint8_t harden_run;
 
+    /* And the chance in 256 that a run long enough actually hardens, on
+     * any one growth. It is a delay, not a gate: without it a run turns to
+     * wood the instant it is long enough, and wood does not grow, so a
+     * seedling became a post before it could put out a limb.
+     *
+     * Lower means greener and shaggier, higher means woodier and squatter.
+     * Measured over eight trees - see the roll in sand_reactions.c. */
+    uint8_t harden_chance;
+
     /* What this material is PART OF: the other material its own body may
      * be made of, for every question of the form "is this cell more of the
      * same tree".
