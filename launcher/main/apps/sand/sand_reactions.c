@@ -2425,6 +2425,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
 #define FOUND_TEMPERATURE      4u
 #define FOUND_MOISTURE         8u
 #define FOUND_FALLER          16u
+#define FOUND_WITHERING       32u
 
 static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
 {
@@ -2510,9 +2511,16 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
         /* Withering. Not gated on may_have_moisture, deliberately: the
          * cells this is for are the ones with no water anywhere near
          * them, on boards that may have none at all. */
-        if (r->withers != 0 &&
-            step_one_withering_cell(s, x, y, w, h, r)) {
-            continue;
+        if (r->withers != 0) {
+            /* Armed by being PRESENT, exactly as the faller flag above
+             * is, and for the same reason: a leaf that is safe this step
+             * because it is touching wood is not a leaf with nothing to
+             * do ever, and once the flag clears nothing can set it
+             * again. */
+            found |= FOUND_WITHERING;
+            if (step_one_withering_cell(s, x, y, w, h, r)) {
+                continue;
+            }
         }
         /* Drinking, before growing: a leaf standing in a puddle should
          * move that water into the ground whether or not the tree has any
@@ -2556,7 +2564,7 @@ void sand_step_reactions(sand_t *s)
      * behind may_have_burning it would freeze mid-ramp instead. */
     if (!s->may_have_burning && !s->may_have_dissolver &&
         !s->may_have_temperature && !s->may_have_moisture &&
-        !s->may_have_faller) {
+        !s->may_have_faller && !s->may_have_withering) {
         return;
     }
 
@@ -2582,6 +2590,9 @@ void sand_step_reactions(sand_t *s)
     }
     if (!(found & FOUND_FALLER)) {
         s->may_have_faller = false;
+    }
+    if (!(found & FOUND_WITHERING)) {
+        s->may_have_withering = false;
     }
 
     /* may_have_heat_holder is deliberately NOT cleared here, unlike the

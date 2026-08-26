@@ -1330,18 +1330,37 @@ static const gfx_color_t palette[256] = {
      * nibble is its identity. Sixteen materials, sixteen colours, and the
      * palette needed no change to allow it - it was already indexed by the
      * whole cell byte. */
-    [MAT_EXTENDED * MATERIAL_VARIANTS] =
+    /* The extended range. NAMED rather than counted, unlike every other
+     * block here: this one is a single entry per material instead of a run
+     * of sixteen, so a miscount does not shift a whole block somewhere
+     * obvious - it silently swaps two materials' colours. Spelling the
+     * index out means a duplicate is a build error (-Werror=override-init)
+     * rather than a surprise on the panel.
+     *
+     * The magenta tail is the padding for slots nobody has claimed, and it
+     * is load-bearing: test_every_material_has_a_palette_block() asserts
+     * all sixteen are non-zero, because zero renders BLACK and black looks
+     * like a styling choice rather than a bug. It has caught exactly that
+     * twice. */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ICE] =
     GFX_RGB(0xB6E4F2),            /* ice - paler and bluer than snow's
                                     * white, and flat rather than speckled:
                                     * a block of it should read as solid
                                     * and cold, where snow reads as loose */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_PLANT] =
     GFX_RGB(0x4E9A38),            /* plant - a green with some yellow in
                                     * it, so it reads as growth rather
                                     * than as the dark of a conifer.
                                     * Nothing else on the board is green
                                     * except gas, which is paler and
                                     * moves */
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] =
+    GFX_RGB(0x7FC94B),            /* leaf - the same green gone lighter and
+                                    * yellower, so a crown separates from
+                                    * the stem holding it up instead of
+                                    * merging into one green mass */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF + 1] =
+    GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
@@ -1557,6 +1576,13 @@ static const gfx_color_t wood_grain[8] = {
 #define PLANT_DARK  0x35701F
 #define PLANT_LIGHT 0x74C25A
 
+/* Foliage: lighter and yellower than the stem, and a wider spread than
+ * either of the others. A crown is sunlit on one side and shaded on the
+ * other, and half of what makes it read as a canopy rather than as more
+ * stem is that it is not one flat green. */
+#define LEAF_DARK   0x5A9E2E
+#define LEAF_LIGHT  0xA6E273
+
 #define ICE_DARK    0x93C9DE
 #define ICE_LIGHT   0xDEF5FD
 
@@ -1569,6 +1595,7 @@ static const gfx_color_t wood_grain[8] = {
 
 static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8]   = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
+static const gfx_color_t leaf_grain[8]  = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
@@ -1589,9 +1616,13 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
         /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
          * its own falls through to the flat palette entry below. */
-        if (v == MATX_PLANT || v == MATX_ICE) {
-            out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
-                                       : ice_grain[hash & 7u];
+        switch (v) {
+        case MATX_PLANT: out[0] = plant_grain[hash & 7u]; break;
+        case MATX_LEAF:  out[0] = leaf_grain[hash & 7u];  break;
+        case MATX_ICE:   out[0] = ice_grain[hash & 7u];   break;
+        default:         out[0] = 0;                      break;
+        }
+        if (out[0] != 0) {
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
@@ -1635,6 +1666,7 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
 static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
     [MATX_ICE]   = "Ice",
     [MATX_PLANT] = "Plant",
+    [MATX_LEAF]  = "Leaf",
 };
 
 const char *material_name(cell_t c)
@@ -1727,6 +1759,51 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
         .dissolvable  = 220,   /* softer than wood's 160 - acid goes
                                 * through leaves faster than through a
                                 * plank */
+    },
+
+    [MATX_LEAF] = {
+        /* FOLIAGE. What a tree puts out when a run of it hardens - see the
+         * canopy in sand_reactions.c - and deliberately a material of its
+         * own rather than more plant.
+         *
+         * The reason is not that it needs different numbers. It is that
+         * every cell of a PLANT is a grower: foliage touches wood, so it
+         * never withers, and find_water() walks down through wood, so it
+         * can always drink. A canopy made of plant would feed the growth
+         * loop with every leaf it put out, and that loop has run away
+         * once already. Charging moisture for each leaf would only make it
+         * expensive; having no `grows` field at all makes it impossible,
+         * which is the better kind of answer.
+         *
+         * So, pointedly, this row has no `grows`, no `falls` and no
+         * `hardens_to`. Leaves do not spread, do not fall and never turn
+         * into timber. What they do is hang there being green, catch fire
+         * readily, and let water through. */
+        .clings_to    = MAT_WOOD,
+
+        /* It has to DRINK, which sounds like the opposite of everything
+         * above and is not optional. Every extended material shares one
+         * physics row - KIND_STATIC at stone's density - so water can
+         * neither fall through a canopy nor soak into it, and a bowl of
+         * leaves holds a pond indefinitely. That was a real bug once
+         * already, on the plant, and a leaf is the surface rain actually
+         * lands on. */
+        .drinks       = 40,
+
+        /* And it must be able to GO. Nothing else would ever clear it:
+         * with no `falls`, a crown whose trunk burns away would hang in
+         * the air permanently. Withering handles it, and `clings_to`
+         * above is what stops a living tree shedding - a leaf touching
+         * wood is safe however dry the ground gets. Twice the plant's
+         * rate: a stem is stouter than a leaf. */
+        .withers      = 2,
+
+        /* Catches far more readily than green stem (40) or seasoned wood
+         * (6). A fire that reaches a canopy should run through it, which
+         * is both what happens and the best thing to look at. */
+        .flammability = 90,
+
+        .dissolvable  = 240,   /* the softest thing on the board */
     },
 };
 

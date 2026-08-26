@@ -860,6 +860,7 @@ extern const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT];
 typedef enum {
     MATX_ICE = 0,
     MATX_PLANT,
+    MATX_LEAF,
 } material_extended_t;
 
 /* What to call one cell, decoding the extended range. materials[].name is

@@ -6770,6 +6770,141 @@ static void test_a_plant_rooted_on_stone_does_not_drink(void)
         "ground as moisture");
 }
 
+
+/* --- foliage -------------------------------------------------------------- */
+
+/* A leaf on a tree never multiplies, and never moves.
+ *
+ * This is the entire reason foliage is its own material rather than more
+ * plant. Every cell of a PLANT is a grower - foliage touches wood so it
+ * never withers, and find_water() walks down through wood so it can always
+ * drink - which means a canopy made of plant would feed the growth loop
+ * with every leaf it put out, and that loop has run away once already.
+ * Charging moisture per leaf makes it expensive; having no `grows` field
+ * makes it impossible.
+ *
+ * The scene is stacked in favour of the failure: watered soil right there,
+ * a trunk to draw through, and two thousand steps. A plant in this spot
+ * would fill the board. */
+static void test_a_leaf_neither_spreads_nor_falls(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    /* Hanging off the side of the trunk, over nothing. */
+    sand_set(&s, cx + 1, H - 5, MATX(MATX_LEAF));
+
+    for (int i = 0; i < 2000; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int leaves = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (sand_at(&s, x, y) == MATX(MATX_LEAF)) {
+                leaves++;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, leaves,
+        "a leaf must stay exactly one leaf - foliage that can grow is a "
+        "canopy that feeds the growth loop, which is the whole reason it "
+        "is not made of plant");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, cx + 1, H - 5),
+        "and it must not have moved - it has no `falls`, so a limb of "
+        "foliage hangs off its trunk over thin air and stays there");
+}
+
+/* A leaf with no tree behind it goes.
+ *
+ * The other half of having no `falls`: nothing else would ever clear it.
+ * Burn a trunk out from under a crown and, without this, the crown hangs
+ * in the air permanently. `clings_to` is what tells the two apart - wood
+ * beside it means it is still part of something. */
+static void test_a_leaf_with_no_tree_withers_away(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, 2, H - 4, MATX(MATX_LEAF));          /* alone, in mid-air */
+    sand_set(&s, W - 3, H - 2, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, W - 2, H - 2, MATX(MATX_LEAF));      /* beside a trunk */
+
+    int gone = 0;
+    for (int i = 0; i < 4000 && !gone; i++) {
+        sand_step(&s, 0, 1000, 0);
+        gone = CELL_IS_EMPTY(sand_at(&s, 2, H - 4));
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(gone,
+        "a leaf with no wood beside it must wither - it cannot fall, so "
+        "nothing else on the board would ever take it away, and a crown "
+        "whose trunk burned out would hang there for good");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, W - 2, H - 2),
+        "while one still touching a trunk stays, however dry it gets");
+}
+
+/* And water gets through a canopy.
+ *
+ * The field most likely to be left off, because it sounds like the
+ * opposite of everything else about this material. Every extended material
+ * shares one physics row - KIND_STATIC at stone's density - so water can
+ * neither fall through foliage nor soak into it, and a bowl of leaves
+ * holds a pond indefinitely. That was a real bug on the plant already, and
+ * a leaf is the surface rain actually lands on. */
+static void test_a_leaf_drains_standing_water_into_the_soil(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));   /* bone dry */
+    }
+    sand_set(&s, cx - 1, H - 3, STONE);
+    sand_set(&s, cx + 1, H - 3, STONE);
+    sand_set(&s, cx - 1, H - 4, STONE);
+    sand_set(&s, cx + 1, H - 4, STONE);
+    sand_set(&s, cx, H - 3, MATX(MATX_LEAF));            /* the only way out */
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    int wet = 0;
+    for (int i = 0; i < 900; i++) {
+        sand_step(&s, 0, 1000, 0);
+        int now = 0;
+        for (int x = 0; x < W; x++) {
+            now += CELL_MOISTURE(sand_at(&s, x, H - 2));
+        }
+        if (now > wet) {
+            wet = now;
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_WATER),
+        "water walled in above a leaf must drain through it - foliage is "
+        "solid and undrainable otherwise, and a canopy would hold a pond");
+    TEST_ASSERT_TRUE_MESSAGE(wet > 0,
+        "and it must come out in the soil, not simply vanish");
+}
+
 /* --- growing ------------------------------------------------------------- */
 
 /* A plant on wet soil climbs.
@@ -7163,7 +7298,7 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
 }
 
 
-/* Plant and ice are speckled, and everything else extended is not.
+/* Plant, leaf and ice are speckled, and everything else extended is not.
  *
  * An extended material's variant IS which one it is, so neither can carry
  * a shade and the position hash is the only variation available - the same
@@ -7174,13 +7309,14 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
  * a mistake there does not fail to build - it paints some other extended
  * material in leaf green, which is the sort of thing nobody notices until
  * a fourteenth material arrives and comes out looking like a hedge. */
-static void test_plant_and_ice_are_speckled_and_nothing_else_is(void)
+static void test_the_right_extended_materials_are_speckled(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
 
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const cell_t c = MATX(k);
-        const bool grained = (k == MATX_PLANT || k == MATX_ICE);
+        const bool grained = (k == MATX_PLANT || k == MATX_LEAF ||
+                              k == MATX_ICE);
 
         int distinct = 0;
         gfx_color_t seen[8];
@@ -11228,12 +11364,15 @@ void run_sand_suite(void)
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
-    RUN_TEST(test_plant_and_ice_are_speckled_and_nothing_else_is);
+    RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
     RUN_TEST(test_a_plant_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_plant_rooted_on_stone_does_not_drink);
+    RUN_TEST(test_a_leaf_neither_spreads_nor_falls);
+    RUN_TEST(test_a_leaf_with_no_tree_withers_away);
+    RUN_TEST(test_a_leaf_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_seed_falls_until_it_lands);
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
     RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);

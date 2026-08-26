@@ -156,6 +156,15 @@ typedef struct {
      * anywhere, and this flag has nothing to say about any of that. */
     bool     may_have_heat_holder;
 
+    /* And its own flag for withering, rather than riding the one above -
+     * the same reasoning that gave may_have_dissolver and
+     * may_have_temperature theirs. They looked like one flag while the
+     * plant was the only material that both fell and withered. Foliage
+     * does neither-and-both: it never falls, so it arms nothing above, and
+     * it does wither, so the pass has to keep visiting it. A leaf on an
+     * otherwise bare board would simply have been skipped for ever. */
+    bool     may_have_withering;
+
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 
