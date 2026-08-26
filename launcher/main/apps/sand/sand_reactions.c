@@ -2292,29 +2292,43 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
         return true;
     }
 
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
-        if (neighbor_quenches(s, nx, ny, w, h)) {
-            const uint8_t quench_to = rx->quench_to;
-            if (lit_state) {
-                /* Water on a burning log puts it OUT. The log is still
-                 * there, just no longer alight - which is only expressible
-                 * now that being alight is a state of the wood rather than
-                 * a different material. Ember had to name something to
-                 * become, because the ember WAS the fire. */
-                row[x] = CELL_MAKE(mat_id, 0);
-                mark_rows(s, y, y);
-                wake_block_and_neighbors(s, x, y);
-            } else if (quench_to != 0) {
-                place_reacted(s, x, y, at, quench_to);
-            } else {
-                row[x] = CELL_EMPTY;
-                mark_rows(s, y, y);
-                wake_block_and_neighbors(s, x, y);
+    /* Nothing can put this out while there is no liquid anywhere on the
+     * board, so the whole four-neighbour scan goes with one field test.
+     * Worth having rather than tidy: neighbor_quenches() reads the
+     * material table per neighbour, and measured by deleting, that scan
+     * is 9.3% of the full-screen-of-fire benchmark and 10% of the fire
+     * cascade - both of which are boards with no liquid on them at all.
+     *
+     * Sound because may_have_liquid is armed by latch_content_flags(),
+     * which every write that can create a liquid goes through, this
+     * pass's own included: place_cell() is how snow melting into water
+     * gets made, and it latches. The flag is only ever cleared by a full
+     * cross-flow sweep that found none, so false really does mean none. */
+    if (s->may_have_liquid) {
+        for (int d = 0; d < 4; d++) {
+            const int nx = x + reaction_dirs[d][0];
+            const int ny = y + reaction_dirs[d][1];
+            if (neighbor_quenches(s, nx, ny, w, h)) {
+                const uint8_t quench_to = rx->quench_to;
+                if (lit_state) {
+                    /* Water on a burning log puts it OUT. The log is still
+                     * there, just no longer alight - which is only expressible
+                     * now that being alight is a state of the wood rather than
+                     * a different material. Ember had to name something to
+                     * become, because the ember WAS the fire. */
+                    row[x] = CELL_MAKE(mat_id, 0);
+                    mark_rows(s, y, y);
+                    wake_block_and_neighbors(s, x, y);
+                } else if (quench_to != 0) {
+                    place_reacted(s, x, y, at, quench_to);
+                } else {
+                    row[x] = CELL_EMPTY;
+                    mark_rows(s, y, y);
+                    wake_block_and_neighbors(s, x, y);
+                }
+                pay_quench_cost(s, nx, ny, w);
+                return true;
             }
-            pay_quench_cost(s, nx, ny, w);
-            return true;
         }
     }
 

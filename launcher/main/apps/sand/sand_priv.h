@@ -100,8 +100,12 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
  * entering the grid from outside (sand_set(), try_spawn_one()) goes through
  * mark_move(), which clears the settled bits on a 3x3 of blocks, so the next
  * sweep is guaranteed to walk the block and see it. Nothing else in the
- * simulation creates a liquid cell: sand_reactions.c only ever writes
- * MAT_FIRE, and sand_gas.c moves gas.
+ * simulation creates a liquid cell without going through that same
+ * latch: sand_reactions.c does now make one - snow melts into water -
+ * but every placement it makes goes through place_cell(), which calls
+ * latch_content_flags() exactly as sand_set() does. sand_gas.c only
+ * moves gas. The claim that used to stand here, that sand_reactions.c
+ * "only ever writes MAT_FIRE", stopped being true when snow arrived.
  *
  * The contrapositive is what equalise_liquids() uses: a block with NEAR clear
  * provably holds no liquid at all, so skipping its cells changes nothing -
