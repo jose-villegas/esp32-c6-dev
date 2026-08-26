@@ -5129,6 +5129,83 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
  * The extended range: sixteen materials behind the last slot.
  * =================================================================== */
 
+/* Every material has a colour, and every extended material has one too.
+ *
+ * The palette is one flat array of 256 entries indexed by the whole cell
+ * byte, and C zero-fills whatever an initialiser does not reach. So a
+ * material whose block is missing does not fail to build - it renders
+ * BLACK, which looks like a styling choice rather than a bug.
+ *
+ * That has happened twice. Both times a block was added or removed
+ * somewhere in the middle and every block after it shifted by sixteen: the
+ * first time the extended range landed on the wrong id, the second time
+ * folding ember out left ice reading from the zero-filled tail. Reported
+ * as "ice look is pretty bad, just black", which is exactly what an unset
+ * palette entry looks like.
+ *
+ * The blocks carry explicit `[MAT_X * MATERIAL_VARIANTS] =` designators
+ * now, so removing a material cannot shift the ones after it. This checks
+ * the result rather than the mechanism, because the failure is silent
+ * either way. */
+static void test_every_material_has_a_palette_block(void)
+{
+    const gfx_color_t *pal = material_palette();
+
+    for (int m = 0; m < MAT_COUNT; m++) {
+        int set = 0;
+        for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+            if (pal[m * MATERIAL_VARIANTS + v] != 0) {
+                set++;
+            }
+        }
+        char why[144];
+        snprintf(why, sizeof why,
+                 "%s (id %d) has %d of %d palette entries set - a block "
+                 "that is missing or misaligned renders black, and black "
+                 "is not an error anyone sees as one",
+                 materials[m].name, m, set, MATERIAL_VARIANTS);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS, set, why);
+    }
+
+    /* And the extended range, whose entries are one per material rather
+     * than a block each - the same failure, one level down. */
+    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        char why[128];
+        snprintf(why, sizeof why,
+                 "extended material %d (cell 0x%02X) has no colour", k,
+                 (unsigned)MATX(k));
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(0, pal[MATX(k)], why);
+    }
+}
+
+/* Ice is the colour it is meant to be, not merely some colour.
+ *
+ * The check above catches a block that is missing. This catches one that
+ * is present but WRONG - reading a neighbouring material's entry, which is
+ * what a shifted palette produces and what the count test cannot see. */
+static void test_ice_is_its_own_colour(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t ice = pal[MATX(MATX_ICE)];
+
+    TEST_ASSERT_EQUAL_MESSAGE(GFX_RGB(0xB6E4F2), ice,
+        "ice must be the pale blue its own palette entry names - anything "
+        "else means the entry is being read from somewhere other than "
+        "where it was written");
+
+    for (int m = 0; m < MAT_COUNT; m++) {
+        for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+            if (pal[m * MATERIAL_VARIANTS + v] == ice) {
+                char why[128];
+                snprintf(why, sizeof why,
+                         "ice shares a colour with %s variant %d",
+                         materials[m].name, v);
+                TEST_FAIL_MESSAGE(why);
+            }
+        }
+    }
+}
+
 /* An extended material keeps its identity through a paint.
  *
  * Its low nibble IS which material it is, so anything that treats the
@@ -7529,6 +7606,8 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_every_material_has_a_palette_block);
+    RUN_TEST(test_ice_is_its_own_colour);
     RUN_TEST(test_an_extended_material_survives_being_painted);
     RUN_TEST(test_every_extended_material_shares_one_physics_row);
     RUN_TEST(test_extended_materials_get_their_own_reactions);

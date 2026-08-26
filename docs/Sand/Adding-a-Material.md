@@ -283,7 +283,10 @@ distance in cells.**
 ```mermaid
 flowchart TD
     A["1. material.h\nnew material_id_t\nbefore MAT_COUNT"] --> B["2a. material.c\nmaterials[] row\nkind, density, slip,\nrepose, scatter, name"]
-    B --> C["2b. material.c\npalette[] row - SHADES(lo,hi)\nreplacing an UNUSED slot\nAT THE SAME ENUM POSITION"]
+    B --> C["2b. material.c
+palette[] block
+[MAT_YOURS * MATERIAL_VARIANTS] =
+SHADES(lo,hi)"]
     C --> D{"Does it react\nto fire at all?"}
     D -- yes --> E["2c. material.c\nreactions[] row"]
     D -- no --> F
@@ -300,11 +303,17 @@ flowchart TD
 
 1. **`material.h`**: add the new `material_id_t` enum value, before
    `MAT_COUNT`.
-2. **`material.c`**: add a `materials[]` row and a `palette[]` row
-   (`SHADES(lo, hi)`, replacing one `UNUSED` slot, **same enum
-   position** - the palette is positional, and getting it wrong silently
-   gives your material someone else's colour). `MATERIAL_MAX` stays 16
-   either way - it is already padded.
+2. **`material.c`**: add a `materials[]` row and a `palette[]` block. The
+   block needs its own designator - `[MAT_YOURS * MATERIAL_VARIANTS] =`
+   followed by `SHADES(lo, hi)` - which is what stops it depending on
+   where in the list it sits. `MATERIAL_MAX` stays 16 either way.
+
+   The designators are not decoration. The palette used to be positional,
+   and twice a block added or removed in the middle shifted every block
+   after it by sixteen entries, handing materials each other's colours and
+   leaving the last one reading the array's zero-filled tail - which
+   renders as plain black and looks like a styling choice rather than a
+   bug. `test_every_material_has_a_palette_block` now checks the result.
 
    **If the material reacts to fire at all** - it can catch, it is
    itself a heat source, it conducts heat, it smokes, it does something
@@ -765,11 +774,21 @@ number goes in a comment next to the constant and the probe is disposable.
   many cells every *other* test drawing on that grid rolls random numbers
   over, cascading into unrelated failures. Give the outlier its own grid -
   see `test_conduction_stops_at_the_reach_cap`.
-- **Palette rows are positional.** `SHADES()` in enum order, replacing
-  `UNUSED` slots, never appended.
+- **Palette blocks carry their own `[MAT_X * MATERIAL_VARIANTS] =`
+  designator.** They used to be positional and it bit twice: a block added
+  or removed mid-list shifts every one after it, and the symptom is a
+  material rendering black rather than any kind of error. Do not add a
+  block without one.
 - **`smothered()` needs all four neighbours *strictly* denser.** A dense
-  material (ember at 150) is therefore essentially unsmotherable - only
+  material (wood at 150) is therefore essentially unsmotherable - only
   stone qualifies. Check this whenever you pick a density above sand's.
+- **A material's variant may already mean something.** Liquids read it as
+  fill, transients as life, glass and stone as temperature, wood as how
+  much is left to burn. The suite's `GLASS`, `STONE` and `WOOD` macros have
+  each been caught placing cells at a variant that used to be a shade and
+  had quietly become a state - hot stone, half-melted glass, a log already
+  on fire. If you give a material's variant a meaning, grep the tests for
+  `CELL_MAKE(MAT_YOURS`.
 - **Test overrides are wiped by `sand_init()`.** `sand_set_decay()` and
   friends must be called *after* any fixture helper that re-inits the
   grid internally.

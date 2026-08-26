@@ -1049,23 +1049,31 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 &&
 /* THE source of colour. The material table deliberately carries none, so there
  * is one place to change and none to forget. Rows are in material_id_t order. */
 static const gfx_color_t palette[256] = {
+    [MAT_EMPTY * MATERIAL_VARIANTS] =
     SHADES(0x0A0C14, 0x0A0C14),   /* empty - the background */
+    [MAT_SAND * MATERIAL_VARIANTS] =
     SHADES(0xB07430, 0xF2CE90),   /* sand  */
+    [MAT_WATER * MATERIAL_VARIANTS] =
     SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
+    [MAT_STONE * MATERIAL_VARIANTS] =
     STONE_SHADES,                 /* stone - a TEMPERATURE scale now, not a
                                     * shade ramp: same levels and the same
                                     * meanings as glass, so one wall reads
                                     * like the other */
+    [MAT_GAS * MATERIAL_VARIANTS] =
     SHADES(0x445544, 0xC8E8B8),   /* gas   */
+    [MAT_FIRE * MATERIAL_VARIANTS] =
     SHADES(0x400A00, 0xFFE060),   /* fire  - dying ember is dark, freshly
                                     * lit is bright yellow-white; variant
                                     * is life remaining, same trick gas
                                     * already uses */
+    [MAT_WOOD * MATERIAL_VARIANTS] =
     WOOD_SHADES,                  /* wood - variant 0 is UNLIT and every
                                     * other value is how much is left to
                                     * burn, so this ramp is one colour of
                                     * timber followed by a burn ramp. See
                                     * WOOD_SHADES above */
+    [MAT_STEAM * MATERIAL_VARIANTS] =
     SHADES(0x6E8496, 0xF2FAFF),   /* steam - variant is life remaining, so
                                     * a dying wisp is a cool blue-grey and
                                     * a fresh one is almost white; same
@@ -1078,6 +1086,7 @@ static const gfx_color_t palette[256] = {
                                     * reason they are two materials rather
                                     * than one (see MAT_SMOKE's own row in
                                     * the material table above). */
+    [MAT_SMOKE * MATERIAL_VARIANTS] =
     SHADES(0x2A2622, 0x857A6E),   /* smoke - dying wisp is near-black soot,
                                     * fresh is a warm mid grey-brown. Warm
                                     * rather than neutral so it reads as
@@ -1108,6 +1117,7 @@ static const gfx_color_t palette[256] = {
                                     * reason they are separate materials,
                                     * so it is worth a test rather than a
                                     * good intention. */
+    [MAT_OIL * MATERIAL_VARIANTS] =
     SHADES(0x6E5A22, 0x14100A),   /* oil   - a liquid's variant is FILL
                                     * LEVEL, not life, so this runs the
                                     * same way water's does: a thin film
@@ -1117,6 +1127,7 @@ static const gfx_color_t palette[256] = {
                                     * floating on water is unmistakable -
                                     * which is the whole point of giving
                                     * oil a density below water's */
+    [MAT_LAVA * MATERIAL_VARIANTS] =
     SHADES(0xFFC24A, 0x8A1400),   /* lava  - fill level again, and
                                     * deliberately INVERTED against
                                     * fire's own ramp: a thin skim is
@@ -1126,6 +1137,7 @@ static const gfx_color_t palette[256] = {
                                     * heat. Keeps a lava pool visually
                                     * distinct from the flames it
                                     * flares */
+    [MAT_ACID * MATERIAL_VARIANTS] =
     SHADES(0xEAFF3C, 0x2E6B0A),   /* acid  - a liquid's variant is FILL
                                     * LEVEL, so this runs the way water's
                                     * does: a thin film is a vivid lime and
@@ -1136,6 +1148,7 @@ static const gfx_color_t palette[256] = {
                                     * the density ladder but they are
                                     * adjacent on screen the moment
                                     * something fizzes */
+    [MAT_GLASS * MATERIAL_VARIANTS] =
     GLASS_SHADES,                 /* glass - NOT a shade ramp. Glass is the
                                     * one material whose variant is HEAT
                                     * (material.h's top comment), so this
@@ -1154,6 +1167,7 @@ static const gfx_color_t palette[256] = {
                                     * exactly the colour of what it turns
                                     * into, and the transformation lands
                                     * without a visible seam */
+    [MAT_SNOW * MATERIAL_VARIANTS] =
     SHADES(0xC6D8E4, 0xFFFFFF),   /* snow  - a powder, so a shade ramp
                                     * again, and a narrow one: cold blue
                                     * white to plain white. Deliberately
@@ -1165,6 +1179,7 @@ static const gfx_color_t palette[256] = {
      * nibble is its identity. Sixteen materials, sixteen colours, and the
      * palette needed no change to allow it - it was already indexed by the
      * whole cell byte. */
+    [MAT_EXTENDED * MATERIAL_VARIANTS] =
     GFX_RGB(0xB6E4F2),            /* ice - paler and bluer than snow's
                                     * white, and flat rather than speckled:
                                     * a block of it should read as solid
