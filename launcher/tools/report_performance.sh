@@ -59,17 +59,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
     & '$IDF_EXPORT_PS1' | Out-Null
     Set-Location '$LAUNCHER_DIR_WIN'
-    # A fresh checkout has no build.diag/sdkconfig, so a bare idf.py build
-    # configures from sdkconfig.defaults alone and leaves
-    # CONFIG_LAUNCHER_SELFTEST unset, compiling an image with no self-test
-    # in it at all. That failure is silent - the capture below just comes
-    # back with no measurements in it, and nothing says why. Spell out
-    # both sdkconfig fragments explicitly, same as run_device_tests.sh,
-    # so this works from a clean checkout too.
-    # One line on purpose: this whole PowerShell block is a bash
-    # double-quoted string, where PowerShell's backtick line-continuation
-    # is bash command substitution - continuations here are a bash syntax
-    # error, caught by 'bash -n' before this ever shipped.
+    # idf.py's default sdkconfig path is the project's own sdkconfig, not
+    # the build directory's, so a bare build here reads launcher/sdkconfig
+    # - which has CONFIG_LAUNCHER_SELFTEST off - and produces an image
+    # with no self-test in it. This only looked like it worked because
+    # build.diag/CMakeCache.txt, left behind by run_device_tests.sh,
+    # already remembered the right path; a fresh checkout has no such
+    # cache, and the failure is silent - the capture below just comes
+    # back with no measurements in it. SDKCONFIG_DEFAULTS alone would not
+    # fix this; SDKCONFIG is the flag that actually points the build at
+    # build.diag/sdkconfig. Kept to ONE line on purpose: this PowerShell
+    # block is a bash double-quoted string, where PowerShell backtick
+    # line-continuations are bash command substitution - a parse error.
     idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag\" -D SDKCONFIG=build.diag/sdkconfig build
     if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
     idf.py -B build.diag -p '$COM_PORT' flash
