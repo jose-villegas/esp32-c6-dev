@@ -931,23 +931,51 @@ Grep the capture for the headline line and any failures:
 grep -E "FAIL|SELFTEST_COMPLETE" /path/to/output.txt
 ```
 
-`SELFTEST_COMPLETE failures=N` is the number that matters. The accepted
-baseline is **`failures=5`** as of the 2026-08-25 capture, and only one
-of those five is deliberate:
+`SELFTEST_COMPLETE failures=N` is the number that matters. **The last
+capture, 2026-08-25, reported `failures=4`** - and two things about it
+have to be said before any of its numbers are used, both found in the
+eleventh tuning attempt.
 
-- `test_a_gravity_flip_on_every_material_at_once_stays_sane` - a
-  reduction target, 10% under its measured 60091 µs, failing by design.
-- Four others are **unexplained and probably regressions**: the full
-  screen of fire (286720 against a 250000 budget, up 34% on its last
-  recorded figure), the fire cascade (390158, up 23%), the screen of
-  water (16052, up 21%) and the mixed-scene flip (12876, up 15%).
-  Everything sand-only is unchanged to within a percent, which points at
-  the reactions and liquid passes rather than at the sweep.
+First, that capture does not describe this tree. The self-test names in
+its raw log place the flashed build between `b9e8845` and `4fe0d04`:
+**fifty commits behind HEAD**, with none of glass, thermal shock, snow,
+ice, dirt, convection, percolation or the plant and tree work in it. It
+is the newest capture that exists. It is not a measurement of the code
+you are reading.
 
-That is not a baseline anyone should be comfortable with. It is written
-down as five so the number is honest, not because four unexplained
-regressions are acceptable - they want attributing against the commit
-they appeared in.
+Second, this file previously recorded that capture as `failures=5`,
+which conflated what it observed with what HEAD would do.
+`test_a_gravity_flip_on_every_material_at_once_stays_sane` is held to
+54,000 µs here and last measured 60,091, so a fresh capture of HEAD
+should indeed fail it - deliberately, as a reduction target - but the
+flashed build predated that budget and held it to 300,000, so the
+capture passed it. Five is a reasonable expectation for HEAD; four is
+what was measured.
+
+The four it did report: the full screen of fire (286720 against a 250000
+budget), the fire cascade (390158 against 350000), the screen of water
+(16052 against 14000) and the mixed-scene flip (12876 against 12000).
+Everything sand-only was unchanged to within a percent, which correctly
+pointed at the reactions and liquid passes rather than at the sweep, and
+that is where the eleventh attempt found them:
+
+- **Water and the mixed flip were one commit and one branch**, in
+  `move_liquid_grain()`, and are recovered in full on the host - 28% and
+  17% respectively, with the simulation byte-identical. Both are
+  **expected to pass on the next capture. Unverified pending a flash.**
+- **The two fire budgets are genuine feature cost.** The reactions pass
+  doubled across the wave. One cheap win shipped (about 10% off each),
+  and the residual is real - see the re-pegging recommendation in
+  [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
+  **Both are expected to still fail**, and the cascade may well come in
+  *higher* than 390158, since 19% of its growth landed after that
+  capture was taken.
+
+One tooling note, flagged rather than fixed: the generated report reads
+the every-material budget as "300000", which is a number that appears in
+that test's *comment prose* describing a discarded estimate, not the
+assertion's argument. The report tool matches a number near the test
+name. Worth knowing before trusting a budget column.
 
 It was `failures=3` for a long time, and all three came off without a
 single budget moving, which is the part worth knowing. The settled-pile
@@ -970,25 +998,39 @@ what the code could do when they were written, on purpose, so they fail
 until the work is done. The mixed scene was the first and came good; the
 mixed-material flip is the second and has not yet.
 
+Every "last measured" below is the 2026-08-25 capture, whose build is
+fifty commits behind HEAD - see the caveat above. The "expected" notes
+are host-measured predictions from the eleventh attempt and are
+**unverified pending a flash**.
+
 | Test | Scenario | Budget | Last measured |
 |---|---|---|---|
-| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | ~5876 µs (thin - watch it) |
-| `test_a_screen_of_settled_sand_costs_almost_nothing` | Entire grid full of sand, nothing moving | 300 µs | ~260 µs |
-| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | ~5969 µs (was 8996 and failing until the ninth attempt) |
-| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | ~11167 µs (was 15144 and failing until the tenth attempt) |
-| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 14000 µs (tightened from 16000 after the tenth attempt) | ~13288 µs (was 16141 and failing until the ninth attempt) |
-| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | ~316000 µs |
-| `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | ~214000-231000 µs (varies with flash-cache layout - see below) |
-| `test_a_gravity_flip_on_every_material_at_once_stays_sane` | A wrapped tile of **every** material, laid out so all 66 material pairs touch, settled then flipped - every pass doing real work at once | 54000 µs (**reduction target**, 10% under measured) | 60091 µs (2026-08-25) - **currently 11% over** |
+| `test_a_full_size_step_fits_in_the_frame_budget` | Checkerboard of falling sand, worst-case movement | 6000 µs | 5867 µs (thin - watch it; its code is unchanged since, so any move is layout) |
+| `test_a_screen_of_settled_sand_costs_almost_nothing` | Entire grid full of sand, nothing moving | 300 µs | 267 µs |
+| `test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget` | Big pile settled asleep, then gravity flipped | 6500 µs | 5959 µs (was 8996 and failing until the ninth attempt) |
+| `test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget` | Sand ~30% left, water ~30% right, a stone X in between, all settled then flipped | 12000 µs | 12876 µs - **FAIL**; expected to pass after the eleventh attempt (host -17%), unverified |
+| `test_a_screen_of_water_fits_in_the_frame_budget` | Half a screen of water dropped as a slab | 14000 µs (tightened from 16000 after the tenth attempt) | 16052 µs - **FAIL**; expected to pass after the eleventh attempt (host -28%), unverified |
+| `test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget` | Whole grid of gas, one fire spark, single step (ignition, not steady state) | 350000 µs | 390158 µs - **FAIL**; expected to still fail, possibly higher than this, and recommended for re-pegging |
+| `test_a_full_screen_of_fire_fits_in_the_frame_budget` | Whole grid already all fire (steady state - both `sand_step_gas()` and `sand_step_reactions()` pay per cell, every step) | 250000 µs | 286720 µs - **FAIL**; expected to still fail and recommended for re-pegging |
+| `test_a_gravity_flip_on_every_material_at_once_stays_sane` | A wrapped tile of **every** material, laid out so all material pairs touch, settled then flipped - every pass doing real work at once | 54000 µs (**reduction target**, 10% under measured) | 60091 µs, measured against the older 300000 budget and passing there; **expected to fail** against 54000 on HEAD |
 
-Every measured row passes, and no budget was ever raised to make that
-true - the mixed scene in particular was set 21% *below* what the code
-could do when it was written, deliberately, as a reduction target rather
-than a safety margin, and it went from 26.2% over to 7.0% under without
-the number moving. That is the standard to hold the next one to, and the
-reason the unmeasured row above is labelled rather than quietly given a
-plausible-looking figure: a budget nobody measured is worse than no
-budget, because it looks like one.
+Four rows fail as of that capture, and no budget was ever raised to make
+any row pass - the mixed scene in particular was set 21% *below* what
+the code could do when it was written, deliberately, as a reduction
+target rather than a safety margin, and it went from 26.2% over to 7.0%
+under without the number moving. That is the standard to hold the next
+one to, and the reason the rows above carry labelled expectations rather
+than quietly-updated figures: a number nobody measured on the device is
+worse than no number, because it looks like one.
+
+The two fire rows are the exception being argued about rather than
+chased. Both budgets are regression guards pegged at about 9% over a
+measured figure, and both say in their own comments that they are not
+real-time promises. A deliberate feature wave moved what they were
+pegged to. The eleventh attempt recommends re-pegging them from a fresh
+capture by the method their comments already document, and deliberately
+did not do it - a budget adjusted to accommodate the code it guards has
+stopped guarding anything.
 
 One row to watch rather than celebrate: `full_size_step` sits at ~2.1%
 under its budget, thin enough that an unrelated code change can flip it

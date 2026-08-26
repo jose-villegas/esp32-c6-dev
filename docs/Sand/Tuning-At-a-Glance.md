@@ -1,30 +1,43 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-ten numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
-budgets on a 160 MHz single-core chip with no data cache, ending at **every budget
-met, none ever raised**. The prose file holds the full derivations and is the
-authority when the two disagree; this page is for a first read, a refresher, or
-finding which attempt taught the lesson you half-remember.
+eleven numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
+budget met, none ever raised**; a wave of new materials then put four back over, and
+the eleventh sorted the accident from the feature. The prose file holds the full
+derivations and is the authority when the two disagree; this page is for a first read,
+a refresher, or finding which attempt taught the lesson you half-remember.
 
 ---
 
 ## The scoreboard
 
-Each bar is the latest device measurement as a share of its own budget
-(`█` = 5%, the `|` at the end of the scale is the budget). Every budget is a
-*reduction target* — set from a principle or set deliberately below the measured
-number, never adjusted upward to make a test pass.
+The last device capture (2026-08-25), each measurement as a share of its own
+budget — `█` = 5%, the scale ends at the budget, `▶` means it ran off the end.
+No budget here was ever raised to make a test pass.
 
-| Test | Measured / budget | % of budget | Campaign start |
+| Test | Measured / budget | % of budget | |
 |---|---|---|---|
-| Gravity flip, settled pile | `██████████████████▍ ` 92% | 5,969 / 6,500 µs | **8,996 — failing** |
-| Mixed scene flip | `██████████████████▌ ` 93% | 11,167 / 12,000 µs | **15,144 — failing** |
-| Screen of water collapsing | `██████████████████▉ ` 95% | 13,288 / 14,000 µs | **16,141 — failing** |
-| Full-size step, all falling | `███████████████████▌` 98% | 5,876 / 6,000 µs | 5,801 (thinnest margin) |
-| Settled screen, nothing moves | `█████████████████▎  ` 86% | 259 / 300 µs | 259 |
-| Fire cascade through gas | `██████████████████  ` 90% | 316,117 / 350,000 µs | 321,339 |
-| Full screen of fire, steady | `█████████████████▍  ` 87% | 217,221 / 250,000 µs | 221,396 |
+| Settled screen, nothing moves | `█████████████████▊  ` 89% | 267 / 300 µs | pass |
+| Gravity flip, settled pile | `██████████████████▎ ` 92% | 5,959 / 6,500 µs | pass |
+| Full-size step, all falling | `███████████████████▌` 98% | 5,867 / 6,000 µs | pass — thinnest |
+| Mixed scene flip | `████████████████████▶` 107% | 12,876 / 12,000 µs | **FAIL** |
+| Fire cascade through gas | `████████████████████▶` 111% | 390,158 / 350,000 µs | **FAIL** |
+| Screen of water collapsing | `████████████████████▶` 115% | 16,052 / 14,000 µs | **FAIL** |
+| Full screen of fire, steady | `████████████████████▶` 115% | 286,720 / 250,000 µs | **FAIL** |
+| Every material at once | `████████████████████▶` 111% | 60,091 / 54,000 µs | **FAIL** — by design, a reduction target |
+
+**Read this table with two caveats, both found in attempt 11.** Its capture
+reported `failures=4`, not 5: the build that was flashed predates the commit
+that set the every-material budget to 54,000, so on the device that row passed
+against an older 300,000. And that build is **fifty commits behind HEAD** — it
+has none of glass, thermal shock, snow, ice, dirt, convection, percolation or
+the plant work. It is the newest capture that exists; it is not a measurement
+of the current tree.
+
+Attempt 11 fixed the water and mixed regressions in full on the host and took
+about 10% off each fire benchmark. **None of that is device-verified** — the
+next capture is what settles it.
 
 Fixed RNG seeds make identical builds reproduce these numbers to the microsecond.
 What moves them *between* builds is flash layout, not chance — see
@@ -50,6 +63,7 @@ the next person from re-running them.
 | 08 | 🟠 | Three good ideas, zero effect | Force-inline, IRAM, RNG early-out: all correct, all reverted — **the failing test never calls that function.** Moving a grain costs ~3.2 ms/step more than failing to move one. |
 | 09 | 🟢 | Delete the row cache | `ROW_NO_LIQUID` cost **33,426 writes/step** to save 104 cheap row scans. The whole `row_state` buffer went. Failures **3 → 1**. |
 | 10 | 🟢 | Tell the cross-flow pass where water isn't | The sweep already reads every awake cell — a per-block liquid bit is free. One neighbour ring makes it sound; the pass skips **41%** of its cells. Failures **1 → 0**. |
+| 11 | 🟢 | A feature wave, and one branch in the wrong place | Rebuilt and re-timed all 75 commits of the wave on the host: water's whole regression is **one commit, one branch**, and the branch never even says no. GCC had spliced its cold blocks into the hot path — hinting them cold recovers **26%**, simulation byte-identical. Fire's is diffuse and genuine; the reactions pass **doubled**, and the gas pass nobody suspected is 60% of it. |
 
 ---
 
@@ -234,6 +248,9 @@ names the attempt that paid for it.
 | **Don't filter the live capture.** A `grep` on the one crashing run discarded the only lines that explained it. Save everything, filter after. | 03 |
 | **A resisting hot path is information.** Two well-reasoned failures on one mechanism mean the mechanism is the wrong shape. | 04 |
 | **A new test must fail first.** A test never seen red is not yet a test. | 09 · 10 |
+| **Layout is not only about inlining — it is about block order.** A branch that costs nothing to evaluate can still cost 26% by sitting between the entry and the work. `objdump` the device object; look at what is *between*, not just at what exists. | 11 |
+| **Bisect on the host.** Rebuilding and re-timing a commit range costs twenty minutes and no flash cycles, and answers the question a regression actually poses — *when did this start* — with a byte-identical simulation either side. | 11 |
+| **A capture measures a tree, not a project.** Check the flashed build against the code before diagnosing anything with it. This one was fifty commits stale and said so nowhere. | 11 |
 
 ---
 

@@ -1371,6 +1371,322 @@ declined on counters that took ten seconds to produce.
 
 ---
 
+## The eleventh attempt: a feature wave, and one branch in the wrong place
+
+The tenth attempt ended by saying there was no failing budget left to
+point at, and that if a future feature ever put one back over, the
+step-0 method was the thing to repeat before anything else. A large wave
+of new materials then landed - temperature and conduction, viscosity,
+interfacial drag, percolation, convection, acid, lava, glass, ice, snow,
+dirt, trees and plants - `sand_reactions.c` went from a few hundred
+lines to about 2,800, and four budgets went red at once.
+
+This attempt is mostly about how much of that was a feature and how much
+was an accident. The answer turned out to be split cleanly down the
+middle: the two liquid budgets were an accident, in one commit, in one
+branch, and are recovered in full; the two fire budgets are the feature,
+and the honest thing to do with them is re-peg them rather than chase
+them.
+
+### Step 0, first half: the baseline was older than the code
+
+Before diagnosing anything, the incoming capture
+(`launcher/tools/results/performance_20260825_203707.md`) was checked
+against the tree it was supposed to describe, and it does not describe
+it. The self-test names in the raw log place the flashed build somewhere
+between `b9e8845` and `4fe0d04` - it contains
+`test_every_liquid_declares_a_mobility` but not
+`test_the_mixed_scene_puts_every_material_pair_in_contact`, and it holds
+the every-material flip to a budget above 60,091 us, which only builds
+before `a943be9` did. **Fifty commits landed after it**, including
+glass, thermal shock, snow, ice, dirt, convection, percolation and the
+whole of the plant and tree work.
+
+Two things follow, and both change what the numbers mean:
+
+- The capture's own headline is **`SELFTEST_COMPLETE failures=4`**, not
+  the `failures=5` this repo's `Architecture.md` recorded. The fifth is
+  a real expectation for HEAD - the every-material flip is held to
+  54,000 us now and last measured 60,091 - but it is not something that
+  capture observed, and the two were conflated. Corrected there.
+- The generated report's every-material row reads "300000" as the
+  budget. `suite_sand.c` says 54,000. The number in the report is the
+  `300000` that appears in that test's own comment prose, describing an
+  earlier estimate that was thrown out. The report tool is matching a
+  number near the test name rather than the assertion's argument.
+  Flagged rather than fixed here, since it is a tooling bug and not a
+  simulation one, but it is exactly the shape of thing that makes a
+  capture quietly lie.
+
+**The general point is the tenth attempt's own lesson about phase
+splits, one level up: a device capture goes stale the moment the tree
+moves under it, and nothing in the file says so.** Every number quoted
+below as "device" is that stale capture, and every conclusion drawn from
+it is scoped accordingly.
+
+### Step 0, second half: rebuild every commit and re-time it
+
+The eighth attempt's host-counter trick answers "does this code run."
+This attempt needed a different question - "which commit made it slower"
+- and the same machinery answers it if you are willing to spend the
+build time: a harness that reproduces the device benchmarks' exact
+scenarios on the host, driven over every commit in the wave, rebuilding
+and re-timing at each one. Seventy-five builds, about twenty minutes,
+no flash cycle.
+
+Two things make the output trustworthy despite host wall-clock being
+only a relative signal. The harness prints a checksum of the final grid,
+so a scenario that evolves identically says so; and it carries the same
+liquid-free controls the device suite does, so a run where the machine
+was busy announces itself.
+
+For the screen of water the result was not a trend, it was a step:
+
+| commit | water, host us/step |
+|---|---:|
+| ... twenty commits, `0378703` through `ec18186` | 60-70 |
+| `726ca63` **Give liquids a viscosity** | **99.8** |
+| ... fifty-four commits, `6cfc9c7` through HEAD | 95-105 |
+
+Byte-identical final grid on both sides of that step, and on every
+commit of the wave. Nothing else in seventy-five commits moved the water
+benchmark at all.
+
+### The cost was one branch, and it was never the logic
+
+`726ca63` adds exactly two things to the liquid path: a call to a new
+`liquid_may_move()` at the top of `move_liquid_grain()`, and another
+inside `equalise_one_cell()`. Removing them one at a time on the host
+put the entire regression on the first one - the cross-flow one costs
+nothing measurable, because three cheaper tests run before it and almost
+no cell reaches it.
+
+And on a screen of water that gate cannot even say no. `s->mobility`
+defaults to 255, water's own figure is 255, so it returns true every
+time without drawing a random number - which is why the simulation is
+byte-identical with the check present or deleted.
+
+A short series of substitutions, each one variable, found which part of
+a load-and-a-branch was expensive, and the answer was: neither.
+
+| at the top of `move_liquid_grain()` | water, host us/step |
+|---|---:|
+| nothing (control) | 70 |
+| `if (mat_id == 0xFF) return false;` - a branch on a live register | 69 |
+| `if (s->h == 0x7FFF) return false;` - a load of a cold field | 71 |
+| `if (materials[mat_id].mobility == 0x7F) return false;` | 66 |
+| `if (s->mobility != 255) return false;` | 98 |
+| the real gate | 101 |
+
+A branch is free. A load is free. A load from the material table is
+free. That specific comparison is not - and the difference between it
+and the others is nothing about the data, it is which side of the branch
+GCC decides is the fall-through.
+
+**Confirmed by disassembling the real device object rather than
+inferring it.** Compiling `sand_liquid.c` with ESP-IDF's own flags,
+unhinted, the cold "too viscous to move" blocks land at offsets `0xb6`
+and `0xce` - spliced into the middle of a 1,102-byte function that runs
+about 11,130 times a step, so every cache line the hot path fetches
+carries bytes it will never execute. This is the same 32 KB instruction
+cache that decided attempts 07, 08, 09 and 10; here nobody had written
+any new code for it to fetch, the compiler had simply interleaved code
+that was already there.
+
+Marking the branch unlikely moves those blocks to `0x24c` and `0x264`,
+at the tail, and the hot path becomes contiguous again. Four spellings
+were measured back to back, with the liquid-free controls flat across
+all of them:
+
+| variant | screen of water | water at the app's per-material mobility |
+|---|---:|---:|
+| unchanged | 101.1 | 101.5 |
+| gate deleted outright (the ceiling) | 74.7 | 74.8 |
+| **`__builtin_expect(..., 0)`** | **74.5** | **74.7** |
+| cold half split into its own function | 77.5 | 84.4 |
+| that half marked `noinline` | 97.8 | 96.8 |
+
+Only the hint reaches the ceiling, and it reaches it on both paths. The
+split is worth a note as a near miss: it works, but by GCC's size
+heuristic rather than by construction - shrink the callee and the
+compiler folds it back in and re-splices the blocks, which is exactly
+what happened when a variant of it was tried with a smaller body. That
+is the inlining cliff of attempts 07/08/10 wearing its third face, and
+this time the fix was to stop relying on the heuristic instead of
+arranging to satisfy it. Marking the cold half `noinline` is worse than
+doing nothing: then the *call* sits in the hot path.
+
+The second column matters more than the benchmark does. Every device
+frame-budget test runs at the default `s->mobility` of 255; the real app
+calls `sand_set_mobility(SAND_MOBILITY_PER_MATERIAL)`, so it takes a
+different path through that same function, and no test in this repo
+measures it. It regressed by the same amount and it is fixed by the same
+line - but that was luck rather than coverage, and worth saying plainly.
+
+`__builtin_expect` is the first one in this codebase. It is not the
+`always_inline` family that the dead-end list warns about: those force
+the compiler to do more, and this only tells it which way a branch goes,
+which happens to be a fact - water always moves. It is wrong for oil,
+which refuses about two steps in three, and that costs oil the far
+branch. Water is what a screen of liquid is usually made of.
+
+### Fire: diffuse, and mostly not where it was expected
+
+The same commit-by-commit walk over the fire benchmarks found no step at
+all - just a creep, roughly 1,000 to 1,300 host us/step across the wave,
+with the largest single contribution (about 14%) from heat conduction
+and the rest spread over a dozen commits. That is what genuine feature
+cost looks like, and it is the opposite shape from the water finding.
+
+Splitting the step into its two passes, at the round-4 baseline and at
+HEAD, says where it went:
+
+| full screen of fire, host us/step | round 4 | HEAD |
+|---|---:|---:|
+| total | 978.9 | 1295.4 |
+| `sand_step_gas()` | 720.0 | 776.2 (+8%) |
+| `sand_step_reactions()` | **266.7** | **537.4 (+101%)** |
+
+The reactions pass exactly doubled, and it accounts for 85% of the
+benchmark's growth. Worth noticing anyway, because it corrects an
+assumption this round started with: **the reactions pass is not the
+expensive one.** Even doubled it is 41% of the step, and the gas pass -
+which barely changed - is 60%. A screen that is entirely fire pays
+`sand_step_gas()` to discover, every step, that a fully packed grid of
+same-density cells has nowhere to move.
+
+Measure-by-deleting inside the reactions pass, one mechanism at a time
+against a 1,295 us baseline:
+
+| stubbed out | us/step | share of the benchmark |
+|---|---:|---:|
+| the four-neighbour quench scan | 1,175 | **9.3%** |
+| `try_heat_transform()` | 1,231 | 5.0% |
+| `smothered()` | 1,246 | 3.8% |
+| `try_ignite()` | 1,262 | 2.6% |
+| `conduct_heat()` | 1,269 | 2.0% |
+| the burn-out smoke puff | 1,290 | 0.4% |
+| `try_flare()` | 1,292 | 0.3% |
+
+The genuinely new mechanisms - conduction, heat transformation, flare,
+smoke - come to about 8% between them. They are not the doubling. Most
+of the rest is structural: `f9bc63f` split the reaction properties out
+of `material_t` into a second table, for good reasons of struct size, and
+the consequence is that every per-cell and per-neighbour question the
+pass asks now reads two arrays where it used to read one. That is a real
+cost, it is spread everywhere, and it is not something a branch fixes.
+
+One line of it was worth taking. The quench scan is the largest single
+item at 9.3%, and on both fire benchmarks it is spent entirely on boards
+with no liquid anywhere - four material-table reads per burning cell,
+every step, confirming that a thing which is not there is still not
+there. `s->may_have_liquid` already answers that, and answers it
+soundly: `latch_content_flags()` arms it for every write in the
+simulation that can create a liquid, this pass's own snow-melting-into-
+water included, and it is only ever cleared by a full cross-flow sweep
+that found none.
+
+That correction had to be made in the record before it could be leaned
+on. The invariant comment above `BLOCK_HAS_LIQUID` in `sand_priv.h`
+claimed that "sand_reactions.c only ever writes MAT_FIRE" - true when it
+was written, false since snow arrived. The conclusion still holds, by a
+different route (that placement goes through `place_cell()`, which
+latches), and the comment now says so.
+
+### What shipped, on the host, with the controls flat
+
+Two commits. All eight scenarios evolve to byte-identical final grids
+before and after both of them.
+
+| scenario, host us/step | round 4 | before | after |
+|---|---:|---:|---:|
+| screen of water | 70.0 | 104.2 | **75.1** |
+| water at the app's mobility | 69.5 | 101.5 | **78.3** |
+| mixed scene flip | - | 84.0 | **69.3** |
+| full screen of fire | 1,006.8 | 1,325.6 | **1,192.6** |
+| fire cascade through gas | 1,343.0 | 1,943.8 | **1,833.0** |
+| full-size step (control) | 34.0 | 33.9 | 34.2 |
+| settled screen (control) | 0.9 | 0.9 | 0.9 |
+| settled-pile flip (control) | 35.3 | 35.0 | 32.6 |
+
+The mixed scene follows water without being touched, which is what its
+own composition predicts - it is a sweep with a water half bolted on.
+The reactions pass turns out to cost the water and mixed scenes about
+2 us and 1.4 us a step respectively: the content flags clear after the
+first step and the pass stops running, so there was nothing there to
+find.
+
+`sand.c` is not touched by either commit, and its compiled device object
+is **identical instruction for instruction** before and after - checked
+by disassembly, since the object files themselves differ only in DWARF
+line numbers shifted by the `sand_priv.h` comment. The three control
+benchmarks run entirely in that code. They can still move on a fresh
+flash, because the whole image relinks around a `sand_liquid.c` that
+grew two bytes and a `sand_reactions.c` that shrank 250 - but if they
+move, it is the layout lottery and not this work.
+
+### The two fire budgets: a recommendation, not a change
+
+Neither fire budget was ever a frame-rate promise. Both say so in their
+own comments - "not a real-time requirement", "a real regression guard"
+- and both were pegged at about 9% over a measured number, on scenes
+(edge-to-edge fire, edge-to-edge gas) that the pour-brush UI cannot
+practically produce.
+
+A deliberate feature wave moved the thing they were pegged to. The
+recommendation is to re-peg them from a fresh capture of HEAD, by the
+same method their comments already document: measure, then set the
+budget about 9-10% above it. **Not adjusted here** - changing a budget
+is not this file's call to make, and a budget moved to accommodate the
+code it guards has stopped being a guard.
+
+Two things should go into that decision rather than just a number:
+
+- The stale capture understates HEAD. On the host, the full screen of
+  fire gained a further 6.8% after that capture was taken and the fire
+  cascade gained **18.7%**, from the fifty commits it never saw. This
+  round gives back 8.3% and 4.5% respectively, so fire lands roughly
+  where the capture found it while the cascade should be expected to
+  come in *higher* than its 390,158, not lower.
+- The gas pass, not the reactions pass, is 60% of the full-screen-of-fire
+  benchmark, and it is the same gas pass as at round 4. If those numbers
+  ever need to be real rather than a guard, that is where the work is,
+  and it is a design question - "creeping fire", deferred when fire was
+  built - rather than a tuning one.
+
+### What this attempt is worth carrying
+
+**A capture is a measurement of a tree, not of a project.** The single
+most useful thing this round did was spend five minutes checking whether
+the incoming numbers described the code they were about to be used to
+diagnose. They did not, by fifty commits, and every ratio drawn from
+them would have been quietly wrong.
+
+**Bisecting on the host is affordable, and it is a different tool from
+counting.** The eighth attempt's counters answer "does this run"; a
+rebuild-and-retime over a commit range answers "when did this start",
+which is the question a regression actually poses. Seventy-five builds
+cost about twenty minutes and no flash cycles, and the answer here was
+a single commit out of seventy-five, with a byte-identical simulation on
+both sides of it - a degree of certainty that no amount of reading the
+diff would have produced.
+
+**The inlining cliff has a sibling: block layout.** This file has three
+attempts about whether the compiler folds a function in. This one is
+about where the compiler puts the code it decided to keep, and it cost
+26% of a benchmark with no function boundary involved at all. The
+detection is the same - `objdump` the real device object and look, do
+not infer - but the thing to look at is which blocks sit between the
+entry and the work, not whether a symbol exists.
+
+**And the oldest lesson, in its cheapest form yet:** the change that
+fixed a 26% regression adds no state, removes no work, and computes
+exactly what it computed before. Every plausible story about *what* that
+line was doing was wrong, because it was not doing anything. It was
+sitting in the way.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery
