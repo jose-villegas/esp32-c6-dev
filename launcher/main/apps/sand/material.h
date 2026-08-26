@@ -706,6 +706,24 @@ typedef struct {
      * one-cell shrub. */
     uint8_t grows;
 
+    /* FALLING, in the cold pass: chance/256 per step that this cell moves
+     * one step gravity-ward, if the cell it would move into is empty.
+     *
+     * Which is the sweep's job, and is here anyway, for a reason specific
+     * to the extended range: `kind` lives in materials[], and every
+     * extended material shares one row of it. Making the plant a
+     * KIND_POWDER so it could be poured like a grain would make ICE one
+     * too - and would break the plant itself, because a grown stem is made
+     * of the same material as the seed, so a column six cells tall would
+     * slump the moment it existed.
+     *
+     * Falling only into EMPTY is what separates the two cases without any
+     * per-cell state at all. A seed painted in mid-air has nothing under
+     * it and drops until it lands. A stem does not, because what is under
+     * every cell of it is the rest of the stem. The rule is the same; the
+     * board answers it differently. */
+    uint8_t falls;
+
     /* And what a long enough straight run of it turns into: `hardens_to`
      * once `harden_run` cells line up along the gravity axis.
      *

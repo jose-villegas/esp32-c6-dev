@@ -131,6 +131,13 @@ typedef struct {
      * when a cell is actually wet or actually beside a liquid. */
     bool     may_have_moisture;
 
+    /* Something on the board falls in the COLD pass rather than in the
+     * sweep - see reaction_t.falls. Its own flag because it is the one
+     * reason the reactions pass may need to run on a board with no fire,
+     * no acid, no heat and no water anywhere on it: a seed dropped onto a
+     * bare screen still has to reach the floor. */
+    bool     may_have_faller;
+
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 

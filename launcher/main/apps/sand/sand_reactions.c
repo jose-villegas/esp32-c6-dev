@@ -673,13 +673,17 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
              * have evened out stop trading), and a saturated cell now
              * reaches as far as its water can rather than as far as the
              * step size allows. */
-            int give;
+            int give, cost;
             if (nr->soaks_to != 0) {
                 /* Dry sand beside wet soil becomes soil - and is handed
                  * enough to go on wetting ITS neighbours, which is what
                  * turns a puddle into a spreading patch of earth. It keeps
                  * its own shade as the new soil's tone. */
                 give = held / 2;
+                if (give == 0) {
+                    continue;           /* not enough to bind a grain */
+                }
+                cost = give;
                 s->cells[nat] = CELL_SOIL(nr->soaks_to,
                                           CELL_VARIANT(n) >> SOIL_MOISTURE_BITS,
                                           (uint8_t)give);
@@ -691,11 +695,128 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
                 }
                 s->cells[nat] = CELL_WITH_MOISTURE(
                     n, (uint8_t)(CELL_MOISTURE(n) + give));
+                cost = give;
             } else {
                 continue;
             }
 
-            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - give));
+            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - cost));
+            mark_rows(s, y, y);
+            mark_rows(s, ny, ny);
+            wake_block_and_neighbors(s, x, y);
+            wake_block_and_neighbors(s, nx, ny);
+            return true;
+        }
+    }
+
+    /* PERCOLATION. Water in soil runs DOWNHILL, which diffusion alone
+     * cannot express and which is what bounds how deep a soaking gets.
+     *
+     * Half-the-difference settles at a gradient of one level per cell -
+     * and stops there, because half of a gap of one is zero. So the reach
+     * of a soaking was capped at the moisture range itself: a pile held
+     * under water wet its top seven rows into a perfect 7-6-5-4-3-2-1
+     * ramp and then froze, with dry sand underneath it for ever. Reported
+     * as dirt not wetting a whole pile "even fully submerged in water".
+     *
+     * Gravity is the missing term. This hand-off needs NO gradient - only
+     * room in the cell it is going to - so it does not stall, and it
+     * cannot ping-pong the way an ungated symmetric transfer would,
+     * because it only ever goes one way.
+     *
+     * It goes to ONE of the three cells gravity-ward - straight down or
+     * either diagonal - picked at random, and hands over HALF of what it
+     * holds. Both halves of that are what make it look like water rather
+     * than like a rising tide. A fixed direction and a single level would
+     * advance a flat sheet one row at a time, damping everything evenly;
+     * a wandering direction carrying a real share instead drives fingers
+     * down through the soil, which split when a wet cell sends half one
+     * way and half the other on a later step, and merge where two fingers
+     * meet. That is what water actually does in sand, and it is much the
+     * more interesting thing to watch.
+     *
+     * Every gate is checked before the roll, INCLUDING whether any of the
+     * three can take anything. Drawing a random number for soil with
+     * nowhere to send it would advance the RNG for every wet cell on the
+     * board and shift every decision downstream - the trap try_ignite()
+     * documents, and one this pass has already fallen into once. */
+    if (r->dries != 0 && held != 0) {
+        /* The three gravity-ward cells: straight down, and down along each
+         * perpendicular. Built from the settled direction, so they turn
+         * with the board. */
+        const int dx = s->last_load_dx, dy = s->last_load_dy;
+        const int fan[3][2] = {
+            { dx, dy }, { dx - dy, dy + dx }, { dx + dy, dy - dx },
+        };
+        int open[3], n_open = 0;
+        for (int i = 0; i < 3; i++) {
+            const int nx = x + fan[i][0], ny = y + fan[i][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const cell_t below = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (CELL_IS_EMPTY(below)) {
+                continue;
+            }
+            const reaction_t *br = reaction_of(below);
+            if (br->soaks == 0) {
+                continue;
+            }
+            if (br->soaks_to != 0 ||
+                (br->dries != 0 && CELL_MOISTURE(below) < SOIL_MOISTURE_MAX)) {
+                open[n_open++] = i;
+            }
+        }
+        if (n_open != 0 && (int)(rng_next(&s->rng) & 0xFF) < spread) {
+            const int pick = open[rng_below(&s->rng, n_open)];
+            const int nx = x + fan[pick][0], ny = y + fan[pick][1];
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            const cell_t below = s->cells[nat];
+            const reaction_t *br = reaction_of(below);
+
+            /* Half, rounded up, so a cell holding 1 still moves it - a
+             * finger that rounds down to nothing stops one level short of
+             * the bottom every time. */
+            int give = (held + 1) / 2;
+            int cost = give;
+            if (br->soaks_to != 0) {
+                /* Turning a grain into soil COSTS a level on top of what
+                 * is handed over, because binding sand into earth uses
+                 * water up rather than passing it along.
+                 *
+                 * Rounded DOWN here, unlike the hand-off between two
+                 * cells that are already soil - and that one character is
+                 * the whole difference between a soaking and a wash.
+                 * Rounding up lets a cell holding a single level convert
+                 * the grain below it, hand that level over and keep
+                 * nothing, whereupon the new cell does the same: one
+                 * splash of water turned a forty-by-nineteen bank
+                 * entirely to soil, every cell of it bone dry. Rounding
+                 * down means a converting cell always keeps at least as
+                 * much as it gives, so a chain runs out after a few
+                 * branches and what it leaves behind is visibly wet.
+                 *
+                 * Moving water between two cells of soil creates nothing,
+                 * so it keeps the rounding that reaches the bottom row. */
+                give = held / 2;
+                if (give == 0) {
+                    return true;        /* too little to bind a grain */
+                }
+                cost = give;
+                s->cells[nat] = CELL_SOIL(
+                    br->soaks_to, CELL_VARIANT(below) >> SOIL_MOISTURE_BITS,
+                    (uint8_t)give);
+                latch_content_flags(s, s->cells[nat]);
+            } else {
+                const int room = (int)SOIL_MOISTURE_MAX - CELL_MOISTURE(below);
+                if (give > room) {
+                    give = room;
+                }
+                s->cells[nat] = CELL_WITH_MOISTURE(
+                    below, (uint8_t)(CELL_MOISTURE(below) + give));
+                cost = give;
+            }
+            row[x] = CELL_WITH_MOISTURE(c, (uint8_t)(held - cost));
             mark_rows(s, y, y);
             mark_rows(s, ny, ny);
             wake_block_and_neighbors(s, x, y);
@@ -748,11 +869,183 @@ static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
     }
 }
 
+/* One cell that FALLS in the cold pass, because it cannot fall in the
+ * sweep - see reaction_t.falls for why an extended material has to do it
+ * here. Moves one step gravity-ward into empty space and nowhere else, so
+ * a seed drops and a stem stands.
+ *
+ * Returns whether it still has anywhere to go, which is what keeps
+ * may_have_faller from latching on for good once everything has landed. */
+static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
+                                  const reaction_t *r)
+{
+    const int nx = x + s->last_load_dx;
+    const int ny = y + s->last_load_dy;
+    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+        return false;
+    }
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+    if (!CELL_IS_EMPTY(s->cells[nat])) {
+        return false;                    /* landed */
+    }
+    /* ATTACHED things do not fall. A branch grows out sideways and has
+     * nothing under it, so "the cell below is empty" alone would snap
+     * every limb off the moment it appeared - the rule has to be about
+     * being part of something, not about being directly held up.
+     *
+     * But it has to be part of something that is ITSELF held up, and that
+     * second half is not optional: two seeds falling side by side each
+     * counted the other as an attachment and the pair stopped dead in
+     * mid-air, hanging off nothing. So the neighbour is only an anchor if
+     * it has something under IT. One level of indirection, no walk to the
+     * ground - a chain of limbs hanging off a limb is not a shape a tree
+     * grows into, and if it ever were, it falling is the right answer.
+     *
+     * Said generically, so it belongs to the material rather than to the
+     * plant: more of yourself, or what you harden into. */
+    const cell_t self = s->cells[at];
+    for (int d = 0; d < 4; d++) {
+        const int ax = x + reaction_dirs[d][0];
+        const int ay = y + reaction_dirs[d][1];
+        if ((unsigned)ax >= (unsigned)w || (unsigned)ay >= (unsigned)h) {
+            continue;
+        }
+        const cell_t a = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
+        if (a != self &&
+            !(r->hardens_to != 0 && CELL_MATERIAL(a) == r->hardens_to)) {
+            continue;
+        }
+        const int bx = ax + s->last_load_dx, by = ay + s->last_load_dy;
+        if ((unsigned)bx >= (unsigned)w || (unsigned)by >= (unsigned)h ||
+            !CELL_IS_EMPTY(s->cells[(size_t)by * (size_t)w + (size_t)bx])) {
+            return false;             /* anchored to something standing */
+        }
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->falls) {
+        return true;                     /* still falling, just not now */
+    }
+
+    s->cells[nat] = s->cells[at];
+    s->cells[at] = SAND_EMPTY;
+    mark_rows(s, y, y);
+    mark_rows(s, ny, ny);
+    wake_block_and_neighbors(s, x, y);
+    wake_block_and_neighbors(s, nx, ny);
+    return true;
+}
+
 /* How tall one plant may get, and how far the walk to its tip may run.
  * A bound rather than a rule: growth stops when the soil dries, which is
  * the real limit - this only keeps a cold pass from walking the height of
  * the board looking for a tip. */
 #define GROW_REACH 48
+
+/* How far down through soil a plant's roots reach for water. Deep enough
+ * to survive a bed draining under it, short enough that a tree cannot
+ * drink from the far side of the board. */
+#define ROOT_REACH 6
+
+/* How far a plant can LIFT water, counted in cells of its own stem between
+ * the growing cell and the ground.
+ *
+ * This is what bounds a tree, and it is the only thing that does. Growth
+ * has no per-cell state to count against, so there is no age, no size and
+ * no budget to spend - but there is a shape on the grid, and how far up it
+ * a cell sits is already being measured on the way down to the water. A
+ * cap on that is a cap on height, on the length of a branch, and on how
+ * far a limb can wander, all at once and for free.
+ *
+ * Without it the only limit was moisture, which meant a well watered bed
+ * grew a solid wall of timber: every cell of every tree rolls to grow
+ * every step, so the growth rate rises with the amount already grown, and
+ * an unbounded tree is not slow, it is explosive. */
+#define TREE_LIFT 10
+
+/* And how wide a trunk may get. Thickening is what turns a sapling into
+ * something that reads as a trunk, and left alone it is the one direction
+ * with nothing to stop it: the cells that thicken are the ones nearest the
+ * ground, so they never run out of lift the way the tip does. */
+#define TRUNK_WIDTH 3
+
+/* Where a plant drinks from: down through the plant itself to the ground,
+ * then on down into the soil for the first of it holding any water.
+ *
+ * Two walks, and both have to wander. The first follows the STEM, trying
+ * straight down and then either diagonal, because a branch has its own
+ * trunk below it at an angle - a walk that only went straight down would
+ * find empty air one cell below every limb, and limbs would be the only
+ * part of a tree that could never grow. The second follows the SOIL, for
+ * a different reason: moisture percolates, so the wettest earth is at the
+ * bottom of a bed and the surface a tree stands on is the part that dries
+ * first. A plant that drank only from the cell it touched stopped growing
+ * with plenty of water two rows down.
+ *
+ * Both are bounded, and the whole thing runs in the cold pass for cells
+ * that grow - which is a handful on any board that has any. */
+static int find_water(sand_t *s, int x, int y, int w, int h,
+                      const reaction_t *r, cell_t self, int *lift)
+{
+    const int dx = s->last_load_dx, dy = s->last_load_dy;
+    const int px = -dy, py = dx;
+    const int fan[3][2] = { { dx, dy }, { dx + px, dy + py },
+                            { dx - px, dy - py } };
+
+    int cx = x, cy = y;
+    for (int step = 0; step < GROW_REACH; step++) {
+        *lift = step;
+        int nx = -1, ny = -1;
+        bool on_soil = false;
+
+        for (int i = 0; i < 3; i++) {
+            const int tx = cx + fan[i][0], ty = cy + fan[i][1];
+            if ((unsigned)tx >= (unsigned)w || (unsigned)ty >= (unsigned)h) {
+                continue;
+            }
+            const cell_t c = s->cells[(size_t)ty * (size_t)w + (size_t)tx];
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            if (reaction_of(c)->dries != 0) {
+                nx = tx; ny = ty; on_soil = true;
+                break;                /* ground: stop looking for stem */
+            }
+            if (nx < 0 &&
+                (c == self ||
+                 (r->hardens_to != 0 &&
+                  CELL_MATERIAL(c) == r->hardens_to))) {
+                nx = tx; ny = ty;     /* more stem, keep it as a fallback */
+            }
+        }
+        if (nx < 0) {
+            return -1;                /* neither stem nor ground below */
+        }
+        if (!on_soil) {
+            cx = nx; cy = ny;         /* carry on down the stem */
+            continue;
+        }
+
+        /* Into the soil. */
+        cx = nx; cy = ny;
+        for (int depth = 0; depth < ROOT_REACH; depth++) {
+            if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
+                return -1;
+            }
+            const size_t at = (size_t)cy * (size_t)w + (size_t)cx;
+            const cell_t c = s->cells[at];
+            if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
+                return -1;
+            }
+            if (CELL_MOISTURE(c) != 0) {
+                return (int)at;
+            }
+            cx += dx;
+            cy += dy;
+        }
+        return -1;
+    }
+    return -1;
+}
 
 /* One cell of something that GROWS.
  *
@@ -787,46 +1080,109 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
         return true;                  /* free fall: no up to grow towards */
     }
 
-    /* Soil touching THIS cell, with something in it to spend. */
-    int soil_at = -1;
-    for (int d = 0; d < 4; d++) {
-        const int nx = x + reaction_dirs[d][0];
-        const int ny = y + reaction_dirs[d][1];
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            continue;
-        }
-        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-        const cell_t n = s->cells[nat];
-        if (CELL_IS_EMPTY(n)) {
-            continue;
-        }
-        if (reaction_of(n)->dries != 0 && CELL_MOISTURE(n) != 0) {
-            soil_at = (int)nat;
-            break;
-        }
-    }
+    /* Soil touching THIS cell - and then ROOTS: down through that soil,
+     * following gravity, for the first of it holding any water.
+     *
+     * The reach is what makes a plant survive its own ground draining.
+     * Moisture percolates, so the wettest soil is at the bottom of a bed
+     * and the surface a tree is standing on is the part that dries first;
+     * a plant that could only drink from the cell it touched stopped
+     * growing while there was still plenty of water a row or two down. */
+    int lift = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift);
     if (soil_at < 0) {
         return true;                  /* nothing to drink */
+    }
+    if (lift >= TREE_LIFT) {
+        return true;                  /* too high up to be fed */
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->grows) {
         return true;
     }
 
-    /* Walk to the tip of this column. */
-    int tx = x, ty = y;
+    /* WHERE it grows. Straight up from the tip, every time, is a stick -
+     * which is what this was, and what "grow seems to be mostly one side,
+     * the idea is to imitate trees" is about.
+     *
+     * Two rolls make it a tree instead. One picks the SITE: usually the
+     * tip, but one attempt in three starts somewhere further down the
+     * stem, which is a branch. The other picks the DIRECTION: a tip mostly
+     * carries straight on and sometimes leans, a branch always goes out at
+     * an angle. Neither needs anything remembered - the shape so far is on
+     * the grid, and re-reading it is what the walk to the tip was already
+     * doing. */
+    int run = 1, tx = x, ty = y;
     for (int i = 0; i < GROW_REACH; i++) {
         const int nx = tx + ux, ny = ty + uy;
         if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            return true;
+            break;
         }
         if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] != self) {
             break;
         }
         tx = nx;
         ty = ny;
+        run++;
     }
 
-    const int gx = tx + ux, gy = ty + uy;
+    const int px = -uy, py = ux;      /* out at ninety degrees to up */
+    const int side = rng_below(&s->rng, 2) ? 1 : -1;
+
+    int site, dx, dy;
+    const int what = rng_below(&s->rng, 8);
+    if (what < 4 || run < 3) {
+        site = run - 1;               /* HEIGHT: straight on from the tip */
+        dx = ux;
+        dy = uy;
+    } else if (what < 6) {
+        site = run - 1;               /* LEAN: the tip, at an angle */
+        dx = ux + px * side;
+        dy = uy + py * side;
+    } else if (what < 7) {
+        site = rng_below(&s->rng, run - 1);   /* BRANCH: out and up */
+        dx = ux + px * side;
+        dy = uy + py * side;
+    } else {
+        /* WIDTH. Straight out from low down, which is how a trunk
+         * thickens - and thickening is most of what turns a sapling into
+         * wood, because hardening counts a straight run along gravity and
+         * a second column beside the first is a second run of its own. A
+         * tree that only ever got taller hardened into a one-cell stick;
+         * one that also gets fatter hardens into something that looks
+         * like a trunk. */
+        site = rng_below(&s->rng, (run + 1) / 2);
+        dx = px * side;
+        dy = py * side;
+
+        /* TAPERED: the allowance shrinks with height, so a trunk is
+         * fat at the foot and a single cell by the time it is up in the
+         * branches. A uniform allowance grows a pillar - correct by every
+         * rule here and not a tree. */
+        const int allowed = TRUNK_WIDTH - (lift + site) / 3;
+        if (allowed < 2) {
+            return true;              /* too high up to be thickening */
+        }
+        int wide = 0;
+        for (int i = 1; i < allowed; i++) {
+            const int wx = x + ux * site + px * side * i;
+            const int wy = y + uy * site + py * side * i;
+            if ((unsigned)wx >= (unsigned)w || (unsigned)wy >= (unsigned)h) {
+                break;
+            }
+            const cell_t c = s->cells[(size_t)wy * (size_t)w + (size_t)wx];
+            if (c != self &&
+                !(r->hardens_to != 0 && CELL_MATERIAL(c) == r->hardens_to)) {
+                break;
+            }
+            wide++;
+        }
+        if (wide >= allowed - 1) {
+            return true;              /* thick enough already */
+        }
+    }
+    const int sx = x + ux * site, sy = y + uy * site;
+
+    const int gx = sx + dx, gy = sy + dy;
     if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
         return true;
     }
@@ -858,15 +1214,15 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
         return true;                  /* not the bottom; someone else counts */
     }
 
-    int run = 0, cx = x, cy = y;
-    while (run < GROW_REACH &&
+    int trunk = 0, cx = x, cy = y;
+    while (trunk < GROW_REACH &&
            (unsigned)cx < (unsigned)w && (unsigned)cy < (unsigned)h &&
            s->cells[(size_t)cy * (size_t)w + (size_t)cx] == self) {
-        run++;
+        trunk++;
         cx += ux;
         cy += uy;
     }
-    if (run < r->harden_run) {
+    if (trunk < r->harden_run) {
         return true;
     }
 
@@ -877,7 +1233,7 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * on a board with no fire anywhere on it. */
     cx = x;
     cy = y;
-    for (int i = 0; i < run; i++) {
+    for (int i = 0; i < trunk; i++) {
         place_cell(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx,
                    CELL_MAKE(r->hardens_to, 0));
         cx += ux;
@@ -1620,6 +1976,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
 #define FOUND_DISSOLVER 2u
 #define FOUND_TEMPERATURE      4u
 #define FOUND_MOISTURE         8u
+#define FOUND_FALLER          16u
 
 static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
 {
@@ -1679,6 +2036,15 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
             found |= FOUND_MOISTURE;
             continue;
         }
+        /* Falling. First, because a seed still in the air has nothing to
+         * grow from and no soil to look at - and because the cheapest
+         * answer for everything else on the board is one zero field. */
+        if (r->falls != 0) {
+            if (step_one_falling_cell(s, x, y, w, h, r)) {
+                found |= FOUND_FALLER;
+                continue;
+            }
+        }
         /* Growing. Reached only where there is soil with water in it,
          * which is what may_have_moisture already tracks - a plant on dry
          * ground costs one field test and nothing else. */
@@ -1703,7 +2069,8 @@ void sand_step_reactions(sand_t *s)
      * goes on cooling long after the flame that heated it is out, and gated
      * behind may_have_burning it would freeze mid-ramp instead. */
     if (!s->may_have_burning && !s->may_have_dissolver &&
-        !s->may_have_temperature && !s->may_have_moisture) {
+        !s->may_have_temperature && !s->may_have_moisture &&
+        !s->may_have_faller) {
         return;
     }
 
@@ -1726,5 +2093,8 @@ void sand_step_reactions(sand_t *s)
     }
     if (!(found & FOUND_MOISTURE)) {
         s->may_have_moisture = false;
+    }
+    if (!(found & FOUND_FALLER)) {
+        s->may_have_faller = false;
     }
 }

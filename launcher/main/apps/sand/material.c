@@ -1618,9 +1618,17 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * Six in a line becomes wood. Low enough that a sapling turns into
          * a trunk while you are watching it, high enough that a plant
          * creeping over flat ground never does. */
-        .grows       = 40,
+        .grows       = 12,
         .hardens_to  = MAT_WOOD,
         .harden_run  = 6,
+
+        /* And it POURS. Every step it is in the air, so a handful of seeds
+         * scattered over a bed behaves like a handful of seeds rather than
+         * hanging wherever the brush left them. It cannot be a KIND_POWDER
+         * to get that - see reaction_t.falls - and would not want to be:
+         * this rule leaves a grown stem standing, because what is under a
+         * stem is more stem. */
+        .falls       = 255,
 
         /* And it burns, which is most of the point of growing a tree. Well
          * above wood's 6: green growth catches far more readily than

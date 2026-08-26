@@ -5809,6 +5809,270 @@ static void test_cullet_does_not_look_like_sand(void)
     }
 }
 
+
+/* Water reaches the BOTTOM of a submerged pile.
+ *
+ * Diffusion alone cannot do this and the shape of its failure is
+ * distinctive: half-the-difference settles into a gradient of one level
+ * per cell and then stops, because half of a gap of one is zero. So a pile
+ * held under water wet its top few rows into a perfect ramp and froze,
+ * with dry sand underneath it for ever, and the depth it reached was set
+ * by the size of the moisture range rather than by how much water there
+ * was. Reported as dirt not wetting a whole pile "even fully submerged".
+ *
+ * What fixes it is gravity: percolation needs no gradient, only room in
+ * the cell it is going to, so it does not stall. */
+static void test_water_percolates_to_the_bottom_of_a_submerged_pile(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        for (int y = 2; y < H - 1; y++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_SAND, 6));
+        }
+    }
+
+    /* Saturated, not merely damp - and that is the whole point of the
+     * assert. This grid is shallower than the moisture range, so a pile
+     * of it can be wet to the floor by diffusion alone; what diffusion
+     * cannot do is SATURATE the bottom, because it settles at one level
+     * per cell and the surface only ever holds the maximum. A full bottom
+     * row is a water table, and only something that runs downhill without
+     * needing a gradient builds one. */
+    int wet_floor = 0;
+    for (int i = 0; i < 1200 && !wet_floor; i++) {
+        /* Held under: the pile has standing water on it throughout. */
+        for (int x = 0; x < W; x++) {
+            for (int y = 0; y < 2; y++) {
+                if (CELL_IS_EMPTY(sand_at(&s, x, y))) {
+                    sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+                }
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_DIRT &&
+                CELL_MOISTURE(c) == SOIL_MOISTURE_MAX) {
+                wet_floor = 1;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(wet_floor,
+        "the deepest row of a submerged pile must SATURATE - diffusion "
+        "settles into a gradient of one level per cell and stops there, "
+        "which leaves the bottom of a pile drier than the top for ever, "
+        "however much water is standing on it");
+}
+
+
+/* Percolation goes down and SIDEWAYS-down, not straight down.
+ *
+ * That is what makes it look like water finding its way into sand -
+ * fingers that wander, split where a wet cell sends half one way and half
+ * the other, and join where two meet - rather than a flat sheet of damp
+ * descending one row at a time. It is also the difference between water
+ * getting past an obstacle and water stopping at one.
+ *
+ * The scene is built so that nothing else can be responsible. The wet cell
+ * is walled in on both sides, so the sideways diffusion cannot reach the
+ * grains below; and it is walled in directly beneath, so straight-down
+ * percolation cannot either. The only way out is diagonal. */
+static void test_water_percolates_diagonally_as_well_as_straight_down(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* One row above the floor, so the grains the water has to reach
+     * are resting on it - a grain with empty space under it falls
+     * out of the scene before any of this gets a turn. */
+    const int cx = W / 2, cy = H - 3;
+
+    sand_set(&s, cx, cy, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    sand_set(&s, cx - 1, cy, STONE);          /* no way out sideways */
+    sand_set(&s, cx + 1, cy, STONE);
+    sand_set(&s, cx, cy + 1, STONE);          /* nor straight down */
+    sand_set(&s, cx - 1, cy + 1, CELL_MAKE(MAT_SAND, 6));   /* only these */
+    sand_set(&s, cx + 1, cy + 1, CELL_MAKE(MAT_SAND, 6));
+
+    int reached = 0;
+    for (int i = 0; i < 600 && !reached; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int d = -1; d <= 1; d += 2) {
+            if (CELL_MATERIAL(sand_at(&s, cx + d, cy + 1)) == MAT_DIRT) {
+                reached = 1;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(reached,
+        "water walled in on both sides and underneath must still get out "
+        "diagonally - percolation that only goes straight down is a "
+        "rising damp, not water soaking into sand");
+}
+
+/* --- seeds ---------------------------------------------------------------- */
+
+/* A seed painted in mid-air falls.
+ *
+ * It cannot fall the ordinary way. `kind` lives in materials[], and every
+ * extended material shares one row of it, so making the plant a
+ * KIND_POWDER would make ICE one too - and would break the plant itself,
+ * since a grown stem is the same material as the seed and a column of
+ * powder six tall would slump the moment it existed. So it falls in the
+ * cold pass instead, into empty space and nowhere else. */
+static void test_a_seed_falls_until_it_lands(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, W / 2, 0, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, W / 2, H - 2),
+        "a seed dropped from the top must come to rest on the floor - it "
+        "is poured like a grain, and a grain that hangs where the brush "
+        "left it is not one");
+}
+
+/* Two of them falling side by side must not hold each other up.
+ *
+ * The rule that keeps a branch attached to its tree is "touching more of
+ * yourself", and on its own it is wrong in exactly this way: a pair of
+ * seeds falling together each counted the other and the pair stopped dead
+ * in mid-air, hanging off nothing at all. An anchor has to be something
+ * that is itself standing on something. */
+static void test_two_falling_seeds_do_not_hold_each_other_up(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, W / 2, 1, MATX(MATX_PLANT));
+    sand_set(&s, W / 2 + 1, 1, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    for (int y = 0; y < H - 2; y++) {
+        for (int x = 0; x < W; x++) {
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(MATX(MATX_PLANT), sand_at(&s, x, y),
+                "no seed may still be in the air - two of them touching "
+                "are two unsupported things, not one supported thing");
+        }
+    }
+}
+
+/* And what a tree grows must NOT fall.
+ *
+ * The other half of the same rule, and the reason it cannot simply be
+ * "fall when there is nothing underneath": a branch grows out sideways
+ * over thin air, and without attachment every limb would snap off on the
+ * step it appeared. */
+static void test_a_growing_tree_does_not_shed_what_it_grows(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    int grown = 0;
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+
+        /* Nothing may ever be sitting on empty space unattached. */
+        for (int y = 0; y < H - 1; y++) {
+            for (int x = 0; x < W; x++) {
+                if (sand_at(&s, x, y) != MATX(MATX_PLANT)) {
+                    continue;
+                }
+                grown++;
+                int touching = 0;
+                for (int d = 0; d < 4; d++) {
+                    static const int ox[4] = { 1, -1, 0, 0 };
+                    static const int oy[4] = { 0, 0, 1, -1 };
+                    const int nx = x + ox[d];
+                    const int ny = y + oy[d];
+                    if ((unsigned)nx >= (unsigned)W ||
+                        (unsigned)ny >= (unsigned)H) {
+                        continue;
+                    }
+                    if (!CELL_IS_EMPTY(sand_at(&s, nx, ny))) {
+                        touching = 1;
+                    }
+                }
+                TEST_ASSERT_TRUE_MESSAGE(touching,
+                    "no part of a tree may be floating free - a limb that "
+                    "detaches from what grew it is a bug in the falling "
+                    "rule, not weather");
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(grown > 0, "the tree has to have grown at all");
+}
+
+/* A tree is not a stick.
+ *
+ * Growth used to go straight up from the tip, every time, which grew a
+ * one-cell column and nothing else - reported as growing "mostly one
+ * side". Reaching the tip is still the common case; what makes it a tree
+ * is that it sometimes leans, sometimes starts a limb further down, and
+ * sometimes thickens the trunk instead. The last of those is what turns a
+ * sapling into wood, because hardening counts a straight run along gravity
+ * and a second column beside the first is a second run of its own. */
+static void test_a_tree_grows_wider_than_one_column(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int columns = 0;
+    for (int x = 0; x < W; x++) {
+        for (int y = 0; y < H - 2; y++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
+                columns++;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, columns,
+        "a tree must occupy more than the one column it was sown in - "
+        "growing only from the tip and only straight up is a stick");
+}
+
 /* --- growing ------------------------------------------------------------- */
 
 /* A plant on wet soil climbs.
@@ -8419,6 +8683,12 @@ void run_sand_suite(void)
     RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
     RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
+    RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
+    RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
+    RUN_TEST(test_a_seed_falls_until_it_lands);
+    RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
+    RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
+    RUN_TEST(test_a_tree_grows_wider_than_one_column);
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
     RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
     RUN_TEST(test_cullet_does_not_look_like_sand);

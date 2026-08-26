@@ -328,6 +328,7 @@ static inline void clear_content_flags(sand_t *s)
     s->may_have_dissolver   = false;
     s->may_have_temperature = false;
     s->may_have_moisture    = false;
+    s->may_have_faller      = false;
 }
 
 static inline void latch_content_flags(sand_t *s, cell_t cell)
@@ -349,6 +350,9 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     }
     if (r->dissolves) {
         s->may_have_dissolver = true;
+    }
+    if (r->falls != 0) {
+        s->may_have_faller = true;
     }
     /* Off ambient in EITHER direction is work to do: a frosted pane has to
      * warm back up just as a hot one has to cool down. At ambient exactly
