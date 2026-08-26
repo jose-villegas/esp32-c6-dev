@@ -4927,7 +4927,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                     "glass is hatched, so its body, its lines and their "
                     "crossings must all differ - equal ones paint a flat "
                     "pane and the shine vanishes");
-            } else if (m == MAT_STONE) {
+            } else if (m == MAT_STONE || m == MAT_DIRT) {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_SPECKLED, pat, why);
             } else if (m == MAT_WOOD) {
                 /* Speckled only while UNLIT. A burning log is a glow, and
@@ -5135,6 +5135,80 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
 /* ===================================================================
  * The extended range: sixteen materials behind the last slot.
  * =================================================================== */
+
+/* A powder lands ON another powder, and still sinks through a liquid.
+ *
+ * Displacement used to be "anything not static, if you are heavier", so a
+ * heavier powder fell straight through a lighter one - dirt through snow,
+ * sand through snow, dirt through sand. Reported as dirt passing through a
+ * snowbank instead of landing on it, which is what it looked like.
+ *
+ * A grain can push its way down through water or through smoke and cannot
+ * push its way through packed grains however heavy it is. Density still
+ * decides fluids and stops deciding anything between solids.
+ *
+ * Both halves in one test, because "powders stack" passes just as well on
+ * a board where nothing displaces anything at all - which would leave sand
+ * sitting on top of water. */
+static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
+{
+    static const struct { uint8_t bed, dropped; bool sinks; } cases[] = {
+        { MAT_SNOW,  MAT_DIRT,  false },
+        { MAT_SNOW,  MAT_SAND,  false },
+        { MAT_SAND,  MAT_DIRT,  false },
+        { MAT_WATER, MAT_SAND,  true  },
+        { MAT_WATER, MAT_DIRT,  true  },
+    };
+
+    for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        const uint8_t bed = cases[k].bed, dropped = cases[k].dropped;
+        fixture();
+        sand_clear(&s);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+        }
+        for (int y = H - 4; y < H - 1; y++) {
+            for (int x = 0; x < W; x++) {
+                sand_set(&s, x, y,
+                         materials[bed].kind == KIND_LIQUID
+                             ? CELL_MAKE(bed, MASS_MAX) : CELL_MAKE(bed, 4));
+            }
+        }
+        for (int x = 2; x < W - 2; x++) {
+            sand_set(&s, x, 1, CELL_MAKE(dropped, 4));
+        }
+
+        for (int i = 0; i < 300; i++) {
+            sand_step(&s, 0, 1000, 0);
+        }
+
+        int lowest = -1, highest_bed = H;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const uint8_t m = CELL_MATERIAL(sand_at(&s, x, y));
+                if (m == dropped && y > lowest) {
+                    lowest = y;
+                }
+                if (m == bed && y < highest_bed) {
+                    highest_bed = y;
+                }
+            }
+        }
+
+        char why[160];
+        snprintf(why, sizeof why,
+                 "%s dropped on %s should %s", materials[dropped].name,
+                 materials[bed].name,
+                 cases[k].sinks ? "sink through it - density decides fluids"
+                                : "land on top of it - grains do not pass "
+                                  "through grains");
+        if (cases[k].sinks) {
+            TEST_ASSERT_TRUE_MESSAGE(lowest > highest_bed, why);
+        } else {
+            TEST_ASSERT_TRUE_MESSAGE(lowest <= highest_bed, why);
+        }
+    }
+}
 
 /* Hot gas warms what it touches - convection.
  *
@@ -7837,6 +7911,7 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid);
     RUN_TEST(test_hot_gas_warms_what_it_touches);
     RUN_TEST(test_hot_gas_does_not_set_fire_to_anything);
     RUN_TEST(test_wet_sand_becomes_dirt_and_spends_the_water);

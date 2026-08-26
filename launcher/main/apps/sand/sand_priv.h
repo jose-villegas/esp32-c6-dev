@@ -575,7 +575,18 @@ static inline bool can_enter(uint8_t mover_density, cell_t target)
 
     const material_t *t = material_of(target);
 
-    return t->kind != KIND_STATIC && mover_density > t->density;
+    /* Only a FLUID gets displaced. A grain can push its way down through
+     * water or through smoke, and cannot push its way through packed
+     * grains however heavy it is - which is what grains do.
+     *
+     * This used to be `kind != KIND_STATIC`, so any powder sank through
+     * any lighter powder: dirt fell through snow, sand fell through snow,
+     * dirt fell through sand. Reported as dirt passing through a snowbank
+     * rather than landing on it, which is exactly what it looked like.
+     * Density still decides fluids - sand sinks in water, snow floats on
+     * it - and stops deciding anything between solids. */
+    return (t->kind == KIND_LIQUID || t->kind == KIND_GAS) &&
+           mover_density > t->density;
 }
 
 /* Whether a cell exists and can be entered, without moving anything into it.
