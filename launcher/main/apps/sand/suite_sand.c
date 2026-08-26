@@ -6771,6 +6771,58 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
         "limit it, since it happens at the foot of the trunk");
 }
 
+
+/* Plant and ice are speckled, and everything else extended is not.
+ *
+ * An extended material's variant IS which one it is, so neither can carry
+ * a shade and the position hash is the only variation available - the same
+ * tool stone and wood use, and right here for the same reason it was wrong
+ * for dirt: neither a wall of ice nor a grown tree moves.
+ *
+ * The negative half matters as much. The switch is on the low nibble, and
+ * a mistake there does not fail to build - it paints some other extended
+ * material in leaf green, which is the sort of thing nobody notices until
+ * a fourteenth material arrives and comes out looking like a hedge. */
+static void test_plant_and_ice_are_speckled_and_nothing_else_is(void)
+{
+    gfx_color_t col[3] = { 0, 0, 0 };
+
+    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        const cell_t c = MATX(k);
+        const bool grained = (k == MATX_PLANT || k == MATX_ICE);
+
+        int distinct = 0;
+        gfx_color_t seen[8];
+        for (unsigned hash = 0; hash < 8u; hash++) {
+            const material_pattern_t pat = material_colours(c, hash, false,
+                                                            col);
+            char why[96];
+            snprintf(why, sizeof why, "extended material %d", k);
+            TEST_ASSERT_EQUAL_MESSAGE(
+                grained ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
+
+            bool known = false;
+            for (int i = 0; i < distinct; i++) {
+                known = known || (seen[i] == col[0]);
+            }
+            if (!known) {
+                seen[distinct++] = col[0];
+            }
+        }
+
+        if (grained) {
+            TEST_ASSERT_GREATER_THAN_MESSAGE(4, distinct,
+                "a speckled material must actually use its grain - a table "
+                "of eight identical colours is a flat fill with extra steps");
+        } else {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(1, distinct,
+                "and one without a grain must not vary with position - it "
+                "would be the palette entry of some other material leaking "
+                "through the wrong branch");
+        }
+    }
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -9259,6 +9311,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
+    RUN_TEST(test_plant_and_ice_are_speckled_and_nothing_else_is);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);

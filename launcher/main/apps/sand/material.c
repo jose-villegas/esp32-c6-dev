@@ -1528,6 +1528,36 @@ static const gfx_color_t wood_grain[8] = {
     WOOD_GRAIN(4), WOOD_GRAIN(5), WOOD_GRAIN(6), WOOD_GRAIN(7),
 };
 
+/* The two extended materials that are worth speckling, and the only
+ * source of variation they can have.
+ *
+ * An extended material's variant IS which one it is, so there is no shade
+ * to carry - the position hash is all there is, exactly as for stone and
+ * wood. That is the right tool here for the same reason it was wrong for
+ * dirt: a wall of ice does not move, and a tree, once it has grown, does
+ * not either. A falling seed shimmers for the second it is in the air,
+ * which is a fair price for foliage that is not one flat block of green.
+ *
+ * Leaves get the wider range of the two. Foliage in life is a mess of
+ * light and shade and half-dead leaves; ice is one substance, and its
+ * variation is facets catching the light rather than any real difference
+ * in colour. */
+#define PLANT_DARK  0x35701F
+#define PLANT_LIGHT 0x74C25A
+
+#define ICE_DARK    0x93C9DE
+#define ICE_LIGHT   0xDEF5FD
+
+#define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
+
+#define GRAIN8_ROW(lo, hi)                                                 \
+    { GRAIN8(lo, hi, 0), GRAIN8(lo, hi, 1), GRAIN8(lo, hi, 2),             \
+      GRAIN8(lo, hi, 3), GRAIN8(lo, hi, 4), GRAIN8(lo, hi, 5),             \
+      GRAIN8(lo, hi, 6), GRAIN8(lo, hi, 7) }
+
+static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
+static const gfx_color_t ice_grain[8]   = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
+
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
     STONE_EDGE_ROW(3),  STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),
@@ -1543,6 +1573,18 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
     const uint8_t v = CELL_VARIANT(c);
 
     switch (CELL_MATERIAL(c)) {
+    case MAT_EXTENDED:
+        /* Switched on the low nibble, which for these is their identity
+         * rather than a variant - see MATX(). Anything without a grain of
+         * its own falls through to the flat palette entry below. */
+        if (v == MATX_PLANT || v == MATX_ICE) {
+            out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
+                                       : ice_grain[hash & 7u];
+            out[1] = out[0];
+            out[2] = out[0];
+            return MATERIAL_SPECKLED;
+        }
+        break;
     case MAT_GLASS:
         out[0] = edge ? glass_edge_body[v][hash & 3u]
                       : glass_body[v][hash & 3u];
