@@ -874,6 +874,16 @@ const reaction_t reactions[MATERIAL_MAX] = {
     },
 
     [MAT_WOOD] = {
+        /* Wood standing in wet ground buds. Slow - 6 in 256 is one bud
+         * every forty steps or so per cell of trunk touching wet soil, and
+         * only while somebody keeps the ground watered - because this is
+         * the part with no natural limit on it. Growth is bounded by how
+         * far a plant can lift water; budding happens at the foot of the
+         * trunk, where lift is zero by definition, so the only things
+         * holding it back are the rate and the moisture it spends. */
+        .sprouts     = 6,
+        .sprouts_to  = MATX(MATX_PLANT),
+
         /* 6 in 256 is roughly 43 steps of contact with a single flame
          * before it catches - a fire that has to work at it, which is
          * the whole point of "slowly consumed" (see sand_reactions.c's

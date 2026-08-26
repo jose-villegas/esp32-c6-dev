@@ -739,6 +739,25 @@ typedef struct {
     uint8_t hardens_to;
     uint8_t harden_run;
 
+    /* SPROUTING: chance/256 per step that this material, standing in soil
+     * with water in it, puts a cell of `sprouts_to` into an empty space
+     * beside it - and spends a level of that soil's moisture doing it.
+     *
+     * The other direction of the same loop `grows` makes: growth turns a
+     * plant into wood, and this turns wood back into new growth. It is
+     * what stops a tree being a thing that happens once. Hardening
+     * consumes the very cells that could grow, so a trunk that reached its
+     * full height was finished for good, and anything that took its
+     * foliage - fire, acid, a passing landslide - left a bare post that
+     * could never recover. A trunk with wet ground at its foot buds
+     * again.
+     *
+     * `sprouts_to` is a cell SPEC rather than a material id, the same as
+     * `shatters_to` and for the same reason: what a tree buds is an
+     * extended material, whose identity is its low nibble. */
+    uint8_t sprouts;
+    uint8_t sprouts_to;
+
     /* What a THERMALLY SHOCKED cell of this material becomes: hot enough to
      * be near the top of its ramp, and touching something that `chills`.
      *

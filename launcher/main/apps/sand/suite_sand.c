@@ -6358,6 +6358,97 @@ static void test_a_stem_that_wanders_still_hardens(void)
         "of two and no tree on a tilted board would ever become a trunk");
 }
 
+
+/* A bare trunk in wet ground buds again.
+ *
+ * The loop this closes: growth hardens a plant into wood, and hardening
+ * consumes the very cells that could grow. So a tree that reached its full
+ * height was finished for good, and one that lost its foliage - to fire,
+ * to acid, to a landslide - stayed a bare post for ever. The scene here is
+ * the worst case on purpose: wood only, no plant anywhere on the board, so
+ * nothing but the trunk itself can be responsible for what appears.
+ *
+ * The dry half of the test is the half that matters. Budding out of
+ * nothing would mean a wooden wall sprouted a hedge, and it is the
+ * moisture that has to be doing the work. */
+static void test_a_bare_trunk_in_wet_ground_buds_again(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, W / 2, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+
+    int budded = 0;
+    for (int i = 0; i < 1500 && !budded; i++) {
+        sand_step(&s, 0, 1000, 0);
+        budded = count_cells_of(MAT_EXTENDED) > 0;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(budded,
+        "wood standing in watered soil must put out new growth - without "
+        "it a tree is a thing that happens once, and anything that takes "
+        "its foliage leaves a post that can never recover");
+
+    /* And on dry ground, nothing. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, W / 2, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    for (int i = 0; i < 1500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_EXTENDED),
+        "and on dry ground it must not - budding out of nothing is a "
+        "wooden wall growing a hedge, and water is what pays for growth");
+
+    /* A trunk in barely damp ground stays a trunk.
+     *
+     * Deliberately NOT claimed as a test that budding spends the water it
+     * uses. It is not: budding puts its cell in an empty space beside the
+     * trunk, and on a grid this size those run out long before the
+     * moisture does, so a build that budded for free passes this
+     * unchanged - checked, by mutation. The moisture cost is real and
+     * bounds the total on a full board, and nothing here can see it.
+     *
+     * What this does pin is that one level of moisture is not a licence
+     * to keep budding, which is the failure that would be visible. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+    sand_set(&s, W / 2, H - 2, CELL_SOIL(MAT_DIRT, 1, 1));   /* one level */
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, W / 2, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    for (int i = 0; i < 1500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(2, count_cells_of(MAT_EXTENDED),
+        "a trunk in barely damp ground must put out a bud or two, not a "
+        "thicket - budding is the one part of growth with no lift to "
+        "limit it, since it happens at the foot of the trunk");
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -8854,6 +8945,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
     RUN_TEST(test_a_stem_that_wanders_still_hardens);
+    RUN_TEST(test_a_bare_trunk_in_wet_ground_buds_again);
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
     RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
     RUN_TEST(test_cullet_does_not_look_like_sand);

@@ -1046,6 +1046,59 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
     return -1;
 }
 
+/* One cell of something that SPROUTS: standing in wet soil, it buds a
+ * cell of `sprouts_to` into an empty space beside it and spends a level of
+ * the soil's moisture.
+ *
+ * Small enough to look like nothing and it closes the loop the whole
+ * feature rests on. Growth hardens a plant into wood, which consumes the
+ * cells that could grow - so a tree that reached its full height was
+ * finished permanently, and one that lost its foliage stayed a bare post.
+ * This is how a trunk gets to be alive. */
+static bool step_one_sprouting_cell(sand_t *s, int x, int y, int w, int h,
+                                    const reaction_t *r)
+{
+    int soil_at = -1, empty_at = -1, ex = 0, ey = 0;
+
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n)) {
+            if (empty_at < 0) {
+                empty_at = (int)nat;
+                ex = nx;
+                ey = ny;
+            }
+            continue;
+        }
+        if (soil_at < 0 && reaction_of(n)->dries != 0 &&
+            CELL_MOISTURE(n) != 0) {
+            soil_at = (int)nat;
+        }
+    }
+    /* Both, then the roll - drawing for a trunk with nowhere to bud or
+     * nothing to bud with would shift every decision downstream of it. */
+    if (soil_at < 0 || empty_at < 0) {
+        return soil_at >= 0;
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->sprouts) {
+        return true;
+    }
+
+    place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
+
+    const cell_t soil = s->cells[soil_at];
+    s->cells[soil_at] = CELL_WITH_MOISTURE(soil,
+                                           (uint8_t)(CELL_MOISTURE(soil) - 1));
+    mark_rows(s, soil_at / w, soil_at / w);
+    return true;
+}
+
 /* One step along a stem, in the direction (ux, uy) or either diagonal
  * beside it. Returns whether it found one.
  *
@@ -2102,6 +2155,14 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
         if (r->grows != 0 && s->may_have_moisture) {
             step_one_growing_cell(s, x, y, w, h, r);
             found |= FOUND_MOISTURE;
+            continue;
+        }
+        /* Budding. Same gate as growing, and reached by unlit wood, which
+         * falls through every branch above it. */
+        if (r->sprouts != 0 && s->may_have_moisture) {
+            if (step_one_sprouting_cell(s, x, y, w, h, r)) {
+                found |= FOUND_MOISTURE;
+            }
         }
     }
     return found;
