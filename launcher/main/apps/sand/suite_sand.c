@@ -9302,17 +9302,53 @@ static void build_thermal_shock_scene(sand_t *s)
  * exactly the churn this scene exists to show. The sticky mask only ever
  * grows, so "new cullet this third" stays a meaningful, non-negative
  * quantity even while individual cells are cycling glass -> cullet ->
- * glass under the payload's heat. */
+ * glass under the payload's heat.
+ *
+ * The mask is a BITSET, not a byte per cell. This is the only test in
+ * the file that needs a second full-grid buffer alongside `big`, and the
+ * device has only about 68 KB of heap left once the display framebuffer
+ * is carved out of it - two 41,216-byte grids do not fit in that, one
+ * byte per cell does. The first device run of this test with a byte mask
+ * failed AND leaked 41,240 bytes for the rest of boot, because the null
+ * check on the third malloc aborted the test before the frees at its end
+ * ever ran. One bit per cell brings the mask down to 5,152 bytes, which
+ * fits comfortably. */
+#define EVER_CULLET_BYTES \
+    (((size_t)REAL_W * (size_t)REAL_H + 7) / 8)
+
+static inline bool ever_cullet_get(const uint8_t *mask, size_t idx)
+{
+    return (mask[idx >> 3] >> (idx & 7)) & 1u;
+}
+
+/* Sets the bit for `idx` and reports whether it was actually clear
+ * beforehand, so callers can count new cullet without a second pass over
+ * the mask. */
+static inline bool ever_cullet_set(uint8_t *mask, size_t idx)
+{
+    const uint8_t bit = (uint8_t)(1u << (idx & 7));
+    const bool was_clear = (mask[idx >> 3] & bit) == 0;
+    mask[idx >> 3] |= bit;
+    return was_clear;
+}
+
 static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
                               ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    uint8_t *ever_cullet = malloc((size_t)REAL_W * (size_t)REAL_H);
-    TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(blocks);
-    TEST_ASSERT_NOT_NULL(ever_cullet);
-    memset(ever_cullet, 0, (size_t)REAL_W * (size_t)REAL_H);
+    uint8_t *ever_cullet = malloc(EVER_CULLET_BYTES);
+    const bool have_all = (big != NULL && blocks != NULL &&
+                            ever_cullet != NULL);
+    if (!have_all) {
+        free(big);
+        free(blocks);
+        free(ever_cullet);
+        TEST_FAIL_MESSAGE("need a grid, a block map and a one-bit-per-cell "
+                           "cullet mask for the thermal shock scene, and "
+                           "at least one of the three failed to allocate");
+    }
+    memset(ever_cullet, 0, EVER_CULLET_BYTES);
 
     sand_t s;
     sand_init(&s, big, REAL_W, REAL_H, 41u);
@@ -9365,19 +9401,24 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
 
         /* Grow the sticky mask, then charge the growth to this step's
          * third of the window - see the comment above for why the mask
-         * has to be sticky rather than a live per-step count. */
+         * has to be sticky rather than a live per-step count. The mask
+         * only ever grows, so counting each bit's clear-to-set transition
+         * right here, as it happens, is exactly equivalent to rescanning
+         * the whole mask afterwards and diffing against the previous
+         * total - a rescan could only ever find the same bits this loop
+         * just set. */
+        int sticky_total = sticky_total_before;
         for (int y = 0; y < REAL_H; y++) {
             for (int x = 0; x < REAL_W; x++) {
                 const cell_t c = sand_at(&s, x, y);
                 if (CELL_MATERIAL(c) == MAT_SAND &&
                     CELL_VARIANT(c) >= SAND_CULLET_BASE) {
-                    ever_cullet[(size_t)y * REAL_W + (size_t)x] = 1;
+                    if (ever_cullet_set(ever_cullet,
+                                         (size_t)y * REAL_W + (size_t)x)) {
+                        sticky_total++;
+                    }
                 }
             }
-        }
-        int sticky_total = 0;
-        for (size_t i = 0; i < (size_t)REAL_W * REAL_H; i++) {
-            sticky_total += ever_cullet[i];
         }
         int third = step - 1;
         third /= 3;
@@ -9424,7 +9465,8 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
                     if (x >= REAL_W || y >= REAL_H) {
                         continue;
                     }
-                    if (ever_cullet[(size_t)y * REAL_W + (size_t)x]) {
+                    if (ever_cullet_get(ever_cullet,
+                                         (size_t)y * REAL_W + (size_t)x)) {
                         has_cullet = true;
                     }
                 }
@@ -9669,8 +9711,14 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
     uint8_t *big    = malloc(REAL_W * REAL_H);
     uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
                               ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    TEST_ASSERT_NOT_NULL(big);
-    TEST_ASSERT_NOT_NULL(blocks);
+    const bool have_all = (big != NULL && blocks != NULL);
+    if (!have_all) {
+        free(big);
+        free(blocks);
+        TEST_FAIL_MESSAGE("need a grid and a block map for the boiler "
+                           "scene, and at least one of the two failed to "
+                           "allocate");
+    }
 
     sand_t s;
     sand_init(&s, big, REAL_W, REAL_H, 43u);
