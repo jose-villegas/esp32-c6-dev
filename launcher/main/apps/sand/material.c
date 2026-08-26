@@ -1111,6 +1111,33 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 &&
                SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1,
                "glass needs room below ambient for frost, room above the "
                "shock point to keep climbing, and ambient strictly between");
+/* Sand's two bands. Twelve steps then four, so both are spread across the
+ * full 0-15 interpolation regardless of how many entries they have. */
+#define SAND_DUNE  0xB07430
+#define SAND_PALE  0xF2CE90
+#define CULLET_LO  0xB9D2CC
+#define CULLET_HI  0xF0FAF6
+
+#define SAND_DUNE_RAMP                                                    \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  0)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  1)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  2)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  4)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  5)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  6)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  8)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  9)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 10)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 12)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 13)),                              \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 15))
+
+#define SAND_CULLET_RAMP                                                  \
+    GFX_RGB(LERP(CULLET_LO, CULLET_HI,  0)),                              \
+    GFX_RGB(LERP(CULLET_LO, CULLET_HI,  5)),                              \
+    GFX_RGB(LERP(CULLET_LO, CULLET_HI, 10)),                              \
+    GFX_RGB(LERP(CULLET_LO, CULLET_HI, 15))
+
 #define SHADES(lo, hi)                                                    \
     GFX_RGB(LERP(lo, hi,  0)), GFX_RGB(LERP(lo, hi,  1)),                 \
     GFX_RGB(LERP(lo, hi,  2)), GFX_RGB(LERP(lo, hi,  3)),                 \
@@ -1131,7 +1158,13 @@ static const gfx_color_t palette[256] = {
     [MAT_EMPTY * MATERIAL_VARIANTS] =
     SHADES(0x0A0C14, 0x0A0C14),   /* empty - the background */
     [MAT_SAND * MATERIAL_VARIANTS] =
-    SHADES(0xB07430, 0xF2CE90),   /* sand  */
+    /* sand - twelve DUNE shades and then four of CULLET, sand that used to
+     * be glass (see SAND_CULLET_BASE). The cullet band deliberately leaves
+     * the ramp rather than extending it: a paler warm tan is still tan,
+     * and what says "this was a window" is the cool desaturated cast, not
+     * the brightness. It is pulled towards frosted glass's own colour, so
+     * a pane and its wreckage are recognisably the same substance. */
+    SAND_DUNE_RAMP, SAND_CULLET_RAMP,
     [MAT_WATER * MATERIAL_VARIANTS] =
     SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
     [MAT_STONE * MATERIAL_VARIANTS] =

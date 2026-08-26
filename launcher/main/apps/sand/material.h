@@ -248,6 +248,36 @@ typedef enum {
  * confuse the simulation. */
 #define MATERIAL_MAX 16
 
+/* SAND's shade range is split near the top, and the top band is CULLET:
+ * sand that used to be glass.
+ *
+ * The same trick as soil's tone and free for the same reason - sand's
+ * variant is already a shade, so saying "this grain came from a pane"
+ * costs no bits at all, only four of the sixteen shades it could have
+ * been. Twelve is still far more variation than a dune needs.
+ *
+ * Shattered glass was already placed at the very top of the ramp, being
+ * whatever place_reacted() hands a new cell, so it was already the
+ * brightest sand there is - and it did not read, for two reasons the band
+ * fixes together. It was one flat value, so a broken pane was a slab of
+ * uniform colour; and the top of a ramp is still on that ramp, so
+ * "brightest sand" and "sand" are the same warm tan a shade apart. The
+ * cullet band is a different HUE - pale and cool, the colour of ground
+ * glass rather than of beach - and it varies inside itself.
+ *
+ * It is also permanent, which is the nice part: sand's shade never
+ * changes, so a heap keeps the memory of having been a window, and mixing
+ * it into an ordinary dune leaves the two visibly distinguishable. */
+#define SAND_DUNE_SHADES    12
+#define SAND_CULLET_BASE    SAND_DUNE_SHADES
+#define SAND_CULLET_SHADES  (MATERIAL_VARIANTS - SAND_CULLET_BASE)
+
+/* How many shades a freshly PAINTED grain may pick from. Everything else
+ * gets the whole range; sand stops short of its reserved band, which is
+ * what keeps the band meaning anything. */
+#define MATERIAL_SHADE_SPAN(m)                                            \
+    ((m) == MAT_SAND ? SAND_DUNE_SHADES : MATERIAL_VARIANTS)
+
 /* How many materials hide behind MAT_EXTENDED - one per value of the low
  * nibble. */
 #define MATERIAL_EXTENDED_COUNT 16

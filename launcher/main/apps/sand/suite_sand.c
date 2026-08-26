@@ -5698,6 +5698,117 @@ static void test_soil_a_wetting_front_converts_is_handed_a_real_share(void)
         "which makes every cell the front converts a dead end");
 }
 
+
+/* A shattered pane comes back as CULLET, not as beach.
+ *
+ * Sand's variant is a shade, so recording that a grain used to be glass
+ * costs nothing but four of the sixteen shades it could have had. What it
+ * buys is that the wreckage of a window stays visibly the wreckage of a
+ * window - sand's shade never changes, so a heap of it keeps the memory
+ * indefinitely and mixes into an ordinary dune without becoming it.
+ *
+ * The second assert is the one that matters for how it LOOKS. Shattered
+ * glass was already landing at the top of sand's ramp, because that is
+ * what the general placement helper hands a new cell - so it was already
+ * the brightest sand there is, in one flat value across the whole pane. A
+ * band that is not varied inside itself is a slab of colour, which is the
+ * thing this is meant to stop being. */
+static void test_a_shattered_pane_comes_back_as_cullet(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, 0));   /* fully frosted */
+    }
+
+    for (int i = 0; i < 60 && count_cells_of(MAT_SAND) == 0; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, CELL_MAKE(MAT_LAVA, MASS_MAX));
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_SAND) > 0,
+        "the pane has to have actually shattered");
+
+    int shades[MATERIAL_VARIANTS] = { 0 };
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) != MAT_SAND) {
+                continue;
+            }
+            TEST_ASSERT_TRUE_MESSAGE(CELL_VARIANT(c) >= SAND_CULLET_BASE,
+                "sand from a shattered pane must land in the cullet band - "
+                "the top of the dune ramp is still the dune ramp, and pale "
+                "tan reads as sand rather than as broken glass");
+            shades[CELL_VARIANT(c)]++;
+        }
+    }
+
+    int distinct = 0;
+    for (int v = SAND_CULLET_BASE; v < MATERIAL_VARIANTS; v++) {
+        distinct += shades[v] ? 1 : 0;
+    }
+    /* Three of the four, not merely "more than one". The band's top value
+     * is exactly what the general placement helper hands a new cell, so a
+     * crack that forgot to vary its shade still lands IN the band - a
+     * mutation reverting the spread to place_reacted() passed a
+     * two-distinct check on the strength of the one cell that starts the
+     * crack. */
+    TEST_ASSERT_GREATER_THAN_MESSAGE(2, distinct,
+        "and must vary across the band - one flat value over a whole pane "
+        "is a slab of colour, which is what this replaced");
+}
+
+/* And painted sand must never land in that band.
+ *
+ * A reserved band only means anything if it is reserved. Without this the
+ * ordinary brush would scatter grains claiming to be broken glass through
+ * every dune on the board, at a quarter of them. */
+static void test_painted_sand_stays_out_of_the_cullet_band(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_spawn(&s, W / 2, H / 2, 3, MAT_SAND);
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) != MAT_SAND) {
+                continue;
+            }
+            TEST_ASSERT_TRUE_MESSAGE(CELL_VARIANT(c) < SAND_CULLET_BASE,
+                "a painted grain must be a dune shade - the cullet band is "
+                "reserved, and a brush that reaches into it makes every "
+                "pile look like it has broken glass mixed through it");
+        }
+    }
+}
+
+/* The two bands have to be different colours, and not merely different
+ * ends of one ramp.
+ *
+ * This is the whole point and nothing else would catch it: cullet built
+ * from sand's own colours would pass every test above while looking
+ * exactly like pale sand, which is what it looked like before. */
+static void test_cullet_does_not_look_like_sand(void)
+{
+    const gfx_color_t *pal = material_palette();
+
+    for (int c = SAND_CULLET_BASE; c < MATERIAL_VARIANTS; c++) {
+        for (int d = 0; d < SAND_CULLET_BASE; d++) {
+            char why[96];
+            snprintf(why, sizeof why, "cullet %d against dune shade %d", c, d);
+            TEST_ASSERT_TRUE_MESSAGE(
+                pal[CELL_MAKE(MAT_SAND, c)] != pal[CELL_MAKE(MAT_SAND, d)],
+                why);
+        }
+    }
+}
+
 /* --- growing ------------------------------------------------------------- */
 
 /* A plant on wet soil climbs.
@@ -8308,6 +8419,9 @@ void run_sand_suite(void)
     RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
     RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
+    RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
+    RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
+    RUN_TEST(test_cullet_does_not_look_like_sand);
     RUN_TEST(test_a_wetting_front_spreads_past_the_cells_it_touched);
     RUN_TEST(test_soil_a_wetting_front_converts_is_handed_a_real_share);
     RUN_TEST(test_moisture_is_conserved_as_it_spreads);

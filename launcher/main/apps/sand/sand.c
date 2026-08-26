@@ -87,7 +87,11 @@ static cell_t random_cell(sand_t *s, material_id_t material)
     if (reactions[material].dries != 0) {
         return CELL_SOIL(material, rng_below(&s->rng, SOIL_TONES), 0);
     }
-    return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
+    /* Not the whole range: sand keeps its top four shades for cullet, so
+     * a painted dune can never accidentally contain grains that claim to
+     * have been a window. */
+    return CELL_MAKE(material,
+                     rng_below(&s->rng, MATERIAL_SHADE_SPAN(material)));
 }
 
 static int ring_index(int dx, int dy)

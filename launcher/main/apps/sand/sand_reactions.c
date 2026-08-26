@@ -484,6 +484,27 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
  * releases is the whole pane's, not each cell's - a crack does not stop
  * because the far end of the sheet happened to be cooler. The temperature
  * test belongs at the point the crack STARTS, which is where it is. */
+/* What a crack leaves behind.
+ *
+ * Sand gets a shade out of its reserved CULLET band rather than whatever
+ * place_reacted() would hand it, so a shattered pane is pale cool ground
+ * glass instead of more beach - and a fresh shade per cell, because a
+ * broken window is not one flat colour. Anything else a crack might one
+ * day produce is placed the ordinary way. */
+static inline void place_cracked(sand_t *s, int x, int y, size_t at,
+                                 material_id_t into)
+{
+    if (into == MAT_SAND) {
+        place_cell(s, x, y, at,
+                   CELL_MAKE(into,
+                             (uint8_t)(SAND_CULLET_BASE +
+                                       rng_below(&s->rng,
+                                                 SAND_CULLET_SHADES))));
+        return;
+    }
+    place_reacted(s, x, y, at, into);
+}
+
 static void crack_run(sand_t *s, int x, int y, int w, int h,
                       material_id_t from, material_id_t into)
 {
@@ -491,7 +512,7 @@ static void crack_run(sand_t *s, int x, int y, int w, int h,
     int top = 0, done = 0;
 
     const size_t first = (size_t)y * (size_t)w + (size_t)x;
-    place_reacted(s, x, y, first, into);
+    place_cracked(s, x, y, first, into);
     frontier[top++] = (uint16_t)first;
 
     while (top > 0 && done < CRACK_MAX) {
@@ -510,7 +531,7 @@ static void crack_run(sand_t *s, int x, int y, int w, int h,
             if (CELL_MATERIAL(s->cells[nat]) != from) {
                 continue;
             }
-            place_reacted(s, nx, ny, nat, into);
+            place_cracked(s, nx, ny, nat, into);
             if (top < CRACK_MAX) {
                 frontier[top++] = (uint16_t)nat;
             }
