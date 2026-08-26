@@ -44,7 +44,7 @@ turns to pass only when its tenth is genuinely won.
 | Lava stress scene | 127,386 µs | 109,000 | 18,386 µs |
 | Smoke + steam screen | 141,444 µs | 127,000 | 14,444 µs |
 | Full screen of fire, steady | 297,220 µs | 266,000 | 31,220 µs |
-| Fire cascade through gas | 412,718 µs | 456,000 | **passes**, +9.5% |
+| Fire cascade through gas | 412,718 µs | 371,500 | 41,218 µs |
 
 The measured column was refreshed from `performance_20260826_183646` — the
 first watchdog-free capture (zero contamination possible, see attempt 15),
@@ -55,9 +55,12 @@ clean numbers (four liquids 113,000 → 112,000; thermal shock 96,000 →
 water and mixed rows now carry the fourteenth attempt's real device cost
 (+16% and +11%, roughly double its host prediction — the fifteenth
 attempt's host-vs-device lesson, again); and the fire cascade came in
-94,000 µs *below* its baseline and now passes — evidence its 506,666
-baseline was itself a contaminated row the survey missed, making its
-456,000 target a re-peg candidate (≈371,500) awaiting a decision.
+94,000 µs *below* its baseline — evidence its 506,666 baseline was
+itself a contaminated row the survey missed (a single ~500 ms step is
+an easy mark for a 5-second dump cadence). Its target was re-pegged
+from the clean 412,718 to 371,500, returning it to a deliberately
+failing reduction target instead of the accidental pass the inflated
+peg produced — all thirteen rows fail again, by design.
 
 Two findings from that capture, unresolved at re-base time and first in
 line for the next round: attempt 11's host-measured water/mixed recovery

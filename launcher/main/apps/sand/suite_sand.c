@@ -10639,8 +10639,18 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
      * materials wave - the reactions pass gained real chemistry and the
      * gas pass is 60% of a saturated step - -> target 456000
      * (measured * 0.9, rounded; was 350000, pegged to a pre-wave
-     * 321339). */
-    TEST_ASSERT_LESS_THAN_MESSAGE(456000, (int)elapsed,
+     * 321339).
+     *
+     * Re-pegged the same evening from the first watchdog-free capture
+     * (performance_20260826_183646): the clean number is 412718 - a
+     * 94000 us drop that says the 506666 was itself a contaminated row
+     * the fifteenth attempt's survey missed, which this single-step
+     * test is unusually exposed to (one ~500 ms window per capture
+     * against a 5-second dump cadence, and deterministically so).
+     * Same uniform rule, measured * 0.9 rounded -> 371500, back to a
+     * deliberately failing reduction target rather than the accidental
+     * pass the inflated peg produced. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(371500, (int)elapsed,
         "a full-screen cascade must stay in the same ballpark as measured "
         "- a jump here means something got much more expensive, not that "
         "this specific number is a real-time requirement");
