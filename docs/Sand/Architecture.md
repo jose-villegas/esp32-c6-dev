@@ -243,7 +243,8 @@ so there are **15 material slots** and **14 are in use** - sand, water,
 stone, gas, fire, wood, steam, smoke, ember, oil, lava, acid, glass, snow.
 One free.
 
-Three ways to make more room, cheapest first.
+Four ways to make more room, cheapest first - and one that looks like a
+way and is not.
 
 **Reinterpret a nibble.** Free, and already the pattern: liquids read the
 variant as fill, transients as life remaining, glass and stone as
@@ -256,6 +257,41 @@ has to *choose* the material; anything reached by reacting can often be a
 variant of what it came from. Smoke and steam are near-identical rows kept
 apart for narrative reasons, and are the obvious candidates if a slot is
 ever needed badly.
+
+**Add an extended range behind the last slot.** Not built, but the layout
+already allows it and it is the cheapest way to a large number of new
+materials. Let material id 15 mean "extended", and read the low nibble as
+naming one of sixteen further materials.
+
+Three facts make it free in the sweep, and all three are properties of how
+the tables are already indexed:
+
+| | what happens |
+| --- | --- |
+| `material_of()` | indexes `materials[]` by the nibble - id 15 is **one shared row**, so the hot path does not change at all |
+| `palette[256]` | is indexed by the **raw cell byte**, so sixteen distinct colours come for free with no change whatsoever |
+| `reaction_of()` | is used only in `sand_reactions.c` - the **cold** table, where decoding the extended id costs nothing that matters |
+
+So the sixteen can each have their own colour and their own reaction row -
+their own flammability, acid resistance, heat behaviour, whatever - while
+`sand_step()` continues to treat them as one material.
+
+What they cannot have is their own **physics** or a **variant**. They share
+one `density`, `kind`, `slip`, `repose` and `scatter`, because that is the
+row the hot path reads; and the low nibble is spent naming which one they
+are, so there is nothing left for a shade, a fill level, a life or a
+temperature. That confines them to inert static solids - coloured brick,
+decorative block, an ore that acid or fire treats differently, anything
+whose job is to be built with and reacted to rather than to move.
+
+Which makes the realistic budget:
+
+- **one slot** with full physics, worth saving for something that has to
+  move or carry a variant - another liquid, powder or transient;
+- **sixteen more** inert solids behind the extended range, addable the day
+  a seventeenth material is actually wanted, disturbing nothing that
+  already exists;
+- packing the whole byte only after both are spent.
 
 **Pack the byte.** Drop the fixed 4+4 split for a flat 0-255 index with a
 per-material base offset, giving each material only as many variant codes
