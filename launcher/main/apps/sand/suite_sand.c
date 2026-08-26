@@ -6964,25 +6964,25 @@ static void test_hardening_leaves_the_growing_tip_alive(void)
  * Charging moisture per leaf makes it expensive; having no `grows` field
  * makes it impossible.
  *
- * The scene is stacked in favour of the failure: watered soil right there,
- * a trunk to draw through, and two thousand steps. A plant in this spot
- * would fill the board. */
+ * Two scenes, because one cannot show both halves without confusing them.
+ * A trunk standing in wet soil BUDS leaves of its own (see wood's
+ * `sprouts`), so a scene with both a trunk and watered ground cannot tell
+ * "the leaf spread" from "the tree put out another one" - which is exactly
+ * how this test first failed when budding changed from plant to foliage. */
 static void test_a_leaf_neither_spreads_nor_falls(void)
 {
+    /* One: on watered soil with NO wood anywhere. It can drink, so it will
+     * not wither, and nothing else in the scene can produce foliage - so
+     * any second leaf would have to have come from the first. */
     fixture();
     sand_clear(&s);
     sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
 
-    const int cx = W / 2;
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, H - 1, STONE);
         sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
     }
-    for (int y = H - 5; y < H - 2; y++) {
-        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
-    }
-    /* Hanging off the side of the trunk, over nothing. */
-    sand_set(&s, cx + 1, H - 5, MATX(MATX_LEAF));
+    sand_set(&s, W / 2, H - 3, MATX(MATX_LEAF));
 
     for (int i = 0; i < 2000; i++) {
         for (int x = 0; x < W; x++) {
@@ -6992,21 +6992,37 @@ static void test_a_leaf_neither_spreads_nor_falls(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    int leaves = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            if (sand_at(&s, x, y) == MATX(MATX_LEAF)) {
-                leaves++;
-            }
-        }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
+        "a leaf on watered ground must stay exactly one leaf - foliage "
+        "that can grow is a canopy that feeds the growth loop, which is "
+        "the whole reason it is not made of plant");
+
+    /* Two: hanging off the side of a trunk, over nothing, on DRY ground -
+     * dry so the trunk cannot bud, which would put leaves in the scene
+     * that this half is not about. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, leaves,
-        "a leaf must stay exactly one leaf - foliage that can grow is a "
-        "canopy that feeds the growth loop, which is the whole reason it "
-        "is not made of plant");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, cx + 1, H - 5),
+    for (int y = H - 4; y < H - 1; y++) {
+        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    sand_set(&s, cx + 1, H - 4, MATX(MATX_LEAF));
+
+    for (int i = 0; i < 2000; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF),
+        sand_at(&s, cx + 1, H - 4),
         "and it must not have moved - it has no `falls`, so a limb of "
         "foliage hangs off its trunk over thin air and stays there");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
+        "nor multiplied, on dry ground where nothing can bud");
 }
 
 /* A leaf with no tree behind it goes.
@@ -7415,10 +7431,22 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
         sand_set(&s, W / 2, y, CELL_MAKE(MAT_WOOD, 0));
     }
 
+    /* Specifically FOLIAGE. It used to bud a plant, and a plant at the
+     * foot of a trunk is a sucker - a grower, which climbed the outside
+     * of the trunk as a wandering one-cell thread that never got thick
+     * enough to harden and stop. Asserting on MAT_EXTENDED alone would
+     * pass on either, which is what it did while the bug was there. */
     int budded = 0;
     for (int i = 0; i < 1500 && !budded; i++) {
         sand_step(&s, 0, 1000, 0);
-        budded = count_cells_of(MAT_EXTENDED) > 0;
+        for (int y = 0; y < H && !budded; y++) {
+            for (int x = 0; x < W; x++) {
+                if (sand_at(&s, x, y) == MATX(MATX_LEAF)) {
+                    budded = 1;
+                    break;
+                }
+            }
+        }
     }
     TEST_ASSERT_TRUE_MESSAGE(budded,
         "wood standing in watered soil must put out new growth - without "

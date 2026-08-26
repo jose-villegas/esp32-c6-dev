@@ -886,15 +886,29 @@ const reaction_t reactions[MATERIAL_MAX] = {
     },
 
     [MAT_WOOD] = {
-        /* Wood standing in wet ground buds. Slow - 6 in 256 is one bud
-         * every forty steps or so per cell of trunk touching wet soil, and
-         * only while somebody keeps the ground watered - because this is
-         * the part with no natural limit on it. Growth is bounded by how
-         * far a plant can lift water; budding happens at the foot of the
-         * trunk, where lift is zero by definition, so the only things
-         * holding it back are the rate and the moisture it spends. */
+        /* Wood standing in wet ground buds FOLIAGE. Slow - 6 in 256 is
+         * one bud every forty steps or so per cell of trunk touching wet
+         * soil, and only while somebody keeps the ground watered.
+         *
+         * It used to bud a PLANT, and that was the source of the thin
+         * green threads running up beside a trunk. Budding can only ever
+         * happen where wood meets wet soil, which is the foot of the
+         * trunk - so every bud was a sucker at ground level, and a sucker
+         * is a grower: it climbed the outside of the trunk as a one-cell
+         * column, wandering with the dithered gravity into a zigzag that
+         * reads as a line of loose dots rather than as part of a tree, and
+         * it was too thin to ever harden and stop.
+         *
+         * Confirmed by deleting it - the same seed with `sprouts` at zero
+         * grows the same trunk with no threads anywhere on it.
+         *
+         * Foliage is the right thing to put there. It cannot grow, so it
+         * cannot climb; it cannot fall; and it is what a bare trunk
+         * wanting to come back to life should be producing anyway. It
+         * takes a grower back out of the growth loop rather than adding
+         * one, which this feature has needed twice already. */
         .sprouts     = 6,
-        .sprouts_to  = MATX(MATX_PLANT),
+        .sprouts_to  = MATX(MATX_LEAF),
 
         /* A trunk standing in water waters its own roots, at a third of
          * green growth's rate - bark is not a leaf. */
