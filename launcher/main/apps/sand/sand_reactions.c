@@ -217,9 +217,25 @@ static const int reaction_dirs[4][2] = {
  * the same scene, which is most of them. Mirrors sand_set()'s own
  * independent-ifs block, for exactly the same reason it is written that
  * way there. */
+/* `spec` is either an ordinary material id, or a whole extended cell byte
+ * (MATX(k), whose high nibble is MAT_EXTENDED). The two cannot be confused
+ * because an ordinary id is at most MAT_COUNT - 1, well under 0xF0.
+ *
+ * That is what lets a reaction PRODUCE an extended material: every target
+ * field - heats_to, ignites_to, shatters_to, quench_to - is a uint8_t, so
+ * MATX(k) fits in one with nothing to change. Without this an extended
+ * material could only ever be painted, never made. */
 static inline void place_reacted(sand_t *s, int x, int y, size_t at,
-                                 material_id_t mat)
+                                 uint8_t spec)
 {
+    if (spec >= (MAT_EXTENDED << 4)) {
+        s->cells[at] = (cell_t)spec;     /* identity IS the low nibble */
+        latch_content_flags(s, (cell_t)spec);
+        mark_rows(s, y, y);
+        wake_block_and_neighbors(s, x, y);
+        return;
+    }
+    const material_id_t mat = (material_id_t)spec;
     /* A heat-ramping material's variant is HEAT, and a cell that has just
      * come into existence has none of it yet. MATERIAL_VARIANTS - 1 would
      * mean sand fusing into glass produced a pane already at the top of its
@@ -1072,7 +1088,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
          * comment. Hardcoded rather than a `smokes_to` field mirroring
          * quench_to, because every material that burns wants the same
          * residue; if one ever does not, that field is the change. */
-        const uint8_t residue = reactions[mat_id].residue;
+        const uint8_t residue = reaction_of(grain)->residue;
         if (residue != 0 && (int)(rng_next(&s->rng) & 0xFF) < residue) {
             place_reacted(s, x, y, at, MAT_SMOKE);
         }
@@ -1083,7 +1099,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
         if (neighbor_quenches(s, nx, ny, w, h)) {
-            const material_id_t quench_to = reactions[mat_id].quench_to;
+            const uint8_t quench_to = reaction_of(grain)->quench_to;
             if (quench_to != 0) {
                 place_reacted(s, x, y, at, quench_to);
             } else {
@@ -1139,7 +1155,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
         acted = true;
     }
 
-    if (try_flare(s, x, y, w, h, reactions[mat_id].flare)) {
+    if (try_flare(s, x, y, w, h, reaction_of(grain)->flare)) {
         acted = true;
     }
 

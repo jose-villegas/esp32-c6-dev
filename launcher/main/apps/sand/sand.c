@@ -212,7 +212,7 @@ int sand_count(const sand_t *s)
 
 /* Attempt to place `material` at (x, y). Returns whether it did - off the
  * grid or already occupied is not an error, just nothing to do. */
-static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
+static bool try_spawn_one(sand_t *s, int x, int y, cell_t spec)
 {
     if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
         return false;
@@ -223,8 +223,14 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
     /* Latched from the finished cell, not from the material id, because
      * one of the flags depends on the variant - and through the SAME
      * helper sand_set() uses, because this list existing twice is what
-     * let the brush and the setter disagree about snow. */
-    const cell_t cell = random_cell(s, material);
+     * let the brush and the setter disagree about snow.
+     *
+     * An extended material is written exactly as given: its low nibble is
+     * its identity, so there is no variant for random_cell() to pick and
+     * picking one would change which material it is. */
+    const cell_t cell = cell_is_extended(spec)
+                        ? spec
+                        : random_cell(s, (material_id_t)CELL_MATERIAL(spec));
     s->cells[y * s->w + x] = cell;
     latch_content_flags(s, cell);
     mark_move(s, x, y, x, y);
@@ -232,6 +238,11 @@ static bool try_spawn_one(sand_t *s, int x, int y, material_id_t material)
 }
 
 int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material)
+{
+    return sand_spawn_cell(s, cx, cy, radius, CELL_MAKE(material, 0));
+}
+
+int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec)
 {
     int filled = 0;
     const int r2 = radius * radius;
@@ -241,7 +252,7 @@ int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material)
             if (dx * dx + dy * dy > r2) {
                 continue;
             }
-            if (try_spawn_one(s, cx + dx, cy + dy, material)) {
+            if (try_spawn_one(s, cx + dx, cy + dy, spec)) {
                 filled++;
             }
         }

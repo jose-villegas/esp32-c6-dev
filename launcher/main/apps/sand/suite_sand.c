@@ -5118,6 +5118,111 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
         "so steam is the visible symptom of lava being boiled");
 }
 
+/* ===================================================================
+ * The extended range: sixteen materials behind the last slot.
+ * =================================================================== */
+
+/* An extended material keeps its identity through a paint.
+ *
+ * Its low nibble IS which material it is, so anything that treats the
+ * variant as a shade to randomise - which is what happens to every
+ * ordinary static material - would silently repaint it as a different
+ * extended material. That is the one way this scheme can go wrong
+ * quietly. */
+static void test_an_extended_material_survives_being_painted(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        sand_clear(&s);
+        sand_spawn_cell(&s, W / 2, H / 2, 0, MATX(k));
+        const cell_t got = sand_at(&s, W / 2, H / 2);
+
+        char why[96];
+        snprintf(why, sizeof why,
+                 "extended material %d came back as %d", k, CELL_VARIANT(got));
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_EXTENDED, CELL_MATERIAL(got), why);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(k, CELL_VARIANT(got), why);
+    }
+}
+
+/* They share one physics row, and that is the deal.
+ *
+ * material_of() is read per cell per step by the sweep, so it must not
+ * decode anything. Every extended material therefore moves - or rather
+ * does not move - identically. Asserting it keeps someone from quietly
+ * adding a row that expects otherwise. */
+static void test_every_extended_material_shares_one_physics_row(void)
+{
+    const material_t *first = material_of(MATX(0));
+
+    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        char why[96];
+        snprintf(why, sizeof why, "extended material %d", k);
+        TEST_ASSERT_EQUAL_PTR_MESSAGE(first, material_of(MATX(k)), why);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_STATIC, first->kind,
+        "the shared row has to be an inert solid - anything that moves "
+        "needs its own physics, which is exactly what the extended range "
+        "cannot give it");
+}
+
+/* But they get their own reactions, which is the point of the range. */
+static void test_extended_materials_get_their_own_reactions(void)
+{
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(0, reaction_of(MATX(MATX_ICE))->chills,
+        "ice must chill - an extended material with no reactions of its "
+        "own would just be a coloured block");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, reaction_of(MATX(1))->chills,
+        "and an extended material that has not been defined must not "
+        "inherit the reactions of one that has - they are separate rows, "
+        "not one shared row like the physics");
+}
+
+/* Ice does what it exists for: it cracks hot glass, and it stays put.
+ *
+ * Snow already chills, but snow is a powder - it drifts as it falls,
+ * floats on water, and melts in any liquid, so aiming it at one face of a
+ * hot vessel is most of the difficulty of using it. Ice is the same cold
+ * in a form that can be BUILT with. */
+static void test_ice_cracks_hot_glass_and_stays_where_it_is_put(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_GLASS, MATERIAL_VARIANTS - 1));
+        sand_set(&s, x, H - 3, MATX(MATX_ICE));
+    }
+    const int ice_x = 1, ice_y = H - 3;
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_GLASS),
+        "ice against glass at the top of its ramp must crack it, the same "
+        "as snow does - that is what makes it worth having as a solid");
+
+    /* It sat on glass that has now become sand, so it may have settled a
+     * row; what matters is that it did not drift sideways the way a
+     * powder does. */
+    bool still_there = false;
+    for (int y = ice_y; y < H; y++) {
+        if (CELL_MATERIAL(sand_at(&s, ice_x, y)) == MAT_EXTENDED) {
+            still_there = true;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(still_there,
+        "and it must still be in the column it was placed in - a solid "
+        "block is the whole difference from snow");
+}
+
 /* Snow floats, because it is lighter than what it lands on.
  *
  * Not decoration: floating is what puts snow ON TOP of a pool rather than
@@ -7417,6 +7522,10 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_an_extended_material_survives_being_painted);
+    RUN_TEST(test_every_extended_material_shares_one_physics_row);
+    RUN_TEST(test_extended_materials_get_their_own_reactions);
+    RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_stone_heats_up_next_to_lava);
     RUN_TEST(test_stone_never_melts_however_hot);
     RUN_TEST(test_snow_cracks_glass_but_not_stone);

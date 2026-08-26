@@ -229,6 +229,15 @@ int sand_count(const sand_t *s);
  * anything already there. */
 int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material);
 
+/* The same, but taking a whole CELL as the thing to paint.
+ *
+ * An extended material has no variant to choose - its low nibble is its
+ * identity (MATX() in material.h) - so it cannot be named by a
+ * material_id_t at all, and this is how it gets onto the board. For an
+ * ordinary material pass CELL_MAKE(id, 0); the variant is ignored and
+ * chosen the usual way, so sand_spawn() is just this with the id wrapped. */
+int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec);
+
 /* Remove every grain in a disc. Returns how many it removed.
  *
  * The exact mirror of sand_spawn, down to reporting a count that only includes

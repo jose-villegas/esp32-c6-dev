@@ -164,10 +164,18 @@ static screen_t screen;
  * byproduct you watch happen, and ember is a burn state wood passes
  * through on its own, not a material anyone chooses directly - see
  * docs/Sand/Adding-a-Material.md for this as a worked example. */
-static const material_id_t brushes[] = { MAT_SAND, MAT_WATER, MAT_STONE,
-                                         MAT_GAS,  MAT_FIRE,  MAT_WOOD,
-                                         MAT_OIL,  MAT_LAVA, MAT_ACID,
-                                         MAT_GLASS, MAT_SNOW };
+/* Whole CELLS rather than material ids, because an extended material
+ * cannot be named by an id - its low nibble is its identity (MATX() in
+ * material.h). An ordinary material is written CELL_MAKE(id, 0) and its
+ * variant is chosen the usual way when it is painted. */
+static const cell_t brushes[] = {
+    CELL_MAKE(MAT_SAND, 0),  CELL_MAKE(MAT_WATER, 0),
+    CELL_MAKE(MAT_STONE, 0), CELL_MAKE(MAT_GAS, 0),
+    CELL_MAKE(MAT_FIRE, 0),  CELL_MAKE(MAT_WOOD, 0),
+    CELL_MAKE(MAT_OIL, 0),   CELL_MAKE(MAT_LAVA, 0),
+    CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
+    CELL_MAKE(MAT_SNOW, 0),  MATX(MATX_ICE),
+};
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
 /* How long the mode label stays up after the PWR button is pressed. Long
@@ -486,65 +494,11 @@ static inline unsigned cell_hash(int cx, int cy)
     return h;
 }
 
-/* Which of a hatched material's two diagonals catches the light, and where
- * along it the highlights fall.
- *
- * Both diagonals are always drawn - the quiet one is the grain in the
- * material and does not move. The other is the REFLECTION: it is brighter,
- * it is the one gravity picks, and its phase shifts as the board turns, so
- * the glints slide across a pane while it is tilted instead of sitting
- * still. That movement is most of what sells it as a surface catching
- * light rather than a texture printed on one.
- *
- * This was already here and did nothing visible, which is worth recording.
- * It chose which family was "lit" back when only one family was drawn;
- * once both were, both were painted the same colour and the choice had no
- * effect anyone could see. Reported as "I didn't see them follow the
- * gravity", and they did not - a direction that selects between two
- * identical things is not a direction.
- *
- * Rounded to the nearest eighth, so tilting past 45 degrees swaps which
- * diagonal shines. A reflection axis is symmetric under half a turn
- * anyway, so eight directions give four distinct looks, which is as many
- * as the idea has. */
-/* Which way is down, as the RENDERER sees it. Set once a frame from the
- * same smoothed vector the simulation is given.
- *
- * Taken from sand_gravity_direction() rather than from sim.last_load_dx /
- * last_load_dy, which is where it started. That field is the simulation's
- * own record of the last direction it SETTLED under, so it is only written
- * when a step actually runs - and run_sim_steps() can decide a frame is
- * worth zero steps, and compute_settled_bit() returns early under zero
- * gravity, and neither has any business deciding when a reflection moves.
- * Reading the input directly has none of those failure modes and is what
- * the mode label already does two lines below. */
-static int shine_dx = 0, shine_dy = 1;
-
-static inline bool shine_uses_sum(void)
-{
-    const int ax = shine_dx < 0 ? -shine_dx : shine_dx;
-    const int ay = shine_dy < 0 ? -shine_dy : shine_dy;
-    return ay >= ax;
-}
-
-static inline int shine_phase(void)
-{
-    return (shine_dx * 3 + shine_dy * 5) & 7;
-}
-
-/* Everything about the reflection that can change what a pane looks like,
- * in one number, so the renderer can notice it moved. */
-static inline int shine_key(void)
-{
-    return (shine_uses_sum() ? 8 : 0) | shine_phase();
-}
-
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
     gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
-    const bool by_sum = shine_uses_sum();
-    const int phase = shine_phase();
+    row_has_shine[cy] = 0;
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
@@ -575,6 +529,10 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * speckled cell simply arrived with a different colour, chosen
          * once per cell from its position. Only STRIPED does per-pixel
          * work, and only where a striped material is actually on screen. */
+        if (pat == MATERIAL_HATCHED) {
+            row_has_shine[cy] = 1;
+        }
+
         if (pat != MATERIAL_HATCHED) {
             const gfx_color_t c = col[0];
             for (int dy = 0; dy < n; dy++) {
@@ -618,17 +576,25 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                  * left of the diagonal: two's complement just shifts the
                  * phase, which nothing here can tell apart from any other
                  * phase. */
-                const bool a = ((base + dx + dy + phase) & 7) == 0;
-                const bool b = ((diff + dx - dy) & 7) == 0;
+                const bool grain = (((base + dx + dy) & 7) == 0) ||
+                                   (((diff + dx - dy) & 7) == 0);
 
-                /* The reflection wins wherever it falls, including over a
-                 * crossing - it is the bright thing, and letting the grain
-                 * override it anywhere would put dark notches through a
-                 * highlight. */
-                const bool shine = by_sum ? a : b;
-                const bool grain = by_sum ? b : a;
+                /* SHINE: a band travelling along the diagonal, advanced on
+                 * a clock rather than aimed by anything. Modulo by
+                 * SHINE_PERIOD, which is not a power of two - affordable
+                 * because this loop only runs for hatched materials, and
+                 * only glass is hatched. */
+                int along = (base + dx + dy + shine_offset) % SHINE_PERIOD;
+                if (along < 0) {
+                    along += SHINE_PERIOD;
+                }
+
+                /* The band wins wherever it falls, including over the
+                 * grain - it is the bright thing, and letting the grain
+                 * override it would put dark notches through a highlight. */
                 p[dy * GFX_WIDTH + dx] =
-                    shine ? col[2] : (grain ? col[1] : col[0]);
+                    (along < SHINE_WIDTH) ? col[2]
+                                          : (grain ? col[1] : col[0]);
             }
         }
     }
@@ -694,22 +660,52 @@ static int draw_one_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     return n;
 }
 
-/* The last orientation the board was actually PAINTED at, and how long a
- * different one has been asking to replace it.
+/* A band of light travelling across anything hatched.
  *
- * The wait is what keeps this cheap. A tilt resting near one of the
- * boundaries between directions would otherwise flip the key back and
- * forth every frame, and every flip claims the whole screen - the one way
- * this could genuinely cost something, and it would do it while the board
- * was sitting still, which is the worst time. Six frames of agreement is
- * far below what a deliberate turn takes and far above any jitter. */
-#define SHINE_SETTLE_FRAMES 6
+ * This replaces a version that aligned the shine to the board's tilt. That
+ * was a nicer idea and it never became visible: the direction was right,
+ * the repaint was right by the end, and three rounds of looking at it on
+ * the device still could not see it. Two diagonals of single pixels
+ * differing only in WHICH way they lean is simply not a difference the eye
+ * picks up on a 184x224 grid, however correct the arithmetic underneath.
+ *
+ * Movement is a difference the eye cannot miss, which is the whole reason
+ * to prefer this. The band sweeps, so the glass is doing something.
+ *
+ * SHINE_PERIOD is the distance between bands measured along the diagonal,
+ * SHINE_WIDTH how thick one is, and SHINE_STEP_MS how often it advances by
+ * one pixel. About four seconds for a band to reach where the one before
+ * it started. */
+#define SHINE_PERIOD   96
+#define SHINE_WIDTH     2
+#define SHINE_STEP_MS  40
 
-static int shine_key_drawn = -1;
-static int shine_key_pending = -1;
-static int shine_key_agrees = 0;
+static int      shine_offset;
+static uint32_t shine_elapsed_ms;
 
-static void draw_dirty_rows(void)
+/* Which rows had anything hatched in them last time they were painted, so
+ * a tick of the shine can repaint those and leave the rest alone.
+ *
+ * Without this the shine would have to claim the whole screen every time it
+ * moved, which at SHINE_STEP_MS is far too often to be affordable. A row
+ * that is not repainted keeps its last answer, which stays true: nothing in
+ * it changed, so whatever glass it had it still has. */
+static uint8_t row_has_shine[GRID_H_MAX];
+
+/* Advances the travelling shine, and says whether it moved. */
+static bool advance_shine(uint32_t dt_ms)
+{
+    shine_elapsed_ms += dt_ms;
+    if (shine_elapsed_ms < SHINE_STEP_MS) {
+        return false;
+    }
+    const uint32_t steps = shine_elapsed_ms / SHINE_STEP_MS;
+    shine_elapsed_ms -= steps * SHINE_STEP_MS;
+    shine_offset = (int)(((unsigned)shine_offset + steps) % SHINE_PERIOD);
+    return true;
+}
+
+static void draw_dirty_rows(bool shine_moved)
 {
     gfx_color_t *fb = gfx_framebuffer();
 
@@ -728,23 +724,13 @@ static void draw_dirty_rows(void)
      * wakes every block (see sand.c), so the board is re-simulating
      * regardless. It happens only when the direction crosses into a
      * different eighth, not on every frame of a tilt. */
-    const int key = shine_key();
-    if (key == shine_key_drawn) {
-        shine_key_agrees = 0;
-    } else {
-        shine_key_agrees = (key == shine_key_pending) ? shine_key_agrees + 1
-                                                      : 1;
-        shine_key_pending = key;
-        if (shine_key_agrees >= SHINE_SETTLE_FRAMES) {
-            shine_key_drawn = key;
-            shine_key_agrees = 0;
-            memset(dirty_rows, 1, (size_t)grid_h);
-#if CONFIG_LAUNCHER_DEVELOPMENT
-            ESP_LOGI(TAG, "reflection follows down (%+d,%+d): %s diagonal, "
-                          "phase %d - repainting",
-                     shine_dx, shine_dy,
-                     shine_uses_sum() ? "x+y" : "x-y", shine_phase());
-#endif
+    /* Only the rows that actually hold something hatched, which is what
+     * makes an animated shine affordable at all. */
+    if (shine_moved) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            if (row_has_shine[cy]) {
+                dirty_rows[cy] = 1;
+            }
         }
     }
 
@@ -810,7 +796,7 @@ static void draw_mode_label(int gx, int gy)
 {
     /* The material's own name, so the label says what the finger will do
      * rather than merely that something changed. */
-    const char *text = erasing ? "ERASE" : materials[brushes[brush]].name;
+    const char *text = erasing ? "ERASE" : material_name(brushes[brush]);
     const int   len  = (int)strlen(text);
     const int   span = len * 8 * LABEL_SCALE;
     const int   tall = 8 * LABEL_SCALE;
@@ -848,7 +834,10 @@ static void draw_mode_label(int gx, int gy)
      * is about to come out of the finger. */
     const gfx_color_t ink =
         erasing ? gfx_rgb(0xFF8A5C)
-                : material_palette()[CELL_MAKE(brushes[brush], 13)];
+                : material_palette()[
+                      cell_is_extended(brushes[brush])
+                          ? brushes[brush]
+                          : CELL_MAKE(CELL_MATERIAL(brushes[brush]), 13)];
 
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
@@ -909,7 +898,7 @@ static void handle_brush_input(const input_t *input)
     }
     if (input->boot.pressed || input->power.pressed) {
         ESP_LOGI(TAG, "brush: %s",
-                 erasing ? "erase" : materials[brushes[brush]].name);
+                 erasing ? "erase" : material_name(brushes[brush]));
     }
 }
 
@@ -952,8 +941,9 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
         if (erasing) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
         } else {
-            sand_spawn(&sim, cx, cy, (POUR_RADIUS_PX + cell / 2) / cell,
-                      brushes[brush]);
+            sand_spawn_cell(&sim, cx, cy,
+                            (POUR_RADIUS_PX + cell / 2) / cell,
+                            brushes[brush]);
         }
     }
 }
@@ -1209,7 +1199,6 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     }
 
     handle_pour_input(input, dt_ms);
-    sand_gravity_direction(gx, gy, &shine_dx, &shine_dy);
     log_direction_change(gx, gy, jostle, &sample);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
@@ -1224,7 +1213,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     count_awake(&awake_blocks, &awake_cells);
 #endif
 
-    draw_dirty_rows();
+    draw_dirty_rows(advance_shine(dt_ms));
 
     /* On top of the sand, so it is never painted over. */
     if (label_left_ms > 0) {

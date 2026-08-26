@@ -167,7 +167,31 @@ typedef enum {
     MAT_ACID,
     MAT_GLASS,
     MAT_SNOW,
-    MAT_COUNT
+    MAT_COUNT,
+
+    /* THE EXTENDED RANGE. Id 15 is not a material - it is an escape hatch.
+     * A cell whose nibble is MAT_EXTENDED reads its LOW nibble as naming
+     * one of MATERIAL_EXTENDED_COUNT further materials, so the last slot
+     * buys sixteen rather than one.
+     *
+     * They cost nothing in the sweep, and the reason is entirely about how
+     * the tables are already indexed:
+     *
+     *   materials[]   is read by the NIBBLE, so all sixteen share one row
+     *                 and material_of() does not change at all
+     *   palette[]     is read by the whole CELL BYTE, so each of the
+     *                 sixteen already has its own entry, for free
+     *   reactions[]   is read only by sand_reactions.c - the cold pass -
+     *                 so reaction_of() can afford to decode
+     *
+     * What they buy: their own colour and their own reactions. What they
+     * cannot have: their own physics, since materials[MAT_EXTENDED] is one
+     * shared row; or a variant, since the low nibble is spent saying which
+     * one they are. That confines them to inert static solids, which is
+     * the price of not touching the hot loop. */
+    MAT_EXTENDED = 15   /* the last nibble value; asserted against
+                         * MATERIAL_MAX below, which this enum comes
+                         * too early to reference */
 } material_id_t;
 
 /* The table is padded to every value the nibble can hold.
@@ -181,6 +205,17 @@ typedef enum {
  * cell therefore becomes an immovable block rather than something that could
  * confuse the simulation. */
 #define MATERIAL_MAX 16
+
+/* How many materials hide behind MAT_EXTENDED - one per value of the low
+ * nibble. */
+#define MATERIAL_EXTENDED_COUNT 16
+
+_Static_assert(MAT_EXTENDED == MATERIAL_MAX - 1,
+               "the extended range lives in the LAST nibble value, so that "
+               "every ordinary material keeps the id it already had");
+_Static_assert(MAT_COUNT <= MAT_EXTENDED,
+               "an ordinary material has taken the extended range's slot - "
+               "there is no room for both");
 
 /* How a material moves. Four kinds cover almost everything, and the movement
  * code branches on this once per cell rather than on the material itself. */
@@ -533,8 +568,47 @@ typedef struct {
  * by field before leaving a row out. */
 extern const reaction_t reactions[MATERIAL_MAX];
 
+/* The extended materials' own reaction rows, indexed by the low nibble of
+ * a cell whose material is MAT_EXTENDED. Rows not given are all-zero,
+ * which for an inert decorative block is the right answer - but read
+ * reaction_t's own note on what zero means field by field before relying
+ * on that. */
+extern const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT];
+
+/* The extended materials, by low nibble. */
+typedef enum {
+    MATX_ICE = 0,
+} material_extended_t;
+
+/* What to call one cell, decoding the extended range. materials[].name is
+ * shared across all sixteen extended materials, so it says "Extended" for
+ * every one of them - which is right for the physics row and useless for a
+ * label. */
+const char *material_name(cell_t c);
+
+/* One extended material as a whole cell. There is no variant to choose -
+ * the low nibble IS the identity - so this is the complete cell byte, and
+ * it is what gets passed to sand_spawn_cell() and stored in a brush list. */
+#define MATX(k) ((cell_t)((MAT_EXTENDED << 4) | ((k) & 0x0F)))
+
+/* Whether this cell is one of the extended materials. */
+static inline bool cell_is_extended(cell_t c)
+{
+    return CELL_MATERIAL(c) == MAT_EXTENDED;
+}
+
+/* The reaction row for a cell, decoding the extended range.
+ *
+ * The one place that has to know MAT_EXTENDED exists, and it can afford
+ * to: this is only ever called from sand_reactions.c, which is the cold
+ * pass. material_of() deliberately does NOT decode - the sweep reads it
+ * per cell per step, and all sixteen extended materials sharing one
+ * physics row is exactly what keeps that a single shift and index. */
 static inline const reaction_t *reaction_of(cell_t c)
 {
+    if (cell_is_extended(c)) {
+        return &extended_reactions[CELL_VARIANT(c)];
+    }
     return &reactions[CELL_MATERIAL(c)];
 }
 

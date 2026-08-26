@@ -239,9 +239,11 @@ keeping because they are the only measurement of the scene as played:
 ### The material budget, and what is left
 
 A cell is one byte: four bits of material, four of variant. Zero is empty,
-so there are **15 material slots** and **14 are in use** - sand, water,
-stone, gas, fire, wood, steam, smoke, ember, oil, lava, acid, glass, snow.
-One free.
+so there are **15 material slots** and **15 are in use** - the last being
+`MAT_EXTENDED`, which is not a material but a doorway to sixteen more - sand, water,
+stone, gas, fire, wood, steam, smoke, ember, oil, lava, acid, glass, snow,
+and then `MAT_EXTENDED`. No ordinary slots free; sixteen extended ones, of
+which one is used.
 
 Four ways to make more room, cheapest first - two of which mostly do not,
 and one that looks like a way and is not. The short version: the extended
@@ -294,10 +296,9 @@ So this saves a slot only when two states share *every* field and differ in
 something the variant already carries. That is a narrow case, and nothing
 in the table currently meets it.
 
-**Add an extended range behind the last slot.** Not built, but the layout
-already allows it and it is the cheapest way to a large number of new
-materials. Let material id 15 mean "extended", and read the low nibble as
-naming one of sixteen further materials.
+**Add an extended range behind the last slot** - *built*. Material id 15 is
+`MAT_EXTENDED`, and a cell carrying it reads its low nibble as naming one of
+sixteen further materials. The first is `MATX_ICE`.
 
 Three facts make it free in the sweep, and all three are properties of how
 the tables are already indexed:
@@ -320,13 +321,25 @@ temperature. That confines them to inert static solids - coloured brick,
 decorative block, an ore that acid or fire treats differently, anything
 whose job is to be built with and reacted to rather than to move.
 
-Which makes the realistic budget:
+Painting one needs `sand_spawn_cell()` rather than `sand_spawn()`: an
+extended material cannot be named by a `material_id_t` at all, because its
+low nibble is its identity rather than a variant. For the same reason
+nothing may randomise that nibble - the ordinary "static materials get a
+random shade" path would silently repaint ice as a different extended
+material, which is the one way this scheme can go wrong quietly, and there
+is a test for it.
+
+A reaction can produce one too: `place_reacted()` takes a spec that is
+either an ordinary id or a whole `MATX(k)` byte, and the two cannot be
+confused because an ordinary id is well under 0xF0. Without that an
+extended material could only ever be painted, never made.
+
+Which makes the budget:
 
 - **one slot** with full physics, worth saving for something that has to
   move or carry a variant - another liquid, powder or transient;
-- **sixteen more** inert solids behind the extended range, addable the day
-  a seventeenth material is actually wanted, disturbing nothing that
-  already exists;
+- **fifteen more** inert solids behind the extended range, disturbing
+  nothing that already exists;
 - packing the whole byte only after both are spent.
 
 **Pack the byte.** Drop the fixed 4+4 split for a flat 0-255 index with a

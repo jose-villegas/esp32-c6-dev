@@ -513,13 +513,20 @@ const material_t materials[MATERIAL_MAX] = {
                               * sand. */
     },
 
-    /* The remaining slot is unused and left zeroed except for these, which make an
-     * unknown material inert rather than undefined: it never moves and nothing
-     * can displace it. Designated initialisers zero the rest. */
-    [MAT_COUNT ... MATERIAL_MAX - 1] = {
-        .name    = "?",
+    /* ONE row for all sixteen extended materials - see MAT_EXTENDED in
+     * material.h. The sweep reads this per cell per step and must not care
+     * which extended material a cell is, so they all move identically:
+     * they do not move at all, and nothing displaces them.
+     *
+     * That sharing is the whole trick, and also the whole limit. Anything
+     * that needs its own density, kind, slip, repose or scatter cannot
+     * live here and needs one of the ordinary slots. */
+    [MAT_EXTENDED] = {
+        .name    = "Extended",
         .kind    = KIND_STATIC,
-        .density = 255,
+        .density = 200,      /* stone's figure: undisplaceable, and it
+                              * smothers a buried flame the way stone
+                              * does */
     },
 };
 
@@ -1148,7 +1155,20 @@ static const gfx_color_t palette[256] = {
                                     * the palest thing on the board, since
                                     * it has to read as COLD at a glance
                                     * for thermal shock to explain itself */
-    UNUSED,
+    /* THE EXTENDED RANGE, one entry each rather than a shade ramp: an
+     * extended material has no variant to ramp over, because the low
+     * nibble is its identity. Sixteen materials, sixteen colours, and the
+     * palette needed no change to allow it - it was already indexed by the
+     * whole cell byte. */
+    GFX_RGB(0xB6E4F2),            /* ice - paler and bluer than snow's
+                                    * white, and flat rather than speckled:
+                                    * a block of it should read as solid
+                                    * and cold, where snow reads as loose */
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
 };
 
 /* Glass's SECOND colour: the same temperature, mixed halfway to the
@@ -1354,6 +1374,50 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
         return MATERIAL_FLAT;
     }
 }
+
+/* One reaction row per extended material, indexed by the low nibble.
+ *
+ * This is where an extended material gets to be itself. The physics row
+ * above is shared, so everything that distinguishes one from another lives
+ * either here or in the palette. */
+static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
+    [MATX_ICE] = "Ice",
+};
+
+const char *material_name(cell_t c)
+{
+    if (cell_is_extended(c)) {
+        const char *n = extended_names[CELL_VARIANT(c)];
+        return (n != NULL) ? n : "?";
+    }
+    return materials[CELL_MATERIAL(c)].name;
+}
+
+const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
+
+    [MATX_ICE] = {
+        /* Snow that stays where it is put.
+         *
+         * Snow is a powder: it drifts as it falls (scatter 90), floats on
+         * water, and melts in anything liquid, so aiming it at one face of
+         * a hot vessel is most of the difficulty in using it at all. Ice
+         * is the same cold in a form you can BUILD with - it holds still,
+         * so a wall of it can be put against the glass you actually meant.
+         *
+         * Chills harder than snow, 60 against 40, because a solid block
+         * pressed against a pane is more contact than a flake resting on
+         * it. That also makes it the reliable way to shock glass, which is
+         * the thing snow has never quite been.
+         *
+         * Melts to water near heat like snow does, and slowly in liquid -
+         * `thaws` 2 against snow's 4, since a block does not dissolve at
+         * the rate a flake does. */
+        .chills      = 60,
+        .heats_to    = MAT_WATER,
+        .heat_chance = 90,
+        .thaws       = 2,
+    },
+};
 
 const gfx_color_t *material_palette(void)
 {

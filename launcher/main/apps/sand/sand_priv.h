@@ -334,9 +334,8 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     if (CELL_IS_EMPTY(cell)) {
         return;
     }
-    const material_id_t id = (material_id_t)CELL_MATERIAL(cell);
-    const material_t *mat = &materials[id];
-    const reaction_t *r = &reactions[id];
+    const material_t *mat = material_of(cell);
+    const reaction_t *r = reaction_of(cell);   /* decodes MAT_EXTENDED */
 
     if (mat->kind == KIND_LIQUID) {
         s->may_have_liquid = true;
