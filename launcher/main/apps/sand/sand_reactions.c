@@ -842,9 +842,23 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
 
 /* One cell of hot GAS, warming whatever around it holds a temperature.
  *
- * Gated on may_have_temperature by the caller, so on a board with nothing
- * that can hold one this costs a predicted-false branch per gas cell and
- * no scan at all. */
+ * Gated on may_have_heat_holder by the caller - not may_have_temperature,
+ * which cannot do this job: smoke and steam both `warm`, so either one
+ * arms may_have_temperature by itself the moment it is placed, and this
+ * branch re-arms it every step by being taken, so it never closes on a
+ * board holding gas. may_have_heat_holder answers the real question - is
+ * there a cell with a heat_ramp anywhere on the grid - so on a board with
+ * nothing that can hold one this costs a predicted-false branch per gas
+ * cell and no scan at all.
+ *
+ * Why the gate is safe rather than merely fast: when may_have_heat_holder
+ * is false, no cell with a non-zero heat_ramp has ever been written to
+ * this grid. Below, every neighbour whose reaction_of(n)->heat_ramp == 0
+ * is skipped BEFORE any random number is drawn and before anything is
+ * mutated. So on a board where the flag is false, this whole scan
+ * provably does nothing - not "usually finds nothing", nothing at all -
+ * which means suppressing the call cannot change the simulation, not the
+ * grid and not the random-number stream either. */
 static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
                                   const reaction_t *r)
 {
@@ -2455,9 +2469,16 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
             continue;
         }
         /* Hot gas warms what it touches, but only where there is something
-         * that can hold a temperature - otherwise every wisp of smoke on
-         * the board pays for a neighbour scan to find nothing. */
-        if (r->warms != 0 && s->may_have_temperature) {
+         * that can hold a temperature. may_have_temperature alone never
+         * closes this: smoke and steam both `warm`, so placing either one
+         * arms may_have_temperature itself, and taking this branch reports
+         * FOUND_TEMPERATURE unconditionally - which re-arms it every step
+         * it is taken. Gated on may_have_heat_holder as well, which answers
+         * the actual question - is there a heat_ramp cell anywhere on the
+         * grid at all - so a board of nothing but gas and fire never pays
+         * for the neighbour scan below to find nothing. */
+        if (r->warms != 0 && s->may_have_temperature &&
+            s->may_have_heat_holder) {
             step_one_warming_cell(s, x, y, w, h, r);
             found |= FOUND_TEMPERATURE;
             continue;
@@ -2562,4 +2583,35 @@ void sand_step_reactions(sand_t *s)
     if (!(found & FOUND_FALLER)) {
         s->may_have_faller = false;
     }
+
+    /* may_have_heat_holder is deliberately NOT cleared here, unlike the
+     * five flags above. "Clear it at the end of the pass when nothing was
+     * found, like the other five" is the obvious thing to write next, and
+     * it is wrong.
+     *
+     * The other five are safe to clear this way because the walk above
+     * reads every cell that could have set them. may_have_heat_holder is
+     * different: a cell with a heat_ramp can be CREATED during this very
+     * pass, behind the scan pointer - lava quenching to stone is exactly
+     * this, going through place_cell() -> latch_content_flags() mid-row.
+     * The walk that already passed that cell's row never sees it, so
+     * `found` never gets a bit for it, and clearing here would wipe the
+     * flag latch_content_flags() had just armed a moment earlier. Nothing
+     * but another write would ever set it again, so convection onto that
+     * new stone would be dead for good.
+     *
+     * Measured, not assumed: a version of this with the end-of-pass clear
+     * produced a different simulation from HEAD on two four-liquid scenes.
+     * The arm-only version above is byte-identical to HEAD on all eight
+     * benchmark scenes tested.
+     *
+     * Never clearing it costs one case: a board that once held stone or
+     * glass and no longer does keeps paying the scan for ever. That is
+     * exactly what such a board pays today, without this flag at all, so
+     * the flag can never make anything slower than it already is - it can
+     * only fail to help. What it does help is the board that has never
+     * held a heat-holder, and that is where the whole cost was.
+     * This project's convention for a flag like this is to ask who pays to
+     * KEEP it true versus who reads it - and the answer here is nobody
+     * pays any per-step upkeep at all, ever, once it is armed. */
 }

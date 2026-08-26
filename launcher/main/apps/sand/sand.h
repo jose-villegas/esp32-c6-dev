@@ -138,6 +138,24 @@ typedef struct {
      * bare screen still has to reach the floor. */
     bool     may_have_faller;
 
+    /* Whether a cell with a non-zero heat_ramp - stone, glass, anything
+     * that can hold a temperature at all - exists anywhere on the grid.
+     * A different question from may_have_temperature above: that one asks
+     * whether something is currently OFF ambient and needs its ramp
+     * ticked; this one asks whether there is anything to warm in the
+     * first place, which is what gates convection in
+     * step_one_reacting_row() - see the comment on that branch, and on
+     * step_one_warming_cell(), for why a board of nothing but smoke and
+     * steam (both `warms`) needs this to stay closed rather than paying a
+     * four-neighbour scan on every gas cell, every step, forever.
+     *
+     * NOT one of the flags sand_step_reactions() checks to decide whether
+     * to run at all - it is a gate on one branch inside the pass, not a
+     * reason for the pass to exist. A board can need the reactions pass
+     * for fire, acid, moisture or a faller with no heat-holder on it
+     * anywhere, and this flag has nothing to say about any of that. */
+    bool     may_have_heat_holder;
+
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 

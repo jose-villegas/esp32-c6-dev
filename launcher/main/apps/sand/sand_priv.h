@@ -371,6 +371,7 @@ static inline void clear_content_flags(sand_t *s)
     s->may_have_temperature = false;
     s->may_have_moisture    = false;
     s->may_have_faller      = false;
+    s->may_have_heat_holder = false;
 }
 
 static inline void latch_content_flags(sand_t *s, cell_t cell)
@@ -403,6 +404,11 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     if (r->chills != 0 || r->warms != 0 ||
         (r->heat_ramp != 0 && CELL_VARIANT(cell) != SAND_AMBIENT_HEAT)) {
         s->may_have_temperature = true;
+    }
+    /* Something that can HOLD a temperature, which is a different question
+     * from something that HAS one - ambient counts. Convection's gate. */
+    if (r->heat_ramp != 0) {
+        s->may_have_heat_holder = true;
     }
     /* Wet, or something to get wet from. A liquid arms it because that is
      * when a soaker has anything to do; a cell already holding moisture

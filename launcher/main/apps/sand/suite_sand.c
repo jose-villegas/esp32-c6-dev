@@ -7757,6 +7757,84 @@ static void test_water_freezes_lava_into_stone(void)
         "fire into steam");
 }
 
+/* Guards may_have_heat_holder's arm-only design (sand.h/sand_priv.h): the
+ * flag is armed the moment a heat_ramp cell exists on the grid and is
+ * deliberately never cleared, because a heat_ramp cell can be CREATED
+ * mid-pass, behind step_one_reacting_row()'s own scan pointer, rather
+ * than painted onto the board before the step runs. Lava quenching into
+ * stone is exactly that: place_reacted() writes the new MAT_STONE cell
+ * from inside the very row walk that is checking may_have_heat_holder's
+ * sibling flags, so the row that already passed this cell never reports
+ * it, and an end-of-pass clear - "tidy it up like the other five flags" -
+ * would erase what latch_content_flags() had just armed one line
+ * earlier. That is the regression this test exists to catch: anyone who
+ * adds `if (!(found & FOUND_HEAT_HOLDER)) s->may_have_heat_holder =
+ * false;` next to the other five in sand_step_reactions() will fail here,
+ * because the very first quenched cell has no way left to ever re-arm it.
+ *
+ * Deliberately no stone or glass is painted anywhere in this scene - not
+ * even as a floor or walls - specifically so may_have_heat_holder starts
+ * false and the only heat_ramp cell that ever exists is the one born from
+ * the quench itself. Lava and water sit on the bottom row instead of
+ * needing a floor: dest_row() returns NULL past the last row, which is
+ * enough to stop either of them falling out from under themselves without
+ * painting a single cell that would pre-arm the flag.
+ *
+ * Also worth noting because it is the whole reason this flag has to be
+ * independent of may_have_temperature: place_reacted() gives a freshly
+ * created heat-ramp cell SAND_AMBIENT_HEAT, not a hot variant, so the new
+ * stone does NOT arm may_have_temperature (see latch_content_flags()'s
+ * ambient-exception). It must still arm may_have_heat_holder, because
+ * that is exactly what a later convecting gas cell needs to find it. */
+static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    TEST_ASSERT_FALSE_MESSAGE(s.may_have_heat_holder,
+        "setup: a freshly cleared grid holds nothing with a heat_ramp, so "
+        "the flag must start false");
+
+    /* Lava IS the heat rather than holding one (no heat_ramp of its own);
+     * water quenches it into stone, which does. Resting on the bottom row
+     * so neither needs a floor cell to stay put. */
+    sand_set(&s, 3, H - 1, LAVA);
+    sand_set(&s, 4, H - 1, WATER);
+
+    bool saw_heat_holder = false;
+    for (int i = 0; i < 5; i++) {
+        sand_step(&s, 0, 1000, 0);
+
+        bool any_heat_holder = false;
+        for (int y = 0; y < H && !any_heat_holder; y++) {
+            for (int x = 0; x < W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (!CELL_IS_EMPTY(c) && reaction_of(c)->heat_ramp != 0) {
+                    any_heat_holder = true;
+                    break;
+                }
+            }
+        }
+        if (any_heat_holder) {
+            saw_heat_holder = true;
+        }
+
+        TEST_ASSERT_TRUE_MESSAGE(!any_heat_holder || s.may_have_heat_holder,
+            "a cell with a non-zero heat_ramp exists on the grid, so "
+            "may_have_heat_holder must be armed - even though this cell "
+            "(lava quenched to stone) was created mid-pass, behind the "
+            "scan pointer, rather than painted onto the board before the "
+            "step ran");
+    }
+
+    /* If this never went true, the loop above proved nothing - it never
+     * saw a heat holder and passed for the wrong reason. */
+    TEST_ASSERT_TRUE_MESSAGE(saw_heat_holder,
+        "setup: lava next to water must have quenched into stone within "
+        "5 steps, or this test never exercised the mid-pass creation case "
+        "it exists to guard");
+}
+
 /* Lava burns, so it must not quench - the same rule oil needs, arrived
  * at from the other side (oil is fuel, lava is a heat source, and
  * neighbor_quenches() excludes both). */
@@ -10064,6 +10142,7 @@ void run_sand_suite(void)
     RUN_TEST(test_oil_flows_more_slowly_than_water);
     RUN_TEST(test_lava_does_not_decay_away);
     RUN_TEST(test_water_freezes_lava_into_stone);
+    RUN_TEST(test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag);
     RUN_TEST(test_lava_does_not_put_fire_out);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);
     RUN_TEST(test_bubbling_conserves_the_water_it_displaces);
