@@ -931,57 +931,34 @@ Grep the capture for the headline line and any failures:
 grep -E "FAIL|SELFTEST_COMPLETE" /path/to/output.txt
 ```
 
-`SELFTEST_COMPLETE failures=N` is the number that matters. **The last
-capture, 2026-08-25, reported `failures=4`** - and two things about it
-have to be said before any of its numbers are used, both found in the
-eleventh tuning attempt.
+`SELFTEST_COMPLETE failures=N` is the number that matters. **The
+current accepted baseline is `failures=13` - every frame-budget test,
+deliberately.** On 2026-08-26 the first full capture of the
+post-materials-wave tree (`performance_20260826_150930`, reproduced by
+a second capture to within 4 µs on every test) re-measured all
+thirteen scenes, and every budget was re-set to a uniform reduction
+target of measured × 0.9, rounded - see `FULL_STEP_BUDGET_US`'s
+comment in `suite_sand.c` for the full reasoning. Nothing passes by
+decree, nothing was ratcheted up to what the code happens to cost:
+each budget sits a tenth below its own fresh measurement, and each
+test stops failing only when that tenth is actually won.
 
-First, that capture does not describe this tree. The self-test names in
-its raw log place the flashed build between `b9e8845` and `4fe0d04`:
-**fifty commits behind HEAD**, with none of glass, thermal shock, snow,
-ice, dirt, convection, percolation or the plant and tree work in it. It
-is the newest capture that exists. It is not a measurement of the code
-you are reading.
+The measured baselines that capture established (µs, per step except
+the cascade's single step): settled screen 260, full-size step 6434,
+settled-pile flip 6529, mixed scene 12999, water 16043, every-material
+flip 74911, thermal shock 106650, lava stress 121377, four liquids
+125430, smoke+steam 141189, fire screen 295533, fire cascade 506666.
 
-Second, this file previously recorded that capture as `failures=5`,
-which conflated what it observed with what HEAD would do.
-`test_a_gravity_flip_on_every_material_at_once_stays_sane` is held to
-54,000 µs here and last measured 60,091, so a fresh capture of HEAD
-should indeed fail it - deliberately, as a reduction target - but the
-flashed build predated that budget and held it to 300,000, so the
-capture passed it. Five is a reasonable expectation for HEAD; four is
-what was measured.
-
-The four it did report: the full screen of fire (286720 against a 250000
-budget), the fire cascade (390158 against 350000), the screen of water
-(16052 against 14000) and the mixed-scene flip (12876 against 12000).
-Everything sand-only was unchanged to within a percent, which correctly
-pointed at the reactions and liquid passes rather than at the sweep, and
-that is where the eleventh attempt found them:
-
-- **Water and the mixed flip were one commit and one branch**, in
-  `move_liquid_grain()`, and are recovered in full on the host - 28% and
-  17% respectively, with the simulation byte-identical. Both are
-  **expected to pass on the next capture. Unverified pending a flash.**
-- **The two fire budgets are genuine feature cost.** The reactions pass
-  doubled across the wave. One cheap win shipped (about 10% off each),
-  and the residual is real - see the re-pegging recommendation in
-  [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md).
-  **Both are expected to still fail**, and the cascade may well come in
-  *higher* than 390158, since 19% of its growth landed after that
-  capture was taken.
-
-This failing set is otherwise unchanged by the twelfth attempt. That
-round added three more device tests - four liquids reacting at once, a
-lava stress scene, a screen of smoke and steam - and **their outcomes
-are simply unknown**: none of the three has ever run on hardware. Their
-ceilings were chosen to be generous on purpose, so all three are
-expected to pass; if one of them fails on the first capture, read that
-as the ceiling having been guessed wrong, not as a regression, and
-re-peg it from the number that capture measures. **All three must be
-re-pegged from that first capture regardless of whether they pass or
-fail** - a guessed ceiling that happens to pass is still a guess, not a
-budget.
+Two findings from that capture worth keeping next to the numbers.
+First, the eleventh attempt's host-measured water/mixed recovery did
+NOT materialise on the device (water 16043 against a predicted
+12-13.5k) - the host ratio is scene-specific and unstable, as this
+file already warns, and the wave's tail commits also landed in
+between. Second, the liquid-free controls both moved ~+10% against the
+50-commit-older build (full step 5867→6434, flip 5959→6529), which is
+either a layout-lottery double hit or a genuine global per-cell cost
+from the wave's tail - unattributed at the time of the re-base, and
+the first question for the next optimization round.
 
 One tooling note that has since been corrected: the eleventh attempt
 flagged the generated report as reading the every-material budget as

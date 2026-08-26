@@ -9916,8 +9916,30 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * STEP_BUDGET_US constant; split into its own name once the two
  * scenarios needed genuinely different numbers - a checkerboard of
  * falling sand and a full-grid gravity flip are different worst cases
- * and there was never a real reason to hold them to the same ceiling. */
-#define FULL_STEP_BUDGET_US 6000
+ * and there was never a real reason to hold them to the same ceiling.
+ *
+ * THE 2026-08-26 RE-BASE, which this and every other frame budget in
+ * this file now follows: after the materials wave, the first full
+ * capture of the current tree (performance_20260826_150930, reproduced
+ * by a second capture to within 4 us on every test) re-measured all
+ * thirteen scenes, and every budget was re-set to a UNIFORM REDUCTION
+ * TARGET of measured * 0.9, rounded - a deliberate decision to demand
+ * 10% improvement across the whole board rather than ratchet any
+ * budget up to what the code happens to cost today. Every number
+ * stays BELOW its own measured value, so nothing passes by decree;
+ * all thirteen fail on the day of the re-base, and each stops failing
+ * only when the work is done. Some numbers moved numerically upward
+ * from older budgets (water, the fire pair, the every-material flip) -
+ * those older budgets were reduction targets pegged to baselines that
+ * predate the materials wave, and holding them frozen while the
+ * simulation gained temperature, viscosity, drag, percolation and five
+ * new scenes would conflate "the feature costs something" with "the
+ * code regressed". The measured number beside each assertion is the
+ * anchor; the target is a tenth under it.
+ *
+ * This one: measured 6434 us (was budget 6000, itself 3.3% over an
+ * older 5802) -> target 5800. */
+#define FULL_STEP_BUDGET_US 5800
 
 static void test_a_full_size_step_fits_in_the_frame_budget(void)
 {
@@ -10014,8 +10036,14 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
      * FULL_STEP_BUDGET_US documents. If a rebuild that does not touch the
      * liquid pass flips this, check the liquid-free benchmarks first (they
      * are the layout controls - see Optimization-Playbook.md) and loosen
-     * this rather than misread layout noise as a simulation regression. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(14000, (int)per_step,
+     * this rather than misread layout noise as a simulation regression.
+     *
+     * Re-based 2026-08-26: measured 16043 after the materials wave ->
+     * target 14400 (measured * 0.9, rounded) - see FULL_STEP_BUDGET_US's
+     * comment for the uniform re-base this is part of. Numerically up
+     * from 14000, still well below measured: the 13288 the 14000 was
+     * pegged to predates viscosity, drag and percolation existing. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(14400, (int)per_step,
         "a screen-wide collapse of water must still land inside a frame or "
         "two - the search across the flow is the thing to suspect");
 }
@@ -10060,7 +10088,10 @@ static void test_a_screen_of_settled_sand_costs_almost_nothing(void)
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W * REAL_H, grains,
         "and nothing may have moved");
-    TEST_ASSERT_LESS_THAN_MESSAGE(300, (int)per_step,
+    /* Re-based 2026-08-26: measured 260 -> target 235 (measured * 0.9,
+     * rounded) - see FULL_STEP_BUDGET_US's comment for the uniform
+     * re-base. Down from 300, which had become pure headroom. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(235, (int)per_step,
         "sand that is not moving must cost almost nothing - if this fails, "
         "rows are being examined that had no reason to be");
 }
@@ -10117,13 +10148,13 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
     free(big);
     free(blocks);
 
-    /* 6500us: its own number now, split off from the plain full-size-step
-     * test's FULL_STEP_BUDGET_US above (see that constant's comment for
-     * why they used to share one). Measured ~8996 us, well over this -
-     * same deliberate-reduction-target framing as the mixed-scene and
-     * water tests: a real regression would be this number jumping
-     * further, not the fact that it currently fails at all. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(6500, (int)per_step,
+    /* Its own number, split off from the plain full-size-step test's
+     * FULL_STEP_BUDGET_US above (see that constant's comment for why they
+     * used to share one, and for the 2026-08-26 uniform re-base this
+     * follows). Re-based: measured 6529 after the materials wave ->
+     * target 5900 (measured * 0.9, rounded; was 6500, pegged when this
+     * measured 8996 pre-wave). */
+    TEST_ASSERT_LESS_THAN_MESSAGE(5900, (int)per_step,
         "reversing gravity on a settled pile must still fit in a frame or "
         "two - this is the real worst case pouring and tilting produces");
 }
@@ -10214,17 +10245,12 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
     free(big);
     free(blocks);
 
-    /* 12000us: NOT headroom over the real measured 15144us - a deliberate
-     * reduction target below it (about 21% down), same as this file's
-     * other two currently-failing budgets (the plain settled-pile flip and
-     * the water test just above). Those exist to keep pressure on real
-     * optimization work rather than quietly ratchet up to whatever the
-     * code happens to cost today; this one joins them on purpose, not as a
-     * mistake - SELFTEST_COMPLETE's accepted baseline moves from
-     * failures=2 to failures=3 the moment this lands (see
-     * docs/Sand/Architecture.md's device-tests table, which needs the same
-     * update). */
-    TEST_ASSERT_LESS_THAN_MESSAGE(12000, (int)per_step,
+    /* A deliberate reduction target from the day it was written (12000
+     * against a then-measured 15144), never headroom. Re-based
+     * 2026-08-26: measured 12999 after the materials wave -> target
+     * 11700 (measured * 0.9, rounded) - see FULL_STEP_BUDGET_US's
+     * comment for the uniform re-base this is part of. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(11700, (int)per_step,
         "reversing gravity over a mixed sand/water/stone scene should come "
         "down to this - a target to optimize toward, not yet the reality");
 }
@@ -10346,16 +10372,20 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
      * too pessimistic. The right correction is a fresh device capture, not
      * an estimate.
      *
-     * So read a failure here carefully: it may be the regression it always
-     * meant, or it may be two extra materials in a harder scene. Re-measure
-     * before concluding either.
-     *
      * On the extrapolation that produced 300000: fire measures ~318x host
      * and this scene ~63x, so it predicted 226-244 ms against an actual
      * 60 ms. Worth remembering before anyone extrapolates again - on this
      * chip the ratio is dominated by cache behaviour the host does not
-     * model, and it is scene-specific. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(54000, (int)per_step,
+     * model, and it is scene-specific.
+     *
+     * The staleness warning the paragraphs above carried is RESOLVED:
+     * the fresh capture the 2026-08-26 re-base ran on (see
+     * FULL_STEP_BUDGET_US's comment) measured the fourteen-material
+     * scene at 74911 us, and the target followed the same uniform rule
+     * as every other budget: measured * 0.9, rounded -> 67500.
+     * Numerically up from the stale 54000, still a tenth below what the
+     * current scene actually costs. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(67500, (int)per_step,
         "the mixed-material flip is held to 10% below what it measured, "
         "as a reduction target - this failing means the work has not been "
         "done yet, not that something broke");
@@ -10424,12 +10454,16 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
      * could trigger a stall this long. If fire+gas ever needs to
      * support a fully-packed screen at interactive rates, that is the
      * "creeping fire" design explicitly deferred in the plan this was
-     * built from, not a bug in this v1. The budget below is ~9% over
-     * the measured number - tight enough to catch a real regression,
-     * loose enough to absorb ordinary flash-layout noise (the
-     * ~2-5% this project has already characterised elsewhere), not a
-     * frame-rate promise. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(350000, (int)elapsed,
+     * built from, not a bug in this v1.
+     *
+     * Re-based 2026-08-26: what had been a ~9%-over regression guard
+     * became a reduction target like everything else in this file (see
+     * FULL_STEP_BUDGET_US's comment). Measured 506666 after the
+     * materials wave - the reactions pass gained real chemistry and the
+     * gas pass is 60% of a saturated step - -> target 456000
+     * (measured * 0.9, rounded; was 350000, pegged to a pre-wave
+     * 321339). */
+    TEST_ASSERT_LESS_THAN_MESSAGE(456000, (int)elapsed,
         "a full-screen cascade must stay in the same ballpark as measured "
         "- a jump here means something got much more expensive, not that "
         "this specific number is a real-time requirement");
@@ -10488,10 +10522,15 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
      * the cascade test above: an edge-to-edge screen of fire is not
      * something the pour-brush UI can practically sustain, but this
      * catches a real regression if the steady-state cost balloons past
-     * what was actually measured. ~8% headroom, tightened from an
-     * initial, untuned 300000 once the number proved exactly
-     * reproducible rather than noisy. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(250000, (int)per_step,
+     * what was actually measured. Originally ~8% headroom over 230962,
+     * tightened from an initial, untuned 300000 once the number proved
+     * exactly reproducible rather than noisy.
+     *
+     * Re-based 2026-08-26 (see FULL_STEP_BUDGET_US's comment): measured
+     * 295533 after the materials wave -> target 266000 (measured * 0.9,
+     * rounded; was 250000). A reduction target now, like the rest of the
+     * file. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(266000, (int)per_step,
         "steady-state cost of a full screen of fire must stay in the "
         "same ballpark as measured - not a real-time promise, but a "
         "real regression guard");
@@ -10517,18 +10556,14 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
  * setting too, but it is graded as a reduction target, not a real ceiling.
  * Four liquids at once, at the app's own mobility, is now that benchmark.
  *
- * THE ASSERTION BELOW IS NOT A BUDGET. Nobody has run this test on
- * hardware yet, so - same as the every-material gravity flip above - this
- * is a deliberately loose SANITY CEILING: wide enough that it cannot pass
- * as tuned, tight enough to catch something catastrophic like an
- * accidental quadratic. It is not extrapolated from the host timing
- * either - the every-material test above already tells that story once
- * (a number reasoned from another scene's device/host ratio came out four
- * times too pessimistic against what the chip actually did), and there is
- * no reason to repeat the mistake here. Replace this with a real figure -
- * about 9-10% over the measured number, the method this file's other
- * budgets document - the first time this runs on a device, and say what
- * was measured. */
+ * First device measurement, 2026-08-26: 125430 us (capture
+ * performance_20260826_150930, reproduced to within a microsecond by a
+ * second capture). The provisional ceiling this shipped with (150000)
+ * was retired the same day - not to the ~9-10%-over guard its draft
+ * comment prescribed, but to the uniform reduction target the whole
+ * file moved to (see FULL_STEP_BUDGET_US's comment): measured * 0.9,
+ * rounded -> 113000, failing by construction until the scene gets 10%
+ * faster. */
 static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -10565,10 +10600,11 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(150000, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(113000, (int)per_step,
         "four liquids reacting under the app's own per-material mobility "
-        "must stay in the same ballpark as this provisional ceiling - see "
-        "the comment above for why it is provisional");
+        "is held to 10% below its first measured number, as a reduction "
+        "target - failing means the work is not done, not that something "
+        "broke");
 }
 
 /* A lava reservoir, a water roof, and columns of sand, wood and oil between
@@ -10581,15 +10617,11 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
  * once, across a scene big enough to keep them going for the whole
  * measured window rather than one that burns out in the first few steps.
  *
- * THE ASSERTION BELOW IS NOT A BUDGET, for the same reason as the
- * liquid-scene test above: nobody has run this on hardware yet. It is a
- * deliberately loose SANITY CEILING, not extrapolated from host timings -
- * this file has already been burned once by an extrapolated figure that
- * came out four times too pessimistic against the real device number, and
- * there is no reason to repeat that here. Replace it with a real figure -
- * about 9-10% over the measured number, the method this file's other
- * budgets document - the first time this runs on a device, and say what
- * was measured. */
+ * First device measurement, 2026-08-26: 121377 us (capture
+ * performance_20260826_150930, reproduced by a second capture to within
+ * a microsecond). Provisional ceiling (150000) retired the same day to
+ * the file-wide uniform reduction target (see FULL_STEP_BUDGET_US's
+ * comment): measured * 0.9, rounded -> 109000. */
 static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -10623,10 +10655,10 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(150000, (int)per_step,
-        "the lava stress scene must stay in the same ballpark as this "
-        "provisional ceiling - see the comment above for why it is "
-        "provisional");
+    TEST_ASSERT_LESS_THAN_MESSAGE(109000, (int)per_step,
+        "the lava stress scene is held to 10% below its first measured "
+        "number, as a reduction target - failing means the work is not "
+        "done, not that something broke");
 }
 
 /* A full screen of smoke and steam with one spark of fire
@@ -10647,15 +10679,11 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
  * full screen. No settling steps either - the scene is the worst case
  * from the moment it is painted.
  *
- * THE ASSERTION BELOW IS NOT A BUDGET, for the same reason as the two
- * device tests above: nobody has run this on hardware yet. It is a
- * deliberately loose SANITY CEILING, not extrapolated from host timings -
- * an extrapolated figure elsewhere in this file already came out four
- * times too pessimistic against the real device number, which is
- * reason enough not to try that again here. Replace it with a real
- * figure - about 9-10% over the measured number, the method this file's
- * other budgets document - the first time this runs on a device, and say
- * what was measured. */
+ * First device measurement, 2026-08-26: 141189 us (capture
+ * performance_20260826_150930; the second capture reproduced it at
+ * 141187, a 2 us spread). Provisional ceiling (400000) retired the same
+ * day to the file-wide uniform reduction target (see
+ * FULL_STEP_BUDGET_US's comment): measured * 0.9, rounded -> 127000. */
 static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -10694,10 +10722,10 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(total, count,
         "setup: cells must only ever convert material, never appear or "
         "vanish, across a screen of smoke and steam");
-    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
-        "a full screen of smoke and steam must stay in the same ballpark "
-        "as this provisional ceiling - see the comment above for why it "
-        "is provisional");
+    TEST_ASSERT_LESS_THAN_MESSAGE(127000, (int)per_step,
+        "a full screen of smoke and steam is held to 10% below its first "
+        "measured number, as a reduction target - failing means the work "
+        "is not done, not that something broke");
 }
 
 /* 480 glass compartments (build_thermal_shock_scene() above, shared with
@@ -10710,17 +10738,11 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
  * starts strictly between the two shock thresholds and every trigger
  * starts touching its ring from step 1.
  *
- * THE ASSERTION BELOW IS NOT A BUDGET. Nobody has run this on hardware
- * yet, so - same as the other four scenes' device tests in this file -
- * this is a deliberately loose SANITY CEILING: wide enough that it cannot
- * pass as tuned, tight enough to catch something catastrophic like an
- * accidental quadratic. It is not extrapolated from the host timing
- * either - this file has already been burned once by an extrapolated
- * figure that came out four times too pessimistic against what the chip
- * actually did, and there is no reason to repeat that mistake here.
- * Replace this with a real figure - about 9-10% over the measured
- * number, the method this file's other budgets document - the first
- * time this runs on a device, and say what was measured.
+ * First device measurement, 2026-08-26: 106650 us (capture
+ * performance_20260826_150930, reproduced by a second capture).
+ * Provisional ceiling (400000) retired the same day to the file-wide
+ * uniform reduction target (see FULL_STEP_BUDGET_US's comment):
+ * measured * 0.9, rounded -> 96000.
  *
  * The watchdog reasoning here is stronger than it was for the three
  * scenes above: ten steps, and no settling step to spend any of the
@@ -10739,11 +10761,11 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
  * The step count is not chosen against those numbers at all. It is fixed
  * at ten by the host guard beside this test - see that test's comment on
  * why the cullet timeline only splits into honest thirds at ten - and
- * the CEILING is then what gets chosen: ten steps at 400000 us is four
- * seconds total, which stays inside the device's five-second task
- * watchdog even in the worst case the assertion allows. The two are one
- * decision - raise the step count without lowering the ceiling and this
- * stops being a safe bet. */
+ * the CEILING is then what gets chosen against the watchdog: at the
+ * original provisional 400000, ten steps was four seconds against the
+ * device's five-second task watchdog; at the re-based 96000 the margin
+ * is wide. The two remain one decision - raise the step count without
+ * minding the ceiling and the bet needs re-doing. */
 static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -10774,11 +10796,10 @@ static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
-        "the thermal shock lattice must stay in the same ballpark as "
-        "this provisional ceiling - see the comment above for why it is "
-        "provisional, and for the watchdog arithmetic that ties this "
-        "ceiling to the 10-step window");
+    TEST_ASSERT_LESS_THAN_MESSAGE(96000, (int)per_step,
+        "the thermal shock lattice is held to 10% below its first "
+        "measured number, as a reduction target - failing means the work "
+        "is not done, not that something broke");
 }
 
 /* The boiler scaled to the whole grid and run as a sustained steady state
@@ -10793,29 +10814,20 @@ static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
  * really is a sustained boil rather than a burst that has mostly spent
  * itself by the time the measured window starts.
  *
- * THE ASSERTION BELOW IS NOT A BUDGET, for the same reason as the other
- * four device tests in this section: nobody has run this on hardware
- * yet. It is a deliberately loose SANITY CEILING, not extrapolated from
- * host timings - this file has already been burned once by an
- * extrapolated figure that came out four times too pessimistic against
- * the real device number, which is reason enough not to try that again
- * here. Replace it with a real figure - about 9-10% over the measured
- * number, the method this file's other budgets document - the first
- * time this runs on a device, and say what was measured.
+ * First device measurement, 2026-08-26: 31529 us (capture
+ * performance_20260826_150930, reproduced by a second capture).
+ * Provisional ceiling (80000) retired the same day to the file-wide
+ * uniform reduction target (see FULL_STEP_BUDGET_US's comment):
+ * measured * 0.9, rounded -> 28500.
  *
- * Fifty steps in total (20 settle + 30 measured) at the 80000 us ceiling
- * this test asserts is four seconds, which stays inside the device's
- * five-second task watchdog even in the worst case the assertion allows
- * - the same step-count-and-ceiling-as-a-pair reasoning the thermal
- * shock lattice's device test above documents, and the reason the
- * ceiling here is 80000 rather than the round 100000 an earlier draft
- * used: at 100000, fifty steps is exactly the watchdog's own five
- * seconds, which is not a margin. Host timing, best-of-5 and
- * interleaved, ranks this scene the CHEAPEST of the five at 218 us/step
- * against 1199 for the thermal shock lattice - which is why it can
- * afford fifty steps where that one is held to ten: a scene costing
- * about a fifth as much per step buys back the same watchdog margin with
- * five times the steps. */
+ * The watchdog pairing the provisional ceiling was chosen against (50
+ * total steps at 80000 us was four seconds against the five-second task
+ * watchdog; an earlier draft's round 100000 was exactly five, which is
+ * not a margin) is comfortably looser at the re-based number. Host
+ * timing, best-of-5 and interleaved, ranks this scene the CHEAPEST of
+ * the five at 218 us/step against 1199 for the thermal shock lattice -
+ * which is why it can afford fifty steps where that one is held to
+ * ten. */
 static void test_the_boiler_scene_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -10849,11 +10861,10 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(80000, (int)per_step,
-        "the boiler scene must stay in the same ballpark as this "
-        "provisional ceiling - see the comment above for why it is "
-        "provisional, and for the watchdog arithmetic that ties this "
-        "ceiling to the 50-step total window");
+    TEST_ASSERT_LESS_THAN_MESSAGE(28500, (int)per_step,
+        "the boiler scene is held to 10% below its first measured "
+        "number, as a reduction target - failing means the work is not "
+        "done, not that something broke");
 }
 #endif /* DEVICE_BUILD */
 

@@ -15,42 +15,38 @@ half-remember.
 
 ## The scoreboard
 
-The last device capture (2026-08-25), each measurement as a share of its own
-budget — `█` = 5%, the scale ends at the budget, `▶` means it ran off the end.
-No budget here was ever raised to make a test pass.
+**The 2026-08-26 re-base: all thirteen budgets are now uniform reduction
+targets — measured × 0.9, rounded — and all thirteen deliberately fail.**
+The first full capture of the post-wave tree (`performance_20260826_150930`,
+reproduced by a second capture to within 4 µs on every test) established a
+fresh baseline for every scene, and every budget was re-set a tenth below
+its own measurement. No bars this round: by construction every row sits at
+~111% of its target, and the honest visualization is the gap itself. A row
+turns to pass only when its tenth is genuinely won.
 
-| Test | Measured / budget | % of budget | |
-|---|---|---|---|
-| Settled screen, nothing moves | `█████████████████▊  ` 89% | 267 / 300 µs | pass |
-| Gravity flip, settled pile | `██████████████████▎ ` 92% | 5,959 / 6,500 µs | pass |
-| Full-size step, all falling | `███████████████████▌` 98% | 5,867 / 6,000 µs | pass — thinnest |
-| Mixed scene flip | `████████████████████▶` 107% | 12,876 / 12,000 µs | **FAIL** |
-| Fire cascade through gas | `████████████████████▶` 111% | 390,158 / 350,000 µs | **FAIL** |
-| Screen of water collapsing | `████████████████████▶` 115% | 16,052 / 14,000 µs | **FAIL** |
-| Full screen of fire, steady | `████████████████████▶` 115% | 286,720 / 250,000 µs | **FAIL** |
-| Every material at once | `████████████████████▶` 111% | 60,091 / 54,000 µs | **FAIL** — by design, a reduction target |
+| Test | Measured (2026-08-26) | Target | To close |
+|---|---:|---:|---:|
+| Settled screen, nothing moves | 260 µs | 235 | 25 µs |
+| Full-size step, all falling | 6,434 µs | 5,800 | 634 µs |
+| Gravity flip, settled pile | 6,529 µs | 5,900 | 629 µs |
+| Mixed scene flip | 12,999 µs | 11,700 | 1,299 µs |
+| Screen of water collapsing | 16,043 µs | 14,400 | 1,643 µs |
+| Boiler, sustained boil | 31,529 µs | 28,500 | 3,029 µs |
+| Every material at once | 74,911 µs | 67,500 | 7,411 µs |
+| Thermal shock lattice | 106,650 µs | 96,000 | 10,650 µs |
+| Lava stress scene | 121,377 µs | 109,000 | 12,377 µs |
+| Four liquids reacting | 125,430 µs | 113,000 | 12,430 µs |
+| Smoke + steam screen | 141,189 µs | 127,000 | 14,189 µs |
+| Full screen of fire, steady | 295,533 µs | 266,000 | 29,533 µs |
+| Fire cascade through gas | 506,666 µs | 456,000 | 50,666 µs |
 
-**Read this table with two caveats, both found in attempt 11.** Its capture
-reported `failures=4`, not 5: the build that was flashed predates the commit
-that set the every-material budget to 54,000, so on the device that row passed
-against an older 300,000. And that build is **fifty commits behind HEAD** — it
-has none of glass, thermal shock, snow, ice, dirt, convection, percolation or
-the plant work. It is the newest capture that exists; it is not a measurement
-of the current tree.
-
-Attempt 11 fixed the water and mixed regressions in full on the host and took
-about 10% off each fire benchmark. **None of that is device-verified** — the
-next capture is what settles it.
-
-The suite now has **thirteen** device frame-budget tests, not eight. Attempt 12
-added three of them — four liquids, a lava stress scene, a screen of smoke
-and steam, at 150,000 µs, 150,000 µs and 400,000 µs — and attempt 13 added
-two more — a thermal shock lattice at 400,000 µs and a boiler at 80,000 µs.
-All five are provisional sanity ceilings guessed rather than measured, and
-**none of the five has ever run on hardware.** Their rows cannot appear
-in the scoreboard above until a capture exists; when one does, all five
-ceilings still need re-pegging from that first measurement, whether they
-pass or not.
+Two findings from that capture, unresolved at re-base time and first in
+line for the next round: attempt 11's host-measured water/mixed recovery
+**did not materialise on the device** (16,043 against a predicted
+12–13.5k — the host→device ratio is scene-specific, as this file already
+warns), and both liquid-free controls moved ~+10% against the older build
+(5,867→6,434 and 5,959→6,529) — layout-lottery double hit or a genuine
+global per-cell cost from the wave's tail, not yet attributed.
 
 Fixed RNG seeds make identical builds reproduce these numbers to the microsecond.
 What moves them *between* builds is flash layout, not chance — see
