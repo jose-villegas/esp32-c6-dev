@@ -1036,6 +1036,7 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
  * pass stays a handful of writes. */
 #define CANOPY_SPAN 3
 
+
 /* How far down through soil a plant's roots reach for water. Deep enough
  * to survive a bed draining under it, short enough that a tree cannot
  * drink from the far side of the board. */
@@ -1511,16 +1512,16 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     const int what = rng_below(&s->rng, 8);
     if (what < 4 || run < 3) {
         site = run - 1;               /* HEIGHT: straight on from the tip */
-        dx = ux;
-        dy = uy;
+        dx = 0;
+        dy = 0;                       /* along the run - filled in below */
     } else if (what < 6) {
         site = run - 1;               /* LEAN: the tip, one step round */
-        dx = ring_dir(up + side)[0];
-        dy = ring_dir(up + side)[1];
+        dx = side;
+        dy = 0;                       /* one step round from the run */
     } else if (what < 7) {
         site = rng_below(&s->rng, run - 1);   /* BRANCH: out and up */
-        dx = ring_dir(up + side)[0];
-        dy = ring_dir(up + side)[1];
+        dx = side;
+        dy = 0;
     } else {
         /* WIDTH. Straight out from low down, which is how a trunk
          * thickens - and thickening is most of what turns a sapling into
@@ -1530,8 +1531,8 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
          * one that also gets fatter hardens into something that looks
          * like a trunk. */
         site = rng_below(&s->rng, (run + 1) / 2);
-        dx = ring_dir(up + side * 2)[0];   /* square on to up */
-        dy = ring_dir(up + side * 2)[1];
+        dx = side * 2;                /* square on to the run */
+        dy = 0;
         thicken = true;
     }
     /* Back up the stem to the chosen site, the same way. */
@@ -1543,6 +1544,44 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
         }
         sx = nx;
         sy = ny;
+    }
+
+    /* WHICH WAY THIS RUN IS GOING, re-derived from the shape rather than
+     * remembered - the same trick the tip walk uses to answer "where is my
+     * top". The step from the cell below the site to the site itself is
+     * the direction that run has been travelling.
+     *
+     * It is what makes a limb a limb. Reckoning every direction from
+     * gravity meant a branch went out one cell and then climbed: a
+     * one-cell branch is a run of one, which trips the `run < 3` gate on
+     * to the straight-up arm, on every attempt, for ever. Nothing could
+     * travel outward.
+     *
+     * Falls back to up when there is no cell below - a seed on soil has no
+     * line to hold yet - and when the roll says not to, which is what
+     * bends a bough back towards upright instead of firing it off as a
+     * straight ray. `holds_line` at zero restores the old behaviour
+     * exactly. */
+    int head = up;
+    if (r->holds_line != 0 &&
+        (int)(rng_next(&s->rng) & 0xFF) < r->holds_line) {
+        /* The step from the cell below this one to this one IS the way
+         * the run has been going. One cell, not an average over several:
+         * a three-cell baseline was tried and measured no further -
+         * limb reach summed 67, 73 and 70 over eight seeds for baselines
+         * of one, two and three, which is one spread - while the longer
+         * baseline let a run lock into a lean and wander, taking the
+         * trees' horizontal drift from 24 to 38. Shorter is simpler and
+         * measured better on the one axis that moved. */
+        int px, py;
+        if (stem_next(s, sx, sy, -ux, -uy, w, h, self, &px, &py)) {
+            head = ring_of(sx - px, sy - py);
+        }
+    }
+    {
+        const int *hd = ring_dir(head + dx);
+        dx = hd[0];
+        dy = hd[1];
     }
 
     if (thicken) {

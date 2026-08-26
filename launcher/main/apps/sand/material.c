@@ -1755,7 +1755,13 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * leaves, varying, rather than a fixed rosette. */
         .canopy      = 110,
         .canopy_to   = MATX(MATX_LEAF),
-        .trunk_girth = 2,   /* and it is part of one, which is the
+        .trunk_girth = 2,
+
+        /* High, but not certain. At 255 a limb is a perfectly straight
+         * ray; the occasional reversion to reckoning from gravity is what
+         * bends it back towards upright, which is what a real bough does
+         * and what keeps a tree from looking like a diagram. */
+        .holds_line  = 200,   /* and it is part of one, which is the
                                     * same material here and will not be
                                     * once foliage exists */
         .harden_run  = 6,

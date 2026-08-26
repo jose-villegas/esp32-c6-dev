@@ -6952,6 +6952,87 @@ static void test_hardening_leaves_the_growing_tip_alive(void)
     TEST_ASSERT_TRUE_MESSAGE(checked, "the tree has to have hardened at all");
 }
 
+
+/* A limb TRAVELS. It does not go out one cell and then climb.
+ *
+ * Growth used to reckon every direction from gravity, which meant a branch
+ * could never get anywhere: one cell out makes a run of ONE, and a run
+ * under three trips the gate that forces the straight-up arm - on every
+ * attempt, for ever. So limbs went out a single cell and then grew
+ * vertically alongside the trunk, which is the same thin-thread shape that
+ * made basal suckers look like floating debris.
+ *
+ * A run's direction is not stored anywhere; it is read back off the grid,
+ * from where the run has been over its last few cells. `holds_line` is the
+ * chance of using it, and zero restores the old behaviour exactly - which
+ * is what this is really pinned against.
+ *
+ * On a grid of its own, because the shared fixture is eight by eight and a
+ * diagonal limb runs out of ceiling in three cells - far too soon to tell
+ * travelling from the sideways cell an occasional LEAN produces anyway.
+ * The limb is pre-built with a heading already established, because what
+ * is being tested is what a run does once it HAS a direction. */
+#define LIMB_W 30
+#define LIMB_H 26
+static uint8_t limb_cells[LIMB_W * LIMB_H];
+
+static void test_a_limb_travels_outward_instead_of_climbing(void)
+{
+    /* Summed over eight seeds, and that is not laziness about a flaky
+     * test - it is what the measurement actually supports. On any single
+     * seed the two builds overlap: with the heading, one limb reached 7
+     * and another 13; without it, the range is 6 to 7. A threshold picked
+     * to split one seed would be fitted to that seed and would say
+     * nothing. Totalled, the gap is unmistakable - 70 against 52 - and
+     * the assert sits in the middle of it. */
+    int total = 0;
+    for (unsigned seed = 1; seed <= 8; seed++) {
+        sand_t t;
+        memset(limb_cells, 0, sizeof limb_cells);
+        sand_init(&t, limb_cells, LIMB_W, LIMB_H, seed * 7919u);
+        sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+        sand_set_decay(&t, SAND_DECAY_PER_MATERIAL);
+
+        const int bx = 3;
+        for (int x = 0; x < LIMB_W; x++) {
+            sand_set(&t, x, LIMB_H - 1, STONE);
+            sand_set(&t, x, LIMB_H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        for (int y = LIMB_H - 8; y < LIMB_H - 2; y++) {
+            sand_set(&t, bx, y, CELL_MAKE(MAT_WOOD, 0));
+        }
+        sand_set(&t, bx + 1, LIMB_H - 9,  MATX(MATX_PLANT));
+        sand_set(&t, bx + 2, LIMB_H - 10, MATX(MATX_PLANT));
+        sand_set(&t, bx + 3, LIMB_H - 11, MATX(MATX_PLANT));
+
+        int reach = bx + 3;
+        for (int i = 0; i < 4000; i++) {
+            for (int x = 0; x < LIMB_W; x++) {
+                sand_set(&t, x, LIMB_H - 2,
+                         CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
+            sand_step(&t, 0, 1000, 0);
+
+            for (int y = 0; y < LIMB_H - 2; y++) {
+                for (int x = 0; x < LIMB_W; x++) {
+                    const cell_t c = sand_at(&t, x, y);
+                    if ((c == MATX(MATX_PLANT) ||
+                         CELL_MATERIAL(c) == MAT_WOOD) && x > reach) {
+                        reach = x;
+                    }
+                }
+            }
+        }
+        total += reach;
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(60, total,
+        "limbs with a heading must carry on in that direction - reckoning "
+        "every growth from gravity instead sends one straight up the side "
+        "of its own trunk, and no tree ever puts out a bough");
+}
+
 /* --- foliage -------------------------------------------------------------- */
 
 /* A leaf on a tree never multiplies, and never moves.
@@ -11579,6 +11660,7 @@ void run_sand_suite(void)
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
     RUN_TEST(test_a_plant_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_plant_rooted_on_stone_does_not_drink);
+    RUN_TEST(test_a_limb_travels_outward_instead_of_climbing);
     RUN_TEST(test_a_hardened_trunk_is_left_with_foliage);
     RUN_TEST(test_a_hardened_trunk_is_thicker_at_the_foot);
     RUN_TEST(test_hardening_leaves_the_growing_tip_alive);

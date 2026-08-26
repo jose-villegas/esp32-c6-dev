@@ -810,6 +810,27 @@ typedef struct {
      * tapering to nothing at its top. Zero leaves a stick. */
     uint8_t trunk_girth;
 
+    /* HOLDING A LINE: chance in 256 that growth continues along the run's
+     * OWN direction rather than straight against gravity.
+     *
+     * Without it a limb cannot exist. Growth always reckoned from "up", so
+     * a branch went out one cell and then climbed - and a one-cell branch
+     * is a run of one, which trips the `run < 3` gate that forces the
+     * straight-up arm, so it climbed on every single attempt. Every limb
+     * turned into a thin vertical thread beside the trunk, which is the
+     * same shape that made basal suckers look like floating debris.
+     *
+     * The direction is not remembered anywhere. It is re-derived from the
+     * shape, the way the tip walk answers "where is my top": the step from
+     * the cell below a run to the cell itself IS the way that run has been
+     * going. A trunk's is straight up and nothing changes for it; a limb
+     * that set out up-and-left keeps going up-and-left.
+     *
+     * SET IT TO ZERO to get the previous behaviour back exactly - every
+     * direction reckoned from gravity, limbs as stubs. That is the whole
+     * rollback, and it is why this is a field rather than a rewrite. */
+    uint8_t holds_line;
+
     /* SPROUTING: chance/256 per step that this material, standing in soil
      * with water in it, puts a cell of `sprouts_to` into an empty space
      * beside it - and spends a level of that soil's moisture doing it.
