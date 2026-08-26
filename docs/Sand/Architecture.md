@@ -236,6 +236,53 @@ keeping because they are the only measurement of the scene as played:
 | ambient + 3 | 17 |
 | ambient + 2 | 25 |
 
+### The material budget, and what is left
+
+A cell is one byte: four bits of material, four of variant. Zero is empty,
+so there are **15 material slots** and **14 are in use** - sand, water,
+stone, gas, fire, wood, steam, smoke, ember, oil, lava, acid, glass, snow.
+One free.
+
+Three ways to make more room, cheapest first.
+
+**Reinterpret a nibble.** Free, and already the pattern: liquids read the
+variant as fill, transients as life remaining, glass and stone as
+temperature. A material needing two small quantities can split its own
+nibble. This costs nothing and is the default answer.
+
+**Make a material a state of another.** Ember is wood's burn state rather
+than its own paintable thing. A slot is only really spent when the player
+has to *choose* the material; anything reached by reacting can often be a
+variant of what it came from. Smoke and steam are near-identical rows kept
+apart for narrative reasons, and are the obvious candidates if a slot is
+ever needed badly.
+
+**Pack the byte.** Drop the fixed 4+4 split for a flat 0-255 index with a
+per-material base offset, giving each material only as many variant codes
+as it uses. Measured against the current table that needs **189 of 256
+codes, leaving 67** - about four more liquids or sixteen more inert solids.
+The cost lands in the worst place: `CELL_MATERIAL` and `CELL_VARIANT`
+become dependent table lookups instead of a shift and a mask, in the
+hottest loop in the program. Worth doing only when slot pressure is real.
+
+**What does not work: moving transients out of the grid.** The idea is
+appealing - fire, smoke, steam, gas and ember are five of the fourteen
+slots, and they are short-lived, so a side list of active ones would free
+a third of the table. Measured peak transient population:
+
+| scene | transient cells at once |
+| --- | --- |
+| a burning wood floor | 2,631 |
+| a lava pool, flaring | 412 |
+| a screen of gas, ignited | **33,879** |
+
+The grid is 41,216 cells. In the scenes that actually stress the
+simulation transients are most of the board, so a side table holding
+position, kind and life would want ~132 KB against the ~50 KB of RAM that
+exists - more than three times the whole grid at one byte per cell. They
+are not the rare case; they are the case that fills the screen, which is
+exactly why they belong in the grid rather than beside it.
+
 ### What carries a temperature, and what it does with one
 
 `heat_ramp` makes a material's variant a temperature. What it does with
