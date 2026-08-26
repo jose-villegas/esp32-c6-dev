@@ -444,6 +444,22 @@ tuning a constant that feeds a test fixture's array size, check what that
 constant costs in the worst case you intend to try, not just the case you
 are currently running.
 
+A *dynamically* allocated fixture that exceeds the budget is worse than the
+static case above, not just another instance of it, because how the failure
+is handled now matters as much as whether it happens. Write the null check
+as an assert before any of a multi-malloc fixture's earlier buffers are
+freed, and a single over-budget test does not just fail on its own account:
+the assert's longjmp skips straight past the frees at the end of the
+function, so everything that DID allocate stays allocated for the rest of
+that boot, and every later test that needs memory fails behind it. A host
+suite structurally cannot see this coming, either, because the leak lives
+entirely on malloc's failure path — and on a host, with memory to spare,
+that path never runs, so the same fixture that leaks on the device passes
+clean every time it's built for the machine checking it in.
+**A null check written as assert-before-free does not just fail its own
+test on an over-budget target — it can leak everything the fixture already
+allocated and take every later test down with it.**
+
 ---
 
 ## Related

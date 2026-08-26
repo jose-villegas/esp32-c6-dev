@@ -2227,6 +2227,27 @@ regression in the simulation's own `may_have_*` bookkeeping, which is
 exactly their purpose) and one right-half water-loss assertion that is
 the mirror expression of the left-half one, which was reddened.
 
+### The first device run measured nothing at all
+
+The first device capture of these five benchmarks,
+`launcher/tools/results/performance_20260826_144811_raw.txt`, produced
+no numbers at all - not a bad number, no number. At that point the
+thermal shock host guard's `ever_cullet` mask was still a byte per
+cell, so the guard's fixture asked for 82,456 bytes - the 41,216-byte
+grid, its 24-byte block map, and a second 41,216-byte buffer for the
+mask - against the roughly 68,188 the device has free once the display
+framebuffer is carved out of its heap. The third malloc came back
+NULL, the test's `TEST_ASSERT_NOT_NULL` aborted straight past its own
+frees, and the resulting 41,240-byte leak starved every allocation
+after it for the rest of that boot: all thirteen frame-budget tests in
+the run failed on a null grid, not on a bad frame time, and the
+capture that was supposed to characterise this attempt's two scenes
+came back empty. The host guards here are registered the same way as
+every other test in this suite - unconditionally, inside the self-test
+image the board itself boots - so a fixture sized for host convenience
+is really sized for the board whether it meant to be or not, and this
+attempt's own guard is what broke it.
+
 ### What this attempt is worth carrying
 
 **A window length can be a measured decision rather than a round
@@ -2244,6 +2265,11 @@ the true thing.
 **Cross-talk between two halves of a scene can be real physics rather
 than a scene bug;** the fix is to assert the intended direction fires,
 not that contamination is zero.
+
+**A guard that runs on the host runs on the board too, unconditionally,
+and has to fit the board's budget even though it was written and
+proved out on a machine where that budget does not exist** - the mask
+above passed every host run right up until the device tried it.
 
 ---
 
