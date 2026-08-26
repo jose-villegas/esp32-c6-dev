@@ -2273,6 +2273,279 @@ above passed every host run right up until the device tried it.
 
 ---
 
+## The fourteenth attempt: the flicker fix's unpriced bill, called in
+
+Every attempt so far in this file either won time back or spent nothing
+finding out that it could not. This one is different on purpose: it
+*spends* host time, deliberately, to buy back a piece of behaviour an
+earlier fix had traded away without anyone pricing the trade. The bug
+was not found by this campaign - it came in as a report that a settled
+liquid surface looked wrong - and tracing it led back past the tenth
+attempt to commit 30335ae, the fix that gave
+`test_a_settled_pool_does_not_flicker` its green.
+
+### The trade nobody priced
+
+30335ae fixed a real bug: cross-flow's axis was being taken from
+gravity's own *dithered* direction, which by design changes between two
+octants almost every step once gravity is off-axis. A settled pool's
+"is this level" search therefore ran along a different axis almost every
+step, and a pool level along one axis could read as wildly unbalanced
+along the other - visible as water that looked finished settling
+flashing between shades and resettling, over and over. Pinning the axis
+to the *nearest* nondithered direction instead fixed exactly that, and
+its guard test, `test_a_settled_pool_does_not_flicker`, has been green
+ever since.
+
+What that fix did not have, and what nobody wrote in the tenth through
+thirteenth attempts because nothing pointed at it, was a test that the
+settled surface still tracked the tilt it was settling under. Measured
+on the host before this round: settled slope against true slope, 5
+through 20 degrees, came out 0.006 to 0.032 against true slopes of 0.087
+to 0.364 - dead flat. 25 through 45 degrees came out about 0.94 against
+true slopes of 0.466 to 1.0 - snapped to the diagonal. Two values, for
+the whole range of possible tilts. A pool can only ever settle
+perpendicular to one of the eight ring directions when it is only ever
+allowed to level along one of them, so it quantised to 0, 45 or 90
+degrees regardless of what the true angle was. That was not visible as
+a trade at the time 30335ae landed, because nothing measured it - the
+flicker was gone, the guard was green, and the case was closed.
+
+### The structural half
+
+Below 22.5 degrees the story is not just coarse, it is broken outright,
+and for a reason worth naming precisely: in the near-vertical octant the
+level ray runs horizontal, and a horizontal ray can only move mass
+*within a row*. Nothing else in this simulation moves liquid mass to a
+lower row index except cross-flow along a diagonal ray - down-then-slope
+only ever gives mass to a strictly lower row, never levels one - so with
+cross-flow pinned to a horizontal ray, a pool in that octant physically
+could not deepen on its low side, at any tilt. That is why the
+sub-22.5-degree half of the range read as perfectly flat rather than
+merely coarse: it was not a rounding error, it was a mechanism with no
+path to the answer.
+
+### The design: two rays, dithered in space instead of in time
+
+The fix has two halves. First, cross-flow now brackets the true
+perpendicular to gravity with two rays instead of pinning to one: the
+axis ray (what 30335ae used) and the diagonal ray beside it, on the side
+the tilt leans. Each column - or row, when gravity is mostly sideways -
+picks one or the other on a fixed pattern in space, with density
+`q = min(|gx|,|gy|)/max(|gx|,|gy|)` - the same ratio
+`sand_gravity_direction_dithered()` already uses to dither gravity
+itself. The insight worth stating plainly, because it is the whole
+trick: the flicker 30335ae fixed came from dithering the axis in TIME,
+where a settled pool sees a different answer on almost every step: the
+same choice, dithered in SPACE instead, gives a settled pool the
+identical answer on every step, because a given column always takes the
+same ray - so it settles, and stops flickering, exactly as before - but
+the *mix* of rays across the pool now reads as the true angle instead of
+snapping to one of eight. The diagonal ray also restores the row-
+crossing the near-vertical octant had lost outright.
+
+Second, the two rays have to be compared on the same footing, and raw
+mass is not that footing: "level" means equal surface height measured
+along gravity, and a cell reached by a step of a ray that is not exactly
+perpendicular to gravity sits a little higher or lower along the true
+"down" than the cell before it, so a level surface should hold a little
+more or less mass there even though nothing moved. `bias_ax_q8` and
+`bias_dg_q8` (`xflow_t`, `sand_priv.h`) are exactly that: what one step
+of each ray costs in gravitational potential, in 1/256 mass units, and
+`find_shallowest()` (`sand_liquid.c`) carries the running total so a
+multi-step walk compares LEVEL rather than raw mass. Both figures derive
+from one shared pair of per-axis constants, so the level field stays
+exactly consistent whichever ray reaches a given cell.
+
+At exactly axis-aligned gravity, q is 0 and `bias_ax_q8` is 0; at
+exactly 45 degrees, q is 256 and `bias_dg_q8` is 0. At both, the new
+code reduces to precisely the old code, bit for bit - which is why every
+existing test at those two gravities was unaffected.
+
+### Why the alternatives lost
+
+Three other shapes were considered before this one, and all three lose
+to the measurements above, not to taste.
+
+**Hysteresis on the axis** - keep the current axis until the true angle
+crosses well into the next octant, a dead band around the switch point.
+Rejected on the pre-fix measurements themselves: they are only ever two
+values across the *entire* range, ≈0.00 below 22.5 degrees and ≈0.94
+above it. A dead band moves *where* the jump between those two values
+happens; it does not add a third value anywhere. It would fix flapping
+exactly at the boundary and nothing else - the coarseness that is this
+round's actual subject would be untouched.
+
+**Slow alternation between the two axes, duty-cycled** - stretch the
+dither in time until it is too slow to read as flicker. Measured, and
+this is the number worth keeping: a pool settled at 30 degrees on its
+nearest axis churns at most 28 units of mass per step over 20 quiet
+steps, well inside `test_a_settled_pool_does_not_flicker`'s ceiling of
+60. Switching the axis for a single step costs 1,582 units of churn on
+that first step alone; the next twenty steps peak at 1,076; switching
+back costs 1,394. Run as a 30-steps-per-axis duty cycle, it peaks at
+2,278 units in a single step and the mid-pool depth wanders by over 3.53
+cells. One axis change on a settled pool costs roughly twenty-six times
+the flicker guard's entire budget, and no duty cycle makes that cheaper
+- it only makes it rarer.
+
+**Activity-gated dither** - dither while the liquid is moving, freeze to
+the stable axis once it settles. Rejected as circular: the dither is
+itself what keeps a settled pool from ever reading as settled, so the
+gate that is supposed to detect "settled" never closes. Gated instead on
+the simulation's existing settled bits, it freezes at whichever
+quantised axis happened to be in use when those bits latched, which is
+the original bug with extra steps between it and the symptom. The
+alternation numbers above price every reopening of such a gate at
+roughly 1,582 units.
+
+### The cost, in full
+
+Host-relative, best of 5, the two binaries interleaved, on the shipped
+184x224 grid with the same half-screen water slab the device benchmark
+uses:
+
+| scene | before | after | change |
+|---|---:|---:|---:|
+| water, exactly vertical gravity | 74.7-75.1 µs/step | 80.8-81.8 µs/step | ≈+8% |
+| water, 20 degrees | 76.3-77.8 µs/step | 98.8-100.9 µs/step | ≈+29% |
+| water, 26 degrees | 83.0-85.2 µs/step | 113.6-116.4 µs/step | ≈+37% |
+| mixed scene, vertical | 599-618 µs/step | 617-633 µs/step | ≈+2-3% |
+| mixed scene, 20 degrees | 590-602 µs/step | 617-623 µs/step | ≈+4% |
+
+These are the landed build's own numbers, re-measured against HEAD after
+an earlier pass through this table used the prototype's; the landed
+code is the same algorithm as the prototype but measures a further
+several points cheaper at the axis gravity purely from where the
+compiler happened to place the same logic in flash - the layout lottery
+this file already documents elsewhere, observed again, this time
+between two builds of code that was never meant to differ at all.
+
+The sharp point has to be stated explicitly, because it is easy to read
+the scoreboard as safe: **every shipped device benchmark runs at
+exactly (0, 1000)**, the one gravity where this change is behaviourally
+a no-op. The +8% measured there is pure code-shape cost with nothing
+behavioural to show for it - extra branches and a wider `xflow_t` paid
+on every cell even though q is always 0 at that gravity. The +29% to
++37% that off-axis gravity actually costs is not measured by any budget
+in this suite at all, because no budgeted scene runs tilted. That is a
+gap in the benchmark set, not a reason to feel safe about this round's
+cost.
+
+### The attempt-11 treatment, applied, with one negative result
+
+The eleventh attempt's own lessons - hint the cold path, keep the hot
+path short - were applied here too. `__builtin_expect` on the new cold
+clamps in `equalise_one_cell()`, and moving the per-cell ray choice
+(diagonal or axis) to *after* the empty/not-liquid checks in
+`equalise_one_row_cell()` rather than doing it for every cell in the
+block loop, together were worth about 10% of the step - most cells a
+scanned block holds are empty, and there is no reason to pick a ray for
+a cell that is about to be rejected anyway.
+
+One idea from that same toolbox was tried and did not pay: hoisting
+`xflow_t`'s fields into locals inside `find_shallowest()`, to defeat a
+suspected aliasing reload (the compiler cannot prove the loop's stores
+to `s->cells` don't touch the struct the loop also reads from).
+**Measured no difference at all.** Recorded here as a negative result on
+purpose, because the same idea - hoist to defeat a suspected reload -
+is documented as a real win elsewhere in this file, and a later reader
+who has not seen this section would have every reason to try it again.
+
+### The other cost: a settled pool is livelier than it was
+
+Worst per-step mass churn on a settled pool, swept over tilts from 5 to
+85 degrees: 16-44 units before this round, 14-86 after. The largest
+single-cell shade jump is comparable either way (6 of 15 before, 8
+after), so this reads as more cells wobbling by a little rather than the
+large mass swings 30335ae fixed - but it is roughly double the old
+worst case, and at several tilts it now exceeds the 60-unit ceiling
+`test_a_settled_pool_does_not_flicker` applies at its own vector. That
+test's own vector, (60, 1000), stays well inside its ceiling - the guard
+that matters most is unaffected - but stated plainly: whether the
+livelier surface reads as texture or as shimmer on real glass is a
+device judgement that has not been made yet.
+
+### A grid-size audit
+
+Prompted by the original report, which said the snap was worst at the
+app's VERY LOW quality setting (grid 368/6 x 448/6 = 61x74): is there a
+coupling defect somewhere between grid size and tilt angle? Finding:
+**no.** The tilt chain is pure vector math on raw accelerometer counts -
+`tilt.c`, `sand_gravity_direction()` and
+`sand_gravity_direction_dithered()` read no grid dimension anywhere, and
+`update_momentum()` renormalises to a unit vector regardless of grid size. The pre-fix snap
+measures the same at every quality grid tried: 0.940 to 0.949 at 26-40
+degrees and 0.006 to 0.018 at 10-20 degrees, at 61x74, 92x112, 123x149
+and 184x224 alike.
+
+What *is* grid-size dependent is `SAND_LIQUID_SIGHT`, which is a fixed
+8 cells regardless of grid size: transport reach per step is a fixed
+number of cells, so a 61-wide pool reaches its settled angle roughly
+three times sooner, in steps, than a 184-wide one does. Measured: at 26
+degrees the fix reads 0.479 at 61x74 after 4,000 steps, but needs
+roughly 20,000 steps to reach the equivalent 0.482 at 184x224. That
+changes how *fast* the settled angle arrives, not what it settles to -
+and it is the likely reason the wrong pre-fix angle read as a hard snap
+at VERY LOW quality and a slow drift at HIGH. The lesson worth drawing:
+an artefact being "more visible at low quality" pointed at a *rate*
+here, not at a scaling bug - and it would have been easy to go looking
+for the wrong thing.
+
+### The guard tests
+
+`test_a_pool_settles_at_the_angle_it_is_tilted_to` is new. It runs four
+grid fixtures - 32x20, 40x28, 61x74 and 92x56 - at two tilts either side
+of the 22.5-degree octant boundary, and was verified RED on the
+previous (pre-fix) simulation before being trusted green, the way this
+file requires of every new guard.
+
+`test_a_settled_pool_does_not_flicker` stayed green throughout, and that
+matters more than a passing mention: it is the check that this round's
+fix does not weaken the thing 30335ae bought. The two tests are
+deliberately a pair from here on - one holds the fix, the other holds
+its cost - and neither alone would have been enough.
+
+`test_a_tipped_basin_pours_its_water_out` had to be re-baselined, and
+the reason is its own small lesson. Its `held/10` threshold was *below*
+the physically correct answer for its own fixture: under this scene's
+tilt, the level plane through the basin's spill corner traps 30 of the
+144 units the basin starts with in a genuine pocket that no correct
+simulation can empty. `held/10` (14) was only ever reachable while
+cross-flow treated a vertical ray as level and let water climb the wall
+for free - it was a threshold calibrated against the bug, not against
+the physics. **A numeric threshold calibrated against buggy behaviour
+becomes a guard for the bug, not for the feature it names.**
+
+### What this attempt is worth carrying
+
+**A guard test proves the bug it was built for is gone. It proves
+nothing about a property nobody thought to assert.**
+`test_a_settled_pool_does_not_flicker` was green for four rounds while
+the surface it was guarding quantised to three possible angles.
+
+**A fix can be correct and still have an unpriced cost.** 30335ae's
+axis-pinning was the right fix for the flicker it targeted; the
+structural loss of tilt resolution was a side effect nobody measured
+because nothing was looking for it.
+
+**Not every round is about winning time back.** This one spent 15-41%
+of the water path's cost, on purpose, because the alternatives - a dead
+band, a slow duty cycle, a gate that cannot close - all lose to
+measurements taken before any of them were built.
+
+**A benchmark suite measures the scenes it contains, not the space of
+scenes that exist.** Every device budget in this file runs at exactly
+(0, 1000), so the real cost of this round - the off-axis case - is
+invisible to every budget here and will not show up until a tilted
+scene is added.
+
+**"More visible at low quality" is a claim about rate until proven
+otherwise.** The grid-size audit found the same wrong angle at every
+grid size; only the time to reach it scaled.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

@@ -146,12 +146,15 @@ because it was measurably wrong rather than because it looked wrong:
      still gravity-ward, so it carries the same no-double-move guarantee
      every other move in the main sweep does.
    - **Cross-flow** (`equalise_liquids()`, `sand_liquid.c`): a *second*,
-     separate sweep, perpendicular to gravity, that looks up to
-     `SAND_LIQUID_SIGHT` (8) cells along the surface for somewhere shallower
-     and moves half the difference there. This is deliberately not local -
-     it is the cheap stand-in for pressure, which in real water travels far
-     faster than the water itself does, and it is why every falling-sand
-     game has some version of it.
+     separate sweep that walks one of two rays bracketing the true
+     perpendicular to gravity - which one a given column (or row) takes is
+     chosen on a fixed pattern in space, see `xflow_t` in `sand_priv.h` -
+     up to `SAND_LIQUID_SIGHT` (8) cells along the surface for somewhere
+     shallower, and moves half the difference in LEVEL there: mass adjusted
+     for how much deeper one cell sits than another along gravity, not raw
+     mass. This is deliberately not local - it is the cheap stand-in for
+     pressure, which in real water travels far faster than the water itself
+     does, and it is why every falling-sand game has some version of it.
 
 **Why cross-flow cannot live in the main sweep.** The main sweep's
 no-double-move guarantee depends on sweeping against gravity - but once
@@ -184,6 +187,25 @@ water that looked settled flashing between shades and resettling. Fixed by
 taking the axis from the *nearest* (non-dithered) direction instead, the
 same fix friction's burial check already used for the identical reason. See
 `test_a_settled_pool_does_not_flicker` in `suite_sand.c`.
+
+**That fix had a sequel, and it is worth knowing too.** Pinning cross-flow
+to the nearest of the eight gravity directions was the correct fix for the
+flicker, and it had a cost nobody had priced: a pool could then only ever
+settle perpendicular to one of those eight directions, so its surface
+quantised to 0/45/90 degrees regardless of the true tilt. The near-vertical
+octant lost more than resolution - its axis ray is horizontal, and a
+horizontal ray can only move mass within a row, so that octant could not
+tilt its surface at all, not merely coarsely. What replaced the single-ray
+rule is a spatial dither between two rays - the axis ray and the diagonal
+beside it, chosen per column on a fixed pattern rather than pinned to one -
+plus comparing gravitational potential instead of raw mass, since two cells
+reached by different rays are not the same distance along "down" even when
+they hold equal mass. Two guard tests exist for this pair of concerns on
+purpose: `test_a_settled_pool_does_not_flicker` holds the original fix, and
+`test_a_pool_settles_at_the_angle_it_is_tilted_to` holds its cost. Neither
+alone is enough - see the fourteenth attempt in
+[`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) for the
+full derivation and what it cost to buy back.
 
 ## Gas: the same primitives, upside down
 

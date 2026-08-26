@@ -1,12 +1,15 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-thirteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+fourteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
 budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
 budget met, none ever raised**; a wave of new materials then put four back over, and
 the eleventh sorted the accident from the feature. The twelfth found a gate that could
 never close; the thirteenth shipped no optimisation at all, measuring the two shapes
-of thermal load nothing had measured yet — a shock and a steady boil. The prose file
+of thermal load nothing had measured yet — a shock and a steady boil. The fourteenth
+went the other way on purpose: it spent host time it did not have to, buying back a
+settled surface's true angle from a fix (30335ae, predating this campaign) that had
+quantised it to 0/45/90 degrees without anyone pricing the trade. The prose file
 holds the full derivations and is the authority when the two disagree; this page is
 for a first read, a refresher, or finding which attempt taught the lesson you
 half-remember.
@@ -52,6 +55,18 @@ Fixed RNG seeds make identical builds reproduce these numbers to the microsecond
 What moves them *between* builds is flash layout, not chance — see
 [the layout lottery](#the-layout-lottery) below.
 
+**The fourteenth attempt has no device data behind it and spent host time rather
+than saving it.** Host-relative, best of 5, interleaved, landed build against HEAD:
+water at exactly (0, 1000) 74.7-75.1 → 80.8-81.8 µs/step (≈+8%, pure code-shape cost
+— every scene in the table above runs at that exact gravity, where the fix is
+behaviourally a no-op); water at 20 degrees 76.3-77.8 → 98.8-100.9 µs/step (≈+29%);
+water at 26 degrees 83.0-85.2 → 113.6-116.4 µs/step (≈+37%) — neither tilt is
+measured by any row here. Expect **"Screen of water collapsing" to move on the next
+device capture, in the wrong direction**, by something in the neighbourhood of the
++8% figure: it is the one row in this table whose scene cross-flow touches at scale,
+and this round's cost lands on every liquid cell whether or not the gravity it runs
+under ever leaves the axis.
+
 ---
 
 ## The campaign, one line per attempt
@@ -75,6 +90,7 @@ the next person from re-running them.
 | 11 | 🟢 | A feature wave, and one branch in the wrong place | Rebuilt and re-timed all 75 commits of the wave on the host: water's whole regression is **one commit, one branch**, and the branch never even says no. GCC had spliced its cold blocks into the hot path — hinting them cold recovers **26%**, simulation byte-identical. Fire's is diffuse and genuine; the reactions pass **doubled**, and the gas pass nobody suspected is 60% of it. |
 | 12 | 🟠 | A mask that measured nothing, and a gate that never closed | Three new benchmarks put the reaction engine under cross-material load for the first time. A per-cell "can this react" mask measured **−0.1%** where the counters promised 19.3% of cells were skippable — too cheap to be worth skipping. The real find: a convection gate that could never close on smoke or steam, costing **41,215 neighbour scans a step** on a screen of gas — fixed with a flag that arms and is never cleared, **−7.1%**. Measure-by-deleting also priced the gas pass's sight scan at **15-18%** of the fire benchmarks — the next round's target, not yet built. |
 | 13 | 🟢 | Two scenes for the shape of load nothing had measured | Everything benchmarked so far was a transient; nothing measured a heat source left running. A thermal shock lattice (480 glass-ringed compartments) and a boiler (a stone basin held at a sustained boil) shipped as a pair, each with a host guard whose assertions were checked by breaking the scene: **24 of 33** individually turned red. Ten steps was a measured decision, not a round one — the only window where the last third of new cullet still clears **15%** of the total instead of trailing off. An earlier boiler draft's exact-conservation count held by **one step**; a floor replaced it. No optimisation shipped — two device ceilings added, both provisional. |
+| 14 | 🟠 | Two rays, dithered in space instead of time | Cross-flow's nearest-axis fix (30335ae) was correct but unpriced: a settled surface could only ever be perpendicular to one of eight directions, so it quantised to 0/45/90 — measured as two values across the whole tilt range, ≈0.00 below 22.5° and ≈0.94 above. The near-vertical octant couldn't tilt at all: its ray is horizontal, and a horizontal ray moves mass only within a row. The fix moves the dither from TIME into SPACE — a fixed per-column pattern choosing between two rays — and compares gravitational potential rather than raw mass. Cost: **+8%** on host water at the axis gravity every benchmark uses, **+29-37%** off-axis, which no budget measures. Slow alternation was rejected on a measurement: switching axis on a settled pool costs **1,582** units of churn against the flicker guard's own ceiling of 60. |
 
 ---
 
