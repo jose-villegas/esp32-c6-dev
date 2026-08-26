@@ -1412,23 +1412,14 @@ static const gfx_color_t palette[256] = {
     GFX_RGB(0x69B03A),            /* leaf - the one green left in a tree
                                     * now that the stem is olive, and the
                                     * only part meant to catch the eye.
-                                    * Greener than it was, to open the
-                                    * gap to the gold it dries into */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DRY] =
-    GFX_RGB(0xD0A134),            /* dry - yellow, and lighter than the
-                                    * green it came from, so a crown going
-                                    * over reads as brightening rather
-                                    * than as dimming */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DEAD] =
-    GFX_RGB(0x624124),            /* dead - the brown of a leaf that has
-                                    * finished, close enough to wood to sit
-                                    * against a trunk without arguing */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DEAD + 1] =
+                                    * only part meant to catch the eye */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF + 1] =
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
 };
 
 /* Glass's SECOND colour: the same temperature, mixed halfway to the
@@ -1661,41 +1652,15 @@ static const gfx_color_t wood_grain[8] = {
  * other, and half of what makes it read as a canopy rather than as more
  * stem is that it is not one flat green.
  *
- * Still most of what a tree's colour is, though no longer all of it.
- * This pair was the whole of it for as long as the WITHERING chain was
- * the only way a leaf could change: foliage is sheltered_by wood, every
- * leaf on a tree touches some, and shelter stops withering outright - so
- * a healthy tree measured 100% green through five different withering
- * configurations. Senescence is what reaches it now, and a watered crown
- * runs about 11% turned, so the gold and brown below are worth as much
- * care as this pair rather than being decoration for a case that never
- * came up. See reaction_t.senesces. */
+ * All of what a tree's colour is, now that foliage is one material
+ * again. A leaf on a tree is sheltered_by wood and can drink through
+ * the trunk, and withering asks both of those before it does anything,
+ * so a crown stays exactly this green until something takes it. An
+ * ageing chain that turned it gold and brown was built, measured and
+ * removed: it cost two of the sixteen extended slots and, being
+ * reachable only through senescence, was barely visible when it ran. */
 #define LEAF_DARK   0x468F26
 #define LEAF_LIGHT  0x8CD24E
-
-/* The two dying stages. Yellow first - the colour a leaf goes when it
- * stops being fed - then the brown of one that has finished. Both keep a
- * spread, because a crown turns unevenly and a canopy that changed all at
- * once would read as a switch rather than as a season.
- *
- * Spread APART, on the report that the stages did not read as distinct.
- * Measured, they had not been: green and yellow sat 40 degrees of hue
- * and 11 points of luminance from each other, which at two screen pixels
- * per cell is one colour with a wobble. The green went greener, the
- * yellow went to gold, and the brown went dark - so the ramp is now 47
- * degrees of hue between green and gold, and 106 points of luminance
- * between gold and brown.
- *
- * Each transition leans on a DIFFERENT channel, deliberately. Green to
- * gold is a hue swing at nearly constant brightness; gold to brown is a
- * brightness collapse at nearly constant hue. A leaf turning therefore
- * changes colour first and then goes out, which is the order it happens
- * in, and neither step can hide inside the other. */
-#define DRY_DARK    0xB07C1E
-#define DRY_LIGHT   0xF0C64A
-
-#define DEAD_DARK   0x4A3018
-#define DEAD_LIGHT  0x7A5230
 
 #define ICE_DARK    0x93C9DE
 #define ICE_LIGHT   0xDEF5FD
@@ -1710,8 +1675,6 @@ static const gfx_color_t wood_grain[8] = {
 static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8]   = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8]  = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
-static const gfx_color_t dry_grain[8]   = GRAIN8_ROW(DRY_DARK, DRY_LIGHT);
-static const gfx_color_t dead_grain[8]  = GRAIN8_ROW(DEAD_DARK, DEAD_LIGHT);
 
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
@@ -1741,13 +1704,10 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
          * branch cost 26% of a benchmark with the simulation byte-
          * identical either way. Ship the shape that was measured - see
          * docs/Sand/Tuning-At-a-Glance.md. */
-        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_LEAF_DRY ||
-            v == MATX_LEAF_DEAD || v == MATX_ICE) {
-            out[0] = (v == MATX_PLANT)     ? plant_grain[hash & 7u]
-                   : (v == MATX_LEAF)      ? leaf_grain[hash & 7u]
-                   : (v == MATX_LEAF_DRY)  ? dry_grain[hash & 7u]
-                   : (v == MATX_LEAF_DEAD) ? dead_grain[hash & 7u]
-                                           : ice_grain[hash & 7u];
+        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
+            out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
+                   : (v == MATX_LEAF)  ? leaf_grain[hash & 7u]
+                                       : ice_grain[hash & 7u];
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
@@ -1791,9 +1751,7 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
 static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
     [MATX_ICE]   = "Ice",
     [MATX_PLANT] = "Plant",
-    [MATX_LEAF]      = "Leaf",
-    [MATX_LEAF_DRY]  = "Dry leaf",
-    [MATX_LEAF_DEAD] = "Dead leaf",
+    [MATX_LEAF]  = "Leaf",
 };
 
 const char *material_name(cell_t c)
@@ -1939,30 +1897,11 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * with no `falls`, a crown whose trunk burns away would hang in
          * the air permanently. Withering handles it, and `clings_to`
          * above is what stops a living tree shedding - a leaf touching
-         * wood is safe however dry the ground gets. The same rate as the
-         * plant's now, not twice it: a stem being stouter than a leaf was
-         * the old reasoning, and slowing the green stage down to the
-         * floor - see below - used up the difference. */
-        /* OLD AGE, and the only reason a living tree ever changes
-         * colour - see reaction_t.senesces. A chance in 65536, so a leaf
-         * holds its green for roughly 32000 steps.
-         *
-         * Tuned against the CROWN rather than against a clock, because the
-         * two are coupled: leaves are replaced only by sprouting and by a
-         * canopy landing, so senescing faster than that supply just thins
-         * the tree. Measured over six watered trees, this holds the crown
-         * at 85% of the size it had when nothing aged, with 12% of it
-         * turned at any moment. Doubling it gives 21% turned for a crown
-         * at 67%, which is a barer tree than the colour is worth. */
-        .senesces     = 2,
-        .withers      = 1,    /* the floor, so a SHED leaf stays green
-                                * as long as the encoding can express -
-                                * 256 steps against the 128 it had. A
-                                * chance in 256 per step cannot go below
-                                * one, so this is the whole of the
-                                * headroom; the stages after it are
-                                * already at the floor themselves. */
-        .withers_to   = MATX(MATX_LEAF_DRY),
+         * wood is safe however dry the ground gets. At the same rate as
+         * the plant, not twice it: a stem being stouter than a leaf was
+         * the old reasoning, and a shed leaf lasting longer used up the
+         * difference. */
+        .withers      = 1,
 
         /* Catches far more readily than green stem (40) or seasoned wood
          * (6). A fire that reaches a canopy should run through it, which
@@ -1972,59 +1911,6 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
         .dissolvable  = 240,   /* the softest thing on the board */
     },
 
-    /* The two stages a leaf dies through. Both are foliage in every way
-     * that matters - static, undrinkable-through until they let water
-     * past, unable to grow - and differ only in colour, in how readily
-     * they burn, and in what they turn into next.
-     *
-     * Both ARE `sheltered_by` wood, which they did not used to be. The
-     * old reasoning was that shelter should not bring a drying leaf back
-     * - but shelter never brought anything back; it only stops a cell
-     * dying of thirst, and a dead leaf hanging on a branch is exactly
-     * what happens in life.
-     *
-     * It matters now because senescence took over the clock. Without
-     * shelter these two were dying of drought long before they had
-     * finished their stage, and a crown showed about a quarter of the
-     * gold the numbers were tuned for. A DETACHED one still dries and
-     * goes, which is the case the old comment was really describing. */
-    [MATX_LEAF_DRY] = {
-        .clings_to    = MAT_WOOD,
-        .sheltered_by = MAT_WOOD,
-        .drinks       = 40,     /* still lets water through to the roots */
-
-        /* TWELVE times the green stage's rate, so a leaf is green for
-         * most of its life and then turns quickly - which is both what a
-         * leaf does and what makes the turning legible: a stage nobody
-         * is ever in is a colour nobody ever sees.
-         *
-         * This reverses an earlier reading, and the reversal is the
-         * point. Under `withers` the dying stages had to be made SLOWER
-         * than the green one, because green was the shortest of the
-         * three and the yellow was over before it could be seen. Under
-         * senescence green is by far the longest - 32000 steps against
-         * this one's 2700 - so the ratio that used to starve the yellow
-         * now feeds it. Measured on a watered crown: 1.4 gold cells
-         * standing at any moment, where the old chain produced zero. */
-        .senesces     = 24,
-        .withers      = 1,      /* the drought path, at its floor */
-        .withers_to   = MATX(MATX_LEAF_DEAD),
-        .flammability = 140,    /* drier than green, and it shows */
-        .dissolvable  = 245,
-    },
-
-    [MATX_LEAF_DEAD] = {
-        .clings_to    = MAT_WOOD,
-        .sheltered_by = MAT_WOOD,
-        .drinks       = 40,
-        .senesces     = 32,     /* the briefest stage of the three */
-        .renews_to    = MATX(MATX_LEAF),   /* ...and then round again, on
-                                            * a tree still being watered */
-        .withers      = 1,
-        .withers_to   = 0,      /* and then it is gone */
-        .flammability = 200,    /* tinder */
-        .dissolvable  = 250,
-    },
 };
 
 const gfx_color_t *material_palette(void)

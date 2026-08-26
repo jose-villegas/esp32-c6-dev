@@ -1221,15 +1221,6 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
     return -1;
 }
 
-/* Take one level of moisture out of a soil cell that has some. */
-static void spend_moisture(sand_t *s, int w, int at)
-{
-    const cell_t soil = s->cells[at];
-    s->cells[at] = CELL_WITH_MOISTURE(soil,
-                                      (uint8_t)(CELL_MOISTURE(soil) - 1));
-    mark_rows(s, at / w, at / w);
-}
-
 /* One cell of something that DRINKS: touching a liquid, and rooted in
  * soil with room in it, it takes a unit of that liquid and puts a level of
  * moisture into the ground.
@@ -1331,7 +1322,11 @@ static bool step_one_sprouting_cell(sand_t *s, int x, int y, int w, int h,
     }
 
     place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
-    spend_moisture(s, w, soil_at);
+
+    const cell_t soil = s->cells[soil_at];
+    s->cells[soil_at] = CELL_WITH_MOISTURE(soil,
+                                           (uint8_t)(CELL_MOISTURE(soil) - 1));
+    mark_rows(s, soil_at / w, soil_at / w);
     return true;
 }
 
@@ -1521,22 +1516,6 @@ static bool shove_aside(sand_t *s, int gx, int gy, int dx, int dy,
     return true;
 }
 
-/* Advance one step along the withers_to chain, or go if the chain ends
- * here. Shared by the two things that can age a cell: senescence, which
- * happens with time, and withering, which happens from drought. */
-static bool age_one_stage(sand_t *s, int x, int y, size_t at,
-                          const reaction_t *r)
-{
-    if (r->withers_to != 0) {
-        place_reacted(s, x, y, at, r->withers_to);
-        return true;
-    }
-    s->cells[at] = SAND_EMPTY;
-    mark_rows(s, y, y);
-    wake_block_and_neighbors(s, x, y);
-    return true;
-}
-
 /* One cell of something that WITHERS: it goes, if it can neither drink
  * nor lean on a trunk.
  *
@@ -1552,35 +1531,6 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
 {
     const size_t at = (size_t)y * (size_t)w + (size_t)x;
     const cell_t self = s->cells[at];
-
-    /* OLD AGE, asked before anything about the weather, because none of
-     * it applies: a leaf turns in the rain as readily as in a drought.
-     * This is what makes a LIVING tree change colour - shelter and water
-     * each stop withering outright, a leaf on a watered tree has both for
-     * ever, and so the chain below was unreachable on any tree anyone
-     * would actually grow. Five withering configurations were measured
-     * against a growing tree and every one produced zero yellow cells.
-     *
-     * One draw, which decides something every time it is taken. Sixteen
-     * bits rather than eight because the rate has to be slower than one
-     * in 256 - see reaction_t.senesces. */
-    if (r->senesces != 0 &&
-        (unsigned)(rng_next(&s->rng) & 0xFFFFu) < (unsigned)r->senesces) {
-        /* The end of the chain, on a tree that can still drink, is a new
-         * leaf rather than an empty cell - see reaction_t.renews_to. The
-         * walk is paid for only here, on the one roll in thousands that
-         * takes this branch. */
-        if (r->renews_to != 0) {
-            int lift = 0;
-            const int soil = find_water(s, x, y, w, h, r, self, &lift, false);
-            if (soil >= 0) {
-                place_reacted(s, x, y, at, r->renews_to);
-                spend_moisture(s, w, soil);
-                return true;
-            }
-        }
-        return age_one_stage(s, x, y, at, r);
-    }
 
     if (r->sheltered_by != 0) {
         for (int d = 0; d < 8; d++) {
@@ -1646,10 +1596,10 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
         return true;
     }
 
-    /* Withering is a STAGE, not a deletion, wherever the material names
-     * something to become. A leaf dries and yellows and browns before it
-     * goes; only the last of those turns into nothing. */
-    return age_one_stage(s, x, y, at, r);
+    s->cells[at] = SAND_EMPTY;
+    mark_rows(s, y, y);
+    wake_block_and_neighbors(s, x, y);
+    return true;
 }
 
 /* One cell of something that GROWS.

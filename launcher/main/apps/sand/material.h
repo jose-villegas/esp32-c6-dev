@@ -757,68 +757,6 @@ typedef struct {
      * lying around. */
     uint8_t withers;
 
-    /* And what withering turns it INTO, rather than simply away. Zero
-     * means gone.
-     *
-     * A leaf that has stopped being fed does not blink out; it dries,
-     * yellows, browns, and only then goes. Three materials rather than one
-     * because an extended material has no variant to age in - its low
-     * nibble is which one it IS - so the only way to hold a stage is to be
-     * a different material at each stage. That is what the extended range
-     * is cheap for: a row in the cold table and a palette entry, and no
-     * cost at all to the sweep.
-     *
-     * The chain also does something the single material could not. Each
-     * stage catches fire more readily than the last, so a crown that has
-     * died and dried is genuinely dangerous in a way a green one is not. */
-    uint8_t withers_to;
-
-    /* Ageing with TIME, which is a different thing from withering and had
-     * to become its own field to say so.
-     *
-     * `withers` is death by drought: it asks whether the cell can drink
-     * and whether it is under shelter, and a leaf on a watered tree
-     * answers yes to both for ever. That is correct for what it models -
-     * a tree in a dry spell keeps its leaves - and it is why the ageing
-     * chain above never ran on a living tree. Five different withering
-     * configurations were measured against a growing tree and every one
-     * produced exactly zero yellow cells.
-     *
-     * Senescence asks nothing. A leaf turns because it is old, in the
-     * rain as much as in a drought, and it walks the same withers_to
-     * chain one stage at a time.
-     *
-     * A chance in 65536, not in 256, and that is the point of the wider
-     * type. A leaf's green stage lasts minutes; at a chance in 256 the
-     * slowest expressible rate is one stage per 256 steps, about eight
-     * seconds, and a crown would strobe. The floor here is 256 times
-     * lower, which is the difference between a season and a flicker. */
-    uint16_t senesces;
-
-    /* What the LAST stage of a senescing chain becomes instead of ending,
-     * on a cell that can still reach water. Zero means it simply ends.
-     *
-     * This is what makes a crown a cycle rather than a countdown. Without
-     * it a leaf's three stages run once and the cell is gone for good,
-     * and since a mature tree has stopped growing, nothing replaces it:
-     * measured over 90000 steps, a watered tree held its timber at 61
-     * cells while its crown fell from 11 leaves to 3. A tree that goes
-     * bald while being watered is not what any of this was for.
-     *
-     * Renewal happens IN PLACE, and that is the whole of why it is safe.
-     * The obvious alternative - letting a crowned trunk sprout a
-     * replacement somewhere nearby - was built and measured first, and it
-     * fails: foliage spreads cell by cell up a bare trunk, every cell it
-     * reaches becomes crowned, and budding is gated on being crowned, so
-     * the bud rate ends up scaling with the size of the tree exactly as
-     * it did before buds replaced growing tips. Renewing in place cannot
-     * spread, so a crown holds the size it earned and no more.
-     *
-     * It costs a level of soil moisture, like every other way a tree
-     * makes new tissue - so this is something a WATERED tree does. Left
-     * alone, the chain runs to its end and the crown comes off. */
-    uint8_t renews_to;
-
     /* And what a long enough straight run of it turns into: `hardens_to`
      * once `harden_run` cells line up along the gravity axis.
      *
@@ -1022,8 +960,6 @@ typedef enum {
     MATX_ICE = 0,
     MATX_PLANT,
     MATX_LEAF,
-    MATX_LEAF_DRY,
-    MATX_LEAF_DEAD,
 } material_extended_t;
 
 /* What to call one cell, decoding the extended range. materials[].name is
