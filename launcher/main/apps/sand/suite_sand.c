@@ -10740,7 +10740,15 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
  * comment prescribed, but to the uniform reduction target the whole
  * file moved to (see FULL_STEP_BUDGET_US's comment): measured * 0.9,
  * rounded -> 113000, failing by construction until the scene gets 10%
- * faster. */
+ * faster.
+ *
+ * Re-pegged the same evening from the first CLEAN capture
+ * (performance_20260826_183646, taken after the diag image's task
+ * watchdog was turned off): the fifteenth attempt proved the 125430
+ * was contaminated - a watchdog register dump's console I/O landed
+ * inside this test's timing window and was charged to the simulation.
+ * Clean measurement 124336 (the dump was worth ~1100 us here) ->
+ * target 112000. */
 static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -10777,7 +10785,7 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(113000, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(112000, (int)per_step,
         "four liquids reacting under the app's own per-material mobility "
         "is held to 10% below its first measured number, as a reduction "
         "target - failing means the work is not done, not that something "
@@ -10921,6 +10929,14 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
  * uniform reduction target (see FULL_STEP_BUDGET_US's comment):
  * measured * 0.9, rounded -> 96000.
  *
+ * Re-pegged the same evening from the first CLEAN capture
+ * (performance_20260826_183646, taken after the diag image's task
+ * watchdog was turned off): the fifteenth attempt proved the 106650
+ * was contaminated - a watchdog register dump's console I/O landed
+ * inside this test's timing window and was charged to the simulation,
+ * and here the dump was worth fully ~7900 us of the old number. Clean
+ * measurement 98738 -> target 89000.
+ *
  * The watchdog reasoning here is stronger than it was for the three
  * scenes above: ten steps, and no settling step to spend any of the
  * window on first. Host timing, best-of-5 and interleaved with the other
@@ -10973,7 +10989,7 @@ static void test_the_thermal_shock_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(96000, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(89000, (int)per_step,
         "the thermal shock lattice is held to 10% below its first "
         "measured number, as a reduction target - failing means the work "
         "is not done, not that something broke");
