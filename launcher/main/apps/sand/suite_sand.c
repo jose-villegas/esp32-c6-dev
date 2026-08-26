@@ -5969,13 +5969,27 @@ static void test_two_falling_seeds_do_not_hold_each_other_up(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    for (int y = 0; y < H - 2; y++) {
-        for (int x = 0; x < W; x++) {
+    /* Not "both on the floor". Once one of them is down, the other may
+     * legitimately come to rest on its shoulder - a seed perched on a
+     * grounded seed is a heap, which is what a handful of them poured out
+     * should look like. What must not happen is the pair stopping where
+     * the brush left them. */
+    for (int x = 0; x < W; x++) {
+        for (int y = 0; y <= 1; y++) {
             TEST_ASSERT_NOT_EQUAL_MESSAGE(MATX(MATX_PLANT), sand_at(&s, x, y),
-                "no seed may still be in the air - two of them touching "
-                "are two unsupported things, not one supported thing");
+                "neither seed may still be at the height it was painted - "
+                "two of them touching are two unsupported things, not one "
+                "supported thing");
         }
     }
+    int landed = 0;
+    for (int x = 0; x < W; x++) {
+        if (sand_at(&s, x, H - 2) == MATX(MATX_PLANT)) {
+            landed = 1;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(landed,
+        "and at least one of them has to reach the floor");
 }
 
 
@@ -6021,6 +6035,39 @@ static void test_a_brushful_of_seeds_does_not_hang_in_the_air(void)
     }
 }
 
+
+/* A seed in a narrow shaft falls down it, rather than sticking to a wall.
+ *
+ * Only what is GRAVITY-WARD holds a body up. Counting a neighbour beside
+ * it as support is an easy thing to write - it is a neighbour, it is
+ * solid - and it wedges anything against any vertical surface, which on
+ * this board means every seed poured next to a stone wall stops at the
+ * height it was poured. */
+static void test_a_seed_in_a_shaft_does_not_stick_to_the_walls(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    for (int y = 0; y < H; y++) {
+        sand_set(&s, cx - 1, y, STONE);
+        sand_set(&s, cx + 1, y, STONE);
+    }
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, cx, 0, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT), sand_at(&s, cx, H - 2),
+        "a seed between two walls must fall to the bottom of the shaft - "
+        "what is beside a thing does not hold it up, and treating it as "
+        "support wedges everything against every wall on the board");
+}
+
 /* And what a tree grows must NOT fall.
  *
  * The other half of the same rule, and the reason it cannot simply be
@@ -6051,10 +6098,15 @@ static void test_a_growing_tree_does_not_shed_what_it_grows(void)
                     continue;
                 }
                 grown++;
+                /* All EIGHT, because a branch grows out at an angle -
+                 * that is what makes it a branch - so the cell it grew
+                 * from is diagonally below it and orthogonally it may be
+                 * touching nothing at all. Checking four was checking the
+                 * shape a tree does not have. */
                 int touching = 0;
-                for (int d = 0; d < 4; d++) {
-                    static const int ox[4] = { 1, -1, 0, 0 };
-                    static const int oy[4] = { 0, 0, 1, -1 };
+                for (int d = 0; d < 8; d++) {
+                    static const int ox[8] = { 1, -1, 0, 0, 1, 1, -1, -1 };
+                    static const int oy[8] = { 0, 0, 1, -1, 1, -1, 1, -1 };
                     const int nx = x + ox[d];
                     const int ny = y + oy[d];
                     if ((unsigned)nx >= (unsigned)W ||
@@ -6159,6 +6211,47 @@ static void test_a_seed_under_stone_stays_put(void)
         TEST_ASSERT_EQUAL_UINT8_MESSAGE(STONE, sand_at(&s, x, H - 4),
             "and the lid must still be where it was put");
     }
+}
+
+
+/* A limb attached to a TRUNK stays on it.
+ *
+ * A branch grows out at an angle, so the cell it came from is diagonally
+ * below it; orthogonally it is often touching nothing. Checking four
+ * neighbours for an anchor therefore snapped off every limb whose trunk
+ * did not happen to continue past it - and on a tilt, where the wood stays
+ * put while gravity swings round underneath, whole crowns detached at once
+ * and dropped a cell a step. Reported as the plant appearing to teleport,
+ * and as the falling looking harsh: it was not the speed, it was how much
+ * of the tree was falling.
+ *
+ * Hardening is what makes this bite, which is why the trunk here is wood:
+ * a limb has to recognise what its own material turns into as something
+ * to hold on to. */
+static void test_a_limb_hangs_on_to_a_wooden_trunk(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int y = H - 4; y < H - 1; y++) {
+        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    /* Diagonally off the top of it, touching nothing else. */
+    sand_set(&s, cx + 1, H - 5, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, cx + 1, H - 5),
+        "a limb growing diagonally off a trunk must stay where it grew - "
+        "it is touching the tree, just not squarely, and a tree that sheds "
+        "every branch it grows is not one");
 }
 
 /* A tree is not a stick.
@@ -6564,8 +6657,15 @@ static void test_a_stem_that_wanders_still_hardens(void)
         sand_set(&s, stem[i][0], stem[i][1], MATX(MATX_PLANT));
     }
 
+    /* Kept watered throughout. Soil dries, growth costs moisture, and
+     * hardening only happens on a growth - so a single saturation turns
+     * this into a race against the drying rate rather than a test of the
+     * walk. */
     int hardened = 0;
-    for (int i = 0; i < 2000 && !hardened; i++) {
+    for (int i = 0; i < 4000 && !hardened; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
         sand_step(&s, 0, 1000, 0);
         for (int k = 0; k < 6; k++) {
             if (CELL_MATERIAL(sand_at(&s, stem[k][0], stem[k][1])) ==
@@ -9167,7 +9267,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_seed_falls_until_it_lands);
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
     RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);
+    RUN_TEST(test_a_seed_in_a_shaft_does_not_stick_to_the_walls);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
+    RUN_TEST(test_a_limb_hangs_on_to_a_wooden_trunk);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
     RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
     RUN_TEST(test_a_seed_under_stone_stays_put);

@@ -876,6 +876,104 @@ static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
  *
  * Returns whether it still has anywhere to go, which is what keeps
  * may_have_faller from latching on for good once everything has landed. */
+/* Is (ax, ay) more of `self`, or of what `self` hardens into? */
+static inline bool is_kin(cell_t a, cell_t self, const reaction_t *r)
+{
+    return a == self ||
+           (r->hardens_to != 0 && CELL_MATERIAL(a) == r->hardens_to);
+}
+
+/* How much of a connected body this is willing to walk before giving up
+ * and letting the cell fall. Comfortably more than a tree between a leaf
+ * and its roots; short enough that the search stays cheap on a board
+ * covered in growth. A body bigger than this sheds its outermost cells,
+ * which is a bounded and quiet way to be wrong. */
+#define SUPPORT_MAX 48
+
+/* Whether (x, y) is part of a body that is RESTING ON something.
+ *
+ * Four attempts, and the first three were each wrong in a way that showed
+ * on the board rather than in a test. Worth keeping all of them in view,
+ * because every one of them looked sufficient at the time:
+ *
+ *   four neighbours only  - a branch grows out at an ANGLE, so what it
+ *                           grew from sits diagonally below it and
+ *                           orthogonally it touches nothing. Every limb
+ *                           whose trunk did not happen to continue past
+ *                           it snapped off.
+ *   the cell above counts - circular. It qualifies as standing on
+ *                           something because the something is the very
+ *                           cell asking, so two seeds stacked hold each
+ *                           other up and a brushful hangs in mid-air
+ *                           exactly where it was painted.
+ *   ...but not on ME      - the circularity only moves. Exclude the
+ *                           asker and a blob finds a chain two links long
+ *                           that dodges it: the disc hung by its bottom
+ *                           cell from its own upper left, which was
+ *                           "held" by a cell standing on the asker. There
+ *                           is no local patch for this. Being held up is
+ *                           a question about the whole body.
+ *
+ * So it is asked about the whole body: walk the connected run of kin -
+ * plant through its own wood, which is what makes a limb hold on to a
+ * trunk - and look for any cell of it with something non-kin gravity-ward.
+ * Ground, a wall, a heap of sand: anything that is not more tree.
+ *
+ * Only the three GRAVITY-WARD directions count as resting on something.
+ * Beside does not: a leaf brushing a wall is not held up by it, and
+ * counting it would wedge a whole crown against any vertical surface. */
+static bool anchored(sand_t *s, int x, int y, int w, int h,
+                     cell_t self, const reaction_t *r)
+{
+    uint16_t body[SUPPORT_MAX];
+    int n = 0, head = 0;
+
+    body[n++] = (uint16_t)((size_t)y * (size_t)w + (size_t)x);
+
+    const int down = ring_of(s->last_load_dx, s->last_load_dy);
+
+    while (head < n) {
+        const int at = (int)body[head++];
+        const int cx = at % w, cy = at / w;
+
+        for (int d = 0; d < 8; d++) {
+            const int *nd = ring_dir(down + d);
+            const int nx = cx + nd[0], ny = cy + nd[1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            const cell_t c = s->cells[nat];
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            if (!is_kin(c, self, r)) {
+                /* Ring offset 0 from `down` is straight down, and it
+                 * is the only one that counts. The two diagonals below
+                 * look like support and are not: in a shaft one cell
+                 * wide, the wall is diagonally beneath every cell of it,
+                 * so a seed dropped in stuck to the side at the height it
+                 * was poured instead of falling down the shaft. */
+                if (d == 0) {
+                    return true;      /* this body is resting on something */
+                }
+                continue;
+            }
+            if (n >= SUPPORT_MAX) {
+                continue;             /* too big to finish; treat as loose */
+            }
+            bool known = false;
+            for (int i = 0; i < n && !known; i++) {
+                known = (body[i] == (uint16_t)nat);
+            }
+            if (!known) {
+                body[n++] = (uint16_t)nat;
+            }
+        }
+    }
+    return false;
+}
+
 static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
                                   const reaction_t *r)
 {
@@ -889,51 +987,12 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
     if (!CELL_IS_EMPTY(s->cells[nat])) {
         return false;                    /* landed */
     }
-    /* ATTACHED things do not fall. A branch grows out sideways and has
-     * nothing under it, so "the cell below is empty" alone would snap
-     * every limb off the moment it appeared - the rule has to be about
-     * being part of something, not about being directly held up.
-     *
-     * But it has to be part of something that is ITSELF held up, and that
-     * second half is not optional: two seeds falling side by side each
-     * counted the other as an attachment and the pair stopped dead in
-     * mid-air, hanging off nothing. So the neighbour is only an anchor if
-     * it has something under IT. One level of indirection, no walk to the
-     * ground - a chain of limbs hanging off a limb is not a shape a tree
-     * grows into, and if it ever were, it falling is the right answer.
-     *
-     * And the neighbour ABOVE is not an anchor, which is the third go at
-     * this rule and the one that matters. A cell above cannot hold
-     * anything up, and counting it makes the test circular: the cell above
-     * qualifies as "standing on something" because the thing it is
-     * standing on is the very cell doing the asking. Two seeds stacked
-     * vertically each held the other, so a brushful of them hung in the
-     * air exactly where it was painted - reported as the plant only
-     * falling when water was poured over it, which is the reactions pass
-     * being woken for some other reason and finding the pile still there.
-     *
-     * Said generically, so it belongs to the material rather than to the
-     * plant: more of yourself, or what you harden into. */
-    const cell_t self = s->cells[at];
-    for (int d = 0; d < 4; d++) {
-        const int ax = x + reaction_dirs[d][0];
-        const int ay = y + reaction_dirs[d][1];
-        if ((unsigned)ax >= (unsigned)w || (unsigned)ay >= (unsigned)h) {
-            continue;
-        }
-        if (ax == x - s->last_load_dx && ay == y - s->last_load_dy) {
-            continue;                 /* what is above holds nothing up */
-        }
-        const cell_t a = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
-        if (a != self &&
-            !(r->hardens_to != 0 && CELL_MATERIAL(a) == r->hardens_to)) {
-            continue;
-        }
-        const int bx = ax + s->last_load_dx, by = ay + s->last_load_dy;
-        if ((unsigned)bx >= (unsigned)w || (unsigned)by >= (unsigned)h ||
-            !CELL_IS_EMPTY(s->cells[(size_t)by * (size_t)w + (size_t)bx])) {
-            return false;             /* anchored to something standing */
-        }
+    /* ATTACHED things do not fall - see anchored(), which is where the
+     * whole of that idea lives and where three wrong versions of it are
+     * recorded. A seed painted in mid-air is attached to nothing and
+     * drops; a limb is part of a tree and does not. */
+    if (anchored(s, x, y, w, h, s->cells[at], r)) {
+        return false;
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->falls) {
         return true;                     /* still falling, just not now */
@@ -1311,6 +1370,34 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * and the surface a tree is standing on is the part that dries first;
      * a plant that could only drink from the cell it touched stopped
      * growing while there was still plenty of water a row or two down. */
+    /* A BURIED cell is not a growing point.
+     *
+     * Every cell of a plant that can reach water rolls to grow, so the
+     * growth rate rises with the amount already grown - and hardening was
+     * the only thing taking cells back out of that loop. The moment
+     * hardening was made to wait for some girth, the loop ran away and
+     * a watered bed filled with a solid mass of green.
+     *
+     * Growth belongs at the surface. A cell with kin on nearly every side
+     * has no room to put anything anyway; skipping it early costs one
+     * neighbour scan and stops the interior of a thicket from being an
+     * engine. */
+    int packed = 0;
+    for (int d = 0; d < 8; d++) {
+        const int *nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            packed++;
+            continue;
+        }
+        if (is_kin(s->cells[(size_t)ny * (size_t)w + (size_t)nx], self, r)) {
+            packed++;
+        }
+    }
+    if (packed >= 5) {
+        return true;                  /* inside the crowd, not at its edge */
+    }
+
     int lift = 0;
     const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
     if (soil_at < 0) {
@@ -1459,12 +1546,25 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     if (r->hardens_to == 0 || r->harden_run == 0) {
         return true;
     }
-    int bx, by;
-    if (stem_next(s, x, y, -ux, -uy, w, h, self, &bx, &by)) {
-        return true;                  /* not the bottom; someone else counts */
+    /* Walk DOWN to the foot of the run first, then measure up from
+     * there. It used to require the growing cell to BE the foot, so that
+     * a run was counted once however many of its cells grew - which is
+     * true and useless: every cell of a plant that can reach water rolls,
+     * so the one that happens to grow is almost never the one at the
+     * bottom. A six-cell stem stood there for twenty thousand steps
+     * growing perfectly well and never once re-measuring itself. */
+    int cx = x, cy = y;
+    for (int i = 0; i < GROW_REACH; i++) {
+        int nx, ny;
+        if (!stem_next(s, cx, cy, -ux, -uy, w, h, self, &nx, &ny)) {
+            break;
+        }
+        cx = nx;
+        cy = ny;
     }
+    const int fx = cx, fy = cy;
 
-    int trunk = 1, cx = x, cy = y;
+    int trunk = 1;
     while (trunk < GROW_REACH) {
         int nx, ny;
         if (!stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny)) {
@@ -1478,13 +1578,27 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
         return true;
     }
 
+
+    /* Not on the first qualifying growth. Measuring the run from its foot
+     * means every cell of a stem re-measures it, so a run that is tall
+     * enough hardens the instant it gets there - and wood does not grow,
+     * so a seedling turned into a post before it ever put out a limb.
+     *
+     * The roll buys back a delay the old, broken version had by accident:
+     * it only counted when the cell that grew happened to be the one at
+     * the foot, which for a stem of n cells is about one time in n. One in
+     * eight, deliberately, rather than one in however tall it is. */
+    if (rng_below(&s->rng, 8) != 0) {
+        return true;
+    }
+
     /* Variant 0, explicitly: a trunk is wood that GREW, not wood that
      * caught. place_reacted() would hand it MATERIAL_VARIANTS - 1, which
      * for wood is burn progress at its maximum - every tree that reached
      * this line burned to nothing over the next couple of hundred steps,
      * on a board with no fire anywhere on it. */
-    cx = x;
-    cy = y;
+    cx = fx;
+    cy = fy;
     for (int i = 0; i < trunk; i++) {
         int nx = 0, ny = 0;
         const bool more = stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny);
