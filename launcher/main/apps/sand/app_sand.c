@@ -507,12 +507,19 @@ static inline unsigned cell_hash(int cx, int cy)
  * to prefer this. The band sweeps, so the glass is doing something.
  *
  * SHINE_PERIOD is the distance between bands measured along the diagonal,
- * SHINE_WIDTH how thick one is, and SHINE_STEP_MS how often it advances by
- * one pixel. About four seconds for a band to reach where the one before
- * it started. */
+ * SHINE_WIDTH how thick one is, and the band moves SHINE_STEP_PX every
+ * SHINE_STEP_MS. Just under two seconds for a band to reach where the one
+ * before it started.
+ *
+ * Speed comes from the step SIZE, not from ticking more often, and the
+ * difference is not cosmetic: every tick repaints all the rows holding
+ * glass, so halving SHINE_STEP_MS would double that cost, while doubling
+ * SHINE_STEP_PX is free. At this width the band still reads as sliding
+ * rather than jumping. */
 #define SHINE_PERIOD   96
-#define SHINE_WIDTH     2
+#define SHINE_WIDTH     4
 #define SHINE_STEP_MS  40
+#define SHINE_STEP_PX   2
 
 static int      shine_offset;
 static uint32_t shine_elapsed_ms;
@@ -702,7 +709,8 @@ static bool advance_shine(uint32_t dt_ms)
     }
     const uint32_t steps = shine_elapsed_ms / SHINE_STEP_MS;
     shine_elapsed_ms -= steps * SHINE_STEP_MS;
-    shine_offset = (int)(((unsigned)shine_offset + steps) % SHINE_PERIOD);
+    shine_offset = (int)(((unsigned)shine_offset + steps * SHINE_STEP_PX)
+                         % SHINE_PERIOD);
     return true;
 }
 
