@@ -6202,6 +6202,99 @@ static void test_a_tree_grows_wider_than_one_column(void)
         "growing only from the tip and only straight up is a stick");
 }
 
+
+/* Water sitting on a plant goes into the ground.
+ *
+ * Every extended material shares one physics row, and that row is
+ * `KIND_STATIC` at stone's density - so water cannot fall through foliage
+ * and nothing about foliage can soak it up. Fill a bowl of leaves and the
+ * water stays there for ever, which is exactly what it looked like.
+ *
+ * A plant conducts it instead: a unit of the liquid for a level of
+ * moisture in the soil its roots reach. It cannot use the ordinary
+ * `soaks` path to do it, because that raises the cell's own variant to
+ * hold what it took, and a plant's variant is WHICH EXTENDED MATERIAL IT
+ * IS - one soak would turn it into the next entry in the table.
+ *
+ * The scene walls the water in so the plant is the only way out. Water
+ * that simply drained round the side would pass an assert about the water
+ * going away while proving nothing at all. */
+static void test_a_plant_drains_standing_water_into_the_soil(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));   /* bone dry */
+    }
+    const int cx = W / 2;
+    sand_set(&s, cx - 1, H - 3, STONE);
+    sand_set(&s, cx + 1, H - 3, STONE);
+    sand_set(&s, cx - 1, H - 4, STONE);
+    sand_set(&s, cx + 1, H - 4, STONE);
+    sand_set(&s, cx, H - 3, MATX(MATX_PLANT));               /* the plug */
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    /* Sampled as it goes, not at the end. Soil dries, so by the time the
+     * water is gone the moisture it turned into has gone too - asserting
+     * on the final state tests the drying rate, not the drinking. */
+    int wet = 0;
+    for (int i = 0; i < 900; i++) {
+        sand_step(&s, 0, 1000, 0);
+        int now = 0;
+        for (int x = 0; x < W; x++) {
+            now += CELL_MOISTURE(sand_at(&s, x, H - 2));
+        }
+        if (now > wet) {
+            wet = now;
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_WATER),
+        "water walled in above a plant must drain through it - foliage is "
+        "solid and undrainable otherwise, so a bowl of leaves holds a pond "
+        "for ever");
+    TEST_ASSERT_TRUE_MESSAGE(wet > 0,
+        "and it must come out at the ROOTS - water that merely vanished "
+        "would pass the assert above and quietly delete itself");
+}
+
+/* A plant with nowhere to put it does not drink.
+ *
+ * The guard on the test above, and the thing that stops this being a
+ * disposal chute for water: what a plant does with a drink is hand it to
+ * the soil. Rooted on bare stone there is no soil, so the water stays
+ * where it is. */
+static void test_a_plant_rooted_on_stone_does_not_drink(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, STONE);          /* no soil anywhere */
+    }
+    const int cx = W / 2;
+    sand_set(&s, cx - 1, H - 3, STONE);
+    sand_set(&s, cx + 1, H - 3, STONE);
+    sand_set(&s, cx - 1, H - 4, STONE);
+    sand_set(&s, cx + 1, H - 4, STONE);
+    sand_set(&s, cx, H - 3, MATX(MATX_PLANT));
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    for (int i = 0; i < 900; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_WATER),
+        "a plant standing on bare stone has nowhere to put a drink, so "
+        "the water must stay - drinking is conduction into the ground, "
+        "not a way of making water disappear");
+}
+
 /* --- growing ------------------------------------------------------------- */
 
 /* A plant on wet soil climbs.
@@ -9069,6 +9162,8 @@ void run_sand_suite(void)
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
+    RUN_TEST(test_a_plant_drains_standing_water_into_the_soil);
+    RUN_TEST(test_a_plant_rooted_on_stone_does_not_drink);
     RUN_TEST(test_a_seed_falls_until_it_lands);
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
     RUN_TEST(test_a_brushful_of_seeds_does_not_hang_in_the_air);

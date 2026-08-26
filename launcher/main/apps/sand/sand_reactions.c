@@ -997,7 +997,8 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
  * Both are bounded, and the whole thing runs in the cold pass for cells
  * that grow - which is a handful on any board that has any. */
 static int find_water(sand_t *s, int x, int y, int w, int h,
-                      const reaction_t *r, cell_t self, int *lift)
+                      const reaction_t *r, cell_t self, int *lift,
+                      bool wants_room)
 {
     const int dx = s->last_load_dx, dy = s->last_load_dy;
     const int down = ring_of(dx, dy);
@@ -1048,7 +1049,11 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
             if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
                 return -1;
             }
-            if (CELL_MOISTURE(c) != 0) {
+            /* Two callers, opposite errands, one walk: growth is
+             * looking for soil with something in it to spend, drinking
+             * for soil with room to take more. */
+            if (wants_room ? CELL_MOISTURE(c) < SOIL_MOISTURE_MAX
+                           : CELL_MOISTURE(c) != 0) {
                 return (int)at;
             }
             cx += dx;
@@ -1057,6 +1062,61 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
         return -1;
     }
     return -1;
+}
+
+/* One cell of something that DRINKS: touching a liquid, and rooted in
+ * soil with room in it, it takes a unit of that liquid and puts a level of
+ * moisture into the ground.
+ *
+ * The plant is `KIND_STATIC` at stone's density, because every extended
+ * material shares one physics row - so water cannot fall through foliage
+ * and nothing about foliage can absorb it. A bowl of leaves held a pond
+ * for ever. This gives the water somewhere to go, and the place it goes is
+ * the right one: down the stem and into the roots, so watering a canopy
+ * waters the tree.
+ *
+ * Returns whether it is still worth coming back to. */
+static bool step_one_drinking_cell(sand_t *s, int x, int y, int w, int h,
+                                   const reaction_t *r, cell_t self)
+{
+    int lx = -1, ly = -1;
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (!CELL_IS_EMPTY(n) &&
+            materials[CELL_MATERIAL(n)].kind == KIND_LIQUID) {
+            lx = nx;
+            ly = ny;
+            break;
+        }
+    }
+    if (lx < 0) {
+        return false;                 /* nothing to drink */
+    }
+
+    int lift = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, true);
+    if (soil_at < 0) {
+        return true;                  /* thirsty, but nowhere to put it */
+    }
+    /* Both ends found before the roll, or every leaf on the board draws a
+     * random number every step and shifts everything downstream of it. */
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->drinks) {
+        return true;
+    }
+
+    pay_quench_cost(s, lx, ly, w);
+
+    const cell_t soil = s->cells[soil_at];
+    s->cells[soil_at] = CELL_WITH_MOISTURE(soil,
+                                           (uint8_t)(CELL_MOISTURE(soil) + 1));
+    mark_rows(s, soil_at / w, soil_at / w);
+    wake_block_and_neighbors(s, soil_at % w, soil_at / w);
+    return true;
 }
 
 /* One cell of something that SPROUTS: standing in wet soil, it buds a
@@ -1252,7 +1312,7 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * a plant that could only drink from the cell it touched stopped
      * growing while there was still plenty of water a row or two down. */
     int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift);
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
     if (soil_at < 0) {
         return true;                  /* nothing to drink */
     }
@@ -2240,6 +2300,15 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
             if (step_one_falling_cell(s, x, y, w, h, r)) {
                 found |= FOUND_FALLER;
                 continue;
+            }
+        }
+        /* Drinking, before growing: a leaf standing in a puddle should
+         * move that water into the ground whether or not the tree has any
+         * use for it this step. Gated on may_have_liquid, so a board with
+         * no water on it pays one field test. */
+        if (r->drinks != 0 && s->may_have_liquid) {
+            if (step_one_drinking_cell(s, x, y, w, h, r, c)) {
+                found |= FOUND_MOISTURE;
             }
         }
         /* Growing. Reached only where there is soil with water in it,

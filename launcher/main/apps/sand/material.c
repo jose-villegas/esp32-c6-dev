@@ -884,6 +884,10 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .sprouts     = 6,
         .sprouts_to  = MATX(MATX_PLANT),
 
+        /* A trunk standing in water waters its own roots, at a third of
+         * green growth's rate - bark is not a leaf. */
+        .drinks      = 12,
+
         /* 6 in 256 is roughly 43 steps of contact with a single flame
          * before it catches - a fire that has to work at it, which is
          * the whole point of "slowly consumed" (see sand_reactions.c's
@@ -1628,6 +1632,11 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * Six in a line becomes wood. Low enough that a sapling turns into
          * a trunk while you are watching it, high enough that a plant
          * creeping over flat ground never does. */
+        /* Drinks briskly. This is drainage as much as it is nutrition -
+         * water sitting in a thicket with nowhere to go looks broken, and
+         * the fix wants to be visible at the speed the player poured it. */
+        .drinks      = 40,
+
         .grows       = 12,
         .hardens_to  = MAT_WOOD,
         .harden_run  = 6,

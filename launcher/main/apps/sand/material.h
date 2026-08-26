@@ -758,6 +758,26 @@ typedef struct {
     uint8_t sprouts;
     uint8_t sprouts_to;
 
+    /* DRINKING: chance/256 per step that this material, touching a liquid
+     * AND rooted in soil that has room for more, takes a unit of that
+     * liquid and puts a level of moisture into the ground it is standing
+     * in. Water on the leaves comes out at the roots.
+     *
+     * It exists because a plant is `KIND_STATIC` with stone's density -
+     * every extended material is, they share one physics row - so water
+     * cannot fall through a thicket and cannot be soaked up by it either.
+     * Pour into a bowl of foliage and the water sits there for ever with
+     * nowhere to go, which is what it looked like.
+     *
+     * It cannot simply be `soaks`. That path raises the cell's own variant
+     * to hold what it took, and a plant's variant is WHICH EXTENDED
+     * MATERIAL IT IS - soaking one level would silently turn a plant into
+     * the next thing in the extended table. Conducting the water to the
+     * ground is both the safe answer and the better one: it is what a
+     * plant does with water, and it means watering a canopy feeds the
+     * tree instead of feeding a puddle. */
+    uint8_t drinks;
+
     /* What a THERMALLY SHOCKED cell of this material becomes: hot enough to
      * be near the top of its ramp, and touching something that `chills`.
      *
