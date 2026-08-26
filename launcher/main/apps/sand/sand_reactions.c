@@ -1484,6 +1484,14 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
         return false;
     }
 
+    /* Withering is a STAGE, not a deletion, wherever the material names
+     * something to become. A leaf dries and yellows and browns before it
+     * goes; only the last of those turns into nothing. */
+    if (r->withers_to != 0) {
+        place_reacted(s, x, y, at, r->withers_to);
+        return true;
+    }
+
     s->cells[at] = SAND_EMPTY;
     mark_rows(s, y, y);
     wake_block_and_neighbors(s, x, y);

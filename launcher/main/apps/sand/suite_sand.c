@@ -7299,6 +7299,60 @@ static void test_a_leaf_drains_standing_water_into_the_soil(void)
         "and it must come out in the soil, not simply vanish");
 }
 
+
+/* A leaf that stops being fed dries by STAGES rather than blinking out.
+ *
+ * An extended material has no variant to age in - its low nibble is which
+ * one it is - so a stage can only be held by being a different material.
+ * Green, dry, dead, gone: three rows in the cold table and three palette
+ * entries, and nothing at all added to the sweep.
+ *
+ * The later stages are deliberately SLOWER than the first. The obvious way
+ * round - each step quicker than the last, a leaf accelerating towards
+ * death - was measured and was over before you could see it: a crown of
+ * eight showed at most one yellow cell at any sample. A leaf spends most
+ * of its dying being visibly dead. */
+static void test_a_dying_leaf_yellows_before_it_goes(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    /* A crown with no tree and no water under it: nothing feeds it, and
+     * nothing shelters it. */
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, 2, MATX(MATX_LEAF));
+    }
+
+    int saw_dry = 0, saw_dead = 0, all_gone = 0;
+    for (int i = 0; i < 6000 && !all_gone; i++) {
+        sand_step(&s, 0, 1000, 0);
+
+        int green = 0, dry = 0, dead = 0;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                green += (c == MATX(MATX_LEAF));
+                dry   += (c == MATX(MATX_LEAF_DRY));
+                dead  += (c == MATX(MATX_LEAF_DEAD));
+            }
+        }
+        saw_dry  |= (dry  > 0);
+        saw_dead |= (dead > 0);
+        all_gone  = (green + dry + dead) == 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(saw_dry,
+        "a leaf losing its tree must go YELLOW on the way out - dying in "
+        "one step is a cell being deleted, not a leaf drying");
+    TEST_ASSERT_TRUE_MESSAGE(saw_dead,
+        "and brown after that");
+    TEST_ASSERT_TRUE_MESSAGE(all_gone,
+        "and be gone in the end - the whole reason foliage withers is that "
+        "it cannot fall, so nothing else would ever clear it");
+}
+
 /* --- growing ------------------------------------------------------------- */
 
 /* A plant on wet soil climbs.
@@ -7722,6 +7776,7 @@ static void test_the_right_extended_materials_are_speckled(void)
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const cell_t c = MATX(k);
         const bool grained = (k == MATX_PLANT || k == MATX_LEAF ||
+                              k == MATX_LEAF_DRY || k == MATX_LEAF_DEAD ||
                               k == MATX_ICE);
 
         int distinct = 0;
@@ -11826,6 +11881,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_finished_tree_carries_no_green);
     RUN_TEST(test_a_leaf_neither_spreads_nor_falls);
     RUN_TEST(test_a_leaf_with_no_tree_withers_away);
+    RUN_TEST(test_a_dying_leaf_yellows_before_it_goes);
     RUN_TEST(test_a_leaf_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_seed_falls_until_it_lands);
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);

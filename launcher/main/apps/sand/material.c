@@ -943,7 +943,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * Rarer than leafing: a bud is a whole new limb rather than a
          * frond, and it is the only thing that compounds, so it is the
          * number to turn down first if a forest gets away. */
-        .buds        = 24,
+        .buds        = 32,
         .buds_to     = MATX(MATX_PLANT),
 
         /* A trunk standing in water waters its own roots, at a third of
@@ -1409,12 +1409,21 @@ static const gfx_color_t palette[256] = {
                                     * yellower, so a crown separates from
                                     * the stem holding it up instead of
                                     * merging into one green mass */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF + 1] =
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DRY] =
+    GFX_RGB(0xCFB94F),            /* dry - yellow, and lighter than the
+                                    * green it came from, so a crown going
+                                    * over reads as brightening rather
+                                    * than as dimming */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DEAD] =
+    GFX_RGB(0x8A6A3A),            /* dead - the brown of a leaf that has
+                                    * finished, close enough to wood to sit
+                                    * against a trunk without arguing */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DEAD + 1] =
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
 };
 
 /* Glass's SECOND colour: the same temperature, mixed halfway to the
@@ -1633,6 +1642,16 @@ static const gfx_color_t wood_grain[8] = {
 #define LEAF_DARK   0x5A9E2E
 #define LEAF_LIGHT  0xA6E273
 
+/* The two dying stages. Yellow first - the colour a leaf goes when it
+ * stops being fed - then the brown of one that has finished. Both keep a
+ * spread, because a crown turns unevenly and a canopy that changed all at
+ * once would read as a switch rather than as a season. */
+#define DRY_DARK    0xA8912E
+#define DRY_LIGHT   0xE4D673
+
+#define DEAD_DARK   0x6B4F26
+#define DEAD_LIGHT  0xA88A5C
+
 #define ICE_DARK    0x93C9DE
 #define ICE_LIGHT   0xDEF5FD
 
@@ -1646,6 +1665,8 @@ static const gfx_color_t wood_grain[8] = {
 static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8]   = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8]  = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
+static const gfx_color_t dry_grain[8]   = GRAIN8_ROW(DRY_DARK, DRY_LIGHT);
+static const gfx_color_t dead_grain[8]  = GRAIN8_ROW(DEAD_DARK, DEAD_LIGHT);
 
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
@@ -1675,10 +1696,13 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
          * branch cost 26% of a benchmark with the simulation byte-
          * identical either way. Ship the shape that was measured - see
          * docs/Sand/Tuning-At-a-Glance.md. */
-        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
-            out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
-                   : (v == MATX_LEAF)  ? leaf_grain[hash & 7u]
-                                       : ice_grain[hash & 7u];
+        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_LEAF_DRY ||
+            v == MATX_LEAF_DEAD || v == MATX_ICE) {
+            out[0] = (v == MATX_PLANT)     ? plant_grain[hash & 7u]
+                   : (v == MATX_LEAF)      ? leaf_grain[hash & 7u]
+                   : (v == MATX_LEAF_DRY)  ? dry_grain[hash & 7u]
+                   : (v == MATX_LEAF_DEAD) ? dead_grain[hash & 7u]
+                                           : ice_grain[hash & 7u];
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
@@ -1722,7 +1746,9 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
 static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
     [MATX_ICE]   = "Ice",
     [MATX_PLANT] = "Plant",
-    [MATX_LEAF]  = "Leaf",
+    [MATX_LEAF]      = "Leaf",
+    [MATX_LEAF_DRY]  = "Dry leaf",
+    [MATX_LEAF_DEAD] = "Dead leaf",
 };
 
 const char *material_name(cell_t c)
@@ -1871,6 +1897,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * wood is safe however dry the ground gets. Twice the plant's
          * rate: a stem is stouter than a leaf. */
         .withers      = 2,
+        .withers_to   = MATX(MATX_LEAF_DRY),
 
         /* Catches far more readily than green stem (40) or seasoned wood
          * (6). A fire that reaches a canopy should run through it, which
@@ -1878,6 +1905,37 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
         .flammability = 90,
 
         .dissolvable  = 240,   /* the softest thing on the board */
+    },
+
+    /* The two stages a leaf dies through. Both are foliage in every way
+     * that matters - static, undrinkable-through until they let water
+     * past, unable to grow - and differ only in colour, in how readily
+     * they burn, and in what they turn into next.
+     *
+     * Neither is `sheltered_by` anything. Shelter is what keeps a LIVING
+     * leaf on a tree through a dry spell; once a leaf has started to dry,
+     * finding itself beside a trunk again should not bring it back. */
+    [MATX_LEAF_DRY] = {
+        .clings_to    = MAT_WOOD,
+        .drinks       = 40,     /* still lets water through to the roots */
+        /* SLOWER than the green stage it came from, not faster. The
+         * first cut had each step quicker than the last, and the yellow
+         * was over before you could see it - measured, a crown of eight
+         * showed at most one yellow cell at any sample. A leaf spends
+         * most of its dying being visibly dead. */
+        .withers      = 1,
+        .withers_to   = MATX(MATX_LEAF_DEAD),
+        .flammability = 140,    /* drier than green, and it shows */
+        .dissolvable  = 245,
+    },
+
+    [MATX_LEAF_DEAD] = {
+        .clings_to    = MAT_WOOD,
+        .drinks       = 40,
+        .withers      = 1,
+        .withers_to   = 0,      /* and then it is gone */
+        .flammability = 200,    /* tinder */
+        .dissolvable  = 250,
     },
 };
 
