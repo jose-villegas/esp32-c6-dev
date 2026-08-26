@@ -1546,12 +1546,54 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
         }
     }
 
+    /* Is it ON a tree? Only asked where the answer can change what
+     * withering does - see the lignifying branch at the bottom - so a
+     * leaf, which has no hardens_to, never pays for these eight reads. */
+    bool attached = false;
+    if (r->hardens_to != 0 && r->clings_to != 0) {
+        for (int d = 0; d < 8; d++) {
+            const int *nd = ring_dir(d);
+            const int nx = x + nd[0], ny = y + nd[1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->clings_to) {
+                attached = true;
+                break;
+            }
+        }
+    }
+
     int lift = 0;
     if (find_water(s, x, y, w, h, r, self, &lift, false) >= 0) {
         return false;                 /* it can still drink */
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->withers) {
         return false;
+    }
+
+    /* A shoot ON A TREE that has stopped being fed does not die - it
+     * LIGNIFIES. It has already named what it becomes when it matures,
+     * so running out of water simply finishes the job early; the green
+     * goes woody instead of vanishing, which is both what a stalled
+     * shoot does and the reason for the change - a tree kept reading
+     * green because every stem that stopped growing stayed a stem.
+     *
+     * Only while it is touching the trunk, which is the whole weight of
+     * the condition. Without it, a seed poured on dry sand would land,
+     * fail to drink, and leave a woody speck behind - and wood is
+     * permanent, so pouring plant anywhere would litter the board for
+     * good. Withering exists precisely because it used to. A loose seed
+     * that cannot drink still just dies.
+     *
+     * CELL_MAKE(..., 0) rather than place_reacted(), which births at
+     * MATERIAL_VARIANTS - 1: for wood that nibble is burn progress, and
+     * its maximum is what "alight" means. Wood born this way would come
+     * into the world on fire. */
+    if (attached) {
+        place_cell(s, x, y, at, CELL_MAKE(r->hardens_to, 0));
+        return true;
     }
 
     /* Withering is a STAGE, not a deletion, wherever the material names

@@ -6564,7 +6564,7 @@ static void test_a_limb_hangs_on_to_a_wooden_trunk(void)
  * All three cases are checked together because the rule is only useful if
  * it can tell them apart. Withering everything that is thirsty would strip
  * a grown tree the moment its soil dried out. */
-static void test_loose_greenery_withers_but_a_tree_keeps_its_leaves(void)
+static void test_loose_greenery_withers_a_stem_lignifies_a_crown_stays(void)
 {
     fixture();
     sand_clear(&s);
@@ -6602,10 +6602,21 @@ static void test_loose_greenery_withers_but_a_tree_keeps_its_leaves(void)
         "but FOLIAGE touching wood must stay, however dry it gets - a tree "
         "in a drought keeps its leaves, and a leaf cannot fall, so nothing "
         "else would ever clear a crown whose trunk had burned away");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, H - 2)),
-        "while green GROWTH touching wood must not - sheltered growth "
-        "never dies, so every stem that failed to finish its run stayed on "
-        "the tree for ever, which is what the stacking was");
+    /* And green GROWTH touching wood LIGNIFIES. It must not stay green -
+     * sheltered growth that never dies is how every stem that failed to
+     * finish its run stayed on the tree for ever, which is what the
+     * stacking was - but it should not simply vanish either. A shoot on
+     * a trunk that stops being fed goes woody, which is what a stalled
+     * shoot does and what stops a settled tree reading green.
+     *
+     * Variant zero, checked rather than assumed: wood's low nibble is
+     * burn progress, and its maximum is what "alight" means, so wood
+     * born the usual way would come into the world on fire. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_MAKE(MAT_WOOD, 0),
+        sand_at(&s, 3, H - 2),
+        "green growth touching wood must go WOODY - not stay green, "
+        "which was the stacking, and not simply vanish, which threw away "
+        "the stem instead of finishing it");
     /* Still plant, or already grown into wood - either way it is alive
      * and still there, which is the claim. Two thousand steps on watered
      * soil is plenty of time for a seedling to become a trunk. */
@@ -11977,7 +11988,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_settled_plant_keeps_the_reaction_pass_armed);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_limb_hangs_on_to_a_wooden_trunk);
-    RUN_TEST(test_loose_greenery_withers_but_a_tree_keeps_its_leaves);
+    RUN_TEST(test_loose_greenery_withers_a_stem_lignifies_a_crown_stays);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
     RUN_TEST(test_a_buried_seed_comes_up_through_the_soil);
     RUN_TEST(test_a_seed_under_stone_stays_put);
