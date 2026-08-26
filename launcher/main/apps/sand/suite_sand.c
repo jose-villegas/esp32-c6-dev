@@ -6575,9 +6575,13 @@ static void test_loose_greenery_withers_but_a_tree_keeps_its_leaves(void)
     }
     /* left: a scrap on bare stone, nothing to drink and nothing to hold */
     sand_set(&s, 1, H - 2, MATX(MATX_PLANT));
-    /* middle: the same scrap, but touching wood */
+    /* middle: a trunk with a LEAF on it and a stem beside it. The leaf
+     * is sheltered by the wood; the stem is not, and that difference is
+     * the point - foliage in a drought is a tree keeping its leaves,
+     * green growth in a drought is growth that failed and should go. */
     sand_set(&s, 4, H - 2, CELL_MAKE(MAT_WOOD, 0));
-    sand_set(&s, 5, H - 2, MATX(MATX_PLANT));
+    sand_set(&s, 5, H - 2, MATX(MATX_LEAF));
+    sand_set(&s, 3, H - 2, MATX(MATX_PLANT));
     /* right: on watered soil */
     sand_set(&s, W - 1, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
     sand_set(&s, W - 1, H - 3, MATX(MATX_PLANT));
@@ -6594,10 +6598,14 @@ static void test_loose_greenery_withers_but_a_tree_keeps_its_leaves(void)
         "a scrap of green on bare stone must eventually go - it can "
         "neither drink nor lean on a trunk, and nothing else on the board "
         "would ever have cleared it away");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT), sand_at(&s, 5, H - 2),
-        "but greenery touching WOOD must stay, however dry it gets - "
-        "otherwise a grown tree is stripped bare the moment its soil dries "
-        "out, which is not what a tree does");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_LEAF), sand_at(&s, 5, H - 2),
+        "but FOLIAGE touching wood must stay, however dry it gets - a tree "
+        "in a drought keeps its leaves, and a leaf cannot fall, so nothing "
+        "else would ever clear a crown whose trunk had burned away");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, H - 2)),
+        "while green GROWTH touching wood must not - sheltered growth "
+        "never dies, so every stem that failed to finish its run stayed on "
+        "the tree for ever, which is what the stacking was");
     /* Still plant, or already grown into wood - either way it is alive
      * and still there, which is the claim. Two thousand steps on watered
      * soil is plenty of time for a seedling to become a trunk. */
@@ -6879,23 +6887,18 @@ static void test_a_hardened_trunk_is_thicker_at_the_foot(void)
         "only asks whether it is thick");
 }
 
-/* The last cell of a run stays green.
+/* Hardening takes the WHOLE run, tip and all.
  *
- * Hardening the whole run takes the stem's growing point with it, and wood
- * does not grow - so a seedling became a post the moment it was tall
- * enough, and the only way back was budding at the foot. Leaving the tip
- * means the tree carries on from where it stiffened.
+ * The reverse of what this file asserted until now, deliberately. A green
+ * tip was the only way a tree could get taller, so hardening stopped one
+ * cell short - and that is why a tree carried green around for ever.
+ * Growth comes from crowned wood now (reaction_t.buds), so a run can turn
+ * to timber entire and the tree still has a future.
  *
- * Checked as "there is still a plant cell immediately above the highest
- * wood", at the first step any wood exists at all. Two things make that
- * the right assert rather than a count of green cells: a count passes on a
- * build that hardened the whole run and happened to have a limb somewhere
- * else on the tree, and the canopy hung by the same pass is MATX_LEAF, not
- * plant, so it cannot stand in for the tip either.
- *
- * "Immediately above" means any of the three gravity-opposite directions,
- * because a stem wanders - see stem_next(). */
-static void test_hardening_leaves_the_growing_tip_alive(void)
+ * Asserted as "a tree reaches a state with no plant on it at all", which
+ * is the claim that matters: plant is a phase a cell passes through, not a
+ * tissue a tree keeps. */
+static void test_a_finished_tree_carries_no_green(void)
 {
     fixture();
     sand_clear(&s);
@@ -6908,48 +6911,47 @@ static void test_hardening_leaves_the_growing_tip_alive(void)
     }
     sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
 
-    int checked = 0;
-    for (int i = 0; i < 4000 && !checked; i++) {
-        for (int x = 0; x < W; x++) {
-            sand_set(&s, x, H - 2,
-                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    /* Watered while it grows, then left alone. Kept watered for ever it
+     * simply keeps budding, which is the model working; the claim here is
+     * about what a tree looks like once it is FINISHED.
+     *
+     * And leaving it dry is what makes the test discriminate: a green tip
+     * clings to wood, so on a build that leaves one it survives drought
+     * indefinitely and this never reaches zero. */
+    int wooded = 0, bare = 0;
+    for (int i = 0; i < 4000 && !bare; i++) {
+        if (i < 1500) {
+            for (int x = 0; x < W; x++) {
+                sand_set(&s, x, H - 2,
+                         CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
         }
         sand_step(&s, 0, 1000, 0);
 
-        if (count_cells_of(MAT_WOOD) == 0) {
+        if (count_cells_of(MAT_WOOD) > 0) {
+            wooded = 1;
+        }
+        if (!wooded) {
             continue;
         }
-        checked = 1;
-
-        /* Highest wood on the board - lowest y, gravity being downward. */
-        int wx = -1, wy = H;
+        int green = 0;
         for (int y = 0; y < H; y++) {
             for (int x = 0; x < W; x++) {
-                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WOOD && y < wy) {
-                    wx = x;
-                    wy = y;
+                if (sand_at(&s, x, y) == MATX(MATX_PLANT)) {
+                    green++;
                 }
             }
         }
-        TEST_ASSERT_TRUE_MESSAGE(wx >= 0, "there is wood, so it has a top");
-
-        int tipped = 0;
-        static const int ux[3] = { 0, -1, 1 };
-        for (int d = 0; d < 3; d++) {
-            const int nx = wx + ux[d], ny = wy - 1;
-            if ((unsigned)nx >= (unsigned)W || ny < 0) {
-                continue;
-            }
-            if (sand_at(&s, nx, ny) == MATX(MATX_PLANT)) {
-                tipped = 1;
-            }
+        if (green == 0) {
+            bare = 1;
         }
-        TEST_ASSERT_TRUE_MESSAGE(tipped,
-            "the highest wood of a freshly hardened run must have the "
-            "run's green tip just above it - harden the whole run and the "
-            "growing point goes with it, and wood does not grow");
     }
-    TEST_ASSERT_TRUE_MESSAGE(checked, "the tree has to have hardened at all");
+
+    TEST_ASSERT_TRUE_MESSAGE(wooded, "the tree has to have hardened at all");
+    TEST_ASSERT_TRUE_MESSAGE(bare,
+        "a tree must reach a state with no plant cells on it - hardening "
+        "leaves no tip behind, so green is a phase a cell passes through "
+        "on its way to timber rather than something a tree keeps");
 }
 
 
@@ -7031,6 +7033,120 @@ static void test_a_limb_travels_outward_instead_of_climbing(void)
         "limbs with a heading must carry on in that direction - reckoning "
         "every growth from gravity instead sends one straight up the side "
         "of its own trunk, and no tree ever puts out a bough");
+}
+
+
+/* A crowned trunk puts out new growth; a bare one does not.
+ *
+ * This is where a tree's growth comes from now. It used to come from a
+ * green tip that hardening deliberately spared - which meant every tree
+ * carried green permanently, and growth scaled with how much of it there
+ * was, because every green cell rolled every step.
+ *
+ * The "already in leaf" half is not decoration, it is the bound. A canopy
+ * touches a dozen cells of wood; if bare wood could bud, the rate would
+ * scale with the trunk and the forest would run away exactly as it did
+ * when growth scaled with green. Crowned wood at the head of its trunk is
+ * a handful of cells per tree however fat it gets. */
+static void test_a_crowned_trunk_buds_and_a_bare_one_does_not(void)
+{
+    const int cx = W / 2;
+
+    /* Crowned: wood, a leaf on it, wet ground under it. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    sand_set(&s, cx + 1, H - 5, MATX(MATX_LEAF));
+
+    int budded = 0;
+    for (int i = 0; i < 4000 && !budded; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !budded; y++) {
+            for (int x = 0; x < W; x++) {
+                if (sand_at(&s, x, y) == MATX(MATX_PLANT)) {
+                    budded = 1;
+                    break;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(budded,
+        "a trunk in leaf and in reach of water must put out new growth - "
+        "hardening leaves no tip behind, so this is the only way a tree "
+        "gets any taller");
+
+    /* Bare: the same trunk, same water, no leaf on it. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+
+    for (int i = 0; i < 4000; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2,
+                     CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                TEST_ASSERT_NOT_EQUAL_MESSAGE(MATX(MATX_PLANT),
+                    sand_at(&s, x, y),
+                    "bare wood must NOT bud - a canopy touches a dozen "
+                    "cells of trunk, and if every one of them could bud, "
+                    "the rate would scale with the tree all over again");
+            }
+        }
+    }
+
+    /* And crowned, but on ground too thin to pay for a limb. A bud costs
+     * BUD_COST levels of moisture, not one - because a bud is the only
+     * thing here that COMPOUNDS, so what has to bound it is the scarce
+     * thing rather than a probability. Priced at one level, buds simply
+     * drank the pour and the forest ran away. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 1));
+    }
+    for (int y = H - 5; y < H - 2; y++) {
+        sand_set(&s, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    sand_set(&s, cx + 1, H - 5, MATX(MATX_LEAF));
+
+    for (int i = 0; i < 4000; i++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 1));
+        }
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                TEST_ASSERT_NOT_EQUAL_MESSAGE(MATX(MATX_PLANT),
+                    sand_at(&s, x, y),
+                    "a crowned trunk on barely damp ground must NOT bud - "
+                    "a limb has to be paid for, or the only thing bounding "
+                    "the one mechanism that compounds is a dice roll");
+            }
+        }
+    }
 }
 
 /* --- foliage -------------------------------------------------------------- */
@@ -11704,9 +11820,10 @@ void run_sand_suite(void)
     RUN_TEST(test_a_plant_drains_standing_water_into_the_soil);
     RUN_TEST(test_a_plant_rooted_on_stone_does_not_drink);
     RUN_TEST(test_a_limb_travels_outward_instead_of_climbing);
+    RUN_TEST(test_a_crowned_trunk_buds_and_a_bare_one_does_not);
     RUN_TEST(test_a_hardened_trunk_is_left_with_foliage);
     RUN_TEST(test_a_hardened_trunk_is_thicker_at_the_foot);
-    RUN_TEST(test_hardening_leaves_the_growing_tip_alive);
+    RUN_TEST(test_a_finished_tree_carries_no_green);
     RUN_TEST(test_a_leaf_neither_spreads_nor_falls);
     RUN_TEST(test_a_leaf_with_no_tree_withers_away);
     RUN_TEST(test_a_leaf_drains_standing_water_into_the_soil);

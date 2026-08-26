@@ -798,6 +798,25 @@ typedef struct {
      * actually happens. */
     uint8_t clings_to;
 
+    /* What SHELTERS this from withering: touch a cell of it and a dry
+     * spell cannot take you.
+     *
+     * The third time a field here has turned out to be answering two
+     * questions. `clings_to` was doing structure - is this cell part of
+     * the same body, for anchoring, for the stem walk, for the walk down
+     * to water - AND shelter, and the two only looked like one while
+     * foliage and growth wanted the same answer.
+     *
+     * They do not. FOLIAGE should be sheltered: a tree in a drought keeps
+     * its leaves, and a leaf cannot fall, so nothing else would ever clear
+     * a crown whose trunk burned away. GROWTH should not: sheltered green
+     * never dies, so every stem that failed to finish its run stayed on
+     * the tree for ever, and that - not the growing tip, and not the buds
+     * - is what "stacking plant" was. Measured over eight trees: sheltered
+     * growth leaves 44 green cells and 12 columns clinging to trunks;
+     * unsheltered, 18 and 2, with MORE timber (262 against 255). */
+    uint8_t sheltered_by;
+
     /* What a run of this leaves BEHIND when it hardens, and how much:
      * `canopy` is a chance in 256 per candidate space around the top of
      * the new trunk, `canopy_to` is the cell spec to put there.
@@ -858,6 +877,35 @@ typedef struct {
      * extended material, whose identity is its low nibble. */
     uint8_t sprouts;
     uint8_t sprouts_to;
+
+    /* BUDDING: chance in 256 that this material, ALREADY IN LEAF and able
+     * to reach water, puts out a cell of `buds_to` beside it.
+     *
+     * This is where a tree's growth comes from, and moving it here is the
+     * point of the whole arrangement. It used to come from a growing tip:
+     * hardening stopped one cell short so the stem kept a green cell, and
+     * that cell - and every other green cell - rolled to grow, every step,
+     * for as long as it existed.
+     *
+     * Two things were wrong with that. Growth scaled with how much green
+     * was already there, which is a positive feedback loop, and the three
+     * dampers on it (the packed brake, the lift cap, the hardening roll)
+     * were all fighting the same runaway. And the green was PERMANENT: a
+     * settled forest of four trees still ran nine root-walks a step and
+     * grew nothing at all, for ever, because eleven cells that could not
+     * grow kept asking whether they could.
+     *
+     * Budding from wood makes growth an EVENT rather than a population. A
+     * finished tree has no plant cells at all, so it costs nothing and
+     * cannot compound; plant becomes a transient phase a cell passes
+     * through on its way to being timber.
+     *
+     * The `already in leaf` gate is what keeps the rate from scaling with
+     * the tree again. Requiring a cell of `sprouts_to` alongside means only
+     * crowned wood buds - a roughly constant handful per tree however fat
+     * its trunk grows - rather than every cell of it. */
+    uint8_t buds;
+    uint8_t buds_to;
 
     /* DRINKING: chance/256 per step that this material, touching a liquid
      * AND rooted in soil that has room for more, takes a unit of that

@@ -1036,6 +1036,10 @@ static bool step_one_falling_cell(sand_t *s, int x, int y, int w, int h,
  * pass stays a handful of writes. */
 #define CANOPY_SPAN 3
 
+/* What a bud costs the soil, in moisture levels. See
+ * step_one_budding_cell() - a bud compounds, so water is what bounds it. */
+#define BUD_COST 3
+
 
 /* How far down through soil a plant's roots reach for water. Deep enough
  * to survive a bed draining under it, short enough that a tree cannot
@@ -1256,6 +1260,98 @@ static bool step_one_sprouting_cell(sand_t *s, int x, int y, int w, int h,
     return true;
 }
 
+/* One cell of something that BUDS: already in leaf, rooted in reach of
+ * water, it puts out a cell of `buds_to` - new growth on a finished tree.
+ *
+ * The whole reason growth is anchored here rather than on a green tip is
+ * in reaction_t.buds. In short: a tip makes growth a POPULATION, which
+ * compounds and never goes quiet; a bud makes it an EVENT, so a settled
+ * tree has no plant cells and costs nothing.
+ *
+ * Buds go up and out - the five directions away from gravity - so a tree
+ * gains height and spread rather than sprouting into its own trunk. */
+static bool step_one_budding_cell(sand_t *s, int x, int y, int w, int h,
+                                  const reaction_t *r)
+{
+    const cell_t self = s->cells[(size_t)y * (size_t)w + (size_t)x];
+
+    /* In leaf? Cheapest question, and much the commonest answer, so it
+     * goes first: bare wood is most of a trunk and pays only this. */
+    bool crowned = false;
+    for (int d = 0; d < 8 && !crowned; d++) {
+        const int *nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        crowned = (s->cells[(size_t)ny * (size_t)w + (size_t)nx] ==
+                   (cell_t)r->sprouts_to);
+    }
+    if (!crowned) {
+        return false;
+    }
+    /* And at the HEAD of its trunk - nothing more of itself directly
+     * against gravity. A canopy touches a dozen cells of wood; without
+     * this every one of them is a bud site and the rate scales with the
+     * tree all over again. */
+    {
+        const int ax = x - s->last_load_dx, ay = y - s->last_load_dy;
+        if ((unsigned)ax < (unsigned)w && (unsigned)ay < (unsigned)h &&
+            s->cells[(size_t)ay * (size_t)w + (size_t)ax] == self) {
+            return false;
+        }
+    }
+
+    /* Somewhere to put it, up and away from gravity. */
+    const int up_i = ring_of(-s->last_load_dx, -s->last_load_dy);
+    static const int out[5] = { 7, 0, 1, 2, 6 };
+    int at = -1, bx = 0, by = 0;
+    for (int d = 0; d < 5; d++) {
+        const int *nd = ring_dir(up_i + out[d]);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        if (CELL_IS_EMPTY(s->cells[nat])) {
+            at = (int)nat;
+            bx = nx;
+            by = ny;
+            break;
+        }
+    }
+    if (at < 0) {
+        return true;                  /* crowned, but boxed in */
+    }
+
+    int lift = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
+    if (soil_at < 0) {
+        return true;                  /* nothing to drink */
+    }
+    /* Everything settled before the roll, or every cell of every trunk
+     * draws a random number every step and shifts what follows. */
+    /* A whole limb's worth of water, not one cell's. A bud is the only
+     * thing here that COMPOUNDS - what it puts out grows, hardens, and
+     * crowns, making more bud sites - so what bounds it has to be the
+     * scarce thing rather than a probability. At one level each, buds
+     * simply drank the pour and the forest ran away. */
+    const cell_t soil = s->cells[soil_at];
+    if (CELL_MOISTURE(soil) < BUD_COST) {
+        return true;
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->buds) {
+        return true;
+    }
+
+    place_reacted(s, bx, by, (size_t)at, r->buds_to);
+
+    s->cells[soil_at] = CELL_WITH_MOISTURE(
+        soil, (uint8_t)(CELL_MOISTURE(soil) - BUD_COST));
+    mark_rows(s, soil_at / w, soil_at / w);
+    return true;
+}
+
 /* One step along a stem, in the direction (ux, uy) or either diagonal
  * beside it. Returns whether it found one.
  *
@@ -1366,7 +1462,7 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
     const size_t at = (size_t)y * (size_t)w + (size_t)x;
     const cell_t self = s->cells[at];
 
-    if (r->clings_to != 0) {
+    if (r->sheltered_by != 0) {
         for (int d = 0; d < 8; d++) {
             const int *nd = ring_dir(d);
             const int nx = x + nd[0], ny = y + nd[1];
@@ -1374,8 +1470,8 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
                 continue;
             }
             const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->clings_to) {
-                return false;         /* part of a tree; it stays */
+            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->sheltered_by) {
+                return false;         /* under its tree; it stays */
             }
         }
     }
@@ -1756,7 +1852,14 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * takes the stem's growing point with it, and wood does not grow, so a
      * seedling became a post the moment it was tall enough. */
     const int up_i = ring_of(ux, uy);
-    const int hard = (trunk > 1) ? trunk - 1 : trunk;
+
+    /* The WHOLE run, tip included. It used to stop one short, so that the
+     * stem kept a growing point - necessary while a green tip was the only
+     * way a tree could get taller, and the reason a tree carried green
+     * around for ever. Growth comes from crowned wood now (see
+     * reaction_t.buds), so a run can turn to timber entire and the tree
+     * still has a future. */
+    const int hard = trunk;
 
     int topx[CANOPY_SPAN], topy[CANOPY_SPAN];
     int ntop = 0;
@@ -2722,6 +2825,13 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
          * falls through every branch above it. */
         if (r->sprouts != 0 && s->may_have_moisture) {
             if (step_one_sprouting_cell(s, x, y, w, h, r)) {
+                found |= FOUND_MOISTURE;
+            }
+        }
+        /* Budding, on the same gate. Reached by wood, which falls through
+         * every branch above it. */
+        if (r->buds != 0 && s->may_have_moisture) {
+            if (step_one_budding_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
             }
         }

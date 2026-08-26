@@ -938,6 +938,14 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .sprouts     = 6,
         .sprouts_to  = MATX(MATX_LEAF),
 
+        /* And a crowned trunk puts out new GROWTH, which is where a tree
+         * gets taller now that hardening leaves no green tip behind.
+         * Rarer than leafing: a bud is a whole new limb rather than a
+         * frond, and it is the only thing that compounds, so it is the
+         * number to turn down first if a forest gets away. */
+        .buds        = 24,
+        .buds_to     = MATX(MATX_PLANT),
+
         /* A trunk standing in water waters its own roots, at a third of
          * green growth's rate - bark is not a leaf. */
         .drinks      = 12,
@@ -1845,6 +1853,7 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * into timber. What they do is hang there being green, catch fire
          * readily, and let water through. */
         .clings_to    = MAT_WOOD,
+        .sheltered_by = MAT_WOOD,   /* a tree in drought keeps its leaves */
 
         /* It has to DRINK, which sounds like the opposite of everything
          * above and is not optional. Every extended material shares one
