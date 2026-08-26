@@ -4928,6 +4928,12 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                     "pane and the shine vanishes");
             } else if (m == MAT_STONE) {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_SPECKLED, pat, why);
+            } else if (m == MAT_WOOD) {
+                /* Speckled only while UNLIT. A burning log is a glow, and
+                 * a glow that varies cell to cell reads as dirty rather
+                 * than as fire. */
+                TEST_ASSERT_EQUAL_MESSAGE(
+                    v == 0 ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
             } else {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat, why);
                 TEST_ASSERT_EQUAL_MESSAGE(pal[c], col[0], why);
@@ -5128,6 +5134,153 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
 /* ===================================================================
  * The extended range: sixteen materials behind the last slot.
  * =================================================================== */
+
+/* ===================================================================
+ * Dirt: soaking, drying, and sand turning into soil.
+ * =================================================================== */
+
+/* Wet sand slowly becomes soil, and the water is SPENT doing it.
+ *
+ * Consuming the liquid is what separates soaking from `thaws`, which snow
+ * uses to melt in one - snow survives on what the liquid gives it for
+ * free. A shoreline that turned to soil without the sea getting any
+ * shallower would be making matter out of nothing. */
+static void test_wet_sand_becomes_dirt_and_spends_the_water(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+    const int water_before = liquid_mass_of(MAT_WATER);
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_DIRT) > 0,
+        "sand left sitting under water must turn into dirt - slowly, but "
+        "it must happen");
+    TEST_ASSERT_TRUE_MESSAGE(liquid_mass_of(MAT_WATER) < water_before,
+        "and the water must be spent doing it, or soil is being made out "
+        "of nothing");
+}
+
+/* Dirt holds moisture in its variant, and gives it back up.
+ *
+ * Both halves matter: without soaking there is no wet soil for anything to
+ * grow in, and without drying a single watering would make a patch fertile
+ * forever, which turns watering from something you DO into something you
+ * did once. */
+static void test_dirt_takes_on_moisture_and_dries_out_again(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_DIRT, 0));
+    }
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    int wettest = 0;
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_VARIANT(c) > wettest) {
+                wettest = CELL_VARIANT(c);
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(wettest > 0,
+        "dirt under water must take moisture on - its variant is how wet "
+        "it is");
+
+    /* Take the water away and let it dry. */
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WATER) {
+                sand_set(&s, x, y, 0);
+            }
+        }
+    }
+    int still_wet = 1;
+    for (int i = 0; i < 4000 && still_wet; i++) {
+        sand_step(&s, 0, 1000, 0);
+        still_wet = 0;
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_VARIANT(c) != 0) {
+                still_wet = 1;
+            }
+        }
+    }
+    TEST_ASSERT_FALSE_MESSAGE(still_wet,
+        "and with the water gone it must dry back out, or one watering "
+        "makes a patch fertile for good");
+}
+
+/* Freshly drawn dirt is dry, and freshly made dirt is barely wet.
+ *
+ * The variant is moisture, so a random shade would hand the player soil
+ * that arrives already watered - the fourth meaning this variant can carry
+ * and the fourth time a random shade would have been wrong. */
+static void test_new_dirt_starts_dry(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_spawn(&s, W / 2, H / 2, 1, MAT_DIRT);
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) != MAT_DIRT) {
+                continue;
+            }
+            TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_VARIANT(c),
+                "painted dirt must arrive bone dry - its variant is "
+                "moisture, not a shade");
+        }
+    }
+}
+
+/* Nothing soaks unless the simulation is told to let it.
+ *
+ * The override exists because soaking is a property of sand, and half the
+ * suite puts sand in water to check that sand SINKS. Those tests are about
+ * density and have no opinion about chemistry; they all broke the moment
+ * soaking arrived switched on. */
+static void test_soaking_is_off_unless_asked_for(void)
+{
+    fixture();
+    sand_clear(&s);
+    /* deliberately NOT calling sand_set_soak */
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    for (int i = 0; i < 600; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_DIRT),
+        "with soaking off, sand under water must stay sand - a mechanic "
+        "that arrives switched on rewrites every scene that already "
+        "existed");
+}
 
 /* Every material has a colour, and every extended material has one too.
  *
@@ -7606,6 +7759,10 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_wet_sand_becomes_dirt_and_spends_the_water);
+    RUN_TEST(test_dirt_takes_on_moisture_and_dries_out_again);
+    RUN_TEST(test_new_dirt_starts_dry);
+    RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_every_material_has_a_palette_block);
     RUN_TEST(test_ice_is_its_own_colour);
     RUN_TEST(test_an_extended_material_survives_being_painted);

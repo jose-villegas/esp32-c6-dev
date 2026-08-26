@@ -364,6 +364,10 @@ static inline bool touches_air(const sand_t *s, int x, int y, int w, int h)
     return false;
 }
 
+/* Defined below, beside the burning cell it was written for - the soaking
+ * cell takes a unit of liquid the same way, and for the same reason. */
+static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w);
+
 /* Defined below, beside the cold cell that is its other caller - a crack
  * can start from either direction of shock, and this is the earlier one. */
 static void crack_run(sand_t *s, int x, int y, int w, int h,
@@ -500,6 +504,83 @@ static void crack_run(sand_t *s, int x, int y, int w, int h,
             }
         }
     }
+}
+
+/* One cell that soaks up liquid, or holds what it soaked.
+ *
+ * Two halves that belong together because they are the same quantity going
+ * in and coming back out. Soaking takes a UNIT of an adjacent liquid - the
+ * liquid is consumed, which is what separates this from `thaws` - and
+ * either turns the cell into `soaks_to` or raises its own variant. Drying
+ * lowers that variant again.
+ *
+ * Returns whether this cell still gives the pass a reason to run: it is
+ * wet, or it is a soaker with liquid beside it. Reporting that honestly is
+ * what keeps may_have_moisture from latching on for good on any board with
+ * sand on it, which is almost all of them.
+ *
+ * Driven from the SOAKING side rather than the liquid's, for the reason
+ * step_one_cold_cell() gives: a scan per liquid cell would be a scan on
+ * the commonest material there is. */
+static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
+                                  int w, int h, const reaction_t *r)
+{
+    const cell_t c = row[x];
+    const uint8_t held = CELL_VARIANT(c);
+    bool beside_liquid = false;
+
+    const int soaks = (s->soak >= 0) ? s->soak : r->soaks;
+
+    if (soaks != 0 && r->soaks != 0 && s->may_have_liquid) {
+        for (int d = 0; d < 4; d++) {
+            const int nx = x + reaction_dirs[d][0];
+            const int ny = y + reaction_dirs[d][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+            const cell_t n = s->cells[nat];
+            if (CELL_IS_EMPTY(n) ||
+                materials[CELL_MATERIAL(n)].kind != KIND_LIQUID) {
+                continue;
+            }
+            beside_liquid = true;
+
+            if ((int)(rng_next(&s->rng) & 0xFF) >= soaks) {
+                continue;
+            }
+            /* The liquid pays for what was taken out of it. */
+            pay_quench_cost(s, nx, ny, w);
+
+            if (r->soaks_to != 0) {
+                /* Becomes something else, holding the one unit it just
+                 * took - wet sand turning into soil. */
+                s->cells[(size_t)y * (size_t)w + (size_t)x] =
+                    CELL_MAKE(r->soaks_to, 1);
+                latch_content_flags(s, s->cells[(size_t)y * (size_t)w +
+                                                (size_t)x]);
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+                return true;
+            }
+            if (held + 1 < MATERIAL_VARIANTS) {
+                row[x] = CELL_MAKE(CELL_MATERIAL(c), held + 1);
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            }
+            return true;
+        }
+    }
+
+    if (r->dries != 0 && held != 0 &&
+        (int)(rng_next(&s->rng) & 0xFF) < r->dries) {
+        row[x] = CELL_MAKE(CELL_MATERIAL(c), held - 1);
+        mark_rows(s, y, y);
+        wake_block_and_neighbors(s, x, y);
+        return held - 1 != 0;
+    }
+
+    return held != 0 || beside_liquid;
 }
 
 /* One cell that is COLD. It does two things to its four neighbours: melts
@@ -1215,6 +1296,7 @@ static bool step_one_burning_cell(sand_t *s, uint8_t *row, int x, int y,
 #define FOUND_BURNING   1u
 #define FOUND_DISSOLVER 2u
 #define FOUND_TEMPERATURE      4u
+#define FOUND_MOISTURE         8u
 
 static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
 {
@@ -1256,6 +1338,14 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
             if (step_one_cold_cell(s, x, y, w, h, r)) {
                 found |= FOUND_TEMPERATURE;
             }
+            continue;
+        }
+        /* Soaking and drying. Reached by sand and dirt, which are on most
+         * boards, so the cheap tests come first: the field check, then
+         * may_have_liquid inside, and only then a neighbour scan. */
+        if ((r->soaks != 0 || r->dries != 0) &&
+            step_one_soaking_cell(s, row, x, y, w, h, r)) {
+            found |= FOUND_MOISTURE;
         }
     }
     return found;
@@ -1273,7 +1363,8 @@ void sand_step_reactions(sand_t *s)
     /* Heat is a third independent reason to run, not a rider on fire: glass
      * goes on cooling long after the flame that heated it is out, and gated
      * behind may_have_burning it would freeze mid-ramp instead. */
-    if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature) {
+    if (!s->may_have_burning && !s->may_have_dissolver &&
+        !s->may_have_temperature && !s->may_have_moisture) {
         return;
     }
 
@@ -1293,5 +1384,8 @@ void sand_step_reactions(sand_t *s)
     }
     if (!(found & FOUND_TEMPERATURE)) {
         s->may_have_temperature = false;
+    }
+    if (!(found & FOUND_MOISTURE)) {
+        s->may_have_moisture = false;
     }
 }

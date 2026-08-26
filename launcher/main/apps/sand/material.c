@@ -461,6 +461,24 @@ const material_t materials[MATERIAL_MAX] = {
         .scatter = 0,
     },
 
+    [MAT_DIRT] = {
+        .name    = "Dirt",
+        .kind    = KIND_POWDER,
+        .density = 62,       /* just above sand's 60. Soil is sand with
+                              * water and organic matter packed into the
+                              * gaps, so it should sink through a loose
+                              * pile rather than float on it - and being
+                              * only just heavier keeps that slow */
+        .slip    = 64,       /* stickier than sand's 96: damp soil clumps
+                              * where dry sand runs */
+        .repose  = 11,       /* ~48 degrees against sand's ~35. A bank of
+                              * earth holds a much steeper face than a
+                              * dune does, which is most of what makes it
+                              * read as soil rather than as brown sand */
+        .scatter = 12,       /* well under sand's 40 - it lands where it
+                              * falls instead of skittering */
+    },
+
     [MAT_SNOW] = {
         .name    = "Snow",
         .kind    = KIND_POWDER,
@@ -594,6 +612,13 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * at, and the one that shows what it does. */
         .dissolvable = 200,
 
+        /* Wet sand slowly becomes soil. Far slower than dirt drinks -
+         * 8 against 60 - because this is sand CHANGING rather than dirt
+         * filling up, and it should read as a shoreline turning to mud
+         * over time rather than as a puddle instantly making earth. */
+        .soaks       = 8,
+        .soaks_to    = MAT_DIRT,
+
         .heats_to    = MAT_GLASS,
         .heat_chance = 16,   /* 16 in 256 per adjacent heat source per
                               * step. Deliberately slow - glass should be
@@ -685,6 +710,22 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * un-make the material without a second material and without
          * spending one of the two remaining slots. */
         .shatters_to = MAT_SAND,
+    },
+
+    [MAT_DIRT] = {
+        /* Dirt's variant is MOISTURE, 0 dry to 15 saturated. It soaks up
+         * any liquid it touches - `soaks_to` is left at zero, so what it
+         * absorbs raises its own variant rather than turning it into
+         * something else - and dries back out slowly.
+         *
+         * Drying at a twelfth of the soaking rate means a watered patch
+         * stays useful for a while and does not stay useful forever, which
+         * is what makes watering a thing you do rather than a thing you
+         * did once. */
+        .soaks       = 60,
+        .dries       = 5,
+
+        .dissolvable = 200,  /* the same as sand: it is mostly sand */
     },
 
     [MAT_SNOW] = {
@@ -1167,6 +1208,16 @@ static const gfx_color_t palette[256] = {
                                     * exactly the colour of what it turns
                                     * into, and the transformation lands
                                     * without a visible seam */
+    [MAT_DIRT * MATERIAL_VARIANTS] =
+    SHADES(0x9A7B52, 0x3A2A18),   /* dirt - the variant is MOISTURE, not a
+                                    * shade, so this is a wetness ramp: dry
+                                    * dusty tan at 0 through to dark damp
+                                    * earth at 15. Wet soil really is
+                                    * darker than dry, so the direction is
+                                    * not a choice - and it means a watered
+                                    * patch is visible as a dark stain
+                                    * rather than being a number only the
+                                    * plants can see */
     [MAT_SNOW * MATERIAL_VARIANTS] =
     SHADES(0xC6D8E4, 0xFFFFFF),   /* snow  - a powder, so a shade ramp
                                     * again, and a narrow one: cold blue
@@ -1360,6 +1411,22 @@ static const gfx_color_t stone_speckle[MATERIAL_VARIANTS][8] = {
       STONE_EDGE_SPECKLE(v, 4), STONE_EDGE_SPECKLE(v, 5),                  \
       STONE_EDGE_SPECKLE(v, 6), STONE_EDGE_SPECKLE(v, 7) }
 
+/* Wood's grain, on the same footing as stone's speckle and for the same
+ * reason: wood spent its shade on burn progress, so an unlit log was one
+ * flat brown fill.
+ *
+ * Only UNLIT wood is speckled. A burning log is glowing, and a glow that
+ * varies cell to cell reads as dirty rather than as fire - the same
+ * reasoning that keeps glass's shine uniform while its pane is not. */
+#define WOOD_GRAIN(k)                                                      \
+    GFX_RGB(LERP(LERP(WOOD_UNLIT, 0x000000, 3),                            \
+                 LERP(WOOD_UNLIT, 0xFFFFFF, 2), (k) * 15 / 7))
+
+static const gfx_color_t wood_grain[8] = {
+    WOOD_GRAIN(0), WOOD_GRAIN(1), WOOD_GRAIN(2), WOOD_GRAIN(3),
+    WOOD_GRAIN(4), WOOD_GRAIN(5), WOOD_GRAIN(6), WOOD_GRAIN(7),
+};
+
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
     STONE_EDGE_ROW(3),  STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),
@@ -1387,12 +1454,22 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
         out[1] = out[0];
         out[2] = out[0];
         return MATERIAL_SPECKLED;
-    default:
-        out[0] = palette[c];
+    case MAT_WOOD:
+        if (v != 0) {
+            break;              /* alight: one flat glow, not grain */
+        }
+        out[0] = wood_grain[hash & 7u];
         out[1] = out[0];
         out[2] = out[0];
-        return MATERIAL_FLAT;
+        return MATERIAL_SPECKLED;
+    default:
+        break;
     }
+
+    out[0] = palette[c];
+    out[1] = out[0];
+    out[2] = out[0];
+    return MATERIAL_FLAT;
 }
 
 /* One reaction row per extended material, indexed by the low nibble.

@@ -174,7 +174,8 @@ static const cell_t brushes[] = {
     CELL_MAKE(MAT_FIRE, 0),  CELL_MAKE(MAT_WOOD, 0),
     CELL_MAKE(MAT_OIL, 0),   CELL_MAKE(MAT_LAVA, 0),
     CELL_MAKE(MAT_ACID, 0),  CELL_MAKE(MAT_GLASS, 0),
-    CELL_MAKE(MAT_SNOW, 0),  MATX(MATX_ICE),
+    CELL_MAKE(MAT_SNOW, 0),  CELL_MAKE(MAT_DIRT, 0),
+    MATX(MATX_ICE),
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
@@ -421,6 +422,7 @@ static void start_sim(void)
      * material (currently just gas) has a nonzero figure in the table, so
      * this is a no-op for sand, water and stone. */
     sand_set_decay(&sim, SAND_DECAY_PER_MATERIAL);
+    sand_set_soak(&sim, SAND_SOAK_PER_MATERIAL);
     /* Per-material too - only gas has a figure below full speed, so this
      * is a no-op for sand, water and stone. */
     sand_set_mobility(&sim, SAND_MOBILITY_PER_MATERIAL);

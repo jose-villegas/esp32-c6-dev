@@ -327,6 +327,7 @@ static inline void clear_content_flags(sand_t *s)
     s->may_have_burning     = false;
     s->may_have_dissolver   = false;
     s->may_have_temperature = false;
+    s->may_have_moisture    = false;
 }
 
 static inline void latch_content_flags(sand_t *s, cell_t cell)
@@ -356,6 +357,13 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     if (r->chills != 0 ||
         (r->heat_ramp != 0 && CELL_VARIANT(cell) != SAND_AMBIENT_HEAT)) {
         s->may_have_temperature = true;
+    }
+    /* Wet, or something to get wet from. A liquid arms it because that is
+     * when a soaker has anything to do; a cell already holding moisture
+     * arms it because drying has to outlive the puddle. */
+    if (mat->kind == KIND_LIQUID ||
+        (r->dries != 0 && CELL_VARIANT(cell) != 0)) {
+        s->may_have_moisture = true;
     }
 }
 

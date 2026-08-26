@@ -74,6 +74,13 @@ static cell_t random_cell(sand_t *s, material_id_t material)
     if (reactions[material].burn_decay != 0) {
         return CELL_MAKE(material, 0);
     }
+    /* A material that dries has MOISTURE in its variant, and a fresh cell
+     * of it is bone dry. Fourth meaning the variant can carry, and the
+     * fourth reason a random shade would be wrong - it would hand the
+     * player soil that arrives already watered. */
+    if (reactions[material].dries != 0) {
+        return CELL_MAKE(material, 0);
+    }
     return CELL_MAKE(material, rng_below(&s->rng, MATERIAL_VARIANTS));
 }
 
@@ -124,6 +131,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->last_load_dy = 0;
     s->scatter      = 0;
     s->decay        = 0;
+    s->soak         = 0;    /* nothing soaks unless asked - see
+                             * sand_set_soak() */
     s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
@@ -425,6 +434,15 @@ void sand_set_scatter(sand_t *s, int chance)
         s->scatter = SAND_SCATTER_PER_MATERIAL;
     } else {
         s->scatter = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_soak(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->soak = SAND_SOAK_PER_MATERIAL;
+    } else {
+        s->soak = chance > 255 ? 255 : chance;
     }
 }
 

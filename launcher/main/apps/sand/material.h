@@ -166,6 +166,7 @@ typedef enum {
     MAT_ACID,
     MAT_GLASS,
     MAT_SNOW,
+    MAT_DIRT,
     MAT_COUNT,
 
     /* THE EXTENDED RANGE. Id 15 is not a material - it is an escape hatch.
@@ -568,6 +569,33 @@ typedef struct {
      * leaving snow untouched would need explaining in a way that melting
      * does not. */
     uint8_t thaws;
+
+    /* SOAKING UP A LIQUID, which is a different thing from melting in one.
+     * Chance in 256 per step, per adjacent liquid cell, that this material
+     * takes a UNIT of that liquid into itself - the liquid is consumed, not
+     * merely survived, which is the whole difference from `thaws`.
+     *
+     * Where the unit goes depends on `soaks_to`:
+     *
+     *   non-zero   the cell BECOMES that material, at moisture 1. Sand
+     *              names dirt here: wet sand slowly turns into soil.
+     *   zero       the cell keeps what it is and its VARIANT rises. Dirt
+     *              names nothing, so watering dirt makes it wetter.
+     *
+     * One field pair rather than two mechanisms because it is one thing
+     * happening - something absorbing water - and the only question is
+     * whether the thing it absorbed into already existed. */
+    uint8_t soaks;
+    uint8_t soaks_to;
+
+    /* And the way back: chance in 256 per step of losing one level of
+     * whatever `soaks` put in. Dirt drying out.
+     *
+     * Non-zero is also what MARKS a material's variant as moisture, the
+     * way heat_ramp marks it as temperature and burn_decay as how much is
+     * left to burn. A freshly drawn cell of one starts at zero - bone
+     * dry - which is why random_cell() has to know. */
+    uint8_t dries;
 
     /* What a THERMALLY SHOCKED cell of this material becomes: hot enough to
      * be near the top of its ramp, and touching something that `chills`.

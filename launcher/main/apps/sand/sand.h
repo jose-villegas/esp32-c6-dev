@@ -120,6 +120,20 @@ typedef struct {
      * It was may_have_temperature while glass was the only thing that had one. */
     bool     may_have_temperature;
 
+    /* And again for anything WET, or anything that could become wet: a
+     * cell holding moisture, or a soaker sitting where there is liquid to
+     * soak. Dirt drying out has to keep happening after the puddle that
+     * wetted it is gone, which is why holding moisture arms it on its own.
+     *
+     * Deliberately NOT armed by "a soaker exists" alone. Sand soaks, and
+     * sand is on almost every board, so that would run the reactions pass
+     * always - see step_one_reacting_row(), which only reports this found
+     * when a cell is actually wet or actually beside a liquid. */
+    bool     may_have_moisture;
+
+    /* See sand_set_soak(). 0, the default, means nothing soaks. */
+    int      soak;
+
     /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
      * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
      * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised
@@ -439,6 +453,20 @@ void sand_set_scatter(sand_t *s, int chance);
  * test that specifically wants to watch something decay wants instead. */
 void sand_set_decay(sand_t *s, int chance);
 #define SAND_DECAY_PER_MATERIAL (-1)
+
+/* How readily anything SOAKS UP a liquid it is touching - sand turning to
+ * dirt, dirt taking on moisture.
+ *
+ * Off by default, like decay, and for the same reason it turned out to
+ * need to be: sand soaks, and half the tests in the suite put sand in
+ * water to check that sand SINKS. Those are about density and have no
+ * opinion about chemistry, and they all broke the moment soaking became a
+ * property of sand rather than of the scene. A mechanic that arrives
+ * switched on rewrites every scene that already existed.
+ *
+ * Pass SAND_SOAK_PER_MATERIAL for each material's own figure. */
+void sand_set_soak(sand_t *s, int chance);
+#define SAND_SOAK_PER_MATERIAL (-1)
 
 /* How often a flammable neighbour actually catches, per adjacent burning
  * cell per step, as a chance in 256 - see material.h's reaction_t.
