@@ -1693,6 +1693,9 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
 
         .grows       = 12,
         .hardens_to  = MAT_WOOD,
+        .clings_to   = MAT_WOOD,   /* and it is part of one, which is the
+                                    * same material here and will not be
+                                    * once foliage exists */
         .harden_run  = 6,
 
         /* And it POURS, so a handful of seeds scattered over a bed

@@ -898,7 +898,7 @@ static void step_one_warming_cell(sand_t *s, int x, int y, int w, int h,
 static inline bool is_kin(cell_t a, cell_t self, const reaction_t *r)
 {
     return a == self ||
-           (r->hardens_to != 0 && CELL_MATERIAL(a) == r->hardens_to);
+           (r->clings_to != 0 && CELL_MATERIAL(a) == r->clings_to);
 }
 
 /* How much of a connected body this is willing to walk before giving up
@@ -1102,8 +1102,8 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
             }
             if (nx < 0 &&
                 (c == self ||
-                 (r->hardens_to != 0 &&
-                  CELL_MATERIAL(c) == r->hardens_to))) {
+                 (r->clings_to != 0 &&
+                  CELL_MATERIAL(c) == r->clings_to))) {
                 nx = tx; ny = ty;     /* more stem, keep it as a fallback */
             }
         }
@@ -1360,7 +1360,7 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
     const size_t at = (size_t)y * (size_t)w + (size_t)x;
     const cell_t self = s->cells[at];
 
-    if (r->hardens_to != 0) {
+    if (r->clings_to != 0) {
         for (int d = 0; d < 8; d++) {
             const int *nd = ring_dir(d);
             const int nx = x + nd[0], ny = y + nd[1];
@@ -1368,7 +1368,7 @@ static bool step_one_withering_cell(sand_t *s, int x, int y, int w, int h,
                 continue;
             }
             const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->hardens_to) {
+            if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->clings_to) {
                 return false;         /* part of a tree; it stays */
             }
         }
@@ -1558,7 +1558,7 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
             }
             const cell_t c = s->cells[(size_t)wy * (size_t)w + (size_t)wx];
             if (c != self &&
-                !(r->hardens_to != 0 && CELL_MATERIAL(c) == r->hardens_to)) {
+                !(r->clings_to != 0 && CELL_MATERIAL(c) == r->clings_to)) {
                 break;
             }
             wide++;

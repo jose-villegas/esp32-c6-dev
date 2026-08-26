@@ -772,6 +772,23 @@ typedef struct {
     uint8_t hardens_to;
     uint8_t harden_run;
 
+    /* What this material is PART OF: the other material its own body may
+     * be made of, for every question of the form "is this cell more of the
+     * same tree".
+     *
+     * It was `hardens_to` doing both jobs, which worked only for as long
+     * as the plant was the only material with either. The two are
+     * genuinely different questions - one is what a run of me BECOMES,
+     * the other is what I hold on to - and they part company the moment
+     * anything else joins a tree. Foliage is part of a tree and never
+     * hardens into anything.
+     *
+     * Read by the walks that decide whether a cell is anchored, whether a
+     * stem continues, how far it is to water, and whether a trunk is
+     * already thick enough. `hardens_to` is now read only where hardening
+     * actually happens. */
+    uint8_t clings_to;
+
     /* SPROUTING: chance/256 per step that this material, standing in soil
      * with water in it, puts a cell of `sprouts_to` into an empty space
      * beside it - and spends a level of that soil's moisture doing it.
