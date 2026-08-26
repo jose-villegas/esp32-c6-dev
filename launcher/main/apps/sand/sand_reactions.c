@@ -1051,7 +1051,21 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
          * Exactly the rule neighbor_quenches() already applies at the
          * other end: a liquid that burns is not a coolant. It is not a
          * kettle either. */
-        if (bm->kind == KIND_LIQUID && reaction_of(bc)->burns == 0) {
+        /* A liquid that BURNS is a heat source and cannot be boiled by
+         * heat. A liquid that is FLAMMABLE is fuel, and heat reaching it
+         * should light it rather than evaporate it - oil in a hot pan
+         * catches fire; it does not turn into steam.
+         *
+         * That second half was missing, and the symptom was oil vanishing
+         * near heat. Measured before the fix: 180 units of oil in a stone
+         * pan over a fire went to ZERO in sixty steps, leaving fourteen
+         * cells of steam - steam being the tell, since oil has no business
+         * producing any. Same shape as lava being boiled by its own
+         * conducted heat, one material along: this test was written when
+         * water was the only liquid that could be on the far side of a
+         * wall, and it has been wrong for every liquid added since. */
+        if (bm->kind == KIND_LIQUID && reaction_of(bc)->burns == 0 &&
+            reaction_of(bc)->flammability == 0) {
             /* Boils the cell the heat actually reached, which is the one
              * touching the conductor - the bottom of a pot sitting on a
              * hot stone, not its surface. That steam then climbs out on
@@ -1084,9 +1098,15 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
                     acted = true;
                 }
             }
-            if (br->flammability != 0) {
-                const material_id_t becomes = br->ignites_to ? br->ignites_to
-                                                              : MAT_FIRE;
+            if (br->flammability != 0 &&
+                (!br->needs_air || touches_air(s, rx, ry, w, h))) {
+                /* needs_air is checked here for the same reason
+                 * try_ignite() checks it: a pool of fuel burns at its
+                 * surface, not through its volume. Without it a pan would
+                 * light the oil against its own bottom - the one cell of
+                 * a pool guaranteed to be buried. */
+                const uint8_t becomes = br->ignites_to ? br->ignites_to
+                                                       : MAT_FIRE;
                 place_reacted(s, rx, ry, bat, becomes);
                 acted = true;
             }

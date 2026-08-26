@@ -5136,6 +5136,58 @@ static void test_lava_is_not_boiled_by_its_own_conducted_heat(void)
  * The extended range: sixteen materials behind the last slot.
  * =================================================================== */
 
+/* Heat through a wall LIGHTS oil. It does not boil it away.
+ *
+ * conduct_heat() turned anything on the far side into steam if it was a
+ * liquid and did not itself burn. Water is a liquid and does not burn, so
+ * that was right when water was the only liquid that could be there - and
+ * it has been wrong for every liquid added since. Lava was caught first,
+ * because lava boiling itself is spectacular. Oil is quieter: it just
+ * disappears.
+ *
+ * Measured before the fix: 180 units of oil in a stone pan over a fire
+ * went to zero in sixty steps, leaving fourteen cells of steam. Steam is
+ * the tell - oil has no business producing any at all, which is what makes
+ * it a sharper assertion than the oil count. */
+static void test_heat_through_a_pan_lights_oil_rather_than_boiling_it(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_flammability(&s, SAND_FLAMMABILITY_PER_MATERIAL);
+    sand_set_conduction(&s, SAND_CONDUCTION_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 3, STONE);            /* the pan */
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 4, CELL_MAKE(MAT_OIL, MASS_MAX));
+    }
+
+    bool lit = false;
+    for (int i = 0; i < 300; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
+                sand_set(&s, x, H - 2, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_STEAM),
+            "oil must never make steam - it is fuel, not a kettle, and "
+            "steam here means heat is evaporating it instead of lighting "
+            "it");
+        if (count_cells_of(MAT_OIL) < W - 2) {
+            lit = true;
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(lit,
+        "and the heat must actually reach it - oil in a pan over a held "
+        "fire has to catch, or this passes on a board where nothing "
+        "happened at all");
+}
+
 /* A powder lands ON another powder, and still sinks through a liquid.
  *
  * Displacement used to be "anything not static, if you are heavier", so a
@@ -7911,6 +7963,7 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_looks_different_at_the_shock_threshold);
     RUN_TEST(test_snow_melts_where_it_chills);
     RUN_TEST(test_snow_floats_on_water);
+    RUN_TEST(test_heat_through_a_pan_lights_oil_rather_than_boiling_it);
     RUN_TEST(test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid);
     RUN_TEST(test_hot_gas_warms_what_it_touches);
     RUN_TEST(test_hot_gas_does_not_set_fire_to_anything);
