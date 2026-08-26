@@ -320,6 +320,44 @@ static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
  * variant: cold glass has nothing to cool and needs no flag, and gets one
  * from try_heat_transform() the moment a flame reaches it. Snow is cold
  * whatever its variant, so it always sets the flag. */
+/* The eight directions, in ring order, so that the two neighbours of any
+ * direction are simply the entries either side of it. That is what lets
+ * the movement rule work at any gravity angle without eight special cases.
+ *
+ * Shared rather than private to sand.c because growth needs it too, and
+ * for a reason worth writing down: "the two cells either side of up" is
+ * NOT up plus a perpendicular. That shortcut is right only while up is
+ * axis-aligned. Let the board tilt until up is (-1,-1) and adding the
+ * perpendicular (1,-1) gives (0,-2) - two cells away, skipping the one in
+ * between - so a tree on a tilted board grew limbs with a gap under them
+ * and branches that leapt. Stepping round the ring is the same idea done
+ * correctly, and it is what the sweep has always done. */
+static inline const int *ring_dir(int i)
+{
+    static const int ring8[8][2] = {
+        {  0,  1 },   /* 0  down            */
+        {  1,  1 },   /* 1  down-right      */
+        {  1,  0 },   /* 2  right           */
+        {  1, -1 },   /* 3  up-right        */
+        {  0, -1 },   /* 4  up              */
+        { -1, -1 },   /* 5  up-left         */
+        { -1,  0 },   /* 6  left            */
+        { -1,  1 },   /* 7  down-left       */
+    };
+    return ring8[i & 7];
+}
+
+static inline int ring_of(int dx, int dy)
+{
+    for (int i = 0; i < 8; i++) {
+        const int *d = ring_dir(i);
+        if (d[0] == dx && d[1] == dy) {
+            return i;
+        }
+    }
+    return 0;   /* unreachable for a unit direction */
+}
+
 static inline void clear_content_flags(sand_t *s)
 {
     s->may_have_liquid      = false;

@@ -6248,6 +6248,116 @@ static void test_the_grain_hash_does_not_stripe(void)
     }
 }
 
+
+/* The dithered direction is recorded, and it is not the nearest one.
+ *
+ * Two different questions about gravity, and the simulation has always
+ * needed both. "Which way is down, near enough" has to be steady, or a
+ * resting pool judged against a constantly-changing axis reads as
+ * unbalanced when it is not. "Which way is down THIS step" has to wobble
+ * between the two eighths a tilt falls between, in proportion, or
+ * everything flows at one of eight fixed angles instead of at the angle
+ * the board is really at.
+ *
+ * The sweep and the liquid pass have used the dithered one all along.
+ * Growth was reading the steady one, which is what made a stem a rigid
+ * straight line - reported as the vertical growth being "too strict or
+ * rigid whereas we have smoothing in the way we map tilt/gravity", and
+ * exactly right. This is the plumbing that fixes it.
+ *
+ * Both asserts are needed: a build that recorded the nearest direction in
+ * both fields passes the second on its own. */
+static void test_a_tilt_between_two_directions_is_dithered_not_snapped(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    /* Well off any of the eight axes, so the two it falls between should
+     * both come up. */
+    int steps_seen = 0, load_seen = 0;
+    int step_dx[8] = { 0 }, load_dx[8] = { 0 };
+
+    for (int i = 0; i < 200; i++) {
+        sand_step(&s, 400, 1000, 0);
+
+        int found = 0;
+        for (int k = 0; k < steps_seen; k++) {
+            if (step_dx[k] == s.last_step_dx) {
+                found = 1;
+            }
+        }
+        if (!found && steps_seen < 8) {
+            step_dx[steps_seen++] = s.last_step_dx;
+        }
+
+        found = 0;
+        for (int k = 0; k < load_seen; k++) {
+            if (load_dx[k] == s.last_load_dx) {
+                found = 1;
+            }
+        }
+        if (!found && load_seen < 8) {
+            load_dx[load_seen++] = s.last_load_dx;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, steps_seen,
+        "a tilt between two of the eight directions must spend steps on "
+        "both - one value means everything on the board flows at a snapped "
+        "angle rather than at the angle the board is at");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, load_seen,
+        "while the NEAREST direction stays put, which is what anything "
+        "measuring a resting state has to be judged against");
+}
+
+
+/* A stem that WANDERS is still one stem.
+ *
+ * Growth points along the dithered gravity direction, which spends steps
+ * on each of the two eighths a tilt falls between - so a trunk climbs with
+ * a kink in it rather than in a dead straight line. Every walk over a
+ * plant has to tolerate that: the walk to the tip, the walk back to a
+ * branch site, and the run that decides whether it has grown tall enough
+ * to be wood.
+ *
+ * A staircase is the cheapest way to say so. Six cells, each one up or up
+ * and across from the last, standing on wet soil: a walk that insists on a
+ * straight line sees a run of two and this never becomes a trunk. */
+static void test_a_stem_that_wanders_still_hardens(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    /* up, up, up-left, up, up-left, up */
+    static const int stem[6][2] = {
+        { 4, 5 }, { 4, 4 }, { 3, 3 }, { 3, 2 }, { 2, 1 }, { 2, 0 },
+    };
+    for (int i = 0; i < 6; i++) {
+        sand_set(&s, stem[i][0], stem[i][1], MATX(MATX_PLANT));
+    }
+
+    int hardened = 0;
+    for (int i = 0; i < 2000 && !hardened; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int k = 0; k < 6; k++) {
+            if (CELL_MATERIAL(sand_at(&s, stem[k][0], stem[k][1])) ==
+                MAT_WOOD) {
+                hardened = 1;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(hardened,
+        "a stem six cells long must harden into wood even though it is not "
+        "straight - a walk that only steps in one direction measures a run "
+        "of two and no tree on a tilted board would ever become a trunk");
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -8736,12 +8846,14 @@ void run_sand_suite(void)
     RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
+    RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
     RUN_TEST(test_a_seed_falls_until_it_lands);
     RUN_TEST(test_two_falling_seeds_do_not_hold_each_other_up);
     RUN_TEST(test_a_growing_tree_does_not_shed_what_it_grows);
     RUN_TEST(test_a_tree_grows_wider_than_one_column);
+    RUN_TEST(test_a_stem_that_wanders_still_hardens);
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
     RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
     RUN_TEST(test_cullet_does_not_look_like_sand);

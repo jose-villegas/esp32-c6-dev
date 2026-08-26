@@ -744,13 +744,11 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
         /* The three gravity-ward cells: straight down, and down along each
          * perpendicular. Built from the settled direction, so they turn
          * with the board. */
-        const int dx = s->last_load_dx, dy = s->last_load_dy;
-        const int fan[3][2] = {
-            { dx, dy }, { dx - dy, dy + dx }, { dx + dy, dy - dx },
-        };
+        const int down = ring_of(s->last_load_dx, s->last_load_dy);
         int open[3], n_open = 0;
         for (int i = 0; i < 3; i++) {
-            const int nx = x + fan[i][0], ny = y + fan[i][1];
+            const int *fd = ring_dir(down + (i == 0 ? 0 : i == 1 ? 1 : 7));
+            const int nx = x + fd[0], ny = y + fd[1];
             if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
                 continue;
             }
@@ -769,7 +767,9 @@ static bool step_one_soaking_cell(sand_t *s, uint8_t *row, int x, int y,
         }
         if (n_open != 0 && (int)(rng_next(&s->rng) & 0xFF) < spread) {
             const int pick = open[rng_below(&s->rng, n_open)];
-            const int nx = x + fan[pick][0], ny = y + fan[pick][1];
+            const int *fd = ring_dir(down + (pick == 0 ? 0
+                                             : pick == 1 ? 1 : 7));
+            const int nx = x + fd[0], ny = y + fd[1];
             const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
             const cell_t below = s->cells[nat];
             const reaction_t *br = reaction_of(below);
@@ -987,9 +987,7 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
                       const reaction_t *r, cell_t self, int *lift)
 {
     const int dx = s->last_load_dx, dy = s->last_load_dy;
-    const int px = -dy, py = dx;
-    const int fan[3][2] = { { dx, dy }, { dx + px, dy + py },
-                            { dx - px, dy - py } };
+    const int down = ring_of(dx, dy);
 
     int cx = x, cy = y;
     for (int step = 0; step < GROW_REACH; step++) {
@@ -998,7 +996,8 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
         bool on_soil = false;
 
         for (int i = 0; i < 3; i++) {
-            const int tx = cx + fan[i][0], ty = cy + fan[i][1];
+            const int *fd = ring_dir(down + (i == 0 ? 0 : i == 1 ? 1 : 7));
+            const int tx = cx + fd[0], ty = cy + fd[1];
             if ((unsigned)tx >= (unsigned)w || (unsigned)ty >= (unsigned)h) {
                 continue;
             }
@@ -1047,6 +1046,35 @@ static int find_water(sand_t *s, int x, int y, int w, int h,
     return -1;
 }
 
+/* One step along a stem, in the direction (ux, uy) or either diagonal
+ * beside it. Returns whether it found one.
+ *
+ * A stem is not a straight line and cannot be walked as one. Growth points
+ * along the DITHERED gravity direction, which spends some steps on each of
+ * the two eighths a tilt falls between - that is what stops a tree being a
+ * rigid stick at one of eight fixed angles, and it means the trunk wanders
+ * by a cell as it climbs. Every walk over a plant has to tolerate that:
+ * the walk to the tip, the walk to a branch site, and the run that decides
+ * whether it has grown tall enough to be wood. */
+static bool stem_next(sand_t *s, int x, int y, int ux, int uy, int w, int h,
+                      cell_t self, int *ox, int *oy)
+{
+    const int up = ring_of(ux, uy);
+    for (int i = 0; i < 3; i++) {
+        const int *d = ring_dir(up + (i == 0 ? 0 : i == 1 ? 1 : 7));
+        const int nx = x + d[0], ny = y + d[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == self) {
+            *ox = nx;
+            *oy = ny;
+            return true;
+        }
+    }
+    return false;
+}
+
 /* One cell of something that GROWS.
  *
  * It grows from the TIP of whatever column of itself this cell belongs to,
@@ -1074,8 +1102,12 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     /* Which way is up. last_load_dx/dy is the direction the sweep settled
      * under this step, so inside the simulation it is current - unlike in
      * the renderer, where a frame can pass without a step. */
-    const int ux = -s->last_load_dx;
-    const int uy = -s->last_load_dy;
+    /* Up, from the DITHERED direction rather than the nearest one, so a
+     * tree leaning under a tilt leans at the angle the board is actually
+     * at. The sweep has used the dithered direction all along for exactly
+     * this reason; growth using the other one is what made stems rigid. */
+    const int ux = -s->last_step_dx;
+    const int uy = -s->last_step_dy;
     if (ux == 0 && uy == 0) {
         return true;                  /* free fall: no up to grow towards */
     }
@@ -1113,11 +1145,8 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
      * doing. */
     int run = 1, tx = x, ty = y;
     for (int i = 0; i < GROW_REACH; i++) {
-        const int nx = tx + ux, ny = ty + uy;
-        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-            break;
-        }
-        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] != self) {
+        int nx, ny;
+        if (!stem_next(s, tx, ty, ux, uy, w, h, self, &nx, &ny)) {
             break;
         }
         tx = nx;
@@ -1125,23 +1154,27 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
         run++;
     }
 
-    const int px = -uy, py = ux;      /* out at ninety degrees to up */
-    const int side = rng_below(&s->rng, 2) ? 1 : -1;
+    /* Round the RING, not up-plus-a-perpendicular: one step round it is
+     * always an adjacent cell, whereas adding a perpendicular to a
+     * diagonal up lands two cells away. */
+    const int up = ring_of(ux, uy);
+    const int side = rng_below(&s->rng, 2) ? 1 : 7;   /* +1 or -1 round */
 
     int site, dx, dy;
+    bool thicken = false;
     const int what = rng_below(&s->rng, 8);
     if (what < 4 || run < 3) {
         site = run - 1;               /* HEIGHT: straight on from the tip */
         dx = ux;
         dy = uy;
     } else if (what < 6) {
-        site = run - 1;               /* LEAN: the tip, at an angle */
-        dx = ux + px * side;
-        dy = uy + py * side;
+        site = run - 1;               /* LEAN: the tip, one step round */
+        dx = ring_dir(up + side)[0];
+        dy = ring_dir(up + side)[1];
     } else if (what < 7) {
         site = rng_below(&s->rng, run - 1);   /* BRANCH: out and up */
-        dx = ux + px * side;
-        dy = uy + py * side;
+        dx = ring_dir(up + side)[0];
+        dy = ring_dir(up + side)[1];
     } else {
         /* WIDTH. Straight out from low down, which is how a trunk
          * thickens - and thickening is most of what turns a sapling into
@@ -1151,21 +1184,34 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
          * one that also gets fatter hardens into something that looks
          * like a trunk. */
         site = rng_below(&s->rng, (run + 1) / 2);
-        dx = px * side;
-        dy = py * side;
+        dx = ring_dir(up + side * 2)[0];   /* square on to up */
+        dy = ring_dir(up + side * 2)[1];
+        thicken = true;
+    }
+    /* Back up the stem to the chosen site, the same way. */
+    int sx = x, sy = y;
+    for (int i = 0; i < site; i++) {
+        int nx, ny;
+        if (!stem_next(s, sx, sy, ux, uy, w, h, self, &nx, &ny)) {
+            break;
+        }
+        sx = nx;
+        sy = ny;
+    }
 
-        /* TAPERED: the allowance shrinks with height, so a trunk is
-         * fat at the foot and a single cell by the time it is up in the
-         * branches. A uniform allowance grows a pillar - correct by every
-         * rule here and not a tree. */
+    if (thicken) {
+        /* TAPERED: the allowance shrinks with height, so a trunk is fat at
+         * the foot and a single cell by the time it is up in the branches.
+         * A uniform allowance grows a pillar - correct by every rule here
+         * and not a tree. */
         const int allowed = TRUNK_WIDTH - (lift + site) / 3;
         if (allowed < 2) {
             return true;              /* too high up to be thickening */
         }
         int wide = 0;
         for (int i = 1; i < allowed; i++) {
-            const int wx = x + ux * site + px * side * i;
-            const int wy = y + uy * site + py * side * i;
+            const int wx = sx + dx * i;
+            const int wy = sy + dy * i;
             if ((unsigned)wx >= (unsigned)w || (unsigned)wy >= (unsigned)h) {
                 break;
             }
@@ -1180,7 +1226,6 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
             return true;              /* thick enough already */
         }
     }
-    const int sx = x + ux * site, sy = y + uy * site;
 
     const int gx = sx + dx, gy = sy + dy;
     if ((unsigned)gx >= (unsigned)w || (unsigned)gy >= (unsigned)h) {
@@ -1208,19 +1253,20 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     if (r->hardens_to == 0 || r->harden_run == 0) {
         return true;
     }
-    const int bx = x - ux, by = y - uy;
-    if ((unsigned)bx < (unsigned)w && (unsigned)by < (unsigned)h &&
-        s->cells[(size_t)by * (size_t)w + (size_t)bx] == self) {
+    int bx, by;
+    if (stem_next(s, x, y, -ux, -uy, w, h, self, &bx, &by)) {
         return true;                  /* not the bottom; someone else counts */
     }
 
-    int trunk = 0, cx = x, cy = y;
-    while (trunk < GROW_REACH &&
-           (unsigned)cx < (unsigned)w && (unsigned)cy < (unsigned)h &&
-           s->cells[(size_t)cy * (size_t)w + (size_t)cx] == self) {
+    int trunk = 1, cx = x, cy = y;
+    while (trunk < GROW_REACH) {
+        int nx, ny;
+        if (!stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny)) {
+            break;
+        }
+        cx = nx;
+        cy = ny;
         trunk++;
-        cx += ux;
-        cy += uy;
     }
     if (trunk < r->harden_run) {
         return true;
@@ -1234,10 +1280,15 @@ static bool step_one_growing_cell(sand_t *s, int x, int y, int w, int h,
     cx = x;
     cy = y;
     for (int i = 0; i < trunk; i++) {
+        int nx = 0, ny = 0;
+        const bool more = stem_next(s, cx, cy, ux, uy, w, h, self, &nx, &ny);
         place_cell(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx,
                    CELL_MAKE(r->hardens_to, 0));
-        cx += ux;
-        cy += uy;
+        if (!more) {
+            break;
+        }
+        cx = nx;
+        cy = ny;
     }
     return true;
 }

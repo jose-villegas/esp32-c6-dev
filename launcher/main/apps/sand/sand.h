@@ -165,6 +165,17 @@ typedef struct {
 
     int      last_load_dx, last_load_dy;
 
+    /* The DITHERED direction of the last step, as opposed to the nearest
+     * one above. A tilt that falls between two of the eight directions
+     * spends some steps on each, in proportion - which is how a pile flows
+     * at its true angle instead of snapping to the nearest eighth.
+     *
+     * Anything that wants to point along gravity over TIME rather than
+     * within one step wants this one. Growth does: a stem built from the
+     * nearest direction is a rigid straight line at one of eight angles,
+     * and the board it is growing on does not work that way. */
+    int      last_step_dx, last_step_dy;
+
     int      scatter;      /* see sand_set_scatter() */
     int      decay;        /* see sand_set_decay() */
     int      mobility;     /* see sand_set_mobility() */

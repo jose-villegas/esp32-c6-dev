@@ -24,20 +24,6 @@
 #include "intmath.h"
 
 
-/* The eight directions, in ring order, so that the two neighbours of any
- * direction are simply the entries either side of it. That is what lets the
- * movement rule work at any gravity angle without eight special cases. */
-static const int ring[8][2] = {
-    {  0,  1 },   /* 0  down            */
-    {  1,  1 },   /* 1  down-right      */
-    {  1,  0 },   /* 2  right           */
-    {  1, -1 },   /* 3  up-right        */
-    {  0, -1 },   /* 4  up              */
-    { -1, -1 },   /* 5  up-left         */
-    { -1,  0 },   /* 6  left            */
-    { -1,  1 },   /* 7  down-left       */
-};
-
 /* tan(22.5 deg) is the boundary between "straight down" and "diagonal"; its
  * reciprocal, 2.4142, is approximated as 29/12 to keep this in integers.
  * The largest operand is a raw accelerometer reading, so 32767 * 29 stays well
@@ -94,16 +80,6 @@ static cell_t random_cell(sand_t *s, material_id_t material)
                      rng_below(&s->rng, MATERIAL_SHADE_SPAN(material)));
 }
 
-static int ring_index(int dx, int dy)
-{
-    for (int i = 0; i < 8; i++) {
-        if (ring[i][0] == dx && ring[i][1] == dy) {
-            return i;
-        }
-    }
-    return 0;   /* unreachable for a unit direction */
-}
-
 /*---------------------------------------------------------------------------
  * Grid access
  *-------------------------------------------------------------------------*/
@@ -139,6 +115,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->block_rows  = (h + SAND_BLOCK_H - 1) / SAND_BLOCK_H;
     s->last_load_dx = 0;
     s->last_load_dy = 0;
+    s->last_step_dx = 0;
+    s->last_step_dy = 0;
     s->scatter      = 0;
     s->decay        = 0;
     s->soak         = 0;    /* nothing soaks unless asked - see
@@ -920,9 +898,9 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
         return;   /* free fall: no down, so nothing settles */
     }
 
-    const int i = ring_index(dx, dy);
-    const int *slide_a = ring[(i + 7) & 7];
-    const int *slide_b = ring[(i + 1) & 7];
+    const int i = ring_of(dx, dy);
+    const int *slide_a = ring_dir(i + 7);
+    const int *slide_b = ring_dir(i + 1);
 
     const uint8_t settled_bit = compute_settled_bit(s, jostle, dx, dy,
                                                     load_dx, load_dy);
@@ -936,6 +914,8 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * step just taken, so it is written once the step has decided it. */
     s->last_load_dx = load_dx;
     s->last_load_dy = load_dy;
+    s->last_step_dx = dx;
+    s->last_step_dy = dy;
 
     bool driven[MATERIAL_MAX][2];
     compute_driven(driven, slide_a, slide_b, gx, gy);
@@ -965,9 +945,9 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * every step once off axis, and a resting pool judged against a
      * constantly-changing axis reads as unbalanced when it is not - see
      * test_a_settled_pool_does_not_flicker. */
-    const int i_stable = ring_index(load_dx, load_dy);
-    const int *const perp_a = ring[(i_stable + 2) & 7];
-    const int *const perp_b = ring[(i_stable + 6) & 7];
+    const int i_stable = ring_of(load_dx, load_dy);
+    const int *const perp_a = ring_dir(i_stable + 2);
+    const int *const perp_b = ring_dir(i_stable + 6);
 
     const int w = s->w;
     const uint16_t is_liquid = liquid_mask();
