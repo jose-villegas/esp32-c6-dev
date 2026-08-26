@@ -319,8 +319,25 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * Deliberately AFTER nothing and BEFORE the density swap below, which
      * is exempt - see sink_through_lighter_liquid()'s own comment for why
      * sorting two liquids into the right order is not the kind of motion
-     * viscosity should resist. */
-    if (!liquid_may_move(s, mat_id)) {
+     * viscosity should resist.
+     *
+     * Marked unlikely, and that is a performance fix rather than
+     * documentation. Without the hint this single branch cost ~26% of the
+     * screen-of-water benchmark on the host, with the simulation
+     * byte-identical either way - the cost is not the test, it is where
+     * GCC puts the code it guards. Disassembled on the real device build:
+     * unhinted, the cold "too viscous to move" blocks land at offsets 0xb6
+     * and 0xce, spliced into the middle of a 1102-byte function that runs
+     * about 11,130 times a step, so every fetched line of the hot path
+     * carries dead bytes. Hinted, they move to the tail and the hot path is
+     * contiguous again. Splitting the cold half into its own function was
+     * tried and only half worked (it depends on GCC's size heuristic, which
+     * a later edit can flip); marking that half noinline was worse than
+     * doing nothing, because then the call itself sits in the hot path. The
+     * hint is wrong for a genuinely viscous liquid like oil, which refuses
+     * about two steps in three - that costs oil the far branch and is worth
+     * it, because water is what a screen of liquid is usually made of. */
+    if (__builtin_expect(!liquid_may_move(s, mat_id), 0)) {
         return false;
     }
 
