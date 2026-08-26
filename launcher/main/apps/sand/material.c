@@ -1638,7 +1638,13 @@ static const gfx_color_t wood_grain[8] = {
 /* Foliage: lighter and yellower than the stem, and a wider spread than
  * either of the others. A crown is sunlit on one side and shaded on the
  * other, and half of what makes it read as a canopy rather than as more
- * stem is that it is not one flat green. */
+ * stem is that it is not one flat green.
+ *
+ * Worth knowing before reaching for the withering chain below: on a
+ * living tree the yellow and brown stages below never happen at all.
+ * Foliage is sheltered_by wood, every leaf on a tree touches some, and
+ * shelter stops withering outright rather than slowing it - so a healthy
+ * tree is 100% green and its colour is entirely this pair. */
 #define LEAF_DARK   0x5A9E2E
 #define LEAF_LIGHT  0xA6E273
 
@@ -1896,7 +1902,13 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * above is what stops a living tree shedding - a leaf touching
          * wood is safe however dry the ground gets. Twice the plant's
          * rate: a stem is stouter than a leaf. */
-        .withers      = 2,
+        .withers      = 1,    /* the floor, so a SHED leaf stays green
+                                * as long as the encoding can express -
+                                * 256 steps against the 128 it had. A
+                                * chance in 256 per step cannot go below
+                                * one, so this is the whole of the
+                                * headroom; the stages after it are
+                                * already at the floor themselves. */
         .withers_to   = MATX(MATX_LEAF_DRY),
 
         /* Catches far more readily than green stem (40) or seasoned wood
