@@ -1409,17 +1409,18 @@ static const gfx_color_t palette[256] = {
                                     * keep the green - they are the part
                                     * meant to catch the eye */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] =
-    GFX_RGB(0x7FC94B),            /* leaf - the same green gone lighter and
-                                    * yellower, so a crown separates from
-                                    * the stem holding it up instead of
-                                    * merging into one green mass */
+    GFX_RGB(0x69B03A),            /* leaf - the one green left in a tree
+                                    * now that the stem is olive, and the
+                                    * only part meant to catch the eye.
+                                    * Greener than it was, to open the
+                                    * gap to the gold it dries into */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DRY] =
-    GFX_RGB(0xCFB94F),            /* dry - yellow, and lighter than the
+    GFX_RGB(0xD0A134),            /* dry - yellow, and lighter than the
                                     * green it came from, so a crown going
                                     * over reads as brightening rather
                                     * than as dimming */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DEAD] =
-    GFX_RGB(0x8A6A3A),            /* dead - the brown of a leaf that has
+    GFX_RGB(0x624124),            /* dead - the brown of a leaf that has
                                     * finished, close enough to wood to sit
                                     * against a trunk without arguing */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF_DEAD + 1] =
@@ -1665,18 +1666,32 @@ static const gfx_color_t wood_grain[8] = {
  * Foliage is sheltered_by wood, every leaf on a tree touches some, and
  * shelter stops withering outright rather than slowing it - so a healthy
  * tree is 100% green and its colour is entirely this pair. */
-#define LEAF_DARK   0x5A9E2E
-#define LEAF_LIGHT  0xA6E273
+#define LEAF_DARK   0x468F26
+#define LEAF_LIGHT  0x8CD24E
 
 /* The two dying stages. Yellow first - the colour a leaf goes when it
  * stops being fed - then the brown of one that has finished. Both keep a
  * spread, because a crown turns unevenly and a canopy that changed all at
- * once would read as a switch rather than as a season. */
-#define DRY_DARK    0xA8912E
-#define DRY_LIGHT   0xE4D673
+ * once would read as a switch rather than as a season.
+ *
+ * Spread APART, on the report that the stages did not read as distinct.
+ * Measured, they had not been: green and yellow sat 40 degrees of hue
+ * and 11 points of luminance from each other, which at two screen pixels
+ * per cell is one colour with a wobble. The green went greener, the
+ * yellow went to gold, and the brown went dark - so the ramp is now 47
+ * degrees of hue between green and gold, and 106 points of luminance
+ * between gold and brown.
+ *
+ * Each transition leans on a DIFFERENT channel, deliberately. Green to
+ * gold is a hue swing at nearly constant brightness; gold to brown is a
+ * brightness collapse at nearly constant hue. A leaf turning therefore
+ * changes colour first and then goes out, which is the order it happens
+ * in, and neither step can hide inside the other. */
+#define DRY_DARK    0xB07C1E
+#define DRY_LIGHT   0xF0C64A
 
-#define DEAD_DARK   0x6B4F26
-#define DEAD_LIGHT  0xA88A5C
+#define DEAD_DARK   0x4A3018
+#define DEAD_LIGHT  0x7A5230
 
 #define ICE_DARK    0x93C9DE
 #define ICE_LIGHT   0xDEF5FD
