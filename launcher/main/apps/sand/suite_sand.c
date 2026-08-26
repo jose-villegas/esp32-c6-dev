@@ -6196,6 +6196,58 @@ static void test_a_tall_plant_hardens_into_wood_that_is_not_alight(void)
         "a plant that grows a full run tall must harden into wood");
 }
 
+
+/* The grain hash must not stripe.
+ *
+ * Stone and wood take their speckle from this and nothing else, so if its
+ * low bits do not vary they are not speckled - and for a long time they
+ * were not. The low three bits came out very nearly constant along a row,
+ * which drew both materials as flat horizontal bands, one shade each.
+ * Nothing caught it because the hash lived in app_sand.c, which does not
+ * compile on a host; moving it next to the tables that use it is half the
+ * fix and this is the other half.
+ *
+ * Both halves of the assert matter. Even spread alone is satisfied by a
+ * hash that stripes, as long as it stripes in equal proportions - it is
+ * the ADJACENCY that says the variation is per cell rather than per row. */
+static void test_the_grain_hash_does_not_stripe(void)
+{
+    enum { N = 64, BUCKETS = 8 };
+
+    int same_row = 0, same_col = 0, seen[BUCKETS] = { 0 };
+    for (int y = 0; y < N; y++) {
+        for (int x = 0; x < N; x++) {
+            const unsigned h = material_grain_hash(x, y) & (BUCKETS - 1);
+            seen[h]++;
+            if (x > 0 &&
+                h == (material_grain_hash(x - 1, y) & (BUCKETS - 1))) {
+                same_row++;
+            }
+            if (y > 0 &&
+                h == (material_grain_hash(x, y - 1) & (BUCKETS - 1))) {
+                same_col++;
+            }
+        }
+    }
+
+    /* One in eight neighbours will match by chance. Twice that is still
+     * comfortably clear of the near-100% a striping hash produces. */
+    const int pairs = N * (N - 1);
+    const int limit = pairs / BUCKETS * 2;
+    TEST_ASSERT_LESS_THAN_MESSAGE(limit, same_row,
+        "side-by-side cells must mostly differ - a hash whose low bits are "
+        "constant along a row paints stone and wood in flat stripes");
+    TEST_ASSERT_LESS_THAN_MESSAGE(limit, same_col,
+        "and so must cells one above another, for the same reason with the "
+        "board turned ninety degrees");
+
+    for (int i = 0; i < BUCKETS; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(seen[i] > N * N / BUCKETS / 2,
+            "every shade must get used, and roughly evenly - a grain that "
+            "reaches two of its eight values is two-tone noise");
+    }
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -8683,6 +8735,7 @@ void run_sand_suite(void)
     RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
     RUN_TEST(test_the_two_soil_tones_are_different_colours);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
+    RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
     RUN_TEST(test_a_seed_falls_until_it_lands);

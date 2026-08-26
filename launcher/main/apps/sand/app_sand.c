@@ -486,16 +486,6 @@ static void sand_exit(void)
  * gfx which band it landed in. A settled pile therefore costs almost nothing
  * to draw AND almost nothing to send, which is where the real saving is: a
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
-/* A stable scatter value for one cell, so a speckled material shows the
- * same grain in the same place every frame. Cheap integer mixing, not a
- * good hash - it only has to look unpatterned at two bits. */
-static inline unsigned cell_hash(int cx, int cy)
-{
-    unsigned h = (unsigned)cx * 0x9E3779B9u ^ (unsigned)cy * 0x85EBCA6Bu;
-    h ^= h >> 15;
-    return h;
-}
-
 /* A band of light travelling across anything hatched.
  *
  * This replaces a version that aligned the shine to the board's tilt. That
@@ -569,7 +559,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
 
         gfx_color_t col[3];
         const material_pattern_t pat =
-            material_colours(row[cx], cell_hash(cx, cy), edge, col);
+            material_colours(row[cx], material_grain_hash(cx, cy), edge, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
