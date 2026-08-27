@@ -95,16 +95,25 @@
  * happens to be there. `dir` is which of the eight ring directions (see
  * ring_dir() in sand_priv.h) it keeps flying.
  *
- * Four bytes, not the three a bare (index, dir) pair would need - the extra
- * byte is what makes that identity check possible at all, and on top of that
- * costs nothing: a uint16_t plus two uint8_ts already rounds up to four for
- * alignment, so the byte is free. Even a generous few hundred of these is
- * still three orders of magnitude under a real per-cell velocity field - see
+ * `speed` is BOTH the chance in 256 this turn's outward move happens AND
+ * the thing that ramps down every turn to make that chance shrink - see
+ * SAND_BLAST_SPEED_INITIAL/SAND_BLAST_SPEED_RAMP's own comment in this file
+ * for why one byte carries both jobs instead of a separate step counter.
+ *
+ * Five bytes, not the three a bare (index, dir) pair would need - the
+ * `cell` byte is what makes the identity check above possible at all, and
+ * `speed` is what makes the arc a curve rather than a bent line (again, see
+ * SAND_BLAST_SPEED_INITIAL's own comment) - and on top of that costs
+ * almost nothing: a uint16_t plus three uint8_ts rounds up to six bytes for
+ * alignment, only one more than the four the struct needed before `speed`
+ * existed. Even a generous few hundred of these is still three orders of
+ * magnitude under a real per-cell velocity field - see
  * docs/Sand/Explosion-Plan.md for the full comparison. */
 typedef struct {
     uint16_t index;
     cell_t   cell;
     uint8_t  dir;
+    uint8_t  speed;
 } blast_t;
 
 typedef struct {
@@ -482,8 +491,8 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * special-casing added for this - lets the surrounding medium swap straight
  * through the fire with no need to wait for it to move or decay away
  * first. Measured, not assumed: a 20,000-seed sweep of a fully packed bed,
- * with decay left OFF, found the resulting cavity reaching well outside
- * the original radius on literally the first step, every time. The
+ * with the flight pass disabled, found the resulting cavity reaching well
+ * outside the original radius on literally the first step, every time. The
  * mechanism this replaced - a plain hole - relied on exactly the same
  * neighbouring-cell collapse; filling with fire costs it nothing.
  *
@@ -509,7 +518,7 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * move anything once the medium it is detonating in has no gaps of its
  * own, and for why fire rather than emptiness. That fill is a real,
  * immediate write - every cell in the core becomes fire, occupied or
- * already empty alike - not something the flight pass or its decay roll
+ * already empty alike - not something the flight pass or its speed ramp
  * has any part in, and it is why sand_explode() is no longer purely
  * additive to the grain count the way sand_spawn()/sand_erase()
  * individually are: see the comment on conservation this implies, below.
@@ -552,39 +561,63 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * half is exact, always. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
-/* Chance in 256, per step, that a flying grain keeps flying rather than
- * settling exactly where it is.
+/* SAND_BLAST_SPEED_INITIAL/SAND_BLAST_SPEED_RAMP - replaces what used to be
+ * a single constant, SAND_BLAST_DECAY, and it is worth being explicit about
+ * why one knob became two rather than being retuned in place.
  *
- * A per-entry step counter was the obvious alternative and was rejected for
- * two reasons. This project already expresses "how often does X happen this
- * step" as a chance in 256 everywhere a rate is needed - mobility, falls,
- * scatter, flare, heat_chance - so a roll here reads like the rest of the
- * file instead of introducing a second idiom. And geometric decay gives the
- * right SHAPE of distribution for free: most grains stop within the first
- * few steps and a few carry much further, which is what a blast actually
- * looks like, without a separate spread parameter to tune by hand - one
- * knob, "how far things fly", rather than a rate and a cap that would have
- * to agree with each other. It also keeps a blast_t entry down to a
- * position, the thrown cell and a direction - there is no count to store.
+ * THE PROBLEM WAS STRUCTURAL, NOT A TUNING ONE. Gravity in this simulation
+ * does not accelerate - a falling grain falls at a constant one cell per
+ * step, forever (see sand_step()'s main sweep). A parabola needs
+ * horizontal speed steady while vertical speed grows; here neither
+ * changes. SAND_BLAST_DECAY was a single fixed chance-in-256 rolled fresh
+ * every turn - full outward push, or none, with nothing in between and no
+ * memory of how long a grain had already been flying - so the sideways
+ * move-chance was the SAME on a grain's first airborne step as its
+ * twentieth. The result was a 45-degree diagonal for as long as the roll
+ * kept succeeding, then a vertical drop the moment it failed: a bent line,
+ * not a curve. No fixed probability can fix that, because the flaw is
+ * that it never changes.
  *
- * 200 is a STARTING POINT, not a measurement - there is no device capture
- * behind it the way SAND_REBOUND_GAIN has one. Arithmetically, a decay
- * chance of d gives an expected 1/(1 - d/256) further moves once a grain is
- * already flying; at 200 that is 256/56 =~ 4.6, so a typical grain clears a
- * handful of cells while a geometric tail keeps a minority going much
- * further - the right SHAPE for a blast, on paper. Whether it is the right
- * SIZE has only been watched on a host grid, never on the panel.
+ * THE FIX gives each entry its own `speed` (see blast_t above) that IS the
+ * chance-in-256 of this turn's outward move, and that ramps down by
+ * SAND_BLAST_SPEED_RAMP every turn - moved or blocked or waiting, exactly
+ * like the old roll ran every turn regardless (see step_blast()'s own
+ * comment on why a wedged entry must still age out on schedule). Early on,
+ * `speed` is high and the grain moves outward nearly every step - shallow.
+ * As it ramps down, outward moves come only occasionally - steeper. Once
+ * `speed` reaches zero, rng_chance() with a zero numerator never succeeds,
+ * so the grain never moves outward again - vertical, falling straight
+ * under gravity alone like any other grain, and dropped from the flight
+ * list on that same turn since a roll that can never again succeed has
+ * nothing left to track (see step_blast()'s own comment on why a failed
+ * roll drops the entry rather than keeping it).
  *
- * THIS IS NOW THE MAIN TUNING KNOB for how far a blast reads. Before
- * step_blast() could re-acquire a grain gravity had already moved (see its
- * own comment), a flying grain lost its impulse after exactly one hop the
- * moment it became airborne, so this number barely mattered - the arc
- * simply did not happen regardless of how generous the roll was. Now that
- * flight genuinely survives across many steps, this is the number that
- * decides how far it survives, and it has not been retuned for that
- * change - see docs/Sand/Explosion-Plan.md's "Device" section for what to
- * look at first. */
-#define SAND_BLAST_DECAY  200
+ * Horizontal progress per step shrinking, against a vertical fall that is
+ * pinned at a constant one cell per step, IS the curve - the ratio between
+ * them keeps changing across the flight, which a fixed probability could
+ * never produce however it was tuned. BE HONEST about what this is not,
+ * though: the vertical component is still exactly one cell per step, the
+ * whole time. This is not a physically accurate parabola; it is a curve
+ * that reads as an arc because the horizontal half of it decays and the
+ * vertical half cannot. Shallow by construction, not by choice.
+ *
+ * INITIAL SETS HOW FAR; RAMP SETS THE SHAPE. SAND_BLAST_SPEED_INITIAL is
+ * the direct descendant of the old SAND_BLAST_DECAY - a bigger number
+ * means more steps before `speed` decays to zero, which means more total
+ * distance (the same "how far things fly" knob as before, kept at its old
+ * value of 200 since nothing about that half of the reasoning changed).
+ * SAND_BLAST_SPEED_RAMP is genuinely new: it controls how quickly the
+ * curve steepens, independent of how far the grain ultimately travels.
+ * Both are STARTING POINTS, not measurements - there is no device capture
+ * behind either the way SAND_REBOUND_GAIN has one. At 200 and 14, `speed`
+ * reaches zero in ceil(200/14) = 15 steps, a fixed, deterministic upper
+ * bound on how long any one entry can fly - unlike the old geometric
+ * decay, which had no upper bound at all, only a shrinking probability of
+ * lasting that long. Tune both on device once the mechanic itself is
+ * judged worth tuning - see docs/Sand/Explosion-Plan.md's "Device"
+ * section for what to look at first. */
+#define SAND_BLAST_SPEED_INITIAL  200
+#define SAND_BLAST_SPEED_RAMP      14
 
 /* FRICTION
  *

@@ -11279,9 +11279,9 @@ static void test_a_blast_wakes_the_blocks_it_touches(void)
  * the rest of its fall as an ordinary grain with no further push. Lateral
  * scatter out of a crater, not an arc.
  *
- * Several independent single-grain trials, not one: SAND_BLAST_DECAY
+ * Several independent single-grain trials, not one: SAND_BLAST_SPEED_INITIAL
  * currently gives roughly a 1 in 5 chance that a single grain's very
- * first decay roll fails outright, unrelated to the identity mechanism
+ * first speed roll fails outright, unrelated to the identity mechanism
  * entirely, which would make a one-shot version of this test flaky across
  * the seed space even though the mechanism it is actually checking is
  * completely deterministic once that roll succeeds. */
@@ -11293,7 +11293,7 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
      * exact same starting state: not several trials at all, just one
      * trial performed several times identically. sand_clear() between
      * trials instead wipes the grid but leaves s->rng exactly where the
-     * previous trial's rolls left it, so each trial's decay rolls come
+     * previous trial's rolls left it, so each trial's speed rolls come
      * from a genuinely different point in the one long sequence a fixed
      * seed still deterministically produces.
      *
@@ -11327,6 +11327,29 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
         for (int i = 0; i < 20; i++) {
             sand_step(&s, 0, 1000, 0);
         }
+
+        /* THE CURVATURE ITSELF, not just sustained motion: 20 steps is
+         * past ceil(SAND_BLAST_SPEED_INITIAL / SAND_BLAST_SPEED_RAMP) = 15,
+         * the fixed step count at which `speed` is guaranteed to have
+         * ramped all the way to zero - see SAND_BLAST_SPEED_INITIAL's own
+         * comment in sand.h. Once that happens, rng_chance() with a zero
+         * numerator can never succeed again, so the entry MUST have been
+         * dropped by now, on every single one of these 16 independent
+         * rolls of the dice - not "probably", not "on average", but always,
+         * regardless of what any of them individually rolled. This is
+         * exactly the guarantee the old SAND_BLAST_DECAY could not make:
+         * a fixed chance every turn only ever shrinks the ODDS of still
+         * being airborne, it never actually bounds how long that can
+         * last. Checking blast_count directly, rather than inferring
+         * "stopped flying" from where the grain ended up on the board, is
+         * what makes this a check of the RAMP'S OWN TERMINATION rather
+         * than a check of gravity having settled it - a grain wedged
+         * against something would keep its x unchanged too, for a
+         * completely different reason. */
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.blast_count,
+            "flight must have ended within a fixed, deterministic step "
+            "count once speed ramps to zero - not merely become "
+            "improbable, as the old fixed-chance decay left it");
 
         for (int y = 0; y < H; y++) {
             for (int x = 0; x < W; x++) {
@@ -11377,7 +11400,7 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
     sand_explode(&s, 4, 5, 2);
 
     /* A cavity exists - immediately, and independent of the flight pass,
-     * the decay roll, or a single step having run: sand_explode() fills
+     * the speed ramp, or a single step having run: sand_explode() fills
      * its core (here, the plus-shaped disc (4,5)/(3,5)/(5,5)/(4,4)/(4,6))
      * with fire before it ever queues an entry - see
      * SAND_BLAST_CORE_DIVISOR. An explosion flashes and leaves a plume; it

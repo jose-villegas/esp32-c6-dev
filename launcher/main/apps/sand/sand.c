@@ -484,6 +484,7 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
             entry->index = (uint16_t)at;
             entry->cell  = cell;
             entry->dir   = (uint8_t)ring_of(qdx, qdy);
+            entry->speed = SAND_BLAST_SPEED_INITIAL;
         }
     }
 }
@@ -1397,8 +1398,8 @@ static void step_blast(sand_t *s, int dx, int dy)
          * matters:
          *
          *   roll every turn (this)   a wedged entry ages out on the same
-         *                            geometric schedule as one that has
-         *                            been moving the whole time
+         *                            schedule as one that has been moving
+         *                            the whole time
          *   roll only on a move      a wedged entry pays nothing for
          *                            waiting, so it waits FOREVER if its
          *                            target never opens
@@ -1411,9 +1412,29 @@ static void step_blast(sand_t *s, int dx, int dy)
          * precisely when an unbounded wait would show up: entries surviving
          * indefinitely, silently occupying the list, for no visible reason
          * on the board. Rolling every turn keeps every entry - moving or
-         * merely hoping to - on the same bounded, geometric clock
-         * everything else in this file already trusts. */
-        if (!rng_chance(&s->rng, SAND_BLAST_DECAY)) {
+         * merely hoping to - on the same bounded clock everything else in
+         * this file already trusts.
+         *
+         * The roll's own chance IS entry.speed - see
+         * SAND_BLAST_SPEED_INITIAL's own comment in sand.h for why one byte
+         * carries both "chance this turn's move happens" and "how much
+         * flight is left" instead of a separate step counter alongside a
+         * fixed rate, and for why that is what turns the arc into an
+         * actual curve instead of a bent line. */
+        const bool rolled_move = rng_chance(&s->rng, entry.speed);
+
+        /* Ramps down every turn, for exactly the same "no exceptions"
+         * reason the roll above runs every turn - moved, blocked, or about
+         * to be dropped, `speed` ages regardless. Saturating rather than
+         * wrapping: once it reaches zero it stays there, so rng_chance()
+         * with a zero numerator never succeeds again and the entry is
+         * dropped, below, the very next time this runs - the ramp needs no
+         * separate "done flying" check of its own. */
+        entry.speed = (entry.speed > SAND_BLAST_SPEED_RAMP)
+                          ? (uint8_t)(entry.speed - SAND_BLAST_SPEED_RAMP)
+                          : 0;
+
+        if (!rolled_move) {
             continue;   /* out of flight - settles exactly where it is */
         }
 
@@ -1433,9 +1454,9 @@ static void step_blast(sand_t *s, int dx, int dy)
          * can_enter()'s own callers already lean on. */
         if (!CELL_IS_EMPTY(sand_at(s, nx, ny))) {
             /* Blocked means WAIT: keep the entry exactly as it is - same
-             * position, same direction, already-spent decay roll and
-             * all - so it gets another turn next step rather than being
-             * dropped for something that may clear a moment later. */
+             * position, same direction, already-ramped speed and all - so
+             * it gets another turn next step rather than being dropped for
+             * something that may clear a moment later. */
             s->blast_buf[kept++] = entry;
             continue;
         }
@@ -1451,6 +1472,7 @@ static void step_blast(sand_t *s, int dx, int dy)
         s->blast_buf[kept].index = (uint16_t)nat;
         s->blast_buf[kept].cell  = entry.cell;
         s->blast_buf[kept].dir   = entry.dir;
+        s->blast_buf[kept].speed = entry.speed;
         kept++;
     }
 
