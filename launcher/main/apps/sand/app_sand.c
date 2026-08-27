@@ -1060,10 +1060,15 @@ static void draw_mode_label(int gx, int gy)
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
 
-/* Gap left between adjacent tiles, and around an unselected tile's swatch -
- * the panel's own background (cleared first, below) shows through it as
- * grout, which is what visually separates one tile from the next. */
-#define PALETTE_GROUT   2
+/* Gap left between adjacent tiles, and around an unselected tile's swatch.
+ * The panel paints no background of its own (see draw_palette()), so what
+ * shows through here is the frozen sand frame underneath - which is what
+ * separates one tile from the next.
+ *
+ * Kept deliberately narrow. The gap is scenery; the tiles are the point,
+ * and every pixel spent widening it comes straight off a touch target that
+ * is already only 92 px on a 322 ppi panel. */
+#define PALETTE_GROUT   4
 
 /* Thickness of each bezel edge - see draw_palette() below. */
 #define PALETTE_BEZEL   3
@@ -1365,20 +1370,29 @@ static uint8_t palette_opened_mode;
  * than snapping to the right turn one frame later.
  *
  * Also records palette_opened_brush/palette_opened_mode - see their own
- * comment above for why - and arms palette_swallow_release. Opening the
- * panel is a press of the physical BOOT button, which has nothing to do
- * with whatever a finger already down on the touchscreen is doing - so a
- * pour in progress when BOOT is released is a touch left dangling, and its
- * own release still has to land somewhere. Without swallowing it, that
- * release arrives on the very next frame with screen already
- * SCREEN_PALETTE, and handle_palette_input() reads it as an ordinary tap on
- * whatever tile happens to be under the finger - silently changing the
- * brush the player never meant to touch. */
-static void open_palette(void)
+ * comment above for why - and arms palette_swallow_release, but ONLY when a
+ * finger is actually on the screen as the panel opens.
+ *
+ * Opening the panel is a press of the physical BOOT button, which has
+ * nothing to do with whatever a finger already down on the touchscreen is
+ * doing - so a pour in progress when BOOT is released is a touch left
+ * dangling, and its own release still has to land somewhere. Without
+ * swallowing it, that release arrives on the very next frame with screen
+ * already SCREEN_PALETTE, and handle_palette_input() reads it as an
+ * ordinary tap on whatever tile happens to be under the finger - silently
+ * changing the brush the player never meant to touch.
+ *
+ * Arming it unconditionally was wrong, and cost the common case to protect
+ * the rare one: with no finger down there is no dangling release to eat, so
+ * the flag ate the player's first deliberate tap on a tile instead and the
+ * panel only started responding on the second. `touch_in_progress` is
+ * simply input->down at the moment of opening - swallow a release only when
+ * there is genuinely one already owed. */
+static void open_palette(bool touch_in_progress)
 {
     label_left_ms = 0;
     screen = SCREEN_PALETTE;
-    palette_swallow_release = true;
+    palette_swallow_release = touch_in_progress;
     palette_opened_brush = brush;
     palette_opened_mode  = brush_mode[brush];
 
@@ -1893,7 +1907,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * plumbed all the way through button_fsm and buttons_read(); this
      * screen simply has no consumer for it right now. */
     if (input->boot.released) {
-        open_palette();
+        open_palette(input->down);
         return;
     }
 
