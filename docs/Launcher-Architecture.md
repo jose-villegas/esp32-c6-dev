@@ -443,7 +443,7 @@ overlapping rectangles reliably.
 
 These fight, and the fight would have hit apps, not just the launcher.
 Immediate mode rebuilds and repaints the UI every frame, which means clearing
-every frame, which marks every band dirty and forces a full 9.6 ms transfer -
+every frame, which marks every band dirty and forces a full ~17 ms transfer -
 discarding the saving that partial updates exist to provide.
 
 The resolution: an immediate-mode UI is **rebuilt** every frame but not
@@ -553,7 +553,8 @@ like. It composes with an app that owns its own frame loop; a retained-mode
 toolkit would compete with it for the same job.
 
 **The whole render pipeline here is built around skipping unchanged frames**,
-because a full transfer costs ~9.6 ms and most frames do not need one. An
+because a full transfer costs ~17 ms (measured: 16,998 us of bus time, the
+frame being 94% bus-bound - see `gfx.h`) and most frames do not need one. An
 immediate-mode command list is exactly the shape that trick needs - see
 [Immediate mode versus dirty bands](#immediate-mode-versus-dirty-bands)
 below for the mechanism. LVGL has its own separate invalidation and redraw

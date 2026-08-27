@@ -12146,7 +12146,11 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
 /* The worst case: every cell on the screen moving at once.
  *
  * Historically this budget was set from a principle (stay well under the
- * blit's ~9.6 ms bus-time ceiling) rather than the measured number, because
+ * blit's bus-time ceiling, quoted here for a long time as ~9.6 ms and
+ * actually ~17 ms - see gfx.h, and the 2026-08-28 decomposition in
+ * test_full_present_cost_splits_into_bus_time_and_overhead, which measured
+ * 16,998 us of raw blit against 18,147 us of full gfx_present()) rather
+ * than the measured number, because
  * it had already been raised twice from over-tight measured budgets - see
  * git history. It also carries a documented cross-build risk: the same code
  * has measured a 3.2-3.9 ms swing purely from the ESP32-C6's 32 KB flash
@@ -13360,20 +13364,21 @@ static void test_present_cost_against_a_falling_sand_scene(void)
     free(row_x1);
     free(row_n);
 
-    /* PROVISIONAL - no device capture of gfx_present() against a real sand
-     * scene exists yet; this is the first. Loose on purpose, the same
-     * convention FULL_STEP_BUDGET_US's comment documents for a brand new
-     * measurement in this file: log the real number, assert only that it
-     * is not absurd, and re-peg this ceiling from the first device
-     * capture rather than trust a guess now. A synthetic full present
-     * alone measures ~17,900 us (suite_gfx.c); this scene interleaves
-     * present() with a checkerboard that is always moving, so the ceiling
-     * is set at more than double that to leave real headroom for the
-     * first capture to land wherever it actually lands. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(40000, (int)mean_us,
-        "present() against a moving falling-sand scene ballooned to more "
-        "than double a full-screen send - PROVISIONAL ceiling, re-peg "
-        "from the first device capture rather than tighten blindly");
+    /* Pegged from the first device capture (performance_20260828_014644):
+     * mean 10,852 us/frame, 76 full-band and 13 gathered strip-sends over
+     * 20 frames. 12000 is ~10% over that - a REGRESSION GUARD, deliberately
+     * not the measured*0.9 reduction target the thirteen sand budgets in
+     * this file use. Those hold sand_step(), which is all reducible work;
+     * a present() is 94% irreducible bus time (see gfx.h, and
+     * test_full_present_cost_splits_into_bus_time_and_overhead), so the
+     * only thing an optimisation could move here is HOW MANY strips get
+     * sent - which the strip-send counts beside the timing are there to
+     * show. Demanding 10% off a hardware constant would be a target
+     * nobody could hit honestly. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(12000, (int)mean_us,
+        "present() against a moving falling-sand scene got more expensive "
+        "- check the full-band vs gathered counts in the log line above "
+        "before suspecting the panel");
 }
 
 /* The lava stress scene (build_lava_stress_scene() above, shared with
@@ -13437,16 +13442,16 @@ static void test_present_cost_against_the_lava_stress_scene(void)
     free(row_x1);
     free(row_n);
 
-    /* PROVISIONAL - see test_present_cost_against_a_falling_sand_scene's
-     * comment above for the convention this follows. This scene's own
-     * sand_step()-only budget (test_the_lava_stress_scene_fits_in_the_-
-     * frame_budget) measures around 121000-125000 us/step on its own; the
-     * ceiling here is set loose enough to hold even if a full present
-     * (~17,900 us, suite_gfx.c) landed on every single measured frame. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(40000, (int)mean_us,
-        "present() against the lava stress scene ballooned past even a "
-        "full-screen send every frame - PROVISIONAL ceiling, re-peg from "
-        "the first device capture rather than tighten blindly");
+    /* Pegged from the first device capture (performance_20260828_014644):
+     * mean 13,018 us/frame, 100 full-band and only 4 gathered strip-sends
+     * over 20 frames - a denser, more contiguous dirty pattern than the
+     * checkerboard's, and it gathers even less often. 14300 is ~10% over,
+     * a regression guard for the same reason spelled out in
+     * test_present_cost_against_a_falling_sand_scene's comment above. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(14300, (int)mean_us,
+        "present() against the lava stress scene got more expensive - "
+        "check the full-band vs gathered counts in the log line above "
+        "before suspecting the panel");
 }
 
 /* The thermal shock lattice (build_thermal_shock_scene() above, shared
@@ -13510,15 +13515,19 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
     free(row_x1);
     free(row_n);
 
-    /* PROVISIONAL - see test_present_cost_against_a_falling_sand_scene's
-     * comment above for the convention this follows. No settle steps and
-     * ten measured ones, the same watchdog-conscious shape
-     * test_the_thermal_shock_scene_fits_in_the_frame_budget uses - see
-     * that test's comment for why. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(40000, (int)mean_us,
-        "present() against the thermal shock lattice ballooned past even "
-        "a full-screen send every frame - PROVISIONAL ceiling, re-peg "
-        "from the first device capture rather than tighten blindly");
+    /* Pegged from the first device capture (performance_20260828_014644),
+     * and this is the row worth reading twice: mean 17,922 us/frame with
+     * 70 full-band and ZERO gathered strip-sends over 10 frames. Ten
+     * frames x 7 strips is 70, so every strip of every frame went out as
+     * a whole band - this scene costs a full-screen send every frame
+     * (a full present measures 18,147 us) and the dirty-region tracking
+     * buys it nothing at all. 480 small isolated glass rings is the
+     * pattern that defeats gathering completely. 19700 is ~10% over, a
+     * regression guard; the real number to move is the zero. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(19700, (int)mean_us,
+        "present() against the thermal shock lattice got more expensive "
+        "than a full-screen send every frame, which is already what it "
+        "costs - check the strip-send counts in the log line above");
 }
 #endif /* DEVICE_BUILD */
 

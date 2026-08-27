@@ -430,7 +430,17 @@ estimated:
 | Settled screen of sand | ~19-24 us | (dwarfed by anything else) |
 | Full-screen sand step, worst case | ~5.5-6 ms | 8 ms |
 | Water cross-flow + rebound, worst case | up to ~15 ms | 16 ms |
-| Full-screen panel blit | ~9.6 ms | (fixed hardware cost) |
+| Full-screen panel blit | **~17 ms** | (fixed hardware cost) |
+
+The blit figure was carried as ~9.6 ms here for a long time; it is wrong,
+and `gfx.h`'s own comment has had the right numbers for a while (16.5 ms
+theoretical at the 40 MHz the panel actually runs, 17.6 ms measured). A
+2026-08-28 device test settled it directly by timing one raw
+`esp_lcd_panel_draw_bitmap()` of the whole framebuffer against a full
+`gfx_present()`: **16,998 us of bus time against 18,147 us total, so the
+dirty-tracking path's own overhead is 1,149 us - 6% - and the frame is
+94% bus-bound.** 80 MHz would halve it and has been tried twice; it
+produces real visual artifacts on this panel, so 17 ms is the floor.
 
 Water, not sand, is the actual bottleneck whenever a body of it is moving -
 see the correction in `docs/Sand/Simulation-Lessons.md`'s "A note on
