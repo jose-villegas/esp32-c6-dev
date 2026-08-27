@@ -620,6 +620,23 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * bigger blast gets a bigger flash automatically instead of the same
  * fixed-size fireball no matter how large the outer radius grows.
  *
+ * THE RULE THIS RATIO ANSWERS TO: a fireball is small; a pressure wave is
+ * large. A real explosion is two effects at very different scales, not
+ * one - a small, hot kernel of actual combustion, and a much wider shock
+ * that does the displacing. sand_explode() draws exactly that as three
+ * concentric zones: the CORE (radius / SAND_EXPLODE_CORE_DIVISOR)
+ * converts to fire - that is the fireball, and it should read as small;
+ * the ANNULUS between the core and the full radius is thrown outward -
+ * that is the pressure wave, and it should read as most of the disc;
+ * beyond the full radius, nothing. This is the reasoning test for the
+ * constant, not the arithmetic alone: a divisor near 1 makes the
+ * "fireball" as big as the blast itself, which is a bomb made of fire,
+ * not a bomb that starts one. A divisor picked to keep the core's AREA a
+ * small fraction of the disc's - see the measurement below - is what
+ * keeps the two zones reading as the different-scaled effects they are
+ * meant to be, and is the test any future retuning of this number should
+ * be held to, not just "does it look a bit bigger or smaller".
+ *
  * WAS 2 (half the radius), MEASURED WRONG. Half the radius is a QUARTER of
  * the disc's area (area scales with the square of the radius), and a
  * device pass on the first real-radius detonation confirmed exactly that

@@ -407,10 +407,26 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
         return;
     }
 
-    /* Bounds and emptiness are sand_impulse()'s own checks now - see its
-     * comment - so this has nothing left to verify before calling it;
-     * past the cap it silently queues nothing further on its own, so
-     * there is no count to watch here either. */
+    /* EVERY CANDIDATE GETS THE SAME SAND_EXPLODE_INITIAL_SPEED,
+     * DELIBERATELY, not because distance-scaled speed was never tried.
+     * "full push at the fireball's edge, decaying toward the outer
+     * radius" reads right and was measured, twice - once linear in the
+     * squared distance (free, since d2 is already computed two lines
+     * up), once a true linear falloff via sqrt - against the dune scene
+     * in suite_sand.c (test_the_sand_dune_scene_throws_grains_beyond_
+     * its_own_footprint). Both made the blast markedly WORSE by the
+     * scene's own numbers, not better: grains outside the footprint fell
+     * from an average of 57 to 4 and 3 respectively, and average throw
+     * distance fell from 71 to 55 and 48. The cells that actually
+     * produce "escaped the footprint" are disproportionately the ones
+     * near the outer radius - they have the least distance left to
+     * travel - and any falloff that reduces their push specifically
+     * guts the exact evidence a working blast is supposed to produce;
+     * the core-adjacent cells getting full speed does not compensate,
+     * because SAND_IMPULSE_SPEED_RAMP decays their push over TIME
+     * before they can cross the same distance from further inside.
+     * Flat speed stays until a falloff is found that does not trade the
+     * whole outer annulus for a marginally hotter core. */
     sand_impulse(s, cx + dx, cy + dy, ring_of(qdx, qdy),
                  SAND_EXPLODE_INITIAL_SPEED);
 }
