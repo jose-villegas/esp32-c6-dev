@@ -1365,6 +1365,55 @@ static void build_xflow(xflow_t *f, int gx, int gy)
     f->bias_dg_q8 = bx * f->dg[0] + by * f->dg[1];
 }
 
+/* Whether a FLYING grain may swap into the cell currently holding `target`,
+ * as opposed to can_enter() (sand_priv.h), which answers the same question
+ * for ORDINARY gravity-driven movement.
+ *
+ * DELIBERATELY NOT can_enter(). That function says a mover displaces a
+ * target only if the target is a fluid (KIND_LIQUID/KIND_GAS) AND the mover
+ * is denser - the right rule for a grain settling under its own weight,
+ * because weight is the only force involved and a powder has no business
+ * sinking through another powder just because gravity is pulling on both of
+ * them identically. An impulse entry is not settling, though - something
+ * has already forced it into motion - and reusing can_enter() as-is turned
+ * out to make the flight pass nearly powerless exactly where the round that
+ * added displacement was aimed: a grain buried in an ordinary sand pile is
+ * surrounded by MORE SAND, same material, same density, and can_enter()'s
+ * mover > target test can never be true between two cells of identical
+ * density however hard either one is being pushed. That is not a fluid
+ * edge case, it is the ENTIRE INTERIOR of every powder scene this mechanic
+ * exists for - so a density gate copied from can_enter() would have looked
+ * reasonable while doing nothing for the one case that motivated this.
+ *
+ * THE ANSWER: density does not gate this at all - a flying grain may swap
+ * into ANY occupied, non-static cell, regardless of which of the two is
+ * denser. Speed does not need its own separate threshold either: this is
+ * only ever consulted from the branch below that already required this
+ * turn's rng_chance(entry.speed) roll to succeed, so every call here is
+ * already gated on the entry currently carrying enough of the blast's own
+ * force to be moving AT ALL this step - a roll that can never succeed once
+ * `speed` has ramped to zero (see SAND_IMPULSE_SPEED_RAMP's own comment in
+ * sand.h). A second, hand-picked "how much speed buys a push" constant
+ * would only be reproducing a threshold the ramp already enforces for free.
+ *
+ * STATIC IS STILL A WALL - the one thing this deliberately does NOT loosen.
+ * A shove has no leverage against something this simulation defines as
+ * immovable regardless of any arithmetic - stone, wood, glass, an extended
+ * material's structure - so KIND_STATIC never yields here any more than it
+ * does to can_enter(). This is what keeps a blast inside a sealed vessel
+ * from tunnelling its own way out through the wall: the wall was never the
+ * obstacle this rule exists to open, only the packed interior it contains.
+ * sand_at()'s out-of-bounds-reads-as-STONE convention folds the grid edge
+ * into the same guarantee for free, exactly as it already did for
+ * can_enter()'s own callers. */
+static inline bool can_impulse_enter(cell_t target)
+{
+    if (CELL_IS_EMPTY(target)) {
+        return true;
+    }
+    return material_of(target)->kind != KIND_STATIC;
+}
+
 /* The flight pass: every entry in s->impulse_buf either moves exactly one
  * cell along the direction it was queued with, waits another turn for its
  * way to clear, or is finally dropped. Called from sand_step(), immediately
@@ -1389,6 +1438,15 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * chance to move out of the way - which is what lets the disturbance the
  * core's fire starts unpack outward over several steps instead of being a
  * single frozen ring.
+ *
+ * WAIT STILL HAPPENS, BUT ONLY AGAINST A TRUE WALL NOW - see
+ * can_impulse_enter()'s own comment just above this function for why a
+ * flying grain shoulders aside any non-static occupant it meets instead of
+ * only ever moving into a genuinely empty cell. That shrinks "blocked" down
+ * to KIND_STATIC and the grid edge specifically, but does not remove the
+ * need for this branch: a wall is still a wall, and the wait-then-retry
+ * behaviour this comment describes is exactly what keeps an entry pinned
+ * against one bounded rather than dropped the instant it arrives.
  *
  * `dx`/`dy` is this step's own dithered gravity direction, the same one
  * sand_step()'s main sweep just used - needed for RE-ACQUISITION, below,
@@ -1539,19 +1597,23 @@ static void step_impulses(sand_t *s, int dx, int dy)
         const int nx = x + d[0];
         const int ny = y + d[1];
 
-        /* Empty only - not can_enter()'s denser-fluid displacement. v1 does
-         * not push, displace or swap with anything (see the plan's "v1
-         * keeps it simple, deliberately"), so containment falls out of this
-         * one check with no raycast: a blast inside a sealed vessel throws
-         * its grains up to the wall and they wait there, because the wall
-         * is never empty. sand_at() reading out-of-bounds as STONE folds
-         * the grid-edge case into this same check for free, the same trick
-         * can_enter()'s own callers already lean on. */
-        if (!CELL_IS_EMPTY(sand_at(s, nx, ny))) {
+        /* can_impulse_enter(), NOT a bare CELL_IS_EMPTY() check any more -
+         * see that function's own comment for why a flying grain now
+         * shoulders aside any non-static occupant instead of waiting on
+         * only a genuinely empty cell. STATIC still blocks unconditionally,
+         * so containment still falls out of this one check with no
+         * raycast: a blast inside a sealed vessel throws its grains up to
+         * the wall and they wait there, exactly as before - only the
+         * packed interior on the way there stopped being a wall too.
+         * sand_at() reading out-of-bounds as STONE (KIND_STATIC) folds the
+         * grid edge into the same guarantee for free. */
+        const cell_t target = sand_at(s, nx, ny);
+        if (!can_impulse_enter(target)) {
             /* Blocked means WAIT: keep the entry exactly as it is - same
              * position, same direction, already-ramped speed and all - so
              * it gets another turn next step rather than being dropped for
-             * something that may clear a moment later. */
+             * something that may clear a moment later. Reached only for a
+             * true wall now, or the grid edge - see can_impulse_enter(). */
             s->impulse_buf[kept++] = entry;
             continue;
         }
@@ -1559,9 +1621,27 @@ static void step_impulses(sand_t *s, int dx, int dy)
         const size_t at  = entry.index;
         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
 
+        /* A SWAP, not an overwrite - move_to()'s own trick (sand_priv.h),
+         * reused here for the same reason: whatever the mover is displacing
+         * (empty, same as always, or now a real occupant) takes the cell
+         * the mover is vacating, rather than that occupant's cell being
+         * blanked. Conservation needs nothing extra to hold: two cells that
+         * both already existed a moment ago simply trade places, so the
+         * grand total is untouched whichever of the two cases this was. */
+        const cell_t displaced = s->cells[nat];
+
         s->cells[nat] = entry.cell;
-        s->cells[at]  = SAND_EMPTY;
+        s->cells[at]  = displaced;
         latch_content_flags(s, entry.cell);
+        /* The displaced occupant, if any, is not a fresh cell - it already
+         * existed on the board a moment ago, at `nat` - but every write
+         * owes the same bookkeeping regardless of whether what landed there
+         * is new, so this costs one more cheap latch rather than a special
+         * case for "not empty". Skipped only for the everyday case where
+         * there was nothing to displace at all. */
+        if (!CELL_IS_EMPTY(displaced)) {
+            latch_content_flags(s, displaced);
+        }
         mark_move(s, x, y, nx, ny);
 
         s->impulse_buf[kept].index = (uint16_t)nat;

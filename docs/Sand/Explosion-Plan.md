@@ -227,6 +227,29 @@ first step rather than depending on open space already existing nearby.
 See `SAND_EXPLODE_CORE_DIVISOR`'s own comment in sand.h for the full
 reasoning, including why fire rather than a plain hole.
 
+**AS SHIPPED, THIS SECTION'S CENTRAL CLAIM DID NOT SURVIVE EITHER, AND THIS
+TIME IT WAS THE POINT.** "Never pushes, displaces, or swaps with a lighter
+cell" bounded the pass to a single walk with no cascade, which was the
+right thing to prove first - but it also means the amount of material a
+blast can ever move is bounded by however much EMPTY space happens to
+exist nearby, and inside an ordinary pile that is just the core's own
+fireball plus whatever open air already sat above it. A grain three cells
+deep in a packed dune has nowhere to go no matter how much speed the ring
+handed it, and shrinking the core to destroy less directly shrinks that
+same cavity, so "throw more" and "destroy less" were fighting each other
+with destruction as the only source of room. `step_impulses()` now lets a
+flying grain swap into ANY occupied, non-static cell in its path, not only
+an empty one - see `can_impulse_enter()`'s own comment in sand.c for why
+density does not gate this the way `can_enter()` gates ordinary
+gravity-driven movement (the short version: a pile is mostly one material
+at one density, so a mover-must-be-denser rule can never fire between two
+identical grains, which is the exact case this exists to unstick), and for
+why `KIND_STATIC` is still the one thing that stops it cold - a stone
+vessel's wall never yields to this any more than it did before. The pass
+is still bounded exactly as this section originally argued: one swap per
+entry per step, no recursion, nothing queued as a side effect of being
+displaced - only which cells now count as "in the way" changed.
+
 ---
 
 ## Host tests
