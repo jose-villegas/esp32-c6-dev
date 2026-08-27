@@ -56,10 +56,9 @@ int ui_launcher_frame(const input_t *input)
      * inverse of the current transform, and they swap under a quarter turn.
      * A window hardcoded to the panel's own dimensions would still claim the
      * un-rotated size after such a turn and overflow the rotated canvas. */
-    if (mu_begin_window_ex(ctx, "Launcher",
-                           mu_rect(0, 0, ui_width(), ui_height()),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Launcher",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         /* The banner. Claimed from the layout and left blank: mu_layout_next()
          * hands back the rect and advances past it, which is how an

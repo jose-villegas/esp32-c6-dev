@@ -192,6 +192,82 @@ static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
         "exactly three times, not four and not fewer");
 }
 
+/*---------------------------------------------------------------------------
+ * ui_begin_screen()
+ *
+ * The bug this reproduces: mu_begin_window_ex() only trusts its rect
+ * argument the FIRST time a given window (by title) is ever opened -
+ * `if (cnt->rect.w == 0) { cnt->rect = rect; }` in microui.c - and remembers
+ * it forever after, which is correct for a desktop window manager and wrong
+ * here, where every full-screen window in this shell is meant to always BE
+ * (0, 0, ui_width(), ui_height()) for the frame currently being built. Once
+ * ui_width()/ui_height() can change at runtime (a quarter-turn transform),
+ * a window opened once in one orientation and revisited in a different,
+ * larger one keeps the SMALLER, stale rect - which is exactly why
+ * repaint_marked_canvases() in ui.c then clears too little of the screen
+ * and leaves a previous app's pixels sitting in whatever the old rect
+ * didn't cover.
+ *
+ * Device-only for the same reason the rest of this suite is: it needs a real
+ * mu_Container living in the real container pool across multiple frames and
+ * multiple ui_set_transform() calls, which is exactly the kind of stateful,
+ * multi-frame behaviour suite_ui_transform.c's pure ui_transform_rect() math
+ * is not shaped to exercise.
+ *-------------------------------------------------------------------------*/
+
+/* Opens and immediately closes one full-screen window via ui_begin_screen(),
+ * simulating one visit to it in whatever orientation `quarter` selects
+ * (0 = identity/portrait-native, 1 = a quarter turn - see
+ * ui_transform_quarter_turn()'s own comment for the domain/viewport split). */
+static void visit_screen(const char *title, int quarter)
+{
+    mu_Context *ctx = ui_context();
+
+    ui_set_transform(ui_transform_quarter_turn(quarter, GFX_WIDTH, GFX_HEIGHT));
+    ui_begin(&no_touch);
+    if (ui_begin_screen(ctx, title, MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                                    MU_OPT_NOCLOSE  | MU_OPT_NOFRAME)) {
+        mu_end_window(ctx);
+    }
+    ui_end(0x000000);
+}
+
+static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(void)
+{
+    fixture();
+
+    /* First-ever visit to this title, in one orientation - this is the call
+     * that would seed cnt->rect under plain mu_begin_window_ex(), and pin it
+     * there for good. */
+    visit_screen("Reused Screen", 0);
+    const int portrait_w = ui_width();
+    const int portrait_h = ui_height();
+
+    /* Same title, different orientation - a quarter turn swaps ui_width()/
+     * ui_height(). Without ui_begin_screen()'s correction, the container's
+     * rect would still read the portrait dimensions from the first visit. */
+    visit_screen("Reused Screen", 1);
+    const int landscape_w = ui_width();
+    const int landscape_h = ui_height();
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(portrait_w, landscape_w,
+        "the test needs a real dimension swap between visits, or it proves "
+        "nothing");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(portrait_h, landscape_h,
+        "same check for height - a quarter turn must swap both");
+
+    mu_Context *ctx = ui_context();
+    mu_Container *cnt = mu_get_container(ctx, "Reused Screen");
+
+    TEST_ASSERT_EQUAL_MESSAGE(landscape_w, cnt->rect.w,
+        "the container's rect must track THIS frame's logical canvas width, "
+        "not whatever width was current the first time this title was ever "
+        "opened");
+    TEST_ASSERT_EQUAL_MESSAGE(landscape_h, cnt->rect.h,
+        "same for height - a stale rect here is precisely what leaves part "
+        "of a rotated screen uncleared");
+}
+
 void run_ui_suite(void)
 {
     RUN_TEST(test_an_unchanged_ui_is_not_repainted);
@@ -201,6 +277,7 @@ void run_ui_suite(void)
     RUN_TEST(test_layout_generation_unchanged_by_a_repeated_equal_transform);
     RUN_TEST(test_layout_generation_increments_by_one_per_genuine_change);
     RUN_TEST(test_layout_generation_counts_a_sequence_of_genuine_changes);
+    RUN_TEST(test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation);
 }
 
 SUITE_REGISTER(run_ui_suite);

@@ -154,6 +154,23 @@ uint32_t ui_layout_generation(void);
 int ui_width(void);
 int ui_height(void);
 
+/* Opens a full-screen window sized to THIS FRAME's logical canvas, correcting
+ * a mismatch between microui's own assumptions and how this shell uses it.
+ *
+ * mu_begin_window_ex() only trusts its rect argument the first time a given
+ * window (by title) is ever opened - `if (cnt->rect.w == 0) { cnt->rect =
+ * rect; }` in microui.c - which is the right behaviour for a desktop window
+ * manager remembering where the user dragged a window, and wrong here: every
+ * window in this shell is meant to always BE (0, 0, ui_width(), ui_height())
+ * for the frame currently being built, and ui_width()/ui_height() can change
+ * at runtime now that the canvas rotates. Left uncorrected, a window's rect
+ * gets pinned to whatever orientation happened to be current the first time
+ * it was ever opened - typically moments after boot - and a later visit in a
+ * DIFFERENT, larger orientation leaves whatever repaint_marked_canvases()
+ * does to clear it too small, so part of the physical screen never gets
+ * cleared and keeps showing a previous app's last frame. */
+int ui_begin_screen(mu_Context *ctx, const char *title, int opt);
+
 /*---------------------------------------------------------------------------
  * Fixed-width content
  *

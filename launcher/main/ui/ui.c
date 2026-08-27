@@ -415,6 +415,33 @@ int ui_height(void)
     return logical_viewport().h;
 }
 
+/* See ui.h for the full argument. Short version: mu_begin_window_ex() only
+ * seeds cnt->rect the FIRST time a given window title is ever opened, and
+ * remembers it forever after - correct for a desktop window manager, wrong
+ * here, where a window's rect must track ui_width()/ui_height() every frame.
+ * So this always passes the current logical canvas as the rect, and then -
+ * unlike mu_begin_window_ex() - checks whether that is actually what the
+ * container ended up with. If a stale rect from an earlier, differently
+ * sized orientation is still in force, it is force-corrected here and
+ * ui_invalidate() is called so THIS frame repaints using the corrected rect,
+ * rather than leaving the fix to take effect only next frame. */
+int ui_begin_screen(mu_Context *ctx, const char *title, int opt)
+{
+    const mu_Rect r = mu_rect(0, 0, ui_width(), ui_height());
+    const int open = mu_begin_window_ex(ctx, title, r, opt);
+
+    if (open) {
+        mu_Container *cnt = mu_get_current_container(ctx);
+        if (cnt->rect.x != r.x || cnt->rect.y != r.y ||
+            cnt->rect.w != r.w || cnt->rect.h != r.h) {
+            cnt->rect = r;
+            ui_invalidate();
+        }
+    }
+
+    return open;
+}
+
 /*---------------------------------------------------------------------------
  * Painting
  *

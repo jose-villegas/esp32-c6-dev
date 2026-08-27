@@ -1283,10 +1283,9 @@ static void draw_palette(const input_t *input)
      * math being wrong. */
     const int cols = palette_cols(ui_width());
 
-    if (mu_begin_window_ex(ctx, "Sand Palette",
-                           mu_rect(0, 0, ui_width(), ui_height()),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Sand Palette",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         for (int i = 0; i < BRUSH_COUNT; i++) {
             int x, y, w, h;
@@ -1767,7 +1766,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
 
 /* The boot menu: START begins the simulation at the current quality, and the
  * quality button cycles HIGH/MEDIUM/LOW and stays on the menu. Modeled on
- * ui_launcher.c's own frame - same ui_begin()/mu_begin_window_ex()/
+ * ui_launcher.c's own frame - same ui_begin()/ui_begin_screen()/
  * mu_end_window()/ui_end() shape, one full-screen window with no chrome.
  *
  * The shell (main.c) draws the home-swipe hint over whatever the app drew
@@ -1781,10 +1780,9 @@ static void draw_menu(const input_t *input)
 
     /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
      * logical canvas swaps dimensions under a quarter-turn transform. */
-    if (mu_begin_window_ex(ctx, "Sand Menu",
-                           mu_rect(0, 0, ui_width(), ui_height()),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Sand Menu",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         /* Both buttons centered as one block, so microui's default top-down
          * row layout is bypassed with mu_layout_set_next() and each button
