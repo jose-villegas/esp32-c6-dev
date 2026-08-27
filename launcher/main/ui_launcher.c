@@ -41,8 +41,13 @@ int ui_launcher_frame(const input_t *input)
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                            MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
-        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
-        mu_text(ctx, "APPS");
+        /* The banner. Claimed from the layout and left blank: mu_layout_next()
+         * hands back the rect and advances past it, which is how an
+         * immediate-mode UI reserves space without a widget in it. When there
+         * is status to show, it is drawn into that rect and nothing below
+         * moves. */
+        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_BANNER_HEIGHT);
+        mu_layout_next(ctx);
 
         for (int i = 0; i < app_list_count(); i++) {
             mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);

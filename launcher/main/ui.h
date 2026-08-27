@@ -45,6 +45,13 @@
 #define UI_ROW_GAP        8
 #define UI_MARGIN         16
 
+/* The strip across the top of the home screen, reserved and deliberately
+ * empty. It is where status belongs - battery, connection, the clock - and
+ * holding the space open now means adding any of that later moves nothing
+ * below it. A row of the menu was there before; a status bar and a heading
+ * that only ever said "APPS" cannot both have the top of a 448px screen. */
+#define UI_BANNER_HEIGHT  56
+
 /* Pass as ui_end()'s background to draw without clearing first - for a UI laid
  * over an app's own output rather than replacing it. */
 #define UI_NO_BACKGROUND 0xFFFFFFFFu
