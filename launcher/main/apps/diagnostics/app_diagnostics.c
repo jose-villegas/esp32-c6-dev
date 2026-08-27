@@ -59,6 +59,11 @@ static int show_orientation;
  * differently from a run that tapped and found zero failures. */
 static int selftest_failures = -1;
 
+/* Set by a tap of the button below; consumed at the top of
+ * diagnostics_frame(), never run from inside mu_button()'s own if-block -
+ * see the comment there for why. */
+static bool selftest_pending;
+
 /* Sensor axes to screen axes - the SAME board-layout fact main.c's
  * DISPLAY_GRAVITY_X/Y and app_sand.c's GRAVITY_SCREEN_X/Y already carry,
  * copied rather than shared for the same reason main.c's own copy gives:
@@ -152,17 +157,13 @@ static void draw_toggles_page(const input_t *input)
 
         /* An ACTION, not a persistent toggle like the checkboxes above -
          * this runs once when tapped rather than reflecting a state the
-         * page tracks continuously. selftest_run() runs synchronously and
-         * blocks for whatever the full suite currently costs; that is fine
-         * and expected here, since the whole point of gating autorun behind
-         * CONFIG_LAUNCHER_SELFTEST_AUTORUN (see main.c) is that this cost is
-         * now paid only when this button is pressed, not on every boot. It
-         * already prints its own SELFTEST_COMPLETE line and logs to the
-         * console the same way it always has - nothing about selftest.c
-         * changes here, only when it gets called. */
+         * page tracks continuously. Only FLAGGED here, not run: selftest_run()
+         * itself happens at the top of diagnostics_frame(), outside this
+         * page's own ui_begin()/ui_end() bracket - see the comment there for
+         * why it cannot run from inside this if-block. */
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
         if (mu_button(ctx, "run self test suite")) {
-            selftest_failures = selftest_run();
+            selftest_pending = true;
         }
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
@@ -189,6 +190,38 @@ static void draw_toggles_page(const input_t *input)
 static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
 {
     (void)dt_ms;
+
+    /* Consumed here, before this frame's own ui_begin()/ui_end() bracket
+     * opens - never from inside mu_button()'s own if-block in
+     * draw_toggles_page(). selftest_run() runs suite_ui.c, a device-only
+     * suite whose fixture() calls ui_init() once per test - i.e. mu_init()
+     * on the exact same ui_context() singleton every window in this shell
+     * draws through, this toggle page included - and whose tests then set
+     * ui_set_transform() to a fixed sequence of quarter-turns that end on
+     * whatever the LAST test happened to leave it at, not the board's real
+     * physical orientation. Calling selftest_run() synchronously from
+     * mu_button()'s own if-block used to do exactly that in the middle of
+     * this very frame's ui_begin()/ui_end() bracket: the suite's own
+     * mu_init() would reset the container pool and canvas hashes the
+     * mu_end_window()/ui_end() calls further down were still relying on,
+     * and ui_set_transform() would leave the shell's touch-to-logical
+     * mapping wrong until the board was physically turned enough to trigger
+     * main.c's own periodic resync - which, held steady, might never
+     * happen, reading exactly like "the screen stopped responding to taps".
+     * Running it here instead, before any mu_* call this frame, means the
+     * suite's own ui_init() calls land on a context nothing is mid-use of,
+     * and the explicit ui_set_transform() right after immediately restores
+     * the board's actual orientation before draw_toggles_page() ever opens
+     * its own frame. One frame of latency between the tap landing and the
+     * suite actually starting - the same deferral gfx_resume()'s "one full
+     * frame after a resume" already uses, and imperceptible next to the
+     * suite's own run time. */
+    if (selftest_pending) {
+        selftest_pending = false;
+        selftest_failures = selftest_run();
+        ui_set_transform(ui_transform_quarter_turn(
+            display_shell_quarter(), GFX_WIDTH, GFX_HEIGHT));
+    }
 
     if (input->boot.pressed) {
         page = (page + 1) % PAGE_COUNT;
