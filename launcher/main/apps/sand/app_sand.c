@@ -1605,8 +1605,10 @@ static void draw_menu(const input_t *input)
 
     ui_begin(input);
 
+    /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
+     * logical canvas swaps dimensions under a quarter-turn transform. */
     if (mu_begin_window_ex(ctx, "Sand Menu",
-                           mu_rect(0, 0, GFX_WIDTH, GFX_HEIGHT),
+                           mu_rect(0, 0, ui_width(), ui_height()),
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                            MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
@@ -1614,8 +1616,8 @@ static void draw_menu(const input_t *input)
          * row layout is bypassed with mu_layout_set_next() and each button
          * placed at an absolute rect instead. */
         const int total_h = 2 * MENU_BTN_H + MENU_BTN_GAP;
-        const int top      = (GFX_HEIGHT - total_h) / 2;
-        const int x        = (GFX_WIDTH - MENU_BTN_W) / 2;
+        const int top      = (ui_height() - total_h) / 2;
+        const int x        = (ui_width() - MENU_BTN_W) / 2;
 
         mu_layout_set_next(ctx, mu_rect(x, top, MENU_BTN_W, MENU_BTN_H), 0);
         if (mu_button(ctx, "START")) {
