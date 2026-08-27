@@ -167,13 +167,25 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 
 /* Its own radius, not the eraser's borrowed one - a blast has to read as
  * bigger than a corrective tool, not the same size as one. 48 (three times
- * ERASE_RADIUS_PX) is an unmeasured starting point, picked only to look
- * obviously larger on screen than either existing brush; there is no
- * device capture behind it the way POUR_RADIUS_PX/ERASE_RADIUS_PX above
- * were tuned by feel over real use. Tune on device once the mechanic
- * itself is judged worth tuning - see docs/Sand/Explosion-Plan.md's
- * "Device" section. */
-#define DETONATE_RADIUS_PX  48
+ * ERASE_RADIUS_PX) was an unmeasured starting point, picked only to look
+ * obviously larger on screen than either existing brush.
+ *
+ * WAS 48, DOUBLED TO 96 - the first number here that IS a device report
+ * rather than a guess: a pass on the retuned, displacement-enabled blast
+ * (see sand.h's SAND_IMPULSE_SPEED_RAMP/SAND_EXPLODE_INITIAL_SPEED/
+ * SAND_EXPLODE_CORE_DIVISOR) came back with one piece of feedback, "it
+ * needs a much bigger radius in general," and nothing else. 96 px is 48
+ * cells at CELL_MIN - a disc a bit over half the 184-cell-wide screen -
+ * which is what "much bigger" has to mean at this scale rather than
+ * another small bump. Doubling the radius is not free, though: it
+ * quadruples the disc's own area (APP_IMPULSE_MAX below), and both
+ * SAND_EXPLODE_CORE_DIVISOR's fireball and the dune scene that measures
+ * this mechanic were tuned at the OLD radius - see those constants' own
+ * comments in sand.h and suite_sand.c for whether the retune's optimum
+ * moved along with this. Tune the radius itself on device again once
+ * this pass has been seen - see docs/Sand/Explosion-Plan.md's "Device"
+ * section. */
+#define DETONATE_RADIUS_PX  96
 
 /* DETONATE_RADIUS_PX in CELLS, at the FINEST quality (CELL_MIN) - the
  * same "size every allocation for CELL_MIN regardless of the active
@@ -198,19 +210,49 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * out of forty-nine ever received an impulse; the entire core and the
  * whole lower half got none.
  *
- * (2 * DETONATE_RADIUS_CELLS + 1) squared is the exact area of the
- * smallest square that contains a disc of that radius - not pi*r^2's
- * approximation, a hard upper bound - so a single detonation can never
- * fill this buffer, whatever DETONATE_RADIUS_PX becomes, without the two
- * having to be retuned in step by hand. Derived, not a bare number,
- * because a bare number is exactly what silently drifted out of sync
- * with the radius it was supposed to cover last time. At the current
- * DETONATE_RADIUS_PX (48, 24 cells at CELL_MIN) that is 49 * 49 = 2,401
- * entries - about 14 KB at six bytes each (impulse_t), still far short of
- * the ~40 KB per-cell field docs/Sand/Explosion-Plan.md rejected, and it
- * is a one-time allocation like every other buffer in this file. */
+ * WAS (2 * DETONATE_RADIUS_CELLS + 1) SQUARED - the exact area of the
+ * smallest square containing the disc, a hard upper bound and, at the old
+ * 24-cell radius, a defensible one: 14 KB was not worth a more careful
+ * formula. Doubling the radius to 48 cells (see DETONATE_RADIUS_PX) made
+ * it worth one, because the square wastes a fixed FRACTION of whatever it
+ * allocates - about 27% at r=24, still about 30% at r=48 - and a fixed
+ * fraction of a number that just quadrupled is no longer a rounding
+ * error: 49*49=2,401 entries (~14 KB) becomes 97*97=9,409 (~56 KB at six
+ * bytes each) for a shape - the bounding SQUARE - that sand_explode()'s
+ * own seeding loop never actually fills, since it only ever visits cells
+ * inside the true circular disc (see queue_outward_impulse()'s own r2
+ * check in sand.c).
+ *
+ * SIZED TO THE DISC INSTEAD: `(355*r*r)/113 + 5*r + 3`, still a hard
+ * upper bound, still derived from DETONATE_RADIUS_CELLS rather than a
+ * bare number, for the same "a bare number is exactly what drifted out of
+ * sync last time" reason the square was. 355/113 is a classical rational
+ * approximation of pi accurate to seven decimal places and, critically,
+ * slightly ABOVE the true value - so the whole expression is provably an
+ * over-estimate of pi*r^2, not merely a close one, before the linear term
+ * is even considered. `5*r + 3` covers the actual gap between a disc's
+ * true lattice-point count and pi*r^2 (the Gauss circle problem): every
+ * lattice point inside the disc corresponds to a unit cell within radius
+ * r + sqrt(2)/2 of the centre, and every one outside to a unit cell beyond
+ * r - sqrt(2)/2, so the true count is bounded above by pi*(r+sqrt(2)/2)^2
+ * = pi*r^2 + 2*pi*(sqrt(2)/2)*r + pi/2 =~ pi*r^2 + 4.44*r + 1.57 - `5*r + 3`
+ * rounds both of those terms up with room to spare. Checked computationally
+ * against the true, exactly-counted disc size for every radius from 0 to
+ * 300 as well, not just argued analytically - this project's own standard
+ * for a constant that matters, and cheap to redo if DETONATE_RADIUS_PX
+ * ever moves outside that range.
+ *
+ * At the new DETONATE_RADIUS_PX (96, 48 cells at CELL_MIN) that is
+ * (355*48*48)/113 + 5*48 + 3 = 7,481 entries - about 43.8 KB at six bytes
+ * each, against 56.5 KB for the old square-shaped formula at this same
+ * radius: roughly 11.3 KB saved by sizing to the shape actually used,
+ * still comfortably short of the ~40 KB PER-CELL field docs/Sand/
+ * Explosion-Plan.md rejected outright (this is a few hundred entries'
+ * worth of struct, not a byte on every one of the grid's own cells), and
+ * still a one-time allocation like every other buffer in this file. */
 #define APP_IMPULSE_MAX  \
-    ((2 * DETONATE_RADIUS_CELLS + 1) * (2 * DETONATE_RADIUS_CELLS + 1))
+    ((355 * DETONATE_RADIUS_CELLS * DETONATE_RADIUS_CELLS) / 113 + \
+     5 * DETONATE_RADIUS_CELLS + 3)
 
 /* What the finger puts down.
  *
@@ -557,6 +599,28 @@ static void start_sim(void)
     }
     if (impulse_buf == NULL) {
         impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
+        /* LOUD, BUT NOT FATAL - unlike every buffer in the big OR-check
+         * below. Those are all load-bearing for the simulation existing at
+         * all; this one is not - sand_enable_impulses(NULL, ...) is a
+         * documented, safe way to disable just the blast mechanic (see its
+         * own comment in sand.h), and sand_explode() already no-ops
+         * gracefully without it. Refusing to run the WHOLE app because the
+         * one buffer detonate needs could not be found would strand a
+         * player who only ever wanted to pour sand behind a "no memory"
+         * screen for a feature they were not using. What must not happen
+         * instead is silence: at 56 KB (r=48, see APP_IMPULSE_MAX's own
+         * comment) a failure here stops being a hypothetical the way it
+         * was at the old radius's 14 KB, and "explosions just stop
+         * working" with nothing in the log is exactly the failure mode a
+         * future bug report would burn an hour rediscovering. */
+        if (impulse_buf == NULL) {
+            ESP_LOGE(TAG, "Could not allocate the %d-entry blast buffer "
+                          "(%u bytes) - detonate will be a no-op this "
+                          "session; largest free block is %u",
+                     APP_IMPULSE_MAX,
+                     (unsigned)((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf)),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        }
     }
     if (row_run_x0 == NULL) {
         row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));
@@ -567,8 +631,10 @@ static void start_sim(void)
     if (row_run_n == NULL) {
         row_run_n = malloc(GRID_H_MAX * sizeof(*row_run_n));
     }
+    /* impulse_buf is deliberately NOT in this list - see the loud-but-not-
+     * fatal log right where it is allocated, above, for why a failure
+     * there disables one optional mechanic rather than the whole app. */
     if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
-        impulse_buf == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",

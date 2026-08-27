@@ -594,7 +594,18 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * design this replaced (a single fixed chance-in-256 rolled fresh every
  * turn, with no memory of how long a grain had already been flying) only
  * ever shrank the PROBABILITY of surviving another turn, never actually
- * bounded how long that could take. Not yet confirmed on a device - see
+ * bounded how long that could take.
+ *
+ * RECONFIRMED, NOT ASSUMED, WHEN THE RADIUS DOUBLED. A device pass on this
+ * combination asked for a much bigger blast - see DETONATE_RADIUS_PX in
+ * app_sand.c, which doubled from 24 to 48 cells - and a grain now has
+ * twice as far to travel to clear a disc twice as wide, which is exactly
+ * the kind of change that could have moved this constant's optimum. It
+ * did not: re-running the full 18-way combined grid at the new radius put
+ * RAMP 2 ahead of RAMP 4 at every SPEED/DIVISOR pairing again, same as at
+ * the old radius, and by a similar relative margin (108-122 "outside" at
+ * RAMP 2 across the three divisors, versus 76-89 at RAMP 4, all at SPEED
+ * 255). Still not confirmed on a device at this new radius - see
  * docs/Sand/Explosion-Plan.md's "Device" section for what to look at
  * first once it is. */
 #define SAND_IMPULSE_SPEED_RAMP  2
@@ -622,7 +633,15 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * "how far things fly" in the sense the old SAND_BLAST_DECAY used to mean
  * it, just relocated to belong to the explosion that actually decides it,
  * rather than living inside the generic flight mechanism as though every
- * future caller would want the same number. */
+ * future caller would want the same number.
+ *
+ * RECONFIRMED AT DOUBLE THE RADIUS, same as SAND_IMPULSE_SPEED_RAMP's own
+ * comment describes: the 18-way combined grid re-run at 48 cells (was 24)
+ * found 255 still beating 200 and 250 at every RAMP/DIVISOR pairing - at
+ * RAMP 2, DIVISOR 5 specifically, 37.6 (200) / 103.2 (250) / 122.1 (255)
+ * "outside", the same ordering and a similar relative gap to before. There
+ * is still nowhere to raise this to, so a bigger radius did not change
+ * that either. */
 #define SAND_EXPLODE_INITIAL_SPEED  255
 
 /* How much of the blast radius sand_explode() fills with fire before it
@@ -711,6 +730,20 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * just at the shipped SPEED/RAMP pair - divisor 5 was the cheapest of the
  * three divisors for destruction at every other pairing in the grid as
  * well, never only on average. Not yet confirmed on a device.
+ *
+ * RECONFIRMED, WITH A BIGGER EFFECT, AT DOUBLE THE RADIUS. The core's own
+ * area scales with the SQUARE of the radius, so doubling the radius from
+ * 24 to 48 cells (see DETONATE_RADIUS_PX in app_sand.c) roughly quadruples
+ * everything divisor decides - measured, not merely expected: at SPEED
+ * 255, RAMP 2, "destroyed" came in at 730.5 for divisor 3, 411.6 for 4,
+ * and 237.4 for 5, each almost exactly what the r=24 figures above times
+ * four would predict. Unlike at the old radius, divisor here also nudged
+ * "outside" UP as it rose (108.5 / 116.1 / 122.1 across 3/4/5) rather than
+ * sitting flat - a bigger core apparently costs a little of the annulus's
+ * own throw too, not just what it converts - so 5 is no longer merely the
+ * cheapest-for-the-same-throw option, it is the best of the three on BOTH
+ * numbers at once at this radius. Still not confirmed on a device at this
+ * new radius.
  *
  * PLAIN DIVISION IS CLAMPED TO A MINIMUM OF 1 for any radius >= 2 - see
  * sand_explode()'s own comment on `core_radius` in sand.c. Raising the
@@ -803,7 +836,35 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * same as any other buried flame. What can never legitimately happen,
  * from either the fill or anything after it, is the count exceeding
  * (count before the call) + (empty cells the core just filled) - that
- * half is exact, always. */
+ * half is exact, always.
+ *
+ * EVERY OCCUPIED ANNULUS CELL IS SEEDED, NOT A SAMPLE OF THEM - TRIED AND
+ * REJECTED, not left unconsidered. Once a flying grain could displace what
+ * it hit (see can_impulse_enter() in sand.c), it was reasonable to guess
+ * that seeding only a fraction of the annulus might be enough: a pushed
+ * grain shoulders its neighbours aside on the way, so maybe motion
+ * propagates through the medium on its own and the rest never needed
+ * their own entry. Measured against the dune scene at this file's shipped
+ * constants and DETONATE_RADIUS_PX's 48-cell radius: full seeding put
+ * "grains outside the footprint" at 122.1 (n=30); seeding every OTHER
+ * annulus cell (a spatial checkerboard, not a scan-order stride, so
+ * coverage stayed uniform) dropped it to 90.6; a quarter dropped it
+ * further, to 65.7 - a clear, monotonic decline, not noise. "Destroyed"
+ * barely moved (237.4 / 236.4 / 235.8), which makes sense: that number is
+ * the core's own area, untouched by how the annulus is seeded. The
+ * hypothesis does not hold, and the reason is structural, not a tuning
+ * miss: a cell displaced as someone ELSE's neighbour gets shoved exactly
+ * once, into whatever cell that mover just vacated, and then sits still -
+ * it was never itself given a direction or a speed, so nothing carries it
+ * any further unless a second, separately-seeded entry happens to reach
+ * it again. Sparse seeding was hoping for a chain reaction that the
+ * design, correctly, does not produce (see step_impulses()'s own "no
+ * cascade" discipline in sand.c) - the fix for a deep grain having
+ * nowhere to go was letting it be PUSHED, not letting one push propagate
+ * indefinitely through everything nearby. Full seeding stays exactly
+ * because of the bound this project already holds every part of this
+ * mechanic to, so a bigger radius keeps costing the memory its own disc
+ * implies rather than getting cheaper by accident. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* FRICTION
