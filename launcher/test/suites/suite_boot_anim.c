@@ -1,24 +1,23 @@
 /*=============================================================================
- * Portable suite: the startup animation's maths and choreography.
+ * Portable suite: the startup animation's projection, curve, smoothing and
+ * timeline.
  *
- * boot_anim.h is the whole of what is tested here - the tables, the curve,
- * the plane and the timeline. boot_anim.c, which turns all that into gfx
- * calls, is not: it needs a framebuffer and a panel.
+ * boot_anim.h and the generated boot_anim_curve.h are the whole of what is
+ * tested here. boot_anim.c, which turns all that into gfx calls, is not: it
+ * needs a framebuffer and a panel.
  *
- * NO libm, ON PURPOSE
+ * THE TABLE IS TESTED AGAINST THE MATHEMATICS, NOT AGAINST ITSELF
  *
- * The obvious way to check a sine table is against sin(), and the obvious way
- * to check ln(n) is against log() - but test/run_tests.sh links no maths
- * library, and adding one would mean this suite proving that the host's libm
- * agrees with the host's libm. Everything below is checked by an IDENTITY the
- * table itself must satisfy instead:
+ * tools/gen_zeta_curve.py already refuses to emit a table unless its own
+ * evaluation of zeta checks out, but that proves nothing about the file
+ * actually in the repo - which could be stale, hand-edited, or generated with
+ * different constants than boot_anim.h now uses.
  *
- *     sin^2 + cos^2 == 1              catches any wrong sine entry
- *     ln(a) + ln(b) == ln(a*b)        catches any wrong logarithm entry
- *     n * (1/sqrt(n))^2 == 1          catches any wrong length entry
- *
- * which is stronger than a spot check against a library, because a single
- * mistyped digit anywhere fails several of them at once.
+ * So the shipped numbers are checked directly, and against the one thing that
+ * makes this curve worth drawing: it must pass through zero at the five known
+ * heights, and it must NOT come anywhere near zero anywhere else. Those are
+ * the first five nontrivial zeros of the zeta function, and no table of
+ * plausible-looking numbers passes both halves by accident.
  *===========================================================================*/
 
 #include <stdbool.h>
@@ -35,245 +34,287 @@
 #define PANEL_W 368
 #define PANEL_H 448
 
-/*---------------------------------------------------------------------------
- * The sine table
- *-------------------------------------------------------------------------*/
-
-static void test_the_quarter_wave_starts_at_zero_and_ends_at_one(void)
+/* |zeta|^2 in Q24, so nothing here needs a square root. */
+static int32_t mag_sq(const boot_anim_sample_t *s)
 {
-    TEST_ASSERT_EQUAL_INT(0, boot_anim_sin_quarter[0]);
-    TEST_ASSERT_EQUAL_INT(32767, boot_anim_sin_quarter[64]);
+    return (int32_t)s->re * s->re + (int32_t)s->im * s->im;
 }
 
-static void test_the_quarter_wave_rises_all_the_way(void)
+/* A Q12 magnitude, squared - what mag_sq() is compared against. */
+static int32_t threshold_sq(int32_t q12)
 {
-    for (int i = 1; i < 65; i++) {
-        TEST_ASSERT_TRUE_MESSAGE(boot_anim_sin_quarter[i] >
-                                 boot_anim_sin_quarter[i - 1],
-            "the quarter wave must increase at every step - a dip means a "
-            "transposed or mistyped entry");
-    }
-}
-
-/* The identity that pins every entry down at once. Q15 squares are summed in
- * 64-bit and compared against 1.0 in Q30. */
-static void test_sin_squared_plus_cos_squared_is_one(void)
-{
-    for (uint32_t phase = 0; phase < 65536; phase += 7) {
-        const int64_t s = boot_anim_sin((uint16_t)phase);
-        const int64_t c = boot_anim_cos((uint16_t)phase);
-        const int64_t sum = s * s + c * c;
-        const int64_t one = (int64_t)32767 * 32767;
-
-        /* The tolerance is the interpolation error between table points, not
-         * slack for a bad table: a wrong entry is out by hundreds of times
-         * this. */
-        TEST_ASSERT_TRUE_MESSAGE(sum > one - one / 300 && sum < one + one / 300,
-            "sin^2 + cos^2 left the neighbourhood of 1");
-    }
-}
-
-static void test_sine_is_odd_about_the_origin(void)
-{
-    for (uint32_t phase = 1; phase < 32768; phase += 13) {
-        const int32_t a = boot_anim_sin((uint16_t)phase);
-        const int32_t b = boot_anim_sin((uint16_t)(65536u - phase));
-        TEST_ASSERT_INT_WITHIN_MESSAGE(2, a, -b,
-            "sin(-x) should be -sin(x) - the quadrant reflection is wrong");
-    }
-}
-
-static void test_the_quarter_points_are_exact(void)
-{
-    TEST_ASSERT_EQUAL_INT(0, boot_anim_sin(0));
-    TEST_ASSERT_EQUAL_INT(32767, boot_anim_sin(16384));
-    TEST_ASSERT_EQUAL_INT(0, boot_anim_sin(32768));
-    TEST_ASSERT_EQUAL_INT(-32767, boot_anim_sin(49152));
-    TEST_ASSERT_EQUAL_INT(32767, boot_anim_cos(0));
-}
-
-/*---------------------------------------------------------------------------
- * The per-term tables
- *-------------------------------------------------------------------------*/
-
-/* ln(a) + ln(b) == ln(a*b), over every pair whose product is still in the
- * table. Nothing here computes a logarithm; the table has to be consistent
- * with itself, and only a correct one can be. */
-static void test_the_log_table_adds_up(void)
-{
-    for (int a = 2; a <= BOOT_ANIM_TERMS; a++) {
-        for (int b = a; a * b <= BOOT_ANIM_TERMS; b++) {
-            const int32_t sum = boot_anim_ln_phase[a] + boot_anim_ln_phase[b];
-            TEST_ASSERT_INT32_WITHIN_MESSAGE(2, boot_anim_ln_phase[a * b], sum,
-                "ln(a) + ln(b) did not match ln(a*b) - one of the three "
-                "entries is wrong");
-        }
-    }
-}
-
-static void test_the_log_table_starts_at_zero_and_climbs(void)
-{
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_ln_phase[1]);
-    for (int n = 2; n <= BOOT_ANIM_TERMS; n++) {
-        TEST_ASSERT_TRUE_MESSAGE(boot_anim_ln_phase[n] >
-                                 boot_anim_ln_phase[n - 1],
-            "ln is increasing; this table is not");
-    }
-}
-
-/* n * (1/sqrt(n))^2 == 1, in Q12. */
-static void test_the_length_table_is_a_reciprocal_square_root(void)
-{
-    for (int n = 1; n <= BOOT_ANIM_TERMS; n++) {
-        const int64_t len = boot_anim_inv_sqrt[n];
-        const int64_t got = n * len * len;
-        const int64_t one = (int64_t)BOOT_ANIM_ONE * BOOT_ANIM_ONE;
-
-        TEST_ASSERT_TRUE_MESSAGE(got > one - one / 200 && got < one + one / 200,
-            "n / n = 1 failed for some n - a length entry is wrong");
-    }
-}
-
-static void test_the_arc_length_constant_matches_the_table(void)
-{
-    int32_t total = 0;
-    for (int n = 1; n <= BOOT_ANIM_TERMS; n++) {
-        total += boot_anim_inv_sqrt[n];
-    }
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(BOOT_ANIM_ARC_Q12, total,
-        "BOOT_ANIM_ARC_Q12 must be exactly the sum of the length table, or "
-        "the colour gradient will not reach its end on the last term");
+    return q12 * q12;
 }
 
 /*---------------------------------------------------------------------------
  * The curve
  *-------------------------------------------------------------------------*/
 
-static void test_a_walk_starts_at_the_origin(void)
+static void test_the_curve_climbs_from_zero_to_the_top(void)
 {
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        boot_anim_walk_t w;
-        boot_anim_walk_begin(&w, k);
-        TEST_ASSERT_EQUAL_INT32(0, w.z.re);
-        TEST_ASSERT_EQUAL_INT32(0, w.z.im);
-        TEST_ASSERT_EQUAL_INT32(0, w.arc);
-        TEST_ASSERT_EQUAL_INT(0, w.n);
+    TEST_ASSERT_EQUAL_INT(0, boot_anim_curve[0].t);
+    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_T_MAX << BOOT_ANIM_TQ,
+                          boot_anim_curve[BOOT_ANIM_CURVE_POINTS - 1].t);
+}
+
+/* t only ever increases. The picture is a climb, and a sample out of order
+ * would draw a segment going back down through everything above it. */
+static void test_the_curve_never_descends(void)
+{
+    for (int i = 1; i < BOOT_ANIM_CURVE_POINTS; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(boot_anim_curve[i].t >=
+                                 boot_anim_curve[i - 1].t,
+            "the curve went back down - the table is out of order");
     }
 }
 
-/* Term one is 1^(-1/2) turned by t*ln(1) - that is, one unit along the real
- * axis, whatever t is. Every spiral therefore leaves the origin the same way,
- * which is visible in the picture and is the cheapest possible check that the
- * phase multiply is not scaled wrongly. */
-static void test_the_first_term_is_one_along_the_real_axis(void)
+/* THE test. At each of the five listed heights the curve must reach the t
+ * axis, which is zeta vanishing there.
+ *
+ * 0.15 rather than 0 because the table is a sampling: the nearest sample to a
+ * crossing sits a little to one side of it. The measured worst case is 0.084,
+ * and the check below that this never happens away from a zero is what stops
+ * the tolerance being meaningless. */
+static void test_the_curve_meets_the_axis_at_every_known_zero(void)
 {
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        boot_anim_walk_t w;
-        boot_anim_walk_begin(&w, k);
-        boot_anim_walk_step(&w);
+    const int32_t window = 1 << BOOT_ANIM_TQ;    /* +/- 1.0 in t */
+    const int32_t close  = threshold_sq((int32_t)(0.15 * BOOT_ANIM_ONE));
 
-        TEST_ASSERT_INT32_WITHIN(2, BOOT_ANIM_ONE, w.z.re);
-        TEST_ASSERT_INT32_WITHIN(2, 0, w.z.im);
+    for (int z = 0; z < BOOT_ANIM_ZEROS; z++) {
+        int32_t best = INT32_MAX;
+        for (int i = 0; i < BOOT_ANIM_CURVE_POINTS; i++) {
+            const int32_t dt = boot_anim_curve[i].t - boot_anim_zero_t[z];
+            if (dt >= -window && dt <= window) {
+                const int32_t m = mag_sq(&boot_anim_curve[i]);
+                if (m < best) {
+                    best = m;
+                }
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(best <= close,
+            "the curve does not reach the t axis at one of the heights where "
+            "zeta is known to vanish");
     }
 }
 
-/* Each step must be exactly as long as the table says, which is what proves
- * the sine and cosine of the term's phase were taken from the same angle.
- * Squared lengths, so no square root is needed. */
-static void test_every_step_is_the_length_the_table_promises(void)
+/* The other half, and the one that gives the test above its teeth: away from
+ * a zero the curve must stay well clear of the axis. Measured minimum is
+ * 0.527, so 0.35 leaves room without letting a flat or collapsed table pass. */
+static void test_the_curve_keeps_away_from_the_axis_everywhere_else(void)
 {
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        boot_anim_walk_t w;
-        boot_anim_walk_begin(&w, k);
+    const int32_t window = 2 << BOOT_ANIM_TQ;    /* +/- 2.0 in t */
+    const int32_t clear  = threshold_sq((int32_t)(0.35 * BOOT_ANIM_ONE));
 
-        for (int n = 1; n <= BOOT_ANIM_TERMS; n++) {
-            const boot_anim_pt_t before = w.z;
-            boot_anim_walk_step(&w);
+    for (int i = 0; i < BOOT_ANIM_CURVE_POINTS; i++) {
+        bool near_a_zero = false;
+        for (int z = 0; z < BOOT_ANIM_ZEROS; z++) {
+            const int32_t dt = boot_anim_curve[i].t - boot_anim_zero_t[z];
+            if (dt >= -window && dt <= window) {
+                near_a_zero = true;
+            }
+        }
+        if (near_a_zero) {
+            continue;
+        }
+        TEST_ASSERT_TRUE_MESSAGE(mag_sq(&boot_anim_curve[i]) > clear,
+            "the curve came close to the t axis at a height where zeta does "
+            "not vanish");
+    }
+}
 
-            const int64_t dx = w.z.re - before.re;
-            const int64_t dy = w.z.im - before.im;
-            const int64_t got = dx * dx + dy * dy;
-            const int64_t want = (int64_t)boot_anim_inv_sqrt[n] *
-                                 boot_anim_inv_sqrt[n];
-
-            TEST_ASSERT_TRUE_MESSAGE(got > want - want / 100 - 4 &&
-                                     got < want + want / 100 + 4,
-                "a term's step was not the length its table entry says");
+static void test_every_listed_zero_is_on_the_climb_and_in_order(void)
+{
+    for (int z = 0; z < BOOT_ANIM_ZEROS; z++) {
+        TEST_ASSERT_TRUE(boot_anim_zero_t[z] > 0);
+        TEST_ASSERT_TRUE(boot_anim_zero_t[z] < (BOOT_ANIM_T_MAX << BOOT_ANIM_TQ));
+        if (z > 0) {
+            /* draw_zeros() stops at the first zero above the pen, which is
+             * only correct while the table is sorted. */
+            TEST_ASSERT_TRUE_MESSAGE(boot_anim_zero_t[z] > boot_anim_zero_t[z - 1],
+                "the zeros must be in increasing order");
         }
     }
 }
 
-static void test_a_walk_stops_at_the_last_term(void)
+static void test_samples_are_clamped_rather_than_read_out_of_range(void)
 {
-    boot_anim_walk_t w;
-    boot_anim_walk_begin(&w, 0);
-    for (int i = 0; i < BOOT_ANIM_TERMS + 20; i++) {
-        boot_anim_walk_step(&w);
-    }
-    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_TERMS, w.n);
-    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_ARC_Q12, w.arc);
+    const boot_anim_pt_t first = boot_anim_sample(0);
+    const boot_anim_pt_t last  = boot_anim_sample(BOOT_ANIM_CURVE_POINTS - 1);
+
+    TEST_ASSERT_EQUAL_INT32(first.t, boot_anim_sample(-1).t);
+    TEST_ASSERT_EQUAL_INT32(first.re, boot_anim_sample(-99).re);
+    TEST_ASSERT_EQUAL_INT32(last.t, boot_anim_sample(BOOT_ANIM_CURVE_POINTS).t);
+    TEST_ASSERT_EQUAL_INT32(last.im,
+                            boot_anim_sample(BOOT_ANIM_CURVE_POINTS + 99).im);
 }
 
-static void test_the_gradient_reaches_its_end_exactly_at_the_last_term(void)
-{
-    boot_anim_walk_t w;
-    boot_anim_walk_begin(&w, 0);
-    for (int n = 1; n <= BOOT_ANIM_TERMS; n++) {
-        boot_anim_walk_step(&w);
-    }
-    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_ONE, boot_anim_along(&w));
-}
+/*---------------------------------------------------------------------------
+ * The projection
+ *-------------------------------------------------------------------------*/
 
-/* The layout guard. Every point of every spiral has to land on the panel, at
- * this origin and this scale - so a change to either that pushes the picture
- * off the edge fails here rather than on the bench. */
-static void test_the_whole_picture_fits_on_the_panel(void)
-{
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        boot_anim_walk_t w;
-        boot_anim_walk_begin(&w, k);
-
-        for (int n = 0; n <= BOOT_ANIM_TERMS; n++) {
-            const int x = boot_anim_screen_x(PANEL_W, w.z.re);
-            const int y = boot_anim_screen_y(PANEL_H, w.z.im);
-
-            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
-                "a spiral ran off the left or right of the panel");
-            TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
-                "a spiral ran off the top or bottom of the panel");
-
-            boot_anim_walk_step(&w);
-        }
-    }
-}
-
-static void test_the_origin_sits_left_of_centre_but_not_at_the_edge(void)
-{
-    const int ox = boot_anim_origin_x(PANEL_W);
-
-    TEST_ASSERT_TRUE_MESSAGE(ox < PANEL_W / 2,
-        "the origin is meant to be offset to the LEFT of centre");
-    TEST_ASSERT_TRUE_MESSAGE(ox > PANEL_W / 4,
-        "offset to the left, not shoved against the edge");
-    TEST_ASSERT_EQUAL_INT(PANEL_H / 2, boot_anim_origin_y(PANEL_H));
-}
-
-static void test_the_origin_maps_to_itself(void)
+static void test_the_origin_maps_to_the_origin(void)
 {
     TEST_ASSERT_EQUAL_INT(boot_anim_origin_x(PANEL_W),
-                          boot_anim_screen_x(PANEL_W, 0));
+                          boot_anim_screen_x(PANEL_W, 0, 0));
     TEST_ASSERT_EQUAL_INT(boot_anim_origin_y(PANEL_H),
-                          boot_anim_screen_y(PANEL_H, 0));
+                          boot_anim_screen_y(PANEL_H, 0, 0, 0));
 }
 
-/* Positive imaginary parts must draw UPWARDS, which is the opposite of the
- * framebuffer's y and the easiest sign in the file to get backwards. */
-static void test_the_imaginary_axis_points_up(void)
+/* The three axes have to go in three different directions, and each of the
+ * six signs below is one that would silently mirror the picture if it were
+ * wrong. t especially: screen y grows downward and height does not. */
+static void test_the_three_axes_point_the_way_they_are_supposed_to(void)
 {
-    TEST_ASSERT_TRUE(boot_anim_screen_y(PANEL_H, BOOT_ANIM_ONE) <
-                     boot_anim_screen_y(PANEL_H, 0));
-    TEST_ASSERT_TRUE(boot_anim_screen_x(PANEL_W, BOOT_ANIM_ONE) >
-                     boot_anim_screen_x(PANEL_W, 0));
+    const int32_t one = BOOT_ANIM_ONE;
+    const int ox = boot_anim_origin_x(PANEL_W);
+    const int oy = boot_anim_origin_y(PANEL_H);
+
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(PANEL_W, one, 0) > ox,
+        "the real axis should run to the right");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, one, 0, 0) > oy,
+        "the real axis should run downward, into the floor");
+
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(PANEL_W, 0, one) < ox,
+        "the imaginary axis should run to the left");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, 0, one, 0) > oy,
+        "the imaginary axis should run downward, into the floor");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(ox, boot_anim_screen_x(PANEL_W, 0, 0),
+        "t should not move a point sideways at all");
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_screen_y(PANEL_H, 0, 0, 1 << BOOT_ANIM_TQ) < oy,
+        "t should run UP the screen, which is downward in y");
+}
+
+/* The imaginary axis at 45 degrees, which is what makes the floor read as a
+ * floor: equal steps left and down. */
+static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
+{
+    const int ox = boot_anim_origin_x(PANEL_W);
+    const int oy = boot_anim_origin_y(PANEL_H);
+    const int32_t three = 3 * BOOT_ANIM_ONE;
+
+    const int dx = ox - boot_anim_screen_x(PANEL_W, 0, three);
+    const int dy = boot_anim_screen_y(PANEL_H, 0, three, 0) - oy;
+
+    TEST_ASSERT_INT_WITHIN_MESSAGE(1, dx, dy,
+        "the imaginary axis should go as far left as it goes down");
+}
+
+/* The layout guard: the whole scene has to land on the panel. Curve, floor
+ * and the top of the t axis, so that changing a scale, an angle or the height
+ * of the climb fails here rather than on the bench. */
+static void test_the_whole_scene_fits_on_the_panel(void)
+{
+    for (int i = 0; i < BOOT_ANIM_CURVE_POINTS; i++) {
+        const boot_anim_pt_t p = boot_anim_sample(i);
+        const int x = boot_anim_screen_x(PANEL_W, p.re, p.im);
+        const int y = boot_anim_screen_y(PANEL_H, p.re, p.im, p.t);
+
+        TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
+            "the curve ran off the side of the panel");
+        TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
+            "the curve ran off the top or bottom of the panel");
+    }
+
+    const int32_t edge = BOOT_ANIM_GRID_RINGS * BOOT_ANIM_ONE;
+    for (int a = -1; a <= 1; a += 2) {
+        for (int b = -1; b <= 1; b += 2) {
+            const int x = boot_anim_screen_x(PANEL_W, a * edge, b * edge);
+            const int y = boot_anim_screen_y(PANEL_H, a * edge, b * edge, 0);
+            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
+                "a corner of the floor is off the side of the panel");
+            TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
+                "a corner of the floor is off the panel");
+        }
+    }
+
+    const int top = boot_anim_screen_y(PANEL_H, 0, 0,
+                                       (BOOT_ANIM_T_MAX + 1) << BOOT_ANIM_TQ);
+    TEST_ASSERT_TRUE_MESSAGE(top >= 0,
+        "the top of the t axis is off the top of the panel");
+}
+
+/*---------------------------------------------------------------------------
+ * Smoothing
+ *-------------------------------------------------------------------------*/
+
+static boot_anim_pt_t pt(int32_t re, int32_t im, int32_t t)
+{
+    boot_anim_pt_t p = { re, im, t };
+    return p;
+}
+
+/* A span runs from the midpoint of the first two control points to the
+ * midpoint of the last two, which is what makes consecutive spans join. */
+static void test_a_span_starts_and_ends_halfway_between_its_points(void)
+{
+    const boot_anim_pt_t a = pt(0, 0, 0);
+    const boot_anim_pt_t b = pt(4096, 2048, 512);
+    const boot_anim_pt_t c = pt(8192, -2048, 1024);
+
+    const boot_anim_pt_t start = boot_anim_spline(a, b, c, 0);
+    const boot_anim_pt_t end   = boot_anim_spline(a, b, c, BOOT_ANIM_ONE);
+
+    TEST_ASSERT_INT32_WITHIN(1, (a.re + b.re) / 2, start.re);
+    TEST_ASSERT_INT32_WITHIN(1, (a.im + b.im) / 2, start.im);
+    TEST_ASSERT_INT32_WITHIN(1, (a.t + b.t) / 2, start.t);
+
+    TEST_ASSERT_INT32_WITHIN(1, (b.re + c.re) / 2, end.re);
+    TEST_ASSERT_INT32_WITHIN(1, (b.im + c.im) / 2, end.im);
+    TEST_ASSERT_INT32_WITHIN(1, (b.t + c.t) / 2, end.t);
+}
+
+/* Repeating a control point pins the curve to it, which is how the first and
+ * last samples end up actually being drawn rather than half a span in. */
+static void test_a_repeated_point_pins_the_end_of_the_curve(void)
+{
+    const boot_anim_pt_t a = pt(1000, -2000, 300);
+    const boot_anim_pt_t b = pt(5000, 1500, 900);
+
+    const boot_anim_pt_t start = boot_anim_spline(a, a, b, 0);
+    TEST_ASSERT_INT32_WITHIN(1, a.re, start.re);
+    TEST_ASSERT_INT32_WITHIN(1, a.im, start.im);
+    TEST_ASSERT_INT32_WITHIN(1, a.t, start.t);
+}
+
+/* The convex hull property, which is the whole reason this is a B-spline and
+ * not a Catmull-Rom: no point of the curve may leave the box its control
+ * points span. An interpolating spline would overshoot here, and the picture
+ * would bulge exactly where the curve turns hardest. */
+static void test_a_span_never_leaves_its_control_points_behind(void)
+{
+    const boot_anim_pt_t a = pt(-3000, 500, 0);
+    const boot_anim_pt_t b = pt(4000, -2500, 400);
+    const boot_anim_pt_t c = pt(-2500, 3000, 800);
+
+    const int32_t lo_re = -3000, hi_re = 4000;
+    const int32_t lo_im = -2500, hi_im = 3000;
+
+    for (int32_t t = 0; t <= BOOT_ANIM_ONE; t += 37) {
+        const boot_anim_pt_t p = boot_anim_spline(a, b, c, t);
+        TEST_ASSERT_TRUE_MESSAGE(p.re >= lo_re - 1 && p.re <= hi_re + 1,
+            "the spline overshot its control points - that is a Catmull-Rom "
+            "failure mode and this is supposed to be a B-spline");
+        TEST_ASSERT_TRUE_MESSAGE(p.im >= lo_im - 1 && p.im <= hi_im + 1,
+            "the spline overshot its control points");
+    }
+}
+
+/* Height must not wobble across a span either: the whole curve climbs, so a
+ * span between two rising samples has to rise all the way through. */
+static void test_a_span_climbs_steadily_when_its_points_do(void)
+{
+    const boot_anim_pt_t a = pt(0, 0, 100);
+    const boot_anim_pt_t b = pt(3000, 1000, 200);
+    const boot_anim_pt_t c = pt(-1000, 2000, 300);
+
+    int32_t last = boot_anim_spline(a, b, c, 0).t;
+    for (int32_t t = 64; t <= BOOT_ANIM_ONE; t += 64) {
+        const int32_t now = boot_anim_spline(a, b, c, t).t;
+        TEST_ASSERT_TRUE_MESSAGE(now >= last, "a span dipped on its way up");
+        last = now;
+    }
 }
 
 /*---------------------------------------------------------------------------
@@ -306,45 +347,19 @@ static void test_the_ease_keeps_its_endpoints_and_leads_in_the_middle(void)
         "an ease-out is ahead of linear part way through, not behind it");
 }
 
-/* The whole point of pacing by arc length: term one is a fifth of the screen
- * long, so the pen must still be on it well after it set off. */
-static void test_the_pen_spends_real_time_on_the_first_term(void)
+static void test_the_pen_runs_from_nothing_to_the_whole_curve(void)
 {
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen_terms(0));
-    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_TERMS * BOOT_ANIM_ONE,
-                            boot_anim_pen_terms(BOOT_ANIM_ONE));
-
-    /* A tenth of the way along the curve is only one term in. */
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_pen_terms(BOOT_ANIM_ONE / 10) < 2 * BOOT_ANIM_ONE,
-        "pacing looks linear in the term index, which would fling the pen "
-        "across the screen and then leave it crawling");
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(0));
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(BOOT_ANIM_PEN_START_MS));
+    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_ONE,
+        boot_anim_pen(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS));
 }
 
-static void test_the_pen_never_goes_backwards(void)
+static void test_the_curve_is_finished_before_the_dissolve_starts(void)
 {
-    int32_t last = -1;
-    for (int32_t p = 0; p <= BOOT_ANIM_ONE; p += 8) {
-        const int32_t terms = boot_anim_pen_terms(p);
-        TEST_ASSERT_TRUE_MESSAGE(terms >= last, "the pen went backwards");
-        last = terms;
-    }
-}
-
-static void test_every_spiral_is_finished_before_the_dissolve_starts(void)
-{
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        TEST_ASSERT_EQUAL_INT32_MESSAGE(
-            BOOT_ANIM_ONE, boot_anim_pen(BOOT_ANIM_FADE_START_MS, k),
-            "a spiral was still being drawn when the picture began fading");
-    }
-}
-
-static void test_the_spirals_do_not_all_set_off_at_once(void)
-{
-    const uint32_t t = BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_STAGGER_MS / 2;
-    TEST_ASSERT_TRUE(boot_anim_pen(t, 0) > 0);
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(t, 1));
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(BOOT_ANIM_ONE,
+        boot_anim_pen(BOOT_ANIM_FADE_START_MS),
+        "the curve was still being drawn when the picture began fading");
 }
 
 static void test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void)
@@ -355,21 +370,19 @@ static void test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void)
     TEST_ASSERT_TRUE(boot_anim_ink(BOOT_ANIM_MS - 100) < 255);
 }
 
-static void test_the_grid_fades_in_from_the_origin_outward(void)
+static void test_the_floor_fades_in_from_the_origin_outward(void)
 {
-    /* At the moment ring 2 is starting, ring 1 is already part way up and
-     * ring 3 has not begun. */
     const uint32_t t = BOOT_ANIM_GRID_START_MS + 2 * BOOT_ANIM_GRID_RING_MS + 1;
 
     TEST_ASSERT_TRUE(boot_anim_grid_alpha(t, 1) > boot_anim_grid_alpha(t, 2));
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_alpha(t, 3));
 }
 
-static void test_the_axes_are_drawn_before_anything_is_plotted_on_them(void)
+static void test_the_axes_are_there_before_the_curve_starts_climbing(void)
 {
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_axis_reach(BOOT_ANIM_AXES_MS));
     TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_AXES_MS <= BOOT_ANIM_PEN_START_MS,
-        "the plane should be there before the curve arrives on it");
+        "the axes should be drawn before anything is plotted against them");
 }
 
 /*---------------------------------------------------------------------------
@@ -417,80 +430,112 @@ static void test_the_hue_wheel_has_no_seams(void)
             const int cb = (int)((b >> shift) & 0xFF);
             const int step = ca > cb ? ca - cb : cb - ca;
             TEST_ASSERT_TRUE_MESSAGE(step <= 1,
-                "a channel jumped between neighbouring hues - the wheel has "
-                "a seam at a sector boundary");
+                "a channel jumped between neighbouring hues - the wheel has a "
+                "seam at a sector boundary");
         }
     }
 }
 
-static void test_a_stroke_brightens_along_the_curve(void)
+static void test_height_changes_the_hue(void)
 {
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        const boot_anim_stroke_t tail = boot_anim_stroke(k, 0);
-        const boot_anim_stroke_t head = boot_anim_stroke(k, BOOT_ANIM_ONE);
+    const boot_anim_stroke_t foot = boot_anim_stroke(0, 0);
+    const boot_anim_stroke_t top  = boot_anim_stroke(BOOT_ANIM_ONE, 0);
 
-        TEST_ASSERT_TRUE_MESSAGE(head.glow > tail.glow,
-            "the newest part of the spiral should be the brightest");
-        TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, head.glow,
-            "the head of the curve should reach full brightness");
-        TEST_ASSERT_TRUE_MESSAGE(head.bloom > tail.bloom,
-            "the core should wash toward white, the tail should not");
-        TEST_ASSERT_TRUE_MESSAGE(head.hue > tail.hue,
-            "a spiral's colour should travel round the wheel as it winds in");
+    TEST_ASSERT_TRUE_MESSAGE(top.hue - foot.hue > BOOT_ANIM_HUE_TURN / 2,
+        "the climb should turn most of the way round the wheel, so that "
+        "height reads as colour");
+}
+
+/* The trail: bright at the pen, fading behind it, and gone by the time it is
+ * a whole trail-length back. */
+static void test_the_trail_is_brightest_at_the_pen_and_fades_behind_it(void)
+{
+    const int32_t pen = BOOT_ANIM_ONE / 2;
+
+    const boot_anim_stroke_t at   = boot_anim_stroke(pen, pen);
+    const boot_anim_stroke_t near = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_Q12 / 4, pen);
+    const boot_anim_stroke_t far  = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_Q12, pen);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, at.glow,
+        "the stroke under the pen should be at full brightness");
+    TEST_ASSERT_TRUE_MESSAGE(at.glow > near.glow && near.glow > far.glow,
+        "the trail should fade with distance behind the pen");
+}
+
+/* Beyond the trail's reach, only the base is left - which is what the
+ * finished picture is made of, and it must still be lit and still be
+ * coloured. */
+static void test_settled_curve_keeps_its_colour(void)
+{
+    const int32_t pen = BOOT_ANIM_ONE;
+    const boot_anim_stroke_t settled = boot_anim_stroke(0, pen);
+
+    TEST_ASSERT_TRUE_MESSAGE(settled.glow > 96,
+        "the settled part of the curve should still be clearly lit");
+    TEST_ASSERT_TRUE_MESSAGE(settled.bloom < 64,
+        "the settled part should keep its hue rather than wash toward white");
+    TEST_ASSERT_EQUAL_UINT8(1, settled.width);
+}
+
+/* The bloom is capped well short of white on purpose - see boot_anim.h. A
+ * trail that reaches white has no colour left exactly where it is brightest. */
+static void test_the_trail_never_washes_out_to_white(void)
+{
+    for (int32_t along = 0; along <= BOOT_ANIM_ONE; along += 64) {
+        const boot_anim_stroke_t s = boot_anim_stroke(along, along);
+        TEST_ASSERT_TRUE_MESSAGE(s.bloom <= 128,
+            "the trail bloomed far enough toward white to lose its hue");
     }
 }
 
-static void test_the_spirals_start_on_different_hues(void)
+static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
 {
-    for (int a = 0; a < BOOT_ANIM_SPIRALS; a++) {
-        for (int b = a + 1; b < BOOT_ANIM_SPIRALS; b++) {
-            const int gap = boot_anim_spiral_hue[a] - boot_anim_spiral_hue[b];
-            TEST_ASSERT_TRUE_MESSAGE((gap > 128 || gap < -128),
-                "two spirals set off close enough in hue to be mistaken for "
-                "one another where they cross");
-        }
-    }
+    const int32_t pen = BOOT_ANIM_ONE / 2;
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(BOOT_ANIM_FAT_WIDTH,
+        boot_anim_stroke(pen, pen).width,
+        "the stroke at the pen should be the fat one");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(1,
+        boot_anim_stroke(pen - BOOT_ANIM_TRAIL_Q12, pen).width,
+        "a stroke a whole trail-length back should be thin again");
 }
 
 void run_boot_anim_suite(void)
 {
-    RUN_TEST(test_the_quarter_wave_starts_at_zero_and_ends_at_one);
-    RUN_TEST(test_the_quarter_wave_rises_all_the_way);
-    RUN_TEST(test_sin_squared_plus_cos_squared_is_one);
-    RUN_TEST(test_sine_is_odd_about_the_origin);
-    RUN_TEST(test_the_quarter_points_are_exact);
+    RUN_TEST(test_the_curve_climbs_from_zero_to_the_top);
+    RUN_TEST(test_the_curve_never_descends);
+    RUN_TEST(test_the_curve_meets_the_axis_at_every_known_zero);
+    RUN_TEST(test_the_curve_keeps_away_from_the_axis_everywhere_else);
+    RUN_TEST(test_every_listed_zero_is_on_the_climb_and_in_order);
+    RUN_TEST(test_samples_are_clamped_rather_than_read_out_of_range);
 
-    RUN_TEST(test_the_log_table_adds_up);
-    RUN_TEST(test_the_log_table_starts_at_zero_and_climbs);
-    RUN_TEST(test_the_length_table_is_a_reciprocal_square_root);
-    RUN_TEST(test_the_arc_length_constant_matches_the_table);
+    RUN_TEST(test_the_origin_maps_to_the_origin);
+    RUN_TEST(test_the_three_axes_point_the_way_they_are_supposed_to);
+    RUN_TEST(test_the_imaginary_axis_is_at_forty_five_degrees);
+    RUN_TEST(test_the_whole_scene_fits_on_the_panel);
 
-    RUN_TEST(test_a_walk_starts_at_the_origin);
-    RUN_TEST(test_the_first_term_is_one_along_the_real_axis);
-    RUN_TEST(test_every_step_is_the_length_the_table_promises);
-    RUN_TEST(test_a_walk_stops_at_the_last_term);
-    RUN_TEST(test_the_gradient_reaches_its_end_exactly_at_the_last_term);
-    RUN_TEST(test_the_whole_picture_fits_on_the_panel);
-    RUN_TEST(test_the_origin_sits_left_of_centre_but_not_at_the_edge);
-    RUN_TEST(test_the_origin_maps_to_itself);
-    RUN_TEST(test_the_imaginary_axis_points_up);
+    RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
+    RUN_TEST(test_a_repeated_point_pins_the_end_of_the_curve);
+    RUN_TEST(test_a_span_never_leaves_its_control_points_behind);
+    RUN_TEST(test_a_span_climbs_steadily_when_its_points_do);
 
     RUN_TEST(test_a_ramp_is_flat_before_and_after);
     RUN_TEST(test_a_ramp_never_goes_backwards);
     RUN_TEST(test_the_ease_keeps_its_endpoints_and_leads_in_the_middle);
-    RUN_TEST(test_the_pen_spends_real_time_on_the_first_term);
-    RUN_TEST(test_the_pen_never_goes_backwards);
-    RUN_TEST(test_every_spiral_is_finished_before_the_dissolve_starts);
-    RUN_TEST(test_the_spirals_do_not_all_set_off_at_once);
+    RUN_TEST(test_the_pen_runs_from_nothing_to_the_whole_curve);
+    RUN_TEST(test_the_curve_is_finished_before_the_dissolve_starts);
     RUN_TEST(test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end);
-    RUN_TEST(test_the_grid_fades_in_from_the_origin_outward);
-    RUN_TEST(test_the_axes_are_drawn_before_anything_is_plotted_on_them);
+    RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
+    RUN_TEST(test_the_axes_are_there_before_the_curve_starts_climbing);
 
     RUN_TEST(test_every_hue_is_fully_saturated);
     RUN_TEST(test_the_hue_wheel_joins_up);
     RUN_TEST(test_the_hue_wheel_has_no_seams);
-    RUN_TEST(test_a_stroke_brightens_along_the_curve);
-    RUN_TEST(test_the_spirals_start_on_different_hues);
+    RUN_TEST(test_height_changes_the_hue);
+    RUN_TEST(test_the_trail_is_brightest_at_the_pen_and_fades_behind_it);
+    RUN_TEST(test_settled_curve_keeps_its_colour);
+    RUN_TEST(test_the_trail_never_washes_out_to_white);
+    RUN_TEST(test_the_live_end_of_the_curve_is_drawn_thicker);
 }
 
 SUITE_REGISTER(run_boot_anim_suite);

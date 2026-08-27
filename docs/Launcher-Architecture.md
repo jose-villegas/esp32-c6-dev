@@ -17,6 +17,7 @@ launcher/
 └── main/
     ├── gfx.{h,c}       owns THE framebuffer, panel, primitives, text
     ├── boot_anim.{h,c} the startup animation      (the .h is host-tested)
+    ├── boot_anim_curve.h  GENERATED - see tools/gen_zeta_curve.py
     ├── touch.{h,c}     FT5x06 polling task
     ├── touch_fsm.{h,c} samples -> press/release events   (host-tested)
     ├── gesture.{h,c}   swipe recognition                 (host-tested)
@@ -114,19 +115,32 @@ gfx_init()                  panel up, framebuffer allocated
 post_run_after_display()    the rest of the health check
                             -> a failure holds the screen for 8 s
 selftest_run()              diagnostics builds only
-boot_anim_run()             the startup animation, ~3 s
+boot_anim_run()             the startup animation, ~5 s
 touch_start(), buttons_start()
 ui_launcher_init()
 ```
 
 The animation goes after the health checks, so a board with a fault says so
 before the device does anything decorative, and before touch starts, because
-there is nothing yet for a tap to reach. It draws the complex plane and the
-spirals the zeta function traces on it. `boot_anim.h` carries the maths, the
-layout and the timeline, all as integer arithmetic with no hardware header in
-sight, so every bit of it is checked on a host by
-`test/suites/suite_boot_anim.c`; `boot_anim.c` is left holding only gfx calls
-and the loop.
+there is nothing yet for a tap to reach.
+
+It draws three axes - the complex plane zeta's *value* lives in, as a floor,
+and the height *t* up the critical line, straight up - and then plots
+`zeta(1/2 + it)` climbing that axis. Where the curve touches the vertical
+axis, zeta is zero, and those five points are the first five nontrivial zeros.
+
+Three files, split by what can be tested where:
+
+| | |
+|---|---|
+| `boot_anim_curve.h` | the curve, as a generated table. Zeta cannot be had cheaply on a chip with no FPU, and the curve never changes, so `tools/gen_zeta_curve.py` computes it once in double precision and it ships in flash. |
+| `boot_anim.h` | the projection, the spline, the colour and the timeline - integer arithmetic, no hardware header, so `test/suites/suite_boot_anim.c` checks all of it on a host. |
+| `boot_anim.c` | gfx calls and the loop. |
+
+The suite checks the shipped table against the mathematics rather than against
+itself: the curve must reach the axis at each of the five known zero heights,
+and must stay well clear of it everywhere else. No table of plausible-looking
+numbers passes both halves by accident.
 
 ## The frame loop
 

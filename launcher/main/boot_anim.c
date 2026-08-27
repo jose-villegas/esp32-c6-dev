@@ -1,8 +1,9 @@
 /*=============================================================================
- * boot_anim - drawing the startup animation, and the three seconds it owns.
+ * boot_anim - drawing the startup animation, and the five seconds it owns.
  *
- * The maths, the layout and the timeline are all in boot_anim.h, where they
- * are host-testable. What is left here is gfx calls and one loop.
+ * The projection, the smoothing, the colour and the timeline are all in
+ * boot_anim.h, where they are host-testable, and the curve is a generated
+ * table in boot_anim_curve.h. What is left here is gfx calls and one loop.
  *
  * THIS LOOP IS NOT THE SHELL'S FRAME LOOP
  *
@@ -10,18 +11,19 @@
  * belongs to the shell, which is a rule about APPS: an app must not loop,
  * because the shell has to stay able to switch away from it. Nothing can be
  * switched to yet at this point in boot - touch is not even running - so this
- * runs to completion before app_main() reaches its loop at all, in the same
- * way show_post_failures() already blocks on a hardware fault. It still
- * yields every frame, so the idle task keeps feeding the watchdog.
+ * runs to completion before app_main() reaches its loop at all, the same way
+ * show_post_failures() already blocks on a hardware fault. It still yields
+ * every frame, so the idle task keeps feeding the watchdog.
  *
  * EVERY FRAME IS A FULL REPAINT
  *
  * Which is the one thing the rest of this project works hard to avoid - see
- * ui.c on skipping unchanged canvases. It is right here and wrong there: the
- * grid is still fading up while the spirals are being drawn over it, so a
- * frame differs from the one before it almost everywhere, and there is
- * nothing to save. The clear also gets the picture back to true black, which
- * is what the dissolve at the end fades into.
+ * ui.c on skipping unchanged canvases. It is right there and wrong here: the
+ * trail behind the pen re-colours a long stretch of curve every frame, so a
+ * frame differs from the one before it almost everywhere and there is nothing
+ * to save. The clear also gets the picture back to true black, which is both
+ * what the additive strokes need underneath them and what the dissolve at the
+ * end fades into.
  *===========================================================================*/
 
 #include "boot_anim.h"
@@ -29,38 +31,44 @@
 #include "gfx.h"
 #include "intmath.h"
 
+#include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
+static const char *TAG = "boot_anim";
+
 /* True black, not the launcher's near-black. On an AMOLED that is the pixel
- * switched off, and a lit curve sitting on switched-off pixels is the thing
- * this panel does that a backlit one cannot. */
+ * switched off, and lit colour on switched-off pixels is the thing this panel
+ * does that a backlit one cannot. */
 #define COL_BG        GFX_RGB(0x000000)
 #define COL_WHITE     GFX_RGB(0xFFFFFF)
 
 #define COL_AXIS      0x5A6478
 #define COL_TICK      0x8792A8
-#define COL_GRID      0x0E1524   /* quarter-unit lines */
-#define COL_GRID_UNIT 0x1B2438   /* the whole-unit ones */
+#define COL_GRID      0x121A2B
+#define COL_ZERO      0xFFFFFF
 
-/* Ticks are drawn on the axes at whole units, out to this many either way.
- * Only the ones that land on screen are drawn, which at the current scale
- * means +1 on the real axis and +/-i on the imaginary one. */
-#define TICK_UNITS 2
-#define TICK_ARM   3            /* half-length of the cross-bar, pixels */
-#define TICK_GAP   6            /* label's distance from the axis       */
-#define LABEL_SCALE 1           /* 8x8 glyphs: an axis label is small   */
+#define LABEL_SCALE 1           /* 8x8 glyphs: an axis label is small */
+#define LABEL_GAP   5
 
-#define PEN_DOT 3               /* the bright square at the pen's head */
+/* The bright head of the pen: three nested squares rather than a circle,
+ * because at this size the difference is a couple of corner pixels and this
+ * is three fills. */
+#define HEAD_OUTER 9
+#define HEAD_MID   5
+#define HEAD_CORE  3
+
+/* A zero of zeta, marked on the t axis where the curve crosses it. */
+#define ZERO_DOT 5
 
 /*---------------------------------------------------------------------------
  * Colour
  *-------------------------------------------------------------------------*/
 
-/* a * b / 255, both 0..255. Used to fold the global dissolve into whatever
- * alpha a thing already had, so one multiply takes the whole picture down
- * together rather than each element fading on its own schedule. */
+/* a * b / 255, both 0..255. Folds the global dissolve into whatever alpha a
+ * thing already had, so one multiply takes the whole picture down together
+ * rather than each element fading on its own schedule. */
 static uint8_t scale8(uint8_t a, uint8_t b)
 {
     return (uint8_t)(((uint32_t)a * b + 127u) / 255u);
@@ -73,203 +81,250 @@ static gfx_color_t lit(uint32_t rgb, uint8_t alpha)
 }
 
 /*---------------------------------------------------------------------------
- * The plane
+ * Projection helpers
+ *
+ * Thin wrappers that pin the panel size, so the rest of this file talks in
+ * world coordinates and never repeats GFX_WIDTH/GFX_HEIGHT.
  *-------------------------------------------------------------------------*/
 
-/* How many grid rings fit before the furthest corner of the screen. Derived
- * rather than fixed, because the origin is off-centre: the right half needs
- * more rings than the left, and both get the same count so that a ring is
- * always a matched pair either side of the axis. */
-static int grid_rings(void)
+static int sx(int32_t re, int32_t im)
 {
-    const int ox = boot_anim_origin_x(GFX_WIDTH);
-    const int oy = boot_anim_origin_y(GFX_HEIGHT);
-    const int far = im_max(im_max(ox, GFX_WIDTH  - 1 - ox),
-                           im_max(oy, GFX_HEIGHT - 1 - oy));
-    return far / BOOT_ANIM_GRID_PX;
+    return boot_anim_screen_x(GFX_WIDTH, re, im);
 }
 
-static void draw_grid(uint32_t now_ms, uint8_t ink)
+static int sy(int32_t re, int32_t im, int32_t t)
 {
-    const int ox = boot_anim_origin_x(GFX_WIDTH);
-    const int oy = boot_anim_origin_y(GFX_HEIGHT);
-    const int rings = grid_rings();
+    return boot_anim_screen_y(GFX_HEIGHT, re, im, t);
+}
 
-    for (int r = 1; r <= rings; r++) {
-        const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, r), ink);
+/* A whole number of grid units, as a Q12 value. */
+static int32_t units(int n)
+{
+    return (int32_t)n * BOOT_ANIM_ONE;
+}
+
+/*---------------------------------------------------------------------------
+ * The floor
+ *
+ * The complex plane zeta's value lives in, drawn as a grid at t = 0. Giving
+ * it a floor rather than leaving the two axes bare is what makes the third
+ * axis read as height instead of as a third line through the same point.
+ *-------------------------------------------------------------------------*/
+
+static void draw_floor(uint32_t now_ms, uint8_t ink)
+{
+    const int32_t edge = units(BOOT_ANIM_GRID_RINGS);
+
+    for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
+        const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
         if (alpha == 0) {
             continue;
         }
-        const bool unit = (r % BOOT_ANIM_GRID_MAJOR) == 0;
-        const gfx_color_t c = lit(unit ? COL_GRID_UNIT : COL_GRID, alpha);
-        const int d = r * BOOT_ANIM_GRID_PX;
+        const gfx_color_t c = lit(COL_GRID, alpha);
+        const int32_t d = units(ring);
 
+        /* Four lines per ring: the two either side of the real axis and the
+         * two either side of the imaginary one. Each spans the full width of
+         * the floor, so the result is a square grid seen at an angle. */
         for (int sign = -1; sign <= 1; sign += 2) {
-            const int x = ox + sign * d;
-            const int y = oy + sign * d;
-            if (x >= 0 && x < GFX_WIDTH) {
-                gfx_line(x, 0, x, GFX_HEIGHT - 1, c);
-            }
-            if (y >= 0 && y < GFX_HEIGHT) {
-                gfx_line(0, y, GFX_WIDTH - 1, y, c);
-            }
+            const int32_t off = sign * d;
+
+            gfx_line(sx(off, -edge), sy(off, -edge, 0),
+                     sx(off,  edge), sy(off,  edge, 0), c);
+            gfx_line(sx(-edge, off), sy(-edge, off, 0),
+                     sx( edge, off), sy( edge, off, 0), c);
         }
-    }
-}
-
-/* The imaginary axis is labelled i and -i rather than 1 and -1: this is one
- * complex plane, not two number lines that happen to cross. */
-static const char *unit_label(int units, bool imaginary)
-{
-    switch (units) {
-    case -2: return imaginary ? "-2i" : "-2";
-    case -1: return imaginary ? "-i"  : "-1";
-    case  1: return imaginary ? "i"   : "1";
-    case  2: return imaginary ? "2i"  : "2";
-    default: return "";
-    }
-}
-
-/* A tick and its label, but only once the axis being drawn has actually
- * grown far enough out to reach it - so the marks appear in the wake of the
- * line rather than waiting for it and then arriving all at once.
- *
- * `reached` is how many pixels of axis exist so far on this side. */
-static void draw_tick(int units, bool imaginary, int reached, uint8_t ink)
-{
-    const int ox = boot_anim_origin_x(GFX_WIDTH);
-    const int oy = boot_anim_origin_y(GFX_HEIGHT);
-    const int offset = units * BOOT_ANIM_UNIT_PX;
-
-    if (im_abs(offset) > reached) {
-        return;
-    }
-
-    const gfx_color_t c = lit(COL_TICK, ink);
-    const char *label = unit_label(units, imaginary);
-
-    /* Asked for at scale 1, not through gfx_text_width()/gfx_text_height(),
-     * which answer for GFX_GLYPH_SCALE - the 16px size the menu is laid out
-     * around. An axis label wants to be small. */
-    const int lw = gfx_font_width(gfx_default_font(), label, -1, LABEL_SCALE);
-    const int lh = gfx_font_height(gfx_default_font(), LABEL_SCALE);
-
-    if (imaginary) {
-        const int y = oy - offset;
-        if (y < 0 || y >= GFX_HEIGHT) {
-            return;
-        }
-        gfx_line(ox - TICK_ARM, y, ox + TICK_ARM, y, c);
-        /* Left of the axis, so the labels do not sit under the spirals -
-         * which all live to the right of it. */
-        gfx_text_scaled(ox - TICK_GAP - lw, y - lh / 2, label, c, LABEL_SCALE);
-    } else {
-        const int x = ox + offset;
-        if (x < 0 || x >= GFX_WIDTH) {
-            return;
-        }
-        gfx_line(x, oy - TICK_ARM, x, oy + TICK_ARM, c);
-        gfx_text_scaled(x - lw / 2, oy + TICK_GAP, label, c, LABEL_SCALE);
-    }
-}
-
-static void draw_axes(uint32_t now_ms, uint8_t ink)
-{
-    const int ox = boot_anim_origin_x(GFX_WIDTH);
-    const int oy = boot_anim_origin_y(GFX_HEIGHT);
-    const uint8_t reach = boot_anim_axis_reach(now_ms);
-
-    if (reach == 0) {
-        return;
-    }
-
-    /* A fraction of each half-axis, not a fixed number of pixels: the origin
-     * is off-centre, so the four arms are four different lengths and must
-     * still arrive at their edges together. */
-    const int left   = ox * reach / 255;
-    const int right  = (GFX_WIDTH  - 1 - ox) * reach / 255;
-    const int up     = oy * reach / 255;
-    const int down   = (GFX_HEIGHT - 1 - oy) * reach / 255;
-
-    const gfx_color_t c = lit(COL_AXIS, ink);
-    gfx_line(ox - left, oy, ox + right, oy, c);
-    gfx_line(ox, oy - up, ox, oy + down, c);
-
-    for (int u = -TICK_UNITS; u <= TICK_UNITS; u++) {
-        if (u == 0) {
-            continue;
-        }
-        draw_tick(u, false, u < 0 ? left : right, ink);
-        draw_tick(u, true,  u < 0 ? down : up,    ink);
     }
 }
 
 /*---------------------------------------------------------------------------
- * The spirals
+ * The axes
  *-------------------------------------------------------------------------*/
 
-static gfx_color_t stroke_colour(int k, int32_t along_q12, uint8_t ink)
+/* One axis arm, grown `reach`/255 of the way from the origin to (re, im, t).
+ *
+ * A fraction rather than a pixel count, so the three arms - which are three
+ * different lengths on screen - still arrive at their ends together. */
+static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
+                     uint8_t ink)
 {
-    const boot_anim_stroke_t s = boot_anim_stroke(k, along_q12);
+    const int32_t fre = (re * reach) / 255;
+    const int32_t fim = (im * reach) / 255;
+    const int32_t ft  = (t  * reach) / 255;
 
-    gfx_color_t c = gfx_rgb(boot_anim_hue_rgb(s.hue));
-    c = gfx_color_mix(c, COL_WHITE, s.bloom);
-    return gfx_color_mix(COL_BG, c, scale8(s.glow, ink));
+    gfx_line(sx(0, 0), sy(0, 0, 0), sx(fre, fim), sy(fre, fim, ft),
+             lit(COL_AXIS, ink));
 }
 
-/* One spiral, from term one up to wherever the pen has reached.
- *
- * Redrawn from the first term every frame. The alternative - keeping the
- * points and extending the drawing - needs both an array of them and a
- * framebuffer nothing else clears, and this device has neither going spare.
- * Recomputing four whole curves costs well under a millisecond, against the
- * ~17.6 ms the frame spends on the wire regardless. */
-static void draw_spiral(int k, uint32_t now_ms, uint8_t ink)
+static void draw_label(int x, int y, const char *text, uint8_t ink)
 {
-    const int32_t progress = boot_anim_pen(now_ms, k);
-    if (progress <= 0) {
+    /* Asked for at LABEL_SCALE rather than through gfx_text_width(), which
+     * answers for GFX_GLYPH_SCALE - the 16px size the menu is laid out
+     * around. An axis label wants to be small. */
+    const int w = gfx_font_width(gfx_default_font(), text, -1, LABEL_SCALE);
+    const int h = gfx_font_height(gfx_default_font(), LABEL_SCALE);
+
+    gfx_text_scaled(x - w / 2, y - h / 2, text, lit(COL_TICK, ink),
+                    LABEL_SCALE);
+}
+
+static void draw_axes(uint32_t now_ms, uint8_t ink)
+{
+    const uint8_t reach = boot_anim_axis_reach(now_ms);
+    if (reach == 0) {
         return;
     }
 
-    const int32_t reached = boot_anim_pen_terms(progress);
-    const int     whole   = reached >> BOOT_ANIM_Q;
-    const int32_t part    = reached & (BOOT_ANIM_ONE - 1);
+    const int32_t arm = units(BOOT_ANIM_GRID_RINGS) + BOOT_ANIM_ONE / 3;
+    const int32_t top = (BOOT_ANIM_T_MAX << BOOT_ANIM_TQ) +
+                        (1 << BOOT_ANIM_TQ);
 
-    boot_anim_walk_t w;
-    boot_anim_walk_begin(&w, k);
+    draw_arm(arm, 0, 0, reach, ink);      /* real      */
+    draw_arm(0, arm, 0, reach, ink);      /* imaginary */
+    draw_arm(0, 0, top, reach, ink);      /* t         */
 
-    int px = boot_anim_screen_x(GFX_WIDTH,  w.z.re);
-    int py = boot_anim_screen_y(GFX_HEIGHT, w.z.im);
+    /* Named rather than tick-marked. Which axis is which is the one thing a
+     * reader cannot work out from the picture, and three short labels say it
+     * where a ladder of numbers up a 315px axis would just be clutter. */
+    if (reach == 255) {
+        draw_label(sx(arm, 0) + LABEL_GAP * 2, sy(arm, 0, 0) + LABEL_GAP,
+                   "Re", ink);
+        draw_label(sx(0, arm) - LABEL_GAP * 2, sy(0, arm, 0) + LABEL_GAP,
+                   "Im", ink);
+        draw_label(sx(0, 0) + LABEL_GAP * 2, sy(0, 0, top) - LABEL_GAP, "t",
+                   ink);
+    }
+}
 
-    for (int n = 1; n <= whole && n <= BOOT_ANIM_TERMS; n++) {
-        boot_anim_walk_step(&w);
-        const int nx = boot_anim_screen_x(GFX_WIDTH,  w.z.re);
-        const int ny = boot_anim_screen_y(GFX_HEIGHT, w.z.im);
-        gfx_line(px, py, nx, ny, stroke_colour(k, boot_anim_along(&w), ink));
-        px = nx;
-        py = ny;
+/*---------------------------------------------------------------------------
+ * The zeros
+ *-------------------------------------------------------------------------*/
+
+/* A dot on the t axis for each zero the pen has climbed past.
+ *
+ * These are the only points of the whole picture that mean anything on their
+ * own: the curve touching the axis is zeta being zero, and the height it
+ * happens at is one of the numbers the Riemann hypothesis is about. Drawn
+ * white and flat rather than blended, so they stay legible through whatever
+ * the curve is doing around them. */
+static void draw_zeros(int32_t pen_t_q8, uint8_t ink)
+{
+    for (int i = 0; i < BOOT_ANIM_ZEROS; i++) {
+        const int32_t t = boot_anim_zero_t[i];
+        if (t > pen_t_q8) {
+            break;      /* the table is in order, so nothing after it either */
+        }
+        gfx_fill_rect(sx(0, 0) - ZERO_DOT / 2, sy(0, 0, t) - ZERO_DOT / 2,
+                      ZERO_DOT, ZERO_DOT, lit(COL_ZERO, ink));
+    }
+}
+
+/*---------------------------------------------------------------------------
+ * The curve
+ *-------------------------------------------------------------------------*/
+
+/* One piece of curve. Added to what is underneath rather than written over
+ * it, so the places where the curve crosses itself - which is most of the
+ * middle of the picture - come out brighter and mixed instead of showing
+ * whichever piece happened to be drawn last. */
+static void draw_stroke(int x0, int y0, int x1, int y1,
+                        boot_anim_stroke_t s, uint8_t ink)
+{
+    gfx_color_t c = gfx_rgb(boot_anim_hue_rgb(s.hue));
+    c = gfx_color_mix(c, COL_WHITE, s.bloom);
+    c = gfx_color_mix(COL_BG, c, scale8(s.glow, ink));
+
+    gfx_line_add(x0, y0, x1, y1, c);
+
+    if (s.width > 1) {
+        /* A second pass one pixel to the side, across whichever axis the
+         * segment is shorter on. The cheapest two-pixel stroke that does not
+         * leave gaps on a diagonal, and it only happens near the head. */
+        if (im_abs(x1 - x0) > im_abs(y1 - y0)) {
+            gfx_line_add(x0, y0 + 1, x1, y1 + 1, c);
+        } else {
+            gfx_line_add(x0 + 1, y0, x1 + 1, y1, c);
+        }
+    }
+}
+
+static void draw_head(int x, int y, uint32_t rgb, uint8_t ink)
+{
+    gfx_fill_rect(x - HEAD_OUTER / 2, y - HEAD_OUTER / 2,
+                  HEAD_OUTER, HEAD_OUTER, lit(rgb, scale8(70, ink)));
+    gfx_fill_rect(x - HEAD_MID / 2, y - HEAD_MID / 2,
+                  HEAD_MID, HEAD_MID, lit(rgb, scale8(210, ink)));
+    gfx_fill_rect(x - HEAD_CORE / 2, y - HEAD_CORE / 2,
+                  HEAD_CORE, HEAD_CORE, gfx_color_mix(COL_BG, COL_WHITE, ink));
+}
+
+/* The curve, from the start up to wherever the pen has reached.
+ *
+ * Redrawn in full every frame. Not laziness: the trail re-colours everything
+ * within half the curve's length of the head, so most of what is on screen
+ * genuinely changes from one frame to the next, and the alternative would be
+ * a second framebuffer this device does not have.
+ *
+ * Returns the height the pen has climbed to, which is what decides how many
+ * of the zeros have been marked. */
+static int32_t draw_curve(uint32_t now_ms, uint8_t ink)
+{
+    const int32_t pen = boot_anim_pen(now_ms);
+    if (pen <= 0) {
+        return 0;
     }
 
-    /* Part way into the next term. Without this the pen would jump from one
-     * point to the next, and the first few terms are a fifth of the screen
-     * long apiece - two frames of nothing followed by a leap. */
-    if (whole < BOOT_ANIM_TERMS) {
-        const boot_anim_pt_t from = w.z;
-        boot_anim_walk_step(&w);
-        const int32_t re = from.re + (((w.z.re - from.re) * part) >> BOOT_ANIM_Q);
-        const int32_t im = from.im + (((w.z.im - from.im) * part) >> BOOT_ANIM_Q);
-        px = boot_anim_screen_x(GFX_WIDTH,  re);
-        py = boot_anim_screen_y(GFX_HEIGHT, im);
-        gfx_line(boot_anim_screen_x(GFX_WIDTH,  from.re),
-                 boot_anim_screen_y(GFX_HEIGHT, from.im), px, py,
-                 stroke_colour(k, boot_anim_along(&w), ink));
+    /* The pen's position along the table, in Q12 samples. The samples are
+     * evenly spaced on screen, so this is also its position along the curve
+     * as drawn. */
+    const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
+    /* pen is already a Q12 FRACTION, so multiplying by the number of spans
+     * gives a Q12 sample index directly - there is no second shift to do,
+     * and doing one anyway lands the pen permanently on sample zero. */
+    const int32_t at = pen * span;
+    const int last = at >> BOOT_ANIM_Q;
+    const int32_t part = at & (BOOT_ANIM_ONE - 1);
 
-        /* A bright head, so it reads as being drawn rather than revealed. It
-         * is dropped once the curve is finished - a dot left sitting on the
-         * end of a static line just looks like a blemish. */
-        gfx_fill_rect(px - PEN_DOT / 2, py - PEN_DOT / 2, PEN_DOT, PEN_DOT,
-                      gfx_color_mix(COL_BG, COL_WHITE, ink));
+    boot_anim_pt_t head = boot_anim_sample(0);
+    int px = sx(head.re, head.im);
+    int py = sy(head.re, head.im, head.t);
+
+    for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
+        /* The span centred on sample i, cutting the corner there. Clamped
+         * indices at both ends pin the curve to its first and last sample. */
+        const boot_anim_pt_t c0 = boot_anim_sample(i - 1);
+        const boot_anim_pt_t c1 = boot_anim_sample(i);
+        const boot_anim_pt_t c2 = boot_anim_sample(i + 1);
+
+        /* How far into the whole curve this span sits, and how far the next
+         * one does, so the colour can be interpolated across it rather than
+         * stepping once per sample. */
+        const int32_t a0 = (int32_t)(((int64_t)i * BOOT_ANIM_ONE) / span);
+        const int32_t a1 = (int32_t)(((int64_t)(i + 1) * BOOT_ANIM_ONE) / span);
+
+        /* A partial span for the one the pen is inside: without it the head
+         * would jump from sample to sample, and a sample is six pixels. */
+        const int32_t limit = (i == last) ? part : BOOT_ANIM_ONE;
+
+        for (int step = 1; step <= BOOT_ANIM_SPLINE_STEPS; step++) {
+            const int32_t t = (limit * step) / BOOT_ANIM_SPLINE_STEPS;
+
+            head = boot_anim_spline(c0, c1, c2, t);
+            const int nx = sx(head.re, head.im);
+            const int ny = sy(head.re, head.im, head.t);
+            const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
+
+            draw_stroke(px, py, nx, ny, boot_anim_stroke(along, pen), ink);
+            px = nx;
+            py = ny;
+        }
     }
+
+    if (last < BOOT_ANIM_CURVE_POINTS - 1) {
+        draw_head(px, py, boot_anim_hue_rgb(boot_anim_stroke(pen, pen).hue),
+                  ink);
+    }
+    return head.t;
 }
 
 /*---------------------------------------------------------------------------
@@ -281,16 +336,19 @@ static void draw_frame(uint32_t now_ms)
     const uint8_t ink = boot_anim_ink(now_ms);
 
     gfx_clear(COL_BG);
-    draw_grid(now_ms, ink);
+    draw_floor(now_ms, ink);
     draw_axes(now_ms, ink);
-    for (int k = 0; k < BOOT_ANIM_SPIRALS; k++) {
-        draw_spiral(k, now_ms, ink);
-    }
+
+    /* Zeros before the curve, so the curve's own glow lands on top of them
+     * rather than the dots punching holes in it. */
+    const int32_t reached = draw_curve(now_ms, ink);
+    draw_zeros(reached, ink);
 }
 
 void boot_anim_run(void)
 {
     const int64_t started_us = esp_timer_get_time();
+    uint32_t frames = 0;
 
     for (;;) {
         const int64_t elapsed_us = esp_timer_get_time() - started_us;
@@ -301,11 +359,19 @@ void boot_anim_run(void)
 
         draw_frame(now_ms);
         gfx_present();
+        frames++;
 
-        /* Same yield the shell's loop makes, for the same reason: the idle
-         * task feeds the watchdog. */
+        /* The same yield the shell's loop makes, for the same reason: the
+         * idle task feeds the watchdog. */
         vTaskDelay(1);
     }
+
+    /* Reported because it is the one thing about this that cannot be checked
+     * anywhere but on the board. Everything else here is covered on a host;
+     * whether a full-screen repaint plus a 322 KiB transfer leaves room for
+     * the curve is a question only the real panel answers. */
+    ESP_LOGI(TAG, "%u frames in %d ms (%.1f fps)", (unsigned)frames,
+             BOOT_ANIM_MS, (double)frames * 1000.0 / BOOT_ANIM_MS);
 
     /* Left black on purpose. The launcher repaints the whole screen on its
      * first frame - ui_init() invalidates - so there is no need to spend
