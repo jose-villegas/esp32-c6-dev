@@ -1095,11 +1095,34 @@ static void draw_palette(void)
         const int   tx   = x + (w - len * GFX_CHAR_W) / 2;
         const int   ty   = y + (h - GFX_CHAR_H) / 2;
 
-        /* Drawn twice, black then white one pixel up-left, rather than in
-         * one fixed ink colour - a swatch runs from snow's near-white to
-         * stone's near-black, and no single colour reads on all of them. */
-        gfx_text_scaled(tx + 1, ty + 1, name, gfx_rgb(0x000000), GFX_GLYPH_SCALE);
-        gfx_text_scaled(tx, ty, name, gfx_rgb(0xFFFFFF), GFX_GLYPH_SCALE);
+        /* White halo outline then a black fill on top, rather than in one
+         * fixed ink colour or derived (via gfx_color_mix()) from the face
+         * the way the bezel and badge above are - the bezel and badge
+         * derive from the face because they should belong to the material;
+         * the name has the opposite job, to stay legible over every swatch
+         * from snow's near-white to stone's near-black, and black-and-white
+         * is the maximum-contrast pair available for that. The white halo
+         * is what lifts the black glyph off the dark swatches like stone.
+         * Deriving this pair too would "tidy" it straight into unreadable
+         * on whichever swatch the derived ink happens to match.
+         *
+         * All eight one-pixel offsets, not just the four cardinals: at
+         * GFX_GLYPH_SCALE == 2 each font pixel is a 2x2 block, and skipping
+         * the diagonals leaves a notch at every block corner instead of a
+         * clean edge. Nine text draws (eight outline + the black fill) per
+         * tile, fourteen tiles - draw_palette() only ever runs on open and
+         * on selection (see the comment above this function), never per
+         * frame, so this is a one-time cost each time, not a per-frame one. */
+        static const int outline_offsets[8][2] = {
+            { -1, -1 }, { 0, -1 }, { 1, -1 },
+            { -1,  0 },            { 1,  0 },
+            { -1,  1 }, { 0,  1 }, { 1,  1 },
+        };
+        for (int o = 0; o < 8; o++) {
+            gfx_text_scaled(tx + outline_offsets[o][0], ty + outline_offsets[o][1],
+                           name, gfx_rgb(0xFFFFFF), GFX_GLYPH_SCALE);
+        }
+        gfx_text_scaled(tx, ty, name, gfx_rgb(0x000000), GFX_GLYPH_SCALE);
     }
 }
 
