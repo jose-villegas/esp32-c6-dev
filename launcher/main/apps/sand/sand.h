@@ -123,7 +123,20 @@
  * bytes for alignment, only one more than the four the struct needed
  * before `speed` existed. Even a generous few hundred of these is still
  * three orders of magnitude under a real per-cell velocity field - see
- * docs/Sand/Explosion-Plan.md for the full comparison. */
+ * docs/Sand/Explosion-Plan.md for the full comparison.
+ *
+ * RE-CHECKED FOR SLACK, NOT JUST ASSUMED MINIMAL, when a memory-budget
+ * bug (see SAND_IMPULSE_BUDGET_BYTES in app_sand.c) made every byte here
+ * worth questioning again: there is none to find. `index` genuinely needs
+ * all 16 bits at this grid's real size (184*224 = 41,216, over halfway to
+ * uint16_t's own 65,536 ceiling, so nothing can be borrowed from it for
+ * `dir` even though `dir` itself only needs three). `cell` and `speed`
+ * each need their own full byte for the reasons above. And reordering the
+ * fields buys nothing: the struct's alignment is fixed at 2 by `index`
+ * alone, so the five logical bytes any ordering produces still round up
+ * to six - the pad moves, it does not shrink. Six bytes is this struct's
+ * true floor for what it does, not merely the number nobody has
+ * revisited. */
 typedef struct {
     uint16_t index;
     cell_t   cell;
@@ -864,7 +877,23 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * indefinitely through everything nearby. Full seeding stays exactly
  * because of the bound this project already holds every part of this
  * mechanic to, so a bigger radius keeps costing the memory its own disc
- * implies rather than getting cheaper by accident. */
+ * implies rather than getting cheaper by accident.
+ *
+ * RECONFIRMED UNDER A REAL MEMORY CEILING, not just in principle. The
+ * comparison above had no allocation limit in play - it only asked which
+ * seeding density throws better, never whether either one's buffer would
+ * actually fit. It later did have to answer that question too:
+ * DETONATE_RADIUS_PX briefly doubled to 96 px (48 cells) without anyone
+ * re-checking the buffer this seeding density needs against it, and full
+ * seeding at that radius could not be allocated on real hardware at all -
+ * see SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c for the
+ * failed malloc and the silent no-op it produced. Given a fixed byte
+ * budget, checkerboard-seeding the ORIGINAL bigger radius was measured
+ * again against seeding a SMALLER radius fully, both sized to fit: the
+ * smaller-but-full radius (35 cells) still won on "grains outside the
+ * footprint" (113.0 vs. 91.0 for a checkerboard 48-cell blast, both
+ * n=30), for the exact structural reason above - so the conclusion did
+ * not change, it just had a harder question to survive. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* FRICTION

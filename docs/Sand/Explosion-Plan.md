@@ -354,6 +354,33 @@ This is temporary scaffolding for evaluation, not a shipped feature.
   broken. The host test catches the arithmetic; on the panel it looks like
   the blast ate material.
 
+*(A third joined these after DETONATE_RADIUS_PX was doubled, 48 px to 96
+px, on a request for "a much bigger radius in general" with no other
+symptom to go on: **the whole mechanic going silently inert**, not
+weaker. `impulse_t`'s buffer is sized to the true worst case - a fully
+packed disc at the current radius (see APP_IMPULSE_MAX's own derivation
+in app_sand.c) - and at 96 px that is a ~43.8 KB allocation the device
+simply does not have room for once its own grid and row-run bookkeeping
+(~43.5 KB, fixed regardless of blast radius) are already accounted for
+against a real ~76 KB free-heap boot-log snapshot with no PSRAM.
+`sand_explode()`'s first line, `if (s->impulse_buf == NULL) return;`, is
+exactly right for a caller that never enabled the mechanic - and exactly
+wrong-looking for one that tried to, and silently lost the allocation
+race instead: nothing crashes, nothing logs anywhere a player would see,
+detonating just stops doing anything. The fix landed at 70 px (35 cells) -
+the largest radius `SAND_IMPULSE_BUDGET_BYTES` (app_sand.c) affords with
+every occupied annulus cell still seeded, chosen over seeding a
+checkerboard HALF of the annulus at the original 96 px after both were
+measured against `build_sand_dune_scene()`: 70 px full-seeded averaged
+113.0 grains outside the footprint over 30 seeds against 91.0 for a
+checkerboard 96 px blast sized to the same budget, for the same
+structural reason sparse seeding lost the first time it was measured -
+see "EVERY OCCUPIED ANNULUS CELL IS SEEDED" in sand.h. A `_Static_assert`
+next to `APP_IMPULSE_MAX` now fails the BUILD, not a device flash, the
+next time a radius change (or a bigger `impulse_t`) would blow this
+budget - see `SAND_IMPULSE_BUDGET_BYTES`'s own comment for the heap
+arithmetic behind the number.)*
+
 ### The quantitative half
 
 `launcher/tools/report_performance.sh` for frame-budget numbers, before

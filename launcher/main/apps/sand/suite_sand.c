@@ -12970,13 +12970,26 @@ static void bfs_distance_from_footprint(const bool *footprint, int w, int h,
  * numbers it reports, read on the same scale a real device detonation
  * does, not some arbitrary test-only radius.
  *
- * WAS 24 (48 px), DOUBLED TO 48 (96 px) - a device pass on the retuned,
- * displacement-enabled blast came back with one request, "it needs a much
- * bigger radius in general," so this follows DETONATE_RADIUS_PX's own
- * change in app_sand.c rather than drifting from it - see that constant's
- * own comment for the report.
+ * WAS 24 (48 px), DOUBLED TO 48 (96 px), THEN PULLED BACK TO 35 (70 px) -
+ * the doubling followed a device request ("it needs a much bigger radius
+ * in general") and the pullback followed a device FAILURE the doubling
+ * itself caused: 96 px needs a 7,481-entry impulse buffer the board
+ * cannot actually allocate (~43.8 KB against a real ~76 KB free-heap
+ * snapshot with ~43.5 KB of that already claimed by this app's OTHER
+ * buffers), so on real hardware the malloc failed, sand_explode() no-
+ * opped on its own first line, and detonating did nothing at all. This
+ * test's fixed RNG seed and unlimited host `malloc()` could not have
+ * caught that - it takes a device boot log and the arithmetic in
+ * SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c, which is what
+ * settled on 35 cells as the largest radius that budget actually affords
+ * with every annulus cell still seeded. This constant follows
+ * DETONATE_RADIUS_PX's own value in app_sand.c rather than drifting from
+ * it - see that constant's own comment for the full report, including
+ * the measured comparison against seeding a checkerboard HALF of the
+ * annulus at the original 96 px instead (worse on this scene's own
+ * "grains outside the footprint" number, despite the bigger radius).
  *
- * DUNE_IMPULSE_MAX now mirrors APP_IMPULSE_MAX's formula too, not just its
+ * DUNE_IMPULSE_MAX mirrors APP_IMPULSE_MAX's formula too, not just its
  * INPUT: `(355*r*r)/113 + 5*r + 3`, sized to the true circular disc rather
  * than its bounding square - see APP_IMPULSE_MAX's own comment in
  * app_sand.c for the full derivation (a provable upper bound, not a fitted
@@ -12987,7 +13000,7 @@ static void bfs_distance_from_footprint(const bool *footprint, int w, int h,
  * app switches to the disc - and a cap sized differently from what it is
  * meant to mirror is exactly the kind of drift this comment already warns
  * against for the radius itself. */
-#define DUNE_BLAST_RADIUS 48
+#define DUNE_BLAST_RADIUS 35
 #define DUNE_IMPULSE_MAX \
     ((355 * DUNE_BLAST_RADIUS * DUNE_BLAST_RADIUS) / 113 + \
      5 * DUNE_BLAST_RADIUS + 3)
@@ -13099,24 +13112,23 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     const int cx = (min_x + max_x) / 2;
     const int cy = (min_y + max_y) / 2;
 
-    /* AT THE 48-CELL RADIUS THIS NOW BLASTS AT, cy + DUNE_BLAST_RADIUS
-     * routinely reaches REAL_H - the grid's own bottom edge - because a
-     * settled dune's own bounding-box centre sits close to the floor it
-     * settled on (a wide, short pile with height well under its own
-     * radius, not a tall one), and half the blast's vertical reach is
-     * ~48 cells either side of a centre that is itself only ~30 cells
-     * above the true floor. This is not a scene bug to fix: the real
-     * device's own screen has exactly this edge, at exactly this
-     * distance from a dune poured the same way, so a blast this size
-     * genuinely does reach it there too - "much bigger radius" was the
-     * whole ask this round (see DETONATE_RADIUS_PX in app_sand.c), and a
-     * radius a bit over half the grid's own width was never going to
-     * clear a dune's floor without being centred somewhere this scene
-     * deliberately does not fake. Verified this still measures something
-     * real rather than a degenerate scene: "outside"/"destroyed" stayed
-     * small fractions of `before` (roughly 3% and 6% at this radius, not
-     * a plurality of the dune, still less all of it) - see this test's
-     * own assertions below, unchanged, for the actual bar. */
+    /* AT THE 35-CELL RADIUS THIS BLASTS AT (DUNE_BLAST_RADIUS - see its
+     * own comment for why 35, not the 48 a "much bigger radius" request
+     * first landed on and a device flash then vetoed), cy + DUNE_BLAST_
+     * RADIUS still routinely reaches near REAL_H - the grid's own bottom
+     * edge - because a settled dune's own bounding-box centre sits close
+     * to the floor it settled on (a wide, short pile with height well
+     * under its own radius, not a tall one), and half the blast's
+     * vertical reach is ~35 cells either side of a centre that is itself
+     * only ~30 cells above the true floor. This is not a scene bug to
+     * fix: the real device's own screen has exactly this edge, at
+     * exactly this distance from a dune poured the same way, so a blast
+     * this size genuinely does reach it there too. Verified this still
+     * measures something real rather than a degenerate scene:
+     * "outside"/"destroyed" stayed small fractions of `before` (a 30-seed
+     * sweep averaged 2.8% and 3.5% at this radius, not a plurality of the
+     * dune, still less all of it) - see this test's own assertions below,
+     * unchanged, for the actual bar. */
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
     /* Past the deterministic flight-time bound (see SAND_IMPULSE_SPEED_
