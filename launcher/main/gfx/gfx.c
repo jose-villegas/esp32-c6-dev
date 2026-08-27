@@ -994,3 +994,27 @@ void gfx_present(void)
         xSemaphoreTake(strip_sent, portMAX_DELAY);
     }
 }
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Test-only: sends the ENTIRE framebuffer as one esp_lcd_panel_draw_bitmap()
+ * call, bypassing every decision gfx_present() makes above it - no strip
+ * loop, no dirty_row_is_dirty() check, no collect_dirty_runs(), no leaf
+ * refinement, no gather-vs-full-band choice. What is left over is as close
+ * to raw QSPI bus time as this driver can be made to give up.
+ *
+ * The SPI driver still has to split a transfer this big into chunks no
+ * bigger than spi_trans_max_bytes (one STRIP_HEIGHT band's worth - see
+ * panel_bring_up()'s bus config, GFX_WIDTH * STRIP_HEIGHT *
+ * sizeof(gfx_color_t)), but esp_lcd_panel_io_spi.c arms the completion
+ * callback only on the LAST chunk of a draw_bitmap() call ("mark
+ * en_trans_done_cb only at the last round to avoid premature completion
+ * callback" - its own comment), so exactly one strip_sent give still means
+ * the whole frame, every chunk, has actually left the bus - not just the
+ * first chunk. One wait is correct here for the same reason gfx_present()
+ * above waits once per QUEUED call rather than once per byte. */
+void gfx_present_raw_full_frame_for_test(void)
+{
+    esp_lcd_panel_draw_bitmap(panel, 0, 0, GFX_WIDTH, GFX_HEIGHT, fb);
+    xSemaphoreTake(strip_sent, portMAX_DELAY);
+}
+#endif

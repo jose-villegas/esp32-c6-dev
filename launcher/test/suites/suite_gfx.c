@@ -472,6 +472,57 @@ static void test_an_unchanged_frame_costs_almost_nothing(void)
         "resend 322 KiB of identical pixels");
 }
 
+/* Decomposes a full-screen gfx_present() into raw QSPI bus time versus
+ * everything gfx_present() itself adds on top of it - the question a
+ * documented figure in suite_sand.c (the comment above FULL_STEP_BUDGET_US)
+ * has stood on without ever having measured it directly: a "~9.6 ms
+ * bus-time ceiling", stated there as a principle rather than a capture,
+ * that this frame's budget was historically set to stay under. The
+ * synthetic test above measures a full gfx_present() at ~17,900 us -
+ * nearly double that figure - and nothing before this test isolated how
+ * much of the gap is genuinely the bus versus gfx_present()'s own
+ * bookkeeping - the seven-strip loop, dirty_row_is_dirty() checks,
+ * collect_dirty_runs(), leaf refinement and the gather-vs-full-band
+ * choice, all of which still run even when the whole screen is one
+ * full-band send.
+ *
+ * gfx_present_raw_full_frame_for_test() (gfx.c, CONFIG_LAUNCHER_DEVELOPMENT
+ * only) is the bus-time side of the comparison: one esp_lcd_panel_draw_-
+ * bitmap() call over the whole framebuffer, none of the above involved at
+ * all - see its own comment for why waiting on exactly one completion is
+ * still correct despite the SPI driver chunking the transfer internally. */
+static void test_full_present_cost_splits_into_bus_time_and_overhead(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x102030));           /* marks the whole screen dirty */
+    const int64_t present_us = time_present();
+
+    const int64_t raw_start = esp_timer_get_time();
+    gfx_present_raw_full_frame_for_test();
+    const int64_t raw_us = esp_timer_get_time() - raw_start;
+
+    const int64_t overhead_us = present_us - raw_us;
+
+    ESP_LOGI(TAG, "present decompose: gfx_present() full %lld us, raw blit "
+                  "%lld us, overhead %lld us",
+             (long long)present_us, (long long)raw_us, (long long)overhead_us);
+
+    /* Sanity bounds only, the same shape test_present_completes uses above -
+     * a full frame over QSPI cannot be instant and should not take anywhere
+     * near a second. The interesting numbers are the two logged above and
+     * their difference; this test exists to produce and log them, not to
+     * hold either to a tuned ceiling. PROVISIONAL: no device capture of
+     * this split exists yet, so nothing tighter is asserted - re-peg (or
+     * replace with a real ceiling on the overhead specifically) from the
+     * first device capture, the same convention suite_sand.c's
+     * FULL_STEP_BUDGET_US comment documents for a newly-added measurement. */
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1000, (int)raw_us,
+        "the raw blit returned implausibly fast - did it actually wait for "
+        "the DMA?");
+    TEST_ASSERT_LESS_THAN_INT(500000, (int)raw_us);
+}
+
 static void test_a_partial_change_costs_less_than_a_full_frame(void)
 {
     fixture();
@@ -896,6 +947,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_repeated_presents_stay_in_sync);
 
     RUN_TEST(test_an_unchanged_frame_costs_almost_nothing);
+    RUN_TEST(test_full_present_cost_splits_into_bus_time_and_overhead);
     RUN_TEST(test_a_partial_change_costs_less_than_a_full_frame);
     RUN_TEST(test_a_narrow_change_costs_less_than_a_full_band);
     RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);

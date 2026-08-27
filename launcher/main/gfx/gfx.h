@@ -278,4 +278,10 @@ bool gfx_debug_leaf_overlay(void);
  * are counted. */
 void gfx_reset_strip_send_counts(void);
 void gfx_get_strip_send_counts(int *full_bands, int *gathered);
+
+/* Test-only: one raw esp_lcd_panel_draw_bitmap() of the whole framebuffer,
+ * bypassing every dirty-tracking decision gfx_present() makes - see gfx.c
+ * for what this isolates and why one wait is still correct despite the
+ * driver chunking the transfer internally. */
+void gfx_present_raw_full_frame_for_test(void);
 #endif
