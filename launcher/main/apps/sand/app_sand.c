@@ -901,12 +901,8 @@ static void draw_mode_label(int gx, int gy)
  * grout, which is what visually separates one tile from the next. */
 #define PALETTE_GROUT   2
 
-/* Thickness of the selected tile's highlight ring - drawn as the full tile
- * filled in one colour with the swatch inset inside it, rather than as a
- * separate outline shape, so it can never disagree with the tile's own
- * bounds (see draw_palette() below). Thicker than PALETTE_GROUT so the
- * selection reads as a border, not as slightly wider grout. */
-#define PALETTE_BORDER  4
+/* Thickness of each bezel edge - see draw_palette() below. */
+#define PALETTE_BEZEL   3
 
 /* The material picker overlay - drawn ONCE when the panel opens (see
  * open_palette()) and left sitting in the framebuffer for as long as it is
@@ -922,7 +918,7 @@ static void draw_palette(void)
     palette_panel_rect(BRUSH_COUNT, &px, &py, &pw, &ph);
 
     /* Clear the panel's own background first, so no sand shows through
-     * between tiles - this is also what erases a highlight ring that has
+     * between tiles - this is also what erases a pressed-in bezel that has
      * just moved off a tile, since every tile gets redrawn below anyway. */
     gfx_fill_rect(px, py, pw, ph, gfx_rgb(COL_BACKGROUND));
 
@@ -930,23 +926,50 @@ static void draw_palette(void)
         int x, y, w, h;
         palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
 
-        const gfx_color_t swatch = brush_color(brushes[i]);
+        const gfx_color_t face = brush_color(brushes[i]);
 
-        /* A future round adds a per-brush "spawn" flag with a corner badge
+        /* Highlight and shadow are derived from the face colour rather than
+         * fixed greys, for the same reason the name text below is drawn
+         * black-then-white instead of one fixed ink: the swatches run from
+         * snow's near-white to stone's near-black, and a fixed highlight
+         * would vanish on the pale ones while a fixed shadow vanished on
+         * the dark ones. ~40% (100 of 255) is the tuned-by-eye amount. */
+        const gfx_color_t hi = gfx_color_mix(face, gfx_rgb(0xFFFFFF), 100);
+        const gfx_color_t sh = gfx_color_mix(face, gfx_rgb(0x000000), 100);
+
+        /* The selected tile inverts the bezel - shadow on top/left, highlight
+         * on bottom/right - so it reads as pressed in rather than raised.
+         * That is the entire selection indicator; there is no separate ring
+         * or border drawn for it. */
+        const gfx_color_t top_left  = (i == brush) ? sh : hi;
+        const gfx_color_t bot_right = (i == brush) ? hi : sh;
+
+        /* Inset by the grout first so neighbouring tiles do not fuse into
+         * one surface, then bezel within that inset rect: top/left edges
+         * PALETTE_BEZEL thick in top_left, bottom/right edges the same in
+         * bot_right, and the remaining interior in the face colour. Plain
+         * fill rects, drawn top/left then bottom/right so the two corners
+         * where an edge of each colour would otherwise meet (top-right,
+         * bottom-left) resolve to whichever is drawn second - the same
+         * simple corner convention as classic 3D control borders.
+         *
+         * A future round adds a per-brush "spawn" flag with a corner badge
          * on flagged tiles - not built here, out of scope for this panel.
          * x/y/w/h above are already this tile's own rect, so that badge
-         * would just be one more gfx_fill_rect at a tile corner; nothing
-         * about this loop's structure needs to change to add it. */
-        if (i == brush) {
-            gfx_fill_rect(x, y, w, h, gfx_rgb(0xFFFFFF));
-            gfx_fill_rect(x + PALETTE_BORDER, y + PALETTE_BORDER,
-                         w - 2 * PALETTE_BORDER, h - 2 * PALETTE_BORDER,
-                         swatch);
-        } else {
-            gfx_fill_rect(x + PALETTE_GROUT, y + PALETTE_GROUT,
-                         w - 2 * PALETTE_GROUT, h - 2 * PALETTE_GROUT,
-                         swatch);
-        }
+         * would just be one more gfx_fill_rect at a tile corner, drawn after
+         * the face below; nothing about this loop's structure needs to
+         * change to add it. */
+        const int ix = x + PALETTE_GROUT;
+        const int iy = y + PALETTE_GROUT;
+        const int iw = w - 2 * PALETTE_GROUT;
+        const int ih = h - 2 * PALETTE_GROUT;
+
+        gfx_fill_rect(ix, iy, iw, PALETTE_BEZEL, top_left);              /* top */
+        gfx_fill_rect(ix, iy, PALETTE_BEZEL, ih, top_left);              /* left */
+        gfx_fill_rect(ix, iy + ih - PALETTE_BEZEL, iw, PALETTE_BEZEL, bot_right); /* bottom */
+        gfx_fill_rect(ix + iw - PALETTE_BEZEL, iy, PALETTE_BEZEL, ih, bot_right); /* right */
+        gfx_fill_rect(ix + PALETTE_BEZEL, iy + PALETTE_BEZEL,
+                     iw - 2 * PALETTE_BEZEL, ih - 2 * PALETTE_BEZEL, face);
 
         /* Centred in the tile. The longest names are 5 characters, 80px at
          * GFX_GLYPH_SCALE (see palette.h's column-count reasoning), inside

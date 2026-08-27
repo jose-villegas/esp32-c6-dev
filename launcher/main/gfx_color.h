@@ -32,3 +32,45 @@ typedef uint16_t gfx_color_t;
 #define GFX_RGB(rgb)                           \
     ((gfx_color_t)((GFX_RGB565(rgb) >> 8) |    \
                    (GFX_RGB565(rgb) << 8)))
+
+/* Blend `a` toward `b`. t is 0..255, where 0 is all `a` and 255 is all `b`.
+ *
+ * A gfx_color_t is RGB565 with the bytes swapped (see GFX_RGB above), not
+ * RGB565 itself - so blending it channel-by-channel means swapping the bytes
+ * back to native RGB565 first, unpacking R5/G6/B5, blending each channel,
+ * repacking to RGB565, and swapping the bytes again on the way out. Skipping
+ * either swap does not fail loudly: it still produces a plausible-looking
+ * colour, just the wrong one, which is exactly why this is tested against
+ * GFX_RGB(...) constants rather than against its own round-trip.
+ *
+ * The three channels are NOT the same width - red and blue are 5 bits, green
+ * is 6 - so each is blended in its own width. Treating all three as 8-bit
+ * (e.g. by blending the swapped 16-bit halves directly) is the obvious
+ * mistake, and it does not crash: it shifts the hue, because a 5-bit channel
+ * blended with 8-bit arithmetic gets weighted wrong relative to the 6-bit
+ * one. */
+static inline gfx_color_t gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t)
+{
+    /* Undo the byte swap to get back to native-endian RGB565. */
+    const uint16_t na = (uint16_t)((a >> 8) | (a << 8));
+    const uint16_t nb = (uint16_t)((b >> 8) | (b << 8));
+
+    const uint8_t ar = (uint8_t)((na >> 11) & 0x1Fu); /* 5 bits */
+    const uint8_t ag = (uint8_t)((na >> 5)  & 0x3Fu); /* 6 bits */
+    const uint8_t ab = (uint8_t)( na        & 0x1Fu); /* 5 bits */
+
+    const uint8_t br = (uint8_t)((nb >> 11) & 0x1Fu);
+    const uint8_t bg = (uint8_t)((nb >> 5)  & 0x3Fu);
+    const uint8_t bb = (uint8_t)( nb        & 0x1Fu);
+
+    /* (channel * (255 - t) + channel * t) / 255, rounded rather than
+     * truncated so t=255 lands exactly on `b` and t=0 exactly on `a`. */
+    const uint8_t mr = (uint8_t)((ar * (255 - t) + br * t + 127) / 255);
+    const uint8_t mg = (uint8_t)((ag * (255 - t) + bg * t + 127) / 255);
+    const uint8_t mb = (uint8_t)((ab * (255 - t) + bb * t + 127) / 255);
+
+    const uint16_t nm = (uint16_t)((mr << 11) | (mg << 5) | mb);
+
+    /* Swap back to the panel's byte order. */
+    return (gfx_color_t)((nm >> 8) | (nm << 8));
+}
