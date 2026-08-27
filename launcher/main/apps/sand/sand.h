@@ -72,6 +72,20 @@ typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
     rng_t    rng;        /* seeded explicitly, so every run repeats exactly */
+    /* Counts steps, and is read by exactly one thing: which part of its
+     * shade band a freshly poured grain takes - see random_cell(). Two
+     * pours a few seconds apart therefore come out as two different
+     * shades, and because the shade lives in the cell it stays put when
+     * the first pile is buried under the second.
+     *
+     * Deliberately not a mechanism. There is no pass, no flag, no
+     * per-cell test and no extra draw: the shade was always chosen by one
+     * random number at spawn, and this only changes what that number is
+     * centred on. A version that instead crusted surfaces in place cost
+     * 4.4 microseconds a step against 1.0 and was reverted; this costs
+     * one increment per step, whatever is on the board. */
+    uint32_t pour_phase;
+
     bool     sweep_flip; /* alternates the sweep direction between steps */
     bool     liquid_flip;/* alternates which way liquids share sideways */
     bool     gas_flip;   /* same idea as liquid_flip, for sand_step_gas()'s

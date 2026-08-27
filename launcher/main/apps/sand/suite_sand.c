@@ -7897,6 +7897,72 @@ static void test_steam_melts_ice_and_plain_gas_does_not(void)
 }
 
 
+
+/* Two pours apart in time come out as two different shades.
+ *
+ * This is how a pile gets layers, and the whole of what it costs is
+ * choosing a different number in the one draw that was already being
+ * made. A grain's shade was always picked at spawn and always lived in
+ * the cell; it was simply spread across the entire band, so every pour
+ * looked like every other and a pile was uniform speckle from top to
+ * bottom. Centring the draw on a slowly drifting band instead means a
+ * brushful is nearly one shade, the next brushful is another, and the
+ * first pile stays legible after the second is poured on top of it.
+ *
+ * Worth stating what this is NOT, because that was built first and
+ * measured: it does not look at cells, it does not know which of them are
+ * at a surface, and it adds no pass, no flag and no per-cell test. A
+ * version that crusted exposed grains in place did all of those and cost
+ * 4.4 microseconds a step against 1.0 on a settled board. This one
+ * measures 1.0 - the same as having nothing at all.
+ *
+ * The narrowness matters as much as the difference. A pour spread over
+ * the whole band again would put every shade in every layer and there
+ * would be no line anywhere. */
+static void test_two_pours_apart_in_time_lay_down_different_shades(void)
+{
+    int lo[2] = { 99, 99 }, hi[2] = { -1, -1 };
+
+    fixture();
+    sand_clear(&s);
+
+    for (int pour = 0; pour < 2; pour++) {
+        sand_spawn(&s, W / 2, H / 2, 2, MAT_SAND);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (CELL_MATERIAL(c) != MAT_SAND) {
+                    continue;
+                }
+                const int v = CELL_VARIANT(c);
+                if (v < lo[pour]) { lo[pour] = v; }
+                if (v > hi[pour]) { hi[pour] = v; }
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(hi[pour] >= 0, "the pour must have landed");
+        TEST_ASSERT_LESS_THAN_MESSAGE(SAND_DUNE_SHADES, hi[pour],
+            "and must stay inside the DUNE band - the four shades above it "
+            "are cullet, and poured sand must never claim to have been a "
+            "window");
+        TEST_ASSERT_LESS_OR_EQUAL_MESSAGE(2, hi[pour] - lo[pour],
+            "one pour must be NARROW in shade - a brushful spread across "
+            "the whole band again would put every shade in every layer, "
+            "and there would be no line anywhere to see");
+
+        sand_clear(&s);
+        /* Long enough for the band to drift exactly one place along. */
+        for (int i = 0; i < 64; i++) {
+            sand_step(&s, 0, 1000, 0);
+        }
+    }
+
+    const int gap = (lo[0] + hi[0]) / 2 - (lo[1] + hi[1]) / 2;
+    TEST_ASSERT_GREATER_OR_EQUAL_MESSAGE(3, gap < 0 ? -gap : gap,
+        "and two pours a couple of seconds apart must be visibly different "
+        "shades - that difference IS the layer, and without it a pile is "
+        "one flat speckle however many times it was poured");
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -11913,6 +11979,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
+    RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);

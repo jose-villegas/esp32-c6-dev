@@ -31,6 +31,19 @@
 #define AXIS_NUM 29
 #define AXIS_DEN 12
 
+/* How long the poured shade lingers on one part of the band before
+ * drifting on: 64 steps, about two seconds, so a single brushful is one
+ * shade and two separate pours are two. */
+#define POUR_BAND_SHIFT 6
+
+/* And how far it JUMPS each time, rather than stepping to the next
+ * shade along. Walking the band one shade at a time put consecutive
+ * pours two shades apart - about twenty points of luminance, which is
+ * a layer you have to look for. Five is coprime with both 12 (sand's
+ * dune band) and 16 (snow's), so it still visits every shade before
+ * repeating, it just does not visit them in order. */
+#define POUR_BAND_STRIDE 5u
+
 static cell_t random_cell(sand_t *s, material_id_t material)
 {
     /* A liquid's variant is an amount, not a shade, so a fresh cell is a full
@@ -71,13 +84,40 @@ static cell_t random_cell(sand_t *s, material_id_t material)
      * random tone, bone-dry moisture. Fresh soil that arrived already
      * watered would hand the player fertile ground for free. */
     if (reactions[material].dries != 0) {
-        return CELL_SOIL(material, rng_below(&s->rng, SOIL_TONES), 0);
+        /* Banded by the moment it was poured, exactly as a shade is
+         * below. Soil has only two tones, so a band IS a tone and
+         * consecutive pours simply alternate - which is the whole of
+         * what two tones can do, and enough to lay down a line. The
+         * draw is kept so a bank is not perfectly uniform. */
+        const unsigned tone =
+            ((s->pour_phase >> POUR_BAND_SHIFT) + rng_below(&s->rng, 4) / 3u)
+            % SOIL_TONES;
+        return CELL_SOIL(material, (uint8_t)tone, 0);
     }
     /* Not the whole range: sand keeps its top four shades for cullet, so
      * a painted dune can never accidentally contain grains that claim to
      * have been a window. */
-    return CELL_MAKE(material,
-                     rng_below(&s->rng, MATERIAL_SHADE_SPAN(material)));
+    /* Centred on where the band has drifted to, rather than spread across
+     * the whole of it. A brushful comes out nearly one shade; a brushful
+     * poured a few seconds later comes out another; and a pile built from
+     * several pours has visible layers in it, with the older surfaces
+     * still legible after they are buried.
+     *
+     * The jitter is what keeps it from being flat. Plus or minus one
+     * shade, which is enough that a bank still reads as grains rather
+     * than as paint, and narrow enough that the layers survive it.
+     *
+     * Same single draw it always was. */
+    const int span = MATERIAL_SHADE_SPAN(material);
+    const int band = (int)(((s->pour_phase >> POUR_BAND_SHIFT) *
+                            POUR_BAND_STRIDE) % (unsigned)span);
+    int shade = band + (int)rng_below(&s->rng, 3) - 1;
+    if (shade < 0) {
+        shade = 0;
+    } else if (shade >= span) {
+        shade = span - 1;
+    }
+    return CELL_MAKE(material, (uint8_t)shade);
 }
 
 /*---------------------------------------------------------------------------
@@ -90,6 +130,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->w          = w;
     s->h          = h;
     rng_seed(&s->rng, seed);
+    s->pour_phase = 0;
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
@@ -565,6 +606,7 @@ static int sweep_x_order(sand_t *s, int dx)
     } else {
         x_step = 1;
     }
+    s->pour_phase++;
     s->sweep_flip = !s->sweep_flip;
     return x_step;
 }
