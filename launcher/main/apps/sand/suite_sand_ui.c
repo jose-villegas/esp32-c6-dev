@@ -42,7 +42,7 @@ static void fixture(sand_ui_t *ui)
         .brush_count  = STUB_BRUSH_COUNT,
         .screen       = SAND_UI_RUNNING,
         .brush        = 0,
-        .erasing      = false,
+        .mode         = SAND_MODE_PAINT,
         .swallow_release = false,
         .opened_brush = 0,
         .opened_mode  = BRUSH_POUR,
@@ -85,7 +85,7 @@ static void test_a_boot_hold_in_running_changes_nothing_at_all(void)
     sand_ui_t ui;
     fixture(&ui);
     ui.brush = 2;
-    ui.erasing = true;
+    ui.mode = SAND_MODE_ERASE;
 
     input_t in = no_input();
     in.boot.held = true;   /* released and pressed both false, as button_fsm
@@ -96,7 +96,7 @@ static void test_a_boot_hold_in_running_changes_nothing_at_all(void)
     TEST_ASSERT_EQUAL_UINT(0, actions);
     TEST_ASSERT_EQUAL_INT(SAND_UI_RUNNING, ui.screen);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
-    TEST_ASSERT_TRUE(ui.erasing);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 }
 
 /* Bug (commit faad9bb): closing the palette on `.pressed` split one
@@ -268,7 +268,7 @@ static void test_tapping_a_different_tile_selects_it_and_preserves_its_mode(void
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
     ui.brush = 0;
-    ui.erasing = true;             /* selecting a material must clear this */
+    ui.mode = SAND_MODE_ERASE;     /* selecting a material must clear this */
     ui.modes[2] = BRUSH_SPAWN;     /* tile 2's own remembered mode */
 
     const unsigned actions = sand_ui_tile_clicked(&ui, 2);
@@ -276,7 +276,35 @@ static void test_tapping_a_different_tile_selects_it_and_preserves_its_mode(void
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[2]);   /* untouched */
-    TEST_ASSERT_FALSE(ui.erasing);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
+}
+
+/* The same reset, but starting from DETONATE rather than ERASE - the third
+ * leg of the cycle needs its own check rather than trusting that "resets
+ * to PAINT" generalises from the ERASE case above, since handle_brush_input()
+ * cycles all three but handle_palette_input() only ever assigns PAINT
+ * directly - nothing here proves it does that from EVERY starting mode
+ * until it is actually exercised from each one. */
+static void test_selecting_a_tile_while_detonating_resets_to_paint(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_PALETTE;
+    ui.brush = 0;
+    ui.mode = SAND_MODE_DETONATE;
+
+    int cx, cy;
+    tile_center(2, &cx, &cy);
+    input_t tap = no_input();
+    tap.released = true;
+    tap.x = cx;
+    tap.y = cy;
+
+    const unsigned actions = sand_ui_step(&ui, &tap);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
+    TEST_ASSERT_EQUAL_INT(2, ui.brush);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
 }
 
 static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
@@ -285,7 +313,7 @@ static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
     ui.brush = 0;                  /* MAT_SAND: emit-capable */
-    ui.erasing = true;             /* a toggle is not a selection - must stay */
+    ui.mode = SAND_MODE_ERASE;     /* a toggle is not a selection - must stay */
     ui.modes[0] = BRUSH_POUR;
 
     const unsigned actions = sand_ui_tile_clicked(&ui, 0);
@@ -293,12 +321,40 @@ static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(0, ui.brush);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[0]);
-    TEST_ASSERT_TRUE(ui.erasing);  /* untouched by a toggle */
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);  /* untouched by a toggle */
 
     /* And back again. */
     const unsigned actions2 = sand_ui_tile_clicked(&ui, 0);
     TEST_ASSERT_TRUE(actions2 & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_POUR, ui.modes[0]);
+}
+
+/* Same toggle, checked from DETONATE too - the same reasoning as
+ * test_selecting_a_tile_while_detonating_resets_to_paint above: a toggle
+ * leaving ERASE alone does not by itself prove it leaves DETONATE alone,
+ * since handle_palette_input()'s toggle branch never touches `mode` at all
+ * and that has to be checked from each starting mode, not assumed. */
+static void test_tapping_the_selected_tile_is_untouched_by_detonate(void)
+{
+    sand_ui_t ui;
+    fixture(&ui);
+    ui.screen = SAND_UI_PALETTE;
+    ui.brush = 0;                  /* MAT_SAND: emit-capable */
+    ui.mode = SAND_MODE_DETONATE;
+    ui.modes[0] = BRUSH_POUR;
+
+    int cx, cy;
+    tile_center(0, &cx, &cy);
+    input_t tap = no_input();
+    tap.released = true;
+    tap.x = cx;
+    tap.y = cy;
+
+    const unsigned actions = sand_ui_step(&ui, &tap);
+
+    TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
+    TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[0]);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_DETONATE, ui.mode);
 }
 
 static void test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing(void)
@@ -337,7 +393,7 @@ static void test_tapping_outside_every_tile_does_nothing(void)
     fixture(&ui);
     ui.screen = SAND_UI_PALETTE;
     ui.brush = 1;
-    ui.erasing = true;
+    ui.mode = SAND_MODE_ERASE;
 
     int px, py;
     outside_every_tile(&px, &py);
@@ -350,27 +406,35 @@ static void test_tapping_outside_every_tile_does_nothing(void)
 
     TEST_ASSERT_EQUAL_UINT(0, actions);
     TEST_ASSERT_EQUAL_INT(1, ui.brush);
-    TEST_ASSERT_TRUE(ui.erasing);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 }
 
-static void test_pwr_toggles_erase_and_requests_the_label(void)
+/* PWR's whole job: PAINT -> ERASE -> DETONATE -> PAINT, one mode per press,
+ * every press asking for the label. Checked as one continuous cycle rather
+ * than three separate tests, since the thing actually under test is the
+ * WRAP - that DETONATE lands back on PAINT rather than running off the end
+ * of the enum - and that only shows up by walking all three. */
+static void test_pwr_cycles_through_paint_erase_detonate_and_back(void)
 {
     sand_ui_t ui;
     fixture(&ui);
     ui.screen = SAND_UI_RUNNING;
-    ui.erasing = false;
+    ui.mode = SAND_MODE_PAINT;
 
     input_t in = no_input();
     in.power.pressed = true;
 
-    const unsigned actions = sand_ui_step(&ui, &in);
-
-    TEST_ASSERT_TRUE(actions & SAND_UI_SHOW_LABEL);
-    TEST_ASSERT_TRUE(ui.erasing);
+    const unsigned actions1 = sand_ui_step(&ui, &in);
+    TEST_ASSERT_TRUE(actions1 & SAND_UI_SHOW_LABEL);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_ERASE, ui.mode);
 
     const unsigned actions2 = sand_ui_step(&ui, &in);
     TEST_ASSERT_TRUE(actions2 & SAND_UI_SHOW_LABEL);
-    TEST_ASSERT_FALSE(ui.erasing);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_DETONATE, ui.mode);
+
+    const unsigned actions3 = sand_ui_step(&ui, &in);
+    TEST_ASSERT_TRUE(actions3 & SAND_UI_SHOW_LABEL);
+    TEST_ASSERT_EQUAL_INT(SAND_MODE_PAINT, ui.mode);
 }
 
 static void test_closing_without_changing_anything_requests_no_label(void)
@@ -442,10 +506,12 @@ void run_sand_ui_suite(void)
     RUN_TEST(test_a_release_arriving_after_the_screen_changed_is_consumed_exactly_once);
 
     RUN_TEST(test_tapping_a_different_tile_selects_it_and_preserves_its_mode);
+    RUN_TEST(test_selecting_a_tile_while_detonating_resets_to_paint);
     RUN_TEST(test_tapping_the_selected_tile_toggles_pour_and_spawn);
+    RUN_TEST(test_tapping_the_selected_tile_is_untouched_by_detonate);
     RUN_TEST(test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing);
     RUN_TEST(test_tapping_outside_every_tile_does_nothing);
-    RUN_TEST(test_pwr_toggles_erase_and_requests_the_label);
+    RUN_TEST(test_pwr_cycles_through_paint_erase_detonate_and_back);
     RUN_TEST(test_closing_without_changing_anything_requests_no_label);
     RUN_TEST(test_closing_after_selecting_a_different_tile_requests_the_label);
     RUN_TEST(test_closing_after_toggling_the_selected_tiles_mode_requests_the_label);

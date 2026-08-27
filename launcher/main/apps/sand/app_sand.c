@@ -165,6 +165,22 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * that guarantee rather than replacing it. */
 #define ERASE_EMITTER_RADIUS_PX  32
 
+/* Its own radius, not the eraser's borrowed one - a blast has to read as
+ * bigger than a corrective tool, not the same size as one. 48 (three times
+ * ERASE_RADIUS_PX) is an unmeasured starting point, picked only to look
+ * obviously larger on screen than either existing brush; there is no
+ * device capture behind it the way POUR_RADIUS_PX/ERASE_RADIUS_PX above
+ * were tuned by feel over real use. Tune on device once the mechanic
+ * itself is judged worth tuning - see docs/Sand/Explosion-Plan.md's
+ * "Device" section. */
+#define DETONATE_RADIUS_PX  48
+
+/* This is evaluation scaffolding (see sand_mode_t in sand_ui.h), not a
+ * tuned feature. Same order as CRACK_MAX - see sand_enable_blast()'s own
+ * comment in sand.h on why this is a few hundred entries, not a per-cell
+ * flag. */
+#define APP_BLAST_MAX    256
+
 /* What the finger puts down.
  *
  * Selected from the palette panel (BOOT's release edge opens it - see
@@ -178,14 +194,14 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * pushed everything after it that much further away. The panel costs one
  * press to open and one tap to choose, whatever this list grows to.
  *
- * PWR still toggles the eraser directly, unchanged from before the panel
- * existed - see sand_ui.c's handle_brush_input(). Erase is
- * pressed often enough, and is purely binary (on/off, nothing to browse),
- * that a plain press is the cheaper action for it: a HOLD costs
- * BUTTON_HOLD_US (600 ms) of waiting before it even registers, every single
- * time, and paying that tax on a control used this often would make erasing
- * feel sluggish next to the immediacy pouring already has. A dedicated
- * button's press has none of that cost.
+ * PWR still cycles PAINT/ERASE/DETONATE directly, unchanged from before the
+ * panel existed - see sand_ui.c's handle_brush_input() and sand_mode_t's
+ * own comment in sand_ui.h for why DETONATE rides along on this cycle
+ * rather than living in the palette. A plain press is the cheaper action
+ * for all three: a HOLD costs BUTTON_HOLD_US (600 ms) of waiting before it
+ * even registers, every single time, and paying that tax on a control used
+ * this often would make erasing feel sluggish next to the immediacy
+ * pouring already has. A dedicated button's press has none of that cost.
  *
  * MAT_WOOD but not MAT_STEAM: every entry here costs a tile in the palette
  * panel - see BRUSH_COUNT and the _Static_assert on PALETTE_FITS below - so
@@ -245,12 +261,12 @@ static uint8_t brush_mode[BRUSH_COUNT];   /* brush_mode_t per brush */
  * rather than owning copies of them, the same way sand_t borrows `cells`
  * instead of allocating its own grid.
  *
- * `ui.screen`, `ui.brush` and `ui.erasing` replace the old file-scope
- * `screen`, `brush` and `erasing` statics - one definition rather than
- * three, now that the state machine that reads and writes them lives in
+ * `ui.screen`, `ui.brush` and `ui.mode` replace the old file-scope
+ * `screen`, `brush` and `mode` statics - one definition rather than three,
+ * now that the state machine that reads and writes them lives in
  * sand_ui.c. Zero-initialised the same way those statics were: `ui.screen`
- * starts at SAND_UI_MENU (0), `ui.brush` at 0, `ui.erasing` at false -
- * matching sand_enter()'s and start_sim()'s own resets below. */
+ * starts at SAND_UI_MENU (0), `ui.brush` at 0, `ui.mode` at SAND_MODE_PAINT
+ * (0) - matching sand_enter()'s and start_sim()'s own resets below. */
 static sand_ui_t ui = {
     .brushes     = brushes,
     .modes       = brush_mode,
@@ -301,6 +317,9 @@ static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
 static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * settled blocks to skip - see
                                    * sand_enable_sleeping() */
+static blast_t    *blast_buf;    /* APP_BLAST_MAX entries: grains in flight
+                                   * from DETONATE - see sand_enable_blast().
+                                   * Scaffolding, like sand_mode_t itself. */
 
 /* Up to ROW_MAX_RUNS (row_runs.h) separate cell-index ranges per row - not
  * pixel ranges, and not a single min/max span - recording where a row's
@@ -491,7 +510,7 @@ static void start_sim(void)
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
     ui.brush = 0;
-    ui.erasing = false;
+    ui.mode = SAND_MODE_PAINT;
     label_left_ms = 0;
     failed = false;
 
@@ -504,6 +523,9 @@ static void start_sim(void)
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
+    if (blast_buf == NULL) {
+        blast_buf = malloc((size_t)APP_BLAST_MAX * sizeof(*blast_buf));
+    }
     if (row_run_x0 == NULL) {
         row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));
     }
@@ -514,6 +536,7 @@ static void start_sim(void)
         row_run_n = malloc(GRID_H_MAX * sizeof(*row_run_n));
     }
     if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
+        blast_buf == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
@@ -559,6 +582,13 @@ static void start_sim(void)
      * thing the simulation can hold rather than the least - every settled
      * grain runs the whole decision path each step to conclude nothing. */
     sand_enable_sleeping(&sim, sleep_blocks);
+
+    /* DETONATE scaffolding - see sand_mode_t's own comment in sand_ui.h.
+     * Enabled unconditionally rather than only once the mode is first
+     * cycled to, so an allocation failure is caught here alongside every
+     * other one above instead of surfacing later as a silent no-op the
+     * first time someone actually cycles PWR round to it. */
+    sand_enable_blast(&sim, blast_buf, APP_BLAST_MAX);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {
@@ -1079,7 +1109,9 @@ static void draw_mode_label(int gx, int gy)
      * layout below needs to know a suffix exists. */
     char text_buf[24];
     const char *text;
-    if (ui.erasing) {
+    if (ui.mode == SAND_MODE_DETONATE) {
+        text = "DETONATE";   /* scaffolding - see sand_mode_t in sand_ui.h */
+    } else if (ui.mode == SAND_MODE_ERASE) {
         text = "ERASE";
     } else if (ui.modes[ui.brush] == BRUSH_SPAWN) {
         snprintf(text_buf, sizeof text_buf, "%s SOURCE",
@@ -1120,9 +1152,19 @@ static void draw_mode_label(int gx, int gy)
 
     /* Coloured as the material itself, so the label needs no colour table of
      * its own - see brush_color()'s own comment for why an extended cell
-     * cannot just have its variant bumped like an ordinary one. */
-    const gfx_color_t ink =
-        ui.erasing ? gfx_rgb(0xFF8A5C) : brush_color(brushes[ui.brush]);
+     * cannot just have its variant bumped like an ordinary one. ERASE and
+     * DETONATE have no material to read a colour from, so each gets one
+     * picked by hand instead - a warmer orange for the corrective eraser, a
+     * hotter red for DETONATE since it is the one mode here that can
+     * actually rearrange the board. */
+    gfx_color_t ink;
+    if (ui.mode == SAND_MODE_DETONATE) {
+        ink = gfx_rgb(0xFF3B3B);
+    } else if (ui.mode == SAND_MODE_ERASE) {
+        ink = gfx_rgb(0xFF8A5C);
+    } else {
+        ink = brush_color(brushes[ui.brush]);
+    }
 
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
@@ -1536,6 +1578,25 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
  * dropped instead of dumping a pile in one go. */
 static void handle_pour_input(const input_t *input, uint32_t dt_ms)
 {
+    if (ui.mode == SAND_MODE_DETONATE) {
+        /* Fires on the press EDGE, not through the `applications` catch-up
+         * loop below. That loop runs every frame while a finger is held, so
+         * wiring DETONATE through it would detonate continuously for as
+         * long as the screen is touched - a fine stress test (see the
+         * plan's "full screen of packed sand, then rapid repeat presses"),
+         * useless for looking at any ONE blast, which is the entire reason
+         * this mode exists. input->pressed is the touch-down edge - true
+         * for exactly one frame per tap - so this is one sand_explode()
+         * call per press, however long the finger then stays down. */
+        pour_accumulator_ms = 0;   /* do not let held time leak into paint/erase */
+        if (input->pressed) {
+            const int cx = input->x / cell;
+            const int cy = input->y / cell;
+            sand_explode(&sim, cx, cy, (DETONATE_RADIUS_PX + cell / 2) / cell);
+        }
+        return;
+    }
+
     if (!input->down) {
         pour_accumulator_ms = 0;
         return;
@@ -1548,7 +1609,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * spawn mode skips the accumulator/pour path for this frame completely
      * - it must never both place a tap and pour a blob from the same
      * touch. */
-    if (!ui.erasing && ui.modes[ui.brush] == BRUSH_SPAWN) {
+    if (ui.mode == SAND_MODE_PAINT && ui.modes[ui.brush] == BRUSH_SPAWN) {
         /* Only on the PRESS edge, never every frame the finger stays down
          * - one tap places one tap. input->pressed fires exactly once per
          * physical press, so this call (and the log below, if it fails)
@@ -1593,7 +1654,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * table: the smallest result is POUR_RADIUS_PX at the coarsest cell,
      * (10 + 3) / 6 = 2. */
     for (int i = 0; i < applications; i++) {
-        if (ui.erasing) {
+        if (ui.mode == SAND_MODE_ERASE) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
             /* Wider than the sweep above on purpose - see
              * ERASE_EMITTER_RADIUS_PX's own comment for why a point target
@@ -1716,7 +1777,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
                              int64_t draw_us, int awake_blocks, int awake_cells,
                              int64_t now)
 {
-    if (input->down && !ui.erasing) {
+    if (input->down && ui.mode == SAND_MODE_PAINT) {
         pour_step_us_total += step_us;
         pour_draw_us_total += draw_us;
         pour_awake_total += awake_blocks;
@@ -2029,8 +2090,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     if (actions & SAND_UI_SHOW_LABEL) {
         label_left_ms = LABEL_MS;
         if (input->power.pressed) {
-            ESP_LOGI(TAG, "brush: %s",
-                     ui.erasing ? "erase" : material_name(brushes[ui.brush]));
+            const char *mode_name = (ui.mode == SAND_MODE_DETONATE) ? "detonate"
+                                   : (ui.mode == SAND_MODE_ERASE)    ? "erase"
+                                   : material_name(brushes[ui.brush]);
+            ESP_LOGI(TAG, "brush: %s", mode_name);
         }
     }
 
