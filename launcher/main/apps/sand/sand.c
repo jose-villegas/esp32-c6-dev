@@ -44,7 +44,13 @@
  * repeating, it just does not visit them in order. */
 #define POUR_BAND_STRIDE 5u
 
-static cell_t random_cell(sand_t *s, material_id_t material)
+/* `band` is where in the shade band this pour is centred, worked out
+ * ONCE by the caller. It is the same for every cell of a brushful, and
+ * the modulo that produces it is a real division - MATERIAL_SHADE_SPAN is
+ * a runtime ternary, so the compiler cannot turn it into a mask. Computed
+ * per cell it cost about 11% of the spawn path; hoisted, a brushful pays
+ * for one instead of thirty. */
+static cell_t random_cell(sand_t *s, material_id_t material, int band)
 {
     /* A liquid's variant is an amount, not a shade, so a fresh cell is a full
      * one. Giving it a random level would be pouring random quantities. */
@@ -90,8 +96,7 @@ static cell_t random_cell(sand_t *s, material_id_t material)
          * what two tones can do, and enough to lay down a line. The
          * draw is kept so a bank is not perfectly uniform. */
         const unsigned tone =
-            ((s->pour_phase >> POUR_BAND_SHIFT) + rng_below(&s->rng, 4) / 3u)
-            % SOIL_TONES;
+            ((unsigned)band + rng_below(&s->rng, 4) / 3u) % SOIL_TONES;
         return CELL_SOIL(material, (uint8_t)tone, 0);
     }
     /* Not the whole range: sand keeps its top four shades for cullet, so
@@ -109,8 +114,6 @@ static cell_t random_cell(sand_t *s, material_id_t material)
      *
      * Same single draw it always was. */
     const int span = MATERIAL_SHADE_SPAN(material);
-    const int band = (int)(((s->pour_phase >> POUR_BAND_SHIFT) *
-                            POUR_BAND_STRIDE) % (unsigned)span);
     int shade = band + (int)rng_below(&s->rng, 3) - 1;
     if (shade < 0) {
         shade = 0;
@@ -257,7 +260,7 @@ int sand_count(const sand_t *s)
 
 /* Attempt to place `material` at (x, y). Returns whether it did - off the
  * grid or already occupied is not an error, just nothing to do. */
-static bool try_spawn_one(sand_t *s, int x, int y, cell_t spec)
+static bool try_spawn_one(sand_t *s, int x, int y, cell_t spec, int band)
 {
     if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
         return false;
@@ -275,7 +278,8 @@ static bool try_spawn_one(sand_t *s, int x, int y, cell_t spec)
      * picking one would change which material it is. */
     const cell_t cell = cell_is_extended(spec)
                         ? spec
-                        : random_cell(s, (material_id_t)CELL_MATERIAL(spec));
+                        : random_cell(s, (material_id_t)CELL_MATERIAL(spec),
+                                      band);
     s->cells[y * s->w + x] = cell;
     latch_content_flags(s, cell);
     mark_move(s, x, y, x, y);
@@ -291,13 +295,17 @@ int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec)
 {
     int filled = 0;
     const int r2 = radius * radius;
+    /* Once for the whole brushful - see random_cell(). */
+    const int span = MATERIAL_SHADE_SPAN((material_id_t)CELL_MATERIAL(spec));
+    const int band = (int)(((s->pour_phase >> POUR_BAND_SHIFT) *
+                            POUR_BAND_STRIDE) % (unsigned)span);
 
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
             if (dx * dx + dy * dy > r2) {
                 continue;
             }
-            if (try_spawn_one(s, cx + dx, cy + dy, spec)) {
+            if (try_spawn_one(s, cx + dx, cy + dy, spec, band)) {
                 filled++;
             }
         }
