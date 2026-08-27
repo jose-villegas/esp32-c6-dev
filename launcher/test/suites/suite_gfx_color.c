@@ -109,6 +109,61 @@ static void test_channels_blend_independently_green_stays_put(void)
         "green must stay at zero while red and blue move independently");
 }
 
+
+/* --- gfx_color_add ------------------------------------------------------ */
+
+static void test_adding_black_changes_nothing(void)
+{
+    const gfx_color_t c = GFX_RGB(0x3D7FA2);
+    TEST_ASSERT_EQUAL_HEX16(c, gfx_color_add(c, GFX_RGB(0x000000)));
+    TEST_ASSERT_EQUAL_HEX16(c, gfx_color_add(GFX_RGB(0x000000), c));
+}
+
+static void test_adding_two_primaries_gives_their_combination(void)
+{
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(GFX_RGB(0xFFFF00),
+        gfx_color_add(GFX_RGB(0xFF0000), GFX_RGB(0x00FF00)),
+        "red plus green is yellow - this is light, not paint");
+    TEST_ASSERT_EQUAL_HEX16(GFX_RGB(0xFFFFFF),
+        gfx_color_add(GFX_RGB(0xFFFF00), GFX_RGB(0x0000FF)));
+}
+
+/* The trap this function exists to avoid: the three channels are not the same
+ * width, so each has to saturate at its own ceiling. Clamping all three at 31
+ * would halve green; clamping all three at 63 would wrap red and blue round
+ * to nearly nothing at the moment they are brightest. */
+static void test_each_channel_saturates_at_its_own_ceiling(void)
+{
+    const gfx_color_t white = GFX_RGB(0xFFFFFF);
+
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(white, gfx_color_add(white, white),
+        "white plus white is white, not a wrapped-round mess");
+    TEST_ASSERT_EQUAL_HEX16(GFX_RGB(0xFF0000),
+        gfx_color_add(GFX_RGB(0xFF0000), GFX_RGB(0xFF0000)));
+    TEST_ASSERT_EQUAL_HEX16(GFX_RGB(0x00FF00),
+        gfx_color_add(GFX_RGB(0x00FF00), GFX_RGB(0x00FF00)));
+    TEST_ASSERT_EQUAL_HEX16(GFX_RGB(0x0000FF),
+        gfx_color_add(GFX_RGB(0x0000FF), GFX_RGB(0x0000FF)));
+}
+
+static void test_adding_never_makes_a_channel_darker(void)
+{
+    const gfx_color_t base = GFX_RGB(0x402080);
+
+    for (uint32_t rgb = 0; rgb <= 0xFFFFFFu; rgb += 0x0103F7u) {
+        const gfx_color_t sum = gfx_color_add(base, GFX_RGB(rgb));
+        const uint16_t nb = (uint16_t)((base >> 8) | (base << 8));
+        const uint16_t ns = (uint16_t)((sum >> 8) | (sum << 8));
+
+        TEST_ASSERT_TRUE_MESSAGE(((ns >> 11) & 0x1Fu) >= ((nb >> 11) & 0x1Fu),
+            "adding light made the red channel darker");
+        TEST_ASSERT_TRUE_MESSAGE(((ns >> 5) & 0x3Fu) >= ((nb >> 5) & 0x3Fu),
+            "adding light made the green channel darker");
+        TEST_ASSERT_TRUE_MESSAGE((ns & 0x1Fu) >= (nb & 0x1Fu),
+            "adding light made the blue channel darker");
+    }
+}
+
 void run_gfx_color_suite(void)
 {
     RUN_TEST(test_t_zero_returns_a_exactly);
@@ -117,6 +172,10 @@ void run_gfx_color_suite(void)
     RUN_TEST(test_black_toward_white_at_half_gives_mid_grey);
     RUN_TEST(test_a_known_pair_blends_to_a_known_result);
     RUN_TEST(test_channels_blend_independently_green_stays_put);
+    RUN_TEST(test_adding_black_changes_nothing);
+    RUN_TEST(test_adding_two_primaries_gives_their_combination);
+    RUN_TEST(test_each_channel_saturates_at_its_own_ceiling);
+    RUN_TEST(test_adding_never_makes_a_channel_darker);
 }
 
 SUITE_REGISTER(run_gfx_color_suite);

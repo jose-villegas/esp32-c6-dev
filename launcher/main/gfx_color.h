@@ -74,3 +74,34 @@ static inline gfx_color_t gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t)
     /* Swap back to the panel's byte order. */
     return (gfx_color_t)((nm >> 8) | (nm << 8));
 }
+
+/* Add `b` to `a`, saturating each channel at its own maximum.
+ *
+ * What overlapping light does: two strokes crossing on a black field make a
+ * brighter, mixed colour rather than whichever was drawn second. That is the
+ * whole reason this exists - see boot_anim.c, where several hundred curve
+ * segments cross each other and flat writes made the picture look like
+ * stacked wires instead of one lit object.
+ *
+ * Same byte-swap dance as gfx_color_mix() below, and the same trap: the three
+ * channels are NOT the same width, so each saturates at its own ceiling.
+ * Clamping all three at 31 dims green by half; clamping all three at 63
+ * wraps red and blue round to nearly black at the exact moment they are
+ * brightest, which looks like holes punched in the picture.
+ */
+static inline gfx_color_t gfx_color_add(gfx_color_t a, gfx_color_t b)
+{
+    const uint16_t na = (uint16_t)((a >> 8) | (a << 8));
+    const uint16_t nb = (uint16_t)((b >> 8) | (b << 8));
+
+    uint16_t r = (uint16_t)(((na >> 11) & 0x1Fu) + ((nb >> 11) & 0x1Fu));
+    uint16_t g = (uint16_t)(((na >> 5)  & 0x3Fu) + ((nb >> 5)  & 0x3Fu));
+    uint16_t bl = (uint16_t)((na & 0x1Fu) + (nb & 0x1Fu));
+
+    if (r  > 0x1Fu) { r  = 0x1Fu; }
+    if (g  > 0x3Fu) { g  = 0x3Fu; }
+    if (bl > 0x1Fu) { bl = 0x1Fu; }
+
+    const uint16_t nm = (uint16_t)((r << 11) | (g << 5) | bl);
+    return (gfx_color_t)((nm >> 8) | (nm << 8));
+}

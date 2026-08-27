@@ -327,12 +327,17 @@ void gfx_pixel(int x, int y, gfx_color_t color)
 /* Bresenham, in the form that treats both axes alike so no case analysis is
  * needed for steep versus shallow lines.
  *
+ * `blend` is what the two public wrappers below differ by, and it is passed
+ * as a flag rather than duplicating the walk: the loop is the part worth
+ * getting right once, and the alternative is two copies that drift.
+ *
  * The dirty box is worked out up front, from the line's own bounding box
  * intersected with the clip rect, and marked ONCE - rather than per pixel the
  * way gfx_pixel() would. A diagonal line's bounding box is mostly empty, so
  * this claims more than it writes; that only ever costs bus time, whereas
  * claiming too little leaves stale pixels on the panel. */
-void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
+static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
+                      bool blend)
 {
     int bx0 = im_min(x0, x1), bx1 = im_max(x0, x1) + 1;
     int by0 = im_min(y0, y1), by1 = im_max(y0, y1) + 1;
@@ -350,7 +355,8 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
 
     for (;;) {
         if (x0 >= clip.x0 && x0 < clip.x1 && y0 >= clip.y0 && y0 < clip.y1) {
-            fb[(size_t)y0 * GFX_WIDTH + x0] = color;
+            gfx_color_t *const dst = &fb[(size_t)y0 * GFX_WIDTH + x0];
+            *dst = blend ? gfx_color_add(*dst, color) : color;
         }
         if (x0 == x1 && y0 == y1) {
             break;
@@ -366,6 +372,16 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
     if (bx0 < bx1 && by0 < by1) {
         dirty_mark(bx0, by0, bx1 - bx0, by1 - by0);
     }
+}
+
+void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
+{
+    draw_line(x0, y0, x1, y1, color, false);
+}
+
+void gfx_line_add(int x0, int y0, int x1, int y1, gfx_color_t color)
+{
+    draw_line(x0, y0, x1, y1, color, true);
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)

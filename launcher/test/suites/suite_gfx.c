@@ -246,6 +246,26 @@ void test_a_line_honours_the_clip_rect(void)
     TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(30, 25));
 }
 
+void test_an_additive_line_brightens_where_it_crosses_itself(void)
+{
+    fixture();
+    const gfx_color_t bg  = gfx_rgb(0x000000);
+    const gfx_color_t red = gfx_rgb(0xFF0000);
+    const gfx_color_t grn = gfx_rgb(0x00FF00);
+
+    gfx_clear(bg);
+    gfx_line_add(10, 100, 60, 100, red);
+    gfx_line_add(35, 80, 35, 120, grn);
+
+    /* Where they cross, both channels are lit; where they do not, only one
+     * is. Flat writes would have put green over red at the crossing. */
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(gfx_rgb(0xFFFF00), pixel_at(35, 100),
+        "the crossing should be the sum of the two strokes");
+    TEST_ASSERT_EQUAL_HEX16(red, pixel_at(20, 100));
+    TEST_ASSERT_EQUAL_HEX16(grn, pixel_at(35, 90));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(70, 100));
+}
+
 void test_fill_rect_is_clipped_to_the_screen(void)
 {
     fixture();
@@ -825,6 +845,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_line_is_clipped_rather_than_wrapped);
     RUN_TEST(test_a_line_entirely_off_screen_draws_nothing);
     RUN_TEST(test_a_line_honours_the_clip_rect);
+    RUN_TEST(test_an_additive_line_brightens_where_it_crosses_itself);
     RUN_TEST(test_fill_rect_entirely_off_screen_draws_nothing);
     RUN_TEST(test_clip_rect_restricts_drawing);
     RUN_TEST(test_pixel_outside_the_screen_is_ignored);

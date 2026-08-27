@@ -100,6 +100,16 @@ void gfx_pixel(int x, int y, gfx_color_t color);
  * at all, which is why this is the newest primitive in the file. */
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 
+/* The same line, ADDED to what is already there rather than replacing it -
+ * gfx_color_add() per pixel, so two strokes crossing make a brighter, mixed
+ * colour instead of whichever was drawn second.
+ *
+ * Costs a read as well as a write per pixel, so it is the one to reach for
+ * when overlap is the point and not otherwise. The startup animation is that
+ * case: its curve crosses itself constantly, and flat writes made it look
+ * like stacked wires rather than one lit object. */
+void gfx_line_add(int x0, int y0, int x1, int y1, gfx_color_t color);
+
 /* Draws at GFX_GLYPH_SCALE - the size the UI is laid out around. */
 void gfx_text(int x, int y, const char *text, gfx_color_t color);
 
