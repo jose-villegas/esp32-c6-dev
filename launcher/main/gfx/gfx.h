@@ -268,4 +268,14 @@ bool gfx_debug_overlay(void);
  * undefined-outside-development reasoning as the toggle above. */
 void gfx_set_leaf_overlay(bool on);
 bool gfx_debug_leaf_overlay(void);
+
+/* Per-strip counts of which send path the last stretch of gfx_present()
+ * calls actually took - full-band send_full_row() versus a gathered send
+ * of at least one run - for a device test to log alongside its own timing
+ * rather than guessing the split from the number alone. Reset explicitly,
+ * not by gfx_present() itself, so a caller can accumulate across exactly
+ * the frames it is measuring. See gfx.c's send_one_row() for where these
+ * are counted. */
+void gfx_reset_strip_send_counts(void);
+void gfx_get_strip_send_counts(int *full_bands, int *gathered);
 #endif

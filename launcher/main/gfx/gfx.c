@@ -663,6 +663,32 @@ static bool leaf_overlay_on;
 void gfx_set_leaf_overlay(bool on) { leaf_overlay_on = on; }
 bool gfx_debug_leaf_overlay(void) { return leaf_overlay_on; }
 
+/* Per-strip counts of which send path gfx_present() actually took: how
+ * many of STRIP_COUNT strips went out as one whole-band send_full_row()
+ * versus how many gathered at least one run instead - counted where
+ * send_one_row() below makes that choice, once per strip either way.
+ *
+ * Exists for a device test that wants to know not just how long
+ * gfx_present() took but WHY, against a real sand scene's dirty pattern
+ * rather than the synthetic marks the rest of this file's tests use - see
+ * suite_sand.c. Not reset by gfx_present() itself, so a caller can
+ * accumulate across exactly the frames it is measuring by calling
+ * gfx_reset_strip_send_counts() right before its own timed window. */
+static int dev_strips_sent_full;
+static int dev_strips_sent_gathered;
+
+void gfx_reset_strip_send_counts(void)
+{
+    dev_strips_sent_full = 0;
+    dev_strips_sent_gathered = 0;
+}
+
+void gfx_get_strip_send_counts(int *full_bands, int *gathered)
+{
+    if (full_bands) { *full_bands = dev_strips_sent_full; }
+    if (gathered)    { *gathered   = dev_strips_sent_gathered; }
+}
+
 /* Outlines whichever rectangle is about to be sent, one row and one column
  * of pixels deep - shows exactly which segments of the strip/gather split
  * are triggering an update on a real interaction, and which path each one
@@ -923,12 +949,20 @@ static void send_one_row(int row, int *queued)
             const size_t area = (size_t)(box_x1[r] - box_x0[r]) *
                                 (size_t)(box_y1[r] - box_y0[r]);
             if (area > GATHER_MAX_PIXELS) {
+#if CONFIG_LAUNCHER_DEVELOPMENT
+                dev_strips_sent_full++;
+#endif
                 send_full_row(row, queued);
                 return;
             }
         }
     }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    if (n > 0) {
+        dev_strips_sent_gathered++;
+    }
+#endif
     for (int r = 0; r < n; r++) {
         send_run(row, run_start[r], run_end[r], box_x0[r], box_x1[r],
                 box_y0[r], box_y1[r], split_n[r], split_x0[r], split_x1[r],

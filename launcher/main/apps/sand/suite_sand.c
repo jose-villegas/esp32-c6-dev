@@ -12138,6 +12138,8 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
 #include <stdlib.h>
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "row_runs.h"
+#include "../../gfx/gfx.h"
 #define REAL_BLOCK_COLS ((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define REAL_BLOCK_ROWS ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
@@ -13140,6 +13142,384 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
         "number, as a reduction target - failing means the work is not "
         "done, not that something broke");
 }
+
+/* --- gfx_present() cost against real sand scenes ------------------------
+ *
+ * Every frame-budget test above times sand_step() alone, with no drawing at
+ * all involved - nobody has ever measured what gfx_present() actually costs
+ * against the dirty pattern a busy, real sand scene leaves behind (see
+ * suite_gfx.c for the only present() numbers that exist, all from synthetic
+ * marks a test wrote by hand). The tests below close that gap, by building a
+ * real scene, stepping it, reproducing app_sand.c's OWN marking policy
+ * against the result, and timing gfx_present() on what that produces.
+ *
+ * "Reproducing", not calling: app_sand.c's draw_dirty_rows(), draw_one_row()
+ * and paint_row() are all static, relying on the compiler inlining them
+ * into their one call site. Removing `static` from a hot per-call
+ * function to share it across a translation-unit boundary is the exact
+ * shape of change a previous tuning round measured a 26% regression from
+ * - not these functions, but try_fall_or_scatter()/try_slide() in sand.c -
+ * see the seventh attempt in docs/Sand/Performance-Tuning-Attempts.md, and
+ * the eighth for how long it took to notice a "fix" for it was aimed at
+ * code the failing benchmark never even ran. So
+ * mirror_app_sand_marking() below duplicates the ~15 lines of policy from
+ * draw_dirty_rows()'s `for (int cy...)` loop (app_sand.c, around its own
+ * line 884) instead: the same row_runs_find()/row_runs_span_fallback()/
+ * row_runs_reconcile() calls, in the same order, gated by the same per-row
+ * dirty flag sand_track_dirty_rows() maintains. It does not paint any
+ * pixels - gfx_present()'s cost depends only on which regions were marked
+ * dirty, never on their colour, and paint_row()/draw_one_row() are the
+ * static functions that decide colour, exactly the ones this cannot call
+ * without repeating the regression above. */
+
+/* REAL_W*REAL_CELL_PX == GFX_WIDTH and REAL_H*REAL_CELL_PX == GFX_HEIGHT -
+ * REAL_W/REAL_H are the grid size at cell=2, the finest ("HIGH") quality
+ * tier in app_sand.c's qualities[] table, which is what the pixel math in
+ * mirror_app_sand_marking()'s gfx_mark_dirty() calls has to agree with. */
+#define REAL_CELL_PX 2
+
+/* See the section comment above: mirrors app_sand.c's draw_dirty_rows()
+ * marking policy against `cells` (the same raw w*h buffer sand_init() was
+ * given - app_sand.c's own `grid`), gated by `dirty_rows` (hooked up via
+ * sand_track_dirty_rows() at the call site) and reconciled against the
+ * per-row "previous" state in row_x0/row_x1/row_n (seeded full-width by
+ * seed_row_runs_full_width_for_gfx_test() below, the same lie
+ * app_sand.c's seed_row_runs_full_width() starts from and for the same
+ * reason: forces the first pass over each row to send full width rather
+ * than trusting a "previous" state that was never real). */
+static void mirror_app_sand_marking(const uint8_t *cells, int w, int h,
+                                    uint8_t *dirty_rows, uint16_t *row_x0,
+                                    uint16_t *row_x1, uint8_t *row_n)
+{
+    for (int cy = 0; cy < h; cy++) {
+        if (!dirty_rows[cy]) {
+            continue;
+        }
+        dirty_rows[cy] = 0;
+
+        const uint8_t *row = &cells[(size_t)cy * w];
+
+        int run_x0[ROW_MAX_RUNS], run_x1[ROW_MAX_RUNS];
+        const int n = row_runs_find(row, w, SAND_EMPTY, run_x0, run_x1);
+
+        uint16_t cur_x0[ROW_MAX_RUNS], cur_x1[ROW_MAX_RUNS];
+        int cur_n;
+        if (n < 0) {
+            int x0, x1;
+            row_runs_span_fallback(row, w, SAND_EMPTY, &x0, &x1);
+            cur_x0[0] = (uint16_t)x0;
+            cur_x1[0] = (uint16_t)x1;
+            cur_n = 1;
+        } else {
+            for (int i = 0; i < n; i++) {
+                cur_x0[i] = (uint16_t)run_x0[i];
+                cur_x1[i] = (uint16_t)run_x1[i];
+            }
+            cur_n = n;
+        }
+
+        uint16_t *rprev_x0 = &row_x0[cy * ROW_MAX_RUNS];
+        uint16_t *rprev_x1 = &row_x1[cy * ROW_MAX_RUNS];
+        const int rprev_n = row_n[cy];
+
+        uint16_t send_x0[2 * ROW_MAX_RUNS], send_x1[2 * ROW_MAX_RUNS];
+        const int send_n = row_runs_reconcile(cur_x0, cur_x1, cur_n, rprev_x0,
+                                              rprev_x1, rprev_n, send_x0,
+                                              send_x1);
+
+        for (int i = 0; i < send_n; i++) {
+            gfx_mark_dirty(send_x0[i] * REAL_CELL_PX, cy * REAL_CELL_PX,
+                          (send_x1[i] - send_x0[i]) * REAL_CELL_PX,
+                          REAL_CELL_PX);
+        }
+
+        for (int i = 0; i < cur_n; i++) {
+            rprev_x0[i] = cur_x0[i];
+            rprev_x1[i] = cur_x1[i];
+        }
+        row_n[cy] = (uint8_t)cur_n;
+    }
+}
+
+/* app_sand.c's seed_row_runs_full_width(), duplicated for the same reason
+ * mirror_app_sand_marking() above is: seeds every row's "previous run" as
+ * one full-width span, so the first marking pass over a freshly-built
+ * scene sends each row's true width rather than trusting a "previous"
+ * state that was never real. */
+static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
+                                                   uint16_t *row_x1,
+                                                   uint8_t *row_n, int w,
+                                                   int h)
+{
+    for (int i = 0; i < h; i++) {
+        row_x0[i * ROW_MAX_RUNS] = 0;
+        row_x1[i * ROW_MAX_RUNS] = (uint16_t)w;
+        row_n[i] = 1;
+    }
+}
+
+/* Runs `settle_steps` unmeasured frames - each a real sand_step(),
+ * mirror_app_sand_marking() and gfx_present(), not just the simulation
+ * step - so gfx's own dirty state and the row_runs "previous" state
+ * converge to what an actually-running app would see by the time the
+ * timed window starts, instead of measuring the inflated first frame a
+ * freshly-seeded full-width "previous" state would otherwise produce.
+ * Then times `measured_steps` more of the same, returning the mean
+ * gfx_present() cost in us. gfx_reset_strip_send_counts() is called right
+ * before the measured window starts, so `full_bands`/`gathered` come back
+ * as the totals accumulated over exactly those steps, not the settle
+ * ones. */
+static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
+                                          int w, int h, uint8_t *dirty_rows,
+                                          uint16_t *row_x0, uint16_t *row_x1,
+                                          uint8_t *row_n, int gx, int gy,
+                                          int gz, int settle_steps,
+                                          int measured_steps, int *full_bands,
+                                          int *gathered)
+{
+    for (int i = 0; i < settle_steps; i++) {
+        sand_step(s, gx, gy, gz);
+        mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1,
+                                row_n);
+        gfx_present();
+    }
+
+    gfx_reset_strip_send_counts();
+
+    int64_t total_us = 0;
+    for (int i = 0; i < measured_steps; i++) {
+        sand_step(s, gx, gy, gz);
+        mirror_app_sand_marking(cells, w, h, dirty_rows, row_x0, row_x1,
+                                row_n);
+
+        const int64_t start = esp_timer_get_time();
+        gfx_present();
+        total_us += esp_timer_get_time() - start;
+    }
+
+    gfx_get_strip_send_counts(full_bands, gathered);
+
+    return total_us / measured_steps;
+}
+
+/* The plain falling-sand case: the same half-screen checkerboard
+ * test_a_full_size_step_fits_in_the_frame_budget above builds, deliberately
+ * not settled so every grain attempts to move every step. No sleeping and
+ * no per-material scatter/decay/mobility, exactly matching that test's own
+ * setup - this is the same worst case, with drawing added on top of it.
+ *
+ * Chosen as the DENSE, CONTIGUOUS end of the shape spectrum these three
+ * present-cost tests are picked to bracket: a checkerboard alternates
+ * cell-by-cell, which overflows ROW_MAX_RUNS (2) on essentially every
+ * occupied row, so row_runs_find() gives up and row_runs_span_fallback()
+ * reports one span covering nearly the whole row width - despite only half
+ * of it actually holding a grain. That wide fallback span, not the true
+ * occupied-cell count, is what gfx_present() actually has to move. */
+static void test_present_cost_against_a_falling_sand_scene(void)
+{
+    uint8_t  *big       = malloc(REAL_W * REAL_H);
+    uint8_t  *dirty_rows = malloc(REAL_H);
+    uint16_t *row_x0    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t *row_x1    = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t  *row_n     = malloc(REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(dirty_rows);
+    TEST_ASSERT_NOT_NULL(row_x0);
+    TEST_ASSERT_NOT_NULL(row_x1);
+    TEST_ASSERT_NOT_NULL(row_n);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 99u);
+    sand_track_dirty_rows(&real, dirty_rows);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
+                                          REAL_H);
+
+    for (int y = 0; y < REAL_H / 2; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            if (((x + y) & 1) == 0) {
+                sand_set(&real, x, y, SAND_FIRST_SHADE);
+            }
+        }
+    }
+
+    int full_bands = 0, gathered = 0;
+    const int measured_steps = 20;
+    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
+        REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5, measured_steps,
+        &full_bands, &gathered);
+
+    ESP_LOGI("device_tests", "present cost, falling sand checkerboard, "
+                             "%dx%d: mean %lld us/frame over %d frames "
+                             "(%d full-band, %d gathered strip-sends)",
+             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
+             gathered);
+
+    free(big);
+    free(dirty_rows);
+    free(row_x0);
+    free(row_x1);
+    free(row_n);
+
+    /* PROVISIONAL - no device capture of gfx_present() against a real sand
+     * scene exists yet; this is the first. Loose on purpose, the same
+     * convention FULL_STEP_BUDGET_US's comment documents for a brand new
+     * measurement in this file: log the real number, assert only that it
+     * is not absurd, and re-peg this ceiling from the first device
+     * capture rather than trust a guess now. A synthetic full present
+     * alone measures ~17,900 us (suite_gfx.c); this scene interleaves
+     * present() with a checkerboard that is always moving, so the ceiling
+     * is set at more than double that to leave real headroom for the
+     * first capture to land wherever it actually lands. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(40000, (int)mean_us,
+        "present() against a moving falling-sand scene ballooned to more "
+        "than double a full-screen send - PROVISIONAL ceiling, re-peg "
+        "from the first device capture rather than tighten blindly");
+}
+
+/* The lava stress scene (build_lava_stress_scene() above, shared with
+ * test_the_lava_stress_scene_reaches_every_reaction_it_claims and
+ * test_the_lava_stress_scene_fits_in_the_frame_budget) - a lava reservoir
+ * floor, a water roof, and full-width columns of sand/wood/oil between
+ * them. Same seed, settings and settle/measured split as that sand_step-
+ * only benchmark above it, so this is directly comparable to it: what
+ * drawing costs on top of the same scene and the same window.
+ *
+ * Chosen as the OTHER dense/contiguous case rather than the scattered one -
+ * every layer in this scene spans the full row width (the floor and roof
+ * are solid slabs; even the middle's sand/wood/oil/gap columns are wide
+ * enough that a dirty row through them is one or two long runs, not many
+ * short ones) - specifically so the scattered pick below has something
+ * genuinely different to contrast against, not just a second variation on
+ * the checkerboard's own fallback-span shape. */
+static void test_present_cost_against_the_lava_stress_scene(void)
+{
+    uint8_t  *big        = malloc(REAL_W * REAL_H);
+    uint8_t  *blocks     = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t  *dirty_rows = malloc(REAL_H);
+    uint16_t *row_x0     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t *row_x1     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t  *row_n      = malloc(REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(dirty_rows);
+    TEST_ASSERT_NOT_NULL(row_x0);
+    TEST_ASSERT_NOT_NULL(row_x1);
+    TEST_ASSERT_NOT_NULL(row_n);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 37u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_track_dirty_rows(&real, dirty_rows);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
+                                          REAL_H);
+
+    build_lava_stress_scene(&real);
+
+    int full_bands = 0, gathered = 0;
+    const int measured_steps = 20;
+    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
+        REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 30,
+        measured_steps, &full_bands, &gathered);
+
+    ESP_LOGI("device_tests", "present cost, lava stress scene, %dx%d: mean "
+                             "%lld us/frame over %d frames (%d full-band, "
+                             "%d gathered strip-sends)",
+             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
+             gathered);
+
+    free(big);
+    free(blocks);
+    free(dirty_rows);
+    free(row_x0);
+    free(row_x1);
+    free(row_n);
+
+    /* PROVISIONAL - see test_present_cost_against_a_falling_sand_scene's
+     * comment above for the convention this follows. This scene's own
+     * sand_step()-only budget (test_the_lava_stress_scene_fits_in_the_-
+     * frame_budget) measures around 121000-125000 us/step on its own; the
+     * ceiling here is set loose enough to hold even if a full present
+     * (~17,900 us, suite_gfx.c) landed on every single measured frame. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(40000, (int)mean_us,
+        "present() against the lava stress scene ballooned past even a "
+        "full-screen send every frame - PROVISIONAL ceiling, re-peg from "
+        "the first device capture rather than tighten blindly");
+}
+
+/* The thermal shock lattice (build_thermal_shock_scene() above, shared
+ * with test_the_thermal_shock_scene_shatters_in_both_directions and
+ * test_the_thermal_shock_scene_fits_in_the_frame_budget) - 480 separate
+ * glass compartments in a 20x24 tile grid, each a small ring with real
+ * empty margin between it and its neighbours (see that builder's own
+ * comment on why the tiling keeps them from touching at all). Same seed,
+ * settings and ten-step measured window as that sand_step-only benchmark
+ * (no settle steps there either - the lattice is already at its most
+ * active the moment it is painted), so this is directly comparable to it.
+ *
+ * Chosen as the SCATTERED case: a dirty row through this lattice crosses
+ * many narrow, genuinely separate rings with real gaps between them,
+ * rather than the lava scene's and the checkerboard's wide, near-full-
+ * width spans - the shape gfx_present()'s gather-vs-full-band choice
+ * (send_one_row() in gfx.c) exists for in the first place. */
+static void test_present_cost_against_the_thermal_shock_scene(void)
+{
+    uint8_t  *big        = malloc(REAL_W * REAL_H);
+    uint8_t  *blocks     = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    uint8_t  *dirty_rows = malloc(REAL_H);
+    uint16_t *row_x0     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t *row_x1     = malloc(REAL_H * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t  *row_n      = malloc(REAL_H);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(dirty_rows);
+    TEST_ASSERT_NOT_NULL(row_x0);
+    TEST_ASSERT_NOT_NULL(row_x1);
+    TEST_ASSERT_NOT_NULL(row_n);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 41u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_track_dirty_rows(&real, dirty_rows);
+    seed_row_runs_full_width_for_gfx_test(row_x0, row_x1, row_n, REAL_W,
+                                          REAL_H);
+
+    build_thermal_shock_scene(&real);
+
+    int full_bands = 0, gathered = 0;
+    const int measured_steps = 10;
+    const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
+        REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 0,
+        measured_steps, &full_bands, &gathered);
+
+    ESP_LOGI("device_tests", "present cost, thermal shock lattice, %dx%d: "
+                             "mean %lld us/frame over %d frames (%d "
+                             "full-band, %d gathered strip-sends)",
+             REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
+             gathered);
+
+    free(big);
+    free(blocks);
+    free(dirty_rows);
+    free(row_x0);
+    free(row_x1);
+    free(row_n);
+
+    /* PROVISIONAL - see test_present_cost_against_a_falling_sand_scene's
+     * comment above for the convention this follows. No settle steps and
+     * ten measured ones, the same watchdog-conscious shape
+     * test_the_thermal_shock_scene_fits_in_the_frame_budget uses - see
+     * that test's comment for why. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(40000, (int)mean_us,
+        "present() against the thermal shock lattice ballooned past even "
+        "a full-screen send every frame - PROVISIONAL ceiling, re-peg "
+        "from the first device capture rather than tighten blindly");
+}
 #endif /* DEVICE_BUILD */
 
 /* --- suite -------------------------------------------------------------- */
@@ -13459,6 +13839,10 @@ void run_sand_suite(void)
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
     RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
+
+    RUN_TEST(test_present_cost_against_a_falling_sand_scene);
+    RUN_TEST(test_present_cost_against_the_lava_stress_scene);
+    RUN_TEST(test_present_cost_against_the_thermal_shock_scene);
 #endif
 }
 
