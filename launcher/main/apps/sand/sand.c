@@ -377,6 +377,54 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
     return removed;
 }
 
+/* Integer floor(sqrt(v)), for exact_disc_count() below - Newton's method,
+ * which converges in a handful of iterations for anything this small (v
+ * is at most a grid dimension squared, a few hundred thousand at the
+ * largest quality this app offers). Not the same isqrt64() tilt.c already
+ * has: that one is `static` to its own file and built around int64_t
+ * magnitudes an accelerometer reading produces, neither of which this
+ * caller needs - a second, smaller copy for a second, smaller domain
+ * beats reaching across an unrelated file for one function. */
+static int isqrt_floor(int v)
+{
+    if (v <= 0) {
+        return 0;
+    }
+    int x = v;
+    int y = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + v / x) / 2;
+    }
+    return x;
+}
+
+/* THE EXACT number of lattice cells inside a disc of this radius (dx*dx +
+ * dy*dy <= r*r), not an upper-bound estimate - see sand_explode()'s own
+ * comment for why exactness matters here specifically. For each row `dy`
+ * of the disc, the widest `dx` still inside it is floor(sqrt(r*r -
+ * dy*dy)), so that row holds exactly 2*dx + 1 cells (dx on either side of
+ * the centre column, plus the centre column itself); summing that over
+ * every row from -radius to radius gives the disc's true cell count in
+ * O(radius) integer square roots, far cheaper than walking the cells
+ * themselves. */
+static int exact_disc_count(int radius)
+{
+    if (radius < 0) {
+        return 0;
+    }
+    const int r2 = radius * radius;
+    int count = 0;
+    for (int dy = -radius; dy <= radius; dy++) {
+        const int rem = r2 - dy * dy;
+        if (rem < 0) {
+            continue;
+        }
+        count += 2 * isqrt_floor(rem) + 1;
+    }
+    return count;
+}
+
 /* One candidate cell of sand_explode()'s own annulus scan, below - split
  * out so the ring-order loop that calls it (see that function's own
  * comment on why ring order rather than row order) does not have to repeat
@@ -385,13 +433,47 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
  * the outer radius squared, so this still enforces the true circular disc
  * even though the ring loop that reaches it walks square Chebyshev shells,
  * not circles - the shell order only decides SEQUENCE, this decides
- * MEMBERSHIP, and the two are independent. */
+ * MEMBERSHIP, and the two are independent.
+ *
+ * `disc_count`, `keep` and `*accum` are what make this disc SELF-LIMITING
+ * to whatever buffer the caller actually has, instead of trusting the
+ * caller to have picked a radius small enough - see sand_explode()'s own
+ * comment on why that trust already failed once. `disc_count` is
+ * exact_disc_count()'s own exact count of how many true disc members this
+ * call's radius contains; `keep` is how many of them this blast may
+ * actually queue (min(disc_count, the buffer's own capacity)); `*accum`
+ * is a fixed-point accumulator, shared across every candidate this blast
+ * visits, that decides WHICH ones. This is a digital differential
+ * analyser - the same technique that rasterises a line one evenly-spaced
+ * pixel at a time, not a modulo stride: a stride aliases with the ring
+ * loop's own edge lengths (four edges per ring, of varying length) and
+ * can clump or gap in ways a flat "every Nth candidate" cannot see
+ * coming, where an accumulator that only advances on true disc members
+ * spreads them out as evenly as `keep`-out-of-`disc_count` can be spread,
+ * in scan order and therefore radially AND angularly at once. The bound
+ * this needs to hold: over any P true disc members actually visited (P is
+ * always <= disc_count, since disc_count IS the true total - not merely
+ * an upper bound on it, see exact_disc_count()'s own comment for why that
+ * distinction matters here), the number of times this fires is
+ * floor(P * keep / disc_count), which cannot exceed `keep` however P
+ * compares to disc_count, and is EXACTLY `keep` once the whole disc has
+ * been visited (P == disc_count). Never more selections than the
+ * caller's own buffer allows, and never fewer than the buffer can hold
+ * either - degrading the DENSITY evenly instead of truncating the SHAPE,
+ * which is what running out of room used to mean before this existed
+ * (see the ring-order comment's own note on that). */
 static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
-                                  int r2)
+                                  int r2, int disc_count, int keep, int *accum)
 {
     if (dx * dx + dy * dy > r2) {
         return;
     }
+
+    *accum += keep;
+    if (*accum < disc_count) {
+        return;
+    }
+    *accum -= disc_count;
 
     /* (dx, dy) IS the vector from the centre to this cell, so handing it
      * straight to the same quantiser gravity uses gives "away from the
@@ -400,7 +482,10 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
      * this can never resolve is the centre cell itself, where (dx, dy) is
      * (0, 0) - sand_gravity_direction() reports that as no direction at
      * all, and this simply leaves that cell where it is rather than throw
-     * it nowhere in particular. */
+     * it nowhere in particular. (The centre cell still spends one unit of
+     * `keep` here even though it never queues anything - a fixed,
+     * one-time rounding cost identical at every radius, not worth a
+     * special case to refund.) */
     int qdx, qdy;
     sand_gravity_direction(dx, dy, &qdx, &qdy);
     if (qdx == 0 && qdy == 0) {
@@ -592,22 +677,70 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * max(|dx|, |dy|) == ring is visited exactly once: ring 0 is the
      * centre alone; each ring after that is its own square's top edge,
      * bottom edge, then the left and right edges with the shared corners
-     * left out (already covered by the top/bottom pass). If the buffer
-     * ever fills partway through, whatever ring was in progress is the
-     * only one left incomplete - the result is a smaller, still-complete,
-     * still-symmetric disc, not a crescent missing everything below a
-     * line. */
+     * left out (already covered by the top/bottom pass). SUPERSEDED BY
+     * queue_outward_impulse()'s own accumulator, below, for what happens
+     * when the disc does not fit the buffer: this used to mean the buffer
+     * filling up partway through, truncating to a smaller-but-complete
+     * disc with an untouched outer band. That was safe, but it made
+     * DETONATE_RADIUS_PX and the buffer's own capacity (APP_IMPULSE_MAX in
+     * app_sand.c) two numbers a caller had to keep in sync by hand -
+     * exactly the step that got skipped once already, when the radius
+     * doubled without anyone re-deriving the buffer to match, and
+     * detonating silently stopped doing anything at all on real hardware.
+     * The ring order this comment describes is unchanged and still
+     * matters - it is what makes the accumulator's even thinning land
+     * radially AND angularly evenly instead of only within one ring - but
+     * "what happens when it doesn't fit" is now this function's own job,
+     * not a constraint on whoever picks the radius. */
     const int r2 = radius * radius;
 
-    queue_outward_impulse(s, cx, cy, 0, 0, r2);
+    /* THE BUFFER'S CAPACITY IS NOW FIXED, INDEPENDENT OF radius - see
+     * APP_IMPULSE_MAX's own comment in app_sand.c, sized once from the
+     * device's real heap budget and never touched again when the radius
+     * changes. That inversion is what this pair of locals implements:
+     * `disc_count` is exact_disc_count()'s own EXACT total for this call's
+     * radius, computed here at RUNTIME from whatever radius this call
+     * actually received, instead of once at compile time from a single
+     * constant radius. `keep` is how much of that disc this specific
+     * buffer can actually hold: the whole disc when it fits (every
+     * existing small-radius test and caller gets EXACTLY today's
+     * full-density behaviour, unchanged), or the buffer's own capacity
+     * when it does not - see queue_outward_impulse()'s own comment for
+     * how `keep`-out-of-`disc_count` turns into an even thinning rather
+     * than a truncation.
+     *
+     * EXACT, NOT A SAFE OVER-ESTIMATE - deliberately, and this is the one
+     * place that distinction actually bites. APP_IMPULSE_MAX used to be
+     * SIZED from `(355*r*r)/113 + 5*r + 3`, a disc-lattice-point formula
+     * proven to always overshoot the true count (see that constant's old
+     * derivation, now folded into this history), which is exactly the
+     * right shape for a BUFFER ALLOCATION - wasting a little headroom on
+     * an over-estimate is harmless, and it must never come up short. A
+     * THINNING RATIO has the opposite tolerance: the same formula
+     * overshoots small discs badly enough to matter (radius 1's true
+     * count is 5, the formula's own estimate is 11 - more than double),
+     * and computing `keep` from an inflated total throws away density
+     * the buffer had room for. A blast whose buffer could hold every one
+     * of its 5 true neighbours would have thinned down to 3 anyway,
+     * exactly the regression that surfaced as two failing host tests the
+     * first time this used the old formula here - both expected a small,
+     * fully-buffered blast to queue EVERY neighbour, and got fewer.
+     * exact_disc_count() costs a handful of integer square roots more
+     * than the formula did, entirely negligible next to the per-cell work
+     * the rest of this function already does once per detonation. */
+    const int disc_count = exact_disc_count(radius);
+    const int keep = (disc_count < s->impulse_max) ? disc_count : s->impulse_max;
+    int accum = 0;
+
+    queue_outward_impulse(s, cx, cy, 0, 0, r2, disc_count, keep, &accum);
     for (int ring = 1; ring <= radius; ring++) {
         for (int dx = -ring; dx <= ring; dx++) {
-            queue_outward_impulse(s, cx, cy, dx, -ring, r2);
-            queue_outward_impulse(s, cx, cy, dx,  ring, r2);
+            queue_outward_impulse(s, cx, cy, dx, -ring, r2, disc_count, keep, &accum);
+            queue_outward_impulse(s, cx, cy, dx,  ring, r2, disc_count, keep, &accum);
         }
         for (int dy = -ring + 1; dy <= ring - 1; dy++) {
-            queue_outward_impulse(s, cx, cy, -ring, dy, r2);
-            queue_outward_impulse(s, cx, cy,  ring, dy, r2);
+            queue_outward_impulse(s, cx, cy, -ring, dy, r2, disc_count, keep, &accum);
+            queue_outward_impulse(s, cx, cy,  ring, dy, r2, disc_count, keep, &accum);
         }
     }
 }

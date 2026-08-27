@@ -11208,54 +11208,76 @@ static void test_the_cap_degrades_gracefully(void)
         }
     }
 
-    /* Centre (3,6), radius 1: the four cardinal neighbours all qualify, in
-     * sand_explode()'s own RING order (see its "QUEUED BY RING" comment
-     * in sand.h) - the centre first (skipped, no direction to throw it
-     * in), then ring 1 walked as a square's own top edge, bottom edge,
-     * then left/right edges: UP, then DOWN, then LEFT, then RIGHT. The
-     * buffer holds 2, so UP and DOWN get an entry; LEFT and RIGHT do not.
-     * Radius 1 also means the filled core (radius 1 / SAND_EXPLODE_
-     * CORE_DIVISOR = 0) is only the centre cell itself, (3,6) - none of
-     * the four cardinal neighbours is it. */
+    /* Centre (3,6), radius 1: the four cardinal neighbours all qualify -
+     * radius 1's true disc is exactly 5 cells (the centre plus the four
+     * cardinals; the four diagonals fail the r2 <= 1 test) - see
+     * exact_disc_count()'s own comment in sand.c. The buffer holds 2, so
+     * queue_outward_impulse()'s accumulator THINS 5 candidates down to 2,
+     * evenly rather than truncating to "however many the scan reaches
+     * first" - see that function's own comment for the accumulator
+     * itself. Worked by hand for this exact case (keep=2, disc_count=5,
+     * scan order centre/UP/DOWN/LEFT/RIGHT - see sand_explode()'s own
+     * "QUEUED BY RING" comment in sand.h for why that is the order):
+     * accum starts at 0 and gains 2 per candidate that passes the r2
+     * test, firing whenever it reaches 5 -
+     *   centre: accum 0->2, no fire (and no direction to throw it in
+     *           regardless)
+     *   UP:     accum 2->4, no fire
+     *   DOWN:   accum 4->6, FIRES (accum -> 1) - 1st entry queued
+     *   LEFT:   accum 1->3, no fire
+     *   RIGHT:  accum 3->5, FIRES (accum -> 0) - 2nd entry queued
+     * DOWN and RIGHT are what a buffer of 2 affords here, not UP and DOWN
+     * the way a first-come truncation would have picked - the whole point
+     * of thinning by density instead of by scan position. Radius 1 also
+     * means the filled core (radius 1 / SAND_EXPLODE_CORE_DIVISOR = 0) is
+     * only the centre cell itself, (3,6) - none of the four cardinal
+     * neighbours is it. */
     sand_explode(&s, 3, 6, 1);
 
     /* Checked directly against the queue itself, before a single step has
      * run, rather than inferred from where anything ends up on the board
-     * afterward - three of these four neighbours happen to be
-     * structurally unable to move in this scene regardless of whether
-     * they were queued (LEFT and RIGHT by the packed bed either side of
-     * them, DOWN by the grid's own bottom edge), which would make "did it
-     * move" the wrong question to ask here. "Was it queued at all" is the
-     * only question a buffer-of-2 test can actually answer. */
+     * afterward - DOWN and RIGHT are both structurally unable to move in
+     * this scene regardless of whether they were queued (DOWN by the
+     * grid's own bottom edge, RIGHT by the packed bed beside it), which
+     * would make "did it move" the wrong question for THEM. "Was it
+     * queued at all" is what the accumulator's own arithmetic above
+     * already answers exactly. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(2, s.impulse_count,
-        "the buffer holds 2, so exactly 2 of the 4 cardinal neighbours "
-        "must have been queued - not fewer, and the third and fourth must "
-        "not have silently bumped one of the first two out");
-    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(5 * W + 3),
-        s.impulse_buf[0].index,
-        "ring order visits the centre, then ring 1's top edge first - UP "
-        "(3,5) must be the first neighbour queued");
+        "the buffer holds 2, so exactly 2 of the 5 true disc members "
+        "must have been queued - not fewer, and the rest must not have "
+        "silently bumped one of the first two out");
     TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(7 * W + 3),
+        s.impulse_buf[0].index,
+        "the accumulator's own arithmetic (see this test's top comment) "
+        "fires on DOWN (3,7) first, not UP - even thinning, not a "
+        "first-come truncation");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(6 * W + 4),
         s.impulse_buf[1].index,
-        "ring 1's bottom edge is next - DOWN (3,7) must be the second, "
-        "and last, neighbour the buffer had room for");
+        "and on RIGHT (4,6) second - the last of the buffer's 2 slots");
 
     /* Measured AFTER the explode - see test_a_blast_conserves_grains's own
      * comment on why the core's removal is real and everything past this
-     * point is the invariant under test: LEFT and RIGHT specifically,
-     * since they were never queued at all, must survive completely
-     * untouched - neither flown, nor caved into the core the way a cell
-     * adjacent to it legitimately might have been. */
+     * point is the invariant under test: UP specifically, since it is the
+     * one candidate here with an actually open landing cell (row 4 above
+     * the packed bed is empty - see this file's own comment on
+     * test_a_blast_wakes_the_blocks_it_touches for the same geometry) and
+     * was NOT queued, must survive completely untouched - a bug that
+     * queued it anyway would show up here as a real, visible move, not
+     * just a wrong index. LEFT gets the same check for good measure, even
+     * though the packed bed beside it already makes "did it move" a weak
+     * question on its own. */
     const int expected = sand_count(&s);
 
     for (int i = 0; i < 20; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 5),
+        "UP did not fit in a buffer of 2 and must not fly - and unlike "
+        "the other three candidates, UP had a genuinely open path to fly "
+        "through if it had been wrongly queued");
     TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 2, 6),
-        "the LEFT neighbour did not fit in a buffer of 2 and must not fly");
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 6),
-        "the RIGHT neighbour did not fit either, for the same reason");
+        "LEFT did not fit either, for the same reason");
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
         "over the cap is a smaller-looking blast, not a bug - nothing may "
         "be lost");
@@ -12964,46 +12986,51 @@ static void bfs_distance_from_footprint(const bool *footprint, int w, int h,
     }
 }
 
-/* Mirrors app_sand.c's DETONATE_RADIUS_CELLS/APP_IMPULSE_MAX derivations
- * exactly, at the same CELL_MIN scale REAL_W/REAL_H already represent (see
- * their own comment above) - so a sweep run against this scene, and the
- * numbers it reports, read on the same scale a real device detonation
- * does, not some arbitrary test-only radius.
+/* Mirrors app_sand.c's DETONATE_RADIUS_PX/APP_IMPULSE_MAX exactly, at the
+ * same CELL_MIN scale REAL_W/REAL_H already represent (see their own
+ * comment above) - so a sweep run against this scene, and the numbers it
+ * reports, read on the same scale a real device detonation does, not
+ * some arbitrary test-only radius.
  *
- * WAS 24 (48 px), DOUBLED TO 48 (96 px), THEN PULLED BACK TO 35 (70 px) -
- * the doubling followed a device request ("it needs a much bigger radius
- * in general") and the pullback followed a device FAILURE the doubling
- * itself caused: 96 px needs a 7,481-entry impulse buffer the board
- * cannot actually allocate (~43.8 KB against a real ~76 KB free-heap
- * snapshot with ~43.5 KB of that already claimed by this app's OTHER
- * buffers), so on real hardware the malloc failed, sand_explode() no-
- * opped on its own first line, and detonating did nothing at all. This
- * test's fixed RNG seed and unlimited host `malloc()` could not have
- * caught that - it takes a device boot log and the arithmetic in
- * SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c, which is what
- * settled on 35 cells as the largest radius that budget actually affords
- * with every annulus cell still seeded. This constant follows
- * DETONATE_RADIUS_PX's own value in app_sand.c rather than drifting from
- * it - see that constant's own comment for the full report, including
- * the measured comparison against seeding a checkerboard HALF of the
- * annulus at the original 96 px instead (worse on this scene's own
- * "grains outside the footprint" number, despite the bigger radius).
+ * WAS 24 (48 px), DOUBLED TO 48 (96 px) - following a device request,
+ * "it needs a much bigger radius in general" - and THAT DOUBLING BRIEFLY
+ * BROKE THE FEATURE OUTRIGHT on real hardware: the impulse buffer used to
+ * be sized FROM this radius (`(355*r*r)/113 + 5*r + 3` entries), so
+ * doubling it demanded a ~43.8 KB allocation the device could not make
+ * (~76 KB free heap system-wide, ~43.5 KB of that already claimed by this
+ * app's OTHER buffers before impulse_buf is even considered - see
+ * SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c for the full
+ * arithmetic). The malloc failed every time, sand_explode() no-opped on
+ * its own first line, and detonating did nothing at all - a failure this
+ * test's fixed RNG seed and unlimited host `malloc()` could never have
+ * caught, since nothing here ever fails to allocate.
  *
- * DUNE_IMPULSE_MAX mirrors APP_IMPULSE_MAX's formula too, not just its
- * INPUT: `(355*r*r)/113 + 5*r + 3`, sized to the true circular disc rather
- * than its bounding square - see APP_IMPULSE_MAX's own comment in
- * app_sand.c for the full derivation (a provable upper bound, not a fitted
- * one) and the memory this saves at the app's own radius. A host test
- * buffer does not need to be lean the way a device allocation does, but
- * "mirrors app_sand.c's derivations exactly" stops being true the moment
- * this scene quietly keeps the old, over-sized square formula while the
- * app switches to the disc - and a cap sized differently from what it is
- * meant to mirror is exactly the kind of drift this comment already warns
- * against for the radius itself. */
-#define DUNE_BLAST_RADIUS 35
-#define DUNE_IMPULSE_MAX \
-    ((355 * DUNE_BLAST_RADIUS * DUNE_BLAST_RADIUS) / 113 + \
-     5 * DUNE_BLAST_RADIUS + 3)
+ * THE FIX WAS NOT A SMALLER RADIUS. It was decoupling buffer size from
+ * radius entirely: APP_IMPULSE_MAX (app_sand.c) is now a FIXED entry
+ * count chosen once from the device's own heap budget, and
+ * sand_explode() itself (sand.c) now THINS its own seeding density
+ * automatically whenever a disc's true cell count would exceed whatever
+ * buffer it was actually given - evenly, across the whole disc, rather
+ * than truncating its shape - see queue_outward_impulse()'s own comment
+ * in sand.c. This constant follows DETONATE_RADIUS_PX's own value rather
+ * than drifting from it, same as before, but the radius itself no longer
+ * has anything to do with whether the buffer allocates - see
+ * DETONATE_RADIUS_PX's own comment in app_sand.c for the measured cost
+ * of the automatic thinning at this exact radius. */
+#define DUNE_BLAST_RADIUS 48
+
+/* A FIXED ENTRY COUNT MIRRORING APP_IMPULSE_MAX EXACTLY, not a formula in
+ * DUNE_BLAST_RADIUS - see APP_IMPULSE_MAX's own comment in app_sand.c for
+ * why the two constants split apart: this scene's own impulse buffer no
+ * longer needs to be "big enough for whatever DUNE_BLAST_RADIUS's disc
+ * requires", because sand_explode() now degrades its own seeding density
+ * to fit whatever buffer it is actually given. What this DOES still need
+ * to mirror is the app's real device budget, not the app's radius - a
+ * host test buffer sized any differently would measure a blast fighting
+ * a different memory ceiling than the one the device actually has, which
+ * defeats the entire point of this scene reading "on the same scale a
+ * real device detonation does" (this file's own top comment, above). */
+#define DUNE_IMPULSE_MAX  4096
 
 /* A settled dune, poured rather than painted - the same way app_sand.c's
  * own starting heap is: sand_spawn() dropped from height and left to find
@@ -13112,22 +13139,25 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     const int cx = (min_x + max_x) / 2;
     const int cy = (min_y + max_y) / 2;
 
-    /* AT THE 35-CELL RADIUS THIS BLASTS AT (DUNE_BLAST_RADIUS - see its
-     * own comment for why 35, not the 48 a "much bigger radius" request
-     * first landed on and a device flash then vetoed), cy + DUNE_BLAST_
-     * RADIUS still routinely reaches near REAL_H - the grid's own bottom
-     * edge - because a settled dune's own bounding-box centre sits close
-     * to the floor it settled on (a wide, short pile with height well
-     * under its own radius, not a tall one), and half the blast's
-     * vertical reach is ~35 cells either side of a centre that is itself
-     * only ~30 cells above the true floor. This is not a scene bug to
-     * fix: the real device's own screen has exactly this edge, at
-     * exactly this distance from a dune poured the same way, so a blast
-     * this size genuinely does reach it there too. Verified this still
-     * measures something real rather than a degenerate scene:
-     * "outside"/"destroyed" stayed small fractions of `before` (a 30-seed
-     * sweep averaged 2.8% and 3.5% at this radius, not a plurality of the
-     * dune, still less all of it) - see this test's own assertions below,
+    /* AT THE 48-CELL RADIUS THIS BLASTS AT (DUNE_BLAST_RADIUS - the "much
+     * bigger radius" request itself, not a value shrunk to dodge the
+     * memory bug it once caused - see that constant's own comment for
+     * why the radius no longer has to shrink), cy + DUNE_BLAST_RADIUS
+     * routinely reaches REAL_H - the grid's own bottom edge - because a
+     * settled dune's own bounding-box centre sits close to the floor it
+     * settled on (a wide, short pile with height well under its own
+     * radius, not a tall one), and half the blast's vertical reach is
+     * ~48 cells either side of a centre that is itself only ~30 cells
+     * above the true floor. This is not a scene bug to fix: the real
+     * device's own screen has exactly this edge, at exactly this
+     * distance from a dune poured the same way, so a blast this size
+     * genuinely does reach it there too. Verified this still measures
+     * something real rather than a degenerate scene: "outside"/
+     * "destroyed" stayed small fractions of `before` (a 500-seed sweep
+     * against the real, shipped sand_explode() - its own automatic
+     * thinning included, not a re-implementation - averaged 2.25% and
+     * 5.80% at this radius and budget, not a plurality of the dune,
+     * still less all of it) - see this test's own assertions below,
      * unchanged, for the actual bar. */
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 

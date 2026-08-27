@@ -357,29 +357,49 @@ This is temporary scaffolding for evaluation, not a shipped feature.
 *(A third joined these after DETONATE_RADIUS_PX was doubled, 48 px to 96
 px, on a request for "a much bigger radius in general" with no other
 symptom to go on: **the whole mechanic going silently inert**, not
-weaker. `impulse_t`'s buffer is sized to the true worst case - a fully
-packed disc at the current radius (see APP_IMPULSE_MAX's own derivation
-in app_sand.c) - and at 96 px that is a ~43.8 KB allocation the device
-simply does not have room for once its own grid and row-run bookkeeping
-(~43.5 KB, fixed regardless of blast radius) are already accounted for
-against a real ~76 KB free-heap boot-log snapshot with no PSRAM.
-`sand_explode()`'s first line, `if (s->impulse_buf == NULL) return;`, is
-exactly right for a caller that never enabled the mechanic - and exactly
-wrong-looking for one that tried to, and silently lost the allocation
-race instead: nothing crashes, nothing logs anywhere a player would see,
-detonating just stops doing anything. The fix landed at 70 px (35 cells) -
-the largest radius `SAND_IMPULSE_BUDGET_BYTES` (app_sand.c) affords with
-every occupied annulus cell still seeded, chosen over seeding a
-checkerboard HALF of the annulus at the original 96 px after both were
-measured against `build_sand_dune_scene()`: 70 px full-seeded averaged
-113.0 grains outside the footprint over 30 seeds against 91.0 for a
-checkerboard 96 px blast sized to the same budget, for the same
-structural reason sparse seeding lost the first time it was measured -
-see "EVERY OCCUPIED ANNULUS CELL IS SEEDED" in sand.h. A `_Static_assert`
-next to `APP_IMPULSE_MAX` now fails the BUILD, not a device flash, the
-next time a radius change (or a bigger `impulse_t`) would blow this
-budget - see `SAND_IMPULSE_BUDGET_BYTES`'s own comment for the heap
-arithmetic behind the number.)*
+weaker. `impulse_t`'s buffer used to be SIZED FROM the current radius - a
+fully packed disc's own worst case (the original `APP_IMPULSE_MAX`
+formula in app_sand.c) - and at 96 px that formula demanded a ~43.8 KB
+allocation the device simply does not have room for once its own grid
+and row-run bookkeeping (~43.5 KB, fixed regardless of blast radius) are
+already accounted for against a real ~76 KB free-heap boot-log snapshot
+with no PSRAM. `sand_explode()`'s first line,
+`if (s->impulse_buf == NULL) return;`, is exactly right for a caller that
+never enabled the mechanic - and exactly wrong-looking for one that
+tried to, and silently lost the allocation race instead: nothing
+crashes, nothing logs anywhere a player would see, detonating just stops
+doing anything.
+
+The fix was not a smaller radius, chosen once to fit this specific
+request - that only relocates the same coupling to wherever the NEXT
+"bigger" ask lands. It was **inverting which side owns the sizing
+decision**: `APP_IMPULSE_MAX` (app_sand.c) is now a FIXED entry count,
+chosen once from the device's own heap budget
+(`SAND_IMPULSE_BUDGET_BYTES`, same file) and never re-derived when
+`DETONATE_RADIUS_PX` changes, and `sand_explode()` itself (sand.c) now
+THINS its own seeding density automatically whenever a disc's true cell
+count (`exact_disc_count()`) exceeds whatever buffer it was actually
+given - spread evenly across the whole disc via a digital-differential-
+analyser accumulator in `queue_outward_impulse()`, not truncated to
+"however much of the scan order fit" and not a caller-chosen sparse mode
+either (that was tried and measured worse - see "EVERY OCCUPIED ANNULUS
+CELL IS SEEDED" in sand.h). Below the buffer's own capacity this is
+unobservable: every existing small-radius caller and test still gets
+full-density seeding, byte for byte what it always got. Above it, 96 px's
+own true disc (7,213 cells) against the shipped 4,096-entry budget seeds
+roughly 57% of itself instead of failing to allocate at all - measured at
+91.0 "grains outside the footprint" against `build_sand_dune_scene()`
+(500-seed sweep, the real shipped `sand_explode()`, not a
+re-implementation). A `_Static_assert` next to `APP_IMPULSE_MAX` now
+fails the BUILD, not a device flash, if the two independently-chosen
+constants (`APP_IMPULSE_MAX` and `SAND_IMPULSE_BUDGET_BYTES`) are ever
+hand-edited out of agreement with each other - see
+`SAND_IMPULSE_BUDGET_BYTES`'s own comment for the heap arithmetic behind
+the number. Because sizing no longer depends on the radius at all, no
+future radius change - however much bigger the next ask is - can
+reproduce this specific failure again; it can only ever make the
+automatic thinning more aggressive, never make the buffer fail to
+allocate.)*
 
 ### The quantitative half
 

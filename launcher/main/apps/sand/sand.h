@@ -874,26 +874,43 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * design, correctly, does not produce (see step_impulses()'s own "no
  * cascade" discipline in sand.c) - the fix for a deep grain having
  * nowhere to go was letting it be PUSHED, not letting one push propagate
- * indefinitely through everything nearby. Full seeding stays exactly
- * because of the bound this project already holds every part of this
- * mechanic to, so a bigger radius keeps costing the memory its own disc
- * implies rather than getting cheaper by accident.
+ * indefinitely through everything nearby. Full seeding stayed the
+ * deliberate default because of the bound this project already holds
+ * every part of this mechanic to - not a manual, caller-chosen sparsity
+ * that trades density for radius, which loses to a smaller full-density
+ * disc for the structural reason above.
  *
- * RECONFIRMED UNDER A REAL MEMORY CEILING, not just in principle. The
- * comparison above had no allocation limit in play - it only asked which
- * seeding density throws better, never whether either one's buffer would
- * actually fit. It later did have to answer that question too:
- * DETONATE_RADIUS_PX briefly doubled to 96 px (48 cells) without anyone
- * re-checking the buffer this seeding density needs against it, and full
- * seeding at that radius could not be allocated on real hardware at all -
- * see SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c for the
- * failed malloc and the silent no-op it produced. Given a fixed byte
- * budget, checkerboard-seeding the ORIGINAL bigger radius was measured
- * again against seeding a SMALLER radius fully, both sized to fit: the
- * smaller-but-full radius (35 cells) still won on "grains outside the
- * footprint" (113.0 vs. 91.0 for a checkerboard 48-cell blast, both
- * n=30), for the exact structural reason above - so the conclusion did
- * not change, it just had a harder question to survive. */
+ * WHAT DID CHANGE: NOT THE CONCLUSION, THE QUESTION. The comparison above
+ * asked which DELIBERATE seeding density throws better, at a radius
+ * someone had already fixed - it never asked what a caller should do
+ * when the buffer it was actually given cannot hold the disc a radius
+ * implies at all. That second question got asked for real when
+ * DETONATE_RADIUS_PX doubled to 96 px (48 cells) and the buffer this
+ * mechanic's own caller-provided sizing used to derive FROM that radius
+ * could not be allocated on real hardware - see SAND_IMPULSE_BUDGET_
+ * BYTES's own comment in app_sand.c for the failed malloc and the silent
+ * no-op it produced. The fix is not a manual sparse mode a caller opts
+ * into (that was tried above and lost) and not a smaller radius chosen
+ * by hand to dodge the failure (that only relocates the same bug to
+ * whatever radius is requested next) - it is sand_explode() itself
+ * degrading its OWN density automatically, only when a disc's true cell
+ * count (exact_disc_count() in sand.c) exceeds the buffer it was
+ * actually given, spread evenly across the whole disc via the same
+ * digital-differential-analyser accumulator queue_outward_impulse() uses
+ * for everything else - see that function's own comment. Below the
+ * buffer's capacity, this is unobservable: every existing small-radius
+ * caller and test still gets full seeding, unchanged, because `keep`
+ * equals the true count exactly when the disc fits. Above it, thinning
+ * costs exactly what the measurement above predicts it would - at
+ * DETONATE_RADIUS_PX's shipped 96 px against a 4,096-entry budget (56.8%
+ * of that radius's true 7,213-cell disc), "grains outside the footprint"
+ * measured 91.0 against build_sand_dune_scene() (500-seed sweep) - see
+ * DETONATE_RADIUS_PX's own comment in app_sand.c for the full account.
+ * The conclusion above did not change: seeding sparsely is still worse,
+ * cell for cell, than seeding fully. What changed is that a caller no
+ * longer has to choose between honouring that conclusion and fitting in
+ * the memory it was actually given - sand_explode() spends every entry
+ * the buffer allows before it starts thinning at all. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* FRICTION
