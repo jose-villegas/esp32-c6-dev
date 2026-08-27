@@ -27,6 +27,12 @@ That constraint shapes the whole design below.
 `MATX_METAL` as extended material 3. No new `reaction_t` fields, no new
 `KIND`, no new sweep flag, `MAT_COUNT` unchanged.
 
+*(This plan briefly said "material 5": leaf ageing landed
+`MATX_LEAF_DRY`/`MATX_LEAF_DEAD` into slots 3 and 4 between writing and
+building, then that chain was removed before metal shipped, freeing 3
+back up. Metal is 3, and twelve extended slots remain. Corrected
+2026-08-27.)*
+
 Consequences of staying in the extended range:
 
 - the last full-physics slot stays banked (see `Architecture.md`, "the
@@ -46,14 +52,19 @@ Consequences of staying in the extended range:
 the **far side** of a conductor run (the `br->heats_to != 0 &&
 br->heat_chance != 0` gate in `conduct_heat()`'s tail). So dirt at the end
 of a metal bar smelts into metal, which lengthens the bar by one, which
-reaches one cell further - until the run hits `CONDUCT_REACH` (32) and
-stops dead.
+reaches one cell further - until the run hits `CONDUCT_REACH` and stops
+dead.
 
-**A lava source grows its own 32-cell metal rod out of a dirt bed and then
-stops.** It is self-limiting, it falls out of tables that are already
-written, and it makes `CONDUCT_REACH` legible to the player for the first
-time. It is also the thing most likely to surprise someone, so the bound
-gets a test.
+**A lava source grows its own 33-cell metal rod out of a dirt bed and then
+stops** - measured on host, not 32. `conduct_heat()`'s walk can still cross
+a run already AT the cap (its depth counter only needs to reach
+`CONDUCT_REACH - 1`, which satisfies `depth < CONDUCT_REACH`), so one more
+cell gets placed before the next attempt finally fails to fit - see
+`test_the_rod_terminates_at_conduct_reach_not_the_far_wall` in
+`suite_sand.c` for the measurement. It is self-limiting, it falls out of
+tables that are already written, and it makes `CONDUCT_REACH` legible to
+the player for the first time, to within one cell. It is also the thing
+most likely to surprise someone, so the bound gets a test.
 
 ---
 
@@ -67,7 +78,8 @@ Add `MATX_METAL` to `material_extended_t`, after `MATX_LEAF`.
 
 - `extended_names[MATX_METAL] = "Metal"`.
 - Palette entry `[MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL]`, and drop
-  one `0xFF00FF` from the magenta tail so the count stays 16.
+  one `0xFF00FF` from the magenta tail so the count stays 16. The tail is
+  thirteen entries today (`MATX_LEAF` is slot 2); it becomes twelve.
 - A `metal_grain[8]` table beside `ice_grain` / `plant_grain` /
   `leaf_grain`, and `MATX_METAL` added to the ternary chain in
   `material_colours()`.
@@ -82,6 +94,12 @@ Add `MATX_METAL` to `material_extended_t`, after `MATX_LEAF`.
   comment says a respelling of that branch is a performance change - an
   if/else rewrite elsewhere cost 14% through the inlining cliff. Extend the
   existing chain; do not convert it to a switch.
+
+  That chain is **three** deep (`MATX_PLANT`, `MATX_LEAF`, `MATX_ICE`), and
+  metal makes it a fourth. The existing comment's "adding a third material"
+  phrasing is still very nearly right - adjust it to say a fourth rather
+  than reopening the switch-versus-chain question, which a single added
+  condition does not justify.
 
 - `extended_reactions[MATX_METAL]` row - see Numbers below.
 
@@ -136,12 +154,14 @@ the six lines instead and say why in a comment.
 
 ### 5. Brush list (`app_sand.c`)
 
-**Recommendation: do not add metal to the brush.** The list is already 14
-button presses long and its own comment says only materials someone
-actually paints belong. Metal would be the first material you have to
-*make*, which this sim has never had.
+**Do not add metal to the brush.** Decided - see "Decisions taken" below.
+The list is already 14 button presses long and its own comment says only
+materials someone actually paints belong. Metal is the first material you
+have to *make*, which this sim has never had.
 
-One line to reverse if it feels wrong on device.
+Note for whoever writes the device tests: this means metal cannot be
+painted by hand on the panel, so any on-device check of it has to build a
+smelt - lava against a dirt bed - rather than drawing a bar.
 
 ---
 
@@ -242,16 +262,22 @@ Plus the ordinary additions: metal and dirt into that diagram, and
 
 ---
 
-## Two decisions left open
+## Decisions taken
 
-**Yield.** First cut is all-metal: a bed of dirt under lava becomes a bed
-of metal, and abundance is tuned with `heat_chance` alone. A partial slag
-yield - some cells coming out stone - would read as ore veins, but needs a
-new `reaction_t` field serving exactly one material, which this codebase
-would rightly push back on. Ship the simple version and see whether metal
-feels too cheap.
+**Yield: all-metal.** A bed of dirt under lava becomes a bed of metal.
+Abundance is tuned with `heat_chance` alone. A partial slag yield - some
+cells coming out stone - was considered and rejected for now: it would read
+as ore veins, but it needs a new `reaction_t` field serving exactly one
+material, and `heat_chance` is the knob that already exists. Revisit only
+if metal turns out too cheap on device.
 
-**Renewability.** `sand + water -> dirt` already exists at rate 8, so metal
-is renewable: sand, soak, smelt. That is probably right - a production
-chain rather than a resource you exhaust - but it should be a decision
-taken deliberately rather than discovered later.
+**Renewable, deliberately.** `sand + water -> dirt` already exists at rate
+8, so the chain sand, soak, smelt regenerates metal without limit. This is
+intended: metal is a production chain, not a resource you exhaust. Do not
+"fix" it later by mistake.
+
+**Brush: metal is not paintable.** The only way to get metal is to smelt
+it, which makes it the first material in this sim you have to make rather
+than paint. The cost is real and accepted: testing metal on device means
+setting up a smelt each time, and you cannot simply draw a heat pipe across
+the board. See section 5.

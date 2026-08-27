@@ -385,6 +385,13 @@ static inline void pay_quench_cost(sand_t *s, int nx, int ny, int w);
 static void crack_run(sand_t *s, int x, int y, int w, int h,
                       material_id_t from, material_id_t into);
 
+/* Defined below, beside try_flare() - the wet-dirt stage of
+ * try_heat_transform() needs the exact same "put a cell of `spec` into
+ * the first empty cardinal" step ember's flame does, and this is the
+ * earlier of its two callers. */
+static inline bool emit_into_empty_neighbor(sand_t *s, int x, int y, int w,
+                                            int h, uint8_t spec);
+
 /* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
  * bounds and the roll succeeds - heat WITHOUT burning.
  *
@@ -452,6 +459,38 @@ static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->heat_chance) {
         return false;
     }
+
+    /* WET EARTH FIRST. Dirt can never carry a heat_ramp - its variant is
+     * already fully spent on a carried tone plus SOIL_MOISTURE_BITS of
+     * moisture (material.h's own comment on SOIL_MOISTURE_BITS) - so a
+     * roll that reached this far has nowhere to bank progress. But wet
+     * earth should not smelt as though it were dry, and the drying is the
+     * part worth watching: spend this SAME successful roll driving one
+     * level of moisture off as steam, instead of converting the cell
+     * outright.
+     *
+     * `dries != 0` is already the canonical "this variant is moisture"
+     * marker - see the MOISTURE SPREADS block above in this file, which
+     * relies on exactly the same test. Sand soaks but does not dry, so
+     * sand -> glass is untouched by this branch without a new field.
+     * CELL_MOISTURE() rather than the raw variant matters too: dirt packs
+     * a carried TONE into the top bit, and a dry cell with a nonzero tone
+     * must not read as wet.
+     *
+     * Sits after the roll, on a path that has already succeeded, so it
+     * costs two extra reads off an already-loaded `r` and nothing on
+     * every failed roll - which is most of them, at dirt's heat_chance of
+     * 10. Saturated dirt therefore needs SOIL_MOISTURE_MAX + 1 successes
+     * to reach metal instead of one, and each of the first
+     * SOIL_MOISTURE_MAX is visible as steam. */
+    if (r->dries != 0 && CELL_MOISTURE(n) != 0) {
+        s->cells[at] = CELL_WITH_MOISTURE(n, CELL_MOISTURE(n) - 1);
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
+        emit_into_empty_neighbor(s, nx, ny, w, h, MAT_STEAM);
+        return true;
+    }
+
     place_reacted(s, nx, ny, at, (material_id_t)r->heats_to);
     return true;
 }
@@ -2356,19 +2395,29 @@ static inline bool try_ignite(sand_t *s, int nx, int ny, int w, int h)
     return true;
 }
 
-/* Ember's flame: rolls reaction_t.flare once per step, and on a hit
- * places ordinary MAT_FIRE in the first empty cell among the four
- * cardinals, in reaction_dirs[] order - arbitrary but fixed, exactly
- * like this pass's own scan order. Direction-agnostic on purpose: the
- * emitted fire rises by itself through sand_step_gas() once it exists,
- * so this code does not need to know, or care, which way is up. Returns
- * whether it placed anything. */
-static inline bool try_flare(sand_t *s, int x, int y, int w, int h,
-                             uint8_t flare)
+/* Puts a cell of `spec` into the first empty cell among the four
+ * cardinals of (x, y), in reaction_dirs[] order - arbitrary but fixed,
+ * exactly like this pass's own scan order. Shared by ember's flame
+ * (try_flare(), just below) and the wet-dirt stage of
+ * try_heat_transform() (above), which both need exactly this "something
+ * appears beside me" step with a different material - fire for one,
+ * steam for the other. Direction-agnostic on purpose: whatever is placed
+ * rises or falls on its own once it exists, so this code does not need
+ * to know, or care, which way is up. Returns whether it placed anything.
+ *
+ * A second call site for a function is exactly the shape this codebase
+ * has been burned by before - Adding-a-Material.md ("inlining into more
+ * call sites is not free") and Tuning-At-a-Glance.md both record a
+ * respelling of a hot branch costing 14-26% through the inlining cliff
+ * once a second caller (or even an if/else respelling) took the decision
+ * away from the compiler. This extraction has NOT been measured on
+ * device - there is no device access in the change that added it - so
+ * treat it as unverified rather than free. If a future capture shows a
+ * regression here, duplicating these six lines back into
+ * try_heat_transform() is the fix, not reshaping either caller. */
+static inline bool emit_into_empty_neighbor(sand_t *s, int x, int y, int w,
+                                            int h, uint8_t spec)
 {
-    if (flare == 0 || (int)(rng_next(&s->rng) & 0xFF) >= flare) {
-        return false;
-    }
     for (int d = 0; d < 4; d++) {
         const int fx = x + reaction_dirs[d][0];
         const int fy = y + reaction_dirs[d][1];
@@ -2377,11 +2426,25 @@ static inline bool try_flare(sand_t *s, int x, int y, int w, int h,
         }
         const size_t at = (size_t)fy * (size_t)w + (size_t)fx;
         if (CELL_IS_EMPTY(s->cells[at])) {
-            place_reacted(s, fx, fy, at, MAT_FIRE);
+            place_reacted(s, fx, fy, at, spec);
             return true;
         }
     }
     return false;
+}
+
+/* Ember's flame: rolls reaction_t.flare once per step, and on a hit
+ * places ordinary MAT_FIRE in the first empty cardinal neighbour - see
+ * emit_into_empty_neighbor() just above, which this now shares with the
+ * wet-dirt stage of try_heat_transform(). Returns whether it placed
+ * anything. */
+static inline bool try_flare(sand_t *s, int x, int y, int w, int h,
+                             uint8_t flare)
+{
+    if (flare == 0 || (int)(rng_next(&s->rng) & 0xFF) >= flare) {
+        return false;
+    }
+    return emit_into_empty_neighbor(s, x, y, w, h, MAT_FIRE);
 }
 
 /* The liquid neighbour that just quenched a burning cell pays for it:

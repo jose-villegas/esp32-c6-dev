@@ -364,26 +364,24 @@ data. Every arrow below is a `reaction_t` field, not a branch in code.
 
 ```mermaid
 flowchart TD
-    Wood["WOOD\nstatic, density 150"] -->|"flammability 6\n~43 steps of contact"| Ember
+    Wood["WOOD\nstatic, density 150"] -->|"flammability 6\n~43 steps of contact"| Wood
     Gas["GAS\nrises"] -->|"flammability 255\ninstant, no RNG draw"| Fire
 
-    Ember["EMBER\nstatic, burns, decay 24"] -->|"flare 48"| Fire["FIRE\nrises, burns, decay 96"]
-    Ember -->|"smoke 90"| Smoke
+    Wood -->|"flare 48, while lit"| Fire["FIRE\nrises, burns, decay 96"]
+    Wood -->|"residue 90, burned out"| Smoke
     Fire -->|"smoke 40"| Smoke["SMOKE\nfuel that burned out"]
 
     Fire -->|"quench_to\n+ water pays 1 mass"| Steam["STEAM\nwater that got hot"]
-    Ember -->|"quench_to"| Steam
 
     Fire -->|"ignites cardinal\nneighbours"| Wood
     Fire -->|"conducts through\nSTONE, boils beyond"| Steam
-    Ember -->|"conducts"| Steam
 
     Oil["OIL\nliquid, needs_air"] -->|"flammability 50\nSURFACE ONLY"| Fire
     Fire -->|"ignites exposed\noil"| Oil
-    Ember -->|"residue 90"| Smoke
     Lava["LAVA\nliquid AND burns"] -->|"quench_to\n(water pays a unit)"| Stone["STONE"]
     Acid["ACID\ndissolves"] -->|"dissolves 60 x dissolvable\n(acid pays a unit)"| Gone["EMPTY"]
     Acid -->|"dissolvable 60"| Stone
+    Acid -->|"dissolvable 110"| Metal
     Sand["SAND"] -->|"heats_to, 16\n(needs sustained heat)"| Glass["GLASS\nimmune to acid"]
     Glass -->|"heat_ramp - long exposure"| Lava
     Glass -->|"shatters_to, at heat 9+
@@ -394,10 +392,11 @@ thaws 4 in any liquid"| Water["WATER"]
     Snow -.->|"chills 40"| Glass
     Fire -->|"heat, no burning"| Sand
     Lava -->|"flare 16"| Fire
+    Lava -.->|"heat, no burning"| Dirt
+    Dirt["DIRT\npowder, soaks/dries"] -->|"heats_to 10\ndries first - see wet-earth stage"| Metal["METAL\nstatic, conducts 248, heatproof"]
 
     style Wood fill:#a87a3d,color:#fff
     style Gas fill:#4a7c59,color:#fff
-    style Ember fill:#8a3d3d,color:#fff
     style Fire fill:#8a3d3d,color:#fff
     style Smoke fill:#5a5a5a,color:#fff
     style Steam fill:#3d6b8a,color:#fff
@@ -410,11 +409,30 @@ thaws 4 in any liquid"| Water["WATER"]
     style Snow fill:#5a5a5a,color:#fff
     style Water fill:#3d6b8a,color:#fff
     style Gone fill:#2a2a2a,color:#fff
+    style Dirt fill:#a87a3d,color:#fff
+    style Metal fill:#5a5a5a,color:#fff
 ```
 
 Note the two byproducts are **different materials on purpose**: steam is
 water that got hot, smoke is fuel that burned out. That split has its own
 lesson below.
+
+Ember is not a node here any more. It folded into wood's own variant -
+`burn_decay` counts down how much of a lit log is left to burn, so
+"catching fire" is wood becoming a lit version of itself (the self-loop
+above) rather than becoming a different material - see "Lesson: the
+obvious material is sometimes the wrong one" below for the full story.
+
+The old `Ember -->|"conducts"| Steam` edge is gone too, and not because
+conducting was ever removed from anything: ember's own rows
+(`materials[MAT_EMBER]` and `reactions[MAT_EMBER]`, checked directly
+against the commit before the fold) never had a `conducts` field at
+all. The edge was wrong the day it was drawn - a diagram claiming a
+field the table never had - not a behaviour this fold took away.
+Wood's current row still has no `conducts`, which is simply consistent
+with what ember's row always was. Dirt and metal are the newest
+arrivals - see
+[`Metal-Smelting-Plan.md`](Metal-Smelting-Plan.md).
 
 ---
 

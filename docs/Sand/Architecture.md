@@ -70,7 +70,7 @@ there as an immovable block.
 | 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
 | 13 | glass | `KIND_STATIC` | never | `density=200`; made from sand by heat, the **only** thing acid cannot eat. Carries a temperature, like stone, and unlike stone it shatters on thermal shock |
 | 14 | snow | `KIND_POWDER` | falls | `density=15` (floats on water **and** oil), `scatter=90` (drifts), `repose=9` (~42°); the only **cold** material. Melts in any liquid, keeps indefinitely on dry ground |
-| 15 | *extended* | one shared row | - | not a material: the low nibble names one of sixteen more. `MATX_ICE`, `MATX_PLANT` so far |
+| 15 | *extended* | one shared row | - | not a material: the low nibble names one of sixteen more. `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`, `MATX_METAL` so far |
 
 Every field on `material_t` is read from the innermost loop, several
 times per cell per step, which is why the struct is kept small with the
@@ -349,7 +349,8 @@ variant was spare. Steam and smoke fail on both counts at once.
 
 **Add an extended range behind the last slot** - *built*. Material id 15 is
 `MAT_EXTENDED`, and a cell carrying it reads its low nibble as naming one of
-sixteen further materials. So far: `MATX_ICE` and `MATX_PLANT`.
+sixteen further materials. So far: `MATX_ICE`, `MATX_PLANT`, `MATX_LEAF`,
+`MATX_METAL`.
 
 Three facts make it free in the sweep, and all three are properties of how
 the tables are already indexed:

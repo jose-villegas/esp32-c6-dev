@@ -570,7 +570,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .wets        = 1,
     },
 
-    [MAT_ACID] = {
+    [MAT_ACID] = {
         /* The only thing that dissolves anything. 60 in 256 is roughly
          * one bite every four steps per acid cell, which eats a pile of
          * sand at a pace you can watch rather than one that removes it
@@ -766,6 +766,27 @@ const reaction_t reactions[MATERIAL_MAX] = {
         .dries       = 5,
 
         .dissolvable = 200,  /* the same as sand: it is mostly sand */
+
+        /* SMELTING. Dirt's variant is fully spent - a tone bit plus
+         * SOIL_MOISTURE_BITS of moisture - so there is nowhere to bank a
+         * `heat_ramp` the way glass and stone do; this has to be a
+         * memoryless roll, like sand into glass. See
+         * docs/Sand/Metal-Smelting-Plan.md for the design this row
+         * follows.
+         *
+         * `heats_to` names an EXTENDED cell (MATX() sets the top nibble to
+         * MAT_EXTENDED), which place_reacted() already routes to the
+         * extended path - nothing needed to change there for a reaction to
+         * produce an extended material.
+         *
+         * 10, slower than sand's 16 into glass: smelting is meant to be a
+         * project, not something a passing flame does by accident. The
+         * wet stage below spends this SAME roll driving off moisture
+         * first (try_heat_transform() in sand_reactions.c), so saturated
+         * dirt takes roughly eight successes - one per level of
+         * SOIL_MOISTURE_MAX - to reach metal instead of one. */
+        .heats_to    = MATX(MATX_METAL),
+        .heat_chance = 10,
     },
 
     [MAT_SNOW] = {
@@ -1428,12 +1449,22 @@ static const gfx_color_t palette[256] = {
                                     * now that the stem is olive, and the
                                     * only part meant to catch the eye.
                                     * only part meant to catch the eye */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF + 1] =
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL] =
+    GFX_RGB(0x7C8794),            /* metal - a cool blue-grey, brighter and
+                                    * cooler than ambient stone (STONE_AMBIENT
+                                    * 0x5F6673) so a wall of it separates from
+                                    * a stone one at two screen pixels per
+                                    * cell, and greyer than ice's 0xB6E4F2 so
+                                    * the two do not merge either. This is a
+                                    * GUESS, not a measurement - it wants eyes
+                                    * on the panel, same as every other
+                                    * starting-point constant in this table
+                                    * (see docs/Sand/Metal-Smelting-Plan.md). */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL + 1] =
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
 };
 
@@ -1680,6 +1711,15 @@ static const gfx_color_t wood_grain[8] = {
 #define ICE_DARK    0x93C9DE
 #define ICE_LIGHT   0xDEF5FD
 
+/* Metal: a wall of it does not move any more than a wall of ice does, so
+ * it gets the same treatment - the position hash is the only variation a
+ * material with no variant of its own can have. A narrower spread than
+ * ice's, closer to ice's own range than leaf's wide one: metal is a cast,
+ * uniform substance, and its speckle is meant to read as light catching a
+ * surface rather than as real variation in the material. */
+#define METAL_DARK  0x7C8794
+#define METAL_LIGHT 0xB9C4D2
+
 #define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
 
 #define GRAIN8_ROW(lo, hi)                                                 \
@@ -1690,6 +1730,7 @@ static const gfx_color_t wood_grain[8] = {
 static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8]   = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8]  = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
+static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
 
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
@@ -1718,11 +1759,14 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
          * cost 14% through the inlining cliff, and a single unhinted
          * branch cost 26% of a benchmark with the simulation byte-
          * identical either way. Ship the shape that was measured - see
-         * docs/Sand/Tuning-At-a-Glance.md. */
-        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
+         * docs/Sand/Tuning-At-a-Glance.md. That measurement was taken at
+         * three materials deep; metal makes it a fourth. */
+        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE ||
+            v == MATX_METAL) {
             out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
                    : (v == MATX_LEAF)  ? leaf_grain[hash & 7u]
-                                       : ice_grain[hash & 7u];
+                   : (v == MATX_ICE)   ? ice_grain[hash & 7u]
+                                       : metal_grain[hash & 7u];
             out[1] = out[0];
             out[2] = out[0];
             return MATERIAL_SPECKLED;
@@ -1767,6 +1811,7 @@ static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
     [MATX_ICE]   = "Ice",
     [MATX_PLANT] = "Plant",
     [MATX_LEAF]  = "Leaf",
+    [MATX_METAL] = "Metal",
 };
 
 const char *material_name(cell_t c)
@@ -1926,6 +1971,58 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
         .dissolvable  = 240,   /* the softest thing on the board */
     },
 
+    /* METAL. Dirt smelted by sustained heat - see
+     * docs/Sand/Metal-Smelting-Plan.md, which this row follows exactly.
+     *
+     * No variant to spend: an extended material's low nibble is its
+     * identity, so metal cannot glow, cannot hold a temperature, and
+     * cannot melt. The design leans into that rather than fighting it -
+     * metal's whole job is the one thing nothing else on the board does
+     * well, moving heat a LONG way, and everything below is in service of
+     * that one axis. */
+    [MATX_METAL] = {
+        /* Rolled per cell crossed by conduct_heat()'s walk, so depth d
+         * succeeds with probability (conducts/256)^d - see that
+         * function's own comment in sand_reactions.c. 248 puts the mean
+         * walk at roughly CONDUCT_REACH cells (32), against stone and
+         * glass's 220:
+         *
+         *     depth   stone/glass (220)   metal (248)
+         *        8           30%              78%
+         *       16          8.5%              60%
+         *       32          0.8%              36%
+         *
+         * That is the point of the material: at CONDUCT_REACH itself the
+         * cap starts doing real work rather than being slack, so the
+         * self-growing rod (below, and see sand_reactions.c's own
+         * comment on the wet-dirt stage of try_heat_transform()) stops at
+         * a length the player can see is a designed limit rather than an
+         * arbitrary one. Starting point, not final - tune on device like
+         * every other constant in this table. */
+        .conducts    = 248,
+
+        /* Acid's counter. 110 sits deliberately between stone's 60 and
+         * sand's 200 - metal gives way to acid FASTER than the stone you
+         * house it in, but slower than the loose sand acid is normally
+         * pointed at. Faster than stone rather than immune to acid,
+         * because immune would make metal strictly better than stone as
+         * a container with no cost anywhere, and there is still a reason
+         * to build in stone. */
+        .dissolvable = 110,
+
+        /* Deliberately no `heats_to`, `heat_ramp`, `heat_chance`, `chills`
+         * or anything else thermal. With no variant metal cannot ramp,
+         * and a memoryless heat_chance roll would mean a metal wall
+         * beside lava randomly catching and turning to lava on its own -
+         * which would make a metal container just as unsafe as the stone
+         * it replaces. So metal SURVIVES heat outright: it is what makes
+         * it worth building the rest of a vessel out of, the one axis
+         * stone and glass do not both have (stone survives heat but
+         * conducts it no better than glass; glass melts). Every field not
+         * named above is 0, and that is a decision, not an oversight -
+         * see reactions[]'s own top comment on what an absent field means
+         * field by field. */
+    },
 };
 
 const gfx_color_t *material_palette(void)

@@ -960,6 +960,12 @@ typedef enum {
     MATX_ICE = 0,
     MATX_PLANT,
     MATX_LEAF,
+
+    /* METAL: dirt smelted by sustained heat - see
+     * docs/Sand/Metal-Smelting-Plan.md. Briefly slot 5 while the leaf
+     * ageing chain held slots 3 and 4; back to 3 now that chain is gone.
+     * Twelve extended slots remain after it. */
+    MATX_METAL,
 } material_extended_t;
 
 /* What to call one cell, decoding the extended range. materials[].name is

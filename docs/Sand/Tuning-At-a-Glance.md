@@ -93,6 +93,45 @@ device capture taken after 4bdcf77 lands is the one that tests it.
 
 ---
 
+## Metal: a conductor twice conducts, and no scene measures it
+
+The metal-smelting change (`docs/Sand/Metal-Smelting-Plan.md`) gave
+`MATX_METAL` a `conducts` of 248, against stone and glass's 220 — a
+deliberately higher figure, since metal moving heat a long way is the
+whole point of the material. Rolled per cell crossed
+(`(conducts/256)^depth`), 248 puts the mean walk at roughly
+`CONDUCT_REACH` (32 cells) where 220 falls off closer to 5-6.
+
+**Every extended material appears in no benchmark scene at all.** The
+"every material at once" scene (and every other scene in the scoreboard
+above) enumerates `MAT_EMPTY + 1 .. MAT_COUNT - 1` — the ordinary
+fourteen — and stops there, so metal's entire cost, a conductor walk
+with a mean roughly five times stone's, ships into this round's
+scoreboard completely unmeasured. Round five is already open with all
+thirteen budgets red; this is a fourteenth material's cost landing on
+top of that, unpriced.
+
+What exists instead of a device number: a host test
+(`test_a_metal_run_conducts_further_than_a_stone_one`,
+`suite_sand.c`) pins the qualitative claim — heat crosses a 20-cell
+metal run inside a ten-step budget where a 20-cell stone run, real
+per-material figures, does not — so a regression that flattens the two
+figures back together fails loudly on the host, in well under a second,
+long before anyone reaches for a device capture. It is a tripwire, not a
+measurement: it says nothing about microseconds, only that the intended
+gap between the two conductors still exists in the table.
+
+**Not yet built:** a device scene with metal actually on the grid — the
+self-growing rod is the obvious candidate, since it exercises the walk
+at its full designed length (measured on host at 33 cells, one past the
+plan's own stated 32 — see the rod-termination test's own comment for
+the off-by-one) rather than a single boil-through. Whether that is worth
+adding mid-round, alongside the fourteenth material's own unpriced
+walk-length cost, is a scheduling call the next round should make with
+eyes open rather than by omission.
+
+---
+
 ## The campaign, one line per attempt
 
 🟢 shipped · 🔴 reverted or dropped · 🟠 mixed / turning point. The reverted rows

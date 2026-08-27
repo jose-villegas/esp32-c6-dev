@@ -7756,12 +7756,14 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
 }
 
 
-/* Plant, leaf and ice are speckled, and everything else extended is not.
+/* Plant, leaf, ice and metal are speckled, and everything else extended is
+ * not.
  *
  * An extended material's variant IS which one it is, so neither can carry
  * a shade and the position hash is the only variation available - the same
  * tool stone and wood use, and right here for the same reason it was wrong
- * for dirt: neither a wall of ice nor a grown tree moves.
+ * for dirt: neither a wall of ice, a grown tree, nor a smelted metal bar
+ * moves.
  *
  * The negative half matters as much. The switch is on the low nibble, and
  * a mistake there does not fail to build - it paints some other extended
@@ -7774,7 +7776,7 @@ static void test_the_right_extended_materials_are_speckled(void)
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const cell_t c = MATX(k);
         const bool grained = (k == MATX_PLANT || k == MATX_LEAF ||
-                              k == MATX_ICE);
+                              k == MATX_ICE || k == MATX_METAL);
 
         int distinct = 0;
         gfx_color_t seen[8];
@@ -9446,6 +9448,435 @@ static void test_the_boiler_end_to_end(void)
         mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER),
         "the water level must have dropped - the boiler consumed at "
         "least one cell's worth of it");
+}
+
+/* ===================================================================
+ * Metal: dirt smelted by sustained heat - see
+ * docs/Sand/Metal-Smelting-Plan.md, which every test below follows.
+ * =================================================================== */
+
+/* A single lava cell boxed on three sides by stone, open only towards a
+ * single dirt cell beside it - the smallest scene that puts lava and
+ * dirt in direct contact without the lava draining away to level itself
+ * (can_enter() needs a strictly denser neighbour to move into, and both
+ * stone and dirt are denser than lava - see MAT_LAVA's own density
+ * comment in material.c). A floor across the whole width means neither
+ * powder cell has anywhere to fall. */
+static void lava_beside_dirt(uint8_t moisture)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, 2, H - 2, STONE);          /* boxes the lava on its left */
+    sand_set(&s, 3, H - 3, STONE);          /* and above */
+    sand_set(&s, 3, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set(&s, 4, H - 2, CELL_SOIL(MAT_DIRT, 1, moisture));
+}
+
+/* Whether the dirt cell in lava_beside_dirt()'s scene has smelted. */
+static bool dirt_cell_is_metal(void)
+{
+    const cell_t c = sand_at(&s, 4, H - 2);
+    return cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL;
+}
+
+/* Steps until lava_beside_dirt()'s dirt cell becomes metal, or `budget`
+ * if it never does within that many steps. */
+static int steps_to_smelt(uint8_t moisture, int budget)
+{
+    lava_beside_dirt(moisture);
+    for (int i = 0; i < budget; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (dirt_cell_is_metal()) {
+            return i + 1;
+        }
+    }
+    return budget;
+}
+
+static void test_dry_dirt_beside_lava_becomes_metal(void)
+{
+    const int budget = 3000;
+    const int steps = steps_to_smelt(0, budget);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(budget, steps,
+        "dirt with no moisture in it, held against lava, must smelt into "
+        "metal - the one reaction lava and dirt have, and the whole "
+        "reason MATX_METAL exists");
+}
+
+/* Saturated dirt needs SOIL_MOISTURE_MAX successful moisture-lowering
+ * events to reach bone dry, one level at a time, before a further
+ * success can ever convert the cell - see the wet-earth branch of
+ * try_heat_transform() (sand_reactions.c). That holds regardless of
+ * WHICH mechanism drives any one level off - the wet stage of the new
+ * branch (visible as steam) or dirt's own ordinary ambient drying
+ * (reaction_t.dries, ambient and silent, ticking independently of any
+ * heat source) - because both only ever remove one level at a time and
+ * the cell cannot smelt while any is left. So this counts the number of
+ * DISTINCT moisture values the cell passes through, deterministically,
+ * rather than comparing wall-clock step counts against bone-dry dirt -
+ * which is a race against two independent RNG-driven rates and was
+ * measured to occasionally land either side of even a generous margin. */
+static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
+{
+    lava_beside_dirt(SOIL_MOISTURE_MAX);
+
+    int distinct_moisture_levels_seen = 1;   /* SOIL_MOISTURE_MAX itself */
+    int last_moisture = SOIL_MOISTURE_MAX;
+    bool smelted = false;
+    for (int i = 0; i < 8000 && !smelted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        smelted = dirt_cell_is_metal();
+        if (!smelted) {
+            const int m = CELL_MOISTURE(sand_at(&s, 4, H - 2));
+            if (m != last_moisture) {
+                distinct_moisture_levels_seen++;
+                last_moisture = m;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(smelted,
+        "fixture check: saturated dirt must eventually smelt within the "
+        "budget");
+    /* SOIL_MOISTURE_MAX, not +1: sampled once per wall-clock step, so the
+     * rare step where BOTH mechanisms roll a success at once (heat and
+     * ambient drying, independently gated) merges two adjacent moisture
+     * values into a single observation - measured to happen on this
+     * seed. The bound stays tight enough to distinguish "passed through
+     * nearly every level" from "converted in a handful of events", which
+     * is the property this test exists to pin down. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SOIL_MOISTURE_MAX,
+        distinct_moisture_levels_seen,
+        "saturated dirt must pass through very nearly every one of its "
+        "SOIL_MOISTURE_MAX + 1 moisture values - SOIL_MOISTURE_MAX itself "
+        "down to bone dry - one level at a time, before it can smelt at "
+        "all. That is what makes it roughly SOIL_MOISTURE_MAX + 1 times "
+        "as much work as bone-dry dirt's single conversion");
+}
+
+/* A FULL tank of moisture rather than a single level. dirt's ordinary
+ * ambient drying (reaction_t.dries, ticking independently of any heat
+ * source at a rate lower than the wet-earth branch's own heat_chance)
+ * competes with the new branch to remove each level, and either one
+ * winning a given level is silent except the heat-driven one, which
+ * steams - so a SINGLE level of moisture is not quite enough to
+ * guarantee steam ever appears (ambient drying could in principle win
+ * the one race that matters). With SOIL_MOISTURE_MAX levels to get
+ * through, ambient drying would have to win every one of them for no
+ * steam to appear at all - vanishingly unlikely, and the cell cannot
+ * possibly smelt until every one of those levels, however each was
+ * removed, is gone. Asserts the SEQUENCE, not just that both eventually
+ * happen. */
+static void test_watered_dirt_steams_before_it_smelts(void)
+{
+    lava_beside_dirt(SOIL_MOISTURE_MAX);
+
+    int steamed_at = -1, smelted_at = -1;
+    for (int i = 0; i < 4000 && smelted_at < 0; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (steamed_at < 0 && count_cells_of(MAT_STEAM) > 0) {
+            steamed_at = i;
+        }
+        if (dirt_cell_is_metal()) {
+            smelted_at = i;
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(steamed_at >= 0,
+        "fixture check: watered dirt against lava must steam at all");
+    TEST_ASSERT_TRUE_MESSAGE(smelted_at >= 0,
+        "fixture check: it must eventually smelt too");
+    TEST_ASSERT_LESS_THAN_MESSAGE(smelted_at, steamed_at,
+        "steam must appear strictly BEFORE the cell smelts - heat works "
+        "on the water first, and only once the moisture is gone does the "
+        "same roll start converting the cell itself");
+}
+
+/* Regression guard for the wet-dirt branch just added to
+ * try_heat_transform(): sand has no `dries` at all, so `r->dries != 0`
+ * must gate the new branch out entirely and sand -> glass must be
+ * completely unaffected by it - see material.h's own comment on `dries`
+ * for why that field, and not a new one, is what the branch tests. */
+static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_SAND, 8));
+    }
+
+    int made = 0;
+    for (int i = 0; i < 2000 && !made; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        made = count_cells_of(MAT_GLASS) > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(made,
+        "sand -> glass must still work after the wet-dirt branch was "
+        "added to try_heat_transform() - sand has no `dries`, so the new "
+        "branch must never catch it");
+}
+
+/* Steps until MAT_STEAM appears past a `wall_len`-cell wall of
+ * `wall_cell`, heated by an immortal LAVA source rather than fire. Fire
+ * decays away in around forty steps (materials[MAT_FIRE].decay), which
+ * would cap how many attempts a slow conductor ever gets and confuse
+ * "does it conduct at all" with "did the fire survive long enough to
+ * find out". Lava never decays (`decay` MUST stay 0 - see its own row
+ * in material.c), so this isolates the one thing under test: the real
+ * per-material `conducts` figure. Boxes the lava on three sides for the
+ * same reason lava_beside_dirt() does above - a liquid otherwise drains
+ * to level itself instead of staying put against the wall. Mirrors
+ * build_boiler_room()/steps_to_boil() above, generalised over the wall
+ * material and the heat source. */
+static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    sand_set_mobility(&wide, 0);
+
+    const int y = 2;
+    const int lava_x  = 1;
+    const int wall_x0 = lava_x + 1;
+    const int water_x = wall_x0 + wall_len;
+
+    sand_set(&wide, water_x - 1, y + 1, STONE);
+    sand_set(&wide, water_x,     y + 1, STONE);
+    sand_set(&wide, water_x + 1, y + 1, STONE);
+
+    /* Boxes the lava on every side but the one facing the wall - INCLUDING
+     * both down-diagonals, not just the cardinals. A liquid blocked
+     * straight down still tries a diagonal fall, and leaving either one
+     * open drains the source clean off the grid within a single step
+     * (found by instrumenting exactly that - a cardinal-only box was not
+     * enough). */
+    sand_set(&wide, lava_x, y - 1, STONE);
+    sand_set(&wide, lava_x, y + 1, STONE);
+    sand_set(&wide, lava_x - 1, y, STONE);
+    sand_set(&wide, lava_x - 1, y + 1, STONE);
+    sand_set(&wide, lava_x + 1, y + 1, STONE);
+    sand_set(&wide, lava_x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    for (int i = 0; i < wall_len; i++) {
+        sand_set(&wide, wall_x0 + i, y, wall_cell);
+    }
+    sand_set(&wide, water_x, y, WATER);
+
+    for (int i = 0; i < budget; i++) {
+        sand_step(&wide, 0, 1000, 0);
+        if (CELL_MATERIAL(sand_at(&wide, water_x, y)) == MAT_STEAM) {
+            return i + 1;
+        }
+    }
+    return budget;
+}
+
+/* The performance-relevant claim the plan itself flags as the one thing
+ * no benchmark scene would catch: metal's `conducts` (248) makes the
+ * conduction walk reach roughly CONDUCT_REACH cells on average, against
+ * stone and glass's 220 - see Metal-Smelting-Plan.md's own attenuation
+ * table. This is the minimum host guard the plan asks for before merge:
+ * heat must cross a 20-cell metal run comfortably inside a short shared
+ * budget where a 20-cell stone run - real per-material figures, nothing
+ * forced - must not have gotten through yet. Extended materials appear
+ * in no benchmark scene today, so this is what stands between metal's
+ * real conduction cost and shipping completely unmeasured. */
+static void test_a_metal_run_conducts_further_than_a_stone_one(void)
+{
+    const int wall_len = 20;
+    const int budget = 10;
+
+    const int metal = steps_to_boil_through(wall_len, MATX(MATX_METAL),
+                                            budget);
+    const int stone = steps_to_boil_through(wall_len, STONE, budget);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(budget, metal,
+        "a 20-cell metal wall must conduct well within a ten-step "
+        "budget - conducts 248 puts the mean walk at roughly "
+        "CONDUCT_REACH (32), well past this depth");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(budget, stone,
+        "a 20-cell stone wall must NOT conduct within the same ten-step "
+        "budget - at conducts 220 the walk needs on the order of twenty "
+        "steps on average to get through this depth, an order of "
+        "magnitude slower than metal");
+}
+
+/* "A lava source grows its own 32-cell metal rod out of a dirt bed and
+ * then stops" - Metal-Smelting-Plan.md's own description of the
+ * self-growing rod, and "the thing most likely to surprise someone".
+ * Dirt at the far side of a metal conductor run smelts via
+ * conduct_heat()'s walk exactly as dirt directly against lava smelts via
+ * direct contact, which lengthens the run by one cell each time it
+ * happens - until the walk can no longer reach past CONDUCT_REACH
+ * conductor cells to find the next un-smelted one.
+ *
+ * The bed is twice CONDUCT_REACH long specifically so a rod that failed
+ * to cap would be caught running all the way to the far wall instead of
+ * merely running a little further than expected. Conduction is forced
+ * to 255 so every roll along an existing metal run succeeds - the ONLY
+ * thing left to gate growth is dirt's own heat_chance at the growing
+ * tip, and the only thing left to stop it is the reach cap itself.
+ *
+ * Measured at 33 cells, not 32: the plan's own prose ("stops at
+ * CONDUCT_REACH") is off by the one cell that is placed by DIRECT
+ * contact rather than by the walk - conduct_heat()'s own loop can still
+ * succeed with an existing run of exactly CONDUCT_REACH conductor cells
+ * (its depth counter reaches CONDUCT_REACH - 1, which satisfies
+ * `depth < CONDUCT_REACH`), so the walk itself can add one cell beyond
+ * a run already at the cap before the NEXT attempt finally fails to fit.
+ * Not something this change gets to silently correct by tightening the
+ * bounds below to hide it - flagged here and in the report instead. The
+ * bounds are loose enough to pass at either 32 or 33, which is the
+ * point: this test pins "stops near the cap, not at the far wall", not
+ * the exact off-by-one. */
+static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
+{
+    enum { ROD_W = CONDUCT_REACH_TEST * 2, ROD_H = 6 };
+    static uint8_t rod_cells[ROD_W * ROD_H];
+    sand_t rod;
+    sand_init(&rod, rod_cells, ROD_W, ROD_H, 3u);
+    sand_set_mobility(&rod, 0);
+    sand_set_conduction(&rod, 255);
+
+    const int y = 2;
+    const int lava_x = 1;
+    const int bed_x0 = lava_x + 1;
+    const int bed_len = ROD_W - bed_x0 - 2;
+
+    /* A floor under the whole bed - dirt is KIND_POWDER and falls into
+     * any empty cell beneath it, mobility override or not (powders never
+     * read that field at all - material.h's own comment on `mobility`).
+     * Without this every cell of the bed drops out of row y on the very
+     * first step, and the rest of this scene tests an empty row. */
+    for (int x = lava_x; x < ROD_W; x++) {
+        sand_set(&rod, x, y + 1, STONE);
+    }
+    /* And the lava boxed on every remaining side - INCLUDING both
+     * down-diagonals, which the floor above only half covers (it already
+     * takes the straight-down and down-right cells; down-left still
+     * needs its own block). A liquid blocked straight down still tries a
+     * diagonal fall, and leaving one open drains the source clean off
+     * the grid within a single step. */
+    sand_set(&rod, lava_x, y - 1, STONE);
+    sand_set(&rod, lava_x - 1, y, STONE);
+    sand_set(&rod, lava_x - 1, y + 1, STONE);
+    sand_set(&rod, lava_x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    for (int i = 0; i < bed_len; i++) {
+        sand_set(&rod, bed_x0 + i, y, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+
+    for (int i = 0; i < 6000; i++) {
+        sand_step(&rod, 0, 1000, 0);
+    }
+
+    /* The run is contiguous from the lava outward, so the first cell
+     * that is NOT metal ends it. */
+    int metal_len = 0;
+    for (int i = 0; i < bed_len; i++) {
+        const cell_t c = sand_at(&rod, bed_x0 + i, y);
+        if (!cell_is_extended(c) || CELL_VARIANT(c) != MATX_METAL) {
+            break;
+        }
+        metal_len++;
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(CONDUCT_REACH_TEST - 4, metal_len,
+        "the rod must actually reach close to CONDUCT_REACH - if this "
+        "fails the growth mechanism itself is broken, not merely capped "
+        "in the wrong place");
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(CONDUCT_REACH_TEST + 2, metal_len,
+        "the rod must stop at (approximately) CONDUCT_REACH - a lava "
+        "source growing its own metal bar out of a dirt bed is meant to "
+        "be self-limiting, not to run until it hits whatever wall the "
+        "player happened to draw");
+    TEST_ASSERT_LESS_THAN_MESSAGE(bed_len, metal_len,
+        "and it must stop well short of the far end of the bed - this "
+        "bed is twice CONDUCT_REACH long specifically so a rod that "
+        "failed to cap would be caught reaching the far wall instead");
+}
+
+/* A GLASS-walled vat with `floor_rows` of `floor_cell` sitting on a
+ * GLASS floor, topped with `acid_rows` of acid - the same box
+ * acid_tank() builds above, generalised over what is being eaten so it
+ * can compare materials rather than always eating sand. */
+static void acid_over(cell_t floor_cell, int floor_rows, int acid_rows)
+{
+    fixture();
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 1, GLASS);
+    }
+    for (int y = 1; y < H; y++) {
+        sand_set(&s, 1, y, GLASS);
+        sand_set(&s, W - 2, y, GLASS);
+    }
+    for (int y = H - 1 - floor_rows; y < H - 1; y++) {
+        for (int x = 2; x < W - 2; x++) {
+            sand_set(&s, x, y, floor_cell);
+        }
+    }
+    for (int y = 1; y <= acid_rows; y++) {
+        for (int x = 2; x < W - 2; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+        }
+    }
+}
+
+/* Steps until every cell counted by `counted_id` is gone from
+ * acid_over()'s scene, or `budget` if some survive that long. */
+static int steps_for_acid_to_clear(uint8_t counted_id, cell_t floor_cell,
+                                   int budget)
+{
+    acid_over(floor_cell, 1, 4);
+    for (int i = 0; i < budget; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (count_cells_of(counted_id) == 0) {
+            return i + 1;
+        }
+    }
+    return budget;
+}
+
+/* Metal's whole point on the acid axis: it is what a stone tank is not -
+ * not immune - and it is slower than sand, which stays the obvious
+ * thing to point acid at. dissolvable 110 sits deliberately between
+ * stone's 60 and sand's 200 - see Metal-Smelting-Plan.md's own
+ * three-material table (stone/glass/metal, one axis of difference
+ * each). */
+static void test_acid_eats_metal_between_stone_and_sand(void)
+{
+    const int budget = 2000;
+    const int stone = steps_for_acid_to_clear(MAT_STONE, STONE, budget);
+    const int metal = steps_for_acid_to_clear(MAT_EXTENDED,
+                                              MATX(MATX_METAL), budget);
+    const int sand  = steps_for_acid_to_clear(MAT_SAND,
+                                              CELL_MAKE(MAT_SAND, 8), budget);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(budget, sand,
+        "fixture check: acid must fully clear a floor of sand within the "
+        "budget");
+    TEST_ASSERT_LESS_THAN_MESSAGE(budget, metal,
+        "fixture check: acid must fully clear a floor of metal within "
+        "the same budget");
+    TEST_ASSERT_LESS_THAN_MESSAGE(budget, stone,
+        "fixture check: acid must fully clear a floor of stone within "
+        "the same budget too");
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(stone, metal,
+        "acid must eat metal FASTER than stone - dissolvable 110 against "
+        "stone's 60. Metal is acid's intended counter; stone is merely "
+        "what the vat holding it is built from");
+    TEST_ASSERT_LESS_THAN_MESSAGE(metal, sand,
+        "and SLOWER than sand - dissolvable 200, the obviously softest "
+        "target on the board. Metal sits deliberately between the two");
 }
 
 static void test_wood_and_steam_grain_count_is_conserved(void)
@@ -12250,6 +12681,13 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thick_wall_conducts_more_slowly_than_a_thin_one);
     RUN_TEST(test_boiling_converts_the_cell_nearest_the_heat);
     RUN_TEST(test_the_boiler_end_to_end);
+    RUN_TEST(test_dry_dirt_beside_lava_becomes_metal);
+    RUN_TEST(test_saturated_dirt_smelts_roughly_eight_times_slower);
+    RUN_TEST(test_watered_dirt_steams_before_it_smelts);
+    RUN_TEST(test_sand_still_becomes_glass_beside_the_new_dirt_branch);
+    RUN_TEST(test_a_metal_run_conducts_further_than_a_stone_one);
+    RUN_TEST(test_the_rod_terminates_at_conduct_reach_not_the_far_wall);
+    RUN_TEST(test_acid_eats_metal_between_stone_and_sand);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);
