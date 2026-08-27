@@ -383,15 +383,64 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
         return;   /* sand_enable_blast() was never called - see its comment */
     }
 
-    /* Clear a cavity FIRST, before a single flight entry is queued - see
-     * SAND_BLAST_CORE_DIVISOR's own comment in sand.h for why a blast that
-     * only ever seeds entries can never move anything once the medium it
-     * detonates in has no gap of its own to offer. Reuses sand_erase()
-     * rather than a second hand-rolled clearing loop: it already does
-     * everything a write like this owes the simulation (marks rows dirty,
-     * wakes the blocks it touches), and "the middle of the blast is simply
-     * gone" is exactly what sand_erase() already means. */
-    sand_erase(s, cx, cy, radius / SAND_BLAST_CORE_DIVISOR);
+    /* FILL a cavity with fire, before a single flight entry is queued -
+     * see SAND_BLAST_CORE_DIVISOR's own comment in sand.h for why a blast
+     * that only ever seeds entries can never move anything once the medium
+     * it detonates in has no gap of its own to offer, and for why fire is
+     * what fills that gap now rather than emptiness. An explosion flashes
+     * and leaves a plume; it does not silently delete whatever was standing
+     * there.
+     *
+     * Every cell within the core radius is written, unconditionally -
+     * occupied or already empty alike. sand_erase() skips an already-empty
+     * cell because removing nothing is a no-op worth avoiding; there is no
+     * equivalent shortcut here; an empty cell becoming fire is exactly as
+     * real a change as an occupied one converting, and skipping it would
+     * leave a ring of untouched holes inside the fireball on any board that
+     * was not already packed solid.
+     *
+     * Written by hand rather than through a shared helper: place_cell() in
+     * sand_reactions.c is the worked example of what every write like this
+     * owes the simulation (latch the content flags a fresh cell arms, mark
+     * its row dirty, wake its block and neighbours), but it is `static` to
+     * that file, so this repeats the same four things directly instead of
+     * exporting it for one caller.
+     *
+     * CONSEQUENCES, NOT BUGS. Fire ignites flammable neighbours (wood, oil,
+     * gas) and boils adjacent water to steam, same as it always has - an
+     * explosion starting fires and boiling water is the feature, not a
+     * regression to guard against. And the fresh fire cells this loop just
+     * wrote are themselves occupied, non-empty cells inside `radius`, so
+     * the annulus loop below queues THEM as flight entries too, exactly
+     * like any other grain in the disc - the fireball's own edge gets
+     * thrown outward along with everything else, which is one more reason
+     * a real explosion's flash reads as an expanding thing rather than a
+     * static disc. */
+    const int core_radius = radius / SAND_BLAST_CORE_DIVISOR;
+    const int core_r2 = core_radius * core_radius;
+    for (int fdy = -core_radius; fdy <= core_radius; fdy++) {
+        for (int fdx = -core_radius; fdx <= core_radius; fdx++) {
+            if (fdx * fdx + fdy * fdy > core_r2) {
+                continue;
+            }
+            const int fx = cx + fdx;
+            const int fy = cy + fdy;
+            if (fx < 0 || fx >= s->w || fy < 0 || fy >= s->h) {
+                continue;
+            }
+            const size_t fat = (size_t)fy * (size_t)s->w + (size_t)fx;
+            /* Fresh, full-life fire - the same MATERIAL_VARIANTS - 1
+             * convention random_cell() (above in this file) uses for any
+             * transient material, so a blast's core reads exactly like
+             * fire painted by hand would: brightest right after ignition,
+             * fading from there via its own ordinary decay. */
+            const cell_t fire = CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1);
+            s->cells[fat] = fire;
+            latch_content_flags(s, fire);
+            mark_rows(s, fy, fy);
+            wake_block_and_neighbors(s, fx, fy);
+        }
+    }
 
     const int r2 = radius * radius;
 
@@ -1237,39 +1286,110 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * bed of sand or a body of water starts with every queued cell surrounded
  * by more of the same material, so that rule dropped nearly everything on
  * its very first turn and only the annulus already touching open space (or
- * the cavity sand_explode() now clears - see SAND_BLAST_CORE_DIVISOR in
- * sand.h) ever went anywhere. Keeping a blocked entry instead lets it try
- * again next step, once whatever was ahead of it has had a chance to move
- * out of the way - which is what lets a cleared core's cavity unpack
- * outward over several steps instead of being a single frozen ring.
+ * the fire-filled core sand_explode() now writes - see
+ * SAND_BLAST_CORE_DIVISOR in sand.h - which a denser neighbour can swap
+ * straight through) ever went anywhere. Keeping a blocked entry instead
+ * lets it try again next step, once whatever was ahead of it has had a
+ * chance to move out of the way - which is what lets the disturbance the
+ * core's fire starts unpack outward over several steps instead of being a
+ * single frozen ring.
+ *
+ * `dx`/`dy` is this step's own dithered gravity direction, the same one
+ * sand_step()'s main sweep just used - needed for RE-ACQUISITION, below,
+ * which is what makes a thrown grain arc at all rather than flying dead
+ * straight for exactly one cell. The sweep runs BEFORE this pass, every
+ * step, on every ordinary cell including ones this list still has an eye
+ * on: an airborne grain sitting in open air is not special to the sweep,
+ * so gravity moves it down one cell before this pass ever gets a turn on
+ * it that step. Naively, the entry's stored index then names a cell the
+ * grain no longer occupies, the identity check below fails, and the entry
+ * is dropped - meaning a grain gets exactly one outward hop, ever, then
+ * spends the rest of its fall as an ordinary grain with no more push. That
+ * reads as lateral scatter out of a crater, not an arc, and it is not a
+ * hypothetical: it is what "the crater works now but the grains don't
+ * arc" was.
  *
  * A single `if` with nothing queued, which is every step on a board that has
  * never exploded - the same shape sand_step_gas()'s own may_have_gas gate
  * gives a board with no gas on it. */
-static void step_blast(sand_t *s)
+static void step_blast(sand_t *s, int dx, int dy)
 {
     if (s->blast_count == 0) {
         return;
     }
 
     const int w = s->w;
+    const int h = s->h;
     int kept = 0;
 
     for (int i = 0; i < s->blast_count; i++) {
-        const blast_t entry = s->blast_buf[i];
+        blast_t entry = s->blast_buf[i];
 
         /* Verify before moving. Nothing marks this index as "spoken for" -
          * that would be the per-cell flag this whole design exists to
          * avoid - so ordinary gravity in the sweep above, a reaction, or an
          * external sand_set()/sand_erase() may already have touched this
-         * exact cell since the entry's last turn. If what sits there now is
-         * not byte-for-byte what was thrown, drop the entry silently rather
-         * than fly whatever happens to be there instead. Grains get lost
-         * this way occasionally and nobody will ever see it - the
-         * alternative is a per-cell "in flight" bit, which is the 40 KB
-         * this whole design exists to avoid (see sand.h's blast_t). */
+         * exact cell since the entry's last turn.
+         *
+         * RE-ACQUIRE before giving up. The sweep just ran and can only have
+         * moved this exact grain to one of three cells: one step along
+         * gravity, or one of the two diagonal slides either side of it -
+         * the same three destinations step_one_grain() itself ever writes
+         * to. Check those for a byte-for-byte match before concluding the
+         * grain is truly gone.
+         *
+         * THIS IS SOUND, NOT A HACK, because of what "byte-for-byte match"
+         * already means everywhere else in this file: two cells holding
+         * the same material and the same variant are the same GRAIN as far
+         * as anything here can tell or cares - move_to()'s own swap logic
+         * already trusts that equivalence for the cell it displaces. If
+         * re-acquisition latches onto some OTHER grain that merely happens
+         * to carry an identical byte, nothing observable changes: the same
+         * material continues flying from a position gravity actually just
+         * put a matching grain at, and conservation still holds exactly,
+         * because nothing here creates or destroys a cell - it only decides
+         * which already-identical cell the entry's own bookkeeping follows.
+         * What it must NOT do, and does not: adopt a DIFFERENT byte. If
+         * nothing among the three candidates matches, the entry is still
+         * dropped exactly as before - see
+         * test_a_dropped_entry_never_moves_someone_elses_cell.
+         *
+         * Liquids are the one honest gap this leaves. A flying liquid cell
+         * that the cross-flow pass (sand_step_liquids(), which also runs
+         * before this one) redistributes sideways is not one of these three
+         * candidates, so it is simply lost, same as before this fix -
+         * accepted for now rather than chased, since a liquid's own amount-
+         * based movement does not preserve a single grain's identity the
+         * way a solid's swap does. */
         if (s->cells[entry.index] != entry.cell) {
-            continue;
+            const int ox = (int)((unsigned)entry.index % (unsigned)w);
+            const int oy = (int)((unsigned)entry.index / (unsigned)w);
+            const int i_dir = ring_of(dx, dy);
+            const int *slide_a = ring_dir(i_dir + 7);
+            const int *slide_b = ring_dir(i_dir + 1);
+            const int cand[3][2] = {
+                { ox + dx,         oy + dy         },
+                { ox + slide_a[0], oy + slide_a[1] },
+                { ox + slide_b[0], oy + slide_b[1] },
+            };
+
+            bool reacquired = false;
+            for (int c = 0; c < 3 && !reacquired; c++) {
+                const int cx = cand[c][0];
+                const int cy = cand[c][1];
+                if ((unsigned)cx >= (unsigned)w ||
+                    (unsigned)cy >= (unsigned)h) {
+                    continue;
+                }
+                const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
+                if (s->cells[cat] == entry.cell) {
+                    entry.index = (uint16_t)cat;
+                    reacquired = true;
+                }
+            }
+            if (!reacquired) {
+                continue;
+            }
         }
 
         /* The roll happens before the move attempt, and it happens EVERY
@@ -1487,7 +1607,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * next turn, and it is what makes a thrown grain arc instead of flying
      * in a straight line - gravity already pulled in the sweep, this only
      * adds the outward half. */
-    step_blast(s);
+    step_blast(s, dx, dy);
 
     finalize_settling(s, settled_bit);
 }

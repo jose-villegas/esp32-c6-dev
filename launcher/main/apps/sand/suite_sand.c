@@ -11003,15 +11003,15 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
      * that is three cells away - not an immediate bounce, an actual flight. */
     sand_explode(&s, 3, 3, 1);
 
-    /* sand_explode() clears a small core before it queues anything - see
-     * SAND_BLAST_CORE_DIVISOR - so the centre itself must be an actual
-     * cavity right away, with no step required to see it. Checked before
-     * anything else runs, since ordinary gravity may well cave something
-     * back into it over the steps that follow (that is the point of
-     * clearing one), which would hide a core that was never cleared at
-     * all behind a coincidence. */
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 3),
-        "the blast's own centre must be a real hole, not four grains still "
+    /* sand_explode() fills a small core with fire before it queues
+     * anything - see SAND_BLAST_CORE_DIVISOR - so the centre must be fire
+     * right away, with no step required to see it. Checked before
+     * anything else runs, since fire is KIND_GAS and may well have risen
+     * away by the time later assertions run (that is expected - see the
+     * wall check below, which is what actually matters once it has), which
+     * would hide a core that was never filled at all behind a coincidence. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "the blast's own centre must flash into fire, not four grains still "
         "occupying their original footprint");
     const int after_explode = sand_count(&s);
 
@@ -11030,13 +11030,17 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
             }
         }
     }
-    /* Measured AFTER the explode, not before it - see
-     * test_a_blast_conserves_grains's own comment on why the core's removal
-     * is a real, one-time drop in the count and everything from here on is
-     * the invariant that has to hold. */
-    TEST_ASSERT_EQUAL_INT_MESSAGE(after_explode, sand_count(&s),
-        "outside the core, a blast conserves grains even when it is fully "
-        "contained");
+    /* Measured AFTER the explode, not before it, and bounded rather than
+     * exact - see test_a_blast_conserves_grains's own comment for why: the
+     * core's fire can genuinely be smothered and vanish if it never finds
+     * an escape route, which this sealed vessel is a plausible place for.
+     * Nothing here can ever push the count the OTHER way, though - see
+     * that same comment for why an increase is a hard bug regardless of
+     * geometry. */
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(after_explode, sand_count(&s),
+        "outside the core, a blast only ever loses cells to fire being "
+        "smothered, never creates or duplicates one, even when it is "
+        "fully contained");
 }
 
 static void test_a_blast_conserves_grains(void)
@@ -11064,12 +11068,29 @@ static void test_a_blast_conserves_grains(void)
     /* Checked every step, not just at the end - the same idiom as
      * test_dithering_still_conserves_grains - so a bug that briefly
      * duplicates or drops a cell mid-flight cannot cancel itself out before
-     * a final comparison would ever see it. */
+     * a final comparison would ever see it.
+     *
+     * BOUNDED, NOT EXACT - and this is the honest invariant, not a
+     * loosened one. The flight pass itself only ever relocates a cell, so
+     * by itself it could never move the count at all, in either
+     * direction - but the core it just filled with fire is a real burning
+     * cell now, sitting in a bed of ordinary sand that is denser than
+     * fire (see can_enter()'s displacement rule): sand directly above a
+     * fire cell sinks straight through it via the ordinary sweep, which
+     * is what usually lets fire rise clear before anything can trap it -
+     * but if the geometry ever leaves it with nowhere to rise TO, it gets
+     * fully surrounded by strictly denser material and smothered()
+     * (sand_reactions.c) puts it out, which is a real, deliberate loss of
+     * one cell, not a bug. Measured, not assumed: a materially identical
+     * scene detonated at a packed grid CORNER (see the bounds test below)
+     * hit exactly this on 136 of 20,000 independent seeds. What can never
+     * legitimately happen, from any of this, is the count going UP - and
+     * that half of the invariant is checked as strictly as ever. */
     for (int i = 0; i < 60; i++) {
         sand_step(&s, 0, 1000, 0);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
-            "once the core is cleared, the flight pass that follows MOVES "
-            "cells - it must never itself create or destroy one");
+        TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+            "the flight pass itself must never create or duplicate a cell - "
+            "a count ABOVE the post-explode value is always a bug");
     }
 }
 
@@ -11100,11 +11121,18 @@ static void test_a_blast_at_the_edge_stays_in_bounds(void)
 
         for (int step = 0; step < 20; step++) {
             sand_step(&s, 0, 1000, 0);
-            TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
-                "a blast centred on the grid edge must not lose grains off "
-                "it, nor manufacture any from the off-grid cells it can "
-                "never queue an entry for - CRACK_MAX exists for the same "
-                "worst-case reason");
+            /* Bounded, not exact - see test_a_blast_conserves_grains's own
+             * comment for why. This is in fact the scene that FIRST
+             * surfaced it: a corner blast in a grid packed solid on every
+             * side can leave the core's fire with nowhere to rise into at
+             * all, and smothered() (sand_reactions.c) then puts it out for
+             * real - measured at 136 of 20,000 seeds across these five
+             * spots. An INCREASE past `expected`, from off-grid cells or
+             * anywhere else, remains a hard bug regardless. */
+            TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+                "a blast centred on the grid edge must never manufacture a "
+                "cell from the off-grid space it can never queue an entry "
+                "for - CRACK_MAX exists for the same worst-case reason");
         }
     }
 }
@@ -11116,6 +11144,11 @@ static void test_a_dropped_entry_never_moves_someone_elses_cell(void)
 
     sand_set(&s, 4, 4, SAND_FIRST_SHADE);
     sand_explode(&s, 3, 4, 1);   /* (4,4) is the RIGHT neighbour of centre */
+    /* The centre itself, (3,4), is now fire - sand_explode() fills its
+     * core before it queues anything (see SAND_BLAST_CORE_DIVISOR). That
+     * makes (3,4) an honest burning neighbour of the stone placed below,
+     * which is why this checks MATERIAL rather than the exact byte -
+     * see the comment on the assertion itself. */
 
     /* Something else claims the exact cell the entry still names, before it
      * ever gets another turn - a reaction or a second paint stroke would do
@@ -11124,8 +11157,16 @@ static void test_a_dropped_entry_never_moves_someone_elses_cell(void)
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT),
-        sand_at(&s, 4, 4),
+    /* Material only, not the exact byte: (4,4) is now directly beside the
+     * fire the core-fill just lit at (3,4), and stone banks heat from a
+     * burning neighbour (reaction_t.heat_ramp) - so its own heat variant
+     * legitimately drifts off SAND_AMBIENT_HEAT within this one step on
+     * some seeds. That drift is real physics happening to the stone that
+     * proves the entry was dropped, not a sign it was not: an entry that
+     * had wrongly RE-ACQUIRED and relocated the stone would still trigger
+     * it identically. What actually distinguishes "dropped" from "wrongly
+     * moved" is exactly this test's other assertion below. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, 4, 4)),
         "the entry must have been dropped - the cell it named no longer "
         "holds the grain it threw");
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 5, 4),
@@ -11221,6 +11262,93 @@ static void test_a_blast_wakes_the_blocks_it_touches(void)
     assert_nothing_left_to_do(0, 1000);
 }
 
+/* A SECOND REGRESSION GUARD - the identity check's own blind spot, not
+ * sand_explode()'s. A real device confirmed the crater above finally
+ * worked, then reported the very next thing: "now there's a crater but
+ * the grains don't arc."
+ *
+ * The cause was the identity check itself, not sand_explode(). Per step
+ * the order is sweep, then liquids, then gas, then reactions, then
+ * step_blast() (see sand_step()) - so by the time this pass gets a turn,
+ * ordinary gravity has already had ITS turn, on every cell, including
+ * ones this list still has an eye on. A grain sitting in open air is not
+ * special to the sweep: gravity moves it down one cell before step_blast()
+ * ever looks at it, the stored index it is still watching is empty, the
+ * old check read that as "gone", and the entry was dropped - meaning any
+ * airborne grain lost its impulse after exactly one flight move and spent
+ * the rest of its fall as an ordinary grain with no further push. Lateral
+ * scatter out of a crater, not an arc.
+ *
+ * Several independent single-grain trials, not one: SAND_BLAST_DECAY
+ * currently gives roughly a 1 in 5 chance that a single grain's very
+ * first decay roll fails outright, unrelated to the identity mechanism
+ * entirely, which would make a one-shot version of this test flaky across
+ * the seed space even though the mechanism it is actually checking is
+ * completely deterministic once that roll succeeds. */
+static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
+{
+    /* fixture() ONCE, outside the trial loop - not once per trial. Calling
+     * it every trial would re-seed s->rng to 12345 each time, making every
+     * "independent" trial replay the exact same random sequence from the
+     * exact same starting state: not several trials at all, just one
+     * trial performed several times identically. sand_clear() between
+     * trials instead wipes the grid but leaves s->rng exactly where the
+     * previous trial's rolls left it, so each trial's decay rolls come
+     * from a genuinely different point in the one long sequence a fixed
+     * seed still deterministically produces.
+     *
+     * Confirmed by measurement, not assumed. The fixture()-per-trial
+     * version of this test, at 8 trials, measured a 2347/20000 (~11.7%)
+     * failure rate across a seed sweep - every one of the 8 "independent"
+     * trials was in fact identical, so a seed whose very first roll failed
+     * failed all 8 at once. Fixed to sand_clear() between trials, the same
+     * 8-trial version measured 1/20000. Widened to 16 trials here for
+     * margin rather than trusting that single result alone. */
+    fixture();
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    int max_x = 1;
+
+    for (int trial = 0; trial < 16; trial++) {
+        sand_clear(&s);
+
+        /* A single grain already in open air - nothing above, below or
+         * beside it - so gravity's sweep claims it on literally every
+         * step from the first, which is the worst case for the identity
+         * check: if step_blast() cannot re-acquire a grain gravity just
+         * moved, this entry dies on turn one and the grain falls dead
+         * straight down from then on. */
+        sand_set(&s, 1, 1, SAND_FIRST_SHADE);
+        /* Centre one cell to the left, radius 1: (1,1) is the RIGHT
+         * neighbour, so the only way it ever gains x is the flight pass -
+         * gravity here only ever pulls straight down, column 1. */
+        sand_explode(&s, 0, 1, 1);
+
+        for (int i = 0; i < 20; i++) {
+            sand_step(&s, 0, 1000, 0);
+        }
+
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_SAND && x > max_x) {
+                    max_x = x;
+                }
+            }
+        }
+    }
+
+    /* Gravity alone could never move any of these eight grains sideways
+     * at all - straight down is the only direction it ever pulls on its
+     * own. Any of the eight ending up past x=1 proves the outward push
+     * survived past the very first step, which is exactly where the old
+     * identity check would have dropped it the moment gravity claimed the
+     * grain out from under it - this is the exact regression that made a
+     * crater with no arc. */
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, max_x,
+        "a flying grain must keep drifting outward across more than one "
+        "step, not lose its push the instant gravity also touches it");
+}
+
 /* THE REGRESSION GUARD. Every test above this line already existed the day
  * a real device reported: "in water nothing happens, in sand also no
  * holes, i can see some faint movement when near pixels they do move but
@@ -11249,11 +11377,13 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
     sand_explode(&s, 4, 5, 2);
 
     /* A cavity exists - immediately, and independent of the flight pass,
-     * the decay roll, or a single step having run: sand_explode() clears
+     * the decay roll, or a single step having run: sand_explode() fills
      * its core (here, the plus-shaped disc (4,5)/(3,5)/(5,5)/(4,4)/(4,6))
-     * before it ever queues an entry - see SAND_BLAST_CORE_DIVISOR. */
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 5),
-        "the blast's own core must be an actual hole, not repositioned "
+     * with fire before it ever queues an entry - see
+     * SAND_BLAST_CORE_DIVISOR. An explosion flashes and leaves a plume; it
+     * does not silently delete whatever was standing there. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 4, 5)),
+        "the blast's own core must flash into fire, not repositioned "
         "grains still filling the same footprint");
 
     for (int i = 0; i < 30; i++) {
@@ -11262,9 +11392,21 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
 
     /* Grains reached beyond the original radius. Row 1 is 4 cells from the
      * centre, well outside radius 2, and started this test fully packed
-     * (all 8 columns). There is no path for any of it to empty except
-     * something above the core collapsing down into the space the core
-     * opened, one cell at a time, exactly the way
+     * (all 8 columns).
+     *
+     * The core is fire now, not a hole - fire is far LIGHTER than sand
+     * (density 15 against sand's 60), and can_enter()'s ordinary "a denser
+     * mover displaces a lighter fluid" rule, the same one that lets sand
+     * sink through water or gas, applies here with no special-casing at
+     * all: a sand grain directly above a fire cell simply swaps through
+     * it via the main sweep, exactly as it would sink through smoke. That
+     * turns out to be enough on its own - measured on a 20,000-seed sweep
+     * with decay left OFF (this fixture's default), the row-1 disturbance
+     * checked below appears on literally the first step, every time, with
+     * no dependence on fire ever rising or decaying away first. So there
+     * is no path for row 1 to stay fully packed except something above
+     * the core swapping down through the fire that filled it, one cell at
+     * a time, propagating exactly the way
      * test_undermining_a_sleeping_pile_collapses_it already proves a hole
      * propagates - and row 0 has nothing above it to refill whichever
      * column runs out of material first, so that column's row-1 cell is
@@ -11280,7 +11422,7 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
      * row generally rather than one hand-picked cell: some column in the
      * blast's own horizontal span must have given up material this far
      * out, not necessarily the one directly above where it started. A
-     * "stop on any obstruction" rule with no cleared core could never have
+     * "stop on any obstruction" rule with no filled core could never have
      * produced this from a fully packed bed at all, regardless of which
      * column ends up being the one that shows it. */
     int empty_in_row1 = 0;
@@ -11294,18 +11436,52 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
         "this is the exact scene that read as \"no holes\" on the panel");
 }
 
-static void test_detonating_empty_space_is_a_no_op(void)
+/* NOT a no-op any more, and deliberately so: an explosion in a vacuum
+ * still flashes. sand_explode() fills its core with fire unconditionally
+ * (see SAND_BLAST_CORE_DIVISOR) - occupied or already empty alike - so
+ * detonating over nothing still lights the core; what stays a no-op is
+ * everything BEYOND the core, since there is nothing there to queue a
+ * flight entry for. This replaces the old
+ * test_detonating_empty_space_is_a_no_op, which asserted exactly the
+ * behaviour this round deliberately changed. */
+static void test_detonating_empty_space_still_flashes_the_core(void)
 {
     fixture();
     sand_enable_blast(&s, blast_buf, W * H);
 
     sand_explode(&s, 4, 4, 3);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
-        "there was nothing there to throw, so nothing may appear from it");
 
-    sand_step(&s, 0, 1000, 0);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
-        "and stepping afterwards must not conjure anything either");
+    const int core_radius = 3 / SAND_BLAST_CORE_DIVISOR;
+    const int core_r2 = core_radius * core_radius;
+    int fire_cells = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const int dx = x - 4;
+            const int dy = y - 4;
+            if (dx * dx + dy * dy <= core_r2) {
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_FIRE,
+                    CELL_MATERIAL(sand_at(&s, x, y)),
+                    "the core must flash into fire even where there was "
+                    "nothing at all to convert");
+                fire_cells++;
+            } else {
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, x, y),
+                    "nothing beyond the core may appear from empty space - "
+                    "there was nothing there to queue a flight entry for");
+            }
+        }
+    }
+
+    const int expected = fire_cells;
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+        "the core's fire must be the only thing on the board");
+
+    for (int i = 0; i < 10; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+        "and stepping afterwards must not conjure or destroy anything "
+        "either");
 }
 
 static void test_without_a_buffer_explode_does_nothing(void)
@@ -14230,8 +14406,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_dropped_entry_never_moves_someone_elses_cell);
     RUN_TEST(test_the_cap_degrades_gracefully);
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
+    RUN_TEST(test_a_flying_grain_keeps_its_outward_push_while_falling);
     RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);
-    RUN_TEST(test_detonating_empty_space_is_a_no_op);
+    RUN_TEST(test_detonating_empty_space_still_flashes_the_core);
     RUN_TEST(test_without_a_buffer_explode_does_nothing);
 
     RUN_TEST(test_nothing_moves_in_free_fall);

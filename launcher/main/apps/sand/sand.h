@@ -459,8 +459,8 @@ int sand_emitter_count(const sand_t *s);
  * the outputs untouched, if `i` is not currently a valid emitter index. */
 bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
 
-/* How much of the blast radius sand_explode() clears outright before it
- * queues a single flight entry - the cleared radius is `radius /
+/* How much of the blast radius sand_explode() fills with fire before it
+ * queues a single flight entry - the filled radius is `radius /
  * SAND_BLAST_CORE_DIVISOR`.
  *
  * Without this, sand_explode() only ever SEEDS entries; it never makes
@@ -469,24 +469,32 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * the same material, so the very first move every entry attempts is
  * blocked. A blocked entry now waits rather than dying (see step_blast()'s
  * own comment), but waiting for a gap that nothing will ever open is still
- * nothing happening: measured on a device, this is exactly what read as
+ * nothing happening: reported from a device, this is exactly what read as
  * "in water nothing happens, in sand also no holes" before this existed.
  *
- * A cleared core sidesteps the problem instead of trying to out-wait it:
- * it is an actual cavity, present the instant sand_explode() returns, that
- * the rest of the disc collapses into and slides through as steps pass -
- * the same mechanism test_undermining_a_sleeping_pile_collapses_it already
- * relies on, aimed at a hole this call dug on purpose instead of one
- * sand_erase() happened to be asked for elsewhere.
+ * FIRE, not a hole. An earlier version of this simply erased the core -
+ * correct for making room, wrong for what an explosion actually is: it
+ * flashes and leaves a plume, it does not silently delete whatever was
+ * standing there. Fire is far LIGHTER than almost anything it might be
+ * detonating into (density 15 against sand's 60, water's 30), so
+ * can_enter()'s ordinary "a denser mover displaces a lighter fluid" rule -
+ * the same one that already lets sand sink through water or gas, with no
+ * special-casing added for this - lets the surrounding medium swap straight
+ * through the fire with no need to wait for it to move or decay away
+ * first. Measured, not assumed: a 20,000-seed sweep of a fully packed bed,
+ * with decay left OFF, found the resulting cavity reaching well outside
+ * the original radius on literally the first step, every time. The
+ * mechanism this replaced - a plain hole - relied on exactly the same
+ * neighbouring-cell collapse; filling with fire costs it nothing.
  *
  * A fraction of the blast's OWN radius, not an independent constant, so a
- * bigger blast gets a bigger cavity automatically instead of the same
- * fixed-size hole no matter how large the outer radius grows. 2 (half the
- * radius) is a starting point, not a measurement: big enough that even
- * radius 1 clears its own centre cell, small enough that a wide blast
- * still has a genuine annulus of material outside the core for the flight
- * pass to do something with, rather than the whole disc being one bare
- * hole with nothing thrown outward at all. */
+ * bigger blast gets a bigger flash automatically instead of the same
+ * fixed-size fireball no matter how large the outer radius grows. 2 (half
+ * the radius) is a starting point, not a measurement: big enough that even
+ * radius 1 fills its own centre cell, small enough that a wide blast still
+ * has a genuine annulus of material outside the core for the flight pass
+ * to do something with, rather than the whole disc being one bare fireball
+ * with nothing thrown outward at all. */
 #define SAND_BLAST_CORE_DIVISOR  2
 
 /* Push every occupied cell within `radius` of the centre outward, to be moved
@@ -496,14 +504,19 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * step, in the direction pointing away from (cx, cy), quantised the same way
  * sand_gravity_direction() already quantises gravity into eight directions.
  *
- * FIRST clears a core - see SAND_BLAST_CORE_DIVISOR's own comment for why a
- * blast that only ever queues flight entries can never actually move
- * anything once the medium it is detonating in has no gaps of its own.
- * That core is an ordinary sand_erase(), so it counts as a real, immediate
- * removal - not something the flight pass or its decay roll has any part
- * in - and it is why sand_explode() is no longer purely additive to the
- * grain count the way sand_spawn()/sand_erase() individually are: see the
- * comment on conservation this implies, below.
+ * FIRST fills a core with fire - see SAND_BLAST_CORE_DIVISOR's own comment
+ * for why a blast that only ever queues flight entries can never actually
+ * move anything once the medium it is detonating in has no gaps of its
+ * own, and for why fire rather than emptiness. That fill is a real,
+ * immediate write - every cell in the core becomes fire, occupied or
+ * already empty alike - not something the flight pass or its decay roll
+ * has any part in, and it is why sand_explode() is no longer purely
+ * additive to the grain count the way sand_spawn()/sand_erase()
+ * individually are: see the comment on conservation this implies, below.
+ * Placing fire is a normal write like any other in this file - it latches
+ * the content flags a burning cell arms (so the reactions pass notices it),
+ * marks rows dirty and wakes blocks - so fire near fuel ignites it and
+ * fire touching water boils it to steam, exactly as painted fire would.
  *
  * Same signature shape as sand_spawn() and sand_erase() above - a centre and
  * a radius - because it belongs to that family: no material owns it and no
@@ -512,8 +525,8 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * design this implements and why it needs no per-cell velocity field.
  *
  * A no-op if sand_enable_blast() was never called - there is nowhere to
- * queue an entry, and the core is left uncleared too, so a disabled blast
- * mechanic costs the board nothing at all, not even the erase. Beyond the
+ * queue an entry, and the core is left unfilled too, so a disabled blast
+ * mechanic costs the board nothing at all, not even the fire. Beyond the
  * core, this is also a no-op for any cell with no defined outward
  * direction, which is exactly the centre cell itself; every other occupied
  * cell in the annulus between the core and the full radius gets one.
@@ -523,14 +536,20 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * truncating a crack rather than failing. A blast bigger than the buffer is
  * a smaller-looking blast, not a bug.
  *
- * CONSERVATION, NOW WITH AN EXCEPTION: sand_spawn() and sand_erase() are
- * each individually exact - every cell they touch is accounted for in what
- * they return. sand_explode() is not: the cells the core removes are gone
- * for good, on purpose, the same as any other sand_erase() call. Everything
- * OUTSIDE the core is still pure relocation - the flight pass this call
- * seeds never creates or destroys a cell - so "outside the core, the count
- * is conserved" is the honest invariant here, not "the count is conserved"
- * outright. */
+ * CONSERVATION, NOW BOUNDED RATHER THAN EXACT. sand_spawn() and sand_erase()
+ * are each individually exact - every cell they touch is accounted for in
+ * what they return. sand_explode() is not, in EITHER direction it might
+ * first seem to move: filling an already-empty core cell with fire is a
+ * real, deliberate increase, exactly once, right here - not a bug to guard
+ * against, just what "the core flashes into fire even where there was
+ * nothing to convert" means. From that point on the count can still fall
+ * further: fire is a real burning cell now, and if the medium around it
+ * ever traps it with no denser neighbour able to sink through and no
+ * escape upward, smothered() (sand_reactions.c) puts it out for good, the
+ * same as any other buried flame. What can never legitimately happen,
+ * from either the fill or anything after it, is the count exceeding
+ * (count before the call) + (empty cells the core just filled) - that
+ * half is exact, always. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* Chance in 256, per step, that a flying grain keeps flying rather than
@@ -554,10 +573,17 @@ void sand_explode(sand_t *s, int cx, int cy, int radius);
  * already flying; at 200 that is 256/56 =~ 4.6, so a typical grain clears a
  * handful of cells while a geometric tail keeps a minority going much
  * further - the right SHAPE for a blast, on paper. Whether it is the right
- * SIZE has only been watched on a host grid, never on the panel. Tune once
- * an actual blast can be watched on real hardware - see
- * docs/Sand/Explosion-Plan.md's "Device" section for what to look at
- * first. */
+ * SIZE has only been watched on a host grid, never on the panel.
+ *
+ * THIS IS NOW THE MAIN TUNING KNOB for how far a blast reads. Before
+ * step_blast() could re-acquire a grain gravity had already moved (see its
+ * own comment), a flying grain lost its impulse after exactly one hop the
+ * moment it became airborne, so this number barely mattered - the arc
+ * simply did not happen regardless of how generous the roll was. Now that
+ * flight genuinely survives across many steps, this is the number that
+ * decides how far it survives, and it has not been retuned for that
+ * change - see docs/Sand/Explosion-Plan.md's "Device" section for what to
+ * look at first. */
 #define SAND_BLAST_DECAY  200
 
 /* FRICTION
