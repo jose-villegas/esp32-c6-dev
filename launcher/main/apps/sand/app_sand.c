@@ -674,30 +674,49 @@ static void start_sim(void)
     label_left_ms = 0;
     failed = false;
 
-    /* ALLOCATED FIRST, BEFORE ANYTHING ELSE IN THIS FUNCTION - moved here
-     * from after `grid` after a live device capture showed the malloc
-     * below failing with "largest free block is 14592" on THREE separate
-     * detonate attempts at THREE different qualities (grid sizes 18,178 /
-     * 10,304 / 4,514 bytes) - the exact same 14,592 every time, which
-     * does not move with anything this app itself allocates. Whatever is
-     * carving the heap into pieces no bigger than that happens BEFORE
-     * this function ever runs, and by the old order this call was LAST to
-     * pick over what was left after dirty_rows/sleep_blocks/grid had
-     * already taken their share too - if any of those three variable-
-     * sized allocations were what fragmented the space this one needs,
-     * going first instead of last is what would let it claim the largest
-     * remaining run before they get a chance to carve it up further.
-     * (Whether that theory is actually what was happening, versus
-     * impulse_buf's ~14 KB simply never having fit anywhere on this board
-     * regardless of order, is exactly what the next device capture of
-     * this same ESP_LOGE line needs to settle - see SAND_IMPULSE_BUDGET_
-     * BYTES's own comment for why host arithmetic alone already got this
-     * wrong once and cannot be trusted to settle it a second time.)
+    if (dirty_rows == NULL) {
+        dirty_rows = malloc(GRID_H_MAX);
+    }
+    if (sleep_blocks == NULL) {
+        sleep_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
+    }
+    if (grid == NULL) {
+        grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
+    }
+    /* impulse_buf GOES LAST, AFTER grid, DELIBERATELY - TRIED GOING FIRST
+     * INSTEAD AND A DEVICE FLASH MADE IT WORSE. A live serial capture
+     * that showed impulse_buf's malloc failing with "largest free block
+     * is 14592" at three different quality settings was misread once as
+     * "impulse_buf never gets a fair shot because grid/dirty_rows/
+     * sleep_blocks fragment the heap ahead of it" - grid's own request
+     * (GRID_W_MAX * GRID_H_MAX) is actually a FIXED 41,216 bytes
+     * regardless of quality (the varying numbers in that capture were
+     * the ACTIVE grid_w*grid_h subset in use, not the allocation size),
+     * and it succeeded cleanly in all three captures. So the real
+     * picture those three captures agree on is: this heap reliably has
+     * one contiguous run big enough for grid's 41,216 bytes, and roughly
+     * 14,592 bytes left over after grid and the small buffers land -
+     * which is a single largest-block ordering fact, not a fragmentation
+     * problem this app's own allocation order was causing.
      *
-     * Safe to move: nothing here depends on grid_w/grid_h/cell or any
-     * other per-quality value - APP_IMPULSE_MAX is a fixed constant (see
-     * its own comment), so this allocation's size and this function's
-     * outcome are identical wherever in start_sim() it runs. */
+     * Moving impulse_buf's smaller (12,288-byte, see APP_IMPULSE_MAX)
+     * request to go FIRST was tried anyway, on the chance that ordering
+     * still mattered - and a device flash of that build produced "no
+     * memory for the grid" instead, a WORSE failure than impulse_buf
+     * alone failing: impulse_buf grabbed a piece of the one heap region
+     * big enough for it, and grid's subsequent 41,216-byte request then
+     * found nowhere left to land, tripping the mandatory-buffer fallback
+     * below (`ui.screen = SAND_UI_RUNNING` with the grid's own "could not
+     * allocate" message). Reordering does not create more contiguous
+     * space anywhere in the heap - it only decides who gets first pick of
+     * what already exists - and on THIS device grid is the one allocation
+     * that needs the single largest contiguous run, so it has to be the
+     * one that picks first. This ordering (grid and the other mandatory
+     * buffers before impulse_buf) is the one three real device captures
+     * confirm actually works; do not move impulse_buf ahead of grid
+     * again without a fresh device capture that shows it helping,
+     * because the only capture that ever tried has already shown it
+     * hurting. */
     if (impulse_buf == NULL) {
         impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
         /* LOUD, BUT NOT FATAL - unlike every buffer in the big OR-check
@@ -734,15 +753,6 @@ static void start_sim(void)
                      (unsigned)((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf)),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         }
-    }
-    if (dirty_rows == NULL) {
-        dirty_rows = malloc(GRID_H_MAX);
-    }
-    if (sleep_blocks == NULL) {
-        sleep_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
-    }
-    if (grid == NULL) {
-        grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
     if (row_run_x0 == NULL) {
         row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));

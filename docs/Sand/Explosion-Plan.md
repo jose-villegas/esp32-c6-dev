@@ -421,16 +421,35 @@ something the rest of the firmware left behind before this app ever
 ran, which 76 KB of TOTAL free heap had no way to reveal and only a live
 capture of the ACTUAL failing `malloc()`'s own diagnostic could.
 
-Two changes followed. First, `impulse_buf`'s allocation moved to the
-very first thing `start_sim()` does (see its own comment there),
-on the hypothesis that this app's OWN other allocations
-(`dirty_rows`/`sleep_blocks`/`grid`) - which used to run first - were
-fragmenting the space `impulse_buf` needed before it got a turn; moving
-it first lets it claim the largest available run before anything else
-gets a chance to carve the heap up further. That hypothesis, and whether
-reordering alone closes the gap, needs a fresh device capture of the
-same `ESP_LOGE` line to confirm - it is untested as of this writing.
-Second, and unconditionally regardless of what the reorder buys:
+A REORDER WAS TRIED HERE AND MADE THINGS WORSE - worth recording by name
+so nobody reaches for it again without a fresh reason to. The first
+reading of those three captures was wrong: `grid`'s own request
+(`GRID_W_MAX * GRID_H_MAX`) is a FIXED 41,216 bytes at every quality
+setting, not the varying 18,178/10,304/4,514 figures those captures
+actually showed - those were the ACTIVE `grid_w * grid_h` subset in use
+at each quality, a different number from the allocation size, and
+`grid`'s 41,216-byte malloc had succeeded cleanly all three times. What
+those captures actually agree on is a heap that reliably has one
+contiguous run big enough for `grid`'s 41,216 bytes, with roughly 14,592
+bytes left over afterward - a single largest-block ordering fact, not
+evidence that this app's own allocations were fragmenting anything.
+Moving `impulse_buf`'s smaller request to go FIRST anyway - on the
+chance that ordering still mattered - was tried and flashed, and made
+things WORSE: the device now failed to allocate `grid` itself, showing
+"no memory for the grid" on screen instead of the working-but-detonate-
+disabled state the old order produced. Reordering does not create more
+contiguous space anywhere in the heap; it only decides who gets first
+pick of what already exists, and on this device `grid` is the one
+allocation that needs the single largest contiguous run, so it has to
+pick first. The allocation order reverted to `dirty_rows`/
+`sleep_blocks`/`grid`/`impulse_buf`/`row_run_*` - grid and the other
+mandatory buffers before `impulse_buf`, exactly as it always was - which
+is the order three real device captures now confirm actually works; see
+`start_sim()`'s own comment at `impulse_buf`'s allocation for the record
+of this specific experiment and why it should not be repeated without a
+fresh capture showing it helping.
+
+Unconditionally, regardless of what the reorder attempt cost:
 `SAND_IMPULSE_BUDGET_BYTES` was corrected to be judged against the
 observed 14,592-byte largest-block figure instead of total free heap -
 12 KB (12,288 bytes), leaving real but deliberately modest margin below
