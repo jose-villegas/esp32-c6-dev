@@ -10521,6 +10521,224 @@ static void test_emitted_water_produces_a_continuing_stream(void)
         "for as long as the tap runs");
 }
 
+/* The bug this whole block exists to catch: emit_from_emitters() used to
+ * write s->emitters[i].cell RAW, via sand_set(). But that cell is not the
+ * exact byte to write - it is whatever the app's brush table handed
+ * sand_add_emitter() (see brushes[] in app_sand.c), and every entry there
+ * is CELL_MAKE(material, 0), a PLACEHOLDER. What variant 0 means depends on
+ * the material's kind (see material.h's top comment and random_cell() in
+ * sand.c): for a KIND_LIQUID it is a fill level of zero - no water, no
+ * lava, nothing to render or flow, even though the high nibble still says
+ * MAT_WATER or MAT_LAVA. A water or lava emitter reported as producing
+ * nothing visible is exactly that cell.
+ *
+ * Every test below places the emitter with CELL_MAKE(material, 0), the
+ * literal brush placeholder, rather than one of this file's own WATER/
+ * LAVA/GAS/... macros - those already carry a non-placeholder variant (8),
+ * which would not reproduce what the app actually hands the emitter.
+ *
+ * And every test steps with gravity (0, 0, 0) rather than a real vector.
+ * sand_step() runs emit_from_emitters() first and then returns immediately
+ * when the dithered direction is (0, 0) - "free fall: no down, so nothing
+ * settles" - which skips the gravity sweep, the liquid pass, the gas pass
+ * and the reactions pass entirely (see sand_step()'s own comment). That
+ * isolates the one thing under test - what the emitter itself wrote - from
+ * anything that could move or react the cell a moment later and make a
+ * mismatch about something else. */
+
+static void test_an_emitted_liquid_cell_is_full_not_the_placeholders_zero_mass(void)
+{
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(
+        sand_add_emitter(&s, 3, H - 1, CELL_MAKE(MAT_WATER, 0)),
+        "setup: placing an emitter over empty, in-bounds ground must "
+        "succeed");
+
+    sand_step(&s, 0, 0, 0);
+
+    const cell_t c = sand_at(&s, 3, H - 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, CELL_MATERIAL(c), "setup");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, CELL_VARIANT(c),
+        "an emitted liquid must be a FULL cell, exactly as a pour is - "
+        "random_cell() always hands a fresh liquid cell MASS_MAX, never a "
+        "random amount and never the placeholder's zero - a water tap "
+        "that instead wrote variant 0 raw would place a cell with "
+        "MAT_WATER in it and no water");
+}
+
+static void test_an_emitted_lava_cell_is_full_not_the_placeholders_zero_mass(void)
+{
+    /* Lava specifically, because it is what was reported on hardware: a
+     * lava source produced steam (the reactions pass still saw MAT_LAVA
+     * and quenched it) but no lava - because the cell it quenched never
+     * carried any mass to look like lava in the first place. */
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(
+        sand_add_emitter(&s, 3, H - 1, CELL_MAKE(MAT_LAVA, 0)),
+        "setup: placing an emitter over empty, in-bounds ground must "
+        "succeed");
+
+    sand_step(&s, 0, 0, 0);
+
+    const cell_t c = sand_at(&s, 3, H - 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(c), "setup");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, CELL_VARIANT(c),
+        "an emitted lava cell must be FULL, not the placeholder's zero "
+        "mass - a zero-mass lava cell is exactly what let a lava tap on "
+        "hardware produce steam (the reactions pass still saw MAT_LAVA "
+        "and quenched it) but no lava anyone could see or that could "
+        "flow");
+}
+
+static void test_an_emitted_transient_cell_has_full_life_not_the_placeholders_zero(void)
+{
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(
+        sand_add_emitter(&s, 3, 0, CELL_MAKE(MAT_GAS, 0)),
+        "setup: placing an emitter over empty, in-bounds ground must "
+        "succeed");
+
+    sand_step(&s, 0, 0, 0);
+
+    const cell_t c = sand_at(&s, 3, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(c), "setup");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1, CELL_VARIANT(c),
+        "an emitted transient material must start at FULL LIFE, exactly "
+        "as a pour does - random_cell() hands a fresh decaying cell "
+        "MATERIAL_VARIANTS - 1, never the placeholder's variant 0, which "
+        "decay reads as life already spent: a gas tap that wrote it raw "
+        "would emit cells already dead");
+}
+
+static void test_an_emitted_powder_still_lands_in_a_valid_shade(void)
+{
+    /* Unlike the liquid and transient cases above, this one cannot
+     * distinguish the fix from the bug by itself - variant 0 happens to
+     * be a valid shade for a powder (see material.h's top comment), which
+     * is exactly why sand and snow LOOKED fine on hardware while water
+     * and lava did not. It is here anyway, as a regression guard: nothing
+     * about routing the emitter through sand_spawn_cell() may push a
+     * powder's variant outside the range a pour would ever produce. */
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(
+        sand_add_emitter(&s, 3, H - 1, CELL_MAKE(MAT_SAND, 0)),
+        "setup: placing an emitter over empty, in-bounds ground must "
+        "succeed");
+
+    sand_step(&s, 0, 0, 0);
+
+    const cell_t c = sand_at(&s, 3, H - 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND, CELL_MATERIAL(c), "setup");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_VARIANT(c) < SAND_DUNE_SHADES,
+        "an emitted grain of sand must land within the dune shade band, "
+        "same as a pour does - random_cell() never hands a freshly "
+        "painted grain one of the shades reserved for cullet");
+}
+
+/* The same claim test_the_brush_and_the_setter_agree_about_every_material
+ * makes about sand_set() versus the brush, but for the emitter versus
+ * sand_spawn_cell() - and exhaustive over every material an emitter may
+ * ever hold, rather than sampled to the handful above. The reason to walk
+ * all of them rather than trust water/lava/gas/sand as representatives is
+ * exactly what made this bug ship: variant 0 means something DIFFERENT for
+ * each material kind - a liquid's fill level, a transient's life, glass's
+ * temperature, soil's tone and moisture, a powder's shade - and picking
+ * representatives only catches the kinds someone thought to check. A loop
+ * over every emit-eligible material catches the next one added with a
+ * variant meaning nobody anticipated, the same way this one got through. */
+static void test_an_emitter_and_sand_spawn_cell_agree_about_every_material(void)
+{
+    const int x = 3, y = 3;
+
+    for (int m = 1; m < MAT_COUNT; m++) {
+        const cell_t placeholder = CELL_MAKE((material_id_t)m, 0);
+        if (!material_can_emit(placeholder)) {
+            continue;   /* material_can_emit() is the same gate
+                         * sand_add_emitter()'s caller applies (see
+                         * test_material_can_emit_matches_every_brush_by_kind)
+                         * - a material that can never legally be an
+                         * emitter has nothing to agree about here */
+        }
+
+        /* The emitter, given the exact placeholder the brush table would
+         * hand it. Zero gravity, so this step does nothing but emit - see
+         * this block's own top comment. */
+        fixture();
+        TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, x, y, placeholder),
+            "setup");
+        sand_step(&s, 0, 0, 0);
+        const cell_t emitted = sand_at(&s, x, y);
+
+        /* sand_spawn_cell(), given the very same placeholder, on an
+         * identically fresh board - same seed, same RNG draw count so
+         * far (zero), so any random pick inside random_cell() lands on
+         * the same value in both. */
+        fixture();
+        sand_spawn_cell(&s, x, y, 0, placeholder);
+        const cell_t spawned = sand_at(&s, x, y);
+
+        char why[256];
+        snprintf(why, sizeof why,
+                 "an emitter of %s disagrees with sand_spawn_cell() about "
+                 "what a fresh cell of it looks like - if the emitter's "
+                 "byte is the unresolved placeholder (variant 0) rather "
+                 "than spawned's, the emitter is writing the brush's raw "
+                 "byte instead of resolving it",
+                 materials[m].name);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(spawned, emitted, why);
+    }
+}
+
+/* The observable claim behind all the byte-level tests above: a liquid
+ * emitter left running has to make a POOL, not merely keep writing cells
+ * that carry the right material and no water. Summing CELL_VARIANT (the
+ * fill level) rather than counting cells is the point - the old bug's
+ * cells were entirely present, entirely MAT_WATER, and entirely empty of
+ * mass, so a count-based check (see
+ * test_emitted_water_produces_a_continuing_stream above) passed against it
+ * without noticing anything was wrong. */
+static void test_a_running_water_emitter_accumulates_mass_on_the_floor(void)
+{
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(
+        sand_add_emitter(&s, 3, 0, CELL_MAKE(MAT_WATER, 0)),
+        "setup: the emitter's own point is empty and in bounds");
+
+    /* Grid walls are solid past the last row (see sand_at()'s own
+     * comment), so the bottom row is already a floor with no need to
+     * paint one - the same shape test_an_emitter_fills_its_own_cell_when_
+     * empty relies on. */
+    for (int i = 0; i < 150; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    long total_mass = 0;
+    bool water_on_the_floor = false;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_IS_EMPTY(c) || CELL_MATERIAL(c) != MAT_WATER) {
+                continue;
+            }
+            total_mass += CELL_VARIANT(c);
+            if (y == H - 1) {
+                water_on_the_floor = true;
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(3 * MASS_MAX, total_mass,
+        "a water emitter left running above a floor must ACCUMULATE far "
+        "more mass than one full cell's worth - this is the reported "
+        "symptom itself: a source producing cells that carry MAT_WATER "
+        "but no mass never pools no matter how long the tap runs, because "
+        "there is never anything in any of the cells it writes");
+    TEST_ASSERT_TRUE_MESSAGE(water_on_the_floor,
+        "the accumulated water must be sitting on the floor, not stranded "
+        "only at the emitter's own point - a source with no mass has "
+        "nothing that could ever fall");
+}
+
 static void test_adding_an_emitter_over_an_occupied_cell_still_registers(void)
 {
     fixture();
@@ -13208,6 +13426,12 @@ void run_sand_suite(void)
     RUN_TEST(test_an_emitter_does_not_overwrite_an_occupied_cell);
     RUN_TEST(test_an_emitter_wakes_a_sleeping_block);
     RUN_TEST(test_emitted_water_produces_a_continuing_stream);
+    RUN_TEST(test_an_emitted_liquid_cell_is_full_not_the_placeholders_zero_mass);
+    RUN_TEST(test_an_emitted_lava_cell_is_full_not_the_placeholders_zero_mass);
+    RUN_TEST(test_an_emitted_transient_cell_has_full_life_not_the_placeholders_zero);
+    RUN_TEST(test_an_emitted_powder_still_lands_in_a_valid_shade);
+    RUN_TEST(test_an_emitter_and_sand_spawn_cell_agree_about_every_material);
+    RUN_TEST(test_a_running_water_emitter_accumulates_mass_on_the_floor);
     RUN_TEST(test_adding_an_emitter_over_an_occupied_cell_still_registers);
     RUN_TEST(test_adding_at_an_existing_emitter_replaces_its_cell);
     RUN_TEST(test_the_emitter_cap_is_respected);

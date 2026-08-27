@@ -433,27 +433,44 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell)
  * where and why. Each tries to place its own cell at its own point, but
  * only if that point is currently empty.
  *
- * That "only if empty" check is the entire rate control, and no other is
- * needed. A material that flows away quickly - water - refills every step
- * and reads as a steady stream; a viscous one - oil - clears its own
- * doorway slowly and refills just as slowly, reading as a drip. The
- * material table already encodes how fast each one moves, so it already
- * encodes how fast its own tap can run: there is no separate rate
- * parameter to tune, and no way for a tap to flood the board faster than
- * its own material disperses, because it can never place a second cell
- * while the first is still sitting there.
+ * `s->emitters[i].cell` is NOT the exact byte to write. It comes straight
+ * from the app's brush table (see brushes[] in app_sand.c), and every entry
+ * there is CELL_MAKE(material, 0) - a placeholder whose variant is not yet
+ * meaningful. What variant 0 MEANS depends on the material (see material.h's
+ * top comment and random_cell() above): for most materials it is a fine
+ * fresh value, but for a KIND_LIQUID it is zero mass - a degenerate, invisible
+ * cell, since a liquid's variant is how much of it is there. Writing it raw
+ * is exactly the bug this function used to have: a lava emitter placed a
+ * MAT_LAVA cell with nothing in it, which the reactions pass could still
+ * quench into steam - MAT_LAVA was really there - but which never rendered
+ * or flowed, because it carried no mass to render or flow.
  *
- * Emits a SINGLE cell, never a disc. A disc emitted every step would be a
+ * sand_spawn_cell() is what resolves that placeholder everywhere else a
+ * brush is used (pouring), through random_cell(), so placing through it here
+ * too is what makes an emitter agree with a pour about what a fresh cell of
+ * a material looks like. For a liquid that resolution is not random at all -
+ * random_cell() always hands back a FULL cell (CELL_MAKE(material,
+ * MASS_MAX)), because a fresh cell is a full one. A radius of 0 places
+ * exactly one cell, not a disc: the disc loop's only offset with
+ * dx*dx + dy*dy <= 0 is (0, 0). A disc emitted every step would be a
  * firehose, not a tap - and, worse, would bury its own source: the centre
  * cell would never see empty again once the disc around it filled in.
  *
- * Placement uses sand_set(), not sand_spawn_cell()/try_spawn_one(): an
- * emitter's `cell` is already the exact byte to write (material and
- * variant both), the same as sand_spawn_cell()'s handling of an extended
- * material's `spec` - there is no material id here for random_cell() to
- * pick a fresh shade for, and picking one anyway would make every emitted
- * grain from the same tap a different, wrong shade. sand_set() is also
- * where the CRITICAL part happens for free: it latches the cell's
+ * The "only if empty" rate control is no longer written out here as an
+ * explicit check - sand_spawn_cell() goes through try_spawn_one(), which
+ * already refuses to overwrite an occupied cell ("never overwrite, so the
+ * count cannot drift"), so the same self-limiting refill falls out of that
+ * refusal for free. A material that flows away quickly - water - refills
+ * every step and reads as a steady stream; a viscous one - oil - clears its
+ * own doorway slowly and refills just as slowly, reading as a drip. The
+ * material table already encodes how fast each one moves, so it already
+ * encodes how fast its own tap can run: there is no separate rate parameter
+ * to tune, and no way for a tap to flood the board faster than its own
+ * material disperses, because it can never place a second cell while the
+ * first is still sitting there.
+ *
+ * Going through sand_spawn_cell() also gets the CRITICAL part for free, the
+ * same as sand_set() did before it: try_spawn_one() latches the cell's
  * content flags and calls mark_move(), which marks the row dirty for the
  * renderer AND wakes the block the point is in (see mark_move()'s comment
  * in sand_priv.h). Without that wake, material appearing inside a block
@@ -463,12 +480,8 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell)
 static void emit_from_emitters(sand_t *s)
 {
     for (int i = 0; i < s->emitter_count; i++) {
-        const int x = s->emitters[i].x;
-        const int y = s->emitters[i].y;
-        if (s->cells[y * s->w + x] != SAND_EMPTY) {
-            continue;
-        }
-        sand_set(s, x, y, s->emitters[i].cell);
+        sand_spawn_cell(s, s->emitters[i].x, s->emitters[i].y, 0,
+                        s->emitters[i].cell);
     }
 }
 
