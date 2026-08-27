@@ -68,6 +68,19 @@
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
+/* How many persistent emitters sand_t can carry at once - see
+ * sand_add_emitter() below.
+ *
+ * A fixed cap, not a caller-owned count, is what lets the list be a small
+ * inline array rather than something the app has to allocate and pass in -
+ * see the comment on the `emitters` field itself for why that matters. 16
+ * is far more taps than a 368x448 board has room for at any placement a
+ * person would actually choose: spaced so each one's stream is visually
+ * distinct, that board does not have 16 sensible places to put a source at
+ * once. The cap exists to bound the array, not because 16 is a number
+ * anyone is expected to reach. */
+#define SAND_MAX_EMITTERS 16
+
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
@@ -225,6 +238,39 @@ typedef struct {
     int      mobility;     /* see sand_set_mobility() */
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
+
+    /* Persistent point sources - see sand_add_emitter() below.
+     *
+     * Deliberately NOT cells. The grid is one byte per cell (material in
+     * the high nibble, variant in the low one - see CELL_MAKE above) and
+     * docs/Sand/Sand-Simulation.md says it always will be; the material
+     * nibble has no spare id to spend on a MAT_SOURCE, and the extended
+     * range that would otherwise hide one is already spoken for by real
+     * materials. Giving an emitter a material id would also make it cost
+     * something on every cell it did NOT occupy - material_of() is read
+     * per cell per step by the sweep, and a sixteenth entry in that table
+     * existing only to be recognised and skipped is a tax paid by every
+     * other cell on the board, forever, for a feature most boards will not
+     * even use.
+     *
+     * So an emitter lives here instead: a small side list, stepped once per
+     * sand_step() (see emit_from_emitters() in sand.c), that writes an
+     * ordinary cell through sand_set() when its own point is empty. No
+     * material id consumed, no per-cell cost anywhere else on the grid, and
+     * the byte at an emitter's own point is indistinguishable from one a
+     * person poured there by hand.
+     *
+     * Inline, unlike `cells`/`dirty_rows`/`block_state` above, which are
+     * caller-owned because they are sized by the grid and can run to tens
+     * of kilobytes. SAND_MAX_EMITTERS entries at a few bytes apiece is
+     * small enough to just carry inside sand_t, and doing so means a
+     * caller that never places an emitter need not allocate a second
+     * buffer, pass it in, or even know the feature exists. */
+    struct {
+        int16_t x, y;
+        cell_t  cell;
+    } emitters[SAND_MAX_EMITTERS];
+    int      emitter_count;
 } sand_t;
 
 /* `cells` must have room for w * h bytes and is cleared. */
@@ -314,11 +360,52 @@ int sand_spawn(sand_t *s, int cx, int cy, int radius, material_id_t material);
  * chosen the usual way, so sand_spawn() is just this with the id wrapped. */
 int sand_spawn_cell(sand_t *s, int cx, int cy, int radius, cell_t spec);
 
-/* Remove every grain in a disc. Returns how many it removed.
+/* Remove every grain in a disc, and every emitter centred in it too - see
+ * sand_add_emitter() below. Returns how many CELLS it removed.
  *
- * The exact mirror of sand_spawn, down to reporting a count that only includes
- * cells it actually changed - so neither can quietly drift the grain total. */
+ * No longer the exact mirror of sand_spawn that it once was: sand_spawn only
+ * ever places grains, and this also switches off any emitter in the same
+ * disc, because a running tap that sand_erase() could not turn off would
+ * make the whole feature a trap - there would be no way to stop it short of
+ * rebuilding the scene.
+ *
+ * The returned count still means exactly what it always has, though: cells
+ * this call actually changed. An emitter removed is not folded into it - see
+ * sand_remove_emitters() below if that count is what a caller wants - so
+ * neither sand_spawn nor sand_erase can quietly drift the grain total. */
 int sand_erase(sand_t *s, int cx, int cy, int radius);
+
+/* EMITTERS
+ *
+ * A point on the grid that keeps producing one material on its own, so the
+ * user can place a water tap or a gas vent and leave it running instead of
+ * holding a finger down. See the `emitters` field of sand_t above for why
+ * this is a side list rather than a material, and emit_from_emitters() in
+ * sand.c for how it is stepped. */
+
+/* Place (or replace) an emitter. Returns false if the list is already at
+ * SAND_MAX_EMITTERS or (x, y) is off the grid - either way nothing changes.
+ *
+ * An emitter already at (x, y) has its cell replaced rather than a second
+ * one being added at the same point, so calling this again at a point the
+ * caller is not sure is already a tap is always safe: it either creates one
+ * or retunes the one already there, never both. `cell` is written exactly
+ * as given, the same as sand_spawn_cell()'s `spec` - so an extended
+ * material can be an emitter's cell too, not just an ordinary one built
+ * with CELL_MAKE(). */
+bool sand_add_emitter(sand_t *s, int x, int y, cell_t cell);
+
+/* Remove every emitter within `radius` of (cx, cy) - the same disc test
+ * sand_erase() uses, so "within radius" means the same thing in both
+ * places. Returns how many were removed. Does not touch the grid itself:
+ * whatever an emitter already placed stays put, only the tap stops. */
+int sand_remove_emitters(sand_t *s, int cx, int cy, int radius);
+
+int sand_emitter_count(const sand_t *s);
+
+/* Read emitter `i` back - for drawing a marker at it, say. False, leaving
+ * the outputs untouched, if `i` is not currently a valid emitter index. */
+bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
 
 /* FRICTION
  *

@@ -179,6 +179,11 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->dir_y_q8 = 0;
     s->mom_primed = false;
     s->flick = 0;
+    /* The array itself need not be touched - every reader below goes
+     * through emitter_count, so an entry past it is simply never looked
+     * at, the same way sand_spawn_cell()'s clipped cells are never looked
+     * at rather than being separately zeroed. */
+    s->emitter_count = 0;
     sand_clear(s);
 }
 
@@ -341,7 +346,130 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
             removed++;
         }
     }
+
+    /* Also switches off any emitter in the same disc - see this function's
+     * own comment in sand.h for why. Not folded into `removed`: that count
+     * means cells changed, and an emitter is not a cell. */
+    sand_remove_emitters(s, cx, cy, radius);
+
     return removed;
+}
+
+/*---------------------------------------------------------------------------
+ * Emitters - see the `emitters` field of sand_t and the EMITTERS section of
+ * sand.h for the design. What is here is just list management; the actual
+ * per-step write lives in emit_from_emitters() below, next to sand_step().
+ *-------------------------------------------------------------------------*/
+
+bool sand_add_emitter(sand_t *s, int x, int y, cell_t cell)
+{
+    if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
+        return false;
+    }
+
+    /* Retune in place if one is already here, rather than adding a second
+     * - see sand_add_emitter()'s own comment in sand.h. */
+    for (int i = 0; i < s->emitter_count; i++) {
+        if (s->emitters[i].x == x && s->emitters[i].y == y) {
+            s->emitters[i].cell = cell;
+            return true;
+        }
+    }
+
+    if (s->emitter_count >= SAND_MAX_EMITTERS) {
+        return false;
+    }
+
+    s->emitters[s->emitter_count].x    = (int16_t)x;
+    s->emitters[s->emitter_count].y    = (int16_t)y;
+    s->emitters[s->emitter_count].cell = cell;
+    s->emitter_count++;
+    return true;
+}
+
+int sand_remove_emitters(sand_t *s, int cx, int cy, int radius)
+{
+    const int r2 = radius * radius;
+    int removed = 0;
+    int kept = 0;
+
+    /* Compact in place: every emitter that survives the disc test is
+     * copied down to the next free slot, so the surviving emitters end up
+     * contiguous at the front with no gap for a later sand_emitter_at() to
+     * trip over. */
+    for (int i = 0; i < s->emitter_count; i++) {
+        const int dx = s->emitters[i].x - cx;
+        const int dy = s->emitters[i].y - cy;
+        if (dx * dx + dy * dy <= r2) {
+            removed++;
+            continue;
+        }
+        if (kept != i) {
+            s->emitters[kept] = s->emitters[i];
+        }
+        kept++;
+    }
+    s->emitter_count = kept;
+    return removed;
+}
+
+int sand_emitter_count(const sand_t *s)
+{
+    return s->emitter_count;
+}
+
+bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell)
+{
+    if (i < 0 || i >= s->emitter_count) {
+        return false;
+    }
+    *x    = s->emitters[i].x;
+    *y    = s->emitters[i].y;
+    *cell = s->emitters[i].cell;
+    return true;
+}
+
+/* One pass over every emitter, run once per sand_step() - see below for
+ * where and why. Each tries to place its own cell at its own point, but
+ * only if that point is currently empty.
+ *
+ * That "only if empty" check is the entire rate control, and no other is
+ * needed. A material that flows away quickly - water - refills every step
+ * and reads as a steady stream; a viscous one - oil - clears its own
+ * doorway slowly and refills just as slowly, reading as a drip. The
+ * material table already encodes how fast each one moves, so it already
+ * encodes how fast its own tap can run: there is no separate rate
+ * parameter to tune, and no way for a tap to flood the board faster than
+ * its own material disperses, because it can never place a second cell
+ * while the first is still sitting there.
+ *
+ * Emits a SINGLE cell, never a disc. A disc emitted every step would be a
+ * firehose, not a tap - and, worse, would bury its own source: the centre
+ * cell would never see empty again once the disc around it filled in.
+ *
+ * Placement uses sand_set(), not sand_spawn_cell()/try_spawn_one(): an
+ * emitter's `cell` is already the exact byte to write (material and
+ * variant both), the same as sand_spawn_cell()'s handling of an extended
+ * material's `spec` - there is no material id here for random_cell() to
+ * pick a fresh shade for, and picking one anyway would make every emitted
+ * grain from the same tap a different, wrong shade. sand_set() is also
+ * where the CRITICAL part happens for free: it latches the cell's
+ * content flags and calls mark_move(), which marks the row dirty for the
+ * renderer AND wakes the block the point is in (see mark_move()'s comment
+ * in sand_priv.h). Without that wake, material appearing inside a block
+ * that had gone to sleep would never be swept - it would sit exactly
+ * where it was written, forever, and look like the emitter was broken
+ * rather than like the wake was missing. */
+static void emit_from_emitters(sand_t *s)
+{
+    for (int i = 0; i < s->emitter_count; i++) {
+        const int x = s->emitters[i].x;
+        const int y = s->emitters[i].y;
+        if (s->cells[y * s->w + x] != SAND_EMPTY) {
+            continue;
+        }
+        sand_set(s, x, y, s->emitters[i].cell);
+    }
 }
 
 /*---------------------------------------------------------------------------
@@ -994,6 +1122,20 @@ static void build_xflow(xflow_t *f, int gx, int gy)
 
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
+    /* Emitters get their one attempt per step FIRST, before gravity is even
+     * looked at - so that, from outside this file, a step with emitters on
+     * the board looks exactly like sand_spawn_cell() having been called at
+     * each emitter's point a moment before sand_step(), which is already
+     * the shape every other kind of pour on this board takes. Placed here
+     * rather than after the sweep, a freshly emitted grain also gets to
+     * move in the very same step it appears, instead of sitting one whole
+     * frame before its first move - and placing it consistently at one end
+     * of the step or the other is what lets a test rely on which. Run
+     * unconditionally, even in free fall (gx == gy == 0): "once per
+     * sand_step()" as the design calls for, not "once per step gravity
+     * happens to be nonzero". */
+    emit_from_emitters(s);
+
     update_momentum(s, gx, gy);
 
     /* Dithered rather than nearest, so a tilt between two of the eight

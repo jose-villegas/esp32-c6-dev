@@ -8273,6 +8273,35 @@ static void test_every_extended_material_shares_one_physics_row(void)
         "cannot give it");
 }
 
+/* Same fact as the test above, asserted again on purpose - this one exists
+ * for a different reader. The rule deciding which materials may be
+ * emitters (see sand_add_emitter() in sand.h) is KIND_POWDER/LIQUID/GAS
+ * may, KIND_STATIC may not - a static source would bury itself on its
+ * first step and jam forever. That rule has to ask material_of(c)->kind,
+ * and material_of() deliberately does not decode the extended range (see
+ * material.h), so Ice, Plant, Leaf and Metal all answer that question
+ * through this one shared row. The derivation gives the right answer
+ * TODAY only because every extended material happens to be static - it is
+ * not a per-material fact, and a future flowing extended material would be
+ * silently misclassified as ineligible to emit.
+ *
+ * This cannot be a _Static_assert: materials[] is `extern const`, so its
+ * contents are not a constant expression the preprocessor or compiler can
+ * see. A host test that fails loudly is the next best thing - and it
+ * needs to fail loudly right here, not wherever the emitter-eligibility
+ * code eventually lands, since that code will have no way to know this
+ * assumption exists. */
+static void test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on(void)
+{
+    TEST_ASSERT_EQUAL_INT_MESSAGE(KIND_STATIC, materials[MAT_EXTENDED].kind,
+        "the emitter-eligibility rule (KIND_POWDER/LIQUID/GAS may emit, "
+        "KIND_STATIC may not) reads this row via material_of(), which "
+        "cannot tell one extended material from another - if this ever "
+        "stops being KIND_STATIC, that rule must be revisited PER "
+        "extended material rather than left to derive an answer from a "
+        "row shared by all sixteen");
+}
+
 /* But they get their own reactions, which is the point of the range. */
 static void test_extended_materials_get_their_own_reactions(void)
 {
@@ -10380,6 +10409,301 @@ static void test_spawned_grains_use_the_full_range_of_shades(void)
     }
     TEST_ASSERT_GREATER_THAN_MESSAGE(1, distinct,
         "a flat-coloured pile looks like a solid block, not sand");
+}
+
+/* --- emitters ------------------------------------------------------------- */
+
+/* A persistent point source - see sand_add_emitter() in sand.h. Unlike
+ * sand_spawn()/sand_erase() above, an emitter is stepped by sand_step()
+ * itself rather than acting the moment it is called, so most of these
+ * tests run at least one step before looking at the grid. */
+
+static void test_an_emitter_fills_its_own_cell_when_empty(void)
+{
+    fixture();
+    /* The bottom row, so gravity cannot immediately carry the fresh grain
+     * away - this test is about placement, not about liquid movement, and
+     * placing it anywhere else would make it about both. */
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, H - 1, WATER),
+        "setup: placing an emitter over empty, in-bounds ground must "
+        "succeed");
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "an emitter must fill its own point once that point is empty");
+}
+
+static void test_an_emitter_does_not_overwrite_an_occupied_cell(void)
+{
+    fixture();
+    sand_set(&s, 3, H - 1, SAND_FIRST_SHADE);
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, H - 1, WATER),
+        "setup: an emitter may be placed over an already-occupied cell");
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "an emitter must never overwrite whatever is already sitting on "
+        "its own point - that is the entire rate control, and an emitter "
+        "that ignored it would be a firehose");
+}
+
+/* The failure mode this test exists to catch: a write that places material
+ * but forgets to wake the block it landed in. That failure would still
+ * pass a test that only checked the cell was written - sand_set() writes
+ * the byte regardless of block-sleeping state - so this one goes on to
+ * demand that the material actually MOVES afterwards, which only happens
+ * if the sweep is still visiting that block. */
+static void test_an_emitter_wakes_a_sleeping_block(void)
+{
+    fixture();
+    sand_enable_sleeping(&s, sleep_blocks);
+
+    /* An empty grid settles on its very first step: nothing in the block
+     * moved, and neither did any neighbour (there is only the one block on
+     * this WxH fixture - see BLOCK_COLS/BLOCK_ROWS above). */
+    sand_step(&s, 0, 1000, 0);
+    TEST_ASSERT_TRUE_MESSAGE(sand_block_settled(&s, 0, 0),
+        "setup: the block must actually be asleep, or this test proves "
+        "nothing about waking one");
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, 0, WATER),
+        "setup: the emitter's own point is empty and in bounds");
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    bool moved_off_row_zero = false;
+    for (int x = 0; x < W && !moved_off_row_zero; x++) {
+        for (int y = 1; y < H; y++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WATER) {
+                moved_off_row_zero = true;
+                break;
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(moved_off_row_zero,
+        "emitted water must have moved somewhere below row 0 over 60 steps "
+        "- if it is still confined to the row it was emitted on, the block "
+        "that went to sleep before the emitter arrived was never woken, "
+        "and the sweep has been skipping it ever since (it would still be "
+        "written there every step, since sand_set() does not care whether "
+        "the block sleeps - only whether it later MOVES proves the wake "
+        "happened)");
+}
+
+static void test_emitted_water_produces_a_continuing_stream(void)
+{
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, 0, WATER),
+        "setup: the emitter's own point is empty and in bounds");
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int water_cells = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_WATER) {
+                water_cells++;
+            }
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(3, water_cells,
+        "a water emitter left running over many steps must read as a "
+        "continuing stream, not a single cell - each step the source cell "
+        "clears by flowing away and the emitter refills it, over and over "
+        "for as long as the tap runs");
+}
+
+static void test_adding_an_emitter_over_an_occupied_cell_still_registers(void)
+{
+    fixture();
+    sand_set(&s, 3, H - 1, SAND_FIRST_SHADE);
+
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, H - 1, WATER),
+        "an emitter may be placed over an already-occupied cell");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_emitter_count(&s),
+        "and it must actually be registered, not silently dropped for "
+        "landing on something");
+
+    sand_step(&s, 0, 1000, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "and it must not emit while the cell stays occupied");
+
+    /* Cleared directly, not via sand_erase() - erase would also remove the
+     * emitter itself (see test_erase_stops_an_emitter_from_emitting below)
+     * and defeat the point of this test, which is only about the delay
+     * between registering and first emitting. */
+    sand_set(&s, 3, H - 1, SAND_EMPTY);
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "once the cell clears, the already-registered emitter must start "
+        "emitting into it");
+}
+
+static void test_adding_at_an_existing_emitter_replaces_its_cell(void)
+{
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, 4, WATER), "setup");
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, 4, GAS),
+        "re-adding at the same point must succeed, not fail because the "
+        "point is already an emitter");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_emitter_count(&s),
+        "the second add must replace the first emitter's cell, not add a "
+        "second emitter at the same point");
+
+    int x, y;
+    cell_t cell;
+    TEST_ASSERT_TRUE_MESSAGE(sand_emitter_at(&s, 0, &x, &y, &cell), "setup");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(cell),
+        "the surviving emitter must emit the SECOND cell it was given, not "
+        "the first");
+}
+
+static void test_the_emitter_cap_is_respected(void)
+{
+    fixture();
+    /* W * H (64) is well over SAND_MAX_EMITTERS (16), so every one of these
+     * has a distinct, in-bounds point and none of them collide with each
+     * other. */
+    for (int i = 0; i < SAND_MAX_EMITTERS; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, i % W, i / W, WATER),
+            "every emitter up to the cap must be accepted");
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_MAX_EMITTERS, sand_emitter_count(&s),
+        "setup");
+
+    /* (0, 2) was not used by the loop above (it only reaches y = 1). */
+    TEST_ASSERT_FALSE_MESSAGE(sand_add_emitter(&s, 0, 2, GAS),
+        "one more than the cap must be refused");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_MAX_EMITTERS, sand_emitter_count(&s),
+        "and the refusal must not have corrupted the list - the count must "
+        "stay exactly at the cap");
+
+    for (int i = 0; i < SAND_MAX_EMITTERS; i++) {
+        int x, y;
+        cell_t cell;
+        TEST_ASSERT_TRUE_MESSAGE(sand_emitter_at(&s, i, &x, &y, &cell),
+            "every emitter that was already there must still be readable");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(i % W, x,
+            "and unchanged by the refused add");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(i / W, y,
+            "and unchanged by the refused add");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, CELL_MATERIAL(cell),
+            "and unchanged by the refused add");
+    }
+}
+
+static void test_out_of_bounds_emitters_are_rejected(void)
+{
+    fixture();
+    TEST_ASSERT_FALSE_MESSAGE(sand_add_emitter(&s, -1, 0, WATER),
+        "negative x is off the grid");
+    TEST_ASSERT_FALSE_MESSAGE(sand_add_emitter(&s, 0, -1, WATER),
+        "negative y is off the grid");
+    TEST_ASSERT_FALSE_MESSAGE(sand_add_emitter(&s, W, 0, WATER),
+        "x == W is one past the right edge");
+    TEST_ASSERT_FALSE_MESSAGE(sand_add_emitter(&s, 0, H, WATER),
+        "y == H is one past the bottom edge");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_emitter_count(&s),
+        "none of the rejected adds may have registered anything");
+}
+
+static void test_remove_emitters_only_removes_those_in_radius(void)
+{
+    fixture();
+    sand_add_emitter(&s, 4, 4, WATER);   /* the centre: distance 0 */
+    sand_add_emitter(&s, 5, 4, WATER);   /* distance 1: inside a radius of 1 */
+    sand_add_emitter(&s, 4, 6, GAS);     /* distance 2: outside it */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(3, sand_emitter_count(&s), "setup");
+
+    const int removed = sand_remove_emitters(&s, 4, 4, 1);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, removed,
+        "only the two emitters within the radius must be removed - the "
+        "same disc test sand_erase() uses");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_emitter_count(&s),
+        "and exactly one emitter must remain");
+
+    int x, y;
+    cell_t cell;
+    TEST_ASSERT_TRUE_MESSAGE(sand_emitter_at(&s, 0, &x, &y, &cell), "setup");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(4, x,
+        "the survivor must be the one outside the radius");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(6, y,
+        "the survivor must be the one outside the radius");
+}
+
+static void test_erase_stops_an_emitter_from_emitting(void)
+{
+    fixture();
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, 0, WATER), "setup");
+
+    sand_erase(&s, 3, 0, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_emitter_count(&s),
+        "erasing over an emitter must remove it - without this a running "
+        "tap could never be turned off, which would make the whole "
+        "feature a trap");
+
+    sand_step(&s, 0, 1000, 0);
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 0),
+        "and it must actually have stopped emitting, not merely been "
+        "forgotten by sand_emitter_count() while still running");
+}
+
+static void test_erase_count_excludes_emitters(void)
+{
+    fixture();
+
+    /* An emitter with nothing under it: erasing here changes no cell, so
+     * the count sand_erase() returns must be zero even though an emitter
+     * also went away. */
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 3, 3, WATER), "setup");
+    const int removed_empty = sand_erase(&s, 3, 3, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, removed_empty,
+        "removing an emitter over an already-empty cell must not count as "
+        "a cell removed - sand_remove_emitters() is what counts emitters, "
+        "not this return value");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_emitter_count(&s),
+        "setup check: the emitter must actually be gone");
+
+    /* An emitter WITH a grain under it: erasing here changes exactly one
+     * cell, and the emitter leaving too must not make it look like two -
+     * see sand_erase()'s own comment in sand.h on why that count must stay
+     * exactly "cells changed", not "cells changed plus emitters removed". */
+    sand_set(&s, 4, 4, SAND_FIRST_SHADE);
+    TEST_ASSERT_TRUE_MESSAGE(sand_add_emitter(&s, 4, 4, WATER), "setup");
+    const int removed_occupied = sand_erase(&s, 4, 4, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, removed_occupied,
+        "the count must still mean exactly one cell changed, whether or "
+        "not an emitter also happened to sit on it");
+}
+
+static void test_sand_init_clears_emitters_from_a_previous_use(void)
+{
+    fixture();
+    sand_add_emitter(&s, 3, 3, WATER);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_emitter_count(&s), "setup");
+
+    sand_init(&s, cells, W, H, 12345u);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_emitter_count(&s),
+        "sand_init() must clear emitters left over from a previous use of "
+        "the struct, the same as it clears every other piece of per-run "
+        "state - see the THIRD-COPY bug in sand_init()'s own comment for "
+        "what carrying stale state across a reused sand_t already cost "
+        "once");
 }
 
 /* --- free fall and shaking ---------------------------------------------- */
@@ -12768,6 +13092,7 @@ void run_sand_suite(void)
     RUN_TEST(test_ice_is_its_own_colour);
     RUN_TEST(test_an_extended_material_survives_being_painted);
     RUN_TEST(test_every_extended_material_shares_one_physics_row);
+    RUN_TEST(test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on);
     RUN_TEST(test_extended_materials_get_their_own_reactions);
     RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_stone_heats_up_next_to_lava);
@@ -12844,6 +13169,19 @@ void run_sand_suite(void)
     RUN_TEST(test_erasing_empty_space_removes_nothing);
     RUN_TEST(test_erase_is_clipped_to_the_grid);
     RUN_TEST(test_erase_marks_the_rows_it_emptied);
+
+    RUN_TEST(test_an_emitter_fills_its_own_cell_when_empty);
+    RUN_TEST(test_an_emitter_does_not_overwrite_an_occupied_cell);
+    RUN_TEST(test_an_emitter_wakes_a_sleeping_block);
+    RUN_TEST(test_emitted_water_produces_a_continuing_stream);
+    RUN_TEST(test_adding_an_emitter_over_an_occupied_cell_still_registers);
+    RUN_TEST(test_adding_at_an_existing_emitter_replaces_its_cell);
+    RUN_TEST(test_the_emitter_cap_is_respected);
+    RUN_TEST(test_out_of_bounds_emitters_are_rejected);
+    RUN_TEST(test_remove_emitters_only_removes_those_in_radius);
+    RUN_TEST(test_erase_stops_an_emitter_from_emitting);
+    RUN_TEST(test_erase_count_excludes_emitters);
+    RUN_TEST(test_sand_init_clears_emitters_from_a_previous_use);
 
     RUN_TEST(test_nothing_moves_in_free_fall);
     RUN_TEST(test_shaking_spreads_a_pile_sideways);
