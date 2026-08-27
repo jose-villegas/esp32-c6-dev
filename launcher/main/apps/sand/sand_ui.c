@@ -1,0 +1,200 @@
+#include "sand_ui.h"
+
+#include "palette.h"
+
+/* Opens the palette panel: transitions to SAND_UI_PALETTE and records
+ * everything the close needs to compare against - see close_palette()'s own
+ * comment. The gravity read and draw_palette() call that used to happen
+ * here now happen in app_sand.c; SAND_UI_OPEN_PALETTE is the signal to do
+ * them - see sand_ui.h's own top comment on "what stays behind".
+ *
+ * Arms `swallow_release`, but ONLY when a finger is actually on the screen
+ * as the panel opens.
+ *
+ * Opening the panel is a press of the physical BOOT button, which has
+ * nothing to do with whatever a finger already down on the touchscreen is
+ * doing - so a pour in progress when BOOT is released is a touch left
+ * dangling, and its own release still has to land somewhere. Without
+ * swallowing it, that release arrives on the very next frame with `screen`
+ * already SAND_UI_PALETTE, and handle_palette_input() reads it as an
+ * ordinary tap on whatever tile happens to be under the finger - silently
+ * changing the brush the player never meant to touch.
+ *
+ * Arming it unconditionally was wrong, and cost the common case to protect
+ * the rare one: with no finger down there is no dangling release to eat, so
+ * the flag ate the player's first deliberate tap on a tile instead and the
+ * panel only started responding on the second (commit eef97e4).
+ * `touch_in_progress` is simply input->down at the moment of opening -
+ * swallow a release only when there is genuinely one already owed. */
+static unsigned open_palette(sand_ui_t *ui, bool touch_in_progress)
+{
+    ui->screen = SAND_UI_PALETTE;
+    ui->swallow_release = touch_in_progress;
+    ui->opened_brush = ui->brush;
+    ui->opened_mode  = ui->modes[ui->brush];
+    return SAND_UI_OPEN_PALETTE;
+}
+
+/* Closes the palette panel. The forced repaint of the sand underneath it,
+ * and the accumulator resets that keep the pause from cashing in as a burst
+ * of catch-up steps the instant it closes, are app_sand.c's job - see
+ * SAND_UI_CLOSE_PALETTE.
+ *
+ * Asks for the mode label - via SAND_UI_SHOW_LABEL - only if the brush or
+ * its mode actually changed while the panel was open (see
+ * opened_brush/opened_mode's own comment on sand_ui_t). Since cycling no
+ * longer gives its own confirmation on the way past each material, this is
+ * the only feedback closing the panel gets, and it should say nothing when
+ * there is nothing to confirm. */
+static unsigned close_palette(sand_ui_t *ui)
+{
+    unsigned actions = SAND_UI_CLOSE_PALETTE;
+
+    if (ui->brush != ui->opened_brush ||
+        ui->modes[ui->brush] != ui->opened_mode) {
+        actions |= SAND_UI_SHOW_LABEL;
+    }
+
+    ui->screen = SAND_UI_RUNNING;
+    return actions;
+}
+
+/* Only reachable while SAND_UI_PALETTE - see sand_ui_step() below.
+ *
+ * Closes on boot.released only - the mirror image of where the panel opens
+ * in SAND_UI_RUNNING (see sand_ui_step()'s own comment on that site). It
+ * cannot close on the SAME edge that opened it: edges are read-and-cleared
+ * once per frame by the caller (buttons_read()) before this function ever
+ * runs for the first time, so the .released that opened the panel is
+ * already gone by the time a SAND_UI_PALETTE frame gets to see one of its
+ * own.
+ *
+ * boot.held closes nothing here - see the comment on the `if` just below
+ * for why that is deliberate and what it means for anyone who holds BOOT
+ * instead of tapping it. */
+static unsigned handle_palette_input(sand_ui_t *ui, const input_t *input)
+{
+    /* On the RELEASE, never on the press. Closing on boot.pressed split a
+     * single physical press across two screens: the panel went away on the
+     * press edge, and the matching release edge arrived several frames
+     * later with screen already back to SAND_UI_RUNNING, where
+     * handle_brush_input() consumed it and cycled the brush forward one -
+     * commit faad9bb, the bug this still guards against even though
+     * cycling itself is gone. Acting on the release keeps both edges of a
+     * press inside the state that started it.
+     *
+     * input->boot.held is deliberately NOT handled here - the panel has
+     * exactly one way to close, a plain tap of BOOT, mirroring the one way
+     * in. Worth writing down because it looks like an omission otherwise:
+     * button_fsm suppresses the .released of a press that turns into a
+     * .held (see button_fsm.h's contract), so a user who HOLDS BOOT instead
+     * of tapping it gets no edge this function acts on at all while the
+     * panel is open. Holding does not close the panel; it does nothing,
+     * silently, by design - not a missed case, and not a bug to go chasing
+     * if someone reports it. */
+    if (input->boot.released) {
+        return close_palette(ui);
+    }
+
+    if (!input->released) {
+        return 0;
+    }
+
+    /* Swallow the first release after the panel opens - see
+     * `swallow_release`'s own comment on sand_ui_t. This is the same family
+     * of bug as the one faad9bb fixed for BOOT: an edge that outlives the
+     * state that produced it, read by whatever state happens to be current
+     * instead of the one it actually belongs to. */
+    if (ui->swallow_release) {
+        ui->swallow_release = false;
+        return 0;
+    }
+
+    const int hit = palette_hit(input->x, input->y, ui->brush_count);
+    if (hit < 0) {
+        /* A tap that hits no tile does nothing - erase and selection state
+         * are both untouched. The panel stays open either way; only BOOT
+         * closes it, so picking a material is not a one-shot action. */
+        return 0;
+    }
+
+    if (hit == ui->brush) {
+        /* Tapping the ALREADY-selected tile toggles its mode instead of
+         * re-selecting it - selection state has nothing left to change, so
+         * a second tap on the same tile has to mean something else. Only
+         * if the material is eligible to be a source at all: an
+         * ineligible tile has no mode to toggle into, so this does
+         * nothing at all rather than silently flip a bit nothing ever
+         * reads (see material_can_emit()). */
+        if (!material_can_emit(ui->brushes[ui->brush])) {
+            return 0;
+        }
+        ui->modes[ui->brush] = (ui->modes[ui->brush] == BRUSH_POUR)
+                                    ? BRUSH_SPAWN : BRUSH_POUR;
+    } else {
+        /* A different tile: select it. Its own remembered mode is left
+         * exactly as it was - only erasing resets on selection, the same
+         * as always. */
+        ui->brush = hit;
+        ui->erasing = false;   /* choosing a material means you want to place it */
+    }
+
+    return SAND_UI_REDRAW_PALETTE;
+}
+
+/* BOOT is not read here at all - its release edge opens the palette from
+ * sand_ui_step() itself, before this function is ever called for that
+ * frame, and selecting a material happens in handle_palette_input() rather
+ * than here. What is left is PWR: a plain press toggles erase, because
+ * erase is binary and pressed often enough that a dedicated button's press
+ * - with none of a hold's BUTTON_HOLD_US delay - is the right cost for it.
+ * See app_sand.c's comment above `brushes[]` for the fuller reasoning on why
+ * BOOT and PWR ended up with the jobs they have. */
+static unsigned handle_brush_input(sand_ui_t *ui, const input_t *input)
+{
+    if (input->power.pressed) {
+        ui->erasing = !ui->erasing;
+        return SAND_UI_SHOW_LABEL;
+    }
+    return 0;
+}
+
+/* One frame's worth of input, dispatched by screen.
+ *
+ * input->boot.released opens the panel from here, on the release edge
+ * rather than the press - the mirror image of handle_palette_input()'s own
+ * close-on-released, and for the identical reason (see that function's
+ * comment, and commit faad9bb, the bug both of these guard against).
+ * Opening on .pressed would leave the matching .released to arrive one
+ * frame later with `screen` already SAND_UI_PALETTE, where
+ * handle_palette_input() would read it as a tap on whatever tile happens to
+ * be under the finger instead. Acting on .released keeps both edges of the
+ * press that opened the panel inside SAND_UI_RUNNING, with nothing left
+ * outstanding by the time SAND_UI_PALETTE takes over.
+ *
+ * input->boot.held is deliberately NOT handled here, or anywhere else in
+ * this module - the panel has exactly one way in, a plain tap. Worth
+ * writing down because it looks like an omission otherwise: button_fsm
+ * suppresses the .released of a press that turns into a .held (see
+ * button_fsm.h's contract), so a user who HOLDS BOOT instead of tapping it
+ * gets no edge this module acts on at all for that press. Holding does not
+ * open the panel; it does nothing, silently, by design - not a missed
+ * case. `held` itself is still produced and plumbed all the way through
+ * button_fsm and buttons_read(); this module simply has no consumer for it
+ * right now. */
+unsigned sand_ui_step(sand_ui_t *ui, const input_t *input)
+{
+    if (ui->screen == SAND_UI_MENU) {
+        return 0;
+    }
+
+    if (ui->screen == SAND_UI_PALETTE) {
+        return handle_palette_input(ui, input);
+    }
+
+    if (input->boot.released) {
+        return open_palette(ui, input->down);
+    }
+
+    return handle_brush_input(ui, input);
+}

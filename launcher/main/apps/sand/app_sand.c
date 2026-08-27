@@ -55,6 +55,7 @@
 #include "palette.h"
 #include "row_runs.h"
 #include "sand.h"
+#include "sand_ui.h"
 #include "tilt.h"
 
 static const char *TAG = "sand";
@@ -102,16 +103,6 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * grid - see sand_enable_sleeping()'s own comment. */
 #define BLOCK_COLS_MAX ((GRID_W_MAX + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define BLOCK_ROWS_MAX ((GRID_H_MAX + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-
-/* SCREEN_PALETTE is entered from SCREEN_RUNNING on BOOT's release edge and
- * left back to it the same way - see sand_frame()'s own boot.released check
- * and handle_palette_input() below. boot.held does nothing in either
- * direction; see the comments at both of those sites for why that is
- * deliberate. SCREEN_PALETTE never appears on the MENU or failed paths,
- * which is why sand_frame()'s dispatch checks it only after those - see the
- * comment on that dispatch. */
-typedef enum { SCREEN_MENU, SCREEN_RUNNING, SCREEN_PALETTE } screen_t;
-static screen_t screen;
 
 /* Centered, absolutely-placed pair of buttons - see draw_menu(). UI_ROW_HEIGHT
  * is the shared row metric from ui.h, used here so the menu's buttons match
@@ -177,7 +168,7 @@ static screen_t screen;
 /* What the finger puts down.
  *
  * Selected from the palette panel (BOOT's release edge opens it - see
- * open_palette()/handle_palette_input() below, and sand_frame()'s own
+ * sand_ui.c's open_palette()/handle_palette_input(), and sand_frame()'s own
  * comment on why that is the release and not the press) rather than cycled
  * one button press at a time. Cycling was the palette's stand-in before the
  * panel existed, and it aged badly for the obvious reason: reaching the Nth
@@ -186,7 +177,7 @@ static screen_t screen;
  * press to open and one tap to choose, whatever this list grows to.
  *
  * PWR still toggles the eraser directly, unchanged from before the panel
- * existed - see handle_brush_input()'s power.pressed branch below. Erase is
+ * existed - see sand_ui.c's handle_brush_input(). Erase is
  * pressed often enough, and is purely binary (on/off, nothing to browse),
  * that a plain press is the cheaper action for it: a HOLD costs
  * BUTTON_HOLD_US (600 ms) of waiting before it even registers, every single
@@ -226,7 +217,9 @@ _Static_assert(PALETTE_FITS(BRUSH_COUNT),
 
 /* Whether a brush places a persistent source ("a tap") instead of pouring -
  * toggled by tapping the already-selected tile in the palette (see
- * handle_palette_input()) and read by handle_pour_input() below.
+ * sand_ui.c's handle_palette_input()) and read by handle_pour_input()
+ * below. brush_mode_t itself now lives in sand_ui.h, alongside the state
+ * machine that reads and writes this table.
  *
  * File-scope and deliberately NOT reset in sand_enter() or start_sim() - the
  * same treatment `quality` gets above, and for the same reason: this is a
@@ -239,12 +232,30 @@ _Static_assert(PALETTE_FITS(BRUSH_COUNT),
  * while no tap exists anywhere on the fresh board. That is correct: the
  * flag says what a tap would place if the material were painted again, not
  * that one is currently placed. */
-typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
 static uint8_t brush_mode[BRUSH_COUNT];   /* brush_mode_t per brush */
+
+/* The UI state machine's own state: which screen is showing, which brush is
+ * selected, whether the eraser is armed, and the palette's own bookkeeping
+ * (the swallow guard, and what brush/mode the panel opened with) - see
+ * sand_ui.h. Pointed at this file's own brushes[]/brush_mode[] tables
+ * rather than owning copies of them, the same way sand_t borrows `cells`
+ * instead of allocating its own grid.
+ *
+ * `ui.screen`, `ui.brush` and `ui.erasing` replace the old file-scope
+ * `screen`, `brush` and `erasing` statics - one definition rather than
+ * three, now that the state machine that reads and writes them lives in
+ * sand_ui.c. Zero-initialised the same way those statics were: `ui.screen`
+ * starts at SAND_UI_MENU (0), `ui.brush` at 0, `ui.erasing` at false -
+ * matching sand_enter()'s and start_sim()'s own resets below. */
+static sand_ui_t ui = {
+    .brushes     = brushes,
+    .modes       = brush_mode,
+    .brush_count = BRUSH_COUNT,
+};
 
 /* How long the mode label stays up after a change worth confirming - a PWR
  * press toggling erase, or the palette closing having actually changed the
- * brush or its mode (see palette_opened_brush/palette_opened_mode and
+ * brush or its mode (see sand_ui.h's opened_brush/opened_mode and sand_ui.c's
  * close_palette()). Long enough to read without hurrying, short enough not
  * to sit over the sand. */
 #define LABEL_MS 1800
@@ -302,10 +313,6 @@ static uint8_t    *row_run_n;
 static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
-static int         brush;            /* index into brushes - set by tapping
-                                       * a tile in the palette; see
-                                       * handle_palette_input() */
-static bool        erasing;          /* PWR toggles it, independently */
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
@@ -402,7 +409,7 @@ static void sand_enter(void)
     /* Nothing else: no allocation, no sand_init(), no imu_init(), no starting
      * heap. Those only happen once START is pressed - see start_sim() - so
      * opening the app costs nothing beyond drawing the menu. */
-    screen = SCREEN_MENU;
+    ui.screen = SAND_UI_MENU;
 
     /* The launcher's own output is still sitting in the framebuffer, and
      * ui_end()'s repaint-skip logic only knows about changes to the UI
@@ -415,11 +422,11 @@ static void sand_enter(void)
 
 /* Seeds every row's run-tracking as one full-width span, as if the whole row
  * were occupied - see start_sim()'s call site for why "previous" has to
- * start out lying like that. Shared with close_palette(), which needs
- * exactly the same lie for exactly the same reason: whatever the panel just
- * left in the framebuffer has to be forced out in full on the first frame
- * after it closes, not trusted to the sand's own (much narrower) real
- * extent. */
+ * start out lying like that. Shared with sand_frame()'s SAND_UI_CLOSE_PALETTE
+ * handling, which needs exactly the same lie for exactly the same reason:
+ * whatever the panel just left in the framebuffer has to be forced out in
+ * full on the first frame after it closes, not trusted to the sand's own
+ * (much narrower) real extent. */
 static void seed_row_runs_full_width(void)
 {
     for (int i = 0; i < grid_h; i++) {
@@ -444,8 +451,8 @@ static void start_sim(void)
 
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
-    brush = 0;
-    erasing = false;
+    ui.brush = 0;
+    ui.erasing = false;
     label_left_ms = 0;
     failed = false;
 
@@ -475,10 +482,10 @@ static void start_sim(void)
                  (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         failed = true;
         /* The "no memory for the grid" message lives on the RUNNING path in
-         * sand_frame() - leaving screen at SCREEN_MENU here would strand the
-         * user on a menu whose only button silently re-fails the same
+         * sand_frame() - leaving screen at SAND_UI_MENU here would strand
+         * the user on a menu whose only button silently re-fails the same
          * allocation forever, with no on-screen sign anything is wrong. */
-        screen = SCREEN_RUNNING;
+        ui.screen = SAND_UI_RUNNING;
         return;
     }
 
@@ -535,7 +542,7 @@ static void start_sim(void)
     gfx_clear(material_palette()[SAND_EMPTY]);
     gfx_mark_all_dirty();
 
-    screen = SCREEN_RUNNING;
+    ui.screen = SAND_UI_RUNNING;
 }
 
 static void sand_exit(void)
@@ -1012,14 +1019,14 @@ static void draw_mode_label(int gx, int gy)
      * layout below needs to know a suffix exists. */
     char text_buf[24];
     const char *text;
-    if (erasing) {
+    if (ui.erasing) {
         text = "ERASE";
-    } else if (brush_mode[brush] == BRUSH_SPAWN) {
+    } else if (ui.modes[ui.brush] == BRUSH_SPAWN) {
         snprintf(text_buf, sizeof text_buf, "%s SOURCE",
-                material_name(brushes[brush]));
+                material_name(brushes[ui.brush]));
         text = text_buf;
     } else {
-        text = material_name(brushes[brush]);
+        text = material_name(brushes[ui.brush]);
     }
     const int   len  = (int)strlen(text);
     const int   span = len * 8 * LABEL_SCALE;
@@ -1055,7 +1062,7 @@ static void draw_mode_label(int gx, int gy)
      * its own - see brush_color()'s own comment for why an extended cell
      * cannot just have its variant bumped like an ordinary one. */
     const gfx_color_t ink =
-        erasing ? gfx_rgb(0xFF8A5C) : brush_color(brushes[brush]);
+        ui.erasing ? gfx_rgb(0xFF8A5C) : brush_color(brushes[ui.brush]);
 
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
@@ -1094,10 +1101,10 @@ static void draw_mode_label(int gx, int gy)
 #define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
 
 /* The material picker overlay - drawn on open, on selection, and on a
- * quarter-turn change (see sand_frame()'s SCREEN_PALETTE handling below),
+ * quarter-turn change (see sand_frame()'s SAND_UI_PALETTE handling below),
  * never per frame. The invariant that makes drawn-on-change safe at all is
  * unchanged from when it was drawn-once: nothing else paints while
- * SCREEN_PALETTE is active - sand_frame() skips the sim step and the sand's
+ * SAND_UI_PALETTE is active - sand_frame() skips the sim step and the sand's
  * own redraw entirely for that screen (see its dispatch) - so anything added
  * later that paints during the pause (a clock, an animation) would need to
  * redraw this too, or it will be silently painted over and never restored.
@@ -1115,7 +1122,7 @@ static void draw_palette(int turn)
      * painted over. Three things make that safe:
      *
      *   - the simulation is paused for as long as this panel is open (see
-     *     sand_frame()'s SCREEN_PALETTE handling), so the frame underneath
+     *     sand_frame()'s SAND_UI_PALETTE handling), so the frame underneath
      *     is frozen - nothing repaints it, so nothing can bleed through or
      *     flicker while the panel is up;
      *   - every tile paints its own bezel and face opaquely within its
@@ -1128,10 +1135,10 @@ static void draw_palette(int turn)
      *     to the panel - those pixels have not changed, so they need no
      *     dirty marking either.
      *
-     * Closing the panel is unaffected: close_palette() already reseeds
-     * every row's runs to full width and marks everything dirty, so the
-     * sand repaints in full regardless of what this panel did or did not
-     * cover while it was open. */
+     * Closing the panel is unaffected: sand_frame()'s SAND_UI_CLOSE_PALETTE
+     * handling already reseeds every row's runs to full width and marks
+     * everything dirty, so the sand repaints in full regardless of what
+     * this panel did or did not cover while it was open. */
     for (int i = 0; i < BRUSH_COUNT; i++) {
         int x, y, w, h;
         palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
@@ -1151,8 +1158,8 @@ static void draw_palette(int turn)
          * on bottom/right - so it reads as pressed in rather than raised.
          * That is the entire selection indicator; there is no separate ring
          * or border drawn for it. */
-        const gfx_color_t top_left  = (i == brush) ? sh : hi;
-        const gfx_color_t bot_right = (i == brush) ? hi : sh;
+        const gfx_color_t top_left  = (i == ui.brush) ? sh : hi;
+        const gfx_color_t bot_right = (i == ui.brush) ? hi : sh;
 
         /* Inset by the grout first so neighbouring tiles do not fuse into
          * one surface, then bezel within that inset rect: top/left edges
@@ -1231,7 +1238,7 @@ static void draw_palette(int turn)
              * a shape of this badge's own. Drawn in the same border colour
              * as the box, the same maximum-contrast choice for the same
              * reason. */
-            if (brush_mode[i] == BRUSH_SPAWN) {
+            if (ui.modes[i] == BRUSH_SPAWN) {
                 icon_check(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
                           border);
             }
@@ -1332,214 +1339,25 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
     *jostle = shake > SHAKE_DEADZONE ? shake : 0;
 }
 
-/* Set by open_palette(), consumed by the next input->released
- * handle_palette_input() sees - see that consumption's own comment for what
- * it is guarding against. */
-static bool palette_swallow_release;
-
 /* The quarter turn the panel was last DRAWN at - not necessarily the current
- * one. sand_frame()'s SCREEN_PALETTE handling compares this against a fresh
+ * one. sand_frame()'s SAND_UI_PALETTE handling compares this against a fresh
  * gravity_quarter_turn() reading every frame and only calls draw_palette()
  * again when they differ, which is what keeps the panel drawn-on-change
  * rather than drawn-per-frame while still following the board when it
- * actually turns - see that dispatch's own comment. */
+ * actually turns - see that dispatch's own comment below. A drawing detail,
+ * so it stays here rather than moving into sand_ui_t alongside the rest of
+ * the palette's bookkeeping. */
 static int palette_turn;
 
-/* The brush and its mode at the moment the panel opened - recorded by
- * open_palette() and compared against the current brush/mode by
- * close_palette(), so the mode label on the way out confirms a choice only
- * when the choice actually changed while the panel was open. Opening the
- * panel and closing it again without touching anything leaves the board
- * exactly as it was, and a label would just be noise there. */
-static int     palette_opened_brush;
-static uint8_t palette_opened_mode;
-
-/* Opens the palette panel: pauses the sim (see sand_frame()'s dispatch,
- * which returns immediately after calling this rather than falling through
- * to the rest of a RUNNING frame), clears the mode-label countdown so its
- * full-screen redraw does not paint sand straight back over the panel (see
- * label_left_ms's own use in sand_frame()), and draws the panel - see
- * draw_palette()'s own comment on when it is (and is not) redrawn.
- *
- * Seeds palette_turn from the tilt filter's CURRENT reading rather than
- * always opening upright: read_gravity_input(0, ...) asks it "what does the
- * filter say right now" without advancing it - dt_ms == 0 is tilt_update()'s
- * own documented no-time-passed case ("no time passed, so nothing to
- * integrate"), not a hack - so this costs nothing extra and the panel opens
- * already turned to match however the board is actually being held, rather
- * than snapping to the right turn one frame later.
- *
- * Also records palette_opened_brush/palette_opened_mode - see their own
- * comment above for why - and arms palette_swallow_release, but ONLY when a
- * finger is actually on the screen as the panel opens.
- *
- * Opening the panel is a press of the physical BOOT button, which has
- * nothing to do with whatever a finger already down on the touchscreen is
- * doing - so a pour in progress when BOOT is released is a touch left
- * dangling, and its own release still has to land somewhere. Without
- * swallowing it, that release arrives on the very next frame with screen
- * already SCREEN_PALETTE, and handle_palette_input() reads it as an
- * ordinary tap on whatever tile happens to be under the finger - silently
- * changing the brush the player never meant to touch.
- *
- * Arming it unconditionally was wrong, and cost the common case to protect
- * the rare one: with no finger down there is no dangling release to eat, so
- * the flag ate the player's first deliberate tap on a tile instead and the
- * panel only started responding on the second. `touch_in_progress` is
- * simply input->down at the moment of opening - swallow a release only when
- * there is genuinely one already owed. */
-static void open_palette(bool touch_in_progress)
-{
-    label_left_ms = 0;
-    screen = SCREEN_PALETTE;
-    palette_swallow_release = touch_in_progress;
-    palette_opened_brush = brush;
-    palette_opened_mode  = brush_mode[brush];
-
-    int gx, gy, flow, jostle, rotation;
-    imu_sample_t sample = { 0 };
-    read_gravity_input(0, &sample, &gx, &gy, &flow, &jostle, &rotation);
-    palette_turn = gravity_quarter_turn(gx, gy);
-
-    draw_palette(palette_turn);
-}
-
-/* Closes the palette panel and forces a full repaint of the sand underneath
- * it - the same seeding start_sim() uses to force a fresh grid's first
- * frame out in full, reused here via seed_row_runs_full_width() rather than
- * duplicated, so draw_dirty_rows() treats every row as needing a
- * full-width send on the very next frame and paints over every pixel the
- * panel touched.
- *
- * The two accumulators are zeroed rather than left to keep counting through
- * the pause: left alone, the wall-clock time the panel was open would cash
- * in as a burst of catch-up steps and pour the instant it closes, which
- * would read as a stutter or a sudden blob under the finger rather than as
- * nothing having happened while paused.
- *
- * Arms the mode label - via label_left_ms, drawn by the next RUNNING frame
- * - only if the brush or its mode actually changed while the panel was
- * open (see palette_opened_brush/palette_opened_mode's own comment). Since
- * cycling no longer gives its own confirmation on the way past each
- * material, this is the only feedback closing the panel gets, and it
- * should say nothing when there is nothing to confirm. */
-static void close_palette(void)
-{
-    if (brush != palette_opened_brush ||
-        brush_mode[brush] != palette_opened_mode) {
-        label_left_ms = LABEL_MS;
-    }
-
-    sim_accumulator_q8 = 0;
-    pour_accumulator_ms = 0;
-    seed_row_runs_full_width();
-    memset(dirty_rows, 1, (size_t)grid_h);
-    gfx_mark_all_dirty();
-    screen = SCREEN_RUNNING;
-}
-
-/* Only reachable while SCREEN_PALETTE - see sand_frame()'s dispatch, which
- * calls this instead of the normal RUNNING handlers and returns.
- *
- * Closes on boot.released only - the mirror image of where the panel opens
- * in SCREEN_RUNNING (see sand_frame()'s own comment on that site). It
- * cannot close on the SAME edge that opened it: edges are read-and-cleared
- * once per frame (see buttons_read()) before this function ever runs for
- * the first time, so the .released that opened the panel is already gone
- * by the time a SCREEN_PALETTE frame gets to see one of its own.
- *
- * boot.held closes nothing here - see the comment on the `if` just below
- * for why that is deliberate and what it means for anyone who holds BOOT
- * instead of tapping it. */
-static void handle_palette_input(const input_t *input)
-{
-    /* On the RELEASE, never on the press. Closing on boot.pressed split a
-     * single physical press across two screens: the panel went away on the
-     * press edge, and the matching release edge arrived several frames
-     * later with screen already back to SCREEN_RUNNING, where
-     * handle_brush_input() consumed it and cycled the brush forward one -
-     * commit faad9bb, the bug this still guards against even though
-     * cycling itself is gone. Acting on the release keeps both edges of a
-     * press inside the state that started it.
-     *
-     * input->boot.held is deliberately NOT handled here - the panel has
-     * exactly one way to close, a plain tap of BOOT, mirroring the one way
-     * in. Worth writing down because it looks like an omission otherwise:
-     * button_fsm suppresses the .released of a press that turns into a
-     * .held (see button_fsm.h's contract), so a user who HOLDS BOOT instead
-     * of tapping it gets no edge this function acts on at all while the
-     * panel is open. Holding does not close the panel; it does nothing,
-     * silently, by design - not a missed case, and not a bug to go chasing
-     * if someone reports it. */
-    if (input->boot.released) {
-        close_palette();
-        return;
-    }
-
-    if (!input->released) {
-        return;
-    }
-
-    /* Swallow the first release after the panel opens - see
-     * palette_swallow_release's own comment at open_palette(). This is the
-     * same family of bug as the one faad9bb fixed for BOOT: an edge that
-     * outlives the state that produced it, read by whatever state happens
-     * to be current instead of the one it actually belongs to. */
-    if (palette_swallow_release) {
-        palette_swallow_release = false;
-        return;
-    }
-
-    const int hit = palette_hit(input->x, input->y, BRUSH_COUNT);
-    if (hit < 0) {
-        /* A tap that hits no tile does nothing - erase and selection state
-         * are both untouched. The panel stays open either way; only BOOT
-         * closes it, so picking a material is not a one-shot action. */
-        return;
-    }
-
-    if (hit == brush) {
-        /* Tapping the ALREADY-selected tile toggles its mode instead of
-         * re-selecting it - selection state has nothing left to change, so
-         * a second tap on the same tile has to mean something else. Only
-         * if the material is eligible to be a source at all: an
-         * ineligible tile has no mode to toggle into, so this does
-         * nothing at all rather than silently flip a bit nothing ever
-         * reads (see material_can_emit()). */
-        if (!material_can_emit(brushes[brush])) {
-            return;
-        }
-        brush_mode[brush] = (brush_mode[brush] == BRUSH_POUR)
-                                 ? BRUSH_SPAWN : BRUSH_POUR;
-    } else {
-        /* A different tile: select it. Its own remembered mode is left
-         * exactly as it was - only erasing resets on selection, the same
-         * as always. */
-        brush = hit;
-        erasing = false;   /* choosing a material means you want to place it */
-    }
-
-    draw_palette(palette_turn);    /* redraw so the highlight/badge moves or updates */
-}
-
-/* BOOT is not read here at all any more - its release edge opens the
- * palette from sand_frame()'s own dispatch, before this function is ever
- * called for that frame, and selecting a material happens in the palette
- * itself (handle_palette_input()) rather than here. What is left is PWR,
- * unchanged from before the palette existed: a plain press toggles erase,
- * because erase is binary and pressed often enough that a dedicated
- * button's press - with none of a hold's BUTTON_HOLD_US delay - is the
- * right cost for it. See the comment above brushes[] for the fuller
- * reasoning on why BOOT and PWR ended up with the jobs they have. */
-static void handle_brush_input(const input_t *input)
-{
-    if (input->power.pressed) {
-        erasing = !erasing;
-        label_left_ms = LABEL_MS;
-        ESP_LOGI(TAG, "brush: %s",
-                 erasing ? "erase" : material_name(brushes[brush]));
-    }
-}
+/* Everything that decides WHICH edges open the palette, close it, select a
+ * tile or toggle its mode now lives in sand_ui.c's sand_ui_step() - the
+ * swallow-release guard, the brush/mode comparison that decides whether the
+ * closing label shows, all of it - so it can be host-tested (see
+ * suite_sand_ui.c and its own top comment on the four bugs this used to
+ * ship). What is left here is CARRYING OUT what sand_ui_step() asks for:
+ * sand_frame()'s dispatch below reads the returned action bits and does the
+ * gfx/IMU/simulation work sand_ui_step() cannot do itself - see sand_ui.h's
+ * own top comment on why the split sits where it does. */
 
 /* Capped rather than looped to exhaustion: after a long frame the backlog is
  * dropped instead of dumping a pile in one go. */
@@ -1557,7 +1375,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * spawn mode skips the accumulator/pour path for this frame completely
      * - it must never both place a tap and pour a blob from the same
      * touch. */
-    if (!erasing && brush_mode[brush] == BRUSH_SPAWN) {
+    if (!ui.erasing && ui.modes[ui.brush] == BRUSH_SPAWN) {
         /* Only on the PRESS edge, never every frame the finger stays down
          * - one tap places one tap. input->pressed fires exactly once per
          * physical press, so this call (and the log below, if it fails)
@@ -1567,7 +1385,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
         if (input->pressed) {
             const int cx = input->x / cell;
             const int cy = input->y / cell;
-            if (!sand_add_emitter(&sim, cx, cy, brushes[brush])) {
+            if (!sand_add_emitter(&sim, cx, cy, brushes[ui.brush])) {
                 ESP_LOGW(TAG, "emitter list full (%d) - tap ignored",
                          SAND_MAX_EMITTERS);
             }
@@ -1602,7 +1420,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * table: the smallest result is POUR_RADIUS_PX at the coarsest cell,
      * (10 + 3) / 6 = 2. */
     for (int i = 0; i < applications; i++) {
-        if (erasing) {
+        if (ui.erasing) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
             /* Wider than the sweep above on purpose - see
              * ERASE_EMITTER_RADIUS_PX's own comment for why a point target
@@ -1612,7 +1430,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
         } else {
             sand_spawn_cell(&sim, cx, cy,
                             (POUR_RADIUS_PX + cell / 2) / cell,
-                            brushes[brush]);
+                            brushes[ui.brush]);
         }
     }
 }
@@ -1725,7 +1543,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
                              int64_t draw_us, int awake_blocks, int awake_cells,
                              int64_t now)
 {
-    if (input->down && !erasing) {
+    if (input->down && !ui.erasing) {
         pour_step_us_total += step_us;
         pour_draw_us_total += draw_us;
         pour_awake_total += awake_blocks;
@@ -1824,20 +1642,21 @@ static void draw_menu(const input_t *input)
 
 static void sand_frame(uint32_t dt_ms, const input_t *input)
 {
-    /* SCREEN_MENU is checked first, but a FAILED start_sim() sets screen to
-     * SCREEN_RUNNING before returning specifically so it falls through to
-     * the `failed` check below rather than getting caught here - see that
-     * comment in start_sim(). Do not reorder these first two checks, or
-     * change what SCREEN_PALETTE does relative to them, without keeping
-     * that path intact.
+    /* SAND_UI_MENU is checked first, but a FAILED start_sim() sets
+     * ui.screen to SAND_UI_RUNNING before returning specifically so it
+     * falls through to the `failed` check below rather than getting caught
+     * here - see that comment in start_sim(). Do not reorder these first
+     * two checks, or change what SAND_UI_PALETTE does relative to them,
+     * without keeping that path intact.
      *
-     * The palette check sits AFTER `failed`, deliberately: a failed start
-     * must still reach the "no memory for the grid" screen even though
-     * screen is SCREEN_RUNNING at that point, and SCREEN_PALETTE is never
-     * entered on that path (see open_palette()'s only caller, below) - but
-     * putting the check any earlier would invite exactly that mistake the
-     * next time a state is added here. */
-    if (screen == SCREEN_MENU) {
+     * The `failed` check sits before sand_ui_step() is ever called,
+     * deliberately: a failed start must still reach the "no memory for the
+     * grid" screen even though ui.screen is SAND_UI_RUNNING at that point,
+     * and SAND_UI_PALETTE is never entered on that path (open_palette() is
+     * only ever reached through sand_ui_step(), below) - but calling
+     * sand_ui_step() any earlier would invite exactly that mistake the next
+     * time a state is added here. */
+    if (ui.screen == SAND_UI_MENU) {
         draw_menu(input);
         return;
     }
@@ -1848,10 +1667,89 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         return;
     }
 
-    if (screen == SCREEN_PALETTE) {
-        handle_palette_input(input);
-        if (screen != SCREEN_PALETTE) {
-            return;     /* handle_palette_input() just closed it - see below */
+    /* One call handles the whole of "which edges do what" - see
+     * sand_ui_step()'s own comment in sand_ui.c for how it dispatches by
+     * ui.screen internally, exactly mirroring the SAND_UI_PALETTE-then-
+     * boot.released-then-PWR shape this function used to have inline. What
+     * is left below is carrying out the returned action bits: opening or
+     * closing the panel's gfx/accumulator side, redrawing it, or - for an
+     * ordinary RUNNING frame - none of the above, and falling through to
+     * the ordinary per-frame work. */
+    const unsigned actions = sand_ui_step(&ui, input);
+
+    if (actions & SAND_UI_CLOSE_PALETTE) {
+        /* Forces a full repaint of the sand underneath the panel - the same
+         * seeding start_sim() uses to force a fresh grid's first frame out
+         * in full, reused here via seed_row_runs_full_width() rather than
+         * duplicated, so draw_dirty_rows() treats every row as needing a
+         * full-width send on the very next frame and paints over every
+         * pixel the panel touched.
+         *
+         * The two accumulators are zeroed rather than left to keep counting
+         * through the pause: left alone, the wall-clock time the panel was
+         * open would cash in as a burst of catch-up steps and pour the
+         * instant it closes, which would read as a stutter or a sudden blob
+         * under the finger rather than as nothing having happened while
+         * paused.
+         *
+         * SAND_UI_SHOW_LABEL is sand_ui_step()'s own answer to whether the
+         * brush or its mode actually changed while the panel was open -
+         * see close_palette()'s comment in sand_ui.c. Since cycling no
+         * longer gives its own confirmation on the way past each material,
+         * this is the only feedback closing the panel gets, and it should
+         * say nothing when there is nothing to confirm. */
+        if (actions & SAND_UI_SHOW_LABEL) {
+            label_left_ms = LABEL_MS;
+        }
+
+        sim_accumulator_q8 = 0;
+        pour_accumulator_ms = 0;
+        seed_row_runs_full_width();
+        memset(dirty_rows, 1, (size_t)grid_h);
+        gfx_mark_all_dirty();
+        return;
+    }
+
+    if (actions & SAND_UI_OPEN_PALETTE) {
+        /* Clears the mode-label countdown so its full-screen redraw does
+         * not paint sand straight back over the panel (see label_left_ms's
+         * own use below), then draws the panel - see draw_palette()'s own
+         * comment on when it is (and is not) redrawn.
+         *
+         * Seeds palette_turn from the tilt filter's CURRENT reading rather
+         * than always opening upright: read_gravity_input(0, ...) asks it
+         * "what does the filter say right now" without advancing it -
+         * dt_ms == 0 is tilt_update()'s own documented no-time-passed case
+         * ("no time passed, so nothing to integrate"), not a hack - so this
+         * costs nothing extra and the panel opens already turned to match
+         * however the board is actually being held, rather than snapping to
+         * the right turn one frame later.
+         *
+         * sand_ui_step() already flipped ui.screen to SAND_UI_PALETTE, so
+         * returning right after this means read_gravity_input(dt_ms, ...)/
+         * run_sim_steps()/handle_pour_input()/draw_dirty_rows() below are
+         * never reached on the very frame the panel opens, exactly as they
+         * are skipped on every later frame by the SAND_UI_PALETTE branch
+         * below - the sim is paused from the same frame the panel becomes
+         * visible, not one frame later. */
+        label_left_ms = 0;
+
+        int gx, gy, flow, jostle, rotation;
+        imu_sample_t sample = { 0 };
+        read_gravity_input(0, &sample, &gx, &gy, &flow, &jostle, &rotation);
+        palette_turn = gravity_quarter_turn(gx, gy);
+
+        draw_palette(palette_turn);
+        return;
+    }
+
+    if (ui.screen == SAND_UI_PALETTE) {
+        /* Still open: either a tile tap changed the selection or its mode
+         * (SAND_UI_REDRAW_PALETTE), or the input did nothing the panel
+         * cares about (a miss, a swallowed release, or boot.held) - see
+         * handle_palette_input() in sand_ui.c. */
+        if (actions & SAND_UI_REDRAW_PALETTE) {
+            draw_palette(palette_turn);    /* the highlight/badge moved or updated */
         }
 
         /* Read gravity every frame while paused, and follow the board when
@@ -1863,8 +1761,9 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * same `turn` every frame and draw_palette() below is skipped - the
          * repaint itself only happens on an actual quarter-turn change,
          * which is what keeps a held-steady panel free. Skipped entirely on
-         * the frame that just closed the panel, above, so there is nothing
-         * here to redraw into a screen that no longer wants it. */
+         * the frame that just closed the panel, above (that branch already
+         * returned), so there is nothing here to redraw into a screen that
+         * no longer wants it. */
         int gx, gy, flow, jostle, rotation;
         imu_sample_t sample = { 0 };
         read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
@@ -1877,45 +1776,20 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         return;
     }
 
-    /* input->boot.released opens the panel from here, on the release edge
-     * rather than the press - the mirror image of handle_palette_input()'s
-     * own close-on-released, and for the identical reason (see that
-     * function's comment, and commit faad9bb, the bug both of these guard
-     * against). Opening on .pressed would leave the matching .released to
-     * arrive one frame later with `screen` already SCREEN_PALETTE, where
-     * handle_palette_input() would read it as a tap on whatever tile
-     * happens to be under the finger instead. Acting on .released keeps
-     * both edges of the press that opened the panel inside SCREEN_RUNNING,
-     * with nothing left outstanding by the time SCREEN_PALETTE takes over.
-     *
-     * open_palette() flips `screen` to SCREEN_PALETTE immediately, so
-     * returning right after it means read_gravity_input()/run_sim_steps()/
-     * handle_pour_input()/handle_brush_input()/draw_dirty_rows() below are
-     * never reached on the very frame the panel opens, exactly as they are
-     * skipped on every later frame by the SCREEN_PALETTE check above - the
-     * sim is paused from the same frame the panel becomes visible, not one
-     * frame later.
-     *
-     * input->boot.held is deliberately NOT handled here, or anywhere else
-     * in this screen - the panel has exactly one way in, a plain tap.
-     * Worth writing down because it looks like an omission otherwise:
-     * button_fsm suppresses the .released of a press that turns into a
-     * .held (see button_fsm.h's contract), so a user who HOLDS BOOT instead
-     * of tapping it gets no edge this app acts on at all for that press.
-     * Holding does not open the panel; it does nothing, silently, by
-     * design - not a missed case. `held` itself is still produced and
-     * plumbed all the way through button_fsm and buttons_read(); this
-     * screen simply has no consumer for it right now. */
-    if (input->boot.released) {
-        open_palette(input->down);
-        return;
-    }
-
+    /* SAND_UI_RUNNING, and sand_ui_step() did not just open the panel: an
+     * ordinary frame. `actions` here is whatever handle_brush_input() in
+     * sand_ui.c returned - SAND_UI_SHOW_LABEL on a PWR press, or 0. */
     int gx, gy, flow, jostle, rotation;
     imu_sample_t sample = { 0 };
     read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
 
-    handle_brush_input(input);
+    if (actions & SAND_UI_SHOW_LABEL) {
+        label_left_ms = LABEL_MS;
+        if (input->power.pressed) {
+            ESP_LOGI(TAG, "brush: %s",
+                     ui.erasing ? "erase" : material_name(brushes[ui.brush]));
+        }
+    }
 
     /* The grid under the label has to be redrawn every frame the label is up,
      * including the frame it expires - that last redraw is what actually wipes
