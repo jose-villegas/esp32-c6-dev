@@ -1,7 +1,5 @@
 #include "sand_ui.h"
 
-#include "palette.h"
-
 /* Opens the palette panel: transitions to SAND_UI_PALETTE and records
  * everything the close needs to compare against - see close_palette()'s own
  * comment. The gravity read and draw_palette() call that used to happen
@@ -16,9 +14,14 @@
  * doing - so a pour in progress when BOOT is released is a touch left
  * dangling, and its own release still has to land somewhere. Without
  * swallowing it, that release arrives on the very next frame with `screen`
- * already SAND_UI_PALETTE, and handle_palette_input() reads it as an
- * ordinary tap on whatever tile happens to be under the finger - silently
- * changing the brush the player never meant to touch.
+ * already SAND_UI_PALETTE, and whatever tile the finger happened to lift
+ * over is what a click would resolve to - silently changing the brush the
+ * player never meant to touch. (Today, feed_input() in ui.c only ever
+ * synthesises a click from a fresh input->pressed, so a bare release like
+ * this one does not actually reach microui as a click at all - but that is
+ * an emergent property of ui.c's touch synthesis, a file with no tests, and
+ * not something this guard gets to lean on. See sand_ui_tile_clicked()'s
+ * own comment for where the guard actually bites now.)
  *
  * Arming it unconditionally was wrong, and cost the common case to protect
  * the rare one: with no finger down there is no dangling release to eat, so
@@ -71,7 +74,17 @@ static unsigned close_palette(sand_ui_t *ui)
  *
  * boot.held closes nothing here - see the comment on the `if` just below
  * for why that is deliberate and what it means for anyone who holds BOOT
- * instead of tapping it. */
+ * instead of tapping it.
+ *
+ * Selecting or toggling a tile is NOT decided here any more, and neither is
+ * reading a touch at all - see sand_ui.h's own "WHO HIT-TESTS AND WHO
+ * DECIDES" comment. What is left, once BOOT is out of the way, is
+ * `swallow_release`'s own bookkeeping: disarm it the first frame a finger
+ * that was already down when the panel opened is genuinely lifted
+ * (input->down goes false), so the very next tap - the first one that can
+ * possibly reach sand_ui_tile_clicked() - is read as a real selection
+ * rather than eaten too. See that function's own comment for the other half
+ * of this guard: while armed, it is the one that actually ignores a click. */
 static unsigned handle_palette_input(sand_ui_t *ui, const input_t *input)
 {
     /* On the RELEASE, never on the press. Closing on boot.pressed split a
@@ -96,29 +109,39 @@ static unsigned handle_palette_input(sand_ui_t *ui, const input_t *input)
         return close_palette(ui);
     }
 
-    if (!input->released) {
-        return 0;
+    /* The dangling touch's own lift, not any particular click - see this
+     * function's own top comment. Checked every SAND_UI_PALETTE frame,
+     * not just once, because the finger can take more than one frame to
+     * actually come up. */
+    if (ui->swallow_release && !input->down) {
+        ui->swallow_release = false;
     }
 
-    /* Swallow the first release after the panel opens - see
-     * `swallow_release`'s own comment on sand_ui_t. This is the same family
-     * of bug as the one faad9bb fixed for BOOT: an edge that outlives the
-     * state that produced it, read by whatever state happens to be current
+    return 0;
+}
+
+/* What a click on palette tile `index` means - see this function's own doc
+ * comment in sand_ui.h for the full contract this applies, and the "WHO
+ * HIT-TESTS AND WHO DECIDES" note there for why the hit-test that produces
+ * `index` is no longer this module's job. draw_palette() in app_sand.c is
+ * the only caller, from inside its own per-tile mu_button() loop - which is
+ * also why there is no "index hits nothing" branch here the way the old
+ * palette_hit()-based version had one: an index this function is ever
+ * handed already named a real tile. */
+unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index)
+{
+    /* Swallow the first click after the panel opens with a finger already
+     * down - see `swallow_release`'s own comment on sand_ui_t, and
+     * handle_palette_input()'s own comment for the other half of this
+     * guard (disarming it on the finger's actual lift). This is the same
+     * family of bug faad9bb fixed for BOOT: an edge that outlives the state
+     * that produced it, read by whatever state happens to be current
      * instead of the one it actually belongs to. */
     if (ui->swallow_release) {
-        ui->swallow_release = false;
         return 0;
     }
 
-    const int hit = palette_hit(input->x, input->y, ui->brush_count);
-    if (hit < 0) {
-        /* A tap that hits no tile does nothing - erase and selection state
-         * are both untouched. The panel stays open either way; only BOOT
-         * closes it, so picking a material is not a one-shot action. */
-        return 0;
-    }
-
-    if (hit == ui->brush) {
+    if (index == ui->brush) {
         /* Tapping the ALREADY-selected tile toggles its mode instead of
          * re-selecting it - selection state has nothing left to change, so
          * a second tap on the same tile has to mean something else. Only
@@ -135,7 +158,7 @@ static unsigned handle_palette_input(sand_ui_t *ui, const input_t *input)
         /* A different tile: select it. Its own remembered mode is left
          * exactly as it was - only erasing resets on selection, the same
          * as always. */
-        ui->brush = hit;
+        ui->brush = index;
         ui->erasing = false;   /* choosing a material means you want to place it */
     }
 
@@ -166,9 +189,10 @@ static unsigned handle_brush_input(sand_ui_t *ui, const input_t *input)
  * close-on-released, and for the identical reason (see that function's
  * comment, and commit faad9bb, the bug both of these guard against).
  * Opening on .pressed would leave the matching .released to arrive one
- * frame later with `screen` already SAND_UI_PALETTE, where
- * handle_palette_input() would read it as a tap on whatever tile happens to
- * be under the finger instead. Acting on .released keeps both edges of the
+ * frame later with `screen` already SAND_UI_PALETTE, where it could resolve
+ * to a click on whatever tile happens to be under the finger instead - see
+ * `swallow_release`'s own comment on sand_ui_t for the guard that exists
+ * because of exactly this. Acting on .released keeps both edges of the
  * press that opened the panel inside SAND_UI_RUNNING, with nothing left
  * outstanding by the time SAND_UI_PALETTE takes over.
  *

@@ -167,8 +167,10 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 /* What the finger puts down.
  *
  * Selected from the palette panel (BOOT's release edge opens it - see
- * sand_ui.c's open_palette()/handle_palette_input(), and sand_frame()'s own
- * comment on why that is the release and not the press) rather than cycled
+ * sand_ui.c's open_palette(), and sand_frame()'s own comment on why that is
+ * the release and not the press; a tap on a tile selects it - see
+ * draw_palette()'s own mu_button() loop and sand_ui.c's
+ * sand_ui_tile_clicked()) rather than cycled
  * one button press at a time. Cycling was the palette's stand-in before the
  * panel existed, and it aged badly for the obvious reason: reaching the Nth
  * material cost N presses, and every material added since - eight of them -
@@ -216,7 +218,7 @@ _Static_assert(PALETTE_FITS(BRUSH_COUNT),
 
 /* Whether a brush places a persistent source ("a tap") instead of pouring -
  * toggled by tapping the already-selected tile in the palette (see
- * sand_ui.c's handle_palette_input()) and read by handle_pour_input()
+ * sand_ui.c's sand_ui_tile_clicked()) and read by handle_pour_input()
  * below. brush_mode_t itself now lives in sand_ui.h, alongside the state
  * machine that reads and writes this table.
  *
@@ -984,8 +986,8 @@ static gfx_color_t brush_color(cell_t c)
  * Used by draw_mode_label() below to turn its text to follow the board's
  * physical "up". draw_palette()'s panel used to share this too, but no
  * longer calls it - see that function's own top comment: the panel is
- * drawn upright regardless of how the board is held, until palette_hit()
- * moves to physical-turned coordinates alongside it. */
+ * drawn upright regardless of how the board is held, until rotation - a
+ * separate change from this one - turns it on deliberately. */
 static int gravity_quarter_turn(int gx, int gy)
 {
     const int ax = gx < 0 ? -gx : gx;
@@ -1125,20 +1127,33 @@ static mu_Color mu_color_hex(uint32_t rgb)
  * handling calls this unconditionally now; there is no more stored
  * "last drawn at this turn" to compare against.
  *
- * NO TRANSFORM, ON PURPOSE, FOR NOW
+ * EACH TILE IS A REAL mu_button() NOW
+ *
+ * Used to be a manually bezelled rect, hit-tested separately by
+ * palette_hit() on raw screen coordinates - see sand_ui.h's own "WHO
+ * HIT-TESTS AND WHO DECIDES" comment for why that split existed and why it
+ * does not any more. microui now lays each tile out AND hit-tests it,
+ * through the very same mu_button() every other button in this shell
+ * already uses; a click just tells this loop which tile index to hand to
+ * sand_ui_tile_clicked(), which is where "what a click on this tile means"
+ * still lives, unchanged, and still host-tested - see suite_sand_ui.c.
+ *
+ * NO TRANSFORM, STILL, BUT NOT FOR THE OLD REASON
  *
  * This does not call ui_set_transform() the way ui_launcher.c-style UIs
- * might. palette.c lays every tile out - and hit-tests every tap - in
- * physical screen coordinates (see palette_tile_rect()/palette_hit(), and
- * palette.h's own comment that the two "must never disagree"). Turning only
- * the DRAWING through a transform would move the tiles on screen without
- * moving where palette_hit() looks for them, so a tap would land on
- * whatever used to be there before the board turned - a real functional
- * regression, not a cosmetic one. Input handling is explicitly out of scope
- * for this change (see this file's own top-level notes), so rotation waits
- * until palette_hit() moves with it; until then the panel - tiles, badges
- * and names alike - is drawn upright regardless of how the board is held.
- * Do not re-add a transform here without moving the input path too. */
+ * might - but the reason has changed. Every tile hit-tests through microui
+ * now, the same feed_input()-through-the-inverse-transform path every other
+ * described UI in this shell already takes (see ui.c's own "Touch to
+ * mouse" comment), so turning this window WOULD turn its hit-testing right
+ * along with its drawing - nothing here still hard-codes physical screen
+ * coordinates the way palette_hit() used to.
+ *
+ * The transform stays identity anyway, on purpose: rotation is a separate
+ * change from this one, and needs to be verifiable on its own rather than
+ * folded into the diff that moved hit-testing to microui. This comment
+ * explaining why it is now SAFE to turn the transform on is not the same
+ * thing as it being on - do not re-add one here without that change also
+ * confirming, end to end, that it actually works. */
 static void draw_palette(const input_t *input)
 {
     mu_Context *ctx = ui_context();
@@ -1147,11 +1162,44 @@ static void draw_palette(const input_t *input)
 
     /* The tile names get their halo from the UI layer now - see
      * ui_text_halo() in ui_style.h: it derives a light halo from a dark ink
-     * (and vice versa), which is what the nine hand-rolled draws this
-     * replaces did by hand for exactly one ink colour (black). Restored to
+     * (and vice versa), which is what the nine hand-rolled draws this used
+     * to replace did by hand for exactly one ink colour (black). Restored to
      * UI_TEXT_PLAIN wherever this panel is torn down - see sand_frame()'s
      * SAND_UI_CLOSE_PALETTE handling. */
     ui_set_text_style(UI_TEXT_OUTLINED);
+
+    /* Bezelled, like every other button in this shell (see
+     * ui_launcher.c) - raised at rest, and inverted for the one frame
+     * microui's own hover/focus state says a finger is actually on it (see
+     * styled_draw_frame() in ui.c). That per-tap press feedback is new
+     * here; the hand-rolled panel never had it. It is NOT what marks a
+     * tile as the selected brush, though - selection is this app's own
+     * idea, not microui's, so it gets its own cue below, drawn after each
+     * mu_button() rather than left to this style. */
+    ui_set_button_style(UI_BUTTON_BEZEL);
+
+    /* MU_COLOR_BUTTON/MU_COLOR_TEXT are ONE shared slot on the context, not
+     * one per button: mu_draw_control_frame()/mu_draw_control_text() read
+     * straight out of ctx->style->colors[] at the moment a button's own
+     * commands are BUILT (i.e. inside mu_button() below), which is what
+     * lets this loop give every tile its own face and have that face baked
+     * correctly into that tile's own command. But it also means whatever
+     * this loop leaves in those two slots is what the NEXT thing to read
+     * them - the boot menu's own START/QUALITY buttons, the next time this
+     * app shows them - would draw with too. Saved once here and restored
+     * once after the loop, rather than reset per iteration, since nothing
+     * between tiles needs the old value back. */
+    const mu_Color saved_button_color = ctx->style->colors[MU_COLOR_BUTTON];
+    const mu_Color saved_text_color   = ctx->style->colors[MU_COLOR_TEXT];
+
+    /* Black, for every tile - mu_button() draws each tile's own name in
+     * this colour, and ui_text_halo() (armed by UI_TEXT_OUTLINED above)
+     * derives a light halo from it at render time, so a dark ink still
+     * reads against every swatch this panel can show - the same choice the
+     * hand-rolled label draw used to make explicitly. Unlike the face
+     * below this does not vary per tile, so it is set once here rather
+     * than inside the loop. */
+    ctx->style->colors[MU_COLOR_TEXT] = mu_color(0, 0, 0, 255);
 
     /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
      * logical canvas swaps dimensions under a quarter-turn transform, the
@@ -1165,30 +1213,84 @@ static void draw_palette(const input_t *input)
             int x, y, w, h;
             palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
 
-            const mu_Color face =
-                mu_color_hex(gfx_color_rgb888(brush_color(brushes[i])));
-
             /* Inset by the grout first so neighbouring tiles do not fuse
-             * into one surface, then bezel within that inset rect -
-             * ui_bezel_spans() derives the lit/shadowed edge pair from
-             * `face` itself and picks which pair is lit from `sunken`,
-             * exactly what this loop used to compute by hand with
-             * gfx_color_mix(). Emitting each returned span as a
-             * mu_draw_rect() is precisely what styled_draw_frame() does for
-             * a bezelled button in ui.c - see that function. The selected
-             * tile is the one drawn sunken, which is the entire selection
-             * indicator; there is no separate ring or border for it. */
+             * into one surface - the button itself, bezel included, is
+             * laid out inside that inset rect, the same rect the old
+             * hand-rolled bezel used to be drawn into by hand. */
             const int ix = x + PALETTE_GROUT;
             const int iy = y + PALETTE_GROUT;
             const int iw = w - 2 * PALETTE_GROUT;
             const int ih = h - 2 * PALETTE_GROUT;
 
-            ui_span_t spans[UI_BEZEL_MAX_SPANS];
-            const int n = ui_bezel_spans(mu_rect(ix, iy, iw, ih), face,
-                                         i == ui.brush, spans,
-                                         UI_BEZEL_MAX_SPANS);
-            for (int s = 0; s < n; s++) {
-                mu_draw_rect(ctx, spans[s].rect, spans[s].color);
+            const mu_Color face =
+                mu_color_hex(gfx_color_rgb888(brush_color(brushes[i])));
+            ctx->style->colors[MU_COLOR_BUTTON] = face;
+
+            /* The button IS the tile now: mu_layout_set_next() places it at
+             * (ix,iy,iw,ih), mu_button() hit-tests it against microui's own
+             * mouse state - fed from touch by feed_input() in ui.c, mapped
+             * through the inverse transform there - draws its bezelled
+             * face via styled_draw_frame(), and draws its own centred
+             * label. That label doubles as the button's id (mu_get_id() in
+             * microui.c hashes the label string): every brush in
+             * BRUSH_COUNT has a distinct display name - Sand, Water,
+             * Stone, Gas, Fire, Wood, Oil, Lava, Acid, Glass, Snow, Dirt,
+             * Ice, Plant (material.c's own name tables) - so no two tiles
+             * this loop draws can ever hash to the same id. */
+            const char *name = material_name(brushes[i]);
+            mu_layout_set_next(ctx, mu_rect(ix, iy, iw, ih), 0);
+            const int clicked = mu_button(ctx, name);
+
+            /* Hand the click over to sand_ui_tile_clicked() BEFORE this
+             * tile draws its own selection ring and badge below, so a
+             * toggle or a fresh selection shows up in THIS tile's own
+             * pixels on the very same frame it happened, rather than
+             * lagging a frame behind - see sand_ui.h's "WHO HIT-TESTS AND
+             * WHO DECIDES" comment for what this call actually decides.
+             * The return value goes unused here, the same as
+             * SAND_UI_REDRAW_PALETTE already went unread from
+             * sand_ui_step(): ui_end() below repaints on its own whenever
+             * the command list this loop builds actually changed. */
+            if (clicked) {
+                sand_ui_tile_clicked(&ui, i);
+            }
+
+            /* The selection cue. ui_style's own bezel already inverts a
+             * button's lit/shadowed edge pair, but only while microui's
+             * hover/focus says a finger is on it THIS frame (see
+             * styled_draw_frame() in ui.c) - there is no "selected" state
+             * for a plain mu_button() to draw, since selection is this
+             * app's own idea, not microui's. So the selected tile gets a
+             * second, purpose-drawn cue on top: ui_bezel_spans() again,
+             * called for its SUNKEN edge pair only (spans[1..4] - span[0]
+             * is the flat face, already painted by mu_button() above, so
+             * it is skipped rather than redrawn on top of itself).
+             *
+             * Those edges are mixed toward white and toward black off THIS
+             * TILE'S OWN face colour (see UI_BEZEL_HIGHLIGHT/UI_BEZEL_SHADOW
+             * in ui_style.h), not a fixed colour - which is what keeps the
+             * ring visible at both ends of the swatch range: on Snow, a
+             * near-white face, it is the mixed-toward-black edge that
+             * reads; on Stone, a near-black face, it is the
+             * mixed-toward-white edge that reads. A fixed light or dark
+             * ring would vanish on one of those two the same way the old
+             * white selection ring did, and the same way the badge's own
+             * face-derived fill did before it was changed to a fixed pair
+             * for the same reason - see PALETTE_BADGE_BORDER_COLOR/
+             * PALETTE_BADGE_FILL_COLOR's own comment on that history. This
+             * ring gets to derive from the face instead of needing a fixed
+             * pair of its own, because unlike the badge it never has to
+             * sit ON a face of unknown lightness - it sits at the tile's
+             * own edge, always paired with the one face it was mixed
+             * from, so there is no separate swatch it has to stay legible
+             * against. */
+            if (i == ui.brush) {
+                ui_span_t spans[UI_BEZEL_MAX_SPANS];
+                const int n = ui_bezel_spans(mu_rect(ix, iy, iw, ih), face,
+                                             true, spans, UI_BEZEL_MAX_SPANS);
+                for (int s = 1; s < n; s++) {
+                    mu_draw_rect(ctx, spans[s].rect, spans[s].color);
+                }
             }
 
             /* The badge: zero or more rects (and an icon) drawn after the
@@ -1230,7 +1332,7 @@ static void draw_palette(const input_t *input)
              *
              * Drawn upright, like every other command in this frame - see
              * this function's own top comment on why nothing here turns
-             * with the board for now (rotation waits on the input path). */
+             * with the board for now (rotation waits on its own change). */
             if (material_can_emit(brushes[i])) {
                 const mu_Color border = mu_color_hex(PALETTE_BADGE_BORDER_COLOR);
                 const mu_Color fill   = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
@@ -1253,36 +1355,26 @@ static void draw_palette(const input_t *input)
                 }
             }
 
-            /* Centred in the tile, at its UPRIGHT position - no longer
-             * turned per-tile the way the hand-rolled version turned each
-             * gfx_text_turned() call with the board's own quarter turn.
-             * Always turn 0 now, since this frame draws upright regardless
-             * of how the board is held - see this function's own top
-             * comment on why. palette_label_origin() itself is unchanged
-             * and still does real work here: it centres a `len`-character
-             * string in the tile's rect, which turn 0 alone does not do.
-             * The longest names are 5 characters, 80px at GFX_GLYPH_SCALE
-             * (see palette.h's column-count reasoning), inside a 92px tile
-             * - 6px of margin either side, never clipped. */
-            const char *name = material_name(brushes[i]);
-            const int   len  = (int)strlen(name);
-            int tx, ty;
-            palette_label_origin(x, y, w, h, len, 0, &tx, &ty);
-
-            /* Black ink; ui_text_halo() (armed by UI_TEXT_OUTLINED above)
-             * derives the light halo from it - see that function's own
-             * comment in ui_style.h. `ctx->style->font` is the same font
-             * every other command in this frame measures and draws with;
-             * there is nothing tile-specific about it, but reading it from
-             * the context rather than hardcoding gfx_default_font() is
-             * what keeps this frame honouring a future ui_set_font() call
-             * the way every other described UI does. */
-            mu_draw_text(ctx, ctx->style->font, name, -1, mu_vec2(tx, ty),
-                        mu_color(0, 0, 0, 255));
+            /* The name itself is no longer drawn here - mu_button() already
+             * drew it, centred in (ix,iy,iw,ih), when it ran above (see
+             * this loop's own comment at that call site). There is no
+             * per-turn positioning left to do either: palette_label_origin()
+             * existed to centre a string at any of four quarter turns, and
+             * this frame only ever draws turn 0 - the plain centring
+             * mu_draw_control_text() already does on its own covers that
+             * one case exactly, which is what makes the manual call this
+             * used to be here redundant now rather than merely optional. */
         }
 
         mu_end_window(ctx);
     }
+
+    /* Restores what this loop borrowed - see the comment above
+     * saved_button_color/saved_text_color for why leaving either mutated
+     * would leak into the next thing drawn with MU_COLOR_BUTTON/
+     * MU_COLOR_TEXT. */
+    ctx->style->colors[MU_COLOR_BUTTON] = saved_button_color;
+    ctx->style->colors[MU_COLOR_TEXT]   = saved_text_color;
 
     /* UI_NO_BACKGROUND is what keeps the frozen sand showing through
      * PALETTE_GROUT's gap between tiles - the same effect the hand-rolled
@@ -1751,20 +1843,22 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * change" by hand the way the old drawn-on-change version did
          * (SAND_UI_REDRAW_PALETTE, and the stored `palette_turn` this
          * function used to compare a fresh reading against, are no longer
-         * consulted here for that reason - sand_ui_step() still returns
-         * SAND_UI_REDRAW_PALETTE, since sand_ui.c is unchanged, but nothing
-         * here needs to read it any more).
+         * consulted here for that reason - sand_ui_tile_clicked() still
+         * returns SAND_UI_REDRAW_PALETTE on a selection or a toggle, since
+         * its callers elsewhere - the tests in suite_sand_ui.c - still
+         * check it, but nothing here needs to read it any more).
          *
          * No gravity read here any more, and no `turn` - draw_palette() no
          * longer takes one. The only thing gravity ever fed while this
-         * screen was up was the panel's own rotation (see draw_palette()'s
-         * top comment for why that is gone for now: palette_hit() hit-tests
-         * in physical screen coordinates and does not turn with the board,
-         * so drawing turned would show tiles where a tap would not land).
-         * With nothing left to compute from it, reading gravity here would
-         * cost a real IMU transaction for a value nothing uses - removed
-         * rather than kept "just in case", the same as any other dead
-         * read would be. */
+         * screen was up was the panel's own rotation, and this panel has
+         * never actually turned with the board: it draws upright regardless
+         * of how the board is held, on purpose, even now that every tile's
+         * hit-test goes through microui and WOULD turn correctly with a
+         * transform - see draw_palette()'s own top comment for why turning
+         * it on is still being left for a separate change. With nothing
+         * left to compute from it, reading gravity here would cost a real
+         * IMU transaction for a value nothing uses - removed rather than
+         * kept "just in case", the same as any other dead read would be. */
         if (actions & SAND_UI_OPEN_PALETTE) {
             /* The panel just opened: the framebuffer still holds whatever
              * the app last drew (running sand, or the boot menu), and the

@@ -15,7 +15,6 @@
 #include "suites.h"
 
 #include "sand_ui.h"
-#include "palette.h"
 
 /* --- fixture --------------------------------------------------------------
  *
@@ -60,21 +59,11 @@ static input_t no_input(void)
     return in;
 }
 
-/* Where tile `index` of the stub panel is, in the middle of its own rect -
- * so a test can aim a touch at a specific tile without hand-deriving
- * PALETTE_TILE geometry itself. Uses the real palette_hit()/palette_tile_rect()
- * pair, so a test tapping "tile 2" is exercising the same arithmetic
- * app_sand.c's real panel uses, at STUB_BRUSH_COUNT rather than BRUSH_COUNT. */
-static void tile_center(int index, int *cx, int *cy)
-{
-    int x, y, w, h;
-    palette_tile_rect(index, STUB_BRUSH_COUNT, &x, &y, &w, &h);
-    *cx = x + w / 2;
-    *cy = y + h / 2;
-}
-
-/* A point guaranteed to hit no tile at all - see palette_hit()'s own
- * contract for negative coordinates. */
+/* A point that used to guarantee a miss when a test drove sand_ui through a
+ * raw touch release - see test_tapping_outside_every_tile_does_nothing()'s
+ * own comment for why the coordinates themselves no longer matter to what
+ * that test is actually pinning. Kept as a named pair rather than inlined
+ * so that test still reads as "a tap, somewhere", not as two magic numbers. */
 static void outside_every_tile(int *px, int *py)
 {
     *px = -5;
@@ -167,13 +156,12 @@ static void test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_ti
     TEST_ASSERT_EQUAL_INT(SAND_UI_PALETTE, ui.screen);
     TEST_ASSERT_FALSE(ui.swallow_release);
 
-    int cx, cy;
-    tile_center(2, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-    const unsigned tap_actions = sand_ui_step(&ui, &tap);
+    /* microui has already done its own hit-test by the time anything calls
+     * this - see sand_ui.h's "WHO HIT-TESTS AND WHO DECIDES" comment - so
+     * driving this test no longer means feeding sand_ui_step() a touch
+     * release at tile 2's coordinates; it means calling the entry point
+     * that call would have resolved to. */
+    const unsigned tap_actions = sand_ui_tile_clicked(&ui, 2);
 
     TEST_ASSERT_TRUE(tap_actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
@@ -183,7 +171,7 @@ static void test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_ti
  * BOOT is released leaves that touch's own release still outstanding, and
  * without swallowing it, it would land on whatever tile happens to be
  * under the finger the instant the panel appears - see
- * open_palette()/handle_palette_input()'s own comments in sand_ui.c. */
+ * open_palette()/sand_ui_tile_clicked()'s own comments in sand_ui.c. */
 static void test_opening_with_a_finger_already_down_then_lifting_selects_nothing(void)
 {
     sand_ui_t ui;
@@ -198,14 +186,19 @@ static void test_opening_with_a_finger_already_down_then_lifting_selects_nothing
     TEST_ASSERT_TRUE(open_actions & SAND_UI_OPEN_PALETTE);
     TEST_ASSERT_TRUE(ui.swallow_release);
 
-    /* The dangling touch's own release, landing squarely on a tile - it
-     * must still select nothing. */
-    int cx, cy;
-    tile_center(3, &cx, &cy);
+    /* The dangling touch is still down, and the guard is still armed - a
+     * click landing squarely on a tile during that window must still
+     * select nothing. This is sand_ui_tile_clicked()'s own half of the
+     * guard: it ignores the click outright while swallow_release is set,
+     * never mind which tile it names. */
+    const unsigned click_actions = sand_ui_tile_clicked(&ui, 3);
+    TEST_ASSERT_EQUAL_UINT(0, click_actions);
+    TEST_ASSERT_EQUAL_INT(0, ui.brush);
+
+    /* The touch finally lifts - a genuine release, no finger down any more.
+     * That is sand_ui_step()'s own half of the guard: disarming it. */
     input_t lift = no_input();
-    lift.released = true;
-    lift.x = cx;
-    lift.y = cy;
+    lift.down = false;
     const unsigned lift_actions = sand_ui_step(&ui, &lift);
 
     TEST_ASSERT_EQUAL_UINT(0, lift_actions);
@@ -246,14 +239,18 @@ static void test_a_release_arriving_after_the_screen_changed_is_consumed_exactly
     TEST_ASSERT_EQUAL_INT(SAND_UI_PALETTE, ui.screen);
     TEST_ASSERT_TRUE(ui.swallow_release);
 
+    /* The dangling touch is still armed against - a click landing squarely
+     * on tile 1 while the guard is up must be consumed here, and only
+     * here: ignored, not read as a selection. */
+    const unsigned click_actions = sand_ui_tile_clicked(&ui, 1);
+    TEST_ASSERT_EQUAL_UINT(0, click_actions);
+    TEST_ASSERT_EQUAL_INT(0, ui.brush);
+
     /* Frame 3: the touch's own release finally arrives, now that the
-     * screen is SAND_UI_PALETTE. It is consumed here - and only here. */
+     * screen is SAND_UI_PALETTE - a genuine lift, which disarms the guard
+     * for whatever tap comes next. */
     input_t release = no_input();
-    release.released = true;
-    int cx, cy;
-    tile_center(1, &cx, &cy);
-    release.x = cx;
-    release.y = cy;
+    release.down = false;
     const unsigned release_actions = sand_ui_step(&ui, &release);
 
     TEST_ASSERT_EQUAL_UINT(0, release_actions);   /* swallowed, not a selection */
@@ -274,14 +271,7 @@ static void test_tapping_a_different_tile_selects_it_and_preserves_its_mode(void
     ui.erasing = true;             /* selecting a material must clear this */
     ui.modes[2] = BRUSH_SPAWN;     /* tile 2's own remembered mode */
 
-    int cx, cy;
-    tile_center(2, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-
-    const unsigned actions = sand_ui_step(&ui, &tap);
+    const unsigned actions = sand_ui_tile_clicked(&ui, 2);
 
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
@@ -298,14 +288,7 @@ static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
     ui.erasing = true;             /* a toggle is not a selection - must stay */
     ui.modes[0] = BRUSH_POUR;
 
-    int cx, cy;
-    tile_center(0, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-
-    const unsigned actions = sand_ui_step(&ui, &tap);
+    const unsigned actions = sand_ui_tile_clicked(&ui, 0);
 
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(0, ui.brush);
@@ -313,7 +296,7 @@ static void test_tapping_the_selected_tile_toggles_pour_and_spawn(void)
     TEST_ASSERT_TRUE(ui.erasing);  /* untouched by a toggle */
 
     /* And back again. */
-    const unsigned actions2 = sand_ui_step(&ui, &tap);
+    const unsigned actions2 = sand_ui_tile_clicked(&ui, 0);
     TEST_ASSERT_TRUE(actions2 & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_POUR, ui.modes[0]);
 }
@@ -326,20 +309,28 @@ static void test_tapping_the_selected_tile_when_it_cannot_emit_does_nothing(void
     ui.brush = 1;                  /* MAT_STONE: KIND_STATIC, cannot emit */
     ui.modes[1] = BRUSH_POUR;
 
-    int cx, cy;
-    tile_center(1, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-
-    const unsigned actions = sand_ui_step(&ui, &tap);
+    const unsigned actions = sand_ui_tile_clicked(&ui, 1);
 
     TEST_ASSERT_EQUAL_UINT(0, actions);
     TEST_ASSERT_EQUAL_INT(1, ui.brush);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_POUR, ui.modes[1]);
 }
 
+/* Old behaviour: a tap outside every tile did nothing, because palette_hit()
+ * returned -1 for it and sand_ui's own handling then had no hit to act on.
+ * That hit-test is microui's job now (see sand_ui.h's "WHO HIT-TESTS AND WHO
+ * DECIDES" comment): draw_palette()'s mu_button() per tile simply never
+ * returns true for a point outside every tile, so sand_ui_tile_clicked() is
+ * never called at all - there is nothing left here for a point outside
+ * every tile to be fed to.
+ *
+ * What this test pins instead, unchanged from before: sand_ui_step() itself
+ * never touches brush/erasing for anything other than a BOOT edge while the
+ * palette is open, whatever the touch is doing - selection only ever
+ * changes through sand_ui_tile_clicked(). Driving it through sand_ui_step()
+ * with an ordinary (non-BOOT) touch frame, coordinates included, still
+ * exercises exactly that guarantee - it is simply no longer the coordinates
+ * doing the work. */
 static void test_tapping_outside_every_tile_does_nothing(void)
 {
     sand_ui_t ui;
@@ -410,13 +401,7 @@ static void test_closing_after_selecting_a_different_tile_requests_the_label(voi
     ui.opened_brush = 0;
     ui.opened_mode = BRUSH_POUR;
 
-    int cx, cy;
-    tile_center(2, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-    sand_ui_step(&ui, &tap);
+    sand_ui_tile_clicked(&ui, 2);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
 
     input_t close = no_input();
@@ -437,13 +422,7 @@ static void test_closing_after_toggling_the_selected_tiles_mode_requests_the_lab
     ui.opened_brush = 0;
     ui.opened_mode = BRUSH_POUR;
 
-    int cx, cy;
-    tile_center(0, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-    sand_ui_step(&ui, &tap);
+    sand_ui_tile_clicked(&ui, 0);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[0]);
 
     input_t close = no_input();
