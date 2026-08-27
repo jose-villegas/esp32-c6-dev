@@ -55,6 +55,7 @@
 #include <stdint.h>
 
 #include "microui.h"
+#include "util/fixed.h"
 
 #define UI_FP_SHIFT 16
 #define UI_FP_ONE   (1 << UI_FP_SHIFT)
@@ -74,25 +75,33 @@ typedef struct {
  *
  * Not part of the public shape of this header, but static inline like
  * everything else here so they still link on their own.
+ *
+ * These are thin wrappers over util/fixed.h, which is where the actual
+ * arithmetic and its floor-vs-round reasoning live now - fixed-point
+ * multiply/divide is not a UI concept, and sand.c/sand_liquid.c need the
+ * same operation at a different shift. UI_FP_SHIFT is simply baked in here
+ * as the shift this transform has always used.
+ *
+ * ui_fp_round() keeps its own name and shape rather than becoming a plain
+ * fx_* call: it rounds an already-computed Q16.16 (or, inside ui_fp_mul(),
+ * Q32.32) ACCUMULATOR, not a product of two raw operands - ui_transform_point
+ * hands it the sum of two Q16.16 products plus a translation, which
+ * fx_mul_round()'s two-operand shape has no way to accept. It delegates to
+ * fixed.h's fx_round_shift(), the primitive under fx_mul_round() that takes
+ * the combined value directly, so the rounding rule itself still lives in
+ * one place.
  *-------------------------------------------------------------------------*/
 
-/* Round v (a Q16.16 accumulator) to the nearest plain integer, ties away
- * from zero. Splitting on sign rather than just adding half and shifting
- * matters here: a plain arithmetic shift of a negative number rounds toward
- * -infinity, which would round -0.5px toward -1 and +0.5px toward +1 - a
- * one-pixel bias against the origin that a truncating cast does not have
- * either, but that plain rounding would introduce. */
 static inline int64_t ui_fp_round(int64_t v)
 {
-    const int64_t half = (int64_t)1 << (UI_FP_SHIFT - 1);
-    return (v >= 0) ? (v + half) >> UI_FP_SHIFT : -(((-v) + half) >> UI_FP_SHIFT);
+    return fx_round_shift(v, UI_FP_SHIFT);
 }
 
 /* Multiply two Q16.16 numbers, rounding the result to Q16.16. The product of
- * two Q16.16 ints is implicitly Q32.32; ui_fp_round() brings it back down. */
+ * two Q16.16 ints is implicitly Q32.32; fx_mul_round() brings it back down. */
 static inline ui_fp_t ui_fp_mul(ui_fp_t a, ui_fp_t b)
 {
-    return (ui_fp_t)ui_fp_round((int64_t)a * (int64_t)b);
+    return (ui_fp_t)fx_mul_round(a, b, UI_FP_SHIFT);
 }
 
 /* Divide two Q16.16 numbers, rounding the result to Q16.16. `den` must be
@@ -100,11 +109,7 @@ static inline ui_fp_t ui_fp_mul(ui_fp_t a, ui_fp_t b)
  * against zero. */
 static inline ui_fp_t ui_fp_div(ui_fp_t num, ui_fp_t den)
 {
-    const bool neg = (num < 0) != (den < 0);
-    const int64_t n = ((int64_t)(num < 0 ? -num : num)) << UI_FP_SHIFT;
-    const int64_t d = den < 0 ? -den : den;
-    const int64_t q = (n + d / 2) / d;
-    return (ui_fp_t)(neg ? -q : q);
+    return (ui_fp_t)fx_div_round(num, den, UI_FP_SHIFT);
 }
 
 /*---------------------------------------------------------------------------

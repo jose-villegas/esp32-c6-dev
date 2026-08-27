@@ -16,6 +16,8 @@
 
 #include "sand_priv.h"
 
+#include "util/fixed.h"
+
 /* liquid_mask() - which materials are liquid, as a bitmask over the nibble -
  * moved to sand_priv.h (still static inline) now that sand.c's own sweep needs
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
@@ -886,7 +888,13 @@ static inline int rebound_kick(int push_q8)
     if (push_q8 <= SAND_REBOUND_THRESHOLD) {
         return 0;
     }
-    const int raw = ((push_q8 - SAND_REBOUND_THRESHOLD) * SAND_REBOUND_GAIN) >> 8;
+    /* push_q8 > SAND_REBOUND_THRESHOLD is already established above, so this
+     * operand is non-negative and fx_mul_floor()'s floor agrees with a plain
+     * truncation here - migrated for consistency with the rest of the
+     * simulation's fixed-point math, not because the rounding choice
+     * matters at this particular call site. */
+    const int raw = fx_mul_floor(push_q8 - SAND_REBOUND_THRESHOLD,
+                                  SAND_REBOUND_GAIN, 8);
     return raw < SAND_REBOUND_MAX ? raw : SAND_REBOUND_MAX;
 }
 
