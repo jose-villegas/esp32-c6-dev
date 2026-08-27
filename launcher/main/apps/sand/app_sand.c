@@ -175,11 +175,42 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * "Device" section. */
 #define DETONATE_RADIUS_PX  48
 
-/* This is evaluation scaffolding (see sand_mode_t in sand_ui.h), not a
- * tuned feature. Same order as CRACK_MAX - see sand_enable_impulses()'s
- * own comment in sand.h on why this is a few hundred entries, not a
- * per-cell flag. */
-#define APP_IMPULSE_MAX    256
+/* DETONATE_RADIUS_PX in CELLS, at the FINEST quality (CELL_MIN) - the
+ * same "size every allocation for CELL_MIN regardless of the active
+ * quality" convention this file's own header comment gives for
+ * GRID_W_MAX/GRID_H_MAX above, applied to the blast radius instead of the
+ * grid. Rounded the same way handle_pour_input() rounds every other
+ * pixel radius down to cells: nearest, not truncated. This is CELL_MIN's
+ * worst case for cell-count, not the active quality's - a coarser active
+ * quality only ever needs FEWER of the entries this buys, never more. */
+#define DETONATE_RADIUS_CELLS  ((DETONATE_RADIUS_PX + CELL_MIN / 2) / CELL_MIN)
+
+/* THIS MUST COVER THE WHOLE DISC, not merely be "a few hundred" - the
+ * original value here, a flat 256 chosen only to look like CRACK_MAX
+ * (which sizes an unrelated mechanic, a shatter's frontier, not a blast's
+ * radius), covered barely 14% of a real detonation's ~1,800-cell disc. A
+ * device pass on the first real-radius blast reported it as "barely
+ * noticeable" and "solids barely move" - both traced back to this: with
+ * the cap that undersized, and sand_explode()'s old top-to-bottom scan
+ * order (see its own "QUEUED BY RING" comment in sand.h - fixed
+ * alongside this, but a correctly-sized cap should not need to depend on
+ * scan order to look right at all), only the disc's top nine or ten rows
+ * out of forty-nine ever received an impulse; the entire core and the
+ * whole lower half got none.
+ *
+ * (2 * DETONATE_RADIUS_CELLS + 1) squared is the exact area of the
+ * smallest square that contains a disc of that radius - not pi*r^2's
+ * approximation, a hard upper bound - so a single detonation can never
+ * fill this buffer, whatever DETONATE_RADIUS_PX becomes, without the two
+ * having to be retuned in step by hand. Derived, not a bare number,
+ * because a bare number is exactly what silently drifted out of sync
+ * with the radius it was supposed to cover last time. At the current
+ * DETONATE_RADIUS_PX (48, 24 cells at CELL_MIN) that is 49 * 49 = 2,401
+ * entries - about 14 KB at six bytes each (impulse_t), still far short of
+ * the ~40 KB per-cell field docs/Sand/Explosion-Plan.md rejected, and it
+ * is a one-time allocation like every other buffer in this file. */
+#define APP_IMPULSE_MAX  \
+    ((2 * DETONATE_RADIUS_CELLS + 1) * (2 * DETONATE_RADIUS_CELLS + 1))
 
 /* What the finger puts down.
  *

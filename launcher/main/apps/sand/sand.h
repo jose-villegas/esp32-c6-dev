@@ -552,31 +552,38 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * "how far this particular impulse reaches" belongs to whoever is calling
  * sand_impulse() and choosing what to queue; "how quickly any impulse's
  * push fades" is a property of the flight mechanism itself, and every
- * caller shares it). 14 is a STARTING POINT, not a measurement - there is
- * no device capture behind it the way SAND_REBOUND_GAIN has one. Paired
- * with a `speed` of 200 (see SAND_EXPLODE_INITIAL_SPEED, sand_explode()'s
- * own choice), it reaches zero in ceil(200/14) = 15 steps - a fixed,
- * deterministic upper bound on how long any one entry can fly, for
- * whatever `speed` it started at. That determinism is itself new: the
- * design this replaced (a single fixed chance-in-256 rolled fresh every
- * turn, with no memory of how long a grain had already been flying) only
- * ever shrank the PROBABILITY of surviving another turn, never actually
- * bounded how long that could take. Tune on device once the mechanic
- * itself is judged worth tuning - see docs/Sand/Explosion-Plan.md's
- * "Device" section for what to look at first. */
-#define SAND_IMPULSE_SPEED_RAMP  14
+ * caller shares it). WAS 14, RAISED TO 4: a device pass on the first
+ * real-radius detonation read as "barely noticeable" - a grain's push was
+ * fading out before it had travelled far enough to be seen, on top of the
+ * cap and core problems fixed alongside this (see SAND_EXPLODE_CORE_
+ * DIVISOR and app_sand.c's APP_IMPULSE_MAX). 4 is a STARTING POINT, not a
+ * measurement - there is no device capture behind it the way
+ * SAND_REBOUND_GAIN has one, and neither was 14. Paired with a `speed` of
+ * 250 (see SAND_EXPLODE_INITIAL_SPEED, sand_explode()'s own choice), it
+ * reaches zero in ceil(250/4) = 63 steps - over four times the old bound
+ * of 15 - a fixed, deterministic upper bound on how long any one entry
+ * can fly, for whatever `speed` it started at. That determinism is itself
+ * new: the design this replaced (a single fixed chance-in-256 rolled
+ * fresh every turn, with no memory of how long a grain had already been
+ * flying) only ever shrank the PROBABILITY of surviving another turn,
+ * never actually bounded how long that could take. Tune on device once
+ * this round's changes have been seen too - see docs/Sand/Explosion-
+ * Plan.md's "Device" section for what to look at first. */
+#define SAND_IMPULSE_SPEED_RAMP  4
 
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
  * not a property of sand_impulse() itself, which takes speed as a plain
  * parameter and assumes nothing about what any particular caller wants.
- * 200 is a STARTING POINT, not a measurement, the same as
- * SAND_IMPULSE_SPEED_RAMP - see its own comment for how the two combine
- * into a bounded flight time. Paired with a bigger or smaller radius this
- * is still "how far things fly" in the sense the old SAND_BLAST_DECAY
- * used to mean it, just relocated to belong to the explosion that actually
- * decides it, rather than living inside the generic flight mechanism as
- * though every future caller would want the same number. */
-#define SAND_EXPLODE_INITIAL_SPEED  200
+ * WAS 200, RAISED TO 250 (near the uint8_t ceiling) alongside slowing
+ * SAND_IMPULSE_SPEED_RAMP - see its own comment for the device report
+ * that prompted both and for how the two combine into a bounded flight
+ * time. Still a STARTING POINT, not a measurement. Paired with a bigger
+ * or smaller radius this is still "how far things fly" in the sense the
+ * old SAND_BLAST_DECAY used to mean it, just relocated to belong to the
+ * explosion that actually decides it, rather than living inside the
+ * generic flight mechanism as though every future caller would want the
+ * same number. */
+#define SAND_EXPLODE_INITIAL_SPEED  250
 
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /
@@ -611,13 +618,32 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  *
  * A fraction of the blast's OWN radius, not an independent constant, so a
  * bigger blast gets a bigger flash automatically instead of the same
- * fixed-size fireball no matter how large the outer radius grows. 2 (half
- * the radius) is a starting point, not a measurement: big enough that even
- * radius 1 fills its own centre cell, small enough that a wide blast still
- * has a genuine annulus of material outside the core for the flight pass
- * to do something with, rather than the whole disc being one bare fireball
- * with nothing thrown outward at all. */
-#define SAND_EXPLODE_CORE_DIVISOR  2
+ * fixed-size fireball no matter how large the outer radius grows.
+ *
+ * WAS 2 (half the radius), MEASURED WRONG. Half the radius is a QUARTER of
+ * the disc's area (area scales with the square of the radius), and a
+ * device pass on the first real-radius detonation confirmed exactly that
+ * reads as deletion, not a flash: "most particles are just being
+ * removed". 3 drops the converted area to about 11% - big enough that
+ * even radius 1 still fills its own centre cell (any divisor does; the
+ * centre is always within a core radius of zero), small enough that a
+ * wide blast keeps most of its own disc as real material for the flight
+ * pass to throw, rather than a quarter of it never existing to be thrown
+ * at all. Still a starting point, not a fully tuned measurement - the
+ * device pass that caught the old value has not yet confirmed this one.
+ *
+ * PLAIN DIVISION IS CLAMPED TO A MINIMUM OF 1 for any radius >= 2 - see
+ * sand_explode()'s own comment on `core_radius` in sand.c. Raising this
+ * divisor made a small enough radius round down to a bare single-cell
+ * core (radius 2, for instance: 2 / 3 = 0), and a 20,000-seed sweep found
+ * that single cell genuinely insufficient to seed the density-swap
+ * collapse a packed medium depends on - stuck on about 11% of seeds, not
+ * merely slow, however many further steps it was given. The clamp
+ * restores exactly the core shape the OLD divisor of 2 already gave at
+ * every radius small enough for this one to have zeroed it out, and
+ * changes nothing at the radius that motivated raising it: 24 / 3 = 8 is
+ * already far above the floor, so a real detonation never touches it. */
+#define SAND_EXPLODE_CORE_DIVISOR  3
 
 /* ONE CALLER OF sand_impulse(), seeding many radially. Fill a disc of
  * `radius` around (cx, cy) with fire at its core (see
@@ -630,6 +656,23 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * step_impulses(); this function's only job is deciding WHICH cells get
  * queued and in which direction, which is the one thing genuinely specific
  * to an explosion shape.
+ *
+ * QUEUED BY RING, OUTWARD FROM THE CENTRE - not by row. An earlier version
+ * scanned dy-outer, dx-inner, which reads as an ordinary nested loop right
+ * up until the buffer is smaller than the disc: a device pass on the
+ * first real-radius detonation found that order had handed the entire cap
+ * to the top nine or ten rows of a forty-nine-row disc before the scan
+ * ever reached the core or the lower half, so almost nothing below the
+ * centre ever received an impulse at all - not a size problem alone (see
+ * APP_IMPULSE_MAX's own comment in app_sand.c), a BIAS problem: any cap
+ * smaller than the disc truncates in whatever order the scan visits
+ * cells, and top-to-bottom is the least fair order there is. Ring order
+ * - every cell at Chebyshev distance 0 from the centre, then every cell
+ * at distance 1, and so on outward - means a truncated cap still yields a
+ * complete, symmetric, smaller disc instead of a lopsided crescent. This
+ * is why the cap being large enough barely matters on its own: whatever
+ * caller's buffer, however tight, degrades the same way this one
+ * would if a future radius ever outgrew it again.
  *
  * FIRST fills a core with fire - see SAND_EXPLODE_CORE_DIVISOR's own
  * comment for why an explosion that only ever queued flight entries could
@@ -661,7 +704,9 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * Past the buffer's own capacity, sand_impulse() itself already queues
  * nothing further - see its own comment - so this simply keeps scanning
  * the rest of the disc without incident. A blast bigger than the buffer is
- * a smaller-looking blast, not a bug.
+ * a smaller, but still evenly-shaped, blast - see the ring-order comment
+ * above for why "smaller" no longer means "missing its entire lower
+ * half" - not a bug.
  *
  * CONSERVATION, NOW BOUNDED RATHER THAN EXACT. sand_spawn() and sand_erase()
  * are each individually exact - every cell they touch is accounted for in

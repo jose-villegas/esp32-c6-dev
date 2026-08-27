@@ -11176,6 +11176,17 @@ static void test_a_dropped_entry_never_moves_someone_elses_cell(void)
 
 static impulse_t tiny_impulse_buf[2];
 
+/* Sized to exactly one full ring (see sand_explode()'s own "QUEUED BY
+ * RING" comment in sand.h) around a centre with radius >= 2, so a radius-3
+ * blast's ring 1 - all 8 of a centre's immediate Chebyshev neighbours,
+ * corners included - fits with nothing left over. Used by
+ * test_a_blast_queues_impulses_on_every_side_of_the_centre below, which
+ * needs the cap to actually bind for scan order to matter at all - a
+ * buffer as generous as the standard impulse_buf[] never truncates a
+ * radius-3 disc in an 8x8 grid, so it could not have told ring order from
+ * the old row-order bug this pins. */
+static impulse_t axis_impulse_buf[8];
+
 static void test_the_cap_degrades_gracefully(void)
 {
     fixture();
@@ -11197,30 +11208,53 @@ static void test_the_cap_degrades_gracefully(void)
     }
 
     /* Centre (3,6), radius 1: the four cardinal neighbours all qualify, in
-     * sand_explode()'s own dy-then-dx scan order - UP, LEFT, RIGHT, DOWN.
-     * The buffer holds 2, so UP and LEFT get an entry; RIGHT and DOWN do
-     * not, and - being part of a fully stable bed - must simply stay
-     * exactly where they are. Radius 1 also means the cleared core (radius
-     * 1 / SAND_EXPLODE_CORE_DIVISOR = 0) is only the centre cell itself,
-     * (3,6) - neither RIGHT (4,6) nor DOWN (3,7) is it. */
+     * sand_explode()'s own RING order (see its "QUEUED BY RING" comment
+     * in sand.h) - the centre first (skipped, no direction to throw it
+     * in), then ring 1 walked as a square's own top edge, bottom edge,
+     * then left/right edges: UP, then DOWN, then LEFT, then RIGHT. The
+     * buffer holds 2, so UP and DOWN get an entry; LEFT and RIGHT do not.
+     * Radius 1 also means the filled core (radius 1 / SAND_EXPLODE_
+     * CORE_DIVISOR = 0) is only the centre cell itself, (3,6) - none of
+     * the four cardinal neighbours is it. */
     sand_explode(&s, 3, 6, 1);
+
+    /* Checked directly against the queue itself, before a single step has
+     * run, rather than inferred from where anything ends up on the board
+     * afterward - three of these four neighbours happen to be
+     * structurally unable to move in this scene regardless of whether
+     * they were queued (LEFT and RIGHT by the packed bed either side of
+     * them, DOWN by the grid's own bottom edge), which would make "did it
+     * move" the wrong question to ask here. "Was it queued at all" is the
+     * only question a buffer-of-2 test can actually answer. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, s.impulse_count,
+        "the buffer holds 2, so exactly 2 of the 4 cardinal neighbours "
+        "must have been queued - not fewer, and the third and fourth must "
+        "not have silently bumped one of the first two out");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(5 * W + 3),
+        s.impulse_buf[0].index,
+        "ring order visits the centre, then ring 1's top edge first - UP "
+        "(3,5) must be the first neighbour queued");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(7 * W + 3),
+        s.impulse_buf[1].index,
+        "ring 1's bottom edge is next - DOWN (3,7) must be the second, "
+        "and last, neighbour the buffer had room for");
 
     /* Measured AFTER the explode - see test_a_blast_conserves_grains's own
      * comment on why the core's removal is real and everything past this
-     * point is the invariant under test: RIGHT and DOWN specifically, since
-     * they were never queued at all, must survive completely untouched -
-     * neither flown, nor caved into the core the way a cell adjacent to it
-     * legitimately might have been. */
+     * point is the invariant under test: LEFT and RIGHT specifically,
+     * since they were never queued at all, must survive completely
+     * untouched - neither flown, nor caved into the core the way a cell
+     * adjacent to it legitimately might have been. */
     const int expected = sand_count(&s);
 
     for (int i = 0; i < 20; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 2, 6),
+        "the LEFT neighbour did not fit in a buffer of 2 and must not fly");
     TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 6),
-        "the RIGHT neighbour did not fit in a buffer of 2 and must not fly");
-    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 7),
-        "the DOWN neighbour did not fit either, for the same reason");
+        "the RIGHT neighbour did not fit either, for the same reason");
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
         "over the cap is a smaller-looking blast, not a bug - nothing may "
         "be lost");
@@ -11307,6 +11341,21 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
     fixture();
     sand_enable_impulses(&s, impulse_buf, W * H);
 
+    /* Computed from the constants themselves, not a bare number - see the
+     * comment on the assertion below for what this bounds and why it must
+     * track SAND_EXPLODE_INITIAL_SPEED/SAND_IMPULSE_SPEED_RAMP rather than
+     * assume whatever value they happened to hold when this was written.
+     * +5 is slack for the loop itself: the ramp guarantees a roll with a
+     * zero numerator by this many steps, but that roll's failure is what
+     * actually drops the entry, so the step AT max_lifetime can still
+     * succeed on a small nonzero `speed` one decrement shy of zero - see
+     * step_impulses()'s own comment on the roll happening before the
+     * decay is applied. */
+    const int max_lifetime =
+        (SAND_EXPLODE_INITIAL_SPEED + SAND_IMPULSE_SPEED_RAMP - 1) /
+        SAND_IMPULSE_SPEED_RAMP;
+    const int steps = max_lifetime + 5;
+
     int max_x = 1;
 
     for (int trial = 0; trial < 16; trial++) {
@@ -11324,12 +11373,12 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
          * gravity here only ever pulls straight down, column 1. */
         sand_explode(&s, 0, 1, 1);
 
-        for (int i = 0; i < 20; i++) {
+        for (int i = 0; i < steps; i++) {
             sand_step(&s, 0, 1000, 0);
         }
 
-        /* THE CURVATURE ITSELF, not just sustained motion: 20 steps is
-         * past ceil(SAND_EXPLODE_INITIAL_SPEED / SAND_IMPULSE_SPEED_RAMP) = 15,
+        /* THE CURVATURE ITSELF, not just sustained motion: `steps` is
+         * past ceil(SAND_EXPLODE_INITIAL_SPEED / SAND_IMPULSE_SPEED_RAMP),
          * the fixed step count at which `speed` is guaranteed to have
          * ramped all the way to zero - see SAND_EXPLODE_INITIAL_SPEED's own
          * comment in sand.h. Once that happens, rng_chance() with a zero
@@ -11457,6 +11506,88 @@ static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_r
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, empty_in_row1,
         "the disturbance must reach further than the blast radius itself - "
         "this is the exact scene that read as \"no holes\" on the panel");
+}
+
+/* THE SPECIFIC REGRESSION THAT JUST BIT US, pinned directly. A device
+ * pass on the first real-radius detonation reported it as "barely
+ * noticeable" with "solids barely move" - traced to sand_explode()'s
+ * OLD scan order (dy-outer, dx-inner, top row to bottom row) handing an
+ * undersized cap entirely to the disc's top nine or ten rows before the
+ * scan ever reached the core or the lower half. Every test above this
+ * line happens to detonate with a buffer at least as big as the disc
+ * (impulse_buf[] is W*H, and an 8x8 grid's largest disc never comes
+ * close), so none of them ever truncate at all - they would pass exactly
+ * as they do now even with the old row-order scan restored, because
+ * nothing was ever cut off for the order to be unfair ABOUT. This is the
+ * one test in the file where the cap must actually bind for the fix to
+ * be tested at all.
+ *
+ * axis_impulse_buf[8] is sized to exactly one full ring - see its own
+ * comment above - so a radius-3 blast's immediate ring of 8 neighbours
+ * fits with nothing to spare, and ring 2 and beyond never get a slot.
+ * Under ring order that ring is EVERY direction at once - all four axes,
+ * all four diagonals - so all four axis checks below must pass. Under
+ * the old row order, the same cap of 8 is exhausted while still working
+ * through the rows above the centre (dy = -3 contributes 1 candidate, dy
+ * = -2 contributes 5, already 6 of the 8 slots, and dy = -1 supplies the
+ * rest before the scan reaches dy = 0 at all) - so DOWN, LEFT and RIGHT
+ * would all still be waiting for a slot that never comes, while UP alone
+ * succeeds. A regression to row order would fail exactly three of these
+ * four assertions, never all four and never zero - which is what makes
+ * this a test of ORDER specifically, not merely of whether the cap
+ * exists.
+ *
+ * Checked directly against the queue itself (s.impulse_count entries in
+ * s.impulse_buf), not inferred from where anything ends up on the board -
+ * inferring it from the board is what let the old bug ship in the first
+ * place, since a test that only watches for "something moved" cannot
+ * tell a fair ring from a lopsided crescent. ring_dir()'s own numbering
+ * (sand_priv.h, not included here - this suite only sees the public dir
+ * byte) is 0 down, 2 right, 4 up, 6 left; 1/3/5/7 are the diagonals
+ * between them and are not checked here, since the four axes are the
+ * ones whose presence or absence actually distinguishes ring order from
+ * row order at this cap. */
+static void test_a_blast_queues_impulses_on_every_side_of_the_centre(void)
+{
+    fixture();
+    sand_enable_impulses(&s, axis_impulse_buf, 8);
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    sand_explode(&s, 4, 4, 3);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(8, s.impulse_count,
+        "the buffer holds exactly one ring's worth (8) and every one of "
+        "a fully packed grid's neighbours qualifies, so all 8 slots must "
+        "have been used");
+
+    bool saw_up = false, saw_down = false, saw_left = false, saw_right = false;
+    for (int i = 0; i < s.impulse_count; i++) {
+        switch (s.impulse_buf[i].dir) {
+        case 4: saw_up    = true; break;
+        case 0: saw_down  = true; break;
+        case 6: saw_left  = true; break;
+        case 2: saw_right = true; break;
+        default: break;
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(saw_up,
+        "an impulse above the centre must be queued - this direction "
+        "worked even under the old bug, so its absence here would mean "
+        "something else broke");
+    TEST_ASSERT_TRUE_MESSAGE(saw_down,
+        "an impulse below the centre must be queued - this is exactly "
+        "the direction the old top-to-bottom scan order starved first, "
+        "along with the entire core between it and the centre");
+    TEST_ASSERT_TRUE_MESSAGE(saw_left,
+        "an impulse left of the centre must be queued");
+    TEST_ASSERT_TRUE_MESSAGE(saw_right,
+        "an impulse right of the centre must be queued");
 }
 
 /* NOT a no-op any more, and deliberately so: an explosion in a vacuum
@@ -14431,6 +14562,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
     RUN_TEST(test_a_flying_grain_keeps_its_outward_push_while_falling);
     RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);
+    RUN_TEST(test_a_blast_queues_impulses_on_every_side_of_the_centre);
     RUN_TEST(test_detonating_empty_space_still_flashes_the_core);
     RUN_TEST(test_without_a_buffer_explode_does_nothing);
 

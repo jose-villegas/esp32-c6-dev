@@ -377,6 +377,44 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
     return removed;
 }
 
+/* One candidate cell of sand_explode()'s own annulus scan, below - split
+ * out so the ring-order loop that calls it (see that function's own
+ * comment on why ring order rather than row order) does not have to repeat
+ * this body once per edge of every ring it walks. (dx, dy) is the offset
+ * from the centre, exactly as sand_explode() itself receives it; `r2` is
+ * the outer radius squared, so this still enforces the true circular disc
+ * even though the ring loop that reaches it walks square Chebyshev shells,
+ * not circles - the shell order only decides SEQUENCE, this decides
+ * MEMBERSHIP, and the two are independent. */
+static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
+                                  int r2)
+{
+    if (dx * dx + dy * dy > r2) {
+        return;
+    }
+
+    /* (dx, dy) IS the vector from the centre to this cell, so handing it
+     * straight to the same quantiser gravity uses gives "away from the
+     * centre" in one of the eight directions the rest of the simulation
+     * already works in - no separate angle math needed. The one input
+     * this can never resolve is the centre cell itself, where (dx, dy) is
+     * (0, 0) - sand_gravity_direction() reports that as no direction at
+     * all, and this simply leaves that cell where it is rather than throw
+     * it nowhere in particular. */
+    int qdx, qdy;
+    sand_gravity_direction(dx, dy, &qdx, &qdy);
+    if (qdx == 0 && qdy == 0) {
+        return;
+    }
+
+    /* Bounds and emptiness are sand_impulse()'s own checks now - see its
+     * comment - so this has nothing left to verify before calling it;
+     * past the cap it silently queues nothing further on its own, so
+     * there is no count to watch here either. */
+    sand_impulse(s, cx + dx, cy + dy, ring_of(qdx, qdy),
+                 SAND_EXPLODE_INITIAL_SPEED);
+}
+
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
 {
     /* Disabled, or already full - see this function's own comment in
@@ -441,7 +479,25 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * thrown outward along with everything else, which is one more reason
      * a real explosion's flash reads as an expanding thing rather than a
      * static disc. */
-    const int core_radius = radius / SAND_EXPLODE_CORE_DIVISOR;
+    /* A BARE SINGLE CELL turned out not to be enough of a seed once
+     * SAND_EXPLODE_CORE_DIVISOR grew from 2 to 3 - measured, not assumed:
+     * a 20,000-seed sweep of a fully packed radius-2 detonation (division
+     * gives core_radius 0 there, versus 1 at the old divisor) found the
+     * density-swap collapse simply never reaching far enough to open a
+     * cavity on about 11% of seeds, no matter how many further steps it
+     * was given - genuinely stuck, not merely slow, so more steps was not
+     * the fix. `radius >= 2` clamped to a minimum of 1 restores exactly
+     * the old, already-proven core shape at every radius small enough for
+     * plain division to have zeroed it out, while changing nothing at the
+     * radii that motivated raising the divisor in the first place: at a
+     * real detonation's scale (radius 24), 24 / 3 = 8 is already far
+     * above this floor, so the floor never engages there at all. radius
+     * 1 is deliberately excluded from the clamp - it stays at core_radius
+     * 0, the single centre cell every test and comment already assumes,
+     * since nothing measured that case as broken. */
+    const int core_radius_raw = radius / SAND_EXPLODE_CORE_DIVISOR;
+    const int core_radius = (core_radius_raw == 0 && radius >= 2)
+                                 ? 1 : core_radius_raw;
     const int core_r2 = core_radius * core_radius;
     for (int fdy = -core_radius; fdy <= core_radius; fdy++) {
         for (int fdx = -core_radius; fdx <= core_radius; fdx++) {
@@ -472,36 +528,42 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * cap, re-acquisition - is sand_impulse()'s and step_impulses()'s job,
      * not this loop's; all this does is decide which cells qualify and
      * which direction each one gets, which is the one part of an explosion
-     * that is genuinely specific to its shape. */
+     * that is genuinely specific to its shape.
+     *
+     * BY RING, OUTWARD FROM THE CENTRE - not by row. See this loop's own
+     * comment in sand.h ("QUEUED BY RING, OUTWARD FROM THE CENTRE") for
+     * why: a device pass on the first real-radius detonation found that
+     * scanning dy-then-dx handed the ENTIRE cap to the top nine or ten
+     * rows of the disc before the scan ever reached the core or the lower
+     * half, because that is what a top-to-bottom scan truncated by a cap
+     * does. `ring` is the Chebyshev distance from the centre -
+     * max(|dx|, |dy|) - not the true Euclidean one, because a SQUARE
+     * ring's border can be walked directly (four edges, no interior
+     * re-scan) where a true circular one would need either a sort or a
+     * repeated full-box scan per ring; the r2 check inside
+     * queue_outward_impulse() still enforces the real circular disc
+     * regardless of which square ring a cell's Chebyshev distance puts it
+     * in, so this only changes the ORDER cells are offered to
+     * sand_impulse() in, never which cells qualify. Every (dx, dy) with
+     * max(|dx|, |dy|) == ring is visited exactly once: ring 0 is the
+     * centre alone; each ring after that is its own square's top edge,
+     * bottom edge, then the left and right edges with the shared corners
+     * left out (already covered by the top/bottom pass). If the buffer
+     * ever fills partway through, whatever ring was in progress is the
+     * only one left incomplete - the result is a smaller, still-complete,
+     * still-symmetric disc, not a crescent missing everything below a
+     * line. */
     const int r2 = radius * radius;
 
-    for (int dy = -radius; dy <= radius; dy++) {
-        for (int dx = -radius; dx <= radius; dx++) {
-            if (dx * dx + dy * dy > r2) {
-                continue;
-            }
-
-            /* (dx, dy) IS the vector from the centre to this cell, so
-             * handing it straight to the same quantiser gravity uses gives
-             * "away from the centre" in one of the eight directions the
-             * rest of the simulation already works in - no separate angle
-             * math needed. The one input this can never resolve is the
-             * centre cell itself, where (dx, dy) is (0, 0) - sand_gravity_
-             * direction() reports that as no direction at all, and this
-             * simply leaves that cell where it is rather than throw it
-             * nowhere in particular. */
-            int qdx, qdy;
-            sand_gravity_direction(dx, dy, &qdx, &qdy);
-            if (qdx == 0 && qdy == 0) {
-                continue;
-            }
-
-            /* Bounds and emptiness are sand_impulse()'s own checks now -
-             * see its comment - so this has nothing left to verify before
-             * calling it; past the cap it silently queues nothing further
-             * on its own, so there is no count to watch here either. */
-            sand_impulse(s, cx + dx, cy + dy, ring_of(qdx, qdy),
-                         SAND_EXPLODE_INITIAL_SPEED);
+    queue_outward_impulse(s, cx, cy, 0, 0, r2);
+    for (int ring = 1; ring <= radius; ring++) {
+        for (int dx = -ring; dx <= ring; dx++) {
+            queue_outward_impulse(s, cx, cy, dx, -ring, r2);
+            queue_outward_impulse(s, cx, cy, dx,  ring, r2);
+        }
+        for (int dy = -ring + 1; dy <= ring - 1; dy++) {
+            queue_outward_impulse(s, cx, cy, -ring, dy, r2);
+            queue_outward_impulse(s, cx, cy,  ring, dy, r2);
         }
     }
 }
