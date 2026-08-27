@@ -87,6 +87,19 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
 
+/* A one-pixel line from (x0, y0) to (x1, y1), both endpoints included.
+ *
+ * Clipped like everything else here, but clipped PER PIXEL rather than by
+ * shortening the line first: a line that runs a long way off-screen still
+ * costs a step for every pixel of its length, drawing none of them. That is
+ * fine for a plot whose points are all within a screen or so of the panel,
+ * and is worth knowing before feeding this something unbounded.
+ *
+ * Exists because the startup animation plots a curve, and a curve is a few
+ * hundred short segments - see boot_anim.c. Nothing before it needed a line
+ * at all, which is why this is the newest primitive in the file. */
+void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
+
 /* Draws at GFX_GLYPH_SCALE - the size the UI is laid out around. */
 void gfx_text(int x, int y, const char *text, gfx_color_t color);
 

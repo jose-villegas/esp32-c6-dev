@@ -135,6 +135,117 @@ void test_fill_rect_writes_exactly_its_own_area(void)
     TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(39, 60));
 }
 
+/* --- lines -------------------------------------------------------------- */
+
+void test_a_horizontal_line_covers_both_endpoints(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0x00FF00);
+
+    gfx_clear(bg);
+    gfx_line(10, 30, 40, 30, fg);
+
+    /* Inclusive at both ends: 40 - 10 + 1. A line that quietly drops its last
+     * pixel leaves a gap at every joint of a polyline, which is what a curve
+     * is made of. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(31, count_pixels(fg),
+        "a horizontal line should cover both of its endpoints and nothing "
+        "else");
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(10, 30));
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(40, 30));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(9, 30));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(41, 30));
+}
+
+void test_a_line_is_the_same_line_drawn_backwards(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF8800);
+
+    /* Same two points, opposite order. Bresenham breaks ties by the direction
+     * it steps in, so the two passes can differ - but only where they are
+     * already adjacent, never by a pixel's worth of coverage. */
+    gfx_clear(bg);
+    gfx_line(5, 7, 60, 33, fg);
+    const int forward = count_pixels(fg);
+
+    gfx_clear(bg);
+    gfx_line(60, 33, 5, 7, fg);
+    const int backward = count_pixels(fg);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(forward, backward,
+        "drawing a line end-to-start covered a different number of pixels");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(56, forward,
+        "a line should be one pixel per step along its longer axis");
+}
+
+void test_a_single_point_line_draws_one_pixel(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0x00FFFF);
+
+    gfx_clear(bg);
+    gfx_line(100, 100, 100, 100, fg);
+
+    TEST_ASSERT_EQUAL_INT(1, count_pixels(fg));
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(100, 100));
+}
+
+void test_a_line_is_clipped_rather_than_wrapped(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+
+    gfx_clear(bg);
+    /* Starts off the left edge and off the top, ends on screen. The failure
+     * this guards against is not a crash but a wrap: an unclipped write at
+     * x = -1 lands at the far end of the previous row. */
+    gfx_line(-50, -20, 20, 15, fg);
+
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(fg, pixel_at(20, 15),
+        "the on-screen end of the line should still be drawn");
+    for (int y = 0; y < GFX_HEIGHT; y++) {
+        TEST_ASSERT_EQUAL_HEX16_MESSAGE(bg, pixel_at(GFX_WIDTH - 1, y),
+            "a clipped line wrapped onto the opposite edge");
+    }
+}
+
+void test_a_line_entirely_off_screen_draws_nothing(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFFFF00);
+
+    gfx_clear(bg);
+    gfx_line(-100, -100, -10, -40, fg);
+    gfx_line(GFX_WIDTH + 5, 10, GFX_WIDTH + 90, 200, fg);
+
+    TEST_ASSERT_EQUAL_INT(0, count_pixels(fg));
+}
+
+void test_a_line_honours_the_clip_rect(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0x8888FF);
+
+    gfx_clear(bg);
+    gfx_set_clip(20, 20, 10, 10);
+    gfx_line(0, 25, GFX_WIDTH - 1, 25, fg);
+    gfx_clear_clip();
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(10, count_pixels(fg),
+        "only the part of the line inside the clip rect should be drawn");
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(20, 25));
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(29, 25));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(19, 25));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(30, 25));
+}
+
 void test_fill_rect_is_clipped_to_the_screen(void)
 {
     fixture();
@@ -708,6 +819,12 @@ void run_gfx_suite(void)
     RUN_TEST(test_clear_touches_every_pixel);
     RUN_TEST(test_fill_rect_writes_exactly_its_own_area);
     RUN_TEST(test_fill_rect_is_clipped_to_the_screen);
+    RUN_TEST(test_a_horizontal_line_covers_both_endpoints);
+    RUN_TEST(test_a_line_is_the_same_line_drawn_backwards);
+    RUN_TEST(test_a_single_point_line_draws_one_pixel);
+    RUN_TEST(test_a_line_is_clipped_rather_than_wrapped);
+    RUN_TEST(test_a_line_entirely_off_screen_draws_nothing);
+    RUN_TEST(test_a_line_honours_the_clip_rect);
     RUN_TEST(test_fill_rect_entirely_off_screen_draws_nothing);
     RUN_TEST(test_clip_rect_restricts_drawing);
     RUN_TEST(test_pixel_outside_the_screen_is_ignored);

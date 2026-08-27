@@ -1,5 +1,6 @@
 #include "gfx.h"
 #include "gfx_dirty.h"
+#include "intmath.h"
 
 #include <string.h>
 
@@ -321,6 +322,50 @@ void gfx_pixel(int x, int y, gfx_color_t color)
     }
     fb[y * GFX_WIDTH + x] = color;
     mark_band(y, y + 1);
+}
+
+/* Bresenham, in the form that treats both axes alike so no case analysis is
+ * needed for steep versus shallow lines.
+ *
+ * The dirty box is worked out up front, from the line's own bounding box
+ * intersected with the clip rect, and marked ONCE - rather than per pixel the
+ * way gfx_pixel() would. A diagonal line's bounding box is mostly empty, so
+ * this claims more than it writes; that only ever costs bus time, whereas
+ * claiming too little leaves stale pixels on the panel. */
+void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
+{
+    int bx0 = im_min(x0, x1), bx1 = im_max(x0, x1) + 1;
+    int by0 = im_min(y0, y1), by1 = im_max(y0, y1) + 1;
+
+    if (bx0 < clip.x0) bx0 = clip.x0;
+    if (by0 < clip.y0) by0 = clip.y0;
+    if (bx1 > clip.x1) bx1 = clip.x1;
+    if (by1 > clip.y1) by1 = clip.y1;
+
+    const int dx = im_abs(x1 - x0);
+    const int dy = -im_abs(y1 - y0);
+    const int sx = x0 < x1 ? 1 : -1;
+    const int sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    for (;;) {
+        if (x0 >= clip.x0 && x0 < clip.x1 && y0 >= clip.y0 && y0 < clip.y1) {
+            fb[(size_t)y0 * GFX_WIDTH + x0] = color;
+        }
+        if (x0 == x1 && y0 == y1) {
+            break;
+        }
+        /* One error term, two independent tests: whichever axis the line is
+         * long on steps every time, the other steps when the error says so,
+         * and a 45-degree line steps both. */
+        const int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+
+    if (bx0 < bx1 && by0 < by1) {
+        dirty_mark(bx0, by0, bx1 - bx0, by1 - by0);
+    }
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
