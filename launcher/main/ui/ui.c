@@ -476,20 +476,61 @@ static void draw_command(const mu_Command *cmd)
         const mu_Color halo = ui_text_halo(ink);
         const gfx_font_t *font = cmd->text.font ?
             (const gfx_font_t *)cmd->text.font : gfx_default_font();
-
-        /* The command's position is mapped once; the quarter turn it maps
-         * through decides which gfx entry point can even draw a rotated
-         * glyph. Under identity this is quarter 0 and mx/my equal the
-         * command's own position exactly (see ui_transform_rect()'s Q16.16
-         * exactness note in ui_transform.h). gfx_text_font() takes the
-         * quarter turn directly and draws quarter 0 exactly as gfx_text()
-         * did, so calling it unconditionally is not an approximation of
-         * the old two-branch behaviour - it IS that behaviour, collapsed
-         * into the one entry point that already handled both cases
-         * underneath. */
-        int mx, my;
-        ui_transform_point(t, cmd->text.pos.x, cmd->text.pos.y, &mx, &my);
         const int quarter = ui_transform_quarter(t);
+
+        /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT JUST ITS ORIGIN
+         *
+         * Every other command here (MU_COMMAND_RECT/ICON/CLIP) maps its
+         * whole rect through ui_transform_rect() - the one function proven
+         * exact under any quarter turn. This used to map only cmd->text.pos
+         * and then walk gfx_text_font()'s per-glyph step table from there,
+         * which reconstructs the string's physical footprint from a single
+         * mapped point plus an assumed direction instead of transforming
+         * the string's own bounding box the way everything else does. That
+         * mismatch is exact and reproducible: mapping a point does not
+         * commute with "walk N glyphs and take the far edge" the way
+         * mapping a box's far corner does, so at quarter 1 and 3 the drawn
+         * string landed a full glyph cell off from where the box says it
+         * should be, and at quarter 2 it was off on both axes - reported on
+         * hardware as rotated button/label text drifting off-centre.
+         *
+         * So this measures the string's LOGICAL box - the same
+         * gfx_font_text_width()/gfx_font_height() measurement
+         * measure_text_width()/measure_text_height() above already use to
+         * size it, so the two can never disagree about the string's extent
+         * - and maps that whole box through ui_transform_rect(), exactly
+         * like the other three commands. */
+        const int tw = gfx_font_text_width(font, cmd->text.str, -1,
+                                           GFX_GLYPH_SCALE);
+        const int th = gfx_font_height(font, GFX_GLYPH_SCALE);
+        const mu_Rect box = ui_transform_rect(
+            t, (mu_Rect){ cmd->text.pos.x, cmd->text.pos.y, tw, th });
+
+        /* gfx_text_font()'s (x, y) is the FIRST GLYPH's cell, not a corner
+         * of the box - at quarter 0 and 1 the string walks forward (+x or
+         * +y) away from the box's own top-left corner, so that corner IS
+         * the origin; at quarter 2 and 3 it walks backward from the FAR end
+         * of the box, one glyph cell in from that far edge. This is
+         * app_sand/palette.c's palette_label_origin() port of exactly this
+         * same problem (see its own comment and suite_palette.c's tests for
+         * the four corner/direction pairs and the proof it centres
+         * correctly at every turn) - ported rather than called directly
+         * because ui/ sits below apps/, so ui.c pulling in apps/sand/ would
+         * be a backwards layering dependency. palette_label_origin() itself
+         * is untouched and stays the reference implementation, even though
+         * nothing calls it for the palette any more now that the palette
+         * rotates as one whole microui-drawn unit. The step is the font's
+         * own cell width at this scale - the same value gfx_text_font()'s
+         * step table advances by per glyph (today's font is monospace, the
+         * same assumption palette_label_origin() already makes with
+         * PALETTE_CHAR_W). */
+        const int step_w = font->cell_w * GFX_GLYPH_SCALE;
+        int mx = box.x, my = box.y;
+        if (quarter == 2) {
+            mx = box.x + box.w - step_w;
+        } else if (quarter == 3) {
+            my = box.y + box.h - step_w;
+        }
 
         ui_text_pass_t passes[UI_TEXT_MAX_PASSES];
         const int n = ui_text_passes(text_style, passes, UI_TEXT_MAX_PASSES);
