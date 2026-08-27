@@ -105,10 +105,18 @@ typedef struct {
  *
  * Measured against this board on 2026-08-27:
  *
- *     0   Portrait
- *     1   Landscape             (USB connector to the right - see below)
+ *     0   Portrait               (USB connector to the right)
+ *     1   Landscape              (USB connector at the top)
  *     2   Portrait, upside down
  *     3   Landscape, upside down
+ *
+ * The USB position was first recorded backwards - written down as "landscape,
+ * USB right" before it was actually checked against the board, when it is
+ * portrait that has USB on the right; landscape has it at the top. Corrected
+ * once, not because it changes DISPLAY_DEFAULT_QUARTER below (that stays
+ * quarter 1, confirmed independently of which edge USB sits on), but because
+ * a wrong physical fact sitting in a comment is worse than no comment at all -
+ * the next reader has no way to know it was never checked.
  *
  * These four names are the start of the vocabulary this shell's apps
  * should share for "which way is the board being held" - use them instead
@@ -128,9 +136,10 @@ typedef struct {
  * something a device-agnostic module should bake into its own reset).
  *
  * DISPLAY_LANDSCAPE, not a bare 1 - this board is normally held sideways
- * to its native upright, USB connector to the right, and the table above
- * is what confirms that is quarter 1 specifically. It was a first guess
- * when this constant was written; it no longer is. */
+ * to its native upright, and the table above is what confirms that is
+ * quarter 1 specifically, independent of which edge USB sits on in that
+ * hold. It was a first guess when this constant was written; it no
+ * longer is. */
 #define DISPLAY_DEFAULT_QUARTER DISPLAY_LANDSCAPE
 
 void display_init(display_t *d);
