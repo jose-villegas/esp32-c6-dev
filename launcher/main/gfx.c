@@ -14,8 +14,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 
-#include "font8x8_basic.h"
-
 /* gfx_dirty.h cannot include gfx.h (it must stay ESP-IDF-free to compile on
  * a host), so it carries its own GFX_DIRTY_WIDTH/HEIGHT literals instead of
  * gfx.h's BSP-derived GFX_WIDTH/HEIGHT. This is what keeps the two from
@@ -347,21 +345,34 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
 /*---------------------------------------------------------------------------
  * Text
  *
- * font8x8_basic is public-domain 8x8 bitmap data: one byte per row, and
- * within a row bit 0 is the LEFTMOST pixel.
+ * One font-aware path (gfx_text_font(), gfx_font_width()) that everything
+ * else here delegates to, passing gfx_default_font() - see gfx_font.h for
+ * what a gfx_font_t is and why it exists: honouring microui's mu_Font is a
+ * later task, in files this one steers clear of, and that task needs a font
+ * to point AT. gfx_default_font() wraps font8x8_basic.h's data, which is
+ * public-domain 8x8 bitmap data: one byte per row, and within a row bit 0 is
+ * the LEFTMOST pixel - see gfx_font_8x8's own comment in gfx_font.h.
  *-------------------------------------------------------------------------*/
+
+const gfx_font_t *gfx_default_font(void)
+{
+    return &gfx_font_8x8;
+}
+
+int gfx_font_width(const gfx_font_t *font, const char *text, int len,
+                   int scale)
+{
+    return gfx_font_text_width(font, text, len, scale);
+}
 
 int gfx_text_width(const char *text, int len)
 {
-    if (len < 0) {
-        len = (int)strlen(text);
-    }
-    return len * GFX_CHAR_W;
+    return gfx_font_width(gfx_default_font(), text, len, GFX_GLYPH_SCALE);
 }
 
 int gfx_text_height(void)
 {
-    return GFX_CHAR_H;
+    return gfx_font_height(gfx_default_font(), GFX_GLYPH_SCALE);
 }
 
 void gfx_text(int x, int y, const char *text, gfx_color_t color)
@@ -375,67 +386,103 @@ void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
     gfx_text_turned(x, y, text, color, scale, 0);
 }
 
-/* Where one font pixel at (row, col) within its own 8x8 cell lands once
- * rotated by `turn` quarter-turns. The cell keeps its origin at (x, y)
- * whichever way it is turned - only the string's advance direction differs
- * between rotations, not this. Drawn as a scale x scale square. */
-static void draw_rotated_font_pixel(int x, int y, int row, int col,
-                                    int scale, int turn, gfx_color_t color)
+/* Where one font pixel at (row, col) within its own cell lands once rotated
+ * by `turn` quarter-turns. The cell keeps its origin at (x, y) whichever way
+ * it is turned - only the string's advance direction differs between
+ * rotations, not this. Drawn as a scale x scale square.
+ *
+ * Generalised from the old fixed-8x8 version to font->cell_w/cell_h, but
+ * still only ever exercised at cell_w == cell_h == 8 - the only font that
+ * exists. A future non-square font's rotation is unverified until one shows
+ * up to test it against. */
+static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
+                                    int row, int col, int scale, int turn,
+                                    gfx_color_t color)
 {
     int px, py;
     switch (turn) {
-    case 1:  px = 7 - row; py = col;     break;
-    case 2:  px = 7 - col; py = 7 - row; break;
-    case 3:  px = row;     py = 7 - col; break;
-    default: px = col;     py = row;     break;
+    case 1:  px = font->cell_h - 1 - row; py = col;                   break;
+    case 2:  px = font->cell_w - 1 - col; py = font->cell_h - 1 - row; break;
+    case 3:  px = row;                    py = font->cell_w - 1 - col; break;
+    default: px = col;                    py = row;                   break;
     }
     gfx_fill_rect(x + px * scale, y + py * scale, scale, scale, color);
 }
 
-static void draw_glyph_turned(int x, int y, unsigned char ch,
-                              gfx_color_t color, int scale, int turn)
+/* Draws one glyph of `font`, or nothing at all when there is nothing safe to
+ * draw:
+ *
+ *   - `ch` outside [font->first, font->first + font->count) - the same gate
+ *     gfx_text_turned() always had (it skipped anything >= 128, and this
+ *     font's first/count is exactly [0, 128)), generalised to whatever range
+ *     `font` actually covers.
+ *
+ *   - font->bpp != 1. The coverage atlas this descriptor makes room for
+ *     needs blending to draw - each atlas byte would be a coverage level,
+ *     not a 1-bit mask - and gfx has no blending anywhere yet (draw_command()
+ *     in ui.c skips transparent rects for the same reason, per its own
+ *     comment). Wiring that up is a separate task; an unrendered glyph is a
+ *     far smaller problem than a garbled one in the meantime. */
+static void draw_glyph_font(const gfx_font_t *font, int x, int y,
+                            unsigned char ch, gfx_color_t color, int scale,
+                            int turn)
 {
-    const char *glyph = font8x8_basic[ch];
+    if (font->bpp != 1) {
+        return;
+    }
+    if (ch < font->first || (unsigned)(ch - font->first) >= font->count) {
+        return;
+    }
 
-    for (int row = 0; row < 8; row++) {
-        const unsigned char bits = (unsigned char)glyph[row];
+    const uint8_t *glyph = font->atlas + (size_t)(ch - font->first) * font->cell_h;
+
+    for (int row = 0; row < font->cell_h; row++) {
+        const uint8_t bits = glyph[row];
         if (bits == 0) {
             continue;
         }
-        for (int col = 0; col < 8; col++) {
+        for (int col = 0; col < font->cell_w; col++) {
             if (bits & (1 << col)) {
-                draw_rotated_font_pixel(x, y, row, col, scale, turn, color);
+                draw_rotated_font_pixel(font, x, y, row, col, scale, turn, color);
             }
         }
     }
 }
 
-void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
-                     int scale, int quarter_turns)
+void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
+                   int scale, int quarter_turns, const gfx_font_t *font)
 {
     if (scale < 1) {
         scale = 1;
     }
 
     const int turn = ((quarter_turns % 4) + 4) % 4;
-    const int cell = 8 * scale;
 
-    /* Which way the string advances from one glyph to the next. */
-    static const int advance[4][2] = {
+    /* Which way the string advances from one glyph to the next. Applied to
+     * whatever gfx_font_advance() says this glyph's step is - for today's
+     * monospace font that is always cell_w * scale, matching the old fixed
+     * `cell` exactly, including that it advanced even past a codepoint it
+     * declined to draw. */
+    static const int step[4][2] = {
         {  1,  0 },   /* upright:        left to right */
         {  0,  1 },   /* quarter turn:   top to bottom */
         { -1,  0 },   /* upside down:    right to left */
         {  0, -1 },   /* three quarters: bottom to top */
     };
 
-    for (const char *p = text; *p != '\0'; p++,
-         x += advance[turn][0] * cell, y += advance[turn][1] * cell) {
-
+    for (const char *p = text; *p != '\0'; p++) {
         const unsigned char ch = (unsigned char)*p;
-        if (ch < 128) {   /* font covers ASCII only */
-            draw_glyph_turned(x, y, ch, color, scale, turn);
-        }
+        draw_glyph_font(font, x, y, ch, color, scale, turn);
+        const int adv = gfx_font_advance(font, ch, scale);
+        x += step[turn][0] * adv;
+        y += step[turn][1] * adv;
     }
+}
+
+void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
+                     int scale, int quarter_turns)
+{
+    gfx_text_font(x, y, text, color, scale, quarter_turns, gfx_default_font());
 }
 
 /*---------------------------------------------------------------------------

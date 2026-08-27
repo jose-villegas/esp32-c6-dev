@@ -59,6 +59,7 @@ $TEST_DIR/suites/suite_button_fsm.c
 $TEST_DIR/suites/suite_rng.c
 $TEST_DIR/suites/suite_gfx_dirty.c
 $TEST_DIR/suites/suite_gfx_color.c
+$TEST_DIR/suites/suite_gfx_font.c
 $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c

@@ -16,11 +16,24 @@
  * //     Public Domain
  *
  * Fetched from: http://dimensionalrift.homelinux.net/combuster/mos3/?p=viewsource&file=/modules/gfx/font8_8.asm
+ *
+ * `#pragma once` and `static const` were added when gfx_font.h started
+ * wrapping this table as a gfx_font_t's atlas: gfx_font.h has to be pure and
+ * host-compilable (see its own top comment), and a header included from more
+ * than one translation unit - the firmware's gfx.c and the host test suite,
+ * at least - needs a guard against double inclusion within one TU and
+ * internal linkage to avoid a duplicate-symbol clash across TUs, the same
+ * way icons.h's icon_check_bitmap is `static const` for the same reason.
+ * `const` also lands the table in flash rather than RAM, matching the model
+ * gfx_color.h's own top comment describes. Neither change alters what any
+ * reader sees: every existing use already only reads through a `const
+ * char *`.
  **/
+#pragma once
 
 // Constant: font8x8_basic
 // Contains an 8x8 font map for unicode points U+0000 - U+007F (basic latin)
-char font8x8_basic[128][8] = {
+static const char font8x8_basic[128][8] = {
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0000 (nul)
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0001
     { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},   // U+0002

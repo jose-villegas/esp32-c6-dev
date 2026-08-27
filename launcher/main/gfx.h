@@ -16,6 +16,7 @@
 
 #include "bsp/esp-bsp.h"
 #include "gfx_color.h"
+#include "gfx_font.h"
 
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
@@ -110,6 +111,28 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
 /* Text metrics. Kept here so the UI layer and the renderer cannot disagree. */
 int gfx_text_width(const char *text, int len);
 int gfx_text_height(void);
+
+/* The font every gfx_text*() call above draws with. gfx_font.h's gfx_font_t
+ * is what carries a font from here on; this is the one entry the scheme has
+ * today. A caller that wants a specific font rather than "whatever gfx draws
+ * with" - microui's mu_Font, once something honours it - asks for this. */
+const gfx_font_t *gfx_default_font(void);
+
+/* The single font-aware drawing path gfx_text(), gfx_text_scaled() and
+ * gfx_text_turned() all delegate to, passing gfx_default_font(). Same
+ * (x, y)-is-the-first-glyph's-cell and turn convention as gfx_text_turned().
+ *
+ * Only draws 1bpp glyphs - see the definition in gfx.c for why a bpp != 1
+ * font is silently skipped rather than drawn wrong. */
+void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
+                   int scale, int quarter_turns, const gfx_font_t *font);
+
+/* gfx_text_width()'s general form: the width `text` would draw at in
+ * `font`, at `scale`. gfx_text_width() is this called with
+ * gfx_default_font(). See gfx_font_text_width() in gfx_font.h for the pure
+ * metric this wraps, and its own comment for the `len < 0` contract. */
+int gfx_font_width(const gfx_font_t *font, const char *text, int len,
+                   int scale);
 
 /* Restrict subsequent drawing to a rectangle. microui emits clip commands
  * around every container, and honouring them is what stops a scrolled panel
