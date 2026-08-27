@@ -15,6 +15,7 @@
 #include <string.h>
 
 #include "app.h"
+#include "boot_anim.h"
 #include "gesture.h"
 #include "gfx.h"
 #include "post.h"
@@ -210,6 +211,11 @@ void app_main(void)
         ESP_LOGE(TAG, "self test reported failures");
     }
 #endif
+
+    /* The startup animation. After the health checks, so a board with a fault
+     * says so before it does anything decorative, and before touch starts,
+     * because there is nothing yet for a tap to reach. */
+    boot_anim_run();
 
     touch_start();
     buttons_start();

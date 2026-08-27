@@ -16,6 +16,7 @@ launcher/
 │   └── small3dlib/     CC0, header-only
 └── main/
     ├── gfx.{h,c}       owns THE framebuffer, panel, primitives, text
+    ├── boot_anim.{h,c} the startup animation      (the .h is host-tested)
     ├── touch.{h,c}     FT5x06 polling task
     ├── touch_fsm.{h,c} samples -> press/release events   (host-tested)
     ├── gesture.{h,c}   swipe recognition                 (host-tested)
@@ -87,6 +88,12 @@ Apps do not loop, do not present, do not block and do not yield. An app's
 - no app can wedge the device by forgetting to `vTaskDelay`
 - the shell decides when to present, and can draw its own chrome afterwards
 
+The one thing that runs a loop of its own is the startup animation, and it
+runs *before* this one exists - see `boot_anim.c`. The rule is about apps: an
+app must not loop because the shell has to stay able to switch away from it,
+and at boot there is nothing to switch to yet. `show_post_failures()` blocks
+for the same reason.
+
 ### 3. Apps are callbacks, not processes
 
 One binary, one address space, one core. There is no isolation: a misbehaving
@@ -95,6 +102,31 @@ no flash-partition machinery. Worth revisiting only if third-party apps ever
 become a goal.
 
 ---
+
+## Startup
+
+Before the loop below ever runs, `app_main()` goes through a fixed order, and
+the order is most of the point:
+
+```
+post_run_before_display()   the SD card, while SPI2 is still free
+gfx_init()                  panel up, framebuffer allocated
+post_run_after_display()    the rest of the health check
+                            -> a failure holds the screen for 8 s
+selftest_run()              diagnostics builds only
+boot_anim_run()             the startup animation, ~3 s
+touch_start(), buttons_start()
+ui_launcher_init()
+```
+
+The animation goes after the health checks, so a board with a fault says so
+before the device does anything decorative, and before touch starts, because
+there is nothing yet for a tap to reach. It draws the complex plane and the
+spirals the zeta function traces on it. `boot_anim.h` carries the maths, the
+layout and the timeline, all as integer arithmetic with no hardware header in
+sight, so every bit of it is checked on a host by
+`test/suites/suite_boot_anim.c`; `boot_anim.c` is left holding only gfx calls
+and the loop.
 
 ## The frame loop
 
