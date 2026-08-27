@@ -115,6 +115,42 @@ static display_t shell_display;
 
 int display_shell_quarter(void) { return display_quarter(&shell_display); }
 
+/* Which edge the exit gesture (and its hint bar) live on, for the shell's
+ * current quarter turn.
+ *
+ * The rule, ergonomic rather than content-driven: the exit edge is always
+ * OPPOSITE wherever the USB connector currently sits, since USB is where a
+ * cable might occupy that edge, leaving the far side as the one a hand can
+ * actually reach.
+ *
+ * USB position rotates with the case: it is a single fixed feature of the
+ * rigid physical case, so its edge - read against whichever orientation the
+ * board is currently in - turns by the same 90 degrees per quarter that
+ * content does. display.h's own table gives the USB edge for quarters 0 and
+ * 1 as MEASURED facts (checked against the physical board); quarters 2 and 3
+ * are not independently measured there, and are DERIVED here by continuing
+ * that same 90-degree step:
+ *
+ *   0  Portrait,               USB right  (measured)   -> exit edge LEFT
+ *   1  Landscape,               USB top    (measured)   -> exit edge BOTTOM
+ *   2  Portrait, upside down,   USB left   (derived)     -> exit edge RIGHT
+ *   3  Landscape, upside down,  USB bottom (derived)     -> exit edge TOP
+ *
+ * One more 90-degree step from quarter 3 returns to quarter 0's USB right,
+ * closing the loop - a necessary check on the derivation, since a rigid
+ * case's own features cannot rotate independently of each other and so must
+ * return to where they started after four quarters. */
+static gesture_edge_t exit_edge_for_quarter(int quarter)
+{
+    static const gesture_edge_t edge_for_quarter[4] = {
+        GESTURE_EDGE_LEFT,    /* quarter 0: Portrait,              USB right */
+        GESTURE_EDGE_BOTTOM,  /* quarter 1: Landscape,             USB top */
+        GESTURE_EDGE_RIGHT,   /* quarter 2: Portrait upside down,  USB left [derived] */
+        GESTURE_EDGE_TOP,     /* quarter 3: Landscape upside down, USB bottom [derived] */
+    };
+    return edge_for_quarter[quarter];
+}
+
 /* Sorted so the menu order is stable. Without this it follows link order,
  * which changes when a file is added and makes the list jump around. */
 static void sort_apps(void)
@@ -132,21 +168,54 @@ static void sort_apps(void)
 
 /* --- chrome ------------------------------------------------------------- */
 
-static void draw_home_hint(void)
+static void draw_home_hint(gesture_edge_t edge)
 {
-    const int x = (GFX_WIDTH - HOME_HINT_WIDTH) / 2;
-    const int y = GFX_HEIGHT - HOME_HINT_MARGIN - HOME_HINT_HEIGHT;
+    /* TOP/BOTTOM keep the strip horizontal (WIDTH wide, HEIGHT tall),
+     * centred across the screen's width. LEFT/RIGHT need it turned - the
+     * strip becomes vertical (HEIGHT wide, WIDTH tall - the two constants
+     * swap, the same way content's own width/height swap under a quarter
+     * turn elsewhere in this shell), centred down the screen's height
+     * instead. In every case it sits HOME_HINT_MARGIN in from whichever
+     * edge the gesture currently lives on. */
+    int x = 0, y = 0, w = 0, h = 0;
 
-    /* Identical every frame, so it only needs redrawing where the app has
-     * already disturbed it. Drawing unconditionally would mark the bottom band
-     * dirty on every frame and force it to be sent - a seventh of the frame's
-     * bus time, spent on pixels that did not change. */
-    if (!gfx_region_dirty(x, y, HOME_HINT_WIDTH, HOME_HINT_HEIGHT)) {
+    switch (edge) {
+    case GESTURE_EDGE_TOP:
+        w = HOME_HINT_WIDTH;
+        h = HOME_HINT_HEIGHT;
+        x = (GFX_WIDTH - w) / 2;
+        y = HOME_HINT_MARGIN;
+        break;
+    case GESTURE_EDGE_BOTTOM:
+        w = HOME_HINT_WIDTH;
+        h = HOME_HINT_HEIGHT;
+        x = (GFX_WIDTH - w) / 2;
+        y = GFX_HEIGHT - HOME_HINT_MARGIN - h;
+        break;
+    case GESTURE_EDGE_LEFT:
+        w = HOME_HINT_HEIGHT;
+        h = HOME_HINT_WIDTH;
+        x = HOME_HINT_MARGIN;
+        y = (GFX_HEIGHT - h) / 2;
+        break;
+    case GESTURE_EDGE_RIGHT:
+        w = HOME_HINT_HEIGHT;
+        h = HOME_HINT_WIDTH;
+        x = GFX_WIDTH - HOME_HINT_MARGIN - w;
+        y = (GFX_HEIGHT - h) / 2;
+        break;
+    }
+
+    /* Identical every frame (for a given edge), so it only needs redrawing
+     * where the app has already disturbed it. Drawing unconditionally would
+     * mark the band dirty on every frame and force it to be sent - a
+     * seventh of the frame's bus time, spent on pixels that did not
+     * change. */
+    if (!gfx_region_dirty(x, y, w, h)) {
         return;
     }
 
-    gfx_fill_rect(x, y, HOME_HINT_WIDTH, HOME_HINT_HEIGHT,
-                  gfx_rgb(HOME_HINT_RGB));
+    gfx_fill_rect(x, y, w, h, gfx_rgb(HOME_HINT_RGB));
 }
 
 /* Holds the failing checks on screen long enough to be read, or until the
@@ -188,7 +257,13 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
         return;
     }
 
-    if (gesture_is_home_swipe(input, GFX_HEIGHT)) {
+    /* Which edge the gesture lives on tracks the board's current
+     * orientation - see exit_edge_for_quarter()'s own comment - so it is
+     * recomputed each call rather than cached, the same as display_shell_quarter()
+     * itself is cheap enough to call freely (it only reads a struct field). */
+    const gesture_edge_t exit_edge = exit_edge_for_quarter(display_shell_quarter());
+
+    if (gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
         ESP_LOGI(TAG, "Leaving %s", (*current)->name);
         (*current)->exit();
         *current = NULL;
@@ -202,7 +277,7 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
     }
 
     (*current)->frame(dt_ms, input);
-    draw_home_hint();
+    draw_home_hint(exit_edge);
 }
 
 /* Report throughput on a TIMER, not every N frames: an idle launcher repaints
