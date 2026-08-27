@@ -985,6 +985,24 @@ static inline bool cell_is_extended(cell_t c)
     return CELL_MATERIAL(c) == MAT_EXTENDED;
 }
 
+/* Whether this cell may be used as an emitter's material - see
+ * sand_add_emitter() in sand.h. True for KIND_POWDER, KIND_LIQUID and
+ * KIND_GAS; false for KIND_STATIC and KIND_NONE, because a static source
+ * buries itself on its first emitted cell and jams forever.
+ *
+ * material_of() deliberately does not decode the extended range - see its
+ * own comment above - so every extended material (Ice, Plant, Leaf, Metal)
+ * reads as KIND_STATIC through the one physics row all sixteen share, and
+ * they are excluded together. That is the right answer today only because
+ * they all happen to be static - see
+ * test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on in
+ * suite_sand.c, which pins the assumption this derives from. */
+static inline bool material_can_emit(cell_t c)
+{
+    const uint8_t kind = material_of(c)->kind;
+    return kind == KIND_POWDER || kind == KIND_LIQUID || kind == KIND_GAS;
+}
+
 
 /* The reaction row for a cell, decoding the extended range.
  *

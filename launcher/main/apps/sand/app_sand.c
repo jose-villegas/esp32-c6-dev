@@ -193,6 +193,24 @@ _Static_assert(PALETTE_FITS(BRUSH_COUNT),
                "the palette panel for BRUSH_COUNT brushes is taller than the "
                "448px screen - see PALETTE_COLS/PALETTE_TILE in palette.h");
 
+/* Whether a brush places a persistent source ("a tap") instead of pouring -
+ * toggled by tapping the already-selected tile in the palette (see
+ * handle_palette_input()) and read by handle_pour_input() below.
+ *
+ * File-scope and deliberately NOT reset in sand_enter() or start_sim() - the
+ * same treatment `quality` gets above, and for the same reason: this is a
+ * deliberate setting the player made, not run state, so leaving the app (or
+ * restarting the simulation) must not throw it away.
+ *
+ * That does leave an asymmetry worth knowing about. sand_init() clears
+ * every REAL emitter on each start_sim(), but nothing clears brush_mode
+ * alongside it - so after a restart, Water may still be flagged a source
+ * while no tap exists anywhere on the fresh board. That is correct: the
+ * flag says what a tap would place if the material were painted again, not
+ * that one is currently placed. */
+typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
+static uint8_t brush_mode[BRUSH_COUNT];   /* brush_mode_t per brush */
+
 /* How long the mode label stays up after the PWR button is pressed. Long
  * enough to read without hurrying, short enough not to sit over the sand. */
 #define LABEL_MS 1800
@@ -822,6 +840,54 @@ static void draw_dirty_rows(bool shine_moved)
 #endif
 }
 
+/* A fixed, saturated colour that appears nowhere in material_palette() (see
+ * material.c's colour tables), rather than one derived per-material the way
+ * the palette badge is (gfx_color_mix() against the face). At a badge's
+ * size that derivation buys contrast against every material's own colour;
+ * at a MARKER's size - a handful of pixels, roughly one grid cell - there
+ * is no room for two nested tones to read as two tones at all, so instead
+ * this picks a colour that sits outside the whole palette and therefore
+ * reads against anything an emitter happens to be streaming. */
+#define EMITTER_MARKER_COLOR 0xFF3EC8
+
+/* Marks every placed emitter with a small square, roughly one grid cell -
+ * see EMITTER_MARKER_COLOR above for its colour. A placed tap that cannot
+ * be seen is just an invisible point the sand happens to keep coming from,
+ * which leaves no way to tell where it is or whether the tap even took.
+ *
+ * Called every frame, not once: draw_dirty_rows() just above repaints
+ * whatever row an emitter sits in every time the simulation actually
+ * changes something there - which is nearly every step the tap is active -
+ * so a marker drawn only once would be eaten the very next time that row
+ * redraws. This is exactly why draw_mode_label() below is drawn after the
+ * rows rather than before - see its own comment.
+ *
+ * Cheap regardless: at most SAND_MAX_EMITTERS markers, each a few pixels,
+ * so the drawing cost here is negligible. And it buys no NEW transfers to
+ * the panel either - the cell an emitter sits in is already being dirtied
+ * by its own output nearly every frame the tap is active, so the
+ * gfx_mark_dirty() below is marking a rect that was, in all but the rarest
+ * frame, going out to the panel anyway. */
+static void draw_emitter_markers(void)
+{
+    const gfx_color_t marker = gfx_rgb(EMITTER_MARKER_COLOR);
+    const int count = sand_emitter_count(&sim);
+
+    for (int i = 0; i < count; i++) {
+        int ex, ey;
+        cell_t ecell;
+        if (!sand_emitter_at(&sim, i, &ex, &ey, &ecell)) {
+            continue;   /* not expected - see sand_emitter_count()'s contract */
+        }
+        (void)ecell;    /* the marker's colour is fixed, not the material's */
+
+        const int px = ex * cell;
+        const int py = ey * cell;
+        gfx_fill_rect(px, py, cell, cell, marker);
+        gfx_mark_dirty(px, py, cell, cell);
+    }
+}
+
 /* The colour a brush represents - the material's own colour, read straight
  * out of the palette so neither this nor draw_mode_label() below can
  * disagree with what actually comes out of the finger. Shared by both,
@@ -853,8 +919,23 @@ static gfx_color_t brush_color(cell_t c)
 static void draw_mode_label(int gx, int gy)
 {
     /* The material's own name, so the label says what the finger will do
-     * rather than merely that something changed. */
-    const char *text = erasing ? "ERASE" : material_name(brushes[brush]);
+     * rather than merely that something changed - and, in BRUSH_SPAWN,
+     * " SOURCE" appended so it also says WHICH thing: a tap that keeps
+     * running, not a blob poured once. `len`/`span` just below are
+     * computed from strlen(text), not hardcoded, so the longer text this
+     * local buffer can hold is picked up automatically - nothing about the
+     * layout below needs to know a suffix exists. */
+    char text_buf[24];
+    const char *text;
+    if (erasing) {
+        text = "ERASE";
+    } else if (brush_mode[brush] == BRUSH_SPAWN) {
+        snprintf(text_buf, sizeof text_buf, "%s SOURCE",
+                material_name(brushes[brush]));
+        text = text_buf;
+    } else {
+        text = material_name(brushes[brush]);
+    }
     const int   len  = (int)strlen(text);
     const int   span = len * 8 * LABEL_SCALE;
     const int   tall = 8 * LABEL_SCALE;
@@ -904,6 +985,16 @@ static void draw_mode_label(int gx, int gy)
 /* Thickness of each bezel edge - see draw_palette() below. */
 #define PALETTE_BEZEL   3
 
+/* The BRUSH_SPAWN corner badge - see draw_palette()'s own comment on it.
+ * 18px outer square against a 92px tile (PALETTE_TILE) reads clearly at
+ * arm's length without crowding the tile's centred name text; 3px of inset
+ * leaves a 12px inner square, still comfortably legible as its own square
+ * rather than a blur. 2px of margin off the bezel keeps the badge from
+ * touching it. */
+#define PALETTE_BADGE_SIZE    18
+#define PALETTE_BADGE_INSET    3
+#define PALETTE_BADGE_MARGIN   2
+
 /* The material picker overlay - drawn ONCE when the panel opens (see
  * open_palette()) and left sitting in the framebuffer for as long as it is
  * up, never redrawn per frame. That is only safe because nothing else draws
@@ -951,14 +1042,7 @@ static void draw_palette(void)
          * fill rects, drawn top/left then bottom/right so the two corners
          * where an edge of each colour would otherwise meet (top-right,
          * bottom-left) resolve to whichever is drawn second - the same
-         * simple corner convention as classic 3D control borders.
-         *
-         * A future round adds a per-brush "spawn" flag with a corner badge
-         * on flagged tiles - not built here, out of scope for this panel.
-         * x/y/w/h above are already this tile's own rect, so that badge
-         * would just be one more gfx_fill_rect at a tile corner, drawn after
-         * the face below; nothing about this loop's structure needs to
-         * change to add it. */
+         * simple corner convention as classic 3D control borders. */
         const int ix = x + PALETTE_GROUT;
         const int iy = y + PALETTE_GROUT;
         const int iw = w - 2 * PALETTE_GROUT;
@@ -970,6 +1054,38 @@ static void draw_palette(void)
         gfx_fill_rect(ix + iw - PALETTE_BEZEL, iy, PALETTE_BEZEL, ih, bot_right); /* right */
         gfx_fill_rect(ix + PALETTE_BEZEL, iy + PALETTE_BEZEL,
                      iw - 2 * PALETTE_BEZEL, ih - 2 * PALETTE_BEZEL, face);
+
+        /* The BRUSH_SPAWN badge: one more fill rect (two, for the two
+         * tones) drawn after the face, at the tile's top-right corner
+         * inside the bezel - exactly the extension this loop's structure
+         * was already built to take.
+         *
+         * Ineligible materials can never carry brush_mode[i] ==
+         * BRUSH_SPAWN in the first place (see handle_palette_input()), so
+         * this never draws for one - no separate eligibility check needed
+         * here.
+         *
+         * Two-tone, the same reason the bezel and the name text both are:
+         * a swatch runs from snow's near-white to stone's near-black, and
+         * no single fixed colour reads on all of them. `t` here is much
+         * stronger than the bezel's ~40% (100) - a badge this small has to
+         * read as a mark in its own right against a face it is sitting
+         * directly on top of, not merely as a lighter/darker edge of that
+         * same face. */
+        if (brush_mode[i] == BRUSH_SPAWN) {
+            const gfx_color_t badge_dark  = gfx_color_mix(face, gfx_rgb(0x000000), 210);
+            const gfx_color_t badge_light = gfx_color_mix(face, gfx_rgb(0xFFFFFF), 210);
+            const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN
+                         - PALETTE_BADGE_SIZE;
+            const int by = iy + PALETTE_BEZEL + PALETTE_BADGE_MARGIN;
+
+            gfx_fill_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
+                         badge_dark);
+            gfx_fill_rect(bx + PALETTE_BADGE_INSET, by + PALETTE_BADGE_INSET,
+                         PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
+                         PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
+                         badge_light);
+        }
 
         /* Centred in the tile. The longest names are 5 characters, 80px at
          * GFX_GLYPH_SCALE (see palette.h's column-count reasoning), inside
@@ -1030,16 +1146,31 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
     *jostle = shake > SHAKE_DEADZONE ? shake : 0;
 }
 
+/* Set by open_palette(), consumed by the next input->released
+ * handle_palette_input() sees - see that consumption's own comment for what
+ * it is guarding against. */
+static bool palette_swallow_release;
+
 /* Opens the palette panel: pauses the sim (see sand_frame()'s dispatch,
  * which returns immediately after calling this rather than falling through
  * to the rest of a RUNNING frame), clears the mode-label countdown so its
  * full-screen redraw does not paint sand straight back over the panel (see
  * label_left_ms's own use in sand_frame()), and draws the panel once - see
- * draw_palette()'s own comment on why once is enough. */
+ * draw_palette()'s own comment on why once is enough.
+ *
+ * Also arms palette_swallow_release. Opening the panel is a BOOT hold, which
+ * has nothing to do with whatever a finger already down on the screen is
+ * doing - so a pour in progress when the hold fires is a touch left
+ * dangling, and its release still has to land somewhere. Without swallowing
+ * it, that release arrives on the very next frame with screen already
+ * SCREEN_PALETTE, and handle_palette_input() reads it as an ordinary tap on
+ * whatever tile happens to be under the finger - silently changing the
+ * brush the player never meant to touch. */
 static void open_palette(void)
 {
     label_left_ms = 0;
     screen = SCREEN_PALETTE;
+    palette_swallow_release = true;
     draw_palette();
 }
 
@@ -1096,17 +1227,50 @@ static void handle_palette_input(const input_t *input)
         return;
     }
 
-    /* A tap that hits no tile does nothing - erase and selection state are
-     * both untouched. The panel stays open either way; only BOOT closes it,
-     * so picking a material is not a one-shot action. */
-    if (input->released) {
-        const int hit = palette_hit(input->x, input->y, BRUSH_COUNT);
-        if (hit >= 0) {
-            brush = hit;
-            erasing = false;   /* choosing a material means you want to place it */
-            draw_palette();    /* redraw so the highlight moves to the new tile */
-        }
+    if (!input->released) {
+        return;
     }
+
+    /* Swallow the first release after the panel opens - see
+     * palette_swallow_release's own comment at open_palette(). This is the
+     * same family of bug as the one faad9bb fixed for BOOT: an edge that
+     * outlives the state that produced it, read by whatever state happens
+     * to be current instead of the one it actually belongs to. */
+    if (palette_swallow_release) {
+        palette_swallow_release = false;
+        return;
+    }
+
+    const int hit = palette_hit(input->x, input->y, BRUSH_COUNT);
+    if (hit < 0) {
+        /* A tap that hits no tile does nothing - erase and selection state
+         * are both untouched. The panel stays open either way; only BOOT
+         * closes it, so picking a material is not a one-shot action. */
+        return;
+    }
+
+    if (hit == brush) {
+        /* Tapping the ALREADY-selected tile toggles its mode instead of
+         * re-selecting it - selection state has nothing left to change, so
+         * a second tap on the same tile has to mean something else. Only
+         * if the material is eligible to be a source at all: an
+         * ineligible tile has no mode to toggle into, so this does
+         * nothing at all rather than silently flip a bit nothing ever
+         * reads (see material_can_emit()). */
+        if (!material_can_emit(brushes[brush])) {
+            return;
+        }
+        brush_mode[brush] = (brush_mode[brush] == BRUSH_POUR)
+                                 ? BRUSH_SPAWN : BRUSH_POUR;
+    } else {
+        /* A different tile: select it. Its own remembered mode is left
+         * exactly as it was - only erasing resets on selection, the same
+         * as always. */
+        brush = hit;
+        erasing = false;   /* choosing a material means you want to place it */
+    }
+
+    draw_palette();    /* redraw so the highlight/badge moves or updates */
 }
 
 /* input->boot.released rather than .pressed: a HOLD fires .pressed at the
@@ -1139,6 +1303,31 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
 {
     if (!input->down) {
         pour_accumulator_ms = 0;
+        return;
+    }
+
+    /* A tap that places an emitter is a different action from pouring, and
+     * takes over the touch entirely rather than sharing it: erasing still
+     * wins outright (an emitter under the eraser is exactly what
+     * sand_erase() already turns off, below), but once neither applies,
+     * spawn mode skips the accumulator/pour path for this frame completely
+     * - it must never both place a tap and pour a blob from the same
+     * touch. */
+    if (!erasing && brush_mode[brush] == BRUSH_SPAWN) {
+        /* Only on the PRESS edge, never every frame the finger stays down
+         * - one tap places one tap. input->pressed fires exactly once per
+         * physical press, so this call (and the log below, if it fails)
+         * happens at most once per press for free - placing on every frame
+         * instead would exhaust SAND_MAX_EMITTERS in a fraction of a
+         * second and turn one drag into a dozen or more taps. */
+        if (input->pressed) {
+            const int cx = input->x / cell;
+            const int cy = input->y / cell;
+            if (!sand_add_emitter(&sim, cx, cy, brushes[brush])) {
+                ESP_LOGW(TAG, "emitter list full (%d) - tap ignored",
+                         SAND_MAX_EMITTERS);
+            }
+        }
         return;
     }
 
@@ -1477,6 +1666,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 
     draw_dirty_rows(advance_shine(dt_ms));
+
+    /* After the rows, every frame - see draw_emitter_markers()'s own
+     * comment for why once would not be enough. */
+    draw_emitter_markers();
 
     /* On top of the sand, so it is never painted over. */
     if (label_left_ms > 0) {

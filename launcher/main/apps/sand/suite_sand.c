@@ -10706,6 +10706,40 @@ static void test_sand_init_clears_emitters_from_a_previous_use(void)
         "once");
 }
 
+/* Every entry the app's palette offers - see brushes[] in app_sand.c - by
+ * KIND rather than by importing that table: this file cannot see
+ * app_sand.c and should not start to. The four flowing kinds (powder,
+ * liquid, gas) come out true and the two static ones false, which is
+ * exactly the KIND_POWDER/LIQUID/GAS-may, KIND_STATIC-may-not rule
+ * material_can_emit() implements - see its own comment in material.h, and
+ * test_the_extended_row_being_static_is_what_emitter_eligibility_leans_on
+ * above for why the two extended entries both land on `false` through one
+ * shared row rather than two independent answers. */
+static void test_material_can_emit_matches_every_brush_by_kind(void)
+{
+    static const struct { cell_t cell; bool can_emit; const char *why; } cases[] = {
+        { SAND,                    true,  "sand is a powder" },
+        { WATER,                   true,  "water is a liquid" },
+        { STONE,                   false, "stone is static" },
+        { GAS,                     true,  "gas is a gas" },
+        { FIRE,                    true,  "fire is a gas" },
+        { WOOD,                    false, "wood is static" },
+        { OIL,                     true,  "oil is a liquid" },
+        { LAVA,                    true,  "lava is a liquid" },
+        { CELL_MAKE(MAT_ACID, MASS_MAX), true,  "acid is a liquid" },
+        { GLASS,                   false, "glass is static" },
+        { SNOW,                    true,  "snow is a powder" },
+        { CELL_MAKE(MAT_DIRT, 0),  true,  "dirt is a powder" },
+        { MATX(MATX_ICE),          false, "ice shares the extended row's KIND_STATIC" },
+        { MATX(MATX_PLANT),        false, "plant shares the extended row's KIND_STATIC" },
+    };
+
+    for (unsigned k = 0; k < sizeof cases / sizeof cases[0]; k++) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(cases[k].can_emit,
+            material_can_emit(cases[k].cell), cases[k].why);
+    }
+}
+
 /* --- free fall and shaking ---------------------------------------------- */
 
 static void test_nothing_moves_in_free_fall(void)
@@ -13182,6 +13216,7 @@ void run_sand_suite(void)
     RUN_TEST(test_erase_stops_an_emitter_from_emitting);
     RUN_TEST(test_erase_count_excludes_emitters);
     RUN_TEST(test_sand_init_clears_emitters_from_a_previous_use);
+    RUN_TEST(test_material_can_emit_matches_every_brush_by_kind);
 
     RUN_TEST(test_nothing_moves_in_free_fall);
     RUN_TEST(test_shaking_spreads_a_pile_sideways);
