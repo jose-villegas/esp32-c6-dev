@@ -10,8 +10,16 @@ hardcoding them here, so retuning a budget in the source is immediately
 reflected in the next report with no second place to update.
 
 Usage:
-    python tools/report_performance.py <raw_capture.txt> <out.md> \
+    python main/apps/sand/tools/report_performance.py <raw_capture.txt> <out.md> \
         --source main/apps/<app>/suite_<app>.c
+
+Lives under the sand app because sand's report_performance.sh is its only
+caller. Nothing in the parsing is sand-specific - it keys on #ifdef
+DEVICE_BUILD, Unity's TEST_ASSERT_LESS_THAN_MESSAGE and a "device_tests ...
+us" log line - so --source takes any app's suite. If a second app ever grows
+frame-budget tests, this belongs back in the shared tools/ and the move is a
+rename plus one path. Until then, an app's folder holds the tools only that
+app uses, so that deleting the app leaves nothing stranded.
 """
 import argparse
 import re

@@ -26,10 +26,13 @@ IDF_EXPORT_PS1="${3:-C:\\Espressif\\esp-idf-v5.5\\export.ps1}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # This file lives at main/apps/sand/tools/, four levels below launcher/ -
-# tools -> sand -> apps -> main -> launcher. The shared tools/ (report_
-# performance.py, sweeps/capture_selftest.py) stayed put when this script
-# moved into the app, so it is reached via LAUNCHER_DIR/tools/... below,
-# not SCRIPT_DIR.
+# tools -> sand -> apps -> main -> launcher.
+#
+# report_performance.py sits beside this script, so it is reached through
+# SCRIPT_DIR. sweeps/capture_selftest.py did NOT move and is reached through
+# LAUNCHER_DIR: it only resets the device and captures serial output, knows
+# nothing about any app, and has four callers - two here, two in the shared
+# sweeps. A tool with a consumer outside this app belongs outside it.
 LAUNCHER_DIR="$(cd "$SCRIPT_DIR/../../../.." && pwd)"
 LAUNCHER_DIR_WIN="$(cd "$LAUNCHER_DIR" && pwd -W 2>/dev/null || echo "$LAUNCHER_DIR")"
 
@@ -88,7 +91,7 @@ echo "=== Capturing self-test output ==="
 python "$LAUNCHER_DIR/tools/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
 
 echo "=== Generating performance report ==="
-python "$LAUNCHER_DIR/tools/report_performance.py" "$RAW_CAPTURE" "$OUT_MD" \
+python "$SCRIPT_DIR/report_performance.py" "$RAW_CAPTURE" "$OUT_MD" \
     --source "$LAUNCHER_DIR/main/apps/sand/suite_sand.c"
 
 echo "=== Report:       $OUT_MD ==="
