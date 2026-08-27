@@ -30,8 +30,12 @@
  * its own bespoke screen.
  *===========================================================================*/
 
+#include <stdio.h>
+
 #include "../../app.h"
+#include "../../display/display.h"
 #include "../../gfx/gfx.h"
+#include "../../input/imu.h"
 #include "../../boot/post_ui.h"
 #include "../../ui/ui.h"
 
@@ -39,6 +43,22 @@
 #define COL_BACKGROUND 0x0A0C14
 
 static int page;
+
+/* Persisted like `page` above - a developer toggle that resets to off every
+ * visit would defeat the point of leaving the board on this screen while
+ * physically turning it through its holds to read the numbers off. */
+static int show_orientation;
+
+/* Sensor axes to screen axes - the SAME board-layout fact main.c's
+ * DISPLAY_GRAVITY_X/Y and app_sand.c's GRAVITY_SCREEN_X/Y already carry,
+ * copied rather than shared for the same reason main.c's own copy gives:
+ * these are small, independent readers of a sensor that only ever answers
+ * "which way is down", and forcing a shared one is a separate piece of
+ * work this toggle does not need. This copy exists so the numbers shown
+ * here are the exact gx/gy display_update() actually decides orientation
+ * from - not a plausible-looking approximation of them. */
+#define ORIENTATION_GRAVITY_X(s)  (-(s)->ay)
+#define ORIENTATION_GRAVITY_Y(s)  ( (s)->ax)
 
 static void diagnostics_enter(void)
 {
@@ -77,6 +97,48 @@ static void draw_toggles_page(const input_t *input)
         int leaf_on = gfx_debug_leaf_overlay();
         mu_checkbox(ctx, "gfx leaf-grid overlay", &leaf_on);
         gfx_set_leaf_overlay(leaf_on);
+
+        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        mu_checkbox(ctx, "show orientation", &show_orientation);
+
+        /* Read once per frame, only while the toggle is on - imu_read() is
+         * an I2C transaction, and there is no reason to pay for it on
+         * every frame of a page most visits never enable this on. Shows
+         * three things on purpose, not just the quarter: the raw
+         * accelerometer counts (what the sensor actually measured), the
+         * derived gx/gy (what display_update() actually decides from -
+         * see ORIENTATION_GRAVITY_X/Y above), and the shell's current
+         * quarter (what that decision came out to) - so a hold can be
+         * pinned down as "this physical orientation reads these numbers
+         * and the shell currently calls it quarter N" in one line,
+         * without doing the ORIENTATION_GRAVITY_X/Y arithmetic by hand. */
+        if (show_orientation) {
+            char line[64];
+            mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+
+            if (imu_ready()) {
+                imu_sample_t sample;
+                if (imu_read(&sample)) {
+                    snprintf(line, sizeof line, "accel ax=%d ay=%d az=%d",
+                             sample.ax, sample.ay, sample.az);
+                    mu_text(ctx, line);
+                    mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+                    snprintf(line, sizeof line, "gravity gx=%d gy=%d",
+                             ORIENTATION_GRAVITY_X(&sample),
+                             ORIENTATION_GRAVITY_Y(&sample));
+                    mu_text(ctx, line);
+                } else {
+                    mu_text(ctx, "IMU read failed");
+                }
+            } else {
+                mu_text(ctx, "no IMU");
+            }
+
+            mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+            snprintf(line, sizeof line, "shell quarter=%d",
+                     display_shell_quarter());
+            mu_text(ctx, line);
+        }
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
         mu_text(ctx, "BOOT for the POST report");
