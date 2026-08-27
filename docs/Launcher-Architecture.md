@@ -14,22 +14,89 @@ launcher/
 ├── components/
 │   ├── microui/        MIT, patched for this chip (see below)
 │   └── small3dlib/     CC0, header-only
+├── tools/
+│   └── gen_zeta_curve.py   generates main/boot/boot_anim_curve.h
 └── main/
-    ├── gfx.{h,c}       owns THE framebuffer, panel, primitives, text
-    ├── boot_anim.{h,c} the startup animation      (the .h is host-tested)
-    ├── boot_anim_curve.h  GENERATED - see tools/gen_zeta_curve.py
-    ├── touch.{h,c}     FT5x06 polling task
-    ├── touch_fsm.{h,c} samples -> press/release events   (host-tested)
-    ├── gesture.{h,c}   swipe recognition                 (host-tested)
-    ├── app.h           the shell/app contract
-    ├── ui.{h,c}        microui integration, shared by the shell and apps
-    ├── ui_style.h      how a control's frame looks       (host-tested)
-    ├── ui_launcher.c   the home screen, built with microui
     ├── main.c          the frame loop and app switching
+    ├── app.h           the shell/app contract
+    ├── boot/           runs once each, before the frame loop exists
+    │   ├── post.{h,c}          power-on self test
+    │   ├── post_ui.{h,c}       the POST report, on screen
+    │   ├── selftest.{h,c}      runs the suites at boot (diagnostics build)
+    │   ├── boot_anim.{h,c}     the startup animation  (the .h is host-tested)
+    │   └── boot_anim_curve.h   GENERATED - see tools/gen_zeta_curve.py
+    ├── gfx/            the panel, and the one framebuffer
+    │   ├── gfx.{h,c}           owns THE framebuffer, primitives, text
+    │   ├── gfx_color.h         what a pixel is            (host-tested)
+    │   ├── gfx_dirty.h         which bands changed        (host-tested)
+    │   └── icons.{h,c}         artwork no font provides   (host-tested)
+    ├── ui/             microui integration, shared by the shell and apps
+    │   ├── ui.{h,c}
+    │   ├── ui_style.h          how a control's frame looks (host-tested)
+    │   └── ui_launcher.c       the home screen
+    ├── input/          the devices a finger reaches
+    │   ├── touch.{h,c}         FT5x06 polling task
+    │   ├── touch_fsm.{h,c}     samples -> press/release    (host-tested)
+    │   └── gesture.{h,c}       swipe recognition           (host-tested)
+    ├── util/           arithmetic that belongs to no layer
+    │   ├── fixed.h             fixed-point multiply/divide (host-tested)
+    │   └── intmath.h
     └── apps/
         └── cube/       one folder per app - see "An app is a folder"
             └── app_cube.c
 ```
+
+**Includes are layer-qualified** - `"gfx/gfx.h"`, not `"gfx.h"` - including
+between two files in the same folder. Uniform is the point: a reader should
+not have to know where a file lives to read its includes, and an app reaching
+past `ui` into `gfx` should be visible at the line that does it.
+
+**Three words that are not interchangeable**, because the code uses all three
+and means something different by each:
+
+| | |
+|---|---|
+| **shell** | the frame loop and the app switching — `main.c`, whose log tag is literally `shell` |
+| **launcher** | the home screen the shell draws when no app is running — `ui/ui_launcher.c`. This is what you reach after booting. |
+| **boot** | what runs once before the loop exists and never again — `boot/` |
+
+
+---
+
+## Generated sources
+
+`main/boot/boot_anim_curve.h` is the only generated file in the tree, and the
+conventions it follows are meant to apply to the next one.
+
+The curve it holds is the zeta function evaluated along the critical line.
+That is not something to compute on a chip with no FPU, and it never changes,
+so `tools/gen_zeta_curve.py` computes it once in double precision and the
+result ships in flash.
+
+Four rules, and the last is the one that matters:
+
+**The generator lives in `tools/`, the output in the tree it belongs to.**
+Generated output is checked in, not built. A build-time generator would put
+Python on the critical path of every clean build, on a project whose whole
+toolchain story is already long enough.
+
+**The output says so, and says how.** A banner naming the exact command that
+produces it, on the first line, where someone about to hand-edit it will see
+it before they start.
+
+**The generator validates itself before emitting anything.** `gen_zeta_curve.py`
+checks its own zeta against known values and exits rather than printing a
+plausible-looking table of wrong numbers. A generator that half-works is worse
+than one that fails, because its output looks fine.
+
+**The shipped artifact is tested independently of the generator.** This is the
+rule with teeth. A generator checking itself proves nothing about the file
+actually in the repo, which can be stale, hand-edited, or produced by an older
+version of the constants. So `suite_boot_anim.c` tests the numbers that ship,
+against the mathematics rather than against the generator: the curve must
+reach the axis at each of the five known zero heights, and must stay well
+clear of it everywhere else. No table of plausible numbers passes both halves
+by accident.
 
 ---
 
@@ -115,7 +182,7 @@ gfx_init()                  panel up, framebuffer allocated
 post_run_after_display()    the rest of the health check
                             -> a failure holds the screen for 8 s
 selftest_run()              diagnostics builds only
-boot_anim_run()             the startup animation, ~5 s
+boot_anim_run()             the startup animation, ~3 s
 touch_start(), buttons_start()
 ui_launcher_init()
 ```
