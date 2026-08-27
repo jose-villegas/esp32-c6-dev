@@ -108,6 +108,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_icons.c"
         "../test/suites/suite_ui.c"
         "../test/suites/suite_ui_style.c"
+        "../test/suites/suite_ui_transform.c"
         ${app_suites}
     )
 endif()

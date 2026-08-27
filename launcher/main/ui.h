@@ -37,6 +37,7 @@
 #include "app.h"
 #include "microui.h"
 #include "ui_style.h"
+#include "ui_transform.h"
 
 /* Shared metrics, so the shell and any app UI look like one product. */
 #define UI_TITLE_HEIGHT   56
@@ -78,6 +79,38 @@ void ui_set_button_style(ui_button_style_t style);
  * hash - see the comment above ui_set_text_style()'s definition in ui.c for
  * why a text style needs its own invalidation and a button style does not. */
 void ui_set_text_style(ui_text_style_t style);
+
+/* Choose the transform every command is mapped through before it is drawn -
+ * see ui_transform.h for what a transform is and why it is fixed point.
+ * Identity until this is called; ui_init() sets it explicitly so nothing
+ * relies on a zeroed struct happening to mean identity.
+ *
+ * Like ui_set_text_style() and unlike ui_set_button_style(), this has to call
+ * ui_invalidate() itself when the transform actually changes, and for the
+ * same reason: the transform is applied at render time, inside draw_command(),
+ * so the command list microui hands to hash_canvas() is byte-identical
+ * whatever the transform is. See the comment above ui_set_text_style()'s
+ * definition in ui.c for the full argument; this is that same trap.
+ *
+ * ONE TRANSFORM PER RENDERED PASS, NOT A STACK
+ *
+ * microui's command list has no way to carry a transform change partway
+ * through it, and components/microui/ is deliberately unpatched (see ui.c's
+ * top comment), so there is no per-widget nesting to hook a push/pop onto -
+ * whatever is in force here applies to every command from every canvas drawn
+ * by the next ui_end(). An app that genuinely wants two differently
+ * transformed surfaces gets there by rendering two passes, each with its own
+ * ui_begin()/ui_set_transform()/ui_end(), not by nesting calls to this. */
+void ui_set_transform(ui_transform_t t);
+
+/* The logical canvas size: the physical viewport (GFX_WIDTH x GFX_HEIGHT)
+ * mapped through the inverse of the current transform. Callers building a UI
+ * must ask these instead of assuming GFX_WIDTH/GFX_HEIGHT directly - under a
+ * quarter-turn transform the two swap, and code that measured against the
+ * physical panel would lay out past the edge of the rotated canvas or leave
+ * a gap at it. */
+int ui_width(void);
+int ui_height(void);
 
 /* Close the frame and paint it, but only if it would look any different from
  * what is already on screen. Returns whether it drew.

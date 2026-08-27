@@ -61,6 +61,7 @@ $TEST_DIR/suites/suite_gfx_dirty.c
 $TEST_DIR/suites/suite_gfx_color.c
 $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
+$TEST_DIR/suites/suite_ui_transform.c
 $MAIN_DIR/touch_fsm.c
 $MAIN_DIR/gesture.c
 $MAIN_DIR/button_fsm.c
