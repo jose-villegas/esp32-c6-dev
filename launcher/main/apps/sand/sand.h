@@ -552,38 +552,74 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * "how far this particular impulse reaches" belongs to whoever is calling
  * sand_impulse() and choosing what to queue; "how quickly any impulse's
  * push fades" is a property of the flight mechanism itself, and every
- * caller shares it). WAS 14, RAISED TO 4: a device pass on the first
- * real-radius detonation read as "barely noticeable" - a grain's push was
- * fading out before it had travelled far enough to be seen, on top of the
- * cap and core problems fixed alongside this (see SAND_EXPLODE_CORE_
- * DIVISOR and app_sand.c's APP_IMPULSE_MAX). 4 is a STARTING POINT, not a
- * measurement - there is no device capture behind it the way
- * SAND_REBOUND_GAIN has one, and neither was 14. Paired with a `speed` of
- * 250 (see SAND_EXPLODE_INITIAL_SPEED, sand_explode()'s own choice), it
- * reaches zero in ceil(250/4) = 63 steps - over four times the old bound
- * of 15 - a fixed, deterministic upper bound on how long any one entry
- * can fly, for whatever `speed` it started at. That determinism is itself
- * new: the design this replaced (a single fixed chance-in-256 rolled
- * fresh every turn, with no memory of how long a grain had already been
- * flying) only ever shrank the PROBABILITY of surviving another turn,
- * never actually bounded how long that could take. Tune on device once
- * this round's changes have been seen too - see docs/Sand/Explosion-
- * Plan.md's "Device" section for what to look at first. */
-#define SAND_IMPULSE_SPEED_RAMP  4
+ * caller shares it). WAS 14, RAISED TO 4, in the round that first gave a
+ * device a real-radius detonation to look at: a grain's push was fading
+ * out before it had travelled far enough to be seen, on top of the cap
+ * and core problems fixed alongside it. 4 was itself only a STARTING
+ * POINT, never measured on its own.
+ *
+ * WAS 4, LOWERED TO 2 - the first of these three constants to actually be
+ * swept rather than guessed, against the host measurement this mechanic
+ * had been missing until suite_sand.c's dune scene arrived: grains landing
+ * outside a settled dune's own footprint, averaged over independent
+ * sand_init() seeds (a single hardcoded-seed host test cannot tell a
+ * genuine improvement from a lucky roll). Swept one knob at a time first
+ * (20 seeds each, this constant against 200/250/255 SAND_EXPLODE_INITIAL_
+ * SPEED and against 3/4/5 SAND_EXPLODE_CORE_DIVISOR): RAMP 2 alone raised
+ * "outside" by roughly 20% over RAMP 4 at every SPEED/DIVISOR pairing
+ * tried, the largest swing any one of the three constants produced -
+ * unsurprising once stated plainly: a slower ramp means more steps spent
+ * above zero speed, which is more steps in which the outward roll can
+ * still succeed at all. Confirmed rather than assumed to still hold in
+ * COMBINATION, not just alone: an 18-way grid over all three constants
+ * together (30 seeds each) found RAMP 2 beating RAMP 4 at every single
+ * SPEED/DIVISOR pairing in the grid, never just on average - see
+ * SAND_EXPLODE_CORE_DIVISOR's own comment for the full table and why 5,
+ * not 3, is the DIVISOR this ships paired with. At the shipped combination
+ * (255, 2, 5) "outside" measured 80.0 average versus baseline (250, 4, 3)'s
+ * 56.9 - both n=30, same seed set - a mechanism-only change, with no
+ * changes yet to WHICH cells a flying grain may enter (see
+ * can_impulse_enter()'s own comment in sand.c for that half of the story,
+ * measured separately since it landed as its own commit).
+ *
+ * Paired with a `speed` of 255 (see SAND_EXPLODE_INITIAL_SPEED), this
+ * reaches zero in ceil(255/2) = 128 steps - almost exactly double the old
+ * RAMP-4 bound of 63, and still a small fraction of a frame's worth of
+ * wall-clock time at this project's step rate. That determinism is the
+ * property worth keeping regardless of where either number lands: the
+ * design this replaced (a single fixed chance-in-256 rolled fresh every
+ * turn, with no memory of how long a grain had already been flying) only
+ * ever shrank the PROBABILITY of surviving another turn, never actually
+ * bounded how long that could take. Not yet confirmed on a device - see
+ * docs/Sand/Explosion-Plan.md's "Device" section for what to look at
+ * first once it is. */
+#define SAND_IMPULSE_SPEED_RAMP  2
 
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
  * not a property of sand_impulse() itself, which takes speed as a plain
  * parameter and assumes nothing about what any particular caller wants.
  * WAS 200, RAISED TO 250 (near the uint8_t ceiling) alongside slowing
- * SAND_IMPULSE_SPEED_RAMP - see its own comment for the device report
- * that prompted both and for how the two combine into a bounded flight
- * time. Still a STARTING POINT, not a measurement. Paired with a bigger
- * or smaller radius this is still "how far things fly" in the sense the
- * old SAND_BLAST_DECAY used to mean it, just relocated to belong to the
- * explosion that actually decides it, rather than living inside the
- * generic flight mechanism as though every future caller would want the
- * same number. */
-#define SAND_EXPLODE_INITIAL_SPEED  250
+ * SAND_IMPULSE_SPEED_RAMP from 14 to 4 - a starting point, not a
+ * measurement, picked from a single device report rather than a sweep.
+ *
+ * WAS 250, RAISED TO 255 - the uint8_t ceiling outright, once there was a
+ * real measurement to raise it TOWARD. See SAND_IMPULSE_SPEED_RAMP's own
+ * comment for the sweep methodology (grains landing outside a settled
+ * dune's own footprint, averaged over independent seeds); the same sweep
+ * ran this constant against 200/250/255 and found 255 beating 250 at
+ * every RAMP/DIVISOR pairing tried, one-at-a-time and in the later 18-way
+ * combined grid alike - a smaller effect than SAND_IMPULSE_SPEED_RAMP's
+ * own (a few points of "outside" rather than dozens), but consistently in
+ * the same direction, so there is no combination in the grid where
+ * stepping back to 250 would have won. There is nowhere left to raise
+ * this TO - 255 is every bit of range a uint8_t speed has - so a future
+ * round wanting more reach has to look at SAND_IMPULSE_SPEED_RAMP or the
+ * radius instead. Paired with a bigger or smaller radius this is still
+ * "how far things fly" in the sense the old SAND_BLAST_DECAY used to mean
+ * it, just relocated to belong to the explosion that actually decides it,
+ * rather than living inside the generic flight mechanism as though every
+ * future caller would want the same number. */
+#define SAND_EXPLODE_INITIAL_SPEED  255
 
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /
@@ -646,21 +682,46 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * centre is always within a core radius of zero), small enough that a
  * wide blast keeps most of its own disc as real material for the flight
  * pass to throw, rather than a quarter of it never existing to be thrown
- * at all. Still a starting point, not a fully tuned measurement - the
- * device pass that caught the old value has not yet confirmed this one.
+ * at all. Was itself a starting point, not a fully tuned measurement - the
+ * device pass that caught the old value never confirmed this one either.
+ *
+ * WAS 3, RAISED TO 5 - now an actual measurement, and the one of these
+ * three constants where the numbers argued hardest for a specific value
+ * rather than just a direction. See SAND_IMPULSE_SPEED_RAMP's own comment
+ * for the sweep methodology. Independently, divisor alone barely moved
+ * "grains outside the footprint" at all (3 vs 4 vs 5 landed within a
+ * couple of points of each other at every fixed SPEED/RAMP pairing) - it
+ * is not a throw-distance knob, which makes sense: it decides how much of
+ * the disc becomes fire before anything is thrown, not how far the
+ * annulus that IS thrown then travels. What it moves instead is
+ * DESTRUCTION, hard, because the core's own area is what it directly
+ * controls: at the combination this ships with (255 speed, ramp 2), the
+ * dune scene's own "material destroyed" reading came in at 184.4 for
+ * divisor 3, 106.5 for 4, and 47.7 for 5 - divisor 5 destroys barely a
+ * QUARTER of what divisor 3 does, for statistically the same throw (80.0
+ * outside vs 81.4, 1.8 max-throw either way, n=30). That is exactly the
+ * trade worth making: the standing complaint driving this round was too
+ * much material vanishing into the core, not too little being thrown, and
+ * this constant turned out to be the one that answers that complaint
+ * almost for free. Confirmed in the full 18-way combined grid too, not
+ * just at the shipped SPEED/RAMP pair - divisor 5 was the cheapest of the
+ * three divisors for destruction at every other pairing in the grid as
+ * well, never only on average. Not yet confirmed on a device.
  *
  * PLAIN DIVISION IS CLAMPED TO A MINIMUM OF 1 for any radius >= 2 - see
- * sand_explode()'s own comment on `core_radius` in sand.c. Raising this
- * divisor made a small enough radius round down to a bare single-cell
- * core (radius 2, for instance: 2 / 3 = 0), and a 20,000-seed sweep found
- * that single cell genuinely insufficient to seed the density-swap
- * collapse a packed medium depends on - stuck on about 11% of seeds, not
- * merely slow, however many further steps it was given. The clamp
- * restores exactly the core shape the OLD divisor of 2 already gave at
- * every radius small enough for this one to have zeroed it out, and
- * changes nothing at the radius that motivated raising it: 24 / 3 = 8 is
- * already far above the floor, so a real detonation never touches it. */
-#define SAND_EXPLODE_CORE_DIVISOR  3
+ * sand_explode()'s own comment on `core_radius` in sand.c. Raising the
+ * divisor to 3 made a small enough radius round down to a bare
+ * single-cell core (radius 2, for instance: 2 / 3 = 0), and a 20,000-seed
+ * sweep found that single cell genuinely insufficient to seed the
+ * density-swap collapse a packed medium depends on - stuck on about 11%
+ * of seeds, not merely slow, however many further steps it was given. The
+ * clamp restores exactly the core shape the OLD divisor of 2 already gave
+ * at every radius small enough for a later divisor to have zeroed it out.
+ * Raising the divisor again, to 5, changes nothing about that: 24 / 5 = 4
+ * is still far above the floor at the radius a real detonation actually
+ * uses, so the floor engages at exactly the same small radii it always
+ * did, for exactly the same reason. */
+#define SAND_EXPLODE_CORE_DIVISOR  5
 
 /* ONE CALLER OF sand_impulse(), seeding many radially. Fill a disc of
  * `radius` around (cx, cy) with fire at its core (see

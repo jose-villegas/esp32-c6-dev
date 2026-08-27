@@ -11606,7 +11606,19 @@ static void test_detonating_empty_space_still_flashes_the_core(void)
 
     sand_explode(&s, 4, 4, 3);
 
-    const int core_radius = 3 / SAND_EXPLODE_CORE_DIVISOR;
+    /* Mirrors sand_explode()'s own `core_radius` in sand.c EXACTLY,
+     * clamp included - not just the bare division. Plain `3 /
+     * SAND_EXPLODE_CORE_DIVISOR` used to agree with the real, clamped
+     * value at every divisor this constant had ever held (2, then 3),
+     * purely by coincidence: raising it to 5 made 3 / 5 round down to 0,
+     * while sand_explode() itself still clamps a radius-3 blast's core to
+     * 1 (see SAND_EXPLODE_CORE_DIVISOR's own comment in sand.h) - so the
+     * unclamped copy here started asserting SAND_EMPTY over four cells
+     * that are, correctly, fire. A local recomputation that quietly
+     * assumes away a documented clamp is exactly the kind of thing that
+     * only breaks the next time a constant moves, which is now. */
+    const int core_radius_raw = 3 / SAND_EXPLODE_CORE_DIVISOR;
+    const int core_radius = (core_radius_raw == 0 && 3 >= 2) ? 1 : core_radius_raw;
     const int core_r2 = core_radius * core_radius;
     int fire_cells = 0;
     for (int y = 0; y < H; y++) {
