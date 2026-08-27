@@ -506,11 +506,15 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * assumes a centre or a radius.
  *
  * A no-op if sand_enable_impulses() was never called, if (x, y) is off the
- * grid, if the cell there is already empty (nothing to throw), or if the
- * buffer is already at capacity - the last one is graceful degradation,
- * exactly like CRACK_MAX truncating a crack rather than failing: past the
- * cap, calls simply queue nothing further, without the caller needing to
- * track the count itself or stop calling once it fills. */
+ * grid, if the cell there is already empty (nothing to throw), if the cell
+ * there is KIND_STATIC (a wall cannot be thrown any more than a flying
+ * grain can enter one - see can_impulse_enter()'s own comment in sand.c
+ * for the entering half of this and this function's own body for why the
+ * throwing half needed its own, separate check), or if the buffer is
+ * already at capacity - the last one is graceful degradation, exactly
+ * like CRACK_MAX truncating a crack rather than failing: past the cap,
+ * calls simply queue nothing further, without the caller needing to track
+ * the count itself or stop calling once it fills. */
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 
 /* Chance in 256, per step, that a queued grain's outward move happens THIS

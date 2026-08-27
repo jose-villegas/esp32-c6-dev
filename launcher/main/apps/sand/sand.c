@@ -449,6 +449,34 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
         return;   /* nothing there to throw */
     }
 
+    /* A WALL CANNOT BE THROWN, any more than one can be entered - the
+     * missing HALF of can_impulse_enter()'s own rule (step_impulses(), this
+     * file), which only ever gated the DESTINATION a flying grain tries to
+     * move into. Nothing gated the SOURCE: this function's only check used
+     * to be "is there something here to throw", and a stone wall cell is
+     * very much something, so it queued exactly like a grain of sand
+     * would - and once queued, step_impulses() moves any entry into
+     * whatever open (or, since displacement, non-static) cell sits ahead
+     * of it, with no idea the thing it is moving happens to itself be a
+     * wall. A vessel wall thick enough that no earlier, smaller blast's
+     * radius ever reached it hid this for every round before this one: the
+     * annulus simply never touched a wall cell to queue in the first
+     * place. Doubling the radius (see DETONATE_RADIUS_PX in app_sand.c)
+     * was what finally reached one, and the result was exactly what it
+     * sounds like - a chunk of the vessel's own wall, given an outward
+     * push like anything else in the annulus, walking itself into the
+     * genuinely empty space just outside the vessel and leaving the
+     * "sealed" box with a hole in it.
+     *
+     * KIND_STATIC, the same test can_impulse_enter() uses for the
+     * opposite half of this rule, because the reasoning is identical
+     * either direction: this simulation defines a wall as the one thing
+     * with no leverage to be moved BY anything, so it must have none to
+     * be moved either. */
+    if (material_of(cell)->kind == KIND_STATIC) {
+        return;
+    }
+
     impulse_t *entry = &s->impulse_buf[s->impulse_count++];
     entry->index = (uint16_t)at;
     entry->cell  = cell;

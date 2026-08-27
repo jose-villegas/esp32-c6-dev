@@ -198,6 +198,26 @@ the wall and they stop. No line-of-sight pass, no radial occlusion test.
 Worth stating explicitly because the obvious first instinct - raycast
 from the centre - is both more expensive and unnecessary.
 
+**AS SHIPPED, THIS GUARANTEE HAD A GAP THAT ONLY A BIGGER BLAST FOUND.**
+Everything above is about a flying grain being unable to ENTER a wall
+cell - it says nothing about a wall cell being unable to BE a flying
+grain. `sand_impulse()`'s only gate on the cell it is given was "is
+there something here to throw", and a stone wall cell is something, so
+once a blast's own radius reached far enough to put a wall cell inside
+its annulus, that wall cell was queued and thrown exactly like any grain
+of sand - walking itself, one cell per step, into whatever genuinely
+empty space sat just outside the vessel it was supposed to be part of.
+No earlier round's radius ever reached a wall this way, so the gap was
+invisible until `DETONATE_RADIUS_PX` doubled (see that constant's own
+comment in app_sand.c) - at which point `test_the_vessel_scene_lets_
+nothing_reach_outside_it` (suite_sand.c) caught over a thousand sand
+cells outside a "sealed" vessel on the very first run. Fixed the same
+way the entering half already was: `sand_impulse()` now refuses to queue
+a `KIND_STATIC` source cell at all, in `sand.c`, right beside `can_impulse
+_enter()`'s own comment on the symmetric half of the same rule. A wall
+has no leverage to be moved BY anything; now it has none to be moved
+WITH either.
+
 **Over the cap, grains simply do not fly.** They stay where they are.
 Graceful degradation, exactly as `CRACK_MAX` truncates a crack rather than
 failing. A blast bigger than the list is a smaller-looking blast, not a
