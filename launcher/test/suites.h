@@ -22,7 +22,17 @@
  *===========================================================================*/
 #pragma once
 
-#define SUITE_MAX 16
+/* The cap on registered suites, checked at registration - overflowing it
+ * PRINTS and drops a suite rather than failing the build, so a run stays
+ * green while silently testing less than it says it does.
+ *
+ * It was 16, and the device build had already outgrown it: twelve shared
+ * suites plus five of the sand app's is seventeen, so one was being dropped
+ * every time the diagnostics image ran its self test. Raised well clear
+ * rather than to exactly the current count - the array is function pointers
+ * and names, so the whole increase costs about a hundred bytes of a build
+ * that only exists on the bench. */
+#define SUITE_MAX 32
 
 typedef void (*suite_fn)(void);
 
