@@ -38,6 +38,14 @@ static uint64_t canvas_hash[MU_CONTAINERPOOL_SIZE];
 static mu_Context ctx;
 static bool       invalidated = true;
 
+/* The style in force for the rest of this frame, and microui's own frame
+ * painter, kept so UI_BUTTON_FLAT and every non-button frame stay exactly what
+ * upstream draws. Captured from the context rather than reimplemented here:
+ * microui's draw_frame() is static to microui.c, and a hand-copied twin of it
+ * would be one more thing to keep in step across a version bump. */
+static ui_button_style_t  button_style;
+static void             (*base_draw_frame)(mu_Context *, mu_Rect, int);
+
 /* microui asks us for text metrics rather than measuring anything itself. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
@@ -49,6 +57,53 @@ static int measure_text_height(mu_Font font)
 {
     (void)font;
     return gfx_text_height();
+}
+
+/*---------------------------------------------------------------------------
+ * Styling
+ *
+ * Every frame microui draws - button, checkbox, slider, scrollbar, window
+ * background - arrives here with a rect and a colour id. See ui_style.h for
+ * what a style is and why it produces spans rather than painting.
+ *
+ * WHY THE PRESSED LOOK IS ON HOVER, NOT ONLY ON FOCUS
+ *
+ * On a mouse, hover means "the pointer is near" and focus means "the button is
+ * held". A touchscreen has no such distinction: the pointer does not exist
+ * until a finger is already on the glass, so hover IS contact. Following
+ * feed_input()'s sequence below, a tap renders MU_COLOR_BUTTONHOVER for every
+ * frame the finger is down and MU_COLOR_BUTTONFOCUS for the single frame the
+ * press lands on. Sinking the bezel only on focus would therefore flash it for
+ * one frame out of a press that lasts dozens, which reads as a glitch rather
+ * than as a button going in.
+ *-------------------------------------------------------------------------*/
+
+static bool is_button_frame(int colorid)
+{
+    return colorid == MU_COLOR_BUTTON ||
+           colorid == MU_COLOR_BUTTONHOVER ||
+           colorid == MU_COLOR_BUTTONFOCUS;
+}
+
+static void styled_draw_frame(mu_Context *c, mu_Rect rect, int colorid)
+{
+    if (button_style != UI_BUTTON_BEZEL || !is_button_frame(colorid)) {
+        base_draw_frame(c, rect, colorid);
+        return;
+    }
+
+    ui_span_t spans[UI_BEZEL_MAX_SPANS];
+    const int n = ui_bezel_spans(rect, c->style->colors[colorid],
+                                 colorid != MU_COLOR_BUTTON,
+                                 spans, UI_BEZEL_MAX_SPANS);
+    for (int i = 0; i < n; i++) {
+        mu_draw_rect(c, spans[i].rect, spans[i].color);
+    }
+}
+
+void ui_set_button_style(ui_button_style_t style)
+{
+    button_style = style;
 }
 
 mu_Context *ui_context(void)
@@ -66,6 +121,10 @@ void ui_init(void)
     mu_init(&ctx);
     ctx.text_width  = measure_text_width;
     ctx.text_height = measure_text_height;
+
+    base_draw_frame = ctx.draw_frame;
+    ctx.draw_frame  = styled_draw_frame;
+    button_style    = UI_BUTTON_FLAT;
 
     /* Palette. Deliberately dark: this is an OLED, so black pixels are off
      * pixels - it costs less power and looks better than a grey chrome. */
@@ -142,6 +201,9 @@ static void feed_input(const input_t *input)
 
 void ui_begin(const input_t *input)
 {
+    /* Reset before the caller can state its own - see ui.h on why style does
+     * not persist across frames. */
+    button_style = UI_BUTTON_FLAT;
     feed_input(input);
     mu_begin(&ctx);
 }

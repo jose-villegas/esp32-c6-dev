@@ -36,6 +36,7 @@
 
 #include "app.h"
 #include "microui.h"
+#include "ui_style.h"
 
 /* Shared metrics, so the shell and any app UI look like one product. */
 #define UI_TITLE_HEIGHT   56
@@ -53,8 +54,22 @@ void ui_init(void);
 mu_Context *ui_context(void);
 
 /* Start a UI frame: translates touch into the mouse events microui expects,
- * then opens the frame. */
+ * then opens the frame.
+ *
+ * Also resets the button style to UI_BUTTON_FLAT. Style is part of the frame's
+ * description, like everything else in an immediate-mode UI - a caller that
+ * wants a style states it every frame, and one that does not is never handed
+ * another screen's looks. That matters here because the whole shell shares one
+ * mu_Context: without the reset, the launcher opting into a bezel would leave
+ * the sand app's overlay buttons bezelled too. */
 void ui_begin(const input_t *input);
+
+/* Choose how button frames are drawn for the rest of this frame.
+ *
+ * Call it after ui_begin() and before the buttons it should apply to; it can
+ * be changed again mid-frame, so one UI can mix styles. See ui_style.h for
+ * what each style is and why only buttons are affected. */
+void ui_set_button_style(ui_button_style_t style);
 
 /* Close the frame and paint it, but only if it would look any different from
  * what is already on screen. Returns whether it drew.

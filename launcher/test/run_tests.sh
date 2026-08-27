@@ -60,6 +60,7 @@ $TEST_DIR/suites/suite_rng.c
 $TEST_DIR/suites/suite_gfx_dirty.c
 $TEST_DIR/suites/suite_gfx_color.c
 $TEST_DIR/suites/suite_icons.c
+$TEST_DIR/suites/suite_ui_style.c
 $MAIN_DIR/touch_fsm.c
 $MAIN_DIR/gesture.c
 $MAIN_DIR/button_fsm.c
@@ -101,8 +102,13 @@ done
 mkdir -p "$BUILD_DIR"
 OUT="$BUILD_DIR/host_tests"
 
+# components/microui/include is on the path for ui_style.h's sake: it needs
+# mu_Rect and mu_Color, and those are plain declarations in microui.h with no
+# library behind them. Nothing here links microui.c - see suite_ui_style.c on
+# why a style's geometry was kept free of it.
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
+    -I "$TEST_DIR/../components/microui/include" \
     $SOURCES -o "$OUT"
 
 # MinGW appends .exe; elsewhere the plain name is produced.

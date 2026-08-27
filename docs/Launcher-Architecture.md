@@ -20,10 +20,13 @@ launcher/
     ├── touch_fsm.{h,c} samples -> press/release events   (host-tested)
     ├── gesture.{h,c}   swipe recognition                 (host-tested)
     ├── app.h           the shell/app contract
+    ├── ui.{h,c}        microui integration, shared by the shell and apps
+    ├── ui_style.h      how a control's frame looks       (host-tested)
     ├── ui_launcher.c   the home screen, built with microui
     ├── main.c          the frame loop and app switching
     └── apps/
-        └── app_cube.c  3D cube
+        └── cube/       one folder per app - see "An app is a folder"
+            └── app_cube.c
 ```
 
 ---
@@ -269,6 +272,59 @@ ui_end(UI_NO_BACKGROUND);   /* draw over the app instead of clearing */
 
 That gets the touch handling - which is not obvious, see the comment on
 `feed_input()` - and the repaint logic below, for free.
+
+#### Styling a control
+
+`ui_style.h` decides how a control's frame *looks*, separately from what it
+*is*. Two styles exist for buttons:
+
+| | |
+|---|---|
+| `UI_BUTTON_FLAT` | microui's own — a flat fill plus a one-pixel border. The default. |
+| `UI_BUTTON_BEZEL` | lit from the top left, inverted while a finger is on it. What the launcher uses. |
+
+```c
+ui_begin(input);
+ui_set_button_style(UI_BUTTON_BEZEL);   /* every frame - see below */
+```
+
+Three things about it are worth knowing before adding a style of your own.
+
+**The hook is microui's, not a patch.** `mu_Context` carries a `draw_frame`
+function pointer that every frame goes through — button, checkbox, slider,
+scrollbar, window background — with a rect and a colour id. `ui_init()` saves
+the one microui installed and puts its own in front, so `UI_BUTTON_FLAT` and
+every non-button frame are still literally upstream's code, and nothing in
+`components/microui/` is edited.
+
+**A style emits commands, not pixels.** It would be simpler to call
+`gfx_fill_rect()` and paint the edges directly, and it would break the repaint
+skip below: that works by hashing microui's command list, so an edge drawn
+outside the list is invisible to the hash and survives on screen as a stale
+smear after the control underneath it changes. Styles return spans;
+`styled_draw_frame()` turns spans into `mu_draw_rect()` calls; the hash sees
+all of it.
+
+**Style does not persist across frames.** `ui_begin()` resets it, so a caller
+that wants a style states it every frame. That is the immediate-mode reading —
+style is part of the frame's description, like everything else — and it is load
+bearing here, because the whole shell shares one `mu_Context`: without the
+reset, the launcher opting in would leave the sand app's overlay buttons
+bezelled too.
+
+One detail worth spelling out, because it is the opposite of what a desktop
+toolkit would do: **the pressed look is on hover, not on focus.** On a mouse,
+hover means "the pointer is near" and focus means "the button is held"; on a
+touchscreen the pointer does not exist until a finger is already on the glass,
+so hover *is* contact. A tap renders `MU_COLOR_BUTTONHOVER` for every frame the
+finger is down and `MU_COLOR_BUTTONFOCUS` for the single frame the press lands
+on, so sinking the bezel only on focus would flash it for one frame out of a
+press lasting dozens.
+
+The geometry and the shading are pure functions in the header, the same split
+`icons.h` makes, so `test/suites/suite_ui_style.c` checks the shape on a host
+without linking `gfx.c` or even `microui.c` — nobody can eyeball five
+overlapping rectangles reliably.
 
 #### Immediate mode versus dirty bands
 

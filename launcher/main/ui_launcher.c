@@ -27,6 +27,13 @@ int ui_launcher_frame(const input_t *input)
 
     ui_begin(input);
 
+    /* Bezelled buttons. On a screen whose only affordance is that a rectangle
+     * is slightly lighter than the black around it, a lit edge is what says
+     * "this is a thing you press" - and it inverts under a finger, so the
+     * press is visible before the app has finished starting. Stated every
+     * frame because style does not persist: see ui.h. */
+    ui_set_button_style(UI_BUTTON_BEZEL);
+
     /* One full-screen window with no chrome: this is a home screen, not a
      * desktop, so the frame, title bar and close button would be noise. */
     if (mu_begin_window_ex(ctx, "Launcher",
