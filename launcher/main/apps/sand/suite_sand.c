@@ -12994,29 +12994,37 @@ static void bfs_distance_from_footprint(const bool *footprint, int w, int h,
  *
  * WAS 24 (48 px), DOUBLED TO 48 (96 px) - following a device request,
  * "it needs a much bigger radius in general" - and THAT DOUBLING BRIEFLY
- * BROKE THE FEATURE OUTRIGHT on real hardware: the impulse buffer used to
- * be sized FROM this radius (`(355*r*r)/113 + 5*r + 3` entries), so
- * doubling it demanded a ~43.8 KB allocation the device could not make
- * (~76 KB free heap system-wide, ~43.5 KB of that already claimed by this
- * app's OTHER buffers before impulse_buf is even considered - see
- * SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c for the full
- * arithmetic). The malloc failed every time, sand_explode() no-opped on
- * its own first line, and detonating did nothing at all - a failure this
- * test's fixed RNG seed and unlimited host `malloc()` could never have
- * caught, since nothing here ever fails to allocate.
+ * BROKE THE FEATURE OUTRIGHT on real hardware, TWICE, for two different
+ * reasons caught by two different device flashes. First: the impulse
+ * buffer used to be sized FROM this radius
+ * (`(355*r*r)/113 + 5*r + 3` entries), so doubling it demanded a ~43.8 KB
+ * allocation nothing on this board could satisfy. Second, after that got
+ * fixed by decoupling buffer size from radius (see below) and sizing the
+ * fixed budget against a ~76 KB TOTAL free-heap boot-log figure instead:
+ * a live serial capture at that "fixed" budget still failed, showing
+ * `heap_caps_get_largest_free_block()` stuck at an identical 14,592
+ * bytes across three different quality settings - proof the relevant
+ * number was never total free heap at all, but the single largest
+ * contiguous run, which can be far smaller than the sum of everything
+ * technically free. Neither failure was visible to this test's fixed RNG
+ * seed and unlimited host `malloc()` - nothing here ever fails to
+ * allocate, which is exactly why this bug needed a device twice to be
+ * believed. See SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c
+ * for the full arithmetic of both incidents.
  *
- * THE FIX WAS NOT A SMALLER RADIUS. It was decoupling buffer size from
- * radius entirely: APP_IMPULSE_MAX (app_sand.c) is now a FIXED entry
- * count chosen once from the device's own heap budget, and
- * sand_explode() itself (sand.c) now THINS its own seeding density
- * automatically whenever a disc's true cell count would exceed whatever
- * buffer it was actually given - evenly, across the whole disc, rather
- * than truncating its shape - see queue_outward_impulse()'s own comment
- * in sand.c. This constant follows DETONATE_RADIUS_PX's own value rather
- * than drifting from it, same as before, but the radius itself no longer
- * has anything to do with whether the buffer allocates - see
- * DETONATE_RADIUS_PX's own comment in app_sand.c for the measured cost
- * of the automatic thinning at this exact radius. */
+ * THE FIX WAS NOT A SMALLER RADIUS EITHER TIME. It was decoupling buffer
+ * size from radius entirely: APP_IMPULSE_MAX (app_sand.c) is now a FIXED
+ * entry count chosen once from the device's own heap budget - now
+ * against the observed largest-contiguous-block number, not total free
+ * heap - and sand_explode() itself (sand.c) now THINS its own seeding
+ * density automatically whenever a disc's true cell count would exceed
+ * whatever buffer it was actually given - evenly, across the whole disc,
+ * rather than truncating its shape - see queue_outward_impulse()'s own
+ * comment in sand.c. This constant follows DETONATE_RADIUS_PX's own
+ * value rather than drifting from it, same as before, but the radius
+ * itself no longer has anything to do with whether the buffer allocates -
+ * see DETONATE_RADIUS_PX's own comment in app_sand.c for the measured
+ * cost of the automatic thinning at this exact radius. */
 #define DUNE_BLAST_RADIUS 48
 
 /* A FIXED ENTRY COUNT MIRRORING APP_IMPULSE_MAX EXACTLY, not a formula in
@@ -13030,7 +13038,7 @@ static void bfs_distance_from_footprint(const bool *footprint, int w, int h,
  * a different memory ceiling than the one the device actually has, which
  * defeats the entire point of this scene reading "on the same scale a
  * real device detonation does" (this file's own top comment, above). */
-#define DUNE_IMPULSE_MAX  4096
+#define DUNE_IMPULSE_MAX  2048
 
 /* A settled dune, poured rather than painted - the same way app_sand.c's
  * own starting heap is: sand_spawn() dropped from height and left to find
@@ -13155,8 +13163,8 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
      * something real rather than a degenerate scene: "outside"/
      * "destroyed" stayed small fractions of `before` (a 500-seed sweep
      * against the real, shipped sand_explode() - its own automatic
-     * thinning included, not a re-implementation - averaged 2.25% and
-     * 5.80% at this radius and budget, not a plurality of the dune,
+     * thinning included, not a re-implementation - averaged 1.66% and
+     * 5.81% at this radius and budget, not a plurality of the dune,
      * still less all of it) - see this test's own assertions below,
      * unchanged, for the actual bar. */
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);

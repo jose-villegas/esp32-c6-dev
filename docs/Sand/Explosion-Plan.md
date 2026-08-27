@@ -399,7 +399,60 @@ the number. Because sizing no longer depends on the radius at all, no
 future radius change - however much bigger the next ask is - can
 reproduce this specific failure again; it can only ever make the
 automatic thinning more aggressive, never make the buffer fail to
-allocate.)*
+allocate.
+
+**That fix still shipped broken** - a live device flash of it found the
+exact same `ESP_LOGE` firing on every detonate attempt, at every quality
+setting tried. The budget above was arithmetic, not a device
+measurement: it subtracted this app's other fixed allocations from a
+boot log's TOTAL FREE HEAP figure (~76 KB) and called what was left over
+a safe number for `impulse_buf`'s malloc. Total free heap is the wrong
+number for a single `malloc()` call to be judged against - what matters
+is the single largest CONTIGUOUS run, and a heap can have plenty of free
+bytes scattered across many small pieces while its biggest unbroken run
+is far smaller than their sum. A live serial capture proved it: three
+detonate attempts at three different quality settings (grid sizes
+18,178 / 10,304 / 4,514 bytes - a near-4x spread) all reported
+`heap_caps_get_largest_free_block()` at an IDENTICAL 14,592 bytes,
+completely unmoved by an allocation that itself varied that much. A
+number that does not track the one thing in this app that changes size
+is not describing this app's own allocations - it is describing
+something the rest of the firmware left behind before this app ever
+ran, which 76 KB of TOTAL free heap had no way to reveal and only a live
+capture of the ACTUAL failing `malloc()`'s own diagnostic could.
+
+Two changes followed. First, `impulse_buf`'s allocation moved to the
+very first thing `start_sim()` does (see its own comment there),
+on the hypothesis that this app's OWN other allocations
+(`dirty_rows`/`sleep_blocks`/`grid`) - which used to run first - were
+fragmenting the space `impulse_buf` needed before it got a turn; moving
+it first lets it claim the largest available run before anything else
+gets a chance to carve the heap up further. That hypothesis, and whether
+reordering alone closes the gap, needs a fresh device capture of the
+same `ESP_LOGE` line to confirm - it is untested as of this writing.
+Second, and unconditionally regardless of what the reorder buys:
+`SAND_IMPULSE_BUDGET_BYTES` was corrected to be judged against the
+observed 14,592-byte largest-block figure instead of total free heap -
+12 KB (12,288 bytes), leaving real but deliberately modest margin below
+the one number this project actually has. `APP_IMPULSE_MAX` followed it
+down to 2,048 entries. At `DETONATE_RADIUS_PX`'s 96 px, whose true disc
+holds 7,213 cells, that budget now seeds roughly 28% of it - measured at
+67.1 "grains outside the footprint" against `build_sand_dune_scene()`
+(500-seed sweep, the real shipped `sand_explode()`) against 121.2 for
+the same radius at full, unaffordable density, and against 106-107 for
+a smaller radius (24-25 cells) that fits this same tighter budget at
+FULL density with no thinning at all - the smaller blast currently wins
+on that specific number, though the bigger one still reaches roughly 5x
+further and destroys roughly 3-5x more. `DETONATE_RADIUS_PX` stayed at
+96 on the judgment that reach and destruction are a real part of what
+"much bigger" meant and a full-density smaller blast does not supply
+them, but this is the closest call this mechanic has produced yet and
+is flagged as such rather than treated as settled - see
+`DETONATE_RADIUS_PX`'s own comment in app_sand.c. Whatever combination
+ships next, the thing that must not happen a third time is calling it
+safe from arithmetic alone: only a live capture of
+`heap_caps_get_largest_free_block()` at the point `impulse_buf` is
+allocated can actually confirm it.)*
 
 ### The quantitative half
 

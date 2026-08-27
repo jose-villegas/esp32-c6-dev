@@ -178,37 +178,45 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * 184-cell-wide screen - which is what "much bigger" has to mean at this
  * scale rather than another small bump.
  *
- * THAT DOUBLING BRIEFLY BROKE THE FEATURE OUTRIGHT, the first time this
- * shipped: APP_IMPULSE_MAX used to be a FORMULA in terms of this radius
- * (`(355*r*r)/113 + 5*r + 3`, sized to the disc), so doubling the radius
- * quadrupled the buffer the formula demanded - to a 7,481-entry, ~43.8 KB
- * allocation the device could not actually make (see SAND_IMPULSE_
- * BUDGET_BYTES below for the real heap arithmetic). The malloc failed
- * every time, sand_explode()'s own "if (s->impulse_buf == NULL) return;"
- * made every detonation a silent no-op, and nothing but an ESP_LOGE
- * nobody was watching for said so. The fix was not a smaller radius -
- * that only relocates the same coupling to wherever the NEXT "bigger"
- * request lands - it was decoupling the two entirely: APP_IMPULSE_MAX is
- * now a FIXED entry count chosen once from the device's own heap budget
- * (see its own comment below) and does not change when this radius does,
- * and sand_explode() itself (sand.c) now THINS its own seeding density
- * automatically whenever a disc's true cell count would exceed whatever
- * buffer it was actually given, spreading the reduced density evenly
- * across the whole disc rather than truncating its shape - see
- * queue_outward_impulse()'s own comment in sand.c for how. That is what
- * makes 96 px affordable again without shrinking anything by hand: this
- * radius's true disc holds 7,213 cells (exact_disc_count(48) - see
- * sand.c), so APP_IMPULSE_MAX's 4,096-entry budget seeds roughly 57% of
- * it instead of failing to allocate at all, measured at 91.0 "grains
- * outside the footprint" against build_sand_dune_scene() (500-seed
- * sweep, real sand_explode(), not a re-implementation) - see docs/Sand/
- * Explosion-Plan.md's "Two failure modes to watch for by name" for the
- * full incident and that measurement.
+ * THAT DOUBLING BROKE THE FEATURE OUTRIGHT ON REAL HARDWARE, TWICE, for
+ * two different reasons a device flash caught each time - see
+ * SAND_IMPULSE_BUDGET_BYTES's own comment below for the full arithmetic
+ * of both. Neither failure was a reason to give the radius back: this
+ * app's own impulse buffer is now sized as a FIXED entry count
+ * (APP_IMPULSE_MAX, decoupled from this radius entirely - see its own
+ * comment) chosen from the device's real heap budget, and sand_explode()
+ * itself (sand.c) THINS its own seeding density automatically whenever a
+ * disc's true cell count would exceed whatever buffer it was actually
+ * given, spreading the reduced density evenly across the whole disc
+ * rather than truncating its shape or failing to allocate at all - see
+ * queue_outward_impulse()'s own comment in sand.c for how.
  *
- * DETONATE_RADIUS_PX is a free gameplay dial again, same as it always
+ * THE HONEST COST OF THAT, at the CORRECTED (12 KB / 2,048-entry) budget:
+ * 96 px's true disc holds 7,213 cells (exact_disc_count(48) - see
+ * sand.c), so this budget seeds only ~28% of it - measured at 67.1
+ * "grains outside the footprint" against build_sand_dune_scene() (real
+ * sand_explode(), 500-seed sweep), against 121.2 for the same radius at
+ * full density (unaffordable on this device) and 106-107 for a SMALLER
+ * radius (24-25 cells) that fits this same budget at FULL density with
+ * no thinning at all. The smaller, fully-seeded blast currently wins on
+ * this specific number; the bigger, thinned one still wins on how far
+ * material actually travels (11.6 vs 2.3 average max-throw distance) and
+ * how much it destroys (235.6 vs ~48-79). This constant stays at 96 -
+ * the size actually asked for - because that reach-and-destruction
+ * difference is a large, real part of what "much bigger" was asking for
+ * and a smaller full-density radius does not deliver it; but this
+ * tradeoff is close enough, and this budget corrected downward steeply
+ * enough (24,576 to 12,288 bytes - see SAND_IMPULSE_BUDGET_BYTES's own
+ * comment for why), that it is worth a real look on the device rather
+ * than taking this call as settled from host numbers alone. If a bigger
+ * "outside" number matters more than the reach, drop this back toward
+ * 48-50 px instead of raising APP_IMPULSE_MAX - the budget is a hardware
+ * fact, not a gameplay dial.
+ *
+ * DETONATE_RADIUS_PX is otherwise a free gameplay dial, same as it always
  * looked like one: raising it further changes how thin an oversized
- * blast gets, never whether it allocates. Tune it on feel; nothing below
- * this line needs to move when it changes. */
+ * blast gets, never whether it allocates. Nothing below this line needs
+ * to move when it changes. */
 #define DETONATE_RADIUS_PX  96
 
 /* A FIXED ENTRY COUNT, not a formula in DETONATE_RADIUS_PX - the single
@@ -223,7 +231,7 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * checked whether the new size still fit the device until it didn't (see
  * DETONATE_RADIUS_PX's own comment for the incident).
  *
- * 4,096 is SAND_IMPULSE_BUDGET_BYTES / sizeof(impulse_t) exactly - 24,576
+ * 2,048 is SAND_IMPULSE_BUDGET_BYTES / sizeof(impulse_t) exactly - 12,288
  * / 6 - chosen as a round entry count rather than left as a byte-only
  * figure so this constant reads the same way every other buffer's own
  * MAX in this file does (GRID_W_MAX, BLOCK_COLS_MAX, ...): a count of
@@ -231,7 +239,7 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * BYTES's own comment immediately below for the heap arithmetic this
  * count is answerable to, and the _Static_assert that keeps the two from
  * drifting apart if either is ever hand-edited on its own. */
-#define APP_IMPULSE_MAX  4096
+#define APP_IMPULSE_MAX  2048
 
 /* THE BUDGET APP_IMPULSE_MAX MUST NOT EXCEED - a HARDWARE decision, made
  * ONCE here, deliberately independent of DETONATE_RADIUS_PX or anything
@@ -248,36 +256,45 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * how sand_explode() now spends whatever this budget affords instead of
  * demanding more of it.
  *
- * THE ARITHMETIC, from a real boot log captured on this board (see the
- * "post:" lines any boot prints): 76,068 bytes of heap free system-wide
- * once the framebuffer and everything before this app are already
- * accounted for, no PSRAM. This app's OWN allocations besides
- * impulse_buf, every one of them fixed by the grid (GRID_W_MAX/
- * GRID_H_MAX) or the row-run bookkeeping and touched by nothing to do
- * with the blast radius:
+ * THIS BUDGET WAS WRONG ONCE ALREADY, AT 24,576 BYTES, AND A DEVICE
+ * FLASH IS WHAT CAUGHT IT - not host arithmetic, which had already
+ * signed off on that number and was still wrong. The mistake was sizing
+ * against a real boot log's TOTAL FREE HEAP (76,068 bytes, everything
+ * this app's own fixed buffers - dirty_rows/sleep_blocks/grid/row_run_*,
+ * ~43,480 bytes together, none of them scaling with the blast radius -
+ * subtracted from it). Total free heap is the wrong number for a SINGLE
+ * malloc() call to be judged against: what a single allocation actually
+ * needs is one contiguous run at least that large, and a heap can have
+ * plenty of total free bytes while its largest unbroken run is much
+ * smaller than their sum. That is exactly what a live serial capture at
+ * 82851a9 found: `impulse_buf`'s malloc failing on THREE separate
+ * detonate attempts, at THREE different quality settings (grid sizes
+ * 18,178 / 10,304 / 4,514 bytes), with `heap_caps_get_largest_free_
+ * block()` reporting an IDENTICAL 14,592 bytes every single time -
+ * unmoved by a grid allocation that itself varied by nearly 4x across
+ * those three runs. A number that does not move with the one thing in
+ * this app that changes size is not describing this app's own
+ * allocations at all; it is describing something upstream of them (heap
+ * layout left behind by whatever ran before this app, most likely -
+ * see start_sim()'s own comment on moving this allocation first, which
+ * was the other half of this same fix) that 76,068 bytes of TOTAL free
+ * heap never had any way to reveal.
  *
- *   dirty_rows                     GRID_H_MAX                          =   224 B
- *   sleep_blocks                   BLOCK_COLS_MAX * BLOCK_ROWS_MAX      =    24 B
- *   grid                           GRID_W_MAX * GRID_H_MAX              = 41,216 B
- *   row_run_x0                     GRID_H_MAX * ROW_MAX_RUNS * 2        =    896 B
- *   row_run_x1                     GRID_H_MAX * ROW_MAX_RUNS * 2        =    896 B
- *   row_run_n                      GRID_H_MAX                           =    224 B
- *                                                             subtotal  = 43,480 B
- *
- * 76,068 - 43,480 = 32,588 bytes left with NO headroom at all for
- * allocator fragmentation or for every other subsystem sharing this same
- * heap (Wi-Fi/BT stacks, other tasks, whatever the UI allocates
- * transiently) - all of which draw from the same pool this 76,068-byte
- * snapshot was taken from, not from a reservation of the sand app's own.
- * 24 KB (24,576 bytes) is what this budget is set to: it leaves 8,012
- * bytes (roughly 8 KB, about a tenth of the whole free-heap snapshot) of
- * headroom beyond this app's own total footprint. That is a considered
- * estimate from the arithmetic above, NOT a number pinned down by a
- * device flash showing the exact failure threshold - that would need a
- * bisection this project has no tooling for yet - so treat 24 KB as a
- * defensible budget, not a measured ceiling; see docs/Sand/Explosion-
- * Plan.md's "Two failure modes to watch for by name" for the incident
- * this constant exists because of.
+ * THE BUDGET IS NOW SET AGAINST THAT OBSERVED NUMBER, NOT TOTAL FREE
+ * HEAP: 12 KB (12,288 bytes) against a measured 14,592-byte largest
+ * block leaves 2,304 bytes (about 16%) of margin for allocator overhead
+ * and whatever this specific board's fragmentation looks like on a run
+ * that was not captured. That margin is deliberately real but not huge -
+ * three identical captures in a row is a strong signal this number is a
+ * structural property of this board's heap layout, not noise that might
+ * land anywhere on the next boot, so a small margin is buying protection
+ * against overhead and rounding, not against this number moving on its
+ * own. STILL NOT A NUMBER THIS PROJECT HAS BISECTED TO ITS OWN FAILURE
+ * THRESHOLD - it is one considered step below the one real data point
+ * available, and the honest thing to say about it is exactly that: see
+ * docs/Sand/Explosion-Plan.md's "Two failure modes to watch for by name"
+ * for both incidents this constant has now been through and what each
+ * one got wrong.
  *
  * WHY A FIXED BYTE BUDGET RATHER THAN A RADIUS CAP: a radius cap has to
  * be re-derived by hand every time either the radius or impulse_t's own
@@ -285,27 +302,43 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * once, from 4 bytes to 6), and a hand re-derivation is exactly the step
  * that got skipped the one time this mattered. A fixed byte budget needs
  * re-deriving only when the HARDWARE changes - a new board, more PSRAM,
- * a leaner framebuffer - which is genuinely rare, and it never needs
+ * a leaner framebuffer, or (as just happened) a better understanding of
+ * what this same board's heap was already doing - and it never needs
  * touching just because a gameplay radius moved. See the _Static_assert
  * immediately below for the guard this buys: it now confirms two
  * independent, hand-chosen constants agree with each other, rather than
- * re-deriving one from a radius that might have drifted. */
-#define SAND_IMPULSE_BUDGET_BYTES  24576
+ * re-deriving one from a radius that might have drifted - and see that
+ * assert's own message for what it CANNOT check, which is whether this
+ * number is actually right on real hardware. Nothing at compile time
+ * can check that; only a device flash can, which is exactly how the
+ * 24,576-byte version of this constant was caught. */
+#define SAND_IMPULSE_BUDGET_BYTES  12288
 
+/* CONFIRMS TWO HAND-CHOSEN CONSTANTS AGREE WITH EACH OTHER - NOTHING
+ * MORE. This assert cannot know, and does not claim to know, whether
+ * SAND_IMPULSE_BUDGET_BYTES itself is actually safe on real hardware -
+ * that is a fact about this board's live heap layout, discovered once
+ * already by a device flash after host arithmetic said everything was
+ * fine, and no compile-time check can substitute for the next one. What
+ * this assert catches is the OTHER way these two constants can drift:
+ * someone raising APP_IMPULSE_MAX (for a denser blast, say) without
+ * checking it against the budget at all. Necessary, not sufficient - see
+ * SAND_IMPULSE_BUDGET_BYTES's own comment for the failure mode this
+ * assert is structurally unable to catch. */
 _Static_assert(
     (unsigned long)APP_IMPULSE_MAX * sizeof(impulse_t) <= SAND_IMPULSE_BUDGET_BYTES,
     "APP_IMPULSE_MAX * sizeof(impulse_t) exceeds SAND_IMPULSE_BUDGET_BYTES - "
-    "these are two independently-chosen constants that must agree, and "
-    "this is exactly the class of mistake that once made DETONATE_RADIUS_"
-    "PX doubling a silent no-op on real hardware (sand_explode() returns "
-    "immediately when impulse_buf's malloc fails, with no crash and no "
-    "visible symptom besides an ESP_LOGE nobody was watching for) - "
-    "except this time it is APP_IMPULSE_MAX that was hand-edited past "
-    "what SAND_IMPULSE_BUDGET_BYTES allows, not a radius formula that "
-    "outgrew it on its own. Shrink APP_IMPULSE_MAX, or raise "
-    "SAND_IMPULSE_BUDGET_BYTES only after re-doing the heap arithmetic in "
-    "this constant's own comment against a real boot log - do not just "
-    "bump either number.");
+    "these are two independently-chosen constants that must agree. This "
+    "assert passing is NOT proof detonate works on real hardware - this "
+    "exact budget already failed a live device flash once at a larger "
+    "value (24,576 bytes) that this same assert also happily passed, "
+    "because the real failure was the budget being sized against total "
+    "free heap instead of the largest contiguous block a single malloc() "
+    "call actually needs - see SAND_IMPULSE_BUDGET_BYTES's own comment "
+    "for that incident. Shrink APP_IMPULSE_MAX, or raise "
+    "SAND_IMPULSE_BUDGET_BYTES only after a fresh device capture of "
+    "heap_caps_get_largest_free_block() at the point impulse_buf is "
+    "allocated - never from arithmetic alone.");
 
 /* What the finger puts down.
  *
@@ -641,15 +674,30 @@ static void start_sim(void)
     label_left_ms = 0;
     failed = false;
 
-    if (dirty_rows == NULL) {
-        dirty_rows = malloc(GRID_H_MAX);
-    }
-    if (sleep_blocks == NULL) {
-        sleep_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
-    }
-    if (grid == NULL) {
-        grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
-    }
+    /* ALLOCATED FIRST, BEFORE ANYTHING ELSE IN THIS FUNCTION - moved here
+     * from after `grid` after a live device capture showed the malloc
+     * below failing with "largest free block is 14592" on THREE separate
+     * detonate attempts at THREE different qualities (grid sizes 18,178 /
+     * 10,304 / 4,514 bytes) - the exact same 14,592 every time, which
+     * does not move with anything this app itself allocates. Whatever is
+     * carving the heap into pieces no bigger than that happens BEFORE
+     * this function ever runs, and by the old order this call was LAST to
+     * pick over what was left after dirty_rows/sleep_blocks/grid had
+     * already taken their share too - if any of those three variable-
+     * sized allocations were what fragmented the space this one needs,
+     * going first instead of last is what would let it claim the largest
+     * remaining run before they get a chance to carve it up further.
+     * (Whether that theory is actually what was happening, versus
+     * impulse_buf's ~14 KB simply never having fit anywhere on this board
+     * regardless of order, is exactly what the next device capture of
+     * this same ESP_LOGE line needs to settle - see SAND_IMPULSE_BUDGET_
+     * BYTES's own comment for why host arithmetic alone already got this
+     * wrong once and cannot be trusted to settle it a second time.)
+     *
+     * Safe to move: nothing here depends on grid_w/grid_h/cell or any
+     * other per-quality value - APP_IMPULSE_MAX is a fixed constant (see
+     * its own comment), so this allocation's size and this function's
+     * outcome are identical wherever in start_sim() it runs. */
     if (impulse_buf == NULL) {
         impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
         /* LOUD, BUT NOT FATAL - unlike every buffer in the big OR-check
@@ -661,21 +709,23 @@ static void start_sim(void)
          * one buffer detonate needs could not be found would strand a
          * player who only ever wanted to pour sand behind a "no memory"
          * screen for a feature they were not using. What must not happen
-         * instead is silence: at 24 KB (see APP_IMPULSE_MAX and
-         * SAND_IMPULSE_BUDGET_BYTES's own comments) a failure here is not
-         * a hypothetical - it is exactly what happened the one time
-         * DETONATE_RADIUS_PX doubling silently resized this allocation
-         * past what the device could make: the malloc failed every time,
-         * this log line fired every time, and nobody was watching for it,
-         * so "explosions just stop working" shipped anyway. APP_IMPULSE_
-         * MAX is now fixed rather than radius-derived (see its own
-         * comment), which is what makes THAT specific chain impossible
-         * again; the _Static_assert above SAND_IMPULSE_BUDGET_BYTES
-         * catches the fixed constants disagreeing with each other at
-         * BUILD time. This log line is what catches the other class - a
-         * genuinely fragmented heap at RUN time, from something entirely
-         * outside this app's control - which no compile-time check ever
-         * could. */
+         * instead is silence: this exact allocation has already failed
+         * silently on real hardware twice, at two different budgets this
+         * app shipped believing were safe - see SAND_IMPULSE_BUDGET_
+         * BYTES's own comment for both incidents and what each got wrong.
+         *
+         * THE %u THIS LOGS - largest_free_block, from heap_caps_get_
+         * largest_free_block() - IS THE DIAGNOSTIC THAT SOLVED THIS. Not
+         * a guess added for completeness: a live serial capture of this
+         * exact line, at three different grid sizes, is what showed the
+         * largest free block sitting at an identical 14,592 bytes
+         * regardless of quality - the observation that turned "why did
+         * this fail" into "the buffer was never sized against the right
+         * number" (total free heap, not the actual largest contiguous
+         * run malloc() has to satisfy from). Keep this argument in every
+         * failure log this file ever adds for an allocation that matters -
+         * total free bytes told a story that was flatly wrong twice
+         * running; the largest block told the truth in one capture. */
         if (impulse_buf == NULL) {
             ESP_LOGE(TAG, "Could not allocate the %d-entry blast buffer "
                           "(%u bytes) - detonate will be a no-op this "
@@ -684,6 +734,15 @@ static void start_sim(void)
                      (unsigned)((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf)),
                      (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
         }
+    }
+    if (dirty_rows == NULL) {
+        dirty_rows = malloc(GRID_H_MAX);
+    }
+    if (sleep_blocks == NULL) {
+        sleep_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
+    }
+    if (grid == NULL) {
+        grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
     if (row_run_x0 == NULL) {
         row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));
