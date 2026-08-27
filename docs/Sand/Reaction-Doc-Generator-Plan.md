@@ -366,6 +366,41 @@ hour.
 
 ---
 
+## Deferred: the palette does not survive being used as text
+
+Material names are coloured with the device's exact palette values. Measured
+against a 3:1 contrast floor on both GitHub themes, **14 of 18 fail
+somewhere**:
+
+    unreadable on DARK    Oil #101008, Water, Wood, Lava, Acid, Dirt, Plant
+    unreadable on LIGHT   Leaf, Sand, Ice, Gas, Fire, Snow, Steam
+    fine on both          Glass, Stone, Smoke, Metal
+
+The cause is structural, not a bad palette: **it was designed to fill cells,
+not to draw glyphs.** Oil against black works as a solid region of pixels and
+vanishes as thin letterforms. Area and text are different legibility
+problems, and one set of values cannot serve both.
+
+Two ways out, when this is picked up:
+
+- **Lift only the seven that fail on dark.** Keeps every pale colour
+  byte-exact, assumes a dark reader. Minimal fidelity loss, and it fixes the
+  case actually complained about (oil).
+- **Clamp everything into a both-themes band.** The contrast maths puts that
+  band at relative luminance 0.117-0.30, narrow enough that hue becomes the
+  only separator - and Snow, Steam, Ice and Gas are pale blue-whites
+  distinguished BY lightness today. They would collapse into near-identical
+  mid-blues. Probably worse than the problem it solves.
+
+Deliberately left for later (2026-08-27): the table is legible enough to tune
+prose against, which is what it is for at this stage.
+
+Measure rather than eyeball - the script that produced the table above lives
+in this session's scratchpad as `contrast.py` and takes the generated file as
+its argument.
+
+---
+
 ## Decisions taken
 
 **Generate the sentences; do not hand-write them.** An intermediate draft
