@@ -9481,6 +9481,23 @@ static bool dirt_cell_is_metal(void)
     return cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL;
 }
 
+/* How many cells anywhere on the board have smelted into metal - for
+ * scenes below that scatter dirt across a row rather than pinning it to
+ * lava_beside_dirt()'s one fixed cell. */
+static int count_metal_cells(void)
+{
+    int n = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 /* Steps until lava_beside_dirt()'s dirt cell becomes metal, or `budget`
  * if it never does within that many steps. */
 static int steps_to_smelt(uint8_t moisture, int budget)
@@ -9593,6 +9610,124 @@ static void test_watered_dirt_steams_before_it_smelts(void)
         "steam must appear strictly BEFORE the cell smelts - heat works "
         "on the water first, and only once the moisture is gone does the "
         "same roll start converting the cell itself");
+}
+
+/* Every smelting test above this one holds a POOL OF LAVA against the
+ * dirt. That proves lava and dirt have the reaction; it says nothing
+ * about whether the reaction is keyed on being LAVA or on being hot and
+ * alight, because try_heat_transform() (sand_reactions.c) is reached from
+ * any burning neighbour - cell_is_burning() gates it, checking
+ * reaction_t.burns, not CELL_MATERIAL(n) == MAT_LAVA. An ordinary flame
+ * is the cheapest thing that also satisfies cell_is_burning(), and the
+ * whole point of this test is that swapping it in for lava changes
+ * nothing about the outcome.
+ *
+ * If a future change narrowed dirt's smelting path to check for lava
+ * specifically - or for anything else lava has that a plain flame does
+ * not - this is the test that would catch it while every lava-based test
+ * above kept passing right through the regression.
+ *
+ * Fire rises and burns itself out in around forty steps
+ * (materials[MAT_FIRE].decay), so exactly like
+ * test_a_fire_held_long_enough_melts_glass_to_lava it has to be
+ * re-placed every step rather than dropped once and left unattended. */
+static void test_a_held_flame_smelts_dirt_as_lava_does(void)
+{
+    fixture();
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, 4, H - 2, CELL_SOIL(MAT_DIRT, 1, 0));   /* bone dry */
+
+    const int budget = 3000;
+    int smelted = 0;
+    for (int i = 0; i < budget && !smelted; i++) {
+        if (CELL_IS_EMPTY(sand_at(&s, 4, H - 3))) {
+            sand_set(&s, 4, H - 3, FIRE);
+        }
+        sand_step(&s, 0, 1000, 0);
+        smelted = count_metal_cells() > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(smelted,
+        "an ordinary flame held against dirt must smelt it into metal "
+        "exactly as lava does - the reaction is keyed on cell_is_burning(), "
+        "not on CELL_MATERIAL(n) == MAT_LAVA, and every other smelting "
+        "test in this file only ever reaches for lava as its heat source");
+}
+
+/* And the conducted path is just as general as the contact path: dirt on
+ * the far side of a plain stone wall smelts from heat that crossed the
+ * wall via conduct_heat(), not by touching the fire that is driving it.
+ *
+ * test_the_rod_terminates_at_conduct_reach_not_the_far_wall (below)
+ * already proves the far-side hit works for a METAL conductor, but that
+ * scene only exists because a metal rod grows itself one smelted cell at
+ * a time - it never demonstrates the far-side hit landing through an
+ * ordinary conductor that was not itself produced by smelting. This is
+ * the plain-stone-wall version test_heat_through_a_pan_lights_oil_rather
+ * _than_boiling_it already is for oil, one section up: fire heats a
+ * stone slab, and dirt sitting on the far side of that slab - never
+ * touching the fire - smelts from the heat that walked through the
+ * stone.
+ *
+ * Real per-material `conducts` applies (sand_set_conduction(&s,
+ * SAND_CONDUCTION_PER_MATERIAL) - see that test's own comment on why this
+ * one wants the same call rather than a forced 255), so this is stone's
+ * actual 220-in-256 figure attenuating across a one-cell-thick wall, not
+ * a tuned-up test double. */
+static void test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_conduction(&s, SAND_CONDUCTION_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 3, STONE);             /* the wall */
+    }
+    for (int x = 1; x < W - 1; x++) {
+        sand_set(&s, x, H - 4, CELL_SOIL(MAT_DIRT, 1, 0));   /* bone dry,
+                                                               * far side */
+    }
+
+    const int budget = 6000;
+    int smelted = 0;
+    for (int i = 0; i < budget && !smelted; i++) {
+        for (int x = 1; x < W - 1; x++) {
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 2))) {
+                sand_set(&s, x, H - 2, FIRE);
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+        smelted = count_metal_cells() > 0;
+
+        /* The wall must stay exactly what it was every single step - not
+         * just at the end - so a geometry slip that let the fire reach it
+         * directly (which would consume or convert it) cannot pass on a
+         * lucky final frame. This is also what proves no dirt cell was
+         * ever in direct contact with the fire: the fire is only ever
+         * placed at H - 2, and every cell of H - 3 (the only row between
+         * the fire and the dirt) staying MAT_STONE means dirt's one
+         * downward neighbour was stone on every step, never flame. */
+        for (int x = 0; x < W; x++) {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+                CELL_MATERIAL(sand_at(&s, x, H - 3)),
+                "the wall must stay intact and unlit - if it changes, "
+                "either the fire reached it directly or the far-side hit "
+                "is landing on the conductor instead of past it, and "
+                "either way this test can no longer tell a conducted "
+                "smelt from a contact one");
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(smelted,
+        "dirt behind a plain stone wall must smelt from conducted heat "
+        "alone - conduct_heat() (sand_reactions.c) applies "
+        "try_heat_transform() to whatever it finds past the far side of "
+        "a conductor run exactly as contact does, and that path has "
+        "otherwise only ever been proven for a metal conductor grown by "
+        "smelting itself, never for an ordinary wall");
 }
 
 /* Regression guard for the wet-dirt branch just added to
@@ -12589,10 +12724,10 @@ void run_sand_suite(void)
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
-    RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
-    RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
-    RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
-    RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
+    RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
+    RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
+    RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
+    RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
@@ -12684,6 +12819,8 @@ void run_sand_suite(void)
     RUN_TEST(test_dry_dirt_beside_lava_becomes_metal);
     RUN_TEST(test_saturated_dirt_smelts_roughly_eight_times_slower);
     RUN_TEST(test_watered_dirt_steams_before_it_smelts);
+    RUN_TEST(test_a_held_flame_smelts_dirt_as_lava_does);
+    RUN_TEST(test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it);
     RUN_TEST(test_sand_still_becomes_glass_beside_the_new_dirt_branch);
     RUN_TEST(test_a_metal_run_conducts_further_than_a_stone_one);
     RUN_TEST(test_the_rod_terminates_at_conduct_reach_not_the_far_wall);
