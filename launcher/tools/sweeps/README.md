@@ -24,12 +24,17 @@ reflashes `build.release` when done, regardless of outcome.
 
 - `capture_selftest.py` - resets the device via an RTS pulse (not
   `esptool`'s own reset - see its own docstring for why) and captures
-  serial output to a file until `SELFTEST_COMPLETE` appears.
-- `block_size_sweep.ps1` - `SAND_BLOCK_W`/`SAND_BLOCK_H`
-  (`main/apps/sand/sand.h`).
+  serial output to a file until `SELFTEST_COMPLETE` appears. Shared: the
+  sand-only sweep below calls into this one too.
 - `row_leaf_sweep.ps1` - `ROW_MAX_RUNS`/`LEAF_REFINE_MAX_RUNS`
   (`main/apps/sand/row_runs.h`, `main/gfx_dirty.h`).
 - `gather_pixels_sweep.ps1` - `GATHER_MAX_PIXELS` (`main/gfx_dirty.h`).
+
+`SAND_BLOCK_W`/`SAND_BLOCK_H` (`main/apps/sand/sand.h`) has a sweep too,
+but it references only the sand app, so it lives with it at
+`main/apps/sand/tools/block_size_sweep.ps1` instead of here - see
+`docs/Launcher-Architecture.md`, "An app is a folder", for the rule that
+puts it there.
 
 Each writes a `results/<name>_sweep_results.csv` plus one raw serial
 capture per candidate value into `results/` (gitignored - these are
@@ -38,10 +43,12 @@ scratch output, not something to commit).
 ## Running one
 
 ```powershell
-.\block_size_sweep.ps1
 .\row_leaf_sweep.ps1 -ComPort COM7
 .\gather_pixels_sweep.ps1 -IdfExportPath C:\esp-idf\export.ps1
 ```
+
+(`block_size_sweep.ps1` runs the same way, from its own directory:
+`main/apps/sand/tools/block_size_sweep.ps1`.)
 
 Only run one at a time - they share `build.diag` and the serial port, so
 two running concurrently will corrupt each other's builds or fight over

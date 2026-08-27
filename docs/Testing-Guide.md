@@ -21,8 +21,8 @@ Python and works fine here), or use a wrapper, which is a `.sh` that
 shells out to PowerShell:
 
 ```sh
-./launcher/tools/report_test_results.sh   # pass/fail for every suite  -> tools/results/
-./launcher/tools/report_performance.sh    # frame-budget numbers       -> tools/results/
+./launcher/tools/report_test_results.sh                    # pass/fail for every suite  -> tools/results/
+./launcher/main/apps/sand/tools/report_performance.sh       # frame-budget numbers       -> its own tools/results/
 ```
 
 Both build and flash the diagnostics variant, capture the run, write a

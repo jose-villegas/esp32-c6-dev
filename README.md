@@ -45,14 +45,14 @@ idf.py -p <PORT> flash monitor
                                         # runs every suite on the actual chip
 ```
 
-`idf.py` cannot run under Git Bash, so on Windows use the wrappers in
-`launcher/tools/` - `.sh` scripts that shell out to PowerShell and write a
-markdown report into `launcher/tools/results/`:
+`idf.py` cannot run under Git Bash, so on Windows use the wrappers below -
+`.sh` scripts that shell out to PowerShell and write a markdown report into
+their own `tools/results/`:
 
 ```bash
 ./launcher/tools/build_flash.sh        # build + flash the release firmware
 ./launcher/tools/report_test_results.sh # every suite, pass/fail
-./launcher/tools/report_performance.sh  # frame-budget numbers
+./launcher/main/apps/sand/tools/report_performance.sh  # frame-budget numbers
 ```
 
 `./monitor.sh` (repo root) attaches to the console without paying ESP-IDF's

@@ -180,14 +180,30 @@ Everything an app owns lives in `main/apps/<name>/`:
 
 ```
 main/apps/sand/
-├── app_sand.c      entry point: gfx, IMU, frame loop        (NOT host-portable)
-├── material.c/.h   what a cell is made of                    (pure, const data)
-├── tilt.c/.h       accelerometer -> steering direction        (pure)
-├── sand.c/.h       the automaton: grid, movement, friction     (pure)
-├── sand_liquid.c   cross-flow levelling, the wall-rebound splash (pure)
-├── sand_priv.h     small inline helpers shared by the two .c files above
-└── suite_sand.c    its tests                                (pure + a device block)
+├── app_sand.c        entry point: gfx, IMU, frame loop        (NOT host-portable)
+├── material.c/.h     what a cell is made of                    (pure, const data)
+├── tilt.c/.h         accelerometer -> steering direction        (pure)
+├── sand.c/.h         the automaton: grid, movement, friction     (pure)
+├── sand_liquid.c     cross-flow levelling, the wall-rebound splash (pure)
+├── sand_gas.c        rising and dispersing, the reverse-order pass (pure)
+├── sand_reactions.c  fire chemistry: ignition, spread, burnout      (pure)
+├── sand_priv.h       small inline helpers shared by the .c files above
+├── row_runs.c/.h     per-row dirty-span detection and reconciliation (pure)
+├── suite_sand.c      tests for the automaton               (pure + a device block)
+├── suite_row_runs.c  tests for row_runs                                (pure)
+├── suite_tilt.c      tests for the tilt filter                         (pure)
+└── tools/            sand-only host tooling (sweeps, report generators)
 ```
+
+`tools/` is not new territory needing its own rule - it follows straight from
+the one above. An app's `tools/` folder holds tools that reference ONLY that
+app; anything spanning app *and* shell code (a sweep that touches a
+shell-owned header alongside an app one, say) stays in the shared
+`launcher/tools/` instead. `main/apps/sand/tools/block_size_sweep.ps1` is the
+first tenant - it only ever touches `sand.h` - while
+`launcher/tools/sweeps/row_leaf_sweep.ps1`, which sweeps a sand constant
+*and* a `main/gfx_dirty.h` constant together, stays shared for exactly that
+reason.
 
 See `docs/Sand/Sand-Simulation.md` for how the pieces above fit together - the
 material system, the water model, and why the liquid logic is split into its
@@ -196,12 +212,20 @@ own file.
 Deleting the app is deleting the folder. Its code, its logic and its tests go
 with it, and nothing is left dangling.
 
-Two mechanisms make that true:
+Three mechanisms make that true:
 
 - **The build globs `apps/**/*.c`** (with `CONFIGURE_DEPENDS`, so a new folder
   is picked up without a manual reconfigure).
 - **Apps register themselves.** `APP_REGISTER` emits a constructor into
   `.init_array`, which ESP-IDF runs before `app_main()`.
+- **The glob excludes `apps/*/tools/`.** That same recursive glob would
+  otherwise sweep an app's host-side tooling into the firmware image right
+  alongside its real sources - and `WHOLE_ARCHIVE` (below) force-links
+  whatever it finds, so a stray `main()` under a `tools/` folder would get
+  compiled into the device build rather than dropped by `--gc-sections`.
+  `launcher/main/CMakeLists.txt` filters `/apps/[^/]*/tools/` out of
+  `discovered_apps` for exactly this reason, structurally rather than by
+  naming each tool.
 
 The naming convention the host test runner relies on: **`app_*.c` is the
 hardware-facing entry point**, and everything else in the folder is portable
