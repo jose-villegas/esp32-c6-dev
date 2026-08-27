@@ -101,12 +101,20 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 /*---------------------------------------------------------------------------
  * Lines, with options
  *
- * Three independent choices - how it composites, whether it is smoothed, and
- * whether it owns its first pixel - which is eight combinations. They are
- * flags on one function rather than eight named ones, because they genuinely
- * are independent: every pair of them is used together somewhere in
- * boot_anim.c, and a family of gfx_line_add_smooth_open() spellings would be
- * both unreadable and a standing invitation to add a ninth.
+ * Two independent choices - how it composites, and whether it owns its first
+ * pixel - which is four combinations, and there was a third. Flags on one
+ * function rather than a name per combination, because they genuinely are
+ * independent and a family of gfx_line_add_open() spellings is both
+ * unreadable and a standing invitation to add another.
+ *
+ * There WAS a GFX_LINE_SMOOTH doing Xiaolin Wu antialiasing here. It worked
+ * and it was tested, and it was taken out again: on a stroke one to three
+ * pixels wide it is close to invisible, because antialiasing redistributes
+ * light WITHIN a pixel and what reads as a lit curve on this panel is a
+ * falloff several pixels ACROSS. It cost 6.7 fps to be almost unnoticeable.
+ * The thing to come back with is a wide-support filter - a distance-indexed
+ * intensity table in the manner of Gupta & Sproull, whose reach is a
+ * parameter - not this. See the commit that removed it.
  *
  * gfx_line() above is the no-flags case, kept as its own name because it is
  * what most callers want and reads better than passing a zero.
@@ -116,17 +124,6 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
  * strokes crossing on a black field make a brighter, mixed colour rather than
  * whichever was drawn second. Costs a read as well as a write per pixel. */
 #define GFX_LINE_ADD    (1u << 0)
-
-/* Antialias: light the two pixels either side of the true line in proportion
- * to how much of each the line actually covers, rather than snapping to the
- * nearer one. Doubles the pixels written.
- *
- * Worth knowing before reaching for it: this panel is RGB565, so red and blue
- * have 5 bits and the smallest step either can show is 1/31. Coverage finer
- * than about 5 bits is invisible on two channels out of three - which is why
- * the implementation does not bother with anything more precise, and why the
- * result looks the same as a far more careful version would. */
-#define GFX_LINE_SMOOTH (1u << 1)
 
 /* Leave the STARTING pixel undrawn.
  *
@@ -138,7 +135,7 @@ void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
  *
  * Only useful from the second segment onward: the first has nothing before it
  * to have drawn its start. */
-#define GFX_LINE_OPEN   (1u << 2)
+#define GFX_LINE_OPEN   (1u << 1)
 
 void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color,
                  unsigned flags);

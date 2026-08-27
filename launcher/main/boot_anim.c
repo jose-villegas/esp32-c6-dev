@@ -141,9 +141,9 @@ static void draw_floor(uint32_t now_ms, uint8_t ink)
             const int32_t off = sign * d;
 
             gfx_line_ex(sx(off, -far), sy(off, -far, 0),
-                        sx(off,  far), sy(off,  far, 0), c, GFX_LINE_SMOOTH);
+                        sx(off,  far), sy(off,  far, 0), c, 0u);
             gfx_line_ex(sx(-far, off), sy(-far, off, 0),
-                        sx( far, off), sy( far, off, 0), c, GFX_LINE_SMOOTH);
+                        sx( far, off), sy( far, off, 0), c, 0u);
         }
     }
 }
@@ -164,7 +164,7 @@ static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
     const int32_t ft  = (t  * reach) / 255;
 
     gfx_line_ex(sx(0, 0), sy(0, 0, 0), sx(fre, fim), sy(fre, fim, ft),
-                lit(COL_AXIS, ink), GFX_LINE_SMOOTH);
+                lit(COL_AXIS, ink), 0u);
 }
 
 static void draw_label(int x, int y, const char *text, uint8_t ink)
@@ -265,8 +265,7 @@ static void draw_stroke(int x0, int y0, int x1, int y1,
         const int by = shallow ? y1 + off : y1;
 
         gfx_line_ex(ax, ay, bx, by, c,
-                    GFX_LINE_ADD | GFX_LINE_SMOOTH |
-                    (joined ? GFX_LINE_OPEN : 0u));
+                    GFX_LINE_ADD | (joined ? GFX_LINE_OPEN : 0u));
     }
 }
 

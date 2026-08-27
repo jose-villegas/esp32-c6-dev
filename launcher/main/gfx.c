@@ -342,7 +342,7 @@ static int outcode(int x, int y)
  *
  * WHY THIS IS NOT JUST THE PER-PIXEL TEST
  *
- * The walks below already skip pixels outside the clip rect, which is correct
+ * The walk below already skips pixels outside the clip rect, which is correct
  * but costs a step per pixel of the line's length whether or not any of them
  * land. That was fine while the only caller was a plotted curve whose points
  * were all on screen. It stopped being fine with a floor grid that runs until
@@ -399,34 +399,21 @@ static bool clip_line(int *x0, int *y0, int *x1, int *y1)
     return false;
 }
 
-/* One pixel of a line, at `cov`/255 coverage.
- *
- * Both compositing modes go through the two helpers in gfx_color.h rather
- * than unpacking channels here: scaling a colour by coverage is a mix down
- * toward black, which gfx_color_mix() already is, and it already knows that
- * green has a bit more range than red and blue. Getting that wrong shifts the
- * hue of every antialiased edge rather than failing outright, so it is worth
- * having exactly one implementation of it.
- */
-static void plot(int x, int y, gfx_color_t color, unsigned flags, uint8_t cov)
+/* One pixel of a line. */
+static void plot(int x, int y, gfx_color_t color, unsigned flags)
 {
     if (x < clip.x0 || x >= clip.x1 || y < clip.y0 || y >= clip.y1) {
         return;
     }
     gfx_color_t *const dst = &fb[(size_t)y * GFX_WIDTH + x];
 
-    if (flags & GFX_LINE_ADD) {
-        *dst = gfx_color_add(*dst, cov == 255 ? color
-                                              : gfx_color_mix(0, color, cov));
-    } else {
-        *dst = cov == 255 ? color : gfx_color_mix(*dst, color, cov);
-    }
+    *dst = (flags & GFX_LINE_ADD) ? gfx_color_add(*dst, color) : color;
 }
 
 /* Bresenham, in the form that treats both axes alike so no case analysis is
  * needed for steep versus shallow lines. */
-static void walk_hard(int x0, int y0, int x1, int y1, gfx_color_t color,
-                      unsigned flags)
+static void walk(int x0, int y0, int x1, int y1, gfx_color_t color,
+                 unsigned flags)
 {
     const int dx = im_abs(x1 - x0);
     const int dy = -im_abs(y1 - y0);
@@ -437,7 +424,7 @@ static void walk_hard(int x0, int y0, int x1, int y1, gfx_color_t color,
 
     for (;;) {
         if (!(first && (flags & GFX_LINE_OPEN))) {
-            plot(x0, y0, color, flags, 255);
+            plot(x0, y0, color, flags);
         }
         first = false;
 
@@ -450,74 +437,6 @@ static void walk_hard(int x0, int y0, int x1, int y1, gfx_color_t color,
         const int e2 = 2 * err;
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
-    }
-}
-
-/* Xiaolin Wu, in the form the integer endpoints here allow.
- *
- * Step along whichever axis the line is longer on; the other coordinate is a
- * Q16 accumulator, and its fractional part is how far the true line sits
- * between two pixels. Light both, in proportion.
- *
- * Wu's published algorithm spends most of its length on fractional endpoints,
- * which need their own partial coverage at each end. Nothing here has them -
- * every caller is plotting a curve that has already been rounded to whole
- * pixels - so the ends land exactly on a pixel, the fraction there is zero,
- * and all of that goes away.
- *
- * A pixel whose fraction is zero skips its neighbour entirely rather than
- * adding a zero-coverage contribution. That is not just a saving: under
- * GFX_LINE_ADD a zero-coverage add is still a read, a mix and a write, and on
- * an axis-aligned line every single step would take it.
- */
-static void walk_smooth(int x0, int y0, int x1, int y1, gfx_color_t color,
-                        unsigned flags)
-{
-    const int dx = x1 - x0;
-    const int dy = y1 - y0;
-    const int adx = im_abs(dx);
-    const int ady = im_abs(dy);
-
-    if (adx == 0 && ady == 0) {
-        if (!(flags & GFX_LINE_OPEN)) {
-            plot(x0, y0, color, flags, 255);
-        }
-        return;
-    }
-
-    const bool shallow = adx >= ady;
-    const int steps = shallow ? adx : ady;
-    const int major = shallow ? (dx > 0 ? 1 : -1) : (dy > 0 ? 1 : -1);
-
-    /* How far the minor coordinate moves per step along the major axis. */
-    const int32_t slope =
-        (int32_t)(((int64_t)(shallow ? dy : dx) << 16) / steps);
-
-    int32_t minor = (int32_t)(shallow ? y0 : x0) << 16;
-    int at = shallow ? x0 : y0;
-
-    for (int i = 0; i <= steps; i++) {
-        if (!(i == 0 && (flags & GFX_LINE_OPEN))) {
-            /* Round toward the pixel the line is actually in: the accumulator
-             * can go negative off the top or left of the screen, and a shift
-             * of a negative value floors, which is what is wanted here. */
-            const int whole = (int)(minor >> 16);
-            const uint32_t frac = (uint32_t)(minor >> 8) & 0xFFu;
-
-            if (shallow) {
-                plot(at, whole, color, flags, (uint8_t)(255u - frac));
-                if (frac) {
-                    plot(at, whole + 1, color, flags, (uint8_t)frac);
-                }
-            } else {
-                plot(whole, at, color, flags, (uint8_t)(255u - frac));
-                if (frac) {
-                    plot(whole + 1, at, color, flags, (uint8_t)frac);
-                }
-            }
-        }
-        at += major;
-        minor += slope;
     }
 }
 
@@ -536,23 +455,15 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
         }
     }
 
-    /* A smoothed line lights one pixel beyond the geometric line, on the side
-     * the fraction leans toward - so the box has to allow for it. */
-    const int spread = (flags & GFX_LINE_SMOOTH) ? 1 : 0;
-
-    int bx0 = im_min(x0, x1) - spread, bx1 = im_max(x0, x1) + 1 + spread;
-    int by0 = im_min(y0, y1) - spread, by1 = im_max(y0, y1) + 1 + spread;
+    int bx0 = im_min(x0, x1), bx1 = im_max(x0, x1) + 1;
+    int by0 = im_min(y0, y1), by1 = im_max(y0, y1) + 1;
 
     if (bx0 < clip.x0) bx0 = clip.x0;
     if (by0 < clip.y0) by0 = clip.y0;
     if (bx1 > clip.x1) bx1 = clip.x1;
     if (by1 > clip.y1) by1 = clip.y1;
 
-    if (flags & GFX_LINE_SMOOTH) {
-        walk_smooth(x0, y0, x1, y1, color, flags);
-    } else {
-        walk_hard(x0, y0, x1, y1, color, flags);
-    }
+    walk(x0, y0, x1, y1, color, flags);
 
     if (bx0 < bx1 && by0 < by1) {
         dirty_mark(bx0, by0, bx1 - bx0, by1 - by0);
