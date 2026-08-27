@@ -90,6 +90,10 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->w          = w;
     s->h          = h;
     rng_seed(&s->rng, seed);
+    /* Offset, so the two streams do not march in step with each other. */
+    rng_seed(&s->weather_rng, seed ^ 0x5EED17u);
+    s->weather_tick = 0;
+    s->weather_seen = false;
     s->sweep_flip = false;
     s->liquid_flip = false;
     s->gas_flip   = false;
@@ -1064,6 +1068,7 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * check (mirroring sand_step_liquids()'s pattern, not
      * sand_step_gas()'s) is enough. */
     sand_step_reactions(s);
+    sand_step_weathering(s);
 
     finalize_settling(s, settled_bit);
 }

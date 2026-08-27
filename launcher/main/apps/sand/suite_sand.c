@@ -334,6 +334,17 @@ static void test_a_settled_grid_reports_nothing_dirty(void)
     dirty_fixture();
     /* A grain in the corner, blocked on every side it could reach. */
     sand_set(&s, 0, H - 1, SAND_FIRST_SHADE);
+
+    /* Let it finish CRUSTING first, and only then start watching. It has
+     * open sky over it, so it weathers where it lies - and while a shade
+     * is drifting, the row it is in genuinely does need redrawing. The
+     * claim here was never "a grain that cannot move is never dirty"; it
+     * is "once nothing is changing, nothing is dirty", and weathering is
+     * the first thing on this board that changes a cell without moving
+     * it. Long enough for the drift to reach its shade and stop. */
+    for (int i = 0; i < 1200; i++) {
+        sand_step(&s, 0, 1, 0);
+    }
     memset(dirty, 0, sizeof(dirty));
 
     for (int i = 0; i < 10; i++) {
@@ -979,9 +990,16 @@ static void test_two_separate_active_spots_in_the_same_block_row_do_not_wake_eac
     }
 
     bool left_unchanged = true;
+    /* MATERIALS, not whole cell bytes. "Undisturbed" here means nothing
+     * moved, and a grain's shade is free to drift where it lies without
+     * anything having moved at all: sand weathers, so the exposed face of
+     * this heap is slowly bleaching throughout the run. Comparing bytes
+     * would make this test fail for a change of colour in a heap that had
+     * not stirred, which is the opposite of what it is here to catch. */
     for (int y = 0; y < LOC_H && left_unchanged; y++) {
         for (int x = 0; x < SAND_BLOCK_W; x++) {
-            if (sand_at(&loc, x, y) != left_before[y * SAND_BLOCK_W + x]) {
+            if (CELL_MATERIAL(sand_at(&loc, x, y)) !=
+                CELL_MATERIAL(left_before[y * SAND_BLOCK_W + x])) {
                 left_unchanged = false;
                 break;
             }
@@ -1026,7 +1044,11 @@ static void test_a_block_wakes_when_disturbed_diagonally(void)
     for (int i = 0; i < 100; i++) {
         sand_step(&loc, 0, 1000, 0);
     }
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE, sand_at(&loc, gx, gy),
+    /* Still sand, and still HERE. Not still the same byte: it has open
+     * sky above it, so it has been weathering where it sits for a hundred
+     * steps, and its shade has drifted. Where it is is the claim. */
+    TEST_ASSERT_EQUAL_MESSAGE(MAT_SAND,
+        CELL_MATERIAL(sand_at(&loc, gx, gy)),
         "the grain must still be boxed in and asleep before the test begins,"
         " or freeing the down-left slide below proves nothing");
 
@@ -7897,6 +7919,70 @@ static void test_steam_melts_ice_and_plain_gas_does_not(void)
 }
 
 
+
+/* A grain lying in the open crusts, and KEEPS the crust once buried.
+ *
+ * The second half is the whole feature. A poured grain takes a random
+ * shade out of the whole dune band, so a pile is speckled top to bottom
+ * and its surface is not distinguishable from its inside. Drifting every
+ * exposed grain towards one shade turns the surface into a line, and
+ * because the shade lives in the cell rather than in the renderer, the
+ * line survives being buried: pour a second pile on the first and the old
+ * surface is still legible through it.
+ *
+ * Measured on a three-pour pile, 33% of grains end as buried crust
+ * against a floor of 6%, which is simply the share poured at that shade
+ * to begin with.
+ *
+ * Sand drifts UP its band and snow drifts DOWN its own, which is not
+ * decoration: snow's pale end is pure white and it is already the palest
+ * thing on the board, so a whiter crust would be no line at all. */
+static void test_a_grain_in_the_open_crusts_and_keeps_it_when_buried(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+
+    /* Open to the sky. */
+    sand_set(&s, 1, H - 2, CELL_MAKE(MAT_SAND, 0));
+    sand_set(&s, 5, H - 2, CELL_MAKE(MAT_SNOW, MATERIAL_VARIANTS - 1));
+    /* Lidded from the start, and never sees any. */
+    sand_set(&s, 3, H - 2, CELL_MAKE(MAT_SAND, 0));
+    sand_set(&s, 3, H - 3, STONE);
+
+    for (int i = 0; i < 1200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        CELL_MAKE(MAT_SAND, SAND_DUNE_SHADES - 1), sand_at(&s, 1, H - 2),
+        "a grain lying in the open must crust to the palest DUNE shade - "
+        "and stop there, because the four shades above it are cullet and a "
+        "weathered dune must never claim to have been a window");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        CELL_MAKE(MAT_SNOW, 0), sand_at(&s, 5, H - 2),
+        "while snow crusts the other way, towards its coldest blue - its "
+        "pale end is pure white, so a whiter crust would be invisible");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        CELL_MAKE(MAT_SAND, 0), sand_at(&s, 3, H - 2),
+        "and a grain with a lid over it must not weather at all - "
+        "weathering is what open sky does to a surface, and if buried "
+        "grains crusted too there would be no line to see");
+
+    /* Now bury the crusted one. It must KEEP what it earned - this is the
+     * half that makes a buried surface readable at all. */
+    sand_set(&s, 1, H - 3, STONE);
+    for (int i = 0; i < 1200; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+        CELL_MAKE(MAT_SAND, SAND_DUNE_SHADES - 1), sand_at(&s, 1, H - 2),
+        "a buried crust must stay a crust - the shade is in the cell, and "
+        "if it drifted back the strata would close up behind every pour");
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -9429,11 +9515,21 @@ static void test_a_heap_settles_against_whichever_wall_is_down(void)
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, touching_wall,
         "the heap must actually reach the wall, not stall short of it");
 
+    /* MATERIALS, not raw cells. "Stable" means nothing moved; it no
+     * longer means the bytes are identical, because the grains with open
+     * sky over them are weathering where they lie and their shades drift
+     * for a while after the heap stops. Comparing cells would make this
+     * fail for a change of colour in a heap that had not crept an inch,
+     * which is the opposite of what it is here to catch. */
     uint8_t settled[W * H];
-    memcpy(settled, cells, sizeof(settled));
+    for (int i = 0; i < W * H; i++) {
+        settled[i] = (uint8_t)CELL_MATERIAL(cells[i]);
+    }
     sand_step(&s, 1, 0, 0);
-    TEST_ASSERT_EQUAL_MEMORY_MESSAGE(settled, cells, sizeof(settled),
-        "a settled heap must be completely stable, not creep for ever");
+    for (int i = 0; i < W * H; i++) {
+        TEST_ASSERT_EQUAL_MESSAGE(settled[i], CELL_MATERIAL(cells[i]),
+            "a settled heap must be completely stable, not creep for ever");
+    }
 }
 
 /* --- spawning ----------------------------------------------------------- */
@@ -11913,6 +12009,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_grain_hash_does_not_stripe);
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
+    RUN_TEST(test_a_grain_in_the_open_crusts_and_keeps_it_when_buried);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);

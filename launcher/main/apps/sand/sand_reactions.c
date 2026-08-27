@@ -1516,6 +1516,55 @@ static bool shove_aside(sand_t *s, int gx, int gy, int dx, int dy,
     return true;
 }
 
+/* One grain of something that WEATHERS: lying with open sky against it,
+ * it drifts one shade towards reaction_t.weathered.
+ *
+ * Returns whether it is worth coming back to - false once a grain has
+ * finished weathering, so a crust that has reached its shade stops
+ * costing anything but the sky test.
+ *
+ * Soil is the awkward case and is handled apart: its variant is a tone in
+ * the top bits and moisture in the low three, so only the tone may move
+ * and the moisture has to survive the write. Everything else that
+ * weathers spends its whole variant on the shade. */
+static bool step_one_weathering_cell(sand_t *s, int x, int y, int w, int h,
+                                     const reaction_t *r)
+{
+    /* Open sky, which is one read against gravity. */
+    const int ax = x - s->last_load_dx, ay = y - s->last_load_dy;
+    if ((unsigned)ax >= (unsigned)w || (unsigned)ay >= (unsigned)h) {
+        return false;               /* against a wall is not open sky */
+    }
+    if (!CELL_IS_EMPTY(s->cells[(size_t)ay * (size_t)w + (size_t)ax])) {
+        return false;
+    }
+
+    const size_t at = (size_t)y * (size_t)w + (size_t)x;
+    const cell_t self = s->cells[at];
+    const bool soil = (r->dries != 0);
+    const uint8_t now = soil ? CELL_SOIL_TONE(self) : CELL_VARIANT(self);
+
+    if (now == r->weathered) {
+        return false;               /* already crusted; nothing to roll for */
+    }
+    if ((int)(rng_next(&s->weather_rng) & 0xFF) >= r->weathers) {
+        return true;
+    }
+
+    const uint8_t next = (uint8_t)(now < r->weathered ? now + 1 : now - 1);
+    s->cells[at] = soil
+        ? CELL_SOIL(CELL_MATERIAL(self), next, CELL_MOISTURE(self))
+        : CELL_MAKE(CELL_MATERIAL(self), next);
+    /* mark_rows, but deliberately NOT wake_block_and_neighbors. Every
+     * other write in this file wakes its block because it changed what
+     * the simulation will do next; this one changes only what the cell
+     * LOOKS like. A crust forming on a settled dune must not bring that
+     * dune back to life - it would wake every sleeping pile on the board,
+     * every step, for a shade. The renderer still needs telling. */
+    mark_rows(s, y, y);
+    return true;
+}
+
 /* One cell of something that WITHERS: it goes, if it can neither drink
  * nor lean on a trunk.
  *
@@ -2949,6 +2998,74 @@ static unsigned step_one_reacting_row(sand_t *s, int y, int w, int h)
         }
     }
     return found;
+}
+
+/* WEATHERING: the slow bleaching of whatever is lying in the open.
+ *
+ * Its own pass, and a strided one, for a reason worth stating plainly. It
+ * began inside sand_step_reactions() and cost 83 microseconds a step on a
+ * settled half-screen of sand against 1.0 without it - eighty-three times
+ * over. Not because the test is dear; the test is one field and one cell
+ * read. Because sand is on every board, so its flag was always armed, so
+ * the whole cold pass ran a full scan of all 41216 cells every step and
+ * the sleeping that normally makes a settled board free stopped counting
+ * for anything.
+ *
+ * So weathering does not get to wake the cold pass. It walks a THIRTY-
+ * SECOND of the rows each step, rotating, which costs a thirty-second of
+ * a scan and gives every cell a look about twice a second. Spread rather
+ * than batched: a whole scan once every thirty-two steps averages the
+ * same and arrives as a hitch, and a hitch is the one thing a sand
+ * simulation must not have.
+ *
+ * A grain therefore weathers on its own clock, unrelated to how busy the
+ * board is - which is right for something that models sun and time. */
+#define WEATHER_STRIDE 8
+
+void sand_step_weathering(sand_t *s)
+{
+    if (!s->may_have_weathering) {
+        return;
+    }
+    const int w = s->w, h = s->h;
+    bool any = false;
+
+    for (int y = (int)(s->weather_tick & (WEATHER_STRIDE - 1)); y < h;
+         y += WEATHER_STRIDE) {
+        const uint8_t *row = s->cells + (size_t)y * (size_t)w;
+        for (int x = 0; x < w; x++) {
+            const cell_t c = row[x];
+            if (CELL_IS_EMPTY(c)) {
+                continue;
+            }
+            const reaction_t *r = reaction_of(c);
+            if (r->weathers == 0) {
+                continue;
+            }
+            /* Armed by being PRESENT, like the faller and withering flags
+             * in the cold pass: a buried grain has nothing to do now and
+             * everything to do the moment the pile on top of it is dug
+             * away, and once this clears nothing would set it again. */
+            any = true;
+            step_one_weathering_cell(s, x, y, w, h, r);
+        }
+    }
+    s->weather_tick++;
+    s->weather_seen |= any;
+
+    /* Cleared only once a WHOLE rotation has come up empty, never on one
+     * slice. A slice is a thirty-second of the board, so "no grain that
+     * weathers in these rows" is not "none on the board" - and clearing
+     * on that would switch weathering off for good the first time the
+     * rotation landed on empty sky, which on a small grid is most steps.
+     * That is exactly what the first version did, and the crust test
+     * caught it. */
+    if ((s->weather_tick & (WEATHER_STRIDE - 1)) == 0) {
+        if (!s->weather_seen) {
+            s->may_have_weathering = false;
+        }
+        s->weather_seen = false;
+    }
 }
 
 /* Takes only `s` again. It briefly took (gx, gy) as well, for

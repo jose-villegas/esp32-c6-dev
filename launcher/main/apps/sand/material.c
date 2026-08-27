@@ -648,6 +648,19 @@ const reaction_t reactions[MATERIAL_MAX] = {
     },
 
     [MAT_SAND] = {
+        /* A dune left standing bleaches to its palest shade and keeps it
+         * once buried, which is what draws a line where the surface used to
+         * be - see reaction_t.weathers.
+         *
+         * The target is the top of the DUNE band, not of the variant: shades
+         * 12 and up are cullet, and a weathered dune must never claim to
+         * have been a window.
+         *
+         * Slow, deliberately. A crust that forms faster than you can pour is
+         * just a uniformly pale pile with no line in it at all. */
+        .weathers    = 255,
+        .weathered   = SAND_DUNE_SHADES - 1,
+
         /* Acid eats sand readily - it is the obvious thing to point acid
          * at, and the one that shows what it does. */
         .dissolvable = 200,
@@ -769,6 +782,16 @@ const reaction_t reactions[MATERIAL_MAX] = {
     },
 
     [MAT_SNOW] = {
+        /* A drift left standing crusts towards its COLDEST blue, and keeps
+         * that shade once buried - see reaction_t.weathers. Downwards,
+         * unlike sand: snow's pale end is pure white and it is already the
+         * palest thing on the board, so a whiter crust is not a line anyone
+         * can see, while its blue end is. Quicker than sand's too, because
+         * the band it crosses is half as wide - 43 points of luminance
+         * against sand's 84. */
+        .weathers    = 200,
+        .weathered   = 0,
+
         /* The only cold thing on the board, and the reason thermal shock
          * is legible at all. `chills` pulls a heat level out of a hot
          * neighbour and marks snow as cold for the shock rule - 40 in 256
