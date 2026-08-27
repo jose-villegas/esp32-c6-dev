@@ -1,6 +1,32 @@
 # Plan: Explosions, without a velocity field
 
-**Status**: planned, not built. Written 2026-08-27.
+**Status**: BUILT, across five rounds, on top of what is written below.
+Written 2026-08-27, when none of it existed yet; kept as the original
+design reasoning rather than rewritten to match the finished mechanism,
+because the WHY below is still accurate even where the WHAT has moved on.
+Where a specific detail was superseded, a note says so at that spot rather
+than silently editing the history out. The two changes worth knowing
+before reading the rest:
+
+- **The list is `impulse_t`, not `blast_t`, and `sand_explode()` is one
+  caller of a primitive, `sand_impulse()`, rather than the whole
+  mechanism.** The plan below was written before a second caller was even
+  hypothetical, so it describes the list, the buffer and the flight pass
+  as if they belonged to explosions specifically. They do not: an
+  explosion is a point that seeds many entries radially, and nothing
+  about the entry, the buffer, or the pass that moves it knows that. See
+  `sand_impulse()`'s own comment in sand.h for the primitive's actual
+  signature, and impulse_t's own comment for why the rename happened
+  once there was a second name-shaped trap to avoid, the same one
+  material.h documents for `mobility` and `sight`.
+- **The "chance in 256, no count to store" reasoning below did not
+  survive the arc.** A flat, memoryless chance every turn cannot produce
+  a curve - see SAND_IMPULSE_SPEED_RAMP's own comment in sand.h for why
+  gravity's constant one-cell-per-step fall makes that structural, not a
+  tuning problem. Each entry now carries a `speed` byte that IS that
+  turn's chance AND ramps down every turn, which is honestly a count
+  after all, just one expressed as a shrinking probability instead of an
+  integer - the idiom survived even though the "no count" claim did not.
 
 Nothing in the simulation displaces or destroys in a blast today. This adds
 one, deliberately **without a trigger and without gunpowder**, so the
@@ -36,6 +62,13 @@ At 256 entries of `{uint16_t index, uint8_t dir}` that is **under a
 kilobyte**, three orders of magnitude off the rejected design, and it
 touches neither the cell byte nor any material row.
 
+*(As shipped, the entry grew twice more - a `cell` byte for the identity
+check that turned out to be necessary, and a `speed` byte for the arc -
+to `{uint16_t index, cell_t cell, uint8_t dir, uint8_t speed}`, six bytes
+with alignment. 256 entries is 1.5 KB rather than under one, still nowhere
+near the rejected per-cell field. See impulse_t's own comment in sand.h
+for why each addition earned its byte.)*
+
 The one-cell-per-step invariant the whole sweep rests on is also
 preserved: a flying grain moves **one cell per step**, in its own pass. It
 travels further by flying for more steps, not by moving faster.
@@ -62,14 +95,19 @@ Mirror `sand_enable_sleeping()` and `sand_track_dirty_rows()`, which take
 a caller-allocated buffer rather than owning one:
 
 ```c
-void sand_enable_blast(sand_t *s, blast_t *buf, int max);
+void sand_enable_impulses(sand_t *s, impulse_t *buf, int max);
 ```
 
-Opt-in, so anything that never explodes pays nothing - not even the
+*(As shipped: `sand_enable_blast`/`blast_t` in this original plan, renamed
+once a second caller made "blast" the wrong name for a list that was never
+explosion-specific in the first place - see this document's own status
+note at the top, and impulse_t's comment in sand.h.)*
+
+Opt-in, so anything that never uses an impulse pays nothing - not even the
 struct space - and a test can size it small to exercise the cap
 deliberately. Without it, `sand_explode()` is a no-op.
 
-### Exhaustion is a ROLL, not a counter
+### Exhaustion is a ROLL, not a fixed counter - but it is not memoryless either
 
 `SAND_BLAST_DECAY`, a chance in 256 per step that a grain keeps flying.
 
@@ -83,6 +121,31 @@ and a cap that have to agree.
 
 It also keeps the entry down to a position and a direction. There is no
 count to store.
+
+**AS SHIPPED, this section's own reasoning did not survive first contact
+with the arc.** A *fixed* chance-in-256, rolled identically every turn
+regardless of how long a grain had already been flying, cannot produce a
+curve: gravity here never accelerates, so the vertical fall is a constant
+one cell per step forever, and a parabola needs the horizontal half to
+change against that constant instead. A flat roll gives a 45-degree
+diagonal for as long as it keeps succeeding, then a vertical drop the
+moment it fails - a bent line, not a curve, however the one number was
+tuned.
+
+The fix keeps the chance-in-256 idiom but gives each entry its own
+`speed` (see impulse_t in sand.h), which both IS this turn's chance and
+ramps down by a fixed amount - `SAND_IMPULSE_SPEED_RAMP` - every turn,
+moved or blocked or waiting. That is, honestly, a count after all: not an
+integer of steps remaining, but a shrinking probability that reaches
+exactly zero after a fixed, deterministic number of turns
+(`ceil(speed / SAND_IMPULSE_SPEED_RAMP)`), at which point `rng_chance()`
+with a zero numerator can never succeed again. "There is no count to
+store" was the wrong takeaway from the house idiom; "the count can be
+*expressed* as a chance in 256, and read like the rest of the file" was
+the part worth keeping. See SAND_IMPULSE_SPEED_RAMP's own comment in
+sand.h for the full reasoning, and SAND_EXPLODE_INITIAL_SPEED's for why
+"how far things fly" ended up belonging to `sand_explode()` specifically
+rather than to the generic mechanism.
 
 ---
 
@@ -109,9 +172,13 @@ material that was thrown. If it is not, drop the entry silently. Grains
 get lost occasionally and nobody will ever see it. The alternative is a
 per-cell "in flight" bit, which is the 40 KB again.
 
-**It gets the arc for free.** Gravity pulls down in the sweep; the impulse
-pushes outward in the flight pass; the impulse decays. Down, plus out,
-decaying, **is** a ballistic path - so grains arc without anything
+**It gets the arc for free** - *this ordering is necessary, but, as
+shipped, it was not sufficient: see the "Exhaustion is a ROLL" section's
+own update note above for why a flat, memoryless decay still produced a
+bent line rather than a curve, and what changed to fix it.* Gravity pulls
+down in the sweep; the impulse pushes outward in the flight pass; the
+impulse decays. Down, plus out, decaying, **is** a ballistic path - so
+grains arc without anything
 modelling an arc. This is the one thing a pure one-shot displacement blast
 could not do, and it costs nothing extra here.
 
@@ -144,6 +211,22 @@ pile will not lift the pile - and it is the right v1: it makes the pass a
 single bounded walk with no cascade, and the whole point of this plan is
 to find out whether the mechanic reads at all before making it cleverer.
 
+**AS SHIPPED, "stops on any obstruction" turned out to mean "does
+nothing at all" the first time it met a packed bed or a body of water** -
+a real device reported it in exactly those words. Every queued cell in an
+incompressible medium starts out surrounded by more of the same material,
+so every entry's very first move was blocked, and "stop" dropped it on the
+spot before it ever went anywhere. Two changes fixed it without touching
+this section's central claim (a flying grain still never pushes,
+displaces, or swaps with a lighter cell): a blocked entry now **waits**
+for its target to clear instead of being dropped outright, retrying every
+turn on the same bounded clock its speed already ages on; and
+`sand_explode()` **fills a small core with fire** before it queues
+anything, giving the disc a real cavity to collapse into on the very
+first step rather than depending on open space already existing nearby.
+See `SAND_EXPLODE_CORE_DIVISOR`'s own comment in sand.h for the full
+reasoning, including why fire rather than a plain hole.
+
 ---
 
 ## Host tests
@@ -172,8 +255,12 @@ Then:
   displaced grains freeze mid-air. `Adding-a-Material.md` has a whole
   lesson on this failure being invisible to almost every other test.
 - **Empty space is a no-op.** No crash, no cells created from nothing.
-- **No buffer, no blast.** Without `sand_enable_blast()`, `sand_explode()`
-  does nothing and nothing crashes.
+  *(As shipped: no longer quite true, once the core fills with fire
+  unconditionally - see the v1 update note above. Detonating over nothing
+  still flashes the core; what stays a no-op is everything beyond it,
+  since there is nothing there to queue.)*
+- **No buffer, no blast.** Without `sand_enable_impulses()`,
+  `sand_explode()` does nothing and nothing crashes.
 
 ---
 
@@ -185,6 +272,13 @@ Then:
 already branches on it into `sand_erase()`. Make PWR cycle three modes -
 **PAINT -> ERASE -> DETONATE** - reusing the existing mode label banner.
 Touch gives the position for free.
+
+*(As shipped: exactly this three-way cycle, but `erasing`/the mode itself
+now lives in `sand_ui_t` (sand_ui.h/.c) as `sand_mode_t`, not as a
+file-scope `app_sand.c` variable - a later UI rewrite made the app's
+button/touch state machine host-testable, and DETONATE was rebuilt
+against that rather than the original `app_sand.c` scaffolding. See
+sand_mode_t's own comment in sand_ui.h.)*
 
 **Fire on press, not on the `applications` loop.** That loop runs every
 frame while held, so a held finger would detonate continuously - useful as

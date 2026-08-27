@@ -156,9 +156,9 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     clear_content_flags(s);
     s->dirty_rows = NULL;
     s->block_state = NULL;
-    s->blast_buf   = NULL;
-    s->blast_max   = 0;
-    s->blast_count = 0;
+    s->impulse_buf   = NULL;
+    s->impulse_max   = 0;
+    s->impulse_count = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
      * step_one_row()), whether or not block_state exists, so block_cols/
@@ -219,15 +219,15 @@ bool sand_block_settled(const sand_t *s, int bx, int by)
            (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
 }
 
-void sand_enable_blast(sand_t *s, blast_t *buf, int max)
+void sand_enable_impulses(sand_t *s, impulse_t *buf, int max)
 {
-    s->blast_buf   = buf;
-    s->blast_max   = (buf != NULL) ? max : 0;
+    s->impulse_buf   = buf;
+    s->impulse_max   = (buf != NULL) ? max : 0;
     /* Nothing can already be in flight against a buffer that was just handed
      * over - the same reasoning sand_enable_sleeping() gives for zeroing
      * `blocks`, applied to a count rather than a memset since there is no
      * grid content of `buf`'s own to know anything about yet. */
-    s->blast_count = 0;
+    s->impulse_count = 0;
 }
 
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
@@ -252,10 +252,10 @@ void sand_clear(sand_t *s)
     /* Any entry still in flight names a cell this memset just wiped, so its
      * stored `cell` byte can no longer match what is actually there - the
      * flight pass would drop every one of them on its next turn anyway (see
-     * step_blast()'s verify-before-moving check). Dropping them here instead
-     * reaches the same outcome without paying for it: no stale index
-     * survives into a grid that has just been handed back empty. */
-    s->blast_count = 0;
+     * step_impulses()'s verify-before-moving check). Dropping them here
+     * instead reaches the same outcome without paying for it: no stale
+     * index survives into a grid that has just been handed back empty. */
+    s->impulse_count = 0;
 }
 
 cell_t sand_at(const sand_t *s, int x, int y)
@@ -377,19 +377,44 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
     return removed;
 }
 
+void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
+{
+    /* Disabled, or already full - see this function's own comment in
+     * sand.h on why both are silent no-ops rather than something a caller
+     * has to check for itself first. */
+    if (s->impulse_buf == NULL || s->impulse_count >= s->impulse_max) {
+        return;
+    }
+    if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
+        return;
+    }
+
+    const size_t at = (size_t)y * (size_t)s->w + (size_t)x;
+    const cell_t cell = s->cells[at];
+    if (CELL_IS_EMPTY(cell)) {
+        return;   /* nothing there to throw */
+    }
+
+    impulse_t *entry = &s->impulse_buf[s->impulse_count++];
+    entry->index = (uint16_t)at;
+    entry->cell  = cell;
+    entry->dir   = (uint8_t)dir;
+    entry->speed = (uint8_t)speed;
+}
+
 void sand_explode(sand_t *s, int cx, int cy, int radius)
 {
-    if (s->blast_buf == NULL) {
-        return;   /* sand_enable_blast() was never called - see its comment */
+    if (s->impulse_buf == NULL) {
+        return;   /* sand_enable_impulses() was never called - see its comment */
     }
 
     /* FILL a cavity with fire, before a single flight entry is queued -
-     * see SAND_BLAST_CORE_DIVISOR's own comment in sand.h for why a blast
-     * that only ever seeds entries can never move anything once the medium
-     * it detonates in has no gap of its own to offer, and for why fire is
-     * what fills that gap now rather than emptiness. An explosion flashes
-     * and leaves a plume; it does not silently delete whatever was standing
-     * there.
+     * see SAND_EXPLODE_CORE_DIVISOR's own comment in sand.h for why an
+     * explosion that only ever seeded entries could never move anything
+     * once the medium it detonates in has no gap of its own to offer, and
+     * for why fire is what fills that gap now rather than emptiness. An
+     * explosion flashes and leaves a plume; it does not silently delete
+     * whatever was standing there.
      *
      * Every cell within the core radius is written, unconditionally -
      * occupied or already empty alike. sand_erase() skips an already-empty
@@ -416,7 +441,7 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * thrown outward along with everything else, which is one more reason
      * a real explosion's flash reads as an expanding thing rather than a
      * static disc. */
-    const int core_radius = radius / SAND_BLAST_CORE_DIVISOR;
+    const int core_radius = radius / SAND_EXPLODE_CORE_DIVISOR;
     const int core_r2 = core_radius * core_radius;
     for (int fdy = -core_radius; fdy <= core_radius; fdy++) {
         for (int fdx = -core_radius; fdx <= core_radius; fdx++) {
@@ -442,26 +467,17 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
         }
     }
 
+    /* THE ONE CALLER OF sand_impulse(), seeding many radially. Everything
+     * about how a queued grain then moves - the flight pass, the arc, the
+     * cap, re-acquisition - is sand_impulse()'s and step_impulses()'s job,
+     * not this loop's; all this does is decide which cells qualify and
+     * which direction each one gets, which is the one part of an explosion
+     * that is genuinely specific to its shape. */
     const int r2 = radius * radius;
 
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
             if (dx * dx + dy * dy > r2) {
-                continue;
-            }
-            if (s->blast_count >= s->blast_max) {
-                return;   /* over the cap - the rest simply do not fly */
-            }
-
-            const int x = cx + dx;
-            const int y = cy + dy;
-            if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
-                continue;
-            }
-
-            const size_t at = (size_t)y * (size_t)s->w + (size_t)x;
-            const cell_t cell = s->cells[at];
-            if (CELL_IS_EMPTY(cell)) {
                 continue;
             }
 
@@ -480,11 +496,12 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
                 continue;
             }
 
-            blast_t *entry = &s->blast_buf[s->blast_count++];
-            entry->index = (uint16_t)at;
-            entry->cell  = cell;
-            entry->dir   = (uint8_t)ring_of(qdx, qdy);
-            entry->speed = SAND_BLAST_SPEED_INITIAL;
+            /* Bounds and emptiness are sand_impulse()'s own checks now -
+             * see its comment - so this has nothing left to verify before
+             * calling it; past the cap it silently queues nothing further
+             * on its own, so there is no count to watch here either. */
+            sand_impulse(s, cx + dx, cy + dy, ring_of(qdx, qdy),
+                         SAND_EXPLODE_INITIAL_SPEED);
         }
     }
 }
@@ -1270,25 +1287,25 @@ static void build_xflow(xflow_t *f, int gx, int gy)
     f->bias_dg_q8 = bx * f->dg[0] + by * f->dg[1];
 }
 
-/* The flight pass: every entry in s->blast_buf either moves exactly one
- * cell along the direction sand_explode() gave it, waits another turn for
- * its way to clear, or is finally dropped. Called from sand_step(),
- * immediately before finalize_settling() - see docs/Sand/Explosion-Plan.md's
- * "Where the pass runs, and why it must be LAST" for the two reasons that
- * position is not a preference. In short: running after every other pass
- * that can move or replace a cell is what keeps an entry's stored position
- * honest - nothing else can have touched it again before this pass's own
- * next turn - and it is what turns a plain outward push into a ballistic arc
- * for nothing extra, since gravity has already pulled in the sweep above by
- * the time this runs and "down" plus "out, decaying" simply add.
+/* The flight pass: every entry in s->impulse_buf either moves exactly one
+ * cell along the direction it was queued with, waits another turn for its
+ * way to clear, or is finally dropped. Called from sand_step(), immediately
+ * before finalize_settling() - see docs/Sand/Explosion-Plan.md's "Where the
+ * pass runs, and why it must be LAST" for the two reasons that position is
+ * not a preference. In short: running after every other pass that can move
+ * or replace a cell is what keeps an entry's stored position honest -
+ * nothing else can have touched it again before this pass's own next turn -
+ * and it is what turns a plain outward push into a ballistic arc for
+ * nothing extra, since gravity has already pulled in the sweep above by the
+ * time this runs and "down" plus "out, decaying" simply add.
  *
  * BLOCKED MEANS WAIT, NOT STOP. A cell in the way used to drop the entry on
- * the spot - fine for open air, wrong for anything packed: a blast into a
- * bed of sand or a body of water starts with every queued cell surrounded
- * by more of the same material, so that rule dropped nearly everything on
- * its very first turn and only the annulus already touching open space (or
- * the fire-filled core sand_explode() now writes - see
- * SAND_BLAST_CORE_DIVISOR in sand.h - which a denser neighbour can swap
+ * the spot - fine for open air, wrong for anything packed: an explosion
+ * into a bed of sand or a body of water starts with every queued cell
+ * surrounded by more of the same material, so that rule dropped nearly
+ * everything on its very first turn and only the annulus already touching
+ * open space (or the fire-filled core sand_explode() now writes - see
+ * SAND_EXPLODE_CORE_DIVISOR in sand.h - which a denser neighbour can swap
  * straight through) ever went anywhere. Keeping a blocked entry instead
  * lets it try again next step, once whatever was ahead of it has had a
  * chance to move out of the way - which is what lets the disturbance the
@@ -1310,12 +1327,12 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * hypothetical: it is what "the crater works now but the grains don't
  * arc" was.
  *
- * A single `if` with nothing queued, which is every step on a board that has
- * never exploded - the same shape sand_step_gas()'s own may_have_gas gate
- * gives a board with no gas on it. */
-static void step_blast(sand_t *s, int dx, int dy)
+ * A single `if` with nothing queued, which is every step on a board with
+ * nothing in flight - the same shape sand_step_gas()'s own may_have_gas
+ * gate gives a board with no gas on it. */
+static void step_impulses(sand_t *s, int dx, int dy)
 {
-    if (s->blast_count == 0) {
+    if (s->impulse_count == 0) {
         return;
     }
 
@@ -1323,8 +1340,8 @@ static void step_blast(sand_t *s, int dx, int dy)
     const int h = s->h;
     int kept = 0;
 
-    for (int i = 0; i < s->blast_count; i++) {
-        blast_t entry = s->blast_buf[i];
+    for (int i = 0; i < s->impulse_count; i++) {
+        impulse_t entry = s->impulse_buf[i];
 
         /* Verify before moving. Nothing marks this index as "spoken for" -
          * that would be the per-cell flag this whole design exists to
@@ -1416,7 +1433,7 @@ static void step_blast(sand_t *s, int dx, int dy)
          * this file already trusts.
          *
          * The roll's own chance IS entry.speed - see
-         * SAND_BLAST_SPEED_INITIAL's own comment in sand.h for why one byte
+         * SAND_IMPULSE_SPEED_RAMP's own comment in sand.h for why one byte
          * carries both "chance this turn's move happens" and "how much
          * flight is left" instead of a separate step counter alongside a
          * fixed rate, and for why that is what turns the arc into an
@@ -1430,8 +1447,8 @@ static void step_blast(sand_t *s, int dx, int dy)
          * with a zero numerator never succeeds again and the entry is
          * dropped, below, the very next time this runs - the ramp needs no
          * separate "done flying" check of its own. */
-        entry.speed = (entry.speed > SAND_BLAST_SPEED_RAMP)
-                          ? (uint8_t)(entry.speed - SAND_BLAST_SPEED_RAMP)
+        entry.speed = (entry.speed > SAND_IMPULSE_SPEED_RAMP)
+                          ? (uint8_t)(entry.speed - SAND_IMPULSE_SPEED_RAMP)
                           : 0;
 
         if (!rolled_move) {
@@ -1457,7 +1474,7 @@ static void step_blast(sand_t *s, int dx, int dy)
              * position, same direction, already-ramped speed and all - so
              * it gets another turn next step rather than being dropped for
              * something that may clear a moment later. */
-            s->blast_buf[kept++] = entry;
+            s->impulse_buf[kept++] = entry;
             continue;
         }
 
@@ -1469,14 +1486,14 @@ static void step_blast(sand_t *s, int dx, int dy)
         latch_content_flags(s, entry.cell);
         mark_move(s, x, y, nx, ny);
 
-        s->blast_buf[kept].index = (uint16_t)nat;
-        s->blast_buf[kept].cell  = entry.cell;
-        s->blast_buf[kept].dir   = entry.dir;
-        s->blast_buf[kept].speed = entry.speed;
+        s->impulse_buf[kept].index = (uint16_t)nat;
+        s->impulse_buf[kept].cell  = entry.cell;
+        s->impulse_buf[kept].dir   = entry.dir;
+        s->impulse_buf[kept].speed = entry.speed;
         kept++;
     }
 
-    s->blast_count = kept;
+    s->impulse_count = kept;
 }
 
 void sand_step(sand_t *s, int gx, int gy, int jostle)
@@ -1621,15 +1638,15 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * sand_step_gas()'s) is enough. */
     sand_step_reactions(s);
 
-    /* Last of all, and deliberately so - see step_blast()'s own comment and
-     * docs/Sand/Explosion-Plan.md's "Where the pass runs, and why it must be
-     * LAST". Everything above this line has already had its one chance to
-     * move or replace a cell this step; running flight after all of it is
-     * what lets an entry trust its own stored position at the top of its
-     * next turn, and it is what makes a thrown grain arc instead of flying
-     * in a straight line - gravity already pulled in the sweep, this only
-     * adds the outward half. */
-    step_blast(s, dx, dy);
+    /* Last of all, and deliberately so - see step_impulses()'s own comment
+     * and docs/Sand/Explosion-Plan.md's "Where the pass runs, and why it
+     * must be LAST". Everything above this line has already had its one
+     * chance to move or replace a cell this step; running flight after all
+     * of it is what lets an entry trust its own stored position at the top
+     * of its next turn, and it is what makes a thrown grain arc instead of
+     * flying in a straight line - gravity already pulled in the sweep, this
+     * only adds the outward half. */
+    step_impulses(s, dx, dy);
 
     finalize_settling(s, settled_bit);
 }

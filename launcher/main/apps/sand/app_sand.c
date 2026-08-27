@@ -176,10 +176,10 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 #define DETONATE_RADIUS_PX  48
 
 /* This is evaluation scaffolding (see sand_mode_t in sand_ui.h), not a
- * tuned feature. Same order as CRACK_MAX - see sand_enable_blast()'s own
- * comment in sand.h on why this is a few hundred entries, not a per-cell
- * flag. */
-#define APP_BLAST_MAX    256
+ * tuned feature. Same order as CRACK_MAX - see sand_enable_impulses()'s
+ * own comment in sand.h on why this is a few hundred entries, not a
+ * per-cell flag. */
+#define APP_IMPULSE_MAX    256
 
 /* What the finger puts down.
  *
@@ -317,9 +317,10 @@ static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
 static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * settled blocks to skip - see
                                    * sand_enable_sleeping() */
-static blast_t    *blast_buf;    /* APP_BLAST_MAX entries: grains in flight
-                                   * from DETONATE - see sand_enable_blast().
-                                   * Scaffolding, like sand_mode_t itself. */
+static impulse_t  *impulse_buf;  /* APP_IMPULSE_MAX entries: grains in
+                                   * flight from DETONATE - see
+                                   * sand_enable_impulses(). Scaffolding,
+                                   * like sand_mode_t itself. */
 
 /* Up to ROW_MAX_RUNS (row_runs.h) separate cell-index ranges per row - not
  * pixel ranges, and not a single min/max span - recording where a row's
@@ -523,8 +524,8 @@ static void start_sim(void)
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
-    if (blast_buf == NULL) {
-        blast_buf = malloc((size_t)APP_BLAST_MAX * sizeof(*blast_buf));
+    if (impulse_buf == NULL) {
+        impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
     }
     if (row_run_x0 == NULL) {
         row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));
@@ -536,7 +537,7 @@ static void start_sim(void)
         row_run_n = malloc(GRID_H_MAX * sizeof(*row_run_n));
     }
     if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
-        blast_buf == NULL ||
+        impulse_buf == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
                       "largest free block is %u",
@@ -588,7 +589,7 @@ static void start_sim(void)
      * cycled to, so an allocation failure is caught here alongside every
      * other one above instead of surfacing later as a silent no-op the
      * first time someone actually cycles PWR round to it. */
-    sand_enable_blast(&sim, blast_buf, APP_BLAST_MAX);
+    sand_enable_impulses(&sim, impulse_buf, APP_IMPULSE_MAX);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {

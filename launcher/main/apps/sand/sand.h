@@ -81,8 +81,21 @@
  * anyone is expected to reach. */
 #define SAND_MAX_EMITTERS 16
 
-/* One grain currently in flight from sand_explode() - see sand_enable_blast()
- * and sand_explode() for the mechanic this belongs to.
+/* One grain currently in flight from sand_impulse() - see
+ * sand_enable_impulses() and sand_impulse() for the mechanic this belongs
+ * to, and sand_explode() for the one caller that exists today.
+ *
+ * NOT explosion-specific, on purpose, and not named as though it were:
+ * this is a sparse, bounded, transient list of cells carrying a directed
+ * displacement, nothing more. An explosion is one way to seed it - queue a
+ * ring of these radiating outward from a point - but nothing about the
+ * entry itself, or the pass that moves it (step_impulses(), in sand.c),
+ * knows or cares that an explosion is where it came from. Naming this
+ * blast_t when it is really an impulse was the same overloading trap
+ * material.h documents for `mobility` and `sight`, which "came to mean
+ * different things to different kinds without saying so" - a name that
+ * describes one caller standing in for what the thing actually is - and
+ * the rename was free while sand_explode() remained the only caller.
  *
  * `index` is y*w+x - the same row-major index crack_run()'s frontier
  * (sand_reactions.c) already uses uint16_t for, and for the same reason: this
@@ -97,24 +110,26 @@
  *
  * `speed` is BOTH the chance in 256 this turn's outward move happens AND
  * the thing that ramps down every turn to make that chance shrink - see
- * SAND_BLAST_SPEED_INITIAL/SAND_BLAST_SPEED_RAMP's own comment in this file
- * for why one byte carries both jobs instead of a separate step counter.
+ * SAND_IMPULSE_SPEED_RAMP's own comment in this file for why one byte
+ * carries both jobs instead of a separate step counter, and why the ramp
+ * rate itself belongs to this generic mechanism rather than to any one
+ * caller.
  *
  * Five bytes, not the three a bare (index, dir) pair would need - the
  * `cell` byte is what makes the identity check above possible at all, and
- * `speed` is what makes the arc a curve rather than a bent line (again, see
- * SAND_BLAST_SPEED_INITIAL's own comment) - and on top of that costs
- * almost nothing: a uint16_t plus three uint8_ts rounds up to six bytes for
- * alignment, only one more than the four the struct needed before `speed`
- * existed. Even a generous few hundred of these is still three orders of
- * magnitude under a real per-cell velocity field - see
+ * `speed` is what makes an arc read as a curve rather than a bent line
+ * (again, see SAND_IMPULSE_SPEED_RAMP's own comment) - and on top of that
+ * costs almost nothing: a uint16_t plus three uint8_ts rounds up to six
+ * bytes for alignment, only one more than the four the struct needed
+ * before `speed` existed. Even a generous few hundred of these is still
+ * three orders of magnitude under a real per-cell velocity field - see
  * docs/Sand/Explosion-Plan.md for the full comparison. */
 typedef struct {
     uint16_t index;
     cell_t   cell;
     uint8_t  dir;
     uint8_t  speed;
-} blast_t;
+} impulse_t;
 
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
@@ -255,14 +270,14 @@ typedef struct {
     uint8_t *block_state;
     int      block_cols, block_rows;   /* set once, by sand_init() */
 
-    /* Optional, caller-owned, `blast_max` entries: grains currently in
-     * flight from sand_explode() - see sand_enable_blast(). NULL disables
-     * the whole mechanic, the same way dirty_rows/block_state above disable
-     * theirs. blast_count is how many of blast_buf's entries are live right
-     * now, always <= blast_max. */
-    blast_t *blast_buf;
-    int      blast_max;
-    int      blast_count;
+    /* Optional, caller-owned, `impulse_max` entries: grains currently in
+     * flight from sand_impulse() - see sand_enable_impulses(). NULL
+     * disables the whole mechanic, the same way dirty_rows/block_state
+     * above disable theirs. impulse_count is how many of impulse_buf's
+     * entries are live right now, always <= impulse_max. */
+    impulse_t *impulse_buf;
+    int        impulse_max;
+    int        impulse_count;
 
     int      last_load_dx, last_load_dy;
 
@@ -376,22 +391,24 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks);
  * it. Always false if block-sleeping was never enabled. */
 bool sand_block_settled(const sand_t *s, int bx, int by);
 
-/* Let sand_explode() throw grains outward instead of doing nothing.
+/* Let sand_impulse() queue a flying grain instead of doing nothing.
  *
  * The same caller-provided-buffer shape as sand_enable_sleeping() and
- * sand_track_dirty_rows() above, and for the same reason: a board that never
- * explodes should not pay for the mechanic, not even the struct space, and a
- * test can size `buf` deliberately small to exercise the cap on purpose (see
- * sand_explode()'s own comment on what happens once it fills).
+ * sand_track_dirty_rows() above, and for the same reason: a board that
+ * never uses an impulse should not pay for the mechanic, not even the
+ * struct space, and a test can size `buf` deliberately small to exercise
+ * the cap on purpose (see sand_impulse()'s own comment on what happens
+ * once it fills).
  *
  * `max` is how many of `buf`'s entries may be in flight at once - a bounded
  * transient list, the same shape crack_run() already uses for CRACK_MAX
  * (sand_reactions.c), not a per-cell flag: an explosion throws at most a few
  * hundred grains for a few dozen steps each, so this is a few hundred
- * entries of blast_t, not another byte on every one of the grid's cells.
+ * entries of impulse_t, not another byte on every one of the grid's cells.
  *
- * NULL disables the mechanic entirely - sand_explode() becomes a no-op. */
-void sand_enable_blast(sand_t *s, blast_t *buf, int max);
+ * NULL disables the mechanic entirely - sand_impulse() becomes a no-op,
+ * and so does anything built on it, sand_explode() included. */
+void sand_enable_impulses(sand_t *s, impulse_t *buf, int max);
 
 /* Out-of-bounds reads return STONE, not empty.
  *
@@ -468,18 +485,114 @@ int sand_emitter_count(const sand_t *s);
  * the outputs untouched, if `i` is not currently a valid emitter index. */
 bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
 
+/* THE PRIMITIVE. Queue one grain at (x, y) to be moved by the flight pass
+ * at the tail of sand_step() - see sand.c's step_impulses() and its own
+ * comment on why that pass has to run LAST, after everything else that can
+ * move or replace a cell. `dir` is which of the eight ring directions (see
+ * ring_dir() in sand_priv.h) it keeps flying, and `speed` is both this
+ * turn's chance in 256 of moving and how much flight is left - see
+ * SAND_IMPULSE_SPEED_RAMP's own comment below for why one number does both
+ * jobs, and for the arc that falls out of it for free.
+ *
+ * NO MATERIAL OWNS THIS AND NO REACTION FIRES IT - it is a primitive, the
+ * same family as sand_spawn()/sand_erase() above in that nothing here
+ * decides when it happens, only what happens once something else decides
+ * to call it. sand_explode(), below, is the one caller that exists today:
+ * it fills a core with fire, then calls this once per occupied cell in an
+ * annulus around it, outward-facing. A future caller wanting a different
+ * shape of push - a single directed shove, a cone, a recoil off an impact
+ * - would call this the same way, with its own choice of which cells, in
+ * which directions, at what speed; nothing about the primitive itself
+ * assumes a centre or a radius.
+ *
+ * A no-op if sand_enable_impulses() was never called, if (x, y) is off the
+ * grid, if the cell there is already empty (nothing to throw), or if the
+ * buffer is already at capacity - the last one is graceful degradation,
+ * exactly like CRACK_MAX truncating a crack rather than failing: past the
+ * cap, calls simply queue nothing further, without the caller needing to
+ * track the count itself or stop calling once it fills. */
+void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
+
+/* Chance in 256, per step, that a queued grain's outward move happens THIS
+ * turn - see sand_impulse()'s `speed` parameter, which is this chance at
+ * the moment an entry is queued, and impulse_t's own `speed` field, which
+ * is where it lives and ramps down from there.
+ *
+ * A per-entry step counter was the obvious alternative to a chance at all,
+ * and was rejected for the same reason mobility/falls/scatter/flare/
+ * heat_chance are all already chances in 256 rather than counters: this
+ * project already expresses "how often does X happen this step" that way
+ * everywhere a rate is needed, so a roll here reads like the rest of the
+ * file instead of introducing a second idiom.
+ *
+ * SAND_IMPULSE_SPEED_RAMP is how much `speed` loses every step - moved,
+ * blocked, or about to be dropped, it ages regardless (see step_impulses()'s
+ * own comment on why the ramp cannot make an exception for a wedged
+ * entry). This is what turns a queued grain's outward push into an actual
+ * ARC rather than a bent line: gravity in this simulation does not
+ * accelerate - a falling grain drops at a constant one cell per step,
+ * forever - so a parabola needs the HORIZONTAL half of the motion to
+ * change instead, since the vertical half never will. Early on, `speed` is
+ * whatever the caller queued it at and the grain moves outward nearly
+ * every step - shallow. As it ramps down, outward moves come only
+ * occasionally - steeper. Once `speed` reaches zero, rng_chance() with a
+ * zero numerator never succeeds, so the grain never moves outward again -
+ * vertical, falling straight under gravity alone like any other grain, and
+ * dropped from the flight list that same turn, since a roll that can never
+ * again succeed has nothing left to track.
+ *
+ * BE HONEST about what this is not, though: the vertical component is
+ * still exactly one cell per step, the whole time. This is not a
+ * physically accurate parabola; it is a curve that reads as an arc because
+ * only the horizontal half of it decays. Shallow by construction, not by
+ * choice.
+ *
+ * ONE KNOB, GENERIC TO EVERY CALLER, not per-call configurable - unlike
+ * the initial `speed` a caller passes in (which is exactly the point:
+ * "how far this particular impulse reaches" belongs to whoever is calling
+ * sand_impulse() and choosing what to queue; "how quickly any impulse's
+ * push fades" is a property of the flight mechanism itself, and every
+ * caller shares it). 14 is a STARTING POINT, not a measurement - there is
+ * no device capture behind it the way SAND_REBOUND_GAIN has one. Paired
+ * with a `speed` of 200 (see SAND_EXPLODE_INITIAL_SPEED, sand_explode()'s
+ * own choice), it reaches zero in ceil(200/14) = 15 steps - a fixed,
+ * deterministic upper bound on how long any one entry can fly, for
+ * whatever `speed` it started at. That determinism is itself new: the
+ * design this replaced (a single fixed chance-in-256 rolled fresh every
+ * turn, with no memory of how long a grain had already been flying) only
+ * ever shrank the PROBABILITY of surviving another turn, never actually
+ * bounded how long that could take. Tune on device once the mechanic
+ * itself is judged worth tuning - see docs/Sand/Explosion-Plan.md's
+ * "Device" section for what to look at first. */
+#define SAND_IMPULSE_SPEED_RAMP  14
+
+/* sand_explode()'s OWN choice of what speed to hand every entry it queues -
+ * not a property of sand_impulse() itself, which takes speed as a plain
+ * parameter and assumes nothing about what any particular caller wants.
+ * 200 is a STARTING POINT, not a measurement, the same as
+ * SAND_IMPULSE_SPEED_RAMP - see its own comment for how the two combine
+ * into a bounded flight time. Paired with a bigger or smaller radius this
+ * is still "how far things fly" in the sense the old SAND_BLAST_DECAY
+ * used to mean it, just relocated to belong to the explosion that actually
+ * decides it, rather than living inside the generic flight mechanism as
+ * though every future caller would want the same number. */
+#define SAND_EXPLODE_INITIAL_SPEED  200
+
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /
- * SAND_BLAST_CORE_DIVISOR`.
+ * SAND_EXPLODE_CORE_DIVISOR`. Explosion-specific, unlike the two constants
+ * above: nothing about sand_impulse() itself has a "core", so this stays
+ * named for the one caller that has one.
  *
  * Without this, sand_explode() only ever SEEDS entries; it never makes
  * room for them. In an incompressible medium - a packed bed, a body of
  * water - every cell inside the radius starts out surrounded by more of
  * the same material, so the very first move every entry attempts is
- * blocked. A blocked entry now waits rather than dying (see step_blast()'s
- * own comment), but waiting for a gap that nothing will ever open is still
- * nothing happening: reported from a device, this is exactly what read as
- * "in water nothing happens, in sand also no holes" before this existed.
+ * blocked. A blocked entry now waits rather than dying (see
+ * step_impulses()'s own comment), but waiting for a gap that nothing will
+ * ever open is still nothing happening: reported from a device, this is
+ * exactly what read as "in water nothing happens, in sand also no holes"
+ * before this existed.
  *
  * FIRE, not a hole. An earlier version of this simply erased the core -
  * correct for making room, wrong for what an explosion actually is: it
@@ -504,22 +617,27 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * has a genuine annulus of material outside the core for the flight pass
  * to do something with, rather than the whole disc being one bare fireball
  * with nothing thrown outward at all. */
-#define SAND_BLAST_CORE_DIVISOR  2
+#define SAND_EXPLODE_CORE_DIVISOR  2
 
-/* Push every occupied cell within `radius` of the centre outward, to be moved
- * by the flight pass at the tail of sand_step() - see sand.c's step_blast()
- * and its own comment on why that pass has to run LAST, after everything
- * else that can move or replace a cell. Each queued grain moves one cell per
- * step, in the direction pointing away from (cx, cy), quantised the same way
- * sand_gravity_direction() already quantises gravity into eight directions.
+/* ONE CALLER OF sand_impulse(), seeding many radially. Fill a disc of
+ * `radius` around (cx, cy) with fire at its core (see
+ * SAND_EXPLODE_CORE_DIVISOR), then queue an outward-facing flight entry -
+ * at SAND_EXPLODE_INITIAL_SPEED - for every occupied cell in the annulus
+ * between the core and the full radius, direction quantised the same way
+ * sand_gravity_direction() already quantises gravity into eight
+ * directions. Everything about HOW a queued grain then moves - the flight
+ * pass, the arc, the cap, re-acquisition - belongs to sand_impulse() and
+ * step_impulses(); this function's only job is deciding WHICH cells get
+ * queued and in which direction, which is the one thing genuinely specific
+ * to an explosion shape.
  *
- * FIRST fills a core with fire - see SAND_BLAST_CORE_DIVISOR's own comment
- * for why a blast that only ever queues flight entries can never actually
- * move anything once the medium it is detonating in has no gaps of its
- * own, and for why fire rather than emptiness. That fill is a real,
- * immediate write - every cell in the core becomes fire, occupied or
- * already empty alike - not something the flight pass or its speed ramp
- * has any part in, and it is why sand_explode() is no longer purely
+ * FIRST fills a core with fire - see SAND_EXPLODE_CORE_DIVISOR's own
+ * comment for why an explosion that only ever queued flight entries could
+ * never actually move anything once the medium it is detonating in has no
+ * gaps of its own, and for why fire rather than emptiness. That fill is a
+ * real, immediate write - every cell in the core becomes fire, occupied or
+ * already empty alike - not something sand_impulse() or the flight pass it
+ * feeds has any part in, and it is why sand_explode() is no longer purely
  * additive to the grain count the way sand_spawn()/sand_erase()
  * individually are: see the comment on conservation this implies, below.
  * Placing fire is a normal write like any other in this file - it latches
@@ -533,16 +651,16 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * temporary mode (see app_sand.c). See docs/Sand/Explosion-Plan.md for the
  * design this implements and why it needs no per-cell velocity field.
  *
- * A no-op if sand_enable_blast() was never called - there is nowhere to
- * queue an entry, and the core is left unfilled too, so a disabled blast
+ * A no-op if sand_enable_impulses() was never called - there is nowhere to
+ * queue an entry, and the core is left unfilled too, so a disabled
  * mechanic costs the board nothing at all, not even the fire. Beyond the
  * core, this is also a no-op for any cell with no defined outward
  * direction, which is exactly the centre cell itself; every other occupied
  * cell in the annulus between the core and the full radius gets one.
  *
- * Past the buffer's own capacity, the excess grains simply are not queued
- * and so do not fly - graceful degradation, exactly like CRACK_MAX
- * truncating a crack rather than failing. A blast bigger than the buffer is
+ * Past the buffer's own capacity, sand_impulse() itself already queues
+ * nothing further - see its own comment - so this simply keeps scanning
+ * the rest of the disc without incident. A blast bigger than the buffer is
  * a smaller-looking blast, not a bug.
  *
  * CONSERVATION, NOW BOUNDED RATHER THAN EXACT. sand_spawn() and sand_erase()
@@ -560,64 +678,6 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * (count before the call) + (empty cells the core just filled) - that
  * half is exact, always. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
-
-/* SAND_BLAST_SPEED_INITIAL/SAND_BLAST_SPEED_RAMP - replaces what used to be
- * a single constant, SAND_BLAST_DECAY, and it is worth being explicit about
- * why one knob became two rather than being retuned in place.
- *
- * THE PROBLEM WAS STRUCTURAL, NOT A TUNING ONE. Gravity in this simulation
- * does not accelerate - a falling grain falls at a constant one cell per
- * step, forever (see sand_step()'s main sweep). A parabola needs
- * horizontal speed steady while vertical speed grows; here neither
- * changes. SAND_BLAST_DECAY was a single fixed chance-in-256 rolled fresh
- * every turn - full outward push, or none, with nothing in between and no
- * memory of how long a grain had already been flying - so the sideways
- * move-chance was the SAME on a grain's first airborne step as its
- * twentieth. The result was a 45-degree diagonal for as long as the roll
- * kept succeeding, then a vertical drop the moment it failed: a bent line,
- * not a curve. No fixed probability can fix that, because the flaw is
- * that it never changes.
- *
- * THE FIX gives each entry its own `speed` (see blast_t above) that IS the
- * chance-in-256 of this turn's outward move, and that ramps down by
- * SAND_BLAST_SPEED_RAMP every turn - moved or blocked or waiting, exactly
- * like the old roll ran every turn regardless (see step_blast()'s own
- * comment on why a wedged entry must still age out on schedule). Early on,
- * `speed` is high and the grain moves outward nearly every step - shallow.
- * As it ramps down, outward moves come only occasionally - steeper. Once
- * `speed` reaches zero, rng_chance() with a zero numerator never succeeds,
- * so the grain never moves outward again - vertical, falling straight
- * under gravity alone like any other grain, and dropped from the flight
- * list on that same turn since a roll that can never again succeed has
- * nothing left to track (see step_blast()'s own comment on why a failed
- * roll drops the entry rather than keeping it).
- *
- * Horizontal progress per step shrinking, against a vertical fall that is
- * pinned at a constant one cell per step, IS the curve - the ratio between
- * them keeps changing across the flight, which a fixed probability could
- * never produce however it was tuned. BE HONEST about what this is not,
- * though: the vertical component is still exactly one cell per step, the
- * whole time. This is not a physically accurate parabola; it is a curve
- * that reads as an arc because the horizontal half of it decays and the
- * vertical half cannot. Shallow by construction, not by choice.
- *
- * INITIAL SETS HOW FAR; RAMP SETS THE SHAPE. SAND_BLAST_SPEED_INITIAL is
- * the direct descendant of the old SAND_BLAST_DECAY - a bigger number
- * means more steps before `speed` decays to zero, which means more total
- * distance (the same "how far things fly" knob as before, kept at its old
- * value of 200 since nothing about that half of the reasoning changed).
- * SAND_BLAST_SPEED_RAMP is genuinely new: it controls how quickly the
- * curve steepens, independent of how far the grain ultimately travels.
- * Both are STARTING POINTS, not measurements - there is no device capture
- * behind either the way SAND_REBOUND_GAIN has one. At 200 and 14, `speed`
- * reaches zero in ceil(200/14) = 15 steps, a fixed, deterministic upper
- * bound on how long any one entry can fly - unlike the old geometric
- * decay, which had no upper bound at all, only a shrinking probability of
- * lasting that long. Tune both on device once the mechanic itself is
- * judged worth tuning - see docs/Sand/Explosion-Plan.md's "Device"
- * section for what to look at first. */
-#define SAND_BLAST_SPEED_INITIAL  200
-#define SAND_BLAST_SPEED_RAMP      14
 
 /* FRICTION
  *
