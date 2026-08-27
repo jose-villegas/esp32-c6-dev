@@ -91,24 +91,47 @@ typedef struct {
  * represent - a board that has not been read yet is assumed held the most
  * common way, and the first real reading corrects it if that guess was
  * wrong, the same as any other update. */
+
+/* WHAT EACH QUARTER ACTUALLY IS, MEASURED - NOT DERIVED
+ *
+ * 0/1/2/3 name a quarter-turn from the panel's native upright (GFX_WIDTH x
+ * GFX_HEIGHT, 368 x 448 - a "portrait" shape). Which physical orientation
+ * that actually corresponds to is not visible from source - it depends on
+ * how the case is held versus how the panel's native rows and columns are
+ * wired - so it could not be derived, only measured, the same way
+ * GRAVITY_SCREEN_X/Y in apps/sand/app_sand.c was found: hold the board,
+ * flash a build with the Diagnostics app's "show orientation" toggle on
+ * (see app_diagnostics.c), read the reported quarter off for each hold.
+ *
+ * Measured against this board on 2026-08-27:
+ *
+ *     0   Portrait
+ *     1   Landscape             (USB connector to the right - see below)
+ *     2   Portrait, upside down
+ *     3   Landscape, upside down
+ *
+ * These four names are the start of the vocabulary this shell's apps
+ * should share for "which way is the board being held" - use them instead
+ * of a bare quarter number anywhere the number is standing in for one of
+ * these four physical facts rather than for arithmetic on the transform
+ * itself (composing turns, deriving ui_width()/height(), and the like stay
+ * plain ints - that math does not care what a quarter is CALLED). */
+#define DISPLAY_PORTRAIT              0
+#define DISPLAY_LANDSCAPE             1
+#define DISPLAY_PORTRAIT_UPSIDE_DOWN  2
+#define DISPLAY_LANDSCAPE_UPSIDE_DOWN 3
+
 /* The orientation the SHELL applies at boot, before the first gravity
  * sample arrives - main.c sets this once, right after display_init(),
  * which itself stays a neutral 0 with no opinion about it (see that
  * function's own comment: this is a physical fact about one board, not
  * something a device-agnostic module should bake into its own reset).
  *
- * Physically determined, not derivable from anything in this file: 0/1/2/3
- * name a quarter-turn from the panel's native upright (GFX_WIDTH x
- * GFX_HEIGHT, 368 x 448 - a "portrait" shape), and this board is normally
- * held sideways to that, USB connector to the right. Which of the four
- * numbers that actually is depends on how the case is held versus how the
- * panel's native rows and columns are wired, which is not visible from
- * source - the same category of fact GRAVITY_SCREEN_X/Y in
- * apps/sand/app_sand.c records, and found the same way: hold the board the
- * way it is meant to be held, flash, and see which quarter the launcher's
- * buttons actually come up in. 1 is a first guess, not a measurement -
- * change this constant, not the logic around it, once it is wrong. */
-#define DISPLAY_DEFAULT_QUARTER 1
+ * DISPLAY_LANDSCAPE, not a bare 1 - this board is normally held sideways
+ * to its native upright, USB connector to the right, and the table above
+ * is what confirms that is quarter 1 specifically. It was a first guess
+ * when this constant was written; it no longer is. */
+#define DISPLAY_DEFAULT_QUARTER DISPLAY_LANDSCAPE
 
 void display_init(display_t *d);
 
