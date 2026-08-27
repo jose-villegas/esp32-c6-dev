@@ -149,6 +149,30 @@ static screen_t screen;
  * see POUR_RADIUS_PX above. */
 #define ERASE_RADIUS_PX  16      /* was 8 cells at 2 px */
 
+/* An emitter gets its OWN, more generous erase tolerance than material
+ * does - two different radii for the same gesture, which looks like a
+ * mistake until the target is considered rather than the gesture.
+ *
+ * Clearing material is an area operation: ERASE_RADIUS_PX sweeps a disc of
+ * grains, and a small disc is precise in a useful way there - a wide one
+ * would wipe out more of a scene than the finger meant to touch. An
+ * emitter is not an area; it is a single point with no area of its own to
+ * hit, so "precise" buys nothing and just makes the point easy to miss.
+ * And in both cases the thing doing the aiming - a fingertip, on the order
+ * of 90 px across - is far larger than either radius and completely covers
+ * the target the whole time it is trying to hit it, so the eraser cannot
+ * lean on the finger to narrow down where the point actually is the way it
+ * could for a whole pile of sand. The point target needs tolerance for
+ * that aim the area sweep does not.
+ *
+ * See handle_pour_input()'s erase branch below, which calls
+ * sand_remove_emitters() at this radius in addition to sand_erase() at
+ * ERASE_RADIUS_PX - not instead of it. sand_erase() already removes any
+ * emitter within ITS OWN, smaller radius as part of turning material off
+ * (see its own comment in sand.h), so this wider sweep simply subsumes
+ * that guarantee rather than replacing it. */
+#define ERASE_EMITTER_RADIUS_PX  32
+
 /* What the finger puts down.
  *
  * Selected from the palette panel (BOOT's release edge opens it - see
@@ -855,16 +879,33 @@ static void draw_dirty_rows(bool shine_moved)
  * material.c's colour tables), rather than one derived per-material the way
  * the palette badge is (gfx_color_mix() against the face). At a badge's
  * size that derivation buys contrast against every material's own colour;
- * at a MARKER's size - a handful of pixels, roughly one grid cell - there
- * is no room for two nested tones to read as two tones at all, so instead
- * this picks a colour that sits outside the whole palette and therefore
- * reads against anything an emitter happens to be streaming. */
+ * at a MARKER's size - EMITTER_MARKER_PX pixels, small even next to the
+ * badge - there is no room for two nested tones to read as two tones at
+ * all, so instead this picks a colour that sits outside the whole palette
+ * and therefore reads against anything an emitter happens to be streaming. */
 #define EMITTER_MARKER_COLOR 0xFF3EC8
 
-/* Marks every placed emitter with a small square, roughly one grid cell -
- * see EMITTER_MARKER_COLOR above for its colour. A placed tap that cannot
- * be seen is just an invisible point the sand happens to keep coming from,
- * which leaves no way to tell where it is or whether the tap even took.
+/* The marker's fixed on-screen size, in pixels rather than cells - the same
+ * reasoning POUR_RADIUS_PX's comment above gives for the pour/erase
+ * brushes: a cell is not a physical size, it is 2 px at HIGH and 6 px at
+ * VERY LOW for the same object, so a marker drawn "one cell wide" would be
+ * a different physical mark at every quality setting, and it would shrink
+ * to nearly nothing at HIGH specifically - the opposite of what a marker
+ * that has to be findable by a finger needs. Findability is a property of
+ * the finger, not of the grid, so the marker gets a size the grid has no
+ * say over.
+ *
+ * Tuned by eye. At MEDIUM's 3 px cells this spans about four cells across,
+ * so it does sit over a little of what the source underneath is actually
+ * producing - an accepted trade for being visible at all, not an
+ * oversight. */
+#define EMITTER_MARKER_PX  12
+
+/* Marks every placed emitter with a small square of fixed physical size -
+ * see EMITTER_MARKER_PX and EMITTER_MARKER_COLOR above for its size and
+ * colour. A placed tap that cannot be seen is just an invisible point the
+ * sand happens to keep coming from, which leaves no way to tell where it is
+ * or whether the tap even took.
  *
  * Called every frame, not once: draw_dirty_rows() just above repaints
  * whatever row an emitter sits in every time the simulation actually
@@ -873,12 +914,13 @@ static void draw_dirty_rows(bool shine_moved)
  * redraws. This is exactly why draw_mode_label() below is drawn after the
  * rows rather than before - see its own comment.
  *
- * Cheap regardless: at most SAND_MAX_EMITTERS markers, each a few pixels,
- * so the drawing cost here is negligible. And it buys no NEW transfers to
- * the panel either - the cell an emitter sits in is already being dirtied
- * by its own output nearly every frame the tap is active, so the
- * gfx_mark_dirty() below is marking a rect that was, in all but the rarest
- * frame, going out to the panel anyway. */
+ * Cheap regardless: at most SAND_MAX_EMITTERS markers, each
+ * EMITTER_MARKER_PX pixels square, so the drawing cost here is negligible.
+ * Unlike the old one-cell marker, this one is bigger than the emitter's own
+ * cell at every quality, so it can now cover a few pixels of neighbouring
+ * cells that would not otherwise have gone out to the panel this frame -
+ * a small, bounded addition next to the mostly-free ride the smaller
+ * marker got from output the tap was already sending. */
 static void draw_emitter_markers(void)
 {
     const gfx_color_t marker = gfx_rgb(EMITTER_MARKER_COLOR);
@@ -892,10 +934,16 @@ static void draw_emitter_markers(void)
         }
         (void)ecell;    /* the marker's colour is fixed, not the material's */
 
-        const int px = ex * cell;
-        const int py = ey * cell;
-        gfx_fill_rect(px, py, cell, cell, marker);
-        gfx_mark_dirty(px, py, cell, cell);
+        /* Centred on the emitter's CELL centre, not its top-left corner -
+         * the marker is now bigger than a cell at every quality, so
+         * starting it at the corner would put the emitter visibly off to
+         * the marker's lower-right instead of in its middle. */
+        const int mid_x = ex * cell + cell / 2;
+        const int mid_y = ey * cell + cell / 2;
+        const int px = mid_x - EMITTER_MARKER_PX / 2;
+        const int py = mid_y - EMITTER_MARKER_PX / 2;
+        gfx_fill_rect(px, py, EMITTER_MARKER_PX, EMITTER_MARKER_PX, marker);
+        gfx_mark_dirty(px, py, EMITTER_MARKER_PX, EMITTER_MARKER_PX);
     }
 }
 
@@ -1022,12 +1070,40 @@ static void draw_mode_label(int gx, int gy)
 /* The eligibility/spawn corner badge - see draw_palette()'s own comment on
  * its three states. 18px outer square against a 92px tile (PALETTE_TILE)
  * reads clearly at arm's length without crowding the tile's centred name
- * text; 3px of inset leaves a 12px inner square, still comfortably legible
- * as its own square rather than a blur. 2px of margin off the bezel keeps
- * the badge from touching it. */
+ * text; 2px of border leaves a 14px inner square, still comfortably legible
+ * as its own square rather than a blur, and is the "1-2 px" a border needs
+ * to read as a border rather than as another fill. 2px of margin off the
+ * bezel keeps the badge from touching it. */
 #define PALETTE_BADGE_SIZE    18
-#define PALETTE_BADGE_INSET    3
+#define PALETTE_BADGE_INSET    2
 #define PALETTE_BADGE_MARGIN   2
+
+/* Fixed, not derived from the face - see the badge's own comment in
+ * draw_palette() for why. gfx_color_mix() against a near-white face
+ * (Snow) used to land the "armed" fill almost exactly on the face colour,
+ * so armed and unarmed read as identical on that one tile. Maximum-
+ * contrast pair, the same choice the tile names below already make and for
+ * the same reason - see their own comment. */
+#define PALETTE_BADGE_BORDER_COLOR  0x141414
+#define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
+
+/* The check mark's strokes: six small squares, each PALETTE_BADGE_CHECK_
+ * STROKE pixels, stepped diagonally from the badge's own (bx, by) origin -
+ * see the badge's own comment in draw_palette() for why there is no glyph
+ * to draw this with instead.
+ *
+ * The first three step down-right (the short, descending limb); the last
+ * three continue on from there stepping up-right (the longer, ascending
+ * limb) - two steps against three, which is what reads as a check rather
+ * than a V or a plain diagonal tick. The third and fourth entries share a
+ * point on purpose: that shared point IS the vertex where the two limbs
+ * meet, not a separate stroke of its own, so six blocks draw a two-limbed
+ * mark rather than two disconnected ones. */
+#define PALETTE_BADGE_CHECK_STROKE  3
+static const int palette_badge_check_blocks[6][2] = {
+    { 1, 4 }, { 3, 6 }, { 5, 8 },      /* short limb, descending */
+    { 7, 6 }, { 9, 4 }, { 11, 2 },     /* long limb, ascending */
+};
 
 /* The material picker overlay - drawn on open, on selection, and on a
  * quarter-turn change (see sand_frame()'s SCREEN_PALETTE handling below),
@@ -1096,28 +1172,18 @@ static void draw_palette(int turn)
         gfx_fill_rect(ix + PALETTE_BEZEL, iy + PALETTE_BEZEL,
                      iw - 2 * PALETTE_BEZEL, ih - 2 * PALETTE_BEZEL, face);
 
-        /* The badge: zero or two more fill rects drawn after the face, at
-         * the tile's top-right corner inside the bezel - exactly the
-         * extension this loop's structure was already built to take. Three
-         * states, not one, and the two that were missing are the whole
-         * point of this pass:
+        /* The badge: zero or more fill rects drawn after the face, at the
+         * tile's top-right corner inside the bezel - exactly the extension
+         * this loop's structure was already built to take. Three states,
+         * not one:
          *
-         *   eligible, BRUSH_SPAWN   filled - the dark square with the light
-         *                           square inset inside it, exactly as
-         *                           before. The tap is armed.
-         *   eligible, BRUSH_POUR    outline only - the same dark square,
-         *                           but its interior is left in the face
-         *                           colour instead of light, so only a thin
-         *                           dark frame shows against the face it
-         *                           sits on. That reads as unmistakably
-         *                           dimmer than the filled state at a
-         *                           glance, which is the point: before this,
-         *                           an eligible-but-not-spawning tile carried
-         *                           no mark at all, so there was nothing on
-         *                           screen to suggest tapping an already-
-         *                           selected tile does anything. The outline
-         *                           advertises the affordance before it has
-         *                           been discovered.
+         *   eligible, BRUSH_POUR    an empty box - a near-black border
+         *                           (PALETTE_BADGE_BORDER_COLOR) around a
+         *                           near-white fill (PALETTE_BADGE_FILL_
+         *                           COLOR). The slot exists; nothing is
+         *                           armed.
+         *   eligible, BRUSH_SPAWN   the same box, with a near-black check
+         *                           mark drawn inside it. The tap is armed.
          *   not eligible            nothing, as before - material_can_emit()
          *                           is false for every KIND_STATIC material
          *                           (stone, glass, the whole extended
@@ -1126,39 +1192,51 @@ static void draw_palette(int turn)
          *                           visible on the panel instead of a fact
          *                           someone has to be told separately.
          *
+         * This follows the tile NAMES below rather than the bezel above:
+         * the border and fill are a FIXED pair, not gfx_color_mix() against
+         * the face - see PALETTE_BADGE_BORDER_COLOR/PALETTE_BADGE_FILL_
+         * COLOR's own comment for why. The badge used to derive from the
+         * face the way the bezel still does, and it read fine on most
+         * swatches, but Snow's face is itself near-white, so mixing toward
+         * white for the armed fill landed almost exactly on the face
+         * colour - armed and unarmed became indistinguishable on the one
+         * tile where telling them apart matters most. That is exactly the
+         * failure the names' own comment below already explains for the
+         * same derive-from-the-face idea, for the same reason: a mark that
+         * has to read on every swatch from snow's near-white to stone's
+         * near-black cannot itself be made of the swatch it sits on.
+         *
          * Left in SCREEN space, not turned with the tile names below - a
          * deliberate choice, not an oversight. It is a state indicator, not
-         * text meant to be read at an angle; a small two-tone square reads
-         * the same "there is a badge here" whichever way it is drawn, so
-         * there is nothing for turning it to buy.
-         *
-         * Two-tone, the same reason the bezel and the name text both are: a
-         * swatch runs from snow's near-white to stone's near-black, and no
-         * single fixed colour reads on all of them - gfx_color_mix() against
-         * the face, never a fixed grey. `t` here is much stronger than the
-         * bezel's ~40% (100) - a badge this small has to read as a mark in
-         * its own right against a face it is sitting directly on top of, not
-         * merely as a lighter/darker edge of that same face. */
+         * text meant to be read at an angle; a small two-tone box reads the
+         * same "there is a badge here" whichever way it is drawn, so there
+         * is nothing for turning it to buy. */
         if (material_can_emit(brushes[i])) {
-            const gfx_color_t badge_dark = gfx_color_mix(face, gfx_rgb(0x000000), 210);
+            const gfx_color_t border = gfx_rgb(PALETTE_BADGE_BORDER_COLOR);
             const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN
                          - PALETTE_BADGE_SIZE;
             const int by = iy + PALETTE_BEZEL + PALETTE_BADGE_MARGIN;
 
             gfx_fill_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
-                         badge_dark);
-
-            /* BRUSH_SPAWN gets the light inner square that makes the badge
-             * read as filled; BRUSH_POUR gets the face colour instead, which
-             * leaves only the dark ring above as a thin frame - "this slot
-             * exists and is empty" rather than "this slot is armed". */
-            const gfx_color_t inner = (brush_mode[i] == BRUSH_SPAWN)
-                ? gfx_color_mix(face, gfx_rgb(0xFFFFFF), 210)
-                : face;
+                         border);
             gfx_fill_rect(bx + PALETTE_BADGE_INSET, by + PALETTE_BADGE_INSET,
                          PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
                          PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
-                         inner);
+                         gfx_rgb(PALETTE_BADGE_FILL_COLOR));
+
+            /* BRUSH_SPAWN alone gets the check mark - see
+             * palette_badge_check_blocks' own comment for what the six
+             * blocks are and why there are six of them. Drawn in the same
+             * border colour as the box, the same maximum-contrast choice
+             * for the same reason. */
+            if (brush_mode[i] == BRUSH_SPAWN) {
+                for (int b = 0; b < 6; b++) {
+                    gfx_fill_rect(bx + palette_badge_check_blocks[b][0],
+                                 by + palette_badge_check_blocks[b][1],
+                                 PALETTE_BADGE_CHECK_STROKE,
+                                 PALETTE_BADGE_CHECK_STROKE, border);
+                }
+            }
         }
 
         /* Centred in the tile, turned to follow the board - see
@@ -1175,14 +1253,19 @@ static void draw_palette(int turn)
 
         /* White halo outline then a black fill on top, rather than in one
          * fixed ink colour or derived (via gfx_color_mix()) from the face
-         * the way the bezel and badge above are - the bezel and badge
-         * derive from the face because they should belong to the material;
-         * the name has the opposite job, to stay legible over every swatch
-         * from snow's near-white to stone's near-black, and black-and-white
-         * is the maximum-contrast pair available for that. The white halo
-         * is what lifts the black glyph off the dark swatches like stone.
-         * Deriving this pair too would "tidy" it straight into unreadable
-         * on whichever swatch the derived ink happens to match.
+         * the way the bezel above still is - the bezel derives from the
+         * face because it should belong to the material; the name has the
+         * opposite job, to stay legible over every swatch from snow's
+         * near-white to stone's near-black, and black-and-white is the
+         * maximum-contrast pair available for that. The white halo is what
+         * lifts the black glyph off the dark swatches like stone. Deriving
+         * this pair too would "tidy" it straight into unreadable on
+         * whichever swatch the derived ink happens to match.
+         *
+         * The badge just above used to derive from the face the same way
+         * the bezel still does, and got exactly this failure on Snow - see
+         * its own comment for the story. It now uses this same fixed
+         * maximum-contrast pair instead of a second one of its own.
          *
          * All eight one-pixel offsets, not just the four cardinals: at
          * GFX_GLYPH_SCALE == 2 each font pixel is a 2x2 block, and skipping
@@ -1514,6 +1597,11 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
     for (int i = 0; i < applications; i++) {
         if (erasing) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
+            /* Wider than the sweep above on purpose - see
+             * ERASE_EMITTER_RADIUS_PX's own comment for why a point target
+             * needs more aiming tolerance than an area sweep does. */
+            sand_remove_emitters(&sim, cx, cy,
+                                 (ERASE_EMITTER_RADIUS_PX + cell / 2) / cell);
         } else {
             sand_spawn_cell(&sim, cx, cy,
                             (POUR_RADIUS_PX + cell / 2) / cell,
