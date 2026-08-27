@@ -10,6 +10,7 @@
  *===========================================================================*/
 
 #include <stdbool.h>
+#include <stddef.h>
 
 #include "unity.h"
 #include "suites.h"
@@ -182,6 +183,125 @@ static void test_count_of_one_lands_sensibly(void)
     TEST_ASSERT_EQUAL_INT(-1, palette_hit(x - 1, y, 1));
 }
 
+/* --- palette_label_origin(): the label lands centred at every quarter turn
+ * --------------------------------------------------------------------------
+ *
+ * gfx_text_turned()'s origin is the FIRST GLYPH's cell, not any corner of
+ * the string as it appears once drawn, so the origin VALUE is not itself
+ * the meaningful thing to check - it differs by turn even when the text
+ * ends up in the same place (see the turn-0-vs-turn-2 test below). What has
+ * to be true is the box the string actually occupies once drawn: centred in
+ * the tile at every turn, and swapped in shape at turns 1/3 versus 0/2.
+ *
+ * label_bbox() below walks the origin the same way gfx_text_turned() does -
+ * PALETTE_CHAR_W per glyph, in the direction each turn implies (see
+ * palette_label_origin()'s own comment in palette.h for the four
+ * corner/direction pairs) - to reconstruct that box from an origin, so the
+ * tests can assert on the box rather than have to re-derive gfx_text_turned's
+ * walk inline in every test. */
+
+static void label_bbox(int ox, int oy, int len, int turn,
+                       int *bx, int *by, int *bw, int *bh)
+{
+    switch (turn) {
+    case 0:                                    /* upright: walks +x from ox,oy */
+        *bx = ox;
+        *by = oy;
+        *bw = len * PALETTE_CHAR_W;
+        *bh = PALETTE_CHAR_H;
+        break;
+    case 2:                                    /* upside down: walks -x from ox,oy */
+        *bx = ox - (len - 1) * PALETTE_CHAR_W;
+        *by = oy;
+        *bw = len * PALETTE_CHAR_W;
+        *bh = PALETTE_CHAR_H;
+        break;
+    case 1:                                    /* top-to-bottom: walks +y from ox,oy */
+        *bx = ox;
+        *by = oy;
+        *bw = PALETTE_CHAR_H;
+        *bh = len * PALETTE_CHAR_W;
+        break;
+    default:                                   /* turn 3, bottom-to-top: walks -y */
+        *bx = ox;
+        *by = oy - (len - 1) * PALETTE_CHAR_W;
+        *bw = PALETTE_CHAR_H;
+        *bh = len * PALETTE_CHAR_W;
+        break;
+    }
+}
+
+/* Every rect/len combination below is exercised at all four turns - a rect
+ * that is not itself square (unlike a real palette tile) so a formula that
+ * only happens to work when w == h cannot pass by accident. */
+
+static void test_label_centred_in_rect_at_every_turn(void)
+{
+    struct { int x, y, w, h, len; } cases[] = {
+        {   0,  40,  92,  92, 5 },   /* a real tile: 5-char name, 92x92 */
+        {   0,  40,  92,  92, 1 },   /* shortest real name */
+        { 100, 200, 120,  80, 3 },   /* non-square rect */
+        {  10,  10,  61,  74, 4 },   /* odd dimensions - VERY LOW quality's cell math shows up elsewhere as odd numbers too */
+    };
+
+    for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {
+        const int x = cases[c].x, y = cases[c].y;
+        const int w = cases[c].w, h = cases[c].h, len = cases[c].len;
+
+        for (int turn = 0; turn < 4; turn++) {
+            int ox, oy;
+            palette_label_origin(x, y, w, h, len, turn, &ox, &oy);
+
+            int bx, by, bw, bh;
+            label_bbox(ox, oy, len, turn, &bx, &by, &bw, &bh);
+
+            TEST_ASSERT_EQUAL_INT_MESSAGE(x + (w - bw) / 2, bx,
+                "label box must be horizontally centred in the rect");
+            TEST_ASSERT_EQUAL_INT_MESSAGE(y + (h - bh) / 2, by,
+                "label box must be vertically centred in the rect");
+        }
+    }
+}
+
+static void test_label_box_swaps_dimensions_at_turns_one_and_three(void)
+{
+    const int len = 5;
+    int ox, oy, bx, by, bw, bh;
+
+    palette_label_origin(0, 40, 92, 92, len, 1, &ox, &oy);
+    label_bbox(ox, oy, len, 1, &bx, &by, &bw, &bh);
+    TEST_ASSERT_EQUAL_INT(PALETTE_CHAR_H, bw);
+    TEST_ASSERT_EQUAL_INT(len * PALETTE_CHAR_W, bh);
+
+    palette_label_origin(0, 40, 92, 92, len, 3, &ox, &oy);
+    label_bbox(ox, oy, len, 3, &bx, &by, &bw, &bh);
+    TEST_ASSERT_EQUAL_INT(PALETTE_CHAR_H, bw);
+    TEST_ASSERT_EQUAL_INT(len * PALETTE_CHAR_W, bh);
+}
+
+static void test_turn_zero_and_two_share_a_box_but_not_an_origin(void)
+{
+    const int len = 5;
+    int ox0, oy0, ox2, oy2;
+
+    palette_label_origin(0, 40, 92, 92, len, 0, &ox0, &oy0);
+    palette_label_origin(0, 40, 92, 92, len, 2, &ox2, &oy2);
+
+    /* The origins are genuinely different points - turn 2 starts drawing
+     * from the box's other end - which is exactly why the origin itself
+     * cannot be the thing under test above. */
+    TEST_ASSERT_NOT_EQUAL_INT(ox0, ox2);
+
+    int bx0, by0, bw0, bh0, bx2, by2, bw2, bh2;
+    label_bbox(ox0, oy0, len, 0, &bx0, &by0, &bw0, &bh0);
+    label_bbox(ox2, oy2, len, 2, &bx2, &by2, &bw2, &bh2);
+
+    TEST_ASSERT_EQUAL_INT(bx0, bx2);
+    TEST_ASSERT_EQUAL_INT(by0, by2);
+    TEST_ASSERT_EQUAL_INT(bw0, bw2);
+    TEST_ASSERT_EQUAL_INT(bh0, bh2);
+}
+
 void run_palette_suite(void)
 {
     RUN_TEST(test_centre_of_every_tile_hits_its_own_index);
@@ -192,6 +312,9 @@ void run_palette_suite(void)
     RUN_TEST(test_tile_rects_never_overlap_and_stay_on_screen);
     RUN_TEST(test_full_grid_of_sixteen_leaves_no_gap);
     RUN_TEST(test_count_of_one_lands_sensibly);
+    RUN_TEST(test_label_centred_in_rect_at_every_turn);
+    RUN_TEST(test_label_box_swaps_dimensions_at_turns_one_and_three);
+    RUN_TEST(test_turn_zero_and_two_share_a_box_but_not_an_origin);
 }
 
 SUITE_REGISTER(run_palette_suite);

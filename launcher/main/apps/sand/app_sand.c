@@ -907,6 +907,31 @@ static gfx_color_t brush_color(cell_t c)
         cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)];
 }
 
+/* Which quarter turn currently reads as "upright" - 0/1/2/3 the same way
+ * gfx_text_turned() numbers them (0 upright, 1 top-to-bottom, 2 upside down,
+ * 3 bottom-to-top). Up is the opposite of gravity: compare magnitudes rather
+ * than an angle, since whichever component of gravity dominates names the
+ * axis, and its sign names the edge. Snapped to one of four because the font
+ * can only be turned in quarters - a diagonal tilt picks whichever quarter
+ * it is nearest.
+ *
+ * Shared by draw_mode_label() below and draw_palette()'s panel: both turn
+ * their text to follow the same physical "up", and both must pick that turn
+ * from this one function rather than each rolling its own copy of the
+ * ax/ay comparison - two copies are two chances to disagree about which way
+ * is up, which would show up as the mode label turned one way and the
+ * palette's tile names turned another while the board sits still. */
+static int gravity_quarter_turn(int gx, int gy)
+{
+    const int ax = gx < 0 ? -gx : gx;
+    const int ay = gy < 0 ? -gy : gy;
+
+    if (ay >= ax) {
+        return (gy >= 0) ? 0 : 2;      /* down is down : board upside down */
+    }
+    return (gx >= 0) ? 3 : 1;          /* down is to the right : to the left */
+}
+
 /* Draws the mode label against whichever edge is currently UP.
  *
  * Up is the opposite of gravity, so the label follows the device rather than
@@ -940,32 +965,30 @@ static void draw_mode_label(int gx, int gy)
     const int   span = len * 8 * LABEL_SCALE;
     const int   tall = 8 * LABEL_SCALE;
 
-    /* Which edge is up. Compare magnitudes rather than an angle: whichever
-     * component of gravity dominates names the axis, and its sign the edge. */
-    const int ax = gx < 0 ? -gx : gx;
-    const int ay = gy < 0 ? -gy : gy;
+    /* Which edge is up - see gravity_quarter_turn()'s own comment above for
+     * why this must come from that shared function and not a second copy of
+     * its ax/ay comparison. Only the 0..3 choice moved there; the positions
+     * below, one per turn, stay exactly as they were. */
+    const int turn = gravity_quarter_turn(gx, gy);
 
-    int x, y, turn;
-    if (ay >= ax) {
-        if (gy >= 0) {
-            turn = 0;                                  /* down is down */
-            x = (GFX_WIDTH - span) / 2;
-            y = LABEL_MARGIN;
-        } else {
-            turn = 2;                                  /* board upside down */
-            x = (GFX_WIDTH + span) / 2 - 8 * LABEL_SCALE;
-            y = GFX_HEIGHT - LABEL_MARGIN - tall;
-        }
-    } else {
-        if (gx >= 0) {
-            turn = 3;                                  /* down is to the right */
-            x = LABEL_MARGIN;
-            y = (GFX_HEIGHT + span) / 2 - 8 * LABEL_SCALE;
-        } else {
-            turn = 1;                                  /* down is to the left */
-            x = GFX_WIDTH - LABEL_MARGIN - tall;
-            y = (GFX_HEIGHT - span) / 2;
-        }
+    int x, y;
+    switch (turn) {
+    case 0:                                             /* down is down */
+        x = (GFX_WIDTH - span) / 2;
+        y = LABEL_MARGIN;
+        break;
+    case 2:                                             /* board upside down */
+        x = (GFX_WIDTH + span) / 2 - 8 * LABEL_SCALE;
+        y = GFX_HEIGHT - LABEL_MARGIN - tall;
+        break;
+    case 3:                                             /* down is to the right */
+        x = LABEL_MARGIN;
+        y = (GFX_HEIGHT + span) / 2 - 8 * LABEL_SCALE;
+        break;
+    default:                                            /* turn == 1: down is to the left */
+        x = GFX_WIDTH - LABEL_MARGIN - tall;
+        y = (GFX_HEIGHT - span) / 2;
+        break;
     }
 
     /* Coloured as the material itself, so the label needs no colour table of
@@ -995,15 +1018,22 @@ static void draw_mode_label(int gx, int gy)
 #define PALETTE_BADGE_INSET    3
 #define PALETTE_BADGE_MARGIN   2
 
-/* The material picker overlay - drawn ONCE when the panel opens (see
- * open_palette()) and left sitting in the framebuffer for as long as it is
- * up, never redrawn per frame. That is only safe because nothing else draws
- * while SCREEN_PALETTE is active - sand_frame() skips the sim step and the
- * sand's own redraw entirely for that screen (see its dispatch) - so
- * anything added later that paints during the pause (a clock, an animation)
- * would need to redraw this too, or it will be silently painted over and
- * never restored. */
-static void draw_palette(void)
+/* The material picker overlay - drawn on open, on selection, and on a
+ * quarter-turn change (see sand_frame()'s SCREEN_PALETTE handling below),
+ * never per frame. The invariant that makes drawn-on-change safe at all is
+ * unchanged from when it was drawn-once: nothing else paints while
+ * SCREEN_PALETTE is active - sand_frame() skips the sim step and the sand's
+ * own redraw entirely for that screen (see its dispatch) - so anything added
+ * later that paints during the pause (a clock, an animation) would need to
+ * redraw this too, or it will be silently painted over and never restored.
+ *
+ * `turn` is the quarter turn to draw the tile names at - see
+ * gravity_quarter_turn() above. The grid itself (bezel, badge, swatch) never
+ * moves or resizes with it: it is a centred 368x368 square on a 368x448
+ * screen, the same physical region at every quarter turn, so only the text
+ * needs to turn - see palette.h's PALETTE_FITS comment for why that square
+ * fits the screen either way it is held. */
+static void draw_palette(int turn)
 {
     int px, py, pw, ph;
     palette_panel_rect(BRUSH_COUNT, &px, &py, &pw, &ph);
@@ -1060,6 +1090,13 @@ static void draw_palette(void)
          * inside the bezel - exactly the extension this loop's structure
          * was already built to take.
          *
+         * Left in SCREEN space, not turned with the tile names below - a
+         * deliberate choice, not an oversight. It is a state indicator (this
+         * tile can spawn a source), not text meant to be read at an angle;
+         * a small two-tone square reads the same "there is a badge here"
+         * whichever way it is drawn, so there is nothing for turning it to
+         * buy.
+         *
          * Ineligible materials can never carry brush_mode[i] ==
          * BRUSH_SPAWN in the first place (see handle_palette_input()), so
          * this never draws for one - no separate eligibility check needed
@@ -1087,13 +1124,17 @@ static void draw_palette(void)
                          badge_light);
         }
 
-        /* Centred in the tile. The longest names are 5 characters, 80px at
-         * GFX_GLYPH_SCALE (see palette.h's column-count reasoning), inside
-         * a 92px tile - 6px of margin either side, never clipped. */
+        /* Centred in the tile, turned to follow the board - see
+         * palette_label_origin()'s own comment for how its returned origin
+         * makes gfx_text_turned() land there at any of the four turns. The
+         * longest names are 5 characters, 80px at GFX_GLYPH_SCALE (see
+         * palette.h's column-count reasoning), inside a 92px tile - 6px of
+         * margin either side, never clipped, and that margin is the same
+         * whichever way the box is turned since PALETTE_TILE is square. */
         const char *name = material_name(brushes[i]);
         const int   len  = (int)strlen(name);
-        const int   tx   = x + (w - len * GFX_CHAR_W) / 2;
-        const int   ty   = y + (h - GFX_CHAR_H) / 2;
+        int tx, ty;
+        palette_label_origin(x, y, w, h, len, turn, &tx, &ty);
 
         /* White halo outline then a black fill on top, rather than in one
          * fixed ink colour or derived (via gfx_color_mix()) from the face
@@ -1109,20 +1150,24 @@ static void draw_palette(void)
          * All eight one-pixel offsets, not just the four cardinals: at
          * GFX_GLYPH_SCALE == 2 each font pixel is a 2x2 block, and skipping
          * the diagonals leaves a notch at every block corner instead of a
-         * clean edge. Nine text draws (eight outline + the black fill) per
-         * tile, fourteen tiles - draw_palette() only ever runs on open and
-         * on selection (see the comment above this function), never per
-         * frame, so this is a one-time cost each time, not a per-frame one. */
+         * clean edge. The offsets stay in SCREEN space rather than turning
+         * with the glyph - an outline is symmetric around its text in every
+         * direction, so rotating the eight offsets would just permute them
+         * among themselves and draw the identical outline. Nine text draws
+         * (eight outline + the black fill) per tile, fourteen tiles -
+         * draw_palette() only runs on open, on selection, and on a
+         * quarter-turn change (see the comment above this function), never
+         * per frame, so this is an occasional cost, not a per-frame one. */
         static const int outline_offsets[8][2] = {
             { -1, -1 }, { 0, -1 }, { 1, -1 },
             { -1,  0 },            { 1,  0 },
             { -1,  1 }, { 0,  1 }, { 1,  1 },
         };
         for (int o = 0; o < 8; o++) {
-            gfx_text_scaled(tx + outline_offsets[o][0], ty + outline_offsets[o][1],
-                           name, gfx_rgb(0xFFFFFF), GFX_GLYPH_SCALE);
+            gfx_text_turned(tx + outline_offsets[o][0], ty + outline_offsets[o][1],
+                           name, gfx_rgb(0xFFFFFF), GFX_GLYPH_SCALE, turn);
         }
-        gfx_text_scaled(tx, ty, name, gfx_rgb(0x000000), GFX_GLYPH_SCALE);
+        gfx_text_turned(tx, ty, name, gfx_rgb(0x000000), GFX_GLYPH_SCALE, turn);
     }
 }
 
@@ -1174,12 +1219,28 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
  * it is guarding against. */
 static bool palette_swallow_release;
 
+/* The quarter turn the panel was last DRAWN at - not necessarily the current
+ * one. sand_frame()'s SCREEN_PALETTE handling compares this against a fresh
+ * gravity_quarter_turn() reading every frame and only calls draw_palette()
+ * again when they differ, which is what keeps the panel drawn-on-change
+ * rather than drawn-per-frame while still following the board when it
+ * actually turns - see that dispatch's own comment. */
+static int palette_turn;
+
 /* Opens the palette panel: pauses the sim (see sand_frame()'s dispatch,
  * which returns immediately after calling this rather than falling through
  * to the rest of a RUNNING frame), clears the mode-label countdown so its
  * full-screen redraw does not paint sand straight back over the panel (see
- * label_left_ms's own use in sand_frame()), and draws the panel once - see
- * draw_palette()'s own comment on why once is enough.
+ * label_left_ms's own use in sand_frame()), and draws the panel - see
+ * draw_palette()'s own comment on when it is (and is not) redrawn.
+ *
+ * Seeds palette_turn from the tilt filter's CURRENT reading rather than
+ * always opening upright: read_gravity_input(0, ...) asks it "what does the
+ * filter say right now" without advancing it - dt_ms == 0 is tilt_update()'s
+ * own documented no-time-passed case ("no time passed, so nothing to
+ * integrate"), not a hack - so this costs nothing extra and the panel opens
+ * already turned to match however the board is actually being held, rather
+ * than snapping to the right turn one frame later.
  *
  * Also arms palette_swallow_release. Opening the panel is a BOOT hold, which
  * has nothing to do with whatever a finger already down on the screen is
@@ -1194,7 +1255,13 @@ static void open_palette(void)
     label_left_ms = 0;
     screen = SCREEN_PALETTE;
     palette_swallow_release = true;
-    draw_palette();
+
+    int gx, gy, flow, jostle, rotation;
+    imu_sample_t sample = { 0 };
+    read_gravity_input(0, &sample, &gx, &gy, &flow, &jostle, &rotation);
+    palette_turn = gravity_quarter_turn(gx, gy);
+
+    draw_palette(palette_turn);
 }
 
 /* Closes the palette panel and forces a full repaint of the sand underneath
@@ -1293,7 +1360,7 @@ static void handle_palette_input(const input_t *input)
         erasing = false;   /* choosing a material means you want to place it */
     }
 
-    draw_palette();    /* redraw so the highlight/badge moves or updates */
+    draw_palette(palette_turn);    /* redraw so the highlight/badge moves or updates */
 }
 
 /* input->boot.released rather than .pressed: a HOLD fires .pressed at the
@@ -1624,6 +1691,30 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 
     if (screen == SCREEN_PALETTE) {
         handle_palette_input(input);
+        if (screen != SCREEN_PALETTE) {
+            return;     /* handle_palette_input() just closed it - see below */
+        }
+
+        /* Read gravity every frame while paused, and follow the board when
+         * it turns - but only that: no sim step, no pour, no dirty-row
+         * redraw, exactly as before this existed. One IMU read a frame costs
+         * nothing next to a panel repaint, and gravity_quarter_turn() snaps
+         * to one of only four values, so holding the board steady (or
+         * tilting without crossing a quarter-turn boundary) computes the
+         * same `turn` every frame and draw_palette() below is skipped - the
+         * repaint itself only happens on an actual quarter-turn change,
+         * which is what keeps a held-steady panel free. Skipped entirely on
+         * the frame that just closed the panel, above, so there is nothing
+         * here to redraw into a screen that no longer wants it. */
+        int gx, gy, flow, jostle, rotation;
+        imu_sample_t sample = { 0 };
+        read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
+
+        const int turn = gravity_quarter_turn(gx, gy);
+        if (turn != palette_turn) {
+            palette_turn = turn;
+            draw_palette(palette_turn);
+        }
         return;
     }
 
