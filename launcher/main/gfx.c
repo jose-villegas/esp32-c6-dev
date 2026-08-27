@@ -324,6 +324,82 @@ void gfx_pixel(int x, int y, gfx_color_t color)
     mark_band(y, y + 1);
 }
 
+/* Cohen-Sutherland outcodes: one bit per edge the point lies outside of. */
+enum { OUT_LEFT = 1, OUT_RIGHT = 2, OUT_TOP = 4, OUT_BOTTOM = 8 };
+
+static int outcode(int x, int y)
+{
+    int code = 0;
+    if (x < clip.x0)       { code |= OUT_LEFT; }
+    else if (x >= clip.x1) { code |= OUT_RIGHT; }
+    if (y < clip.y0)       { code |= OUT_TOP; }
+    else if (y >= clip.y1) { code |= OUT_BOTTOM; }
+    return code;
+}
+
+/* Shorten a line to the part inside the clip rect, or reject it outright.
+ * Returns false if none of it is on screen.
+ *
+ * WHY THIS IS NOT JUST THE PER-PIXEL TEST
+ *
+ * The Bresenham loop below already skips pixels outside the clip rect, which
+ * is correct but costs a step per pixel of the line's length whether or not
+ * any of them land. That was fine while the only caller was a plotted curve
+ * whose points were all on screen. It stopped being fine with a floor grid
+ * that runs until it leaves the panel: those lines are mostly off it, and
+ * some are entirely off it.
+ *
+ * Clipping moves where Bresenham's error term starts, so a clipped line can
+ * differ by a pixel from the same line drawn unclipped. That is why the
+ * caller takes a fast path when both ends are already inside: the common case
+ * stays exactly as it was, and nothing that fits on screen is touched by any
+ * of this.
+ */
+static bool clip_line(int *x0, int *y0, int *x1, int *y1)
+{
+    int c0 = outcode(*x0, *y0);
+    int c1 = outcode(*x1, *y1);
+
+    /* Bounded rather than while(1): every pass either accepts, rejects, or
+     * moves one endpoint onto an edge, so four is already more than it can
+     * need. A loop that cannot terminate is not a risk worth taking on a
+     * device with a watchdog and no console. */
+    for (int pass = 0; pass < 8; pass++) {
+        if ((c0 | c1) == 0) {
+            return true;              /* both ends inside */
+        }
+        if ((c0 & c1) != 0) {
+            return false;             /* both beyond the same edge */
+        }
+
+        const int out = c0 ? c0 : c1;
+        int x, y;
+
+        /* The far edges are exclusive, so this clips to the last pixel
+         * inside rather than to the boundary itself. */
+        if (out & OUT_BOTTOM) {
+            y = clip.y1 - 1;
+            x = *x0 + (int)(((int64_t)(*x1 - *x0) * (y - *y0)) / (*y1 - *y0));
+        } else if (out & OUT_TOP) {
+            y = clip.y0;
+            x = *x0 + (int)(((int64_t)(*x1 - *x0) * (y - *y0)) / (*y1 - *y0));
+        } else if (out & OUT_RIGHT) {
+            x = clip.x1 - 1;
+            y = *y0 + (int)(((int64_t)(*y1 - *y0) * (x - *x0)) / (*x1 - *x0));
+        } else {
+            x = clip.x0;
+            y = *y0 + (int)(((int64_t)(*y1 - *y0) * (x - *x0)) / (*x1 - *x0));
+        }
+
+        if (out == c0) {
+            *x0 = x; *y0 = y; c0 = outcode(x, y);
+        } else {
+            *x1 = x; *y1 = y; c1 = outcode(x, y);
+        }
+    }
+    return false;
+}
+
 /* Bresenham, in the form that treats both axes alike so no case analysis is
  * needed for steep versus shallow lines.
  *
@@ -337,8 +413,15 @@ void gfx_pixel(int x, int y, gfx_color_t color)
  * this claims more than it writes; that only ever costs bus time, whereas
  * claiming too little leaves stale pixels on the panel. */
 static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
-                      bool blend)
+                      bool blend, bool open_start)
 {
+    /* Only pay for clipping when some of the line is actually outside. */
+    if (outcode(x0, y0) | outcode(x1, y1)) {
+        if (!clip_line(&x0, &y0, &x1, &y1)) {
+            return;
+        }
+    }
+
     int bx0 = im_min(x0, x1), bx1 = im_max(x0, x1) + 1;
     int by0 = im_min(y0, y1), by1 = im_max(y0, y1) + 1;
 
@@ -353,11 +436,15 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
     const int sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
 
+    bool first = true;
+
     for (;;) {
-        if (x0 >= clip.x0 && x0 < clip.x1 && y0 >= clip.y0 && y0 < clip.y1) {
+        if (!(first && open_start) &&
+            x0 >= clip.x0 && x0 < clip.x1 && y0 >= clip.y0 && y0 < clip.y1) {
             gfx_color_t *const dst = &fb[(size_t)y0 * GFX_WIDTH + x0];
             *dst = blend ? gfx_color_add(*dst, color) : color;
         }
+        first = false;
         if (x0 == x1 && y0 == y1) {
             break;
         }
@@ -376,12 +463,17 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
 
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
 {
-    draw_line(x0, y0, x1, y1, color, false);
+    draw_line(x0, y0, x1, y1, color, false, false);
 }
 
 void gfx_line_add(int x0, int y0, int x1, int y1, gfx_color_t color)
 {
-    draw_line(x0, y0, x1, y1, color, true);
+    draw_line(x0, y0, x1, y1, color, true, false);
+}
+
+void gfx_line_add_open(int x0, int y0, int x1, int y1, gfx_color_t color)
+{
+    draw_line(x0, y0, x1, y1, color, true, true);
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)

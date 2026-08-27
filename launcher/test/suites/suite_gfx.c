@@ -266,6 +266,44 @@ void test_an_additive_line_brightens_where_it_crosses_itself(void)
     TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(70, 100));
 }
 
+void test_an_open_line_leaves_its_first_pixel_alone(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0x004000);
+
+    gfx_clear(bg);
+    gfx_line_add_open(10, 40, 20, 40, fg);
+
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(bg, pixel_at(10, 40),
+        "an open line must not draw its starting pixel");
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(11, 40));
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(fg, pixel_at(20, 40),
+        "an open line still draws its END pixel");
+    TEST_ASSERT_EQUAL_INT(10, count_pixels(fg));
+}
+
+/* The reason gfx_line_add_open() exists. A polyline drawn as closed segments
+ * adds the shared pixel at each joint twice, which under additive blending is
+ * a brighter dot at every joint - a curve made of a few hundred segments
+ * comes out visibly beaded. Chaining open segments puts exactly one
+ * contribution on every pixel. */
+void test_chained_open_segments_do_not_double_their_joints(void)
+{
+    fixture();
+    const gfx_color_t bg   = gfx_rgb(0x000000);
+    const gfx_color_t step = gfx_rgb(0x002000);
+
+    gfx_clear(bg);
+    gfx_line_add(10, 60, 20, 60, step);
+    gfx_line_add_open(20, 60, 30, 60, step);
+
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(step, pixel_at(20, 60),
+        "the joint should carry exactly one stroke's worth of light");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(21, count_pixels(step),
+        "every pixel of the chain should be lit exactly once");
+}
+
 void test_fill_rect_is_clipped_to_the_screen(void)
 {
     fixture();
@@ -846,6 +884,8 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_line_entirely_off_screen_draws_nothing);
     RUN_TEST(test_a_line_honours_the_clip_rect);
     RUN_TEST(test_an_additive_line_brightens_where_it_crosses_itself);
+    RUN_TEST(test_an_open_line_leaves_its_first_pixel_alone);
+    RUN_TEST(test_chained_open_segments_do_not_double_their_joints);
     RUN_TEST(test_fill_rect_entirely_off_screen_draws_nothing);
     RUN_TEST(test_clip_rect_restricts_drawing);
     RUN_TEST(test_pixel_outside_the_screen_is_ignored);
