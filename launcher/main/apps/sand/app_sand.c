@@ -51,6 +51,7 @@
 #include "../../gfx.h"
 #include "../../imu.h"
 #include "../../ui.h"
+#include "palette.h"
 #include "row_runs.h"
 #include "sand.h"
 #include "tilt.h"
@@ -101,7 +102,12 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 #define BLOCK_COLS_MAX ((GRID_W_MAX + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define BLOCK_ROWS_MAX ((GRID_H_MAX + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
-typedef enum { SCREEN_MENU, SCREEN_RUNNING } screen_t;
+/* SCREEN_PALETTE is entered from SCREEN_RUNNING (BOOT held) and left back to
+ * it (any BOOT event) - see handle_brush_input()'s boot.held check and
+ * handle_palette_input() below. It never appears on the MENU or failed
+ * paths, which is why sand_frame()'s dispatch checks it only after those -
+ * see the comment on that dispatch. */
+typedef enum { SCREEN_MENU, SCREEN_RUNNING, SCREEN_PALETTE } screen_t;
 static screen_t screen;
 
 /* Centered, absolutely-placed pair of buttons - see draw_menu(). UI_ROW_HEIGHT
@@ -178,6 +184,14 @@ static const cell_t brushes[] = {
     MATX(MATX_ICE),      MATX(MATX_PLANT),
 };
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
+
+/* The palette panel's grid is derived from BRUSH_COUNT, never hand-synced to
+ * it - see palette.h. This is what makes adding a 15th brush a BUILD failure
+ * if it ever pushed the panel past the bottom of the screen, rather than a
+ * silently clipped row discovered by looking at the device. */
+_Static_assert(PALETTE_FITS(BRUSH_COUNT),
+               "the palette panel for BRUSH_COUNT brushes is taller than the "
+               "448px screen - see PALETTE_COLS/PALETTE_TILE in palette.h");
 
 /* How long the mode label stays up after the PWR button is pressed. Long
  * enough to read without hurrying, short enough not to sit over the sand. */
@@ -345,6 +359,22 @@ static void sand_enter(void)
     ui_invalidate();
 }
 
+/* Seeds every row's run-tracking as one full-width span, as if the whole row
+ * were occupied - see start_sim()'s call site for why "previous" has to
+ * start out lying like that. Shared with close_palette(), which needs
+ * exactly the same lie for exactly the same reason: whatever the panel just
+ * left in the framebuffer has to be forced out in full on the first frame
+ * after it closes, not trusted to the sand's own (much narrower) real
+ * extent. */
+static void seed_row_runs_full_width(void)
+{
+    for (int i = 0; i < grid_h; i++) {
+        row_run_x0[i * ROW_MAX_RUNS] = 0;
+        row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)grid_w;
+        row_run_n[i] = 1;
+    }
+}
+
 /* Builds the active grid at the chosen quality, then does everything
  * sand_enter() used to do unconditionally: allocate (only on the first-ever
  * call - see the header comment on why every allocation is sized for
@@ -406,11 +436,7 @@ static void start_sim(void)
      * the same guarantee the old unconditional-full-width send gave for
      * free. Only once a row has genuinely been redrawn does its real,
      * narrower extent become trusted enough to send instead. */
-    for (int i = 0; i < grid_h; i++) {
-        row_run_x0[i * ROW_MAX_RUNS] = 0;
-        row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)grid_w;
-        row_run_n[i] = 1;
-    }
+    seed_row_runs_full_width();
 
     sand_init(&sim, grid, grid_w, grid_h, (uint32_t)esp_timer_get_time());
     /* Falling material looks like a rigid block without this: everything in
@@ -796,6 +822,25 @@ static void draw_dirty_rows(bool shine_moved)
 #endif
 }
 
+/* The colour a brush represents - the material's own colour, read straight
+ * out of the palette so neither this nor draw_mode_label() below can
+ * disagree with what actually comes out of the finger. Shared by both,
+ * rather than each computing its own, for that same reason.
+ *
+ * An ordinary brush cell carries no shade of its own - every entry in
+ * brushes[] is CELL_MAKE(mat, 0) - so this substitutes a representative
+ * shade (13 of 16) rather than showing variant zero specifically. An
+ * extended cell cannot take that shortcut: for a MAT_EXTENDED cell the low
+ * nibble names WHICH extended material this is, not a shade, so bumping it
+ * the way an ordinary variant is bumped would silently turn one extended
+ * material into a different one. material_palette() is indexed by the raw
+ * cell byte, so an extended cell is simply looked up as itself instead. */
+static gfx_color_t brush_color(cell_t c)
+{
+    return material_palette()[
+        cell_is_extended(c) ? c : CELL_MAKE(CELL_MATERIAL(c), 13)];
+}
+
 /* Draws the mode label against whichever edge is currently UP.
  *
  * Up is the opposite of gravity, so the label follows the device rather than
@@ -842,17 +887,81 @@ static void draw_mode_label(int gx, int gy)
         }
     }
 
-    /* Coloured as the material itself, read straight out of the palette, so
-     * the label needs no colour table of its own and cannot disagree with what
-     * is about to come out of the finger. */
+    /* Coloured as the material itself, so the label needs no colour table of
+     * its own - see brush_color()'s own comment for why an extended cell
+     * cannot just have its variant bumped like an ordinary one. */
     const gfx_color_t ink =
-        erasing ? gfx_rgb(0xFF8A5C)
-                : material_palette()[
-                      cell_is_extended(brushes[brush])
-                          ? brushes[brush]
-                          : CELL_MAKE(CELL_MATERIAL(brushes[brush]), 13)];
+        erasing ? gfx_rgb(0xFF8A5C) : brush_color(brushes[brush]);
 
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
+}
+
+/* Gap left between adjacent tiles, and around an unselected tile's swatch -
+ * the panel's own background (cleared first, below) shows through it as
+ * grout, which is what visually separates one tile from the next. */
+#define PALETTE_GROUT   2
+
+/* Thickness of the selected tile's highlight ring - drawn as the full tile
+ * filled in one colour with the swatch inset inside it, rather than as a
+ * separate outline shape, so it can never disagree with the tile's own
+ * bounds (see draw_palette() below). Thicker than PALETTE_GROUT so the
+ * selection reads as a border, not as slightly wider grout. */
+#define PALETTE_BORDER  4
+
+/* The material picker overlay - drawn ONCE when the panel opens (see
+ * open_palette()) and left sitting in the framebuffer for as long as it is
+ * up, never redrawn per frame. That is only safe because nothing else draws
+ * while SCREEN_PALETTE is active - sand_frame() skips the sim step and the
+ * sand's own redraw entirely for that screen (see its dispatch) - so
+ * anything added later that paints during the pause (a clock, an animation)
+ * would need to redraw this too, or it will be silently painted over and
+ * never restored. */
+static void draw_palette(void)
+{
+    int px, py, pw, ph;
+    palette_panel_rect(BRUSH_COUNT, &px, &py, &pw, &ph);
+
+    /* Clear the panel's own background first, so no sand shows through
+     * between tiles - this is also what erases a highlight ring that has
+     * just moved off a tile, since every tile gets redrawn below anyway. */
+    gfx_fill_rect(px, py, pw, ph, gfx_rgb(COL_BACKGROUND));
+
+    for (int i = 0; i < BRUSH_COUNT; i++) {
+        int x, y, w, h;
+        palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
+
+        const gfx_color_t swatch = brush_color(brushes[i]);
+
+        /* A future round adds a per-brush "spawn" flag with a corner badge
+         * on flagged tiles - not built here, out of scope for this panel.
+         * x/y/w/h above are already this tile's own rect, so that badge
+         * would just be one more gfx_fill_rect at a tile corner; nothing
+         * about this loop's structure needs to change to add it. */
+        if (i == brush) {
+            gfx_fill_rect(x, y, w, h, gfx_rgb(0xFFFFFF));
+            gfx_fill_rect(x + PALETTE_BORDER, y + PALETTE_BORDER,
+                         w - 2 * PALETTE_BORDER, h - 2 * PALETTE_BORDER,
+                         swatch);
+        } else {
+            gfx_fill_rect(x + PALETTE_GROUT, y + PALETTE_GROUT,
+                         w - 2 * PALETTE_GROUT, h - 2 * PALETTE_GROUT,
+                         swatch);
+        }
+
+        /* Centred in the tile. The longest names are 5 characters, 80px at
+         * GFX_GLYPH_SCALE (see palette.h's column-count reasoning), inside
+         * a 92px tile - 6px of margin either side, never clipped. */
+        const char *name = material_name(brushes[i]);
+        const int   len  = (int)strlen(name);
+        const int   tx   = x + (w - len * GFX_CHAR_W) / 2;
+        const int   ty   = y + (h - GFX_CHAR_H) / 2;
+
+        /* Drawn twice, black then white one pixel up-left, rather than in
+         * one fixed ink colour - a swatch runs from snow's near-white to
+         * stone's near-black, and no single colour reads on all of them. */
+        gfx_text_scaled(tx + 1, ty + 1, name, gfx_rgb(0x000000), GFX_GLYPH_SCALE);
+        gfx_text_scaled(tx, ty, name, gfx_rgb(0xFFFFFF), GFX_GLYPH_SCALE);
+    }
 }
 
 /*---------------------------------------------------------------------------
@@ -898,9 +1007,82 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
     *jostle = shake > SHAKE_DEADZONE ? shake : 0;
 }
 
+/* Opens the palette panel: pauses the sim (see sand_frame()'s dispatch,
+ * which returns immediately after calling this rather than falling through
+ * to the rest of a RUNNING frame), clears the mode-label countdown so its
+ * full-screen redraw does not paint sand straight back over the panel (see
+ * label_left_ms's own use in sand_frame()), and draws the panel once - see
+ * draw_palette()'s own comment on why once is enough. */
+static void open_palette(void)
+{
+    label_left_ms = 0;
+    screen = SCREEN_PALETTE;
+    draw_palette();
+}
+
+/* Closes the palette panel and forces a full repaint of the sand underneath
+ * it - the same seeding start_sim() uses to force a fresh grid's first
+ * frame out in full, reused here via seed_row_runs_full_width() rather than
+ * duplicated, so draw_dirty_rows() treats every row as needing a
+ * full-width send on the very next frame and paints over every pixel the
+ * panel touched.
+ *
+ * The two accumulators are zeroed rather than left to keep counting through
+ * the pause: left alone, the wall-clock time the panel was open would cash
+ * in as a burst of catch-up steps and pour the instant it closes, which
+ * would read as a stutter or a sudden blob under the finger rather than as
+ * nothing having happened while paused. */
+static void close_palette(void)
+{
+    sim_accumulator_q8 = 0;
+    pour_accumulator_ms = 0;
+    seed_row_runs_full_width();
+    memset(dirty_rows, 1, (size_t)grid_h);
+    gfx_mark_all_dirty();
+    screen = SCREEN_RUNNING;
+}
+
+/* Only reachable while SCREEN_PALETTE - see sand_frame()'s dispatch, which
+ * calls this instead of the normal RUNNING handlers and returns.
+ *
+ * Any BOOT edge closes the panel, deliberately without asking which one:
+ * being forgiving here is what guarantees there is no way to get stuck in
+ * the panel. It cannot close on the SAME edge that opened it: the opening
+ * edge is boot.held, and edges are read-and-cleared once per frame (see
+ * buttons_read()) before this function ever runs for the first time - by
+ * the next frame that edge is gone, and the release that follows the hold
+ * fires no `released` edge at all (button_fsm.h's contract) - see the
+ * comment on that composition where sand_frame() calls open_palette(). */
+static void handle_palette_input(const input_t *input)
+{
+    if (input->boot.pressed || input->boot.released || input->boot.held) {
+        close_palette();
+        return;
+    }
+
+    /* A tap that hits no tile does nothing - erase and selection state are
+     * both untouched. The panel stays open either way; only BOOT closes it,
+     * so picking a material is not a one-shot action. */
+    if (input->released) {
+        const int hit = palette_hit(input->x, input->y, BRUSH_COUNT);
+        if (hit >= 0) {
+            brush = hit;
+            erasing = false;   /* choosing a material means you want to place it */
+            draw_palette();    /* redraw so the highlight moves to the new tile */
+        }
+    }
+}
+
+/* input->boot.released rather than .pressed: a HOLD fires .pressed at the
+ * press edge and .held at 600ms while still down (see button_fsm.h's
+ * contract), so cycling on .pressed would make every panel-opening hold
+ * also cycle the brush underneath it. The FSM guarantees a press that
+ * becomes a hold delivers no .released edge at all, which makes .pressed
+ * and .held mutually exclusive for one physical press with no bookkeeping
+ * here - moving to .released is what makes that guarantee do the work. */
 static void handle_brush_input(const input_t *input)
 {
-    if (input->boot.pressed) {
+    if (input->boot.released) {
         brush = (brush + 1) % BRUSH_COUNT;
         erasing = false;      /* choosing a material means you want to place it */
         label_left_ms = LABEL_MS;
@@ -909,7 +1091,7 @@ static void handle_brush_input(const input_t *input)
         erasing = !erasing;
         label_left_ms = LABEL_MS;
     }
-    if (input->boot.pressed || input->power.pressed) {
+    if (input->boot.released || input->power.pressed) {
         ESP_LOGI(TAG, "brush: %s",
                  erasing ? "erase" : material_name(brushes[brush]));
     }
@@ -1171,8 +1353,16 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     /* SCREEN_MENU is checked first, but a FAILED start_sim() sets screen to
      * SCREEN_RUNNING before returning specifically so it falls through to
      * the `failed` check below rather than getting caught here - see that
-     * comment in start_sim(). Do not reorder these two checks, or add a
-     * third state, without keeping that path intact. */
+     * comment in start_sim(). Do not reorder these first two checks, or
+     * change what SCREEN_PALETTE does relative to them, without keeping
+     * that path intact.
+     *
+     * The palette check sits AFTER `failed`, deliberately: a failed start
+     * must still reach the "no memory for the grid" screen even though
+     * screen is SCREEN_RUNNING at that point, and SCREEN_PALETTE is never
+     * entered on that path (see open_palette()'s only caller, below) - but
+     * putting the check any earlier would invite exactly that mistake the
+     * next time a state is added here. */
     if (screen == SCREEN_MENU) {
         draw_menu(input);
         return;
@@ -1181,6 +1371,30 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     if (failed) {
         gfx_clear(gfx_rgb(0x1A0C0C));
         gfx_text(20, GFX_HEIGHT / 2, "no memory for the grid", gfx_rgb(0xFF5C5C));
+        return;
+    }
+
+    if (screen == SCREEN_PALETTE) {
+        handle_palette_input(input);
+        return;
+    }
+
+    /* input->boot.held opens the panel from here, and closes over the rest
+     * of this RUNNING frame doing so: open_palette() flips `screen` to
+     * SCREEN_PALETTE immediately, so returning right after it means
+     * read_gravity_input()/run_sim_steps()/handle_pour_input()/
+     * handle_brush_input()/draw_dirty_rows() below are never reached on the
+     * very frame the panel opens, exactly as they are skipped on every
+     * later frame by the SCREEN_PALETTE check above - the sim is paused
+     * from the same frame the panel becomes visible, not one frame later.
+     *
+     * The release that ends this hold fires no `released` edge at all -
+     * see button_fsm.h's contract - so next frame's handle_palette_input()
+     * cannot mistake the finger lifting for a tap that should close the
+     * panel it just opened. No guard needed here for that; it falls out of
+     * the FSM's own guarantee. */
+    if (input->boot.held) {
+        open_palette();
         return;
     }
 
