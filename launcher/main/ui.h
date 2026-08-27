@@ -71,6 +71,14 @@ void ui_begin(const input_t *input);
  * what each style is and why only buttons are affected. */
 void ui_set_button_style(ui_button_style_t style);
 
+/* Choose how MU_COMMAND_TEXT is drawn for the rest of this frame.
+ *
+ * Unlike ui_set_button_style(), this is not reset by ui_begin() and is not
+ * part of the frame's description in the sense that matters for the repaint
+ * hash - see the comment above ui_set_text_style()'s definition in ui.c for
+ * why a text style needs its own invalidation and a button style does not. */
+void ui_set_text_style(ui_text_style_t style);
+
 /* Close the frame and paint it, but only if it would look any different from
  * what is already on screen. Returns whether it drew.
  *

@@ -46,6 +46,10 @@ static bool       invalidated = true;
 static ui_button_style_t  button_style;
 static void             (*base_draw_frame)(mu_Context *, mu_Rect, int);
 
+/* The style MU_COMMAND_TEXT is drawn in - see ui_set_text_style() below for
+ * why, unlike button_style, this is never reset per frame. */
+static ui_text_style_t text_style;
+
 /* microui asks us for text metrics rather than measuring anything itself. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
@@ -106,6 +110,39 @@ void ui_set_button_style(ui_button_style_t style)
     button_style = style;
 }
 
+/* WHY THIS ONE HAS TO CALL ui_invalidate() AND ui_set_button_style() DOES NOT
+ *
+ * ui_set_button_style() gets away with just storing a value because a bezel
+ * is drawn as real mu_draw_rect() commands (see styled_draw_frame() above):
+ * changing the style changes the bytes ui_end() hashes, so a style change
+ * IS a content change as far as the repaint skip is concerned, and it just
+ * works.
+ *
+ * Text has no such hook to piggyback on. mu_Context offers a draw_frame
+ * function pointer to intercept, but no draw_text equivalent, so there is
+ * nowhere to emit extra commands from - a text style can only be applied
+ * here, at render time, inside draw_command(), reading whatever text_style
+ * currently holds. That means the command list is byte-identical whether
+ * text_style is UI_TEXT_PLAIN or UI_TEXT_OUTLINED; hash_canvas() cannot see
+ * the difference, so mark_changed_canvases() would find no change and skip
+ * the repaint, leaving the OLD style's pixels on screen under the new
+ * style's (unpainted) intent.
+ *
+ * So the invalidation this style needs has to be done by hand, right here,
+ * exactly when the value actually changes. This line looks redundant next
+ * to ui_set_button_style() above it and will look like it too, to whoever
+ * next reads these two functions side by side - it is not: the two styles
+ * are not symmetric, because only one of them produces bytes the hash can
+ * see. Deleting this call "for consistency" reintroduces the very bug it
+ * exists to prevent. */
+void ui_set_text_style(ui_text_style_t style)
+{
+    if (style != text_style) {
+        text_style = style;
+        ui_invalidate();
+    }
+}
+
 mu_Context *ui_context(void)
 {
     return &ctx;
@@ -125,6 +162,7 @@ void ui_init(void)
     base_draw_frame = ctx.draw_frame;
     ctx.draw_frame  = styled_draw_frame;
     button_style    = UI_BUTTON_FLAT;
+    text_style      = UI_TEXT_PLAIN;
 
     /* Palette. Deliberately dark: this is an OLED, so black pixels are off
      * pixels - it costs less power and looks better than a grey chrome. */
@@ -231,10 +269,18 @@ static void draw_command(const mu_Command *cmd)
     }
 
     case MU_COMMAND_TEXT: {
-        const mu_Color c = cmd->text.color;
-        gfx_text(cmd->text.pos.x, cmd->text.pos.y, cmd->text.str,
-                 gfx_rgb(((uint32_t)c.r << 16) |
-                         ((uint32_t)c.g << 8)  | c.b));
+        const mu_Color ink  = cmd->text.color;
+        const mu_Color halo = ui_text_halo(ink);
+
+        ui_text_pass_t passes[UI_TEXT_MAX_PASSES];
+        const int n = ui_text_passes(text_style, passes, UI_TEXT_MAX_PASSES);
+        for (int i = 0; i < n; i++) {
+            const mu_Color c = passes[i].ink ? ink : halo;
+            gfx_text(cmd->text.pos.x + passes[i].dx,
+                     cmd->text.pos.y + passes[i].dy, cmd->text.str,
+                     gfx_rgb(((uint32_t)c.r << 16) |
+                             ((uint32_t)c.g << 8)  | c.b));
+        }
         break;
     }
 

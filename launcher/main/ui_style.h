@@ -152,3 +152,114 @@ static inline int ui_bezel_spans(mu_Rect r, mu_Color face, bool sunken,
     out[4] = (ui_span_t){ (mu_Rect){ r.x + r.w - t, r.y, t, r.h }, bottom_right };
     return UI_BEZEL_MAX_SPANS;
 }
+
+/*---------------------------------------------------------------------------
+ * Text
+ *
+ * A second style, sibling to the bezel above, for exactly the same reason:
+ * WHAT to draw (a string, at this position, in this colour) is microui's
+ * question, and HOW it reads against whatever it sits on is a looks question
+ * that should not require touching a call site. See suite_ui_style.c for the
+ * geometry checks.
+ *-------------------------------------------------------------------------*/
+
+typedef enum {
+    UI_TEXT_PLAIN = 0,   /* one pass, exactly as today */
+    UI_TEXT_OUTLINED,    /* a halo at all eight neighbouring offsets */
+    UI_TEXT_SHADOWED,    /* a single offset halo, down-right */
+} ui_text_style_t;
+
+/* One drawing pass of a styled string, in paint order. */
+typedef struct { int dx, dy; bool ink; } ui_text_pass_t;
+
+/* PLAIN is 1, SHADOWED is 2, OUTLINED is 9 (8 halo offsets + the ink) - the
+ * largest of the three sizes the buffer for all of them. */
+#define UI_TEXT_MAX_PASSES 9
+
+/* The passes making up one styled string, back to front. Returns how many
+ * were written, or 0 if `max` cannot hold them all - the same all-or-nothing
+ * rule ui_bezel_spans() follows, for the same reason: a half-drawn outline
+ * looks like a bug rather than like a plainer style.
+ *
+ * THE INK PASS MUST ALWAYS BE LAST. Every other pass paints the halo, which
+ * has to sit *behind* the glyph it is haloing, so the ink pass has to be
+ * painted over it rather than under it - draw the halo first and the glyph
+ * on top, not the other way round, or the glyph disappears under its own
+ * halo. */
+static inline int ui_text_passes(ui_text_style_t style, ui_text_pass_t *out,
+                                 int max)
+{
+    switch (style) {
+    case UI_TEXT_PLAIN:
+        if (max < 1) {
+            return 0;
+        }
+        out[0] = (ui_text_pass_t){ 0, 0, true };
+        return 1;
+
+    case UI_TEXT_SHADOWED:
+        if (max < 2) {
+            return 0;
+        }
+        out[0] = (ui_text_pass_t){ 1, 1, false };
+        out[1] = (ui_text_pass_t){ 0, 0, true };
+        return 2;
+
+    case UI_TEXT_OUTLINED: {
+        if (max < UI_TEXT_MAX_PASSES) {
+            return 0;
+        }
+        /* One pixel each way, in screen space. This mirrors app_sand.c's
+         * palette label outline (see draw_palette() there) exactly,
+         * including the order - that code is the precedent this style
+         * generalises, and it is worth staying a recognisably identical
+         * list rather than an equivalent but different-looking one. All
+         * eight, not just the four cardinals: at GFX_GLYPH_SCALE 2 each
+         * font pixel is a 2x2 block, so skipping the diagonals leaves a
+         * notch at every block corner rather than a clean edge. */
+        static const int offsets[8][2] = {
+            { -1, -1 }, { 0, -1 }, { 1, -1 },
+            { -1,  0 },            { 1,  0 },
+            { -1,  1 }, { 0,  1 }, { 1,  1 },
+        };
+        for (int i = 0; i < 8; i++) {
+            out[i] = (ui_text_pass_t){ offsets[i][0], offsets[i][1], false };
+        }
+        out[8] = (ui_text_pass_t){ 0, 0, true };
+        return UI_TEXT_MAX_PASSES;
+    }
+
+    default:
+        return 0;
+    }
+}
+
+/* The halo colour for a given ink.
+ *
+ * Derived from the ink's own luminance, the same way the bezel's edges are
+ * derived from the face they belong to rather than fixed - see the comment
+ * above on UI_BEZEL_HIGHLIGHT/UI_BEZEL_SHADOW. A FIXED halo colour fails the
+ * same way a fixed button highlight would: it vanishes against whichever ink
+ * happens to match it. This is also exactly the bug app_sand.c's own comment
+ * describes for the palette's spawn badge, which used to derive its ring
+ * from the swatch face and went unreadable on Snow - the badge was changed
+ * to a fixed maximum-contrast pair instead because IT already had a fixed
+ * pair (black glyph, white halo) available and needed to stay legible
+ * against every material swatch, a much wider range than one ink colour ever
+ * spans. A general-purpose halo has no such fixed pair to fall back on, so
+ * it takes the other fix: go all the way to the opposite extreme of the ink
+ * itself, via ui_shade(), so it can never land near it.
+ *
+ * Full reach to the extreme (t = +/-255) rather than a partial mix, same as
+ * the bezel could in principle use a partial shade too: a near-black ink
+ * mixed only partway toward white can still end up close enough to itself to
+ * wash out, and the whole point of a halo is separation. */
+static inline mu_Color ui_text_halo(mu_Color ink)
+{
+    /* Same weights as a standard perceptual luma (~0.30/0.59/0.11 scaled to
+     * whole numbers as 2:5:1), just enough to tell a dark ink from a light
+     * one - it does not need to be exact, only decisive. Range is
+     * 0..255*8 = 0..2040; 1020 is the midpoint. */
+    const int luma = ink.r * 2 + ink.g * 5 + ink.b;
+    return ui_shade(ink, (luma >= 1020) ? -255 : 255);
+}

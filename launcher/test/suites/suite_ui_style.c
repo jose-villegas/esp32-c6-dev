@@ -180,6 +180,187 @@ static void test_the_shadowed_edges_are_drawn_over_the_lit_ones(void)
 }
 
 /*---------------------------------------------------------------------------
+ * Text styles
+ *
+ * ui_text_passes() is ui_bezel_spans()'s sibling for text - see ui_style.h's
+ * "Text" section for the reasoning. Same approach here: nobody can eyeball
+ * nine overlapping text draws either, so the passes are checked directly
+ * rather than by rendering anything.
+ *-------------------------------------------------------------------------*/
+
+static const int TEXT_SENTINEL = -777;
+
+/* Fill a buffer with a value ui_text_pass_t's fields never take on their own
+ * (dx/dy stay in -1..1, ink is a bool), so "the buffer is untouched" can be
+ * checked by seeing the sentinel survive. */
+static void poison(ui_text_pass_t *out, int n)
+{
+    for (int i = 0; i < n; i++) {
+        out[i] = (ui_text_pass_t){ TEXT_SENTINEL, TEXT_SENTINEL, false };
+    }
+}
+
+static bool is_poisoned(const ui_text_pass_t *p)
+{
+    return p->dx == TEXT_SENTINEL && p->dy == TEXT_SENTINEL;
+}
+
+static void test_plain_is_one_ink_pass_at_the_origin(void)
+{
+    ui_text_pass_t p[UI_TEXT_MAX_PASSES];
+    poison(p, UI_TEXT_MAX_PASSES);
+
+    const int n = ui_text_passes(UI_TEXT_PLAIN, p, UI_TEXT_MAX_PASSES);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, n,
+        "plain text is a single pass - no halo at all");
+    TEST_ASSERT_EQUAL_INT(0, p[0].dx);
+    TEST_ASSERT_EQUAL_INT(0, p[0].dy);
+    TEST_ASSERT_TRUE_MESSAGE(p[0].ink,
+        "the one pass plain text has must be the glyph itself, not a halo");
+}
+
+static void test_outlined_is_eight_halo_offsets_and_the_ink(void)
+{
+    ui_text_pass_t p[UI_TEXT_MAX_PASSES];
+    poison(p, UI_TEXT_MAX_PASSES);
+
+    const int n = ui_text_passes(UI_TEXT_OUTLINED, p, UI_TEXT_MAX_PASSES);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(UI_TEXT_MAX_PASSES, n,
+        "an outline is eight halo offsets plus the glyph itself");
+    TEST_ASSERT_EQUAL_INT(0, p[8].dx);
+    TEST_ASSERT_EQUAL_INT(0, p[8].dy);
+    TEST_ASSERT_TRUE_MESSAGE(p[8].ink, "the last pass must be the ink");
+
+    for (int i = 0; i < 8; i++) {
+        TEST_ASSERT_FALSE_MESSAGE(p[i].ink,
+            "every pass before the last one must be halo, not ink");
+        TEST_ASSERT_FALSE_MESSAGE(p[i].dx == 0 && p[i].dy == 0,
+            "a halo offset must not land on the glyph's own position - that "
+            "would just be a second ink pass, not an outline");
+        TEST_ASSERT_TRUE_MESSAGE(p[i].dx >= -1 && p[i].dx <= 1 &&
+                                 p[i].dy >= -1 && p[i].dy <= 1,
+            "an outline offset must be within one pixel on each axis - "
+            "anything further is a shadow, not an outline");
+
+        for (int j = i + 1; j < 8; j++) {
+            TEST_ASSERT_FALSE_MESSAGE(p[i].dx == p[j].dx && p[i].dy == p[j].dy,
+                "the eight halo offsets must all be distinct, or the outline "
+                "would have a gap where two passes landed on the same pixel "
+                "and an eighth offset went unused");
+        }
+    }
+}
+
+static void test_shadowed_is_one_halo_offset_and_the_ink(void)
+{
+    ui_text_pass_t p[UI_TEXT_MAX_PASSES];
+    poison(p, UI_TEXT_MAX_PASSES);
+
+    const int n = ui_text_passes(UI_TEXT_SHADOWED, p, UI_TEXT_MAX_PASSES);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n,
+        "a drop shadow is one halo offset plus the glyph itself");
+    TEST_ASSERT_EQUAL_INT(0, p[1].dx);
+    TEST_ASSERT_EQUAL_INT(0, p[1].dy);
+    TEST_ASSERT_TRUE_MESSAGE(p[1].ink, "the last pass must be the ink");
+    TEST_ASSERT_FALSE_MESSAGE(p[0].ink, "the first pass must be halo");
+    TEST_ASSERT_TRUE_MESSAGE(p[0].dx > 0 && p[0].dy > 0,
+        "the shadow falls down and to the right, not any other direction");
+}
+
+static void test_the_ink_pass_is_always_last(void)
+{
+    const ui_text_style_t styles[] = {
+        UI_TEXT_PLAIN, UI_TEXT_OUTLINED, UI_TEXT_SHADOWED,
+    };
+
+    for (size_t s = 0; s < sizeof(styles) / sizeof(styles[0]); s++) {
+        ui_text_pass_t p[UI_TEXT_MAX_PASSES];
+        poison(p, UI_TEXT_MAX_PASSES);
+
+        const int n = ui_text_passes(styles[s], p, UI_TEXT_MAX_PASSES);
+
+        TEST_ASSERT_TRUE_MESSAGE(n > 0, "every style must produce passes");
+        TEST_ASSERT_TRUE_MESSAGE(p[n - 1].ink,
+            "the ink pass must be last for every style, checked in a loop so "
+            "a style added later cannot quietly break this - the glyph has "
+            "to land on top of its own halo or it disappears under it");
+        for (int i = 0; i < n - 1; i++) {
+            TEST_ASSERT_FALSE_MESSAGE(p[i].ink,
+                "no pass before the last one may be ink either, or the halo "
+                "drawn after it would paint over the glyph");
+        }
+    }
+}
+
+static void test_a_text_buffer_too_small_produces_nothing(void)
+{
+    const struct { ui_text_style_t style; int max; } cases[] = {
+        { UI_TEXT_PLAIN,    0 },
+        { UI_TEXT_OUTLINED, UI_TEXT_MAX_PASSES - 1 },
+        { UI_TEXT_SHADOWED, 1 },
+    };
+
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); i++) {
+        ui_text_pass_t p[UI_TEXT_MAX_PASSES];
+        poison(p, UI_TEXT_MAX_PASSES);
+
+        const int n = ui_text_passes(cases[i].style, p, cases[i].max);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, n,
+            "a max too small to hold every pass of a style must refuse the "
+            "whole thing, the same all-or-nothing rule ui_bezel_spans() "
+            "follows - a half-drawn outline looks like a bug");
+        for (int j = 0; j < UI_TEXT_MAX_PASSES; j++) {
+            TEST_ASSERT_TRUE_MESSAGE(is_poisoned(&p[j]),
+                "a refused call must not write anything into the buffer, "
+                "not even the passes that would have fit");
+        }
+    }
+}
+
+/*---------------------------------------------------------------------------
+ * The text halo
+ *-------------------------------------------------------------------------*/
+
+static void test_halo_of_a_dark_ink_is_light_and_well_separated(void)
+{
+    const mu_Color near_black = { 0x10, 0x10, 0x10, 255 };
+    const mu_Color halo = ui_text_halo(near_black);
+
+    TEST_ASSERT_TRUE_MESSAGE(luma(halo) > luma(near_black),
+        "a dark ink needs a lighter halo or it vanishes into its own glow");
+    TEST_ASSERT_TRUE_MESSAGE(luma(halo) - luma(near_black) > luma(FACE),
+        "the gap between ink and halo must be a real, visible separation - "
+        "not merely a technically-lighter shade a few steps off black");
+}
+
+static void test_halo_of_a_light_ink_is_dark_and_well_separated(void)
+{
+    const mu_Color near_white = { 0xF0, 0xF0, 0xF0, 255 };
+    const mu_Color halo = ui_text_halo(near_white);
+
+    TEST_ASSERT_TRUE_MESSAGE(luma(halo) < luma(near_white),
+        "a light ink needs a darker halo or it vanishes into its own glow");
+    TEST_ASSERT_TRUE_MESSAGE(luma(near_white) - luma(halo) > luma(FACE),
+        "the gap between ink and halo must be a real, visible separation");
+}
+
+static void test_halo_carries_alpha_through_unchanged(void)
+{
+    const mu_Color translucent_dark  = { 0x10, 0x10, 0x10, 128 };
+    const mu_Color translucent_light = { 0xF0, 0xF0, 0xF0, 64 };
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(128, ui_text_halo(translucent_dark).a,
+        "ui_text_halo() is built on ui_shade(), which never touches alpha - "
+        "a halo must stay exactly as opaque as the ink it surrounds");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(64, ui_text_halo(translucent_light).a,
+        "same for a light, translucent ink");
+}
+
+/*---------------------------------------------------------------------------
  * Degenerate sizes
  *-------------------------------------------------------------------------*/
 
@@ -248,6 +429,14 @@ void suite_ui_style(void)
     RUN_TEST(test_a_thin_control_keeps_a_pixel_of_face_between_its_edges);
     RUN_TEST(test_a_zero_sized_control_produces_nothing);
     RUN_TEST(test_a_buffer_too_small_produces_nothing);
+    RUN_TEST(test_plain_is_one_ink_pass_at_the_origin);
+    RUN_TEST(test_outlined_is_eight_halo_offsets_and_the_ink);
+    RUN_TEST(test_shadowed_is_one_halo_offset_and_the_ink);
+    RUN_TEST(test_the_ink_pass_is_always_last);
+    RUN_TEST(test_a_text_buffer_too_small_produces_nothing);
+    RUN_TEST(test_halo_of_a_dark_ink_is_light_and_well_separated);
+    RUN_TEST(test_halo_of_a_light_ink_is_dark_and_well_separated);
+    RUN_TEST(test_halo_carries_alpha_through_unchanged);
 }
 
 SUITE_REGISTER(suite_ui_style);
