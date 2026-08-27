@@ -11,7 +11,7 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "rng.h"
+#include "util/rng.h"
 
 static void test_the_same_seed_replays_exactly(void)
 {

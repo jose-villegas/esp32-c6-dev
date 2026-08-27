@@ -14,7 +14,7 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "gfx.h"
+#include "gfx/gfx.h"
 
 #define BG_RGB        0x0A0C14
 #define HEADING_RGB   0xE6EAF2

@@ -20,7 +20,7 @@
 #include <stdint.h>
 
 #include "material.h"
-#include "rng.h"
+#include "util/rng.h"
 
 /* A cell is one byte - material in the high nibble, variant in the low one.
  * See material.h, which owns the encoding and the properties.

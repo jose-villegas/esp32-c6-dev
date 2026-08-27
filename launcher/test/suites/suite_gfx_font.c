@@ -24,7 +24,7 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "gfx_font.h"
+#include "gfx/gfx_font.h"
 
 /* Mirrors gfx.h's GFX_GLYPH_SCALE (8x8 glyphs drawn at 2x - see gfx.h's own
  * comment on GFX_CHAR_W/GFX_CHAR_H). Kept in one place, right where it is

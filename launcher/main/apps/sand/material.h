@@ -51,7 +51,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "gfx_color.h"
+#include "gfx/gfx_color.h"
 
 /*---------------------------------------------------------------------------
  * Cells

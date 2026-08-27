@@ -1,6 +1,6 @@
 #include "tilt.h"
 
-#include "intmath.h"
+#include "util/intmath.h"
 
 #define Q 256   /* fixed-point scale for the stored vector */
 

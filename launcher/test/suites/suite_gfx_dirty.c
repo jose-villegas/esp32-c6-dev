@@ -15,7 +15,7 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "gfx_dirty.h"
+#include "gfx/gfx_dirty.h"
 
 /* gfx_dirty.h's state is static, so this file gets its own private copy -
  * exactly like a real device build's gfx.c does, and exactly what makes it

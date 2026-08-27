@@ -1,6 +1,6 @@
-#include "gfx.h"
-#include "gfx_dirty.h"
-#include "intmath.h"
+#include "gfx/gfx.h"
+#include "gfx/gfx_dirty.h"
+#include "util/intmath.h"
 
 #include <string.h>
 

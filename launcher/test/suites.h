@@ -22,16 +22,12 @@
  *===========================================================================*/
 #pragma once
 
-/* The cap on registered suites, checked at registration - overflowing it
- * PRINTS and drops a suite rather than failing the build, so a run stays
- * green while silently testing less than it says it does.
- *
- * It was 16, and the device build had already outgrown it: twelve shared
- * suites plus five of the sand app's is seventeen, so one was being dropped
- * every time the diagnostics image ran its self test. Raised well clear
- * rather than to exactly the current count - the array is function pointers
- * and names, so the whole increase costs about a hundred bytes of a build
- * that only exists on the bench. */
+/* Headroom, not a tight fit: the device selftest build alone (test/suites'
+ * own dozen plus one suite per app) already sits close to whatever this is
+ * set to, and a suite past the limit is dropped SILENTLY - suite_register()
+ * only printf()s a warning to the boot console, so an overflow here reads as
+ * a green run that quietly tested less than it claims. Bump this rather than
+ * trim suites to fit it. */
 #define SUITE_MAX 32
 
 typedef void (*suite_fn)(void);

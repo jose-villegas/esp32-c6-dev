@@ -16,7 +16,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
-#include "gfx.h"
+#include "gfx/gfx.h"
 
 static const char *TAG = "post";
 

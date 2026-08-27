@@ -21,7 +21,8 @@
 
 #include <string.h>
 
-#include "intmath.h"
+#include "util/fixed.h"
+#include "util/intmath.h"
 
 
 /* tan(22.5 deg) is the boundary between "straight down" and "diagonal"; its
@@ -681,8 +682,8 @@ void sand_set_conduction(sand_t *s, int chance)
  * inlining concerns the per-grain helpers below do. */
 static void update_momentum(sand_t *s, int gx, int gy)
 {
-    s->mom_x_q8 = (int32_t)(((int64_t)s->mom_x_q8 * SAND_MOMENTUM_DECAY) >> 8);
-    s->mom_y_q8 = (int32_t)(((int64_t)s->mom_y_q8 * SAND_MOMENTUM_DECAY) >> 8);
+    s->mom_x_q8 = fx_mul_floor(s->mom_x_q8, SAND_MOMENTUM_DECAY, 8);
+    s->mom_y_q8 = fx_mul_floor(s->mom_y_q8, SAND_MOMENTUM_DECAY, 8);
 
     const int len = im_len(gx, gy);
     if (len > 0) {
@@ -706,10 +707,13 @@ static void update_momentum(sand_t *s, int gx, int gy)
             const int tlen = im_len((int)tx, (int)ty);
 
             if (tlen > 0) {
-                s->mom_x_q8 += (int32_t)((((int64_t)tx * 256 / tlen) *
-                                          s->flick) >> 8);
-                s->mom_y_q8 += (int32_t)((((int64_t)ty * 256 / tlen) *
-                                          s->flick) >> 8);
+                /* The inner division truncates toward zero - a different
+                 * operation from the outer multiply-shift, and left exactly
+                 * as it was; only the outer step moves onto fx_mul_floor(). */
+                s->mom_x_q8 += fx_mul_floor(
+                    (int32_t)(((int64_t)tx * 256) / tlen), s->flick, 8);
+                s->mom_y_q8 += fx_mul_floor(
+                    (int32_t)(((int64_t)ty * 256) / tlen), s->flick, 8);
             }
         }
         s->mom_primed = true;

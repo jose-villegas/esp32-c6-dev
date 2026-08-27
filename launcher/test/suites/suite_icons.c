@@ -26,7 +26,7 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "icons.h"
+#include "gfx/icons.h"
 
 static int blocks_at(int w, int h, icon_rect_t *out)
 {

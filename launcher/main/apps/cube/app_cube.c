@@ -15,7 +15,7 @@
 #include <stdint.h>
 
 #include "../../app.h"
-#include "../../gfx.h"
+#include "../../gfx/gfx.h"
 
 /* small3dlib config - must precede its include. */
 #define S3L_PIXEL_FUNCTION     shade_pixel

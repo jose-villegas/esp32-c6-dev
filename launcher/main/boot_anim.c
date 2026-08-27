@@ -28,8 +28,8 @@
 
 #include "boot_anim.h"
 
-#include "gfx.h"
-#include "intmath.h"
+#include "gfx/gfx.h"
+#include "util/intmath.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"

@@ -15,7 +15,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#include "buttons.h"
+#include "input/buttons.h"
 
 /* Touch state for the current frame.
  *

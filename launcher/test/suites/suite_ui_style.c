@@ -20,7 +20,7 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "ui_style.h"
+#include "ui/ui_style.h"
 
 #define ROW_X   16
 #define ROW_Y   80

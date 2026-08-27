@@ -17,8 +17,8 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "gfx.h"
-#include "ui.h"
+#include "gfx/gfx.h"
+#include "ui/ui.h"
 
 /* Two separate canvases, well apart, each inside its own band. */
 #define TOP_Y      0

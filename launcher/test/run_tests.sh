@@ -57,6 +57,7 @@ $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
 $TEST_DIR/suites/suite_button_fsm.c
 $TEST_DIR/suites/suite_rng.c
+$TEST_DIR/suites/suite_fixed.c
 $TEST_DIR/suites/suite_boot_anim.c
 $TEST_DIR/suites/suite_gfx_dirty.c
 $TEST_DIR/suites/suite_gfx_color.c
@@ -64,9 +65,9 @@ $TEST_DIR/suites/suite_gfx_font.c
 $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c
-$MAIN_DIR/touch_fsm.c
-$MAIN_DIR/gesture.c
-$MAIN_DIR/button_fsm.c
+$MAIN_DIR/input/touch_fsm.c
+$MAIN_DIR/input/gesture.c
+$MAIN_DIR/input/button_fsm.c
 "
 
 # App-owned sources, discovered rather than listed, so adding or deleting an

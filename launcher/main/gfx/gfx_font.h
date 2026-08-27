@@ -17,10 +17,11 @@
  *===========================================================================*/
 #pragma once
 
+#include <stddef.h>   /* NULL, used by the advance field of a monospace font */
 #include <stdint.h>
 #include <stdbool.h>
 
-#include "font8x8_basic.h"
+#include "gfx/font8x8_basic.h"
 
 /* Describes one font: where its glyph bitmaps live, how big a cell is, which
  * codepoints it covers, and how far the cursor moves per glyph.

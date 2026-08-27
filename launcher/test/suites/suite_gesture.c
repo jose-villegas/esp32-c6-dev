@@ -9,7 +9,7 @@
 
 #include "unity.h"
 #include "suites.h"
-#include "gesture.h"
+#include "input/gesture.h"
 
 #define SCREEN_H 448
 

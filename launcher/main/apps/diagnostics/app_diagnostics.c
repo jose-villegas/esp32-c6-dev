@@ -31,9 +31,9 @@
  *===========================================================================*/
 
 #include "../../app.h"
-#include "../../gfx.h"
+#include "../../gfx/gfx.h"
 #include "../../post_ui.h"
-#include "../../ui.h"
+#include "../../ui/ui.h"
 
 #define PAGE_COUNT     2
 #define COL_BACKGROUND 0x0A0C14
@@ -58,8 +58,10 @@ static void draw_toggles_page(const input_t *input)
     mu_Context *ctx = ui_context();
     ui_begin(input);
 
+    /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
+     * logical canvas swaps dimensions under a quarter-turn transform. */
     if (mu_begin_window_ex(ctx, "Developer Toggles",
-                           mu_rect(0, 0, GFX_WIDTH, GFX_HEIGHT),
+                           mu_rect(0, 0, ui_width(), ui_height()),
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                            MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 

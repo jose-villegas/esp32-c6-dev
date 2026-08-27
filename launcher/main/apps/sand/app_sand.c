@@ -48,10 +48,9 @@
 #include "esp_timer.h"
 
 #include "../../app.h"
-#include "../../gfx.h"
-#include "../../icons.h"
-#include "../../imu.h"
-#include "../../ui.h"
+#include "../../gfx/gfx.h"
+#include "../../input/imu.h"
+#include "../../ui/ui.h"
 #include "palette.h"
 #include "row_runs.h"
 #include "sand.h"
@@ -982,12 +981,11 @@ static gfx_color_t brush_color(cell_t c)
  * can only be turned in quarters - a diagonal tilt picks whichever quarter
  * it is nearest.
  *
- * Shared by draw_mode_label() below and draw_palette()'s panel: both turn
- * their text to follow the same physical "up", and both must pick that turn
- * from this one function rather than each rolling its own copy of the
- * ax/ay comparison - two copies are two chances to disagree about which way
- * is up, which would show up as the mode label turned one way and the
- * palette's tile names turned another while the board sits still. */
+ * Used by draw_mode_label() below to turn its text to follow the board's
+ * physical "up". draw_palette()'s panel used to share this too, but no
+ * longer calls it - see that function's own top comment: the panel is
+ * drawn upright regardless of how the board is held, until palette_hit()
+ * moves to physical-turned coordinates alongside it. */
 static int gravity_quarter_turn(int gx, int gy)
 {
     const int ax = gx < 0 ? -gx : gx;
@@ -1077,7 +1075,12 @@ static void draw_mode_label(int gx, int gy)
  * is already only 92 px on a 322 ppi panel. */
 #define PALETTE_GROUT   4
 
-/* Thickness of each bezel edge - see draw_palette() below. */
+/* Thickness of each bezel edge - matches UI_BEZEL_THICKNESS (ui_style.h),
+ * which is what actually draws each tile's bezel now (see draw_palette()
+ * below and ui_bezel_spans()). Kept as its own constant here because the
+ * badge's position is measured off it directly - the badge sits just inside
+ * the bezel's inner edge - and that geometry belongs to this file's own
+ * layout, not to the bezel style. */
 #define PALETTE_BEZEL   3
 
 /* The eligibility/spawn corner badge - see draw_palette()'s own comment on
@@ -1100,200 +1103,201 @@ static void draw_mode_label(int gx, int gy)
 #define PALETTE_BADGE_BORDER_COLOR  0x141414
 #define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
 
-/* The material picker overlay - drawn on open, on selection, and on a
- * quarter-turn change (see sand_frame()'s SAND_UI_PALETTE handling below),
- * never per frame. The invariant that makes drawn-on-change safe at all is
- * unchanged from when it was drawn-once: nothing else paints while
- * SAND_UI_PALETTE is active - sand_frame() skips the sim step and the sand's
- * own redraw entirely for that screen (see its dispatch) - so anything added
- * later that paints during the pause (a clock, an animation) would need to
- * redraw this too, or it will be silently painted over and never restored.
- *
- * `turn` is the quarter turn to draw the tile names at - see
- * gravity_quarter_turn() above. The grid itself (bezel, badge, swatch) never
- * moves or resizes with it: it is a centred 368x368 square on a 368x448
- * screen, the same physical region at every quarter turn, so only the text
- * needs to turn - see palette.h's PALETTE_FITS comment for why that square
- * fits the screen either way it is held. */
-static void draw_palette(int turn)
+/* mu_Color from a 0xRRGGBB value, opaque - the microui drawing calls
+ * draw_palette() below issues all work in 8-bit mu_Color, never in the
+ * panel's own gfx_color_t, so every colour handed to them crosses that
+ * boundary once here. Takes a plain 0xRRGGBB (a compile-time badge
+ * constant, or brush_color()'s gfx_color_t already unpacked through
+ * gfx_color_rgb888() - see that function's own comment in gfx_color.h for
+ * why bit replication is what makes the unpacking exact). */
+static mu_Color mu_color_hex(uint32_t rgb)
 {
-    /* No panel-wide background fill here on purpose - the sand underneath
-     * shows through PALETTE_GROUT's 2px gap between tiles instead of being
-     * painted over. Three things make that safe:
-     *
-     *   - the simulation is paused for as long as this panel is open (see
-     *     sand_frame()'s SAND_UI_PALETTE handling), so the frame underneath
-     *     is frozen - nothing repaints it, so nothing can bleed through or
-     *     flicker while the panel is up;
-     *   - every tile paints its own bezel and face opaquely within its
-     *     grout inset, so a redraw on selection or on a quarter-turn change
-     *     fully covers the tile it is redrawing - the old fill's stated job
-     *     of erasing a pressed-in bezel that has moved off a tile is
-     *     already done by that tile being redrawn;
-     *   - the grout ring itself is simply never painted, so it keeps
-     *     showing whatever sand pixels were already there and already sent
-     *     to the panel - those pixels have not changed, so they need no
-     *     dirty marking either.
-     *
-     * Closing the panel is unaffected: sand_frame()'s SAND_UI_CLOSE_PALETTE
-     * handling already reseeds every row's runs to full width and marks
-     * everything dirty, so the sand repaints in full regardless of what
-     * this panel did or did not cover while it was open. */
-    for (int i = 0; i < BRUSH_COUNT; i++) {
-        int x, y, w, h;
-        palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
+    return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
+                    (int)(rgb & 0xFF), 255);
+}
 
-        const gfx_color_t face = brush_color(brushes[i]);
+/* The material picker overlay - now a described microui frame like every
+ * other UI in the shell (see ui_launcher.c), rebuilt every frame while
+ * SAND_UI_PALETTE is the active screen rather than drawn on open, on
+ * selection and on a quarter-turn change. ui_end() only repaints when the
+ * command list actually changed, so a held-steady panel still costs nothing
+ * - see ui.h's own top comment on that skip. sand_frame()'s SAND_UI_PALETTE
+ * handling calls this unconditionally now; there is no more stored
+ * "last drawn at this turn" to compare against.
+ *
+ * NO TRANSFORM, ON PURPOSE, FOR NOW
+ *
+ * This does not call ui_set_transform() the way ui_launcher.c-style UIs
+ * might. palette.c lays every tile out - and hit-tests every tap - in
+ * physical screen coordinates (see palette_tile_rect()/palette_hit(), and
+ * palette.h's own comment that the two "must never disagree"). Turning only
+ * the DRAWING through a transform would move the tiles on screen without
+ * moving where palette_hit() looks for them, so a tap would land on
+ * whatever used to be there before the board turned - a real functional
+ * regression, not a cosmetic one. Input handling is explicitly out of scope
+ * for this change (see this file's own top-level notes), so rotation waits
+ * until palette_hit() moves with it; until then the panel - tiles, badges
+ * and names alike - is drawn upright regardless of how the board is held.
+ * Do not re-add a transform here without moving the input path too. */
+static void draw_palette(const input_t *input)
+{
+    mu_Context *ctx = ui_context();
 
-        /* Highlight and shadow are derived from the face colour rather than
-         * fixed greys, for the same reason the name text below is drawn
-         * black-then-white instead of one fixed ink: the swatches run from
-         * snow's near-white to stone's near-black, and a fixed highlight
-         * would vanish on the pale ones while a fixed shadow vanished on
-         * the dark ones. ~40% (100 of 255) is the tuned-by-eye amount. */
-        const gfx_color_t hi = gfx_color_mix(face, gfx_rgb(0xFFFFFF), 100);
-        const gfx_color_t sh = gfx_color_mix(face, gfx_rgb(0x000000), 100);
+    ui_begin(input);
 
-        /* The selected tile inverts the bezel - shadow on top/left, highlight
-         * on bottom/right - so it reads as pressed in rather than raised.
-         * That is the entire selection indicator; there is no separate ring
-         * or border drawn for it. */
-        const gfx_color_t top_left  = (i == ui.brush) ? sh : hi;
-        const gfx_color_t bot_right = (i == ui.brush) ? hi : sh;
+    /* The tile names get their halo from the UI layer now - see
+     * ui_text_halo() in ui_style.h: it derives a light halo from a dark ink
+     * (and vice versa), which is what the nine hand-rolled draws this
+     * replaces did by hand for exactly one ink colour (black). Restored to
+     * UI_TEXT_PLAIN wherever this panel is torn down - see sand_frame()'s
+     * SAND_UI_CLOSE_PALETTE handling. */
+    ui_set_text_style(UI_TEXT_OUTLINED);
 
-        /* Inset by the grout first so neighbouring tiles do not fuse into
-         * one surface, then bezel within that inset rect: top/left edges
-         * PALETTE_BEZEL thick in top_left, bottom/right edges the same in
-         * bot_right, and the remaining interior in the face colour. Plain
-         * fill rects, drawn top/left then bottom/right so the two corners
-         * where an edge of each colour would otherwise meet (top-right,
-         * bottom-left) resolve to whichever is drawn second - the same
-         * simple corner convention as classic 3D control borders. */
-        const int ix = x + PALETTE_GROUT;
-        const int iy = y + PALETTE_GROUT;
-        const int iw = w - 2 * PALETTE_GROUT;
-        const int ih = h - 2 * PALETTE_GROUT;
+    /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
+     * logical canvas swaps dimensions under a quarter-turn transform, the
+     * same reasoning draw_menu() below already follows. */
+    if (mu_begin_window_ex(ctx, "Sand Palette",
+                           mu_rect(0, 0, ui_width(), ui_height()),
+                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
-        gfx_fill_rect(ix, iy, iw, PALETTE_BEZEL, top_left);              /* top */
-        gfx_fill_rect(ix, iy, PALETTE_BEZEL, ih, top_left);              /* left */
-        gfx_fill_rect(ix, iy + ih - PALETTE_BEZEL, iw, PALETTE_BEZEL, bot_right); /* bottom */
-        gfx_fill_rect(ix + iw - PALETTE_BEZEL, iy, PALETTE_BEZEL, ih, bot_right); /* right */
-        gfx_fill_rect(ix + PALETTE_BEZEL, iy + PALETTE_BEZEL,
-                     iw - 2 * PALETTE_BEZEL, ih - 2 * PALETTE_BEZEL, face);
+        for (int i = 0; i < BRUSH_COUNT; i++) {
+            int x, y, w, h;
+            palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
 
-        /* The badge: zero or more fill rects drawn after the face, at the
-         * tile's top-right corner inside the bezel - exactly the extension
-         * this loop's structure was already built to take. Three states,
-         * not one:
-         *
-         *   eligible, BRUSH_POUR    an empty box - a near-black border
-         *                           (PALETTE_BADGE_BORDER_COLOR) around a
-         *                           near-white fill (PALETTE_BADGE_FILL_
-         *                           COLOR). The slot exists; nothing is
-         *                           armed.
-         *   eligible, BRUSH_SPAWN   the same box, with a near-black check
-         *                           mark drawn inside it. The tap is armed.
-         *   not eligible            nothing, as before - material_can_emit()
-         *                           is false for every KIND_STATIC material
-         *                           (stone, glass, the whole extended
-         *                           range), so the absence of a badge is
-         *                           what makes that eligibility rule
-         *                           visible on the panel instead of a fact
-         *                           someone has to be told separately.
-         *
-         * This follows the tile NAMES below rather than the bezel above:
-         * the border and fill are a FIXED pair, not gfx_color_mix() against
-         * the face - see PALETTE_BADGE_BORDER_COLOR/PALETTE_BADGE_FILL_
-         * COLOR's own comment for why. The badge used to derive from the
-         * face the way the bezel still does, and it read fine on most
-         * swatches, but Snow's face is itself near-white, so mixing toward
-         * white for the armed fill landed almost exactly on the face
-         * colour - armed and unarmed became indistinguishable on the one
-         * tile where telling them apart matters most. That is exactly the
-         * failure the names' own comment below already explains for the
-         * same derive-from-the-face idea, for the same reason: a mark that
-         * has to read on every swatch from snow's near-white to stone's
-         * near-black cannot itself be made of the swatch it sits on.
-         *
-         * Left in SCREEN space, not turned with the tile names below - a
-         * deliberate choice, not an oversight. It is a state indicator, not
-         * text meant to be read at an angle; a small two-tone box reads the
-         * same "there is a badge here" whichever way it is drawn, so there
-         * is nothing for turning it to buy. */
-        if (material_can_emit(brushes[i])) {
-            const gfx_color_t border = gfx_rgb(PALETTE_BADGE_BORDER_COLOR);
-            const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN
-                         - PALETTE_BADGE_SIZE;
-            const int by = iy + PALETTE_BEZEL + PALETTE_BADGE_MARGIN;
+            const mu_Color face =
+                mu_color_hex(gfx_color_rgb888(brush_color(brushes[i])));
 
-            gfx_fill_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
-                         border);
-            gfx_fill_rect(bx + PALETTE_BADGE_INSET, by + PALETTE_BADGE_INSET,
-                         PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
-                         PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
-                         gfx_rgb(PALETTE_BADGE_FILL_COLOR));
+            /* Inset by the grout first so neighbouring tiles do not fuse
+             * into one surface, then bezel within that inset rect -
+             * ui_bezel_spans() derives the lit/shadowed edge pair from
+             * `face` itself and picks which pair is lit from `sunken`,
+             * exactly what this loop used to compute by hand with
+             * gfx_color_mix(). Emitting each returned span as a
+             * mu_draw_rect() is precisely what styled_draw_frame() does for
+             * a bezelled button in ui.c - see that function. The selected
+             * tile is the one drawn sunken, which is the entire selection
+             * indicator; there is no separate ring or border for it. */
+            const int ix = x + PALETTE_GROUT;
+            const int iy = y + PALETTE_GROUT;
+            const int iw = w - 2 * PALETTE_GROUT;
+            const int ih = h - 2 * PALETTE_GROUT;
 
-            /* BRUSH_SPAWN alone gets the check mark - icons.h's icon_check(),
-             * shared with the diagnostics app's checkbox toggles rather than
-             * a shape of this badge's own. Drawn in the same border colour
-             * as the box, the same maximum-contrast choice for the same
-             * reason. */
-            if (ui.modes[i] == BRUSH_SPAWN) {
-                icon_check(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
-                          border);
+            ui_span_t spans[UI_BEZEL_MAX_SPANS];
+            const int n = ui_bezel_spans(mu_rect(ix, iy, iw, ih), face,
+                                         i == ui.brush, spans,
+                                         UI_BEZEL_MAX_SPANS);
+            for (int s = 0; s < n; s++) {
+                mu_draw_rect(ctx, spans[s].rect, spans[s].color);
             }
+
+            /* The badge: zero or more rects (and an icon) drawn after the
+             * bezel, at the tile's top-right corner inside it. Three
+             * states, not one:
+             *
+             *   eligible, BRUSH_POUR    an empty box - a near-black border
+             *                           (PALETTE_BADGE_BORDER_COLOR) around
+             *                           a near-white fill (PALETTE_BADGE_
+             *                           FILL_COLOR). The slot exists;
+             *                           nothing is armed.
+             *   eligible, BRUSH_SPAWN   the same box, with a near-black
+             *                           check mark drawn inside it (
+             *                           MU_ICON_CHECK - draw_command()
+             *                           routes that to icons.h's
+             *                           icon_check(), the same artwork the
+             *                           diagnostics app's checkboxes use).
+             *                           The tap is armed.
+             *   not eligible            nothing, as before -
+             *                           material_can_emit() is false for
+             *                           every KIND_STATIC material (stone,
+             *                           glass, the whole extended range),
+             *                           so the absence of a badge is what
+             *                           makes that eligibility rule visible
+             *                           on the panel instead of a fact
+             *                           someone has to be told separately.
+             *
+             * The border and fill are a FIXED pair, not derived from the
+             * face the way the bezel above is - see PALETTE_BADGE_BORDER_
+             * COLOR/PALETTE_BADGE_FILL_COLOR's own comment for why: the
+             * badge used to derive from the face the same way the bezel
+             * still does, and it read fine on most swatches, but Snow's
+             * face is itself near-white, so mixing toward white for the
+             * armed fill landed almost exactly on the face colour - armed
+             * and unarmed became indistinguishable on the one tile where
+             * telling them apart matters most. A mark that has to read on
+             * every swatch from snow's near-white to stone's near-black
+             * cannot itself be made of the swatch it sits on.
+             *
+             * Drawn upright, like every other command in this frame - see
+             * this function's own top comment on why nothing here turns
+             * with the board for now (rotation waits on the input path). */
+            if (material_can_emit(brushes[i])) {
+                const mu_Color border = mu_color_hex(PALETTE_BADGE_BORDER_COLOR);
+                const mu_Color fill   = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
+                const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN
+                             - PALETTE_BADGE_SIZE;
+                const int by = iy + PALETTE_BEZEL + PALETTE_BADGE_MARGIN;
+                const mu_Rect badge_rect =
+                    mu_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE);
+
+                mu_draw_rect(ctx, badge_rect, border);
+                mu_draw_rect(ctx,
+                            mu_rect(bx + PALETTE_BADGE_INSET,
+                                    by + PALETTE_BADGE_INSET,
+                                    PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
+                                    PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET),
+                            fill);
+
+                if (ui.modes[i] == BRUSH_SPAWN) {
+                    mu_draw_icon(ctx, MU_ICON_CHECK, badge_rect, border);
+                }
+            }
+
+            /* Centred in the tile, at its UPRIGHT position - no longer
+             * turned per-tile the way the hand-rolled version turned each
+             * gfx_text_turned() call with the board's own quarter turn.
+             * Always turn 0 now, since this frame draws upright regardless
+             * of how the board is held - see this function's own top
+             * comment on why. palette_label_origin() itself is unchanged
+             * and still does real work here: it centres a `len`-character
+             * string in the tile's rect, which turn 0 alone does not do.
+             * The longest names are 5 characters, 80px at GFX_GLYPH_SCALE
+             * (see palette.h's column-count reasoning), inside a 92px tile
+             * - 6px of margin either side, never clipped. */
+            const char *name = material_name(brushes[i]);
+            const int   len  = (int)strlen(name);
+            int tx, ty;
+            palette_label_origin(x, y, w, h, len, 0, &tx, &ty);
+
+            /* Black ink; ui_text_halo() (armed by UI_TEXT_OUTLINED above)
+             * derives the light halo from it - see that function's own
+             * comment in ui_style.h. `ctx->style->font` is the same font
+             * every other command in this frame measures and draws with;
+             * there is nothing tile-specific about it, but reading it from
+             * the context rather than hardcoding gfx_default_font() is
+             * what keeps this frame honouring a future ui_set_font() call
+             * the way every other described UI does. */
+            mu_draw_text(ctx, ctx->style->font, name, -1, mu_vec2(tx, ty),
+                        mu_color(0, 0, 0, 255));
         }
 
-        /* Centred in the tile, turned to follow the board - see
-         * palette_label_origin()'s own comment for how its returned origin
-         * makes gfx_text_turned() land there at any of the four turns. The
-         * longest names are 5 characters, 80px at GFX_GLYPH_SCALE (see
-         * palette.h's column-count reasoning), inside a 92px tile - 6px of
-         * margin either side, never clipped, and that margin is the same
-         * whichever way the box is turned since PALETTE_TILE is square. */
-        const char *name = material_name(brushes[i]);
-        const int   len  = (int)strlen(name);
-        int tx, ty;
-        palette_label_origin(x, y, w, h, len, turn, &tx, &ty);
-
-        /* White halo outline then a black fill on top, rather than in one
-         * fixed ink colour or derived (via gfx_color_mix()) from the face
-         * the way the bezel above still is - the bezel derives from the
-         * face because it should belong to the material; the name has the
-         * opposite job, to stay legible over every swatch from snow's
-         * near-white to stone's near-black, and black-and-white is the
-         * maximum-contrast pair available for that. The white halo is what
-         * lifts the black glyph off the dark swatches like stone. Deriving
-         * this pair too would "tidy" it straight into unreadable on
-         * whichever swatch the derived ink happens to match.
-         *
-         * The badge just above used to derive from the face the same way
-         * the bezel still does, and got exactly this failure on Snow - see
-         * its own comment for the story. It now uses this same fixed
-         * maximum-contrast pair instead of a second one of its own.
-         *
-         * All eight one-pixel offsets, not just the four cardinals: at
-         * GFX_GLYPH_SCALE == 2 each font pixel is a 2x2 block, and skipping
-         * the diagonals leaves a notch at every block corner instead of a
-         * clean edge. The offsets stay in SCREEN space rather than turning
-         * with the glyph - an outline is symmetric around its text in every
-         * direction, so rotating the eight offsets would just permute them
-         * among themselves and draw the identical outline. Nine text draws
-         * (eight outline + the black fill) per tile, fourteen tiles -
-         * draw_palette() only runs on open, on selection, and on a
-         * quarter-turn change (see the comment above this function), never
-         * per frame, so this is an occasional cost, not a per-frame one. */
-        static const int outline_offsets[8][2] = {
-            { -1, -1 }, { 0, -1 }, { 1, -1 },
-            { -1,  0 },            { 1,  0 },
-            { -1,  1 }, { 0,  1 }, { 1,  1 },
-        };
-        for (int o = 0; o < 8; o++) {
-            gfx_text_turned(tx + outline_offsets[o][0], ty + outline_offsets[o][1],
-                           name, gfx_rgb(0xFFFFFF), GFX_GLYPH_SCALE, turn);
-        }
-        gfx_text_turned(tx, ty, name, gfx_rgb(0x000000), GFX_GLYPH_SCALE, turn);
+        mu_end_window(ctx);
     }
+
+    /* UI_NO_BACKGROUND is what keeps the frozen sand showing through
+     * PALETTE_GROUT's gap between tiles - the same effect the hand-rolled
+     * version got by simply never painting a panel-wide background fill.
+     * Safe for the same reasons that comment gave: the simulation is
+     * paused for as long as this panel is open (see sand_frame()'s
+     * SAND_UI_PALETTE handling), so the frame underneath is frozen and
+     * cannot bleed through or flicker, and every tile paints its own bezel
+     * and face opaquely within its grout inset, so a repaint fully covers
+     * whatever that tile last looked like. Closing the panel is unaffected
+     * either way: sand_frame()'s SAND_UI_CLOSE_PALETTE handling reseeds
+     * every row's runs to full width and marks everything dirty, so the
+     * sand repaints in full regardless of what this panel did or did not
+     * cover while it was open. */
+    ui_end(UI_NO_BACKGROUND);
 }
 
 /*---------------------------------------------------------------------------
@@ -1338,16 +1342,6 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
     const int shake = tilt_shake(&tilt);
     *jostle = shake > SHAKE_DEADZONE ? shake : 0;
 }
-
-/* The quarter turn the panel was last DRAWN at - not necessarily the current
- * one. sand_frame()'s SAND_UI_PALETTE handling compares this against a fresh
- * gravity_quarter_turn() reading every frame and only calls draw_palette()
- * again when they differ, which is what keeps the panel drawn-on-change
- * rather than drawn-per-frame while still following the board when it
- * actually turns - see that dispatch's own comment below. A drawing detail,
- * so it stays here rather than moving into sand_ui_t alongside the rest of
- * the palette's bookkeeping. */
-static int palette_turn;
 
 /* Everything that decides WHICH edges open the palette, close it, select a
  * tile or toggle its mode now lives in sand_ui.c's sand_ui_step() - the
@@ -1605,8 +1599,10 @@ static void draw_menu(const input_t *input)
 
     ui_begin(input);
 
+    /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
+     * logical canvas swaps dimensions under a quarter-turn transform. */
     if (mu_begin_window_ex(ctx, "Sand Menu",
-                           mu_rect(0, 0, GFX_WIDTH, GFX_HEIGHT),
+                           mu_rect(0, 0, ui_width(), ui_height()),
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                            MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
@@ -1614,8 +1610,8 @@ static void draw_menu(const input_t *input)
          * row layout is bypassed with mu_layout_set_next() and each button
          * placed at an absolute rect instead. */
         const int total_h = 2 * MENU_BTN_H + MENU_BTN_GAP;
-        const int top      = (GFX_HEIGHT - total_h) / 2;
-        const int x        = (GFX_WIDTH - MENU_BTN_W) / 2;
+        const int top      = (ui_height() - total_h) / 2;
+        const int x        = (ui_width() - MENU_BTN_W) / 2;
 
         mu_layout_set_next(ctx, mu_rect(x, top, MENU_BTN_W, MENU_BTN_H), 0);
         if (mu_button(ctx, "START")) {
@@ -1702,6 +1698,28 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             label_left_ms = LABEL_MS;
         }
 
+        /* A text style is ambient context for this whole shell, not
+         * per-frame state private to the panel - ui_set_text_style() stays
+         * in force for every UI drawn after it until something changes it
+         * again (see ui.h's own comment on why, and ui_set_button_style()'s
+         * neighbouring comment for the contrast with a style that DOES
+         * reset itself). Restoring UI_TEXT_PLAIN here, the moment the panel
+         * is torn down, is what stops the outline from leaking into the
+         * launcher or the sand boot menu the next time either draws a frame
+         * - leaving this out is the obvious failure: the whole shell would
+         * come up haloed after the palette had ever been opened once.
+         *
+         * ui_set_transform(ui_transform_identity()) is kept alongside it as
+         * a guard, even though draw_palette() no longer calls
+         * ui_set_transform() at all (see that function's own top comment on
+         * why it draws upright) - so nothing in this app currently leaves
+         * the transform other than identity. The guard costs nothing and
+         * protects against exactly the failure mode the text-style restore
+         * above exists for, in case a transform is ever reintroduced here
+         * without whoever adds it remembering to undo it on close too. */
+        ui_set_transform(ui_transform_identity());
+        ui_set_text_style(UI_TEXT_PLAIN);
+
         sim_accumulator_q8 = 0;
         pour_accumulator_ms = 0;
         seed_row_runs_full_width();
@@ -1713,66 +1731,53 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     if (actions & SAND_UI_OPEN_PALETTE) {
         /* Clears the mode-label countdown so its full-screen redraw does
          * not paint sand straight back over the panel (see label_left_ms's
-         * own use below), then draws the panel - see draw_palette()'s own
-         * comment on when it is (and is not) redrawn.
-         *
-         * Seeds palette_turn from the tilt filter's CURRENT reading rather
-         * than always opening upright: read_gravity_input(0, ...) asks it
-         * "what does the filter say right now" without advancing it -
-         * dt_ms == 0 is tilt_update()'s own documented no-time-passed case
-         * ("no time passed, so nothing to integrate"), not a hack - so this
-         * costs nothing extra and the panel opens already turned to match
-         * however the board is actually being held, rather than snapping to
-         * the right turn one frame later.
+         * own use below).
          *
          * sand_ui_step() already flipped ui.screen to SAND_UI_PALETTE, so
-         * returning right after this means read_gravity_input(dt_ms, ...)/
-         * run_sim_steps()/handle_pour_input()/draw_dirty_rows() below are
-         * never reached on the very frame the panel opens, exactly as they
-         * are skipped on every later frame by the SAND_UI_PALETTE branch
-         * below - the sim is paused from the same frame the panel becomes
-         * visible, not one frame later. */
+         * falling through to the SAND_UI_PALETTE branch just below means
+         * read_gravity_input(dt_ms, ...)/run_sim_steps()/handle_pour_input()/
+         * draw_dirty_rows() are never reached on the very frame the panel
+         * opens, exactly as they are skipped on every later frame by that
+         * same branch - the sim is paused from the same frame the panel
+         * becomes visible, not one frame later. */
         label_left_ms = 0;
-
-        int gx, gy, flow, jostle, rotation;
-        imu_sample_t sample = { 0 };
-        read_gravity_input(0, &sample, &gx, &gy, &flow, &jostle, &rotation);
-        palette_turn = gravity_quarter_turn(gx, gy);
-
-        draw_palette(palette_turn);
-        return;
     }
 
     if (ui.screen == SAND_UI_PALETTE) {
-        /* Still open: either a tile tap changed the selection or its mode
-         * (SAND_UI_REDRAW_PALETTE), or the input did nothing the panel
-         * cares about (a miss, a swallowed release, or boot.held) - see
-         * handle_palette_input() in sand_ui.c. */
-        if (actions & SAND_UI_REDRAW_PALETTE) {
-            draw_palette(palette_turn);    /* the highlight/badge moved or updated */
+        /* Described every frame now, immediate-mode - see draw_palette()'s
+         * own top comment. ui_end() inside it only repaints when the
+         * command list actually changed, which is what keeps a held-steady
+         * panel free without this needing to track "did anything actually
+         * change" by hand the way the old drawn-on-change version did
+         * (SAND_UI_REDRAW_PALETTE, and the stored `palette_turn` this
+         * function used to compare a fresh reading against, are no longer
+         * consulted here for that reason - sand_ui_step() still returns
+         * SAND_UI_REDRAW_PALETTE, since sand_ui.c is unchanged, but nothing
+         * here needs to read it any more).
+         *
+         * No gravity read here any more, and no `turn` - draw_palette() no
+         * longer takes one. The only thing gravity ever fed while this
+         * screen was up was the panel's own rotation (see draw_palette()'s
+         * top comment for why that is gone for now: palette_hit() hit-tests
+         * in physical screen coordinates and does not turn with the board,
+         * so drawing turned would show tiles where a tap would not land).
+         * With nothing left to compute from it, reading gravity here would
+         * cost a real IMU transaction for a value nothing uses - removed
+         * rather than kept "just in case", the same as any other dead
+         * read would be. */
+        if (actions & SAND_UI_OPEN_PALETTE) {
+            /* The panel just opened: the framebuffer still holds whatever
+             * the app last drew (running sand, or the boot menu), and the
+             * UI description this frame may well hash equal to some
+             * earlier UI frame - the same trap ui_invalidate()'s own
+             * comment in ui.h warns about for the launcher/app transition.
+             * Forcing a repaint here is what makes the first frame actually
+             * replace those pixels rather than comparing equal and leaving
+             * them on screen. */
+            ui_invalidate();
         }
 
-        /* Read gravity every frame while paused, and follow the board when
-         * it turns - but only that: no sim step, no pour, no dirty-row
-         * redraw, exactly as before this existed. One IMU read a frame costs
-         * nothing next to a panel repaint, and gravity_quarter_turn() snaps
-         * to one of only four values, so holding the board steady (or
-         * tilting without crossing a quarter-turn boundary) computes the
-         * same `turn` every frame and draw_palette() below is skipped - the
-         * repaint itself only happens on an actual quarter-turn change,
-         * which is what keeps a held-steady panel free. Skipped entirely on
-         * the frame that just closed the panel, above (that branch already
-         * returned), so there is nothing here to redraw into a screen that
-         * no longer wants it. */
-        int gx, gy, flow, jostle, rotation;
-        imu_sample_t sample = { 0 };
-        read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
-
-        const int turn = gravity_quarter_turn(gx, gy);
-        if (turn != palette_turn) {
-            palette_turn = turn;
-            draw_palette(palette_turn);
-        }
+        draw_palette(input);
         return;
     }
 

@@ -35,9 +35,10 @@
 #include <stdint.h>
 
 #include "app.h"
+#include "gfx/gfx_font.h"
 #include "microui.h"
-#include "ui_style.h"
-#include "ui_transform.h"
+#include "ui/ui_style.h"
+#include "ui/ui_transform.h"
 
 /* Shared metrics, so the shell and any app UI look like one product. */
 #define UI_TITLE_HEIGHT   56
@@ -86,6 +87,18 @@ void ui_set_button_style(ui_button_style_t style);
  * hash - see the comment above ui_set_text_style()'s definition in ui.c for
  * why a text style needs its own invalidation and a button style does not. */
 void ui_set_text_style(ui_text_style_t style);
+
+/* Choose the font microui measures and draws MU_COMMAND_TEXT with, for the
+ * rest of this frame and every frame after until this is called again -
+ * ui_init() seeds it with gfx_default_font() so it is never left NULL in
+ * normal use. Passing NULL here falls back to gfx_default_font() rather
+ * than storing NULL, for the same reason.
+ *
+ * Unlike ui_set_text_style() and ui_set_transform() below it, this does NOT
+ * need to call ui_invalidate() - see the comment above ui_set_font()'s
+ * definition in ui.c for why the font is the one style-like setting here
+ * that gets to skip it. */
+void ui_set_font(const gfx_font_t *font);
 
 /* Choose the transform every command is mapped through before it is drawn -
  * see ui_transform.h for what a transform is and why it is fixed point.

@@ -6,11 +6,11 @@
  * logic - is in ui.c, so an app can build its own UI the same way.
  *===========================================================================*/
 
-#include "ui_launcher.h"
+#include "ui/ui_launcher.h"
 
 #include "app.h"
-#include "gfx.h"
-#include "ui.h"
+#include "gfx/gfx.h"
+#include "ui/ui.h"
 
 #define COL_BACKGROUND 0x0A0C14
 
@@ -35,9 +35,15 @@ int ui_launcher_frame(const input_t *input)
     ui_set_button_style(UI_BUTTON_BEZEL);
 
     /* One full-screen window with no chrome: this is a home screen, not a
-     * desktop, so the frame, title bar and close button would be noise. */
+     * desktop, so the frame, title bar and close button would be noise.
+     *
+     * Sized from ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT: those two
+     * are the logical canvas, which is the physical panel mapped through the
+     * inverse of the current transform, and they swap under a quarter turn.
+     * A window hardcoded to the panel's own dimensions would still claim the
+     * un-rotated size after such a turn and overflow the rotated canvas. */
     if (mu_begin_window_ex(ctx, "Launcher",
-                           mu_rect(0, 0, GFX_WIDTH, GFX_HEIGHT),
+                           mu_rect(0, 0, ui_width(), ui_height()),
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                            MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 

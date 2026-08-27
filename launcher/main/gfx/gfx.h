@@ -15,8 +15,8 @@
 #include <stdbool.h>
 
 #include "bsp/esp-bsp.h"
-#include "gfx_color.h"
-#include "gfx_font.h"
+#include "gfx/gfx_color.h"
+#include "gfx/gfx_font.h"
 
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
