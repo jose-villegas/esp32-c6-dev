@@ -102,11 +102,13 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
 #define BLOCK_COLS_MAX ((GRID_W_MAX + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define BLOCK_ROWS_MAX ((GRID_H_MAX + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
 
-/* SCREEN_PALETTE is entered from SCREEN_RUNNING (BOOT held) and left back to
- * it (any BOOT event) - see handle_brush_input()'s boot.held check and
- * handle_palette_input() below. It never appears on the MENU or failed
- * paths, which is why sand_frame()'s dispatch checks it only after those -
- * see the comment on that dispatch. */
+/* SCREEN_PALETTE is entered from SCREEN_RUNNING on BOOT's release edge and
+ * left back to it the same way - see sand_frame()'s own boot.released check
+ * and handle_palette_input() below. boot.held does nothing in either
+ * direction; see the comments at both of those sites for why that is
+ * deliberate. SCREEN_PALETTE never appears on the MENU or failed paths,
+ * which is why sand_frame()'s dispatch checks it only after those - see the
+ * comment on that dispatch. */
 typedef enum { SCREEN_MENU, SCREEN_RUNNING, SCREEN_PALETTE } screen_t;
 static screen_t screen;
 
@@ -149,27 +151,31 @@ static screen_t screen;
 
 /* What the finger puts down.
  *
- * BOOT cycles the material and PWR toggles the eraser, rather than putting the
- * eraser in the cycle. Two reasons, and both are about which button does what:
+ * Selected from the palette panel (BOOT's release edge opens it - see
+ * open_palette()/handle_palette_input() below, and sand_frame()'s own
+ * comment on why that is the release and not the press) rather than cycled
+ * one button press at a time. Cycling was the palette's stand-in before the
+ * panel existed, and it aged badly for the obvious reason: reaching the Nth
+ * material cost N presses, and every material added since - eight of them -
+ * pushed everything after it that much further away. The panel costs one
+ * press to open and one tap to choose, whatever this list grows to.
  *
- *   BOOT is a plain GPIO with no side effects, so it is the safe one to press
- *   repeatedly. PWR's PMU powers the board off on a long hold by default (REG
- *   0x27 offlevel, 4-10 s) - firmware could disable that via REG 0x22 bit 1,
- *   but nothing here does, so as shipped a long hold on PWR still cuts power,
- *   which is a poor property for the control used most often.
+ * PWR still toggles the eraser directly, unchanged from before the panel
+ * existed - see handle_brush_input()'s power.pressed branch below. Erase is
+ * pressed often enough, and is purely binary (on/off, nothing to browse),
+ * that a plain press is the cheaper action for it: a HOLD costs
+ * BUTTON_HOLD_US (600 ms) of waiting before it even registers, every single
+ * time, and paying that tax on a control used this often would make erasing
+ * feel sluggish next to the immediacy pouring already has. A dedicated
+ * button's press has none of that cost.
  *
- *   Keeping erase out of the cycle means returning from it lands back on the
- *   material already chosen, instead of walking through all of them.
- *
- * A stand-in until the palette overlay; without some way to choose, water and
- * stone exist and cannot be reached.
- *
- * MAT_WOOD but not MAT_STEAM: every entry here costs the player a button
- * press to cycle past, so only materials someone actually paints belong.
- * Wood is something you build a fire out of; steam is a byproduct you
- * watch happen. Burning wood is not listed either, because it is a STATE
- * of wood rather than a material - see reaction_t.burn_decay, and
- * docs/Sand/Adding-a-Material.md for this as a worked example. */
+ * MAT_WOOD but not MAT_STEAM: every entry here costs a tile in the palette
+ * panel - see BRUSH_COUNT and the _Static_assert on PALETTE_FITS below - so
+ * only materials someone actually paints belong. Wood is something you
+ * build a fire out of; steam is a byproduct you watch happen. Burning wood
+ * is not listed either, because it is a STATE of wood rather than a
+ * material - see reaction_t.burn_decay, and docs/Sand/Adding-a-Material.md
+ * for this as a worked example. */
 /* Whole CELLS rather than material ids, because an extended material
  * cannot be named by an id - its low nibble is its identity (MATX() in
  * material.h). An ordinary material is written CELL_MAKE(id, 0) and its
@@ -211,8 +217,11 @@ _Static_assert(PALETTE_FITS(BRUSH_COUNT),
 typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
 static uint8_t brush_mode[BRUSH_COUNT];   /* brush_mode_t per brush */
 
-/* How long the mode label stays up after the PWR button is pressed. Long
- * enough to read without hurrying, short enough not to sit over the sand. */
+/* How long the mode label stays up after a change worth confirming - a PWR
+ * press toggling erase, or the palette closing having actually changed the
+ * brush or its mode (see palette_opened_brush/palette_opened_mode and
+ * close_palette()). Long enough to read without hurrying, short enough not
+ * to sit over the sand. */
 #define LABEL_MS 1800
 
 #define LABEL_MARGIN 18
@@ -268,7 +277,9 @@ static uint8_t    *row_run_n;
 static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
-static int         brush;            /* index into brushes - BOOT cycles it */
+static int         brush;            /* index into brushes - set by tapping
+                                       * a tile in the palette; see
+                                       * handle_palette_input() */
 static bool        erasing;          /* PWR toggles it, independently */
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
@@ -1008,12 +1019,12 @@ static void draw_mode_label(int gx, int gy)
 /* Thickness of each bezel edge - see draw_palette() below. */
 #define PALETTE_BEZEL   3
 
-/* The BRUSH_SPAWN corner badge - see draw_palette()'s own comment on it.
- * 18px outer square against a 92px tile (PALETTE_TILE) reads clearly at
- * arm's length without crowding the tile's centred name text; 3px of inset
- * leaves a 12px inner square, still comfortably legible as its own square
- * rather than a blur. 2px of margin off the bezel keeps the badge from
- * touching it. */
+/* The eligibility/spawn corner badge - see draw_palette()'s own comment on
+ * its three states. 18px outer square against a 92px tile (PALETTE_TILE)
+ * reads clearly at arm's length without crowding the tile's centred name
+ * text; 3px of inset leaves a 12px inner square, still comfortably legible
+ * as its own square rather than a blur. 2px of margin off the bezel keeps
+ * the badge from touching it. */
 #define PALETTE_BADGE_SIZE    18
 #define PALETTE_BADGE_INSET    3
 #define PALETTE_BADGE_MARGIN   2
@@ -1085,43 +1096,69 @@ static void draw_palette(int turn)
         gfx_fill_rect(ix + PALETTE_BEZEL, iy + PALETTE_BEZEL,
                      iw - 2 * PALETTE_BEZEL, ih - 2 * PALETTE_BEZEL, face);
 
-        /* The BRUSH_SPAWN badge: one more fill rect (two, for the two
-         * tones) drawn after the face, at the tile's top-right corner
-         * inside the bezel - exactly the extension this loop's structure
-         * was already built to take.
+        /* The badge: zero or two more fill rects drawn after the face, at
+         * the tile's top-right corner inside the bezel - exactly the
+         * extension this loop's structure was already built to take. Three
+         * states, not one, and the two that were missing are the whole
+         * point of this pass:
+         *
+         *   eligible, BRUSH_SPAWN   filled - the dark square with the light
+         *                           square inset inside it, exactly as
+         *                           before. The tap is armed.
+         *   eligible, BRUSH_POUR    outline only - the same dark square,
+         *                           but its interior is left in the face
+         *                           colour instead of light, so only a thin
+         *                           dark frame shows against the face it
+         *                           sits on. That reads as unmistakably
+         *                           dimmer than the filled state at a
+         *                           glance, which is the point: before this,
+         *                           an eligible-but-not-spawning tile carried
+         *                           no mark at all, so there was nothing on
+         *                           screen to suggest tapping an already-
+         *                           selected tile does anything. The outline
+         *                           advertises the affordance before it has
+         *                           been discovered.
+         *   not eligible            nothing, as before - material_can_emit()
+         *                           is false for every KIND_STATIC material
+         *                           (stone, glass, the whole extended
+         *                           range), so the absence of a badge is
+         *                           what makes that eligibility rule
+         *                           visible on the panel instead of a fact
+         *                           someone has to be told separately.
          *
          * Left in SCREEN space, not turned with the tile names below - a
-         * deliberate choice, not an oversight. It is a state indicator (this
-         * tile can spawn a source), not text meant to be read at an angle;
-         * a small two-tone square reads the same "there is a badge here"
-         * whichever way it is drawn, so there is nothing for turning it to
-         * buy.
+         * deliberate choice, not an oversight. It is a state indicator, not
+         * text meant to be read at an angle; a small two-tone square reads
+         * the same "there is a badge here" whichever way it is drawn, so
+         * there is nothing for turning it to buy.
          *
-         * Ineligible materials can never carry brush_mode[i] ==
-         * BRUSH_SPAWN in the first place (see handle_palette_input()), so
-         * this never draws for one - no separate eligibility check needed
-         * here.
-         *
-         * Two-tone, the same reason the bezel and the name text both are:
-         * a swatch runs from snow's near-white to stone's near-black, and
-         * no single fixed colour reads on all of them. `t` here is much
-         * stronger than the bezel's ~40% (100) - a badge this small has to
-         * read as a mark in its own right against a face it is sitting
-         * directly on top of, not merely as a lighter/darker edge of that
-         * same face. */
-        if (brush_mode[i] == BRUSH_SPAWN) {
-            const gfx_color_t badge_dark  = gfx_color_mix(face, gfx_rgb(0x000000), 210);
-            const gfx_color_t badge_light = gfx_color_mix(face, gfx_rgb(0xFFFFFF), 210);
+         * Two-tone, the same reason the bezel and the name text both are: a
+         * swatch runs from snow's near-white to stone's near-black, and no
+         * single fixed colour reads on all of them - gfx_color_mix() against
+         * the face, never a fixed grey. `t` here is much stronger than the
+         * bezel's ~40% (100) - a badge this small has to read as a mark in
+         * its own right against a face it is sitting directly on top of, not
+         * merely as a lighter/darker edge of that same face. */
+        if (material_can_emit(brushes[i])) {
+            const gfx_color_t badge_dark = gfx_color_mix(face, gfx_rgb(0x000000), 210);
             const int bx = ix + iw - PALETTE_BEZEL - PALETTE_BADGE_MARGIN
                          - PALETTE_BADGE_SIZE;
             const int by = iy + PALETTE_BEZEL + PALETTE_BADGE_MARGIN;
 
             gfx_fill_rect(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
                          badge_dark);
+
+            /* BRUSH_SPAWN gets the light inner square that makes the badge
+             * read as filled; BRUSH_POUR gets the face colour instead, which
+             * leaves only the dark ring above as a thin frame - "this slot
+             * exists and is empty" rather than "this slot is armed". */
+            const gfx_color_t inner = (brush_mode[i] == BRUSH_SPAWN)
+                ? gfx_color_mix(face, gfx_rgb(0xFFFFFF), 210)
+                : face;
             gfx_fill_rect(bx + PALETTE_BADGE_INSET, by + PALETTE_BADGE_INSET,
                          PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
                          PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
-                         badge_light);
+                         inner);
         }
 
         /* Centred in the tile, turned to follow the board - see
@@ -1227,6 +1264,15 @@ static bool palette_swallow_release;
  * actually turns - see that dispatch's own comment. */
 static int palette_turn;
 
+/* The brush and its mode at the moment the panel opened - recorded by
+ * open_palette() and compared against the current brush/mode by
+ * close_palette(), so the mode label on the way out confirms a choice only
+ * when the choice actually changed while the panel was open. Opening the
+ * panel and closing it again without touching anything leaves the board
+ * exactly as it was, and a label would just be noise there. */
+static int     palette_opened_brush;
+static uint8_t palette_opened_mode;
+
 /* Opens the palette panel: pauses the sim (see sand_frame()'s dispatch,
  * which returns immediately after calling this rather than falling through
  * to the rest of a RUNNING frame), clears the mode-label countdown so its
@@ -1242,11 +1288,13 @@ static int palette_turn;
  * already turned to match however the board is actually being held, rather
  * than snapping to the right turn one frame later.
  *
- * Also arms palette_swallow_release. Opening the panel is a BOOT hold, which
- * has nothing to do with whatever a finger already down on the screen is
- * doing - so a pour in progress when the hold fires is a touch left
- * dangling, and its release still has to land somewhere. Without swallowing
- * it, that release arrives on the very next frame with screen already
+ * Also records palette_opened_brush/palette_opened_mode - see their own
+ * comment above for why - and arms palette_swallow_release. Opening the
+ * panel is a press of the physical BOOT button, which has nothing to do
+ * with whatever a finger already down on the touchscreen is doing - so a
+ * pour in progress when BOOT is released is a touch left dangling, and its
+ * own release still has to land somewhere. Without swallowing it, that
+ * release arrives on the very next frame with screen already
  * SCREEN_PALETTE, and handle_palette_input() reads it as an ordinary tap on
  * whatever tile happens to be under the finger - silently changing the
  * brush the player never meant to touch. */
@@ -1255,6 +1303,8 @@ static void open_palette(void)
     label_left_ms = 0;
     screen = SCREEN_PALETTE;
     palette_swallow_release = true;
+    palette_opened_brush = brush;
+    palette_opened_mode  = brush_mode[brush];
 
     int gx, gy, flow, jostle, rotation;
     imu_sample_t sample = { 0 };
@@ -1275,9 +1325,21 @@ static void open_palette(void)
  * the pause: left alone, the wall-clock time the panel was open would cash
  * in as a burst of catch-up steps and pour the instant it closes, which
  * would read as a stutter or a sudden blob under the finger rather than as
- * nothing having happened while paused. */
+ * nothing having happened while paused.
+ *
+ * Arms the mode label - via label_left_ms, drawn by the next RUNNING frame
+ * - only if the brush or its mode actually changed while the panel was
+ * open (see palette_opened_brush/palette_opened_mode's own comment). Since
+ * cycling no longer gives its own confirmation on the way past each
+ * material, this is the only feedback closing the panel gets, and it
+ * should say nothing when there is nothing to confirm. */
 static void close_palette(void)
 {
+    if (brush != palette_opened_brush ||
+        brush_mode[brush] != palette_opened_mode) {
+        label_left_ms = LABEL_MS;
+    }
+
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
     seed_row_runs_full_width();
@@ -1289,30 +1351,37 @@ static void close_palette(void)
 /* Only reachable while SCREEN_PALETTE - see sand_frame()'s dispatch, which
  * calls this instead of the normal RUNNING handlers and returns.
  *
- * Any BOOT edge closes the panel, deliberately without asking which one:
- * being forgiving here is what guarantees there is no way to get stuck in
- * the panel. It cannot close on the SAME edge that opened it: the opening
- * edge is boot.held, and edges are read-and-cleared once per frame (see
- * buttons_read()) before this function ever runs for the first time - by
- * the next frame that edge is gone, and the release that follows the hold
- * fires no `released` edge at all (button_fsm.h's contract) - see the
- * comment on that composition where sand_frame() calls open_palette(). */
+ * Closes on boot.released only - the mirror image of where the panel opens
+ * in SCREEN_RUNNING (see sand_frame()'s own comment on that site). It
+ * cannot close on the SAME edge that opened it: edges are read-and-cleared
+ * once per frame (see buttons_read()) before this function ever runs for
+ * the first time, so the .released that opened the panel is already gone
+ * by the time a SCREEN_PALETTE frame gets to see one of its own.
+ *
+ * boot.held closes nothing here - see the comment on the `if` just below
+ * for why that is deliberate and what it means for anyone who holds BOOT
+ * instead of tapping it. */
 static void handle_palette_input(const input_t *input)
 {
     /* On the RELEASE, never on the press. Closing on boot.pressed split a
      * single physical press across two screens: the panel went away on the
      * press edge, and the matching release edge arrived several frames
      * later with screen already back to SCREEN_RUNNING, where
-     * handle_brush_input() consumed it and cycled the brush forward one.
-     * Tapping a tile and then closing therefore selected the material
-     * AFTER the one tapped.
+     * handle_brush_input() consumed it and cycled the brush forward one -
+     * commit faad9bb, the bug this still guards against even though
+     * cycling itself is gone. Acting on the release keeps both edges of a
+     * press inside the state that started it.
      *
-     * Acting on the release keeps both edges of a press inside the state
-     * that started it - the same reason cycling itself moved off .pressed.
-     * boot.held is safe alongside it because button_fsm suppresses the
-     * release of a press that became a hold, so a hold delivers exactly
-     * one of these two and never both. */
-    if (input->boot.released || input->boot.held) {
+     * input->boot.held is deliberately NOT handled here - the panel has
+     * exactly one way to close, a plain tap of BOOT, mirroring the one way
+     * in. Worth writing down because it looks like an omission otherwise:
+     * button_fsm suppresses the .released of a press that turns into a
+     * .held (see button_fsm.h's contract), so a user who HOLDS BOOT instead
+     * of tapping it gets no edge this function acts on at all while the
+     * panel is open. Holding does not close the panel; it does nothing,
+     * silently, by design - not a missed case, and not a bug to go chasing
+     * if someone reports it. */
+    if (input->boot.released) {
         close_palette();
         return;
     }
@@ -1363,25 +1432,20 @@ static void handle_palette_input(const input_t *input)
     draw_palette(palette_turn);    /* redraw so the highlight/badge moves or updates */
 }
 
-/* input->boot.released rather than .pressed: a HOLD fires .pressed at the
- * press edge and .held at 600ms while still down (see button_fsm.h's
- * contract), so cycling on .pressed would make every panel-opening hold
- * also cycle the brush underneath it. The FSM guarantees a press that
- * becomes a hold delivers no .released edge at all, which makes .pressed
- * and .held mutually exclusive for one physical press with no bookkeeping
- * here - moving to .released is what makes that guarantee do the work. */
+/* BOOT is not read here at all any more - its release edge opens the
+ * palette from sand_frame()'s own dispatch, before this function is ever
+ * called for that frame, and selecting a material happens in the palette
+ * itself (handle_palette_input()) rather than here. What is left is PWR,
+ * unchanged from before the palette existed: a plain press toggles erase,
+ * because erase is binary and pressed often enough that a dedicated
+ * button's press - with none of a hold's BUTTON_HOLD_US delay - is the
+ * right cost for it. See the comment above brushes[] for the fuller
+ * reasoning on why BOOT and PWR ended up with the jobs they have. */
 static void handle_brush_input(const input_t *input)
 {
-    if (input->boot.released) {
-        brush = (brush + 1) % BRUSH_COUNT;
-        erasing = false;      /* choosing a material means you want to place it */
-        label_left_ms = LABEL_MS;
-    }
     if (input->power.pressed) {
         erasing = !erasing;
         label_left_ms = LABEL_MS;
-    }
-    if (input->boot.released || input->power.pressed) {
         ESP_LOGI(TAG, "brush: %s",
                  erasing ? "erase" : material_name(brushes[brush]));
     }
@@ -1718,21 +1782,36 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         return;
     }
 
-    /* input->boot.held opens the panel from here, and closes over the rest
-     * of this RUNNING frame doing so: open_palette() flips `screen` to
-     * SCREEN_PALETTE immediately, so returning right after it means
-     * read_gravity_input()/run_sim_steps()/handle_pour_input()/
-     * handle_brush_input()/draw_dirty_rows() below are never reached on the
-     * very frame the panel opens, exactly as they are skipped on every
-     * later frame by the SCREEN_PALETTE check above - the sim is paused
-     * from the same frame the panel becomes visible, not one frame later.
+    /* input->boot.released opens the panel from here, on the release edge
+     * rather than the press - the mirror image of handle_palette_input()'s
+     * own close-on-released, and for the identical reason (see that
+     * function's comment, and commit faad9bb, the bug both of these guard
+     * against). Opening on .pressed would leave the matching .released to
+     * arrive one frame later with `screen` already SCREEN_PALETTE, where
+     * handle_palette_input() would read it as a tap on whatever tile
+     * happens to be under the finger instead. Acting on .released keeps
+     * both edges of the press that opened the panel inside SCREEN_RUNNING,
+     * with nothing left outstanding by the time SCREEN_PALETTE takes over.
      *
-     * The release that ends this hold fires no `released` edge at all -
-     * see button_fsm.h's contract - so next frame's handle_palette_input()
-     * cannot mistake the finger lifting for a tap that should close the
-     * panel it just opened. No guard needed here for that; it falls out of
-     * the FSM's own guarantee. */
-    if (input->boot.held) {
+     * open_palette() flips `screen` to SCREEN_PALETTE immediately, so
+     * returning right after it means read_gravity_input()/run_sim_steps()/
+     * handle_pour_input()/handle_brush_input()/draw_dirty_rows() below are
+     * never reached on the very frame the panel opens, exactly as they are
+     * skipped on every later frame by the SCREEN_PALETTE check above - the
+     * sim is paused from the same frame the panel becomes visible, not one
+     * frame later.
+     *
+     * input->boot.held is deliberately NOT handled here, or anywhere else
+     * in this screen - the panel has exactly one way in, a plain tap.
+     * Worth writing down because it looks like an omission otherwise:
+     * button_fsm suppresses the .released of a press that turns into a
+     * .held (see button_fsm.h's contract), so a user who HOLDS BOOT instead
+     * of tapping it gets no edge this app acts on at all for that press.
+     * Holding does not open the panel; it does nothing, silently, by
+     * design - not a missed case. `held` itself is still produced and
+     * plumbed all the way through button_fsm and buttons_read(); this
+     * screen simply has no consumer for it right now. */
+    if (input->boot.released) {
         open_palette();
         return;
     }
