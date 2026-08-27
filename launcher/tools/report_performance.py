@@ -5,13 +5,13 @@ pass/fail - the same shape as the table in docs/Sand/Architecture.md, except
 generated fresh from a real capture instead of hand-transcribed (and so it
 cannot go stale the way a hand-written copy can).
 
-Reads the budget for each test straight from suite_sand.c rather than
-hardcoding it here, so retuning a budget in the source is immediately
+Reads budgets from whichever suite source is given via --source rather than
+hardcoding them here, so retuning a budget in the source is immediately
 reflected in the next report with no second place to update.
 
 Usage:
     python tools/report_performance.py <raw_capture.txt> <out.md> \
-        [--source main/apps/sand/suite_sand.c]
+        --source main/apps/<app>/suite_<app>.c
 """
 import argparse
 import re
@@ -92,9 +92,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("capture_path", help="Raw capture from capture_selftest.py")
     parser.add_argument("out_path", help="Markdown file to write")
+    # Required, not defaulted to any one app's suite: the parsing above keys
+    # only on generic patterns (#ifdef DEVICE_BUILD, Unity's
+    # TEST_ASSERT_LESS_THAN_MESSAGE, a "device_tests ... us" log line), so
+    # this script lives in shared tools/ on purpose - it has no app-specific
+    # knowledge to make an app the "default" caller. Its one caller
+    # (main/apps/sand/tools/report_performance.sh) always passes --source
+    # explicitly, so requiring it here breaks nothing.
     parser.add_argument(
-        "--source", default="main/apps/sand/suite_sand.c",
-        help="Path to the file the frame-budget tests live in (default: %(default)s)",
+        "--source", required=True,
+        help="Path to the file the frame-budget tests live in",
     )
     args = parser.parse_args()
 

@@ -34,11 +34,17 @@ param(
 
 & $IdfExportPath | Out-Null
 
-$launcher = Resolve-Path "$PSScriptRoot\..\.."
+# This file lives at main/apps/sand/tools/, four levels below launcher/ -
+# tools -> sand -> apps -> main -> launcher.
+$launcher = Resolve-Path "$PSScriptRoot\..\..\..\.."
 $sandH    = "$launcher\main\apps\sand\sand.h"
+# The app's own results dir now that this script lives under the app -
+# deleting main/apps/sand/ takes its scratch output with it too.
 $results  = "$PSScriptRoot\results"
 New-Item -ItemType Directory -Force -Path $results | Out-Null
-$captureScript = "$PSScriptRoot\capture_selftest.py"
+# capture_selftest.py is generic (just resets the device and captures serial
+# output) and stayed in shared tools/sweeps/ when this script moved into the app.
+$captureScript = "$launcher\tools\sweeps\capture_selftest.py"
 
 function Write-Utf8NoBom($path, $content) {
     # Windows PowerShell 5.1's `Set-Content -Encoding utf8` writes a BOM,

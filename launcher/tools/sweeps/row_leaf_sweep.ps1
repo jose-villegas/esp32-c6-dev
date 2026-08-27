@@ -6,11 +6,20 @@
 .DESCRIPTION
     Both cap how many separate dirty regions get tracked/gathered per row
     before falling back to a coarser send. Same build+flash+measure+
-    restore pattern as block_size_sweep.ps1 in this directory - see that
+    restore pattern as main/apps/sand/tools/block_size_sweep.ps1 - see that
     script's own comment for the shared reasoning, and
     docs/Notes/Display-and-Rendering.md's "The cap sweeps" section for
     what this one found (raising the cap regressed the case it exists to
     help - both stay at 2 as shipped).
+
+    Stays in shared tools/sweeps/ rather than moving into
+    main/apps/sand/tools/ alongside block_size_sweep.ps1, even though it
+    touches a sand header: it sweeps ROW_MAX_RUNS (main/apps/sand/row_runs.h)
+    and LEAF_REFINE_MAX_RUNS (main/gfx_dirty.h, a shell-owned file with no
+    app) together, by design - the two mirror each other. Filing this under
+    the sand app would make the gfx-dirty half of the sweep vanish if the
+    sand app folder were ever deleted, which is the same "nothing left
+    dangling" promise violated in the other direction.
 
 .PARAMETER IdfExportPath
     Path to ESP-IDF's export.ps1. Defaults to this project's usual

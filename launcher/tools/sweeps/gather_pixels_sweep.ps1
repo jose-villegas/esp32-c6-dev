@@ -5,7 +5,7 @@
 .DESCRIPTION
     Bounds the biggest leaf-refined split gather_and_send() will attempt
     before falling back to a coarser send. Same build+flash+measure+
-    restore pattern as block_size_sweep.ps1 in this directory - see that
+    restore pattern as main/apps/sand/tools/block_size_sweep.ps1 - see that
     script's own comment for the shared reasoning.
 
     Candidate range is bounded above by ~9984: past that,

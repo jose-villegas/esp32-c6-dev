@@ -81,6 +81,13 @@ $MAIN_DIR/button_fsm.c
 # That split is not bureaucracy: it is what forces an app's logic to be
 # separable from its wiring, which is the only reason a falling-sand automaton
 # can be tested on a laptop at all.
+#
+# The glob below is one level deep (apps/*/*.c), so an app's own
+# apps/<name>/tools/*.{sh,ps1,py} - its sweep scripts, report generators -
+# is already invisible to it without any special-casing. Worth saying so
+# explicitly: the next reader hitting a two-level-deep tools/ folder that
+# this loop skips should be able to tell that is deliberate, not an
+# oversight this script just hasn't caught up to yet.
 for f in "$MAIN_DIR"/apps/*/*.c; do
     [ -e "$f" ] || continue
     case "$(basename "$f")" in
