@@ -95,8 +95,13 @@ static cell_t random_cell(sand_t *s, material_id_t material, int band)
          * consecutive pours simply alternate - which is the whole of
          * what two tones can do, and enough to lay down a line. The
          * draw is kept so a bank is not perfectly uniform. */
+        /* An eighth of grains take the other tone rather than a quarter.
+         * With two tones a "speckle" IS the neighbouring band bleeding in,
+         * so the jitter that keeps sand looking like grains is the same
+         * thing that washes a soil layer out - and soil has one bit to
+         * lose, where sand has twelve shades to spare. */
         const unsigned tone =
-            ((unsigned)band + rng_below(&s->rng, 4) / 3u) % SOIL_TONES;
+            ((unsigned)band + rng_below(&s->rng, 8) / 7u) % SOIL_TONES;
         return CELL_SOIL(material, (uint8_t)tone, 0);
     }
     /* Not the whole range: sand keeps its top four shades for cullet, so

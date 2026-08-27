@@ -1080,9 +1080,24 @@ const reaction_t reactions[MATERIAL_MAX] = {
 #define DIRT_RGB(v) LERP(DIRT_DRY, DIRT_WET, v)
 
 /* One tone of soil: the dry and wet ends shifted together, so a bank shows
- * its strata whether it is parched or sodden. Tone 0 is the darker. */
-#define SOIL_TONE_LO(rgb) LERP((rgb), 0x000000, 3)
-#define SOIL_TONE_HI(rgb) LERP((rgb), 0xFFFFFF, 2)
+ * its strata whether it is parched or sodden. Tone 0 is the darker.
+ *
+ * Pushed apart from 3/2, on the report that the difference between two
+ * poured banks was barely visible. It was 42 points of luminance; it is
+ * now 60. Soil has one bit of tone against sand's twelve shades, so this
+ * pair is the entire visual difference between one pour and the next, and
+ * it has to carry alone what a whole band carries for sand.
+ *
+ * 4/3 is the LIMIT, and the limit is not taste. Wet soil has to read
+ * darker than dry soil whichever tones are involved, or watering stops
+ * being legible - a watered patch is meant to show as a dark stain. Push
+ * to 5/4 and saturated light-tone soil comes out at luminance 100 against
+ * bone-dry dark-tone soil at 85, so a well-watered bank looks drier than
+ * a parched one. At 4/3 the two just clear each other, 86 against 93.
+ * Seven points is not much headroom; anything that moves DIRT_DRY or
+ * DIRT_WET needs to re-check it. */
+#define SOIL_TONE_LO(rgb) LERP((rgb), 0x000000, 4)
+#define SOIL_TONE_HI(rgb) LERP((rgb), 0xFFFFFF, 3)
 
 #define SOIL_END(t, rgb) ((t) ? SOIL_TONE_HI(rgb) : SOIL_TONE_LO(rgb))
 

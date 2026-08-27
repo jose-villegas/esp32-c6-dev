@@ -5704,6 +5704,22 @@ static void test_soil_keeps_its_tone_through_wetting_and_drying(void)
  * nothing else would notice - the whole point of the bit is visual. Checked
  * at every wetness, because the ramps are built per tone and a mistake in
  * one end of one of them would otherwise hide. */
+/* Rec.601 luminance of a panel colour, 0-255.
+ *
+ * The palette stores GFX_RGB, which is RGB565 with the bytes swapped for
+ * this QSPI controller - so getting a brightness back out means undoing
+ * both. Written out here rather than guessed at, because a test that
+ * unpacks the colour wrongly will still compare two numbers and still
+ * pass or fail for reasons of its own. */
+static int panel_luminance(gfx_color_t c)
+{
+    const unsigned v = (unsigned)((c >> 8) | ((c & 0xFFu) << 8));
+    const unsigned r = ((v >> 11) & 0x1Fu) * 255u / 31u;
+    const unsigned g = ((v >>  5) & 0x3Fu) * 255u / 63u;
+    const unsigned b = ( v        & 0x1Fu) * 255u / 31u;
+    return (int)((299u * r + 587u * g + 114u * b) / 1000u);
+}
+
 static void test_the_two_soil_tones_are_different_colours(void)
 {
     const gfx_color_t *pal = material_palette();
@@ -5723,6 +5739,30 @@ static void test_the_two_soil_tones_are_different_colours(void)
         pal[CELL_SOIL(MAT_DIRT, 0, SOIL_MOISTURE_MAX)],
         "dry soil and saturated soil of the SAME tone must differ - the "
         "wetness ramp is how a watered patch shows at all");
+
+    /* And it has to read the RIGHT WAY ROUND across both tones at once,
+     * which is the tighter constraint and the one that decided how far
+     * apart the tones could go.
+     *
+     * The two tones were pushed apart because one poured bank against the
+     * next was barely visible - soil has a single bit of tone, so that
+     * pair carries alone what a whole twelve-shade band carries for sand.
+     * But push it too far and the ramps overlap: saturated LIGHT-tone soil
+     * comes out lighter than bone-dry DARK-tone soil, and a well-watered
+     * bank looks drier than a parched one. Measured, that happens at 5/4;
+     * 4/3 clears it by about seven points of luminance, which is all the
+     * headroom there is. Anything that moves DIRT_DRY, DIRT_WET or the
+     * SOIL_TONE_LO/HI shifts has to come back through here. */
+    {
+        const gfx_color_t wettest_pale =
+            pal[CELL_SOIL(MAT_DIRT, SOIL_TONES - 1, SOIL_MOISTURE_MAX)];
+        const gfx_color_t driest_dark = pal[CELL_SOIL(MAT_DIRT, 0, 0)];
+        TEST_ASSERT_TRUE_MESSAGE(
+            panel_luminance(wettest_pale) < panel_luminance(driest_dark),
+            "the wettest soil of the PALE tone must still be darker than "
+            "the driest soil of the dark one - otherwise watering a bank "
+            "can make it look drier, and the stain stops meaning wet");
+    }
 }
 
 
@@ -8031,6 +8071,76 @@ static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
             "anything re-rolled it on the way then a buried surface would "
             "no longer be the shade it was when it was a surface");
     }
+}
+
+
+/* Sand that turns to soil hands its SHADE on as the soil's tone.
+ *
+ * This is what carries a poured pattern across the one reaction that
+ * destroys the material holding it. Rain on a dune does not just wet it,
+ * it converts it - and if the new soil picked its own tone, everything
+ * the sand remembered about how it was poured would go with the grain.
+ *
+ * It matters more than it used to. Poured shades are laid down in bands
+ * now, so what the sand remembers is which pour it came from, and this
+ * derivation is why three layers of sand are still three layers after
+ * they have been rained into soil. Measured on a three-pour pile: the
+ * first pour's core comes out one tone and the later shells the other.
+ *
+ * The collapse is real and worth stating rather than discovering: twelve
+ * dune shades map onto two soil tones, so about a third of consecutive
+ * layer boundaries land on the same tone and stop being visible once
+ * wet. That is soil having one bit to spend, not the derivation being
+ * wrong - and the alternative mappings are worse. Taking the LOW bit of
+ * the shade instead alternates perfectly on paper and falls apart in
+ * practice, because a pour is a band plus or minus one and that jitter
+ * splits a single pour across both tones. */
+static void test_wet_sand_becomes_soil_in_the_tone_its_shade_implies(void)
+{
+    const uint8_t dark_shade = 1;                       /* low half  */
+    const uint8_t pale_shade = SAND_DUNE_SHADES - 1;    /* high half */
+
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, 1, H - 2, CELL_MAKE(MAT_SAND, dark_shade));
+    sand_set(&s, 5, H - 2, CELL_MAKE(MAT_SAND, pale_shade));
+
+    for (int i = 0; i < 3000; i++) {
+        /* Keep both of them standing in water. */
+        for (int k = 0; k < 2; k++) {
+            const int x = k ? 5 : 1;
+            if (CELL_IS_EMPTY(sand_at(&s, x, H - 3))) {
+                sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
+            }
+        }
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    const cell_t from_dark = sand_at(&s, 1, H - 2);
+    const cell_t from_pale = sand_at(&s, 5, H - 2);
+    TEST_ASSERT_EQUAL_MESSAGE(MAT_DIRT, CELL_MATERIAL(from_dark),
+        "the dark grain must have soaked into soil by now");
+    TEST_ASSERT_EQUAL_MESSAGE(MAT_DIRT, CELL_MATERIAL(from_pale),
+        "and so must the pale one");
+
+    TEST_ASSERT_EQUAL_MESSAGE(dark_shade >> SOIL_MOISTURE_BITS,
+        CELL_SOIL_TONE(from_dark),
+        "soil made from a grain must take the tone that grain's SHADE "
+        "implies - the pattern a dune was poured with has to survive being "
+        "rained into soil, or the layers wash out the moment it gets wet");
+    TEST_ASSERT_EQUAL_MESSAGE(pale_shade >> SOIL_MOISTURE_BITS,
+        CELL_SOIL_TONE(from_pale),
+        "and a grain from the other end of the band must come out the "
+        "other tone, or the derivation is carrying nothing at all");
+    TEST_ASSERT_TRUE_MESSAGE(
+        CELL_SOIL_TONE(from_dark) != CELL_SOIL_TONE(from_pale),
+        "which between them means two grains from opposite ends of the "
+        "dune band must not become the same soil");
 }
 
 /* Every material has a colour, and every extended material has one too.
@@ -12051,6 +12161,7 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
+    RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
