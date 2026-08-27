@@ -24,18 +24,11 @@ MAIN_DIR=$(CDPATH= cd -- "$TEST_DIR/../main" && pwd)
 BUILD_DIR="$TEST_DIR/build"
 
 # --- find a compiler -------------------------------------------------------
-# $CC wins if set, then whatever is on PATH. The last candidate is where winget
-# puts MinGW on Windows, which is not on PATH for shells opened before it was
-# installed.
-find_cc() {
-    if [ -n "${CC:-}" ]; then echo "$CC"; return 0; fi
-    for c in cc gcc clang; do
-        if command -v "$c" >/dev/null 2>&1; then echo "$c"; return 0; fi
-    done
-    winlibs="${LOCALAPPDATA:-}/Microsoft/WinGet/Packages/BrechtSanders.WinLibs.POSIX.UCRT_Microsoft.Winget.Source_8wekyb3d8bbwe/mingw64/bin/gcc.exe"
-    if [ -n "${LOCALAPPDATA:-}" ] && [ -x "$winlibs" ]; then echo "$winlibs"; return 0; fi
-    return 1
-}
+# Sourced rather than defined here, so that report_reactions.sh (main/apps/
+# sand/tools/) can find a compiler the same way without a hand-copied twin -
+# see tools/find_cc.sh's own top comment.
+# shellcheck source=../tools/find_cc.sh
+. "$TEST_DIR/../tools/find_cc.sh"
 
 if ! CC_BIN=$(find_cc); then
     echo "No C compiler found." >&2

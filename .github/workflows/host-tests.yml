@@ -16,3 +16,4 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash launcher/test/run_tests.sh
+      - run: bash launcher/main/apps/sand/tools/report_reactions.sh --check
