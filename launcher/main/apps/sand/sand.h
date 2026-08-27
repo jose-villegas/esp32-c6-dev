@@ -72,29 +72,6 @@ typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
     rng_t    rng;        /* seeded explicitly, so every run repeats exactly */
-
-    /* A SECOND stream, for weathering and nothing else.
-     *
-     * Weathering is cosmetic: it drifts the shade of a grain that is not
-     * moving and changes nothing about what the simulation will do. Drawn
-     * from the main stream it would still move every dice roll after it -
-     * a dune quietly crusting in one corner would change where a wetting
-     * front reached in another, which is exactly what happened the first
-     * time this was written and what the wetting-front test caught.
-     *
-     * So it gets its own. The physics stream is then untouched by how
-     * much sand happens to be lying about, and every existing scene plays
-     * out cell-for-cell as it did before. */
-    rng_t    weather_rng;
-
-    /* Which slice of rows weathering looks at next - see
-     * sand_step_weathering(). Rotates so every row comes round. */
-    uint32_t weather_tick;
-
-    /* Whether the rotation now in progress has seen anything that
-     * weathers. The flag above may only be cleared on a full sweep of the
-     * grid, and one slice is not one. */
-    bool     weather_seen;
     bool     sweep_flip; /* alternates the sweep direction between steps */
     bool     liquid_flip;/* alternates which way liquids share sideways */
     bool     gas_flip;   /* same idea as liquid_flip, for sand_step_gas()'s
@@ -190,13 +167,6 @@ typedef struct {
      * it does wither, so the pass has to keep visiting it. A leaf on an
      * otherwise bare board would simply have been skipped for ever. */
     bool     may_have_withering;
-
-    /* And one for weathering, armed by a grain that can weather being on
-     * the board at all - see reaction_t.weathers. Sand can, and sand is
-     * on almost every board, so this one is nearly always true and is
-     * worth understanding as such: what keeps weathering cheap is not
-     * this flag but the single cell read inside it. */
-    bool     may_have_weathering;
 
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
@@ -476,11 +446,6 @@ int sand_erase(sand_t *s, int cx, int cy, int radius);
  * last is what the next sand_step() sees, so a caller with nothing to report
  * should pass 0 rather than assume it decays on its own. Defaults to 0, so a
  * caller that never calls this sees no rebound at all, ever. */
-/* One step of weathering: the slow bleaching of whatever lies in the
- * open. Called from sand_step(); separate from the reactions pass because
- * it must not wake it - see the comment on the definition. */
-void sand_step_weathering(sand_t *s);
-
 void sand_set_flick(sand_t *s, int flick);
 
 /* The momentum vector as it stands after the last sand_step(), Q8 fixed

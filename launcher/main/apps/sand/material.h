@@ -755,37 +755,6 @@ typedef struct {
      * touching the trunk; what withers is loose greenery with no tree and
      * no water behind it, which is exactly the stuff that should not be
      * lying around. */
-    /* WEATHERING: a grain lying with open sky against it drifts, one
-     * step at a time, towards a fixed shade. Chance in 256 per step.
-     *
-     * The shade is in the cell, so it stays when the grain is buried, and
-     * that is the entire point. A pile left to stand grows a crust a
-     * shade or two off its speckled inside; pour another pile on top and
-     * the old crust is still there, a line running through the sand where
-     * the surface used to be. Pour a third and there are two lines. It
-     * costs nothing to store, because the shade was already the variant.
-     *
-     * Converging on a fixed shade rather than nudging the one it has is
-     * what makes it legible. A poured grain takes a RANDOM shade across
-     * the whole band (see random_cell), so a pile is speckled from top to
-     * bottom and a one-step nudge is invisible inside that noise. Drifting
-     * every exposed grain towards the SAME shade is what turns a surface
-     * into a line.
-     *
-     * Only the face against gravity is tested - one cell read, not the
-     * four an outline would take. This runs on every grain of every pile,
-     * so the cost of the test is the cost of the feature, and weathering
-     * is sun and wind on a surface: it is the upward face that gets them. */
-    uint8_t weathers;
-
-    /* The shade weathering drifts towards, as a variant value. Direction
-     * falls out of where it sits relative to the band: sand converges on
-     * its palest dune shade, snow on its coldest blue, because snow's
-     * pale end is already white and a white crust on white snow is not a
-     * line anyone can see. For soil this is a TONE, not a whole variant -
-     * soil keeps moisture in the low bits and only the tone is a shade. */
-    uint8_t weathered;
-
     uint8_t withers;
 
     /* And what a long enough straight run of it turns into: `hardens_to`
