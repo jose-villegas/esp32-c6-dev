@@ -254,8 +254,8 @@ void test_an_additive_line_brightens_where_it_crosses_itself(void)
     const gfx_color_t grn = gfx_rgb(0x00FF00);
 
     gfx_clear(bg);
-    gfx_line_add(10, 100, 60, 100, red);
-    gfx_line_add(35, 80, 35, 120, grn);
+    gfx_line_ex(10, 100, 60, 100, red, GFX_LINE_ADD);
+    gfx_line_ex(35, 80, 35, 120, grn, GFX_LINE_ADD);
 
     /* Where they cross, both channels are lit; where they do not, only one
      * is. Flat writes would have put green over red at the crossing. */
@@ -273,7 +273,7 @@ void test_an_open_line_leaves_its_first_pixel_alone(void)
     const gfx_color_t fg = gfx_rgb(0x004000);
 
     gfx_clear(bg);
-    gfx_line_add_open(10, 40, 20, 40, fg);
+    gfx_line_ex(10, 40, 20, 40, fg, GFX_LINE_ADD | GFX_LINE_OPEN);
 
     TEST_ASSERT_EQUAL_HEX16_MESSAGE(bg, pixel_at(10, 40),
         "an open line must not draw its starting pixel");
@@ -283,7 +283,7 @@ void test_an_open_line_leaves_its_first_pixel_alone(void)
     TEST_ASSERT_EQUAL_INT(10, count_pixels(fg));
 }
 
-/* The reason gfx_line_add_open() exists. A polyline drawn as closed segments
+/* The reason GFX_LINE_OPEN exists. A polyline drawn as closed segments
  * adds the shared pixel at each joint twice, which under additive blending is
  * a brighter dot at every joint - a curve made of a few hundred segments
  * comes out visibly beaded. Chaining open segments puts exactly one
@@ -295,13 +295,141 @@ void test_chained_open_segments_do_not_double_their_joints(void)
     const gfx_color_t step = gfx_rgb(0x002000);
 
     gfx_clear(bg);
-    gfx_line_add(10, 60, 20, 60, step);
-    gfx_line_add_open(20, 60, 30, 60, step);
+    gfx_line_ex(10, 60, 20, 60, step, GFX_LINE_ADD);
+    gfx_line_ex(20, 60, 30, 60, step, GFX_LINE_ADD | GFX_LINE_OPEN);
 
     TEST_ASSERT_EQUAL_HEX16_MESSAGE(step, pixel_at(20, 60),
         "the joint should carry exactly one stroke's worth of light");
     TEST_ASSERT_EQUAL_INT_MESSAGE(21, count_pixels(step),
         "every pixel of the chain should be lit exactly once");
+}
+
+/* --- antialiasing ------------------------------------------------------- */
+
+/* The green channel of a pixel, 0..63. Green because it is the six-bit one:
+ * red and blue have five, so green is where a coverage difference is most
+ * visible and where a rounding mistake shows up first. */
+static int green_at(int x, int y)
+{
+    const gfx_color_t p = pixel_at(x, y);
+    const uint16_t native = (uint16_t)((p >> 8) | (p << 8));
+    return (native >> 5) & 0x3F;
+}
+
+/* A line with no fractional part has nothing to antialias, and must come out
+ * byte-identical to the hard one. If it does not, the smooth path is leaking
+ * coverage onto neighbours that the geometry never touches - which on a
+ * horizontal rule looks like it has been drawn twice, faintly. */
+void test_smoothing_an_axis_aligned_line_changes_nothing(void)
+{
+    fixture();
+    const gfx_color_t fg = gfx_rgb(0x00FF00);
+
+    gfx_clear(gfx_rgb(0x000000));
+    gfx_line(10, 40, 60, 40, fg);
+    const int hard = count_pixels(fg);
+
+    gfx_clear(gfx_rgb(0x000000));
+    gfx_line_ex(10, 40, 60, 40, fg, GFX_LINE_SMOOTH);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(hard, count_pixels(fg),
+        "a horizontal line should be identical smoothed or not");
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(gfx_rgb(0x000000), pixel_at(30, 41),
+        "nothing should have spilled onto the next row");
+}
+
+/* Same for an exact diagonal: one step across per step down means the line
+ * passes through pixel centres the whole way. */
+void test_smoothing_an_exact_diagonal_changes_nothing(void)
+{
+    fixture();
+    const gfx_color_t fg = gfx_rgb(0x00FF00);
+
+    gfx_clear(gfx_rgb(0x000000));
+    gfx_line_ex(10, 60, 40, 90, fg, GFX_LINE_SMOOTH);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(31, count_pixels(fg),
+        "a 45-degree line should be fully lit at every step, with no "
+        "partial neighbours");
+}
+
+/* The actual claim. A shallow line covers two rows, and the light it puts in
+ * them has to add up: what one row loses at a given column, the other gains.
+ * That is the whole of what antialiasing is, and it is checkable without
+ * looking at the screen. */
+void test_a_smoothed_line_splits_its_light_between_two_rows(void)
+{
+    fixture();
+    const gfx_color_t fg = gfx_rgb(0x00FF00);
+    const int x0 = 20, y0 = 120, x1 = 120, y1 = 128;
+
+    gfx_clear(gfx_rgb(0x000000));
+    gfx_line_ex(x0, y0, x1, y1, fg, GFX_LINE_SMOOTH | GFX_LINE_ADD);
+
+    int graded = 0;
+
+    for (int x = x0 + 1; x < x1; x++) {
+        int total = 0;
+        for (int y = y0 - 1; y <= y1 + 1; y++) {
+            const int g = green_at(x, y);
+            total += g;
+            if (g > 0 && g < 63) {
+                graded++;
+            }
+        }
+        /* Two pixels' worth of coverage, summing to one pixel's worth of
+         * light. The slack is RGB565 rounding: a six-bit channel cannot
+         * split 63 into two parts that always add back to exactly 63. */
+        TEST_ASSERT_INT_WITHIN_MESSAGE(2, 63, total,
+            "a column of a smoothed line should carry one pixel of light "
+            "spread over two rows");
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(graded > 100,
+        "hardly any pixel came out partly lit - this is not antialiased");
+}
+
+/* Coverage is what varies, not position: the line must still stay within one
+ * pixel of where the hard one would have put it. */
+void test_a_smoothed_line_stays_where_the_geometry_says(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0x00FF00);
+
+    gfx_clear(bg);
+    gfx_line_ex(20, 200, 120, 208, fg, GFX_LINE_SMOOTH);
+
+    for (int x = 20; x <= 120; x++) {
+        for (int y = 0; y < GFX_HEIGHT; y++) {
+            if (green_at(x, y) > 0) {
+                TEST_ASSERT_TRUE_MESSAGE(y >= 199 && y <= 209,
+                    "a smoothed line lit a pixel outside the band its "
+                    "endpoints span");
+            }
+        }
+    }
+}
+
+/* Off-screen coordinates go through the clipper before the smooth walk, and
+ * the accumulator can be negative there. Shifting a negative right floors,
+ * which is what the maths wants - but it is the kind of thing that is right
+ * by accident until someone changes it. */
+void test_a_smoothed_line_can_start_off_screen(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0x00FF00);
+
+    gfx_clear(bg);
+    gfx_line_ex(-200, -30, 150, 90, fg, GFX_LINE_SMOOTH);
+
+    TEST_ASSERT_TRUE_MESSAGE(count_pixels(bg) < GFX_WIDTH * GFX_HEIGHT,
+        "the on-screen part of the line should have been drawn");
+    for (int y = 0; y < GFX_HEIGHT; y++) {
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, green_at(GFX_WIDTH - 1, y),
+            "a clipped smoothed line wrapped onto the opposite edge");
+    }
 }
 
 void test_fill_rect_is_clipped_to_the_screen(void)
@@ -886,6 +1014,11 @@ void run_gfx_suite(void)
     RUN_TEST(test_an_additive_line_brightens_where_it_crosses_itself);
     RUN_TEST(test_an_open_line_leaves_its_first_pixel_alone);
     RUN_TEST(test_chained_open_segments_do_not_double_their_joints);
+    RUN_TEST(test_smoothing_an_axis_aligned_line_changes_nothing);
+    RUN_TEST(test_smoothing_an_exact_diagonal_changes_nothing);
+    RUN_TEST(test_a_smoothed_line_splits_its_light_between_two_rows);
+    RUN_TEST(test_a_smoothed_line_stays_where_the_geometry_says);
+    RUN_TEST(test_a_smoothed_line_can_start_off_screen);
     RUN_TEST(test_fill_rect_entirely_off_screen_draws_nothing);
     RUN_TEST(test_clip_rect_restricts_drawing);
     RUN_TEST(test_pixel_outside_the_screen_is_ignored);

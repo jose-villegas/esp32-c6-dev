@@ -342,18 +342,17 @@ static int outcode(int x, int y)
  *
  * WHY THIS IS NOT JUST THE PER-PIXEL TEST
  *
- * The Bresenham loop below already skips pixels outside the clip rect, which
- * is correct but costs a step per pixel of the line's length whether or not
- * any of them land. That was fine while the only caller was a plotted curve
- * whose points were all on screen. It stopped being fine with a floor grid
- * that runs until it leaves the panel: those lines are mostly off it, and
- * some are entirely off it.
+ * The walks below already skip pixels outside the clip rect, which is correct
+ * but costs a step per pixel of the line's length whether or not any of them
+ * land. That was fine while the only caller was a plotted curve whose points
+ * were all on screen. It stopped being fine with a floor grid that runs until
+ * it leaves the panel: those lines are mostly off it, and some are entirely
+ * off it.
  *
- * Clipping moves where Bresenham's error term starts, so a clipped line can
- * differ by a pixel from the same line drawn unclipped. That is why the
- * caller takes a fast path when both ends are already inside: the common case
- * stays exactly as it was, and nothing that fits on screen is touched by any
- * of this.
+ * Clipping moves where the error term starts, so a clipped line can differ by
+ * a pixel from the same line drawn unclipped. That is why the caller takes a
+ * fast path when both ends are already inside: the common case stays exactly
+ * as it was, and nothing that fits on screen is touched by any of this.
  */
 static bool clip_line(int *x0, int *y0, int *x1, int *y1)
 {
@@ -400,51 +399,48 @@ static bool clip_line(int *x0, int *y0, int *x1, int *y1)
     return false;
 }
 
-/* Bresenham, in the form that treats both axes alike so no case analysis is
- * needed for steep versus shallow lines.
+/* One pixel of a line, at `cov`/255 coverage.
  *
- * `blend` is what the two public wrappers below differ by, and it is passed
- * as a flag rather than duplicating the walk: the loop is the part worth
- * getting right once, and the alternative is two copies that drift.
- *
- * The dirty box is worked out up front, from the line's own bounding box
- * intersected with the clip rect, and marked ONCE - rather than per pixel the
- * way gfx_pixel() would. A diagonal line's bounding box is mostly empty, so
- * this claims more than it writes; that only ever costs bus time, whereas
- * claiming too little leaves stale pixels on the panel. */
-static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
-                      bool blend, bool open_start)
+ * Both compositing modes go through the two helpers in gfx_color.h rather
+ * than unpacking channels here: scaling a colour by coverage is a mix down
+ * toward black, which gfx_color_mix() already is, and it already knows that
+ * green has a bit more range than red and blue. Getting that wrong shifts the
+ * hue of every antialiased edge rather than failing outright, so it is worth
+ * having exactly one implementation of it.
+ */
+static void plot(int x, int y, gfx_color_t color, unsigned flags, uint8_t cov)
 {
-    /* Only pay for clipping when some of the line is actually outside. */
-    if (outcode(x0, y0) | outcode(x1, y1)) {
-        if (!clip_line(&x0, &y0, &x1, &y1)) {
-            return;
-        }
+    if (x < clip.x0 || x >= clip.x1 || y < clip.y0 || y >= clip.y1) {
+        return;
     }
+    gfx_color_t *const dst = &fb[(size_t)y * GFX_WIDTH + x];
 
-    int bx0 = im_min(x0, x1), bx1 = im_max(x0, x1) + 1;
-    int by0 = im_min(y0, y1), by1 = im_max(y0, y1) + 1;
+    if (flags & GFX_LINE_ADD) {
+        *dst = gfx_color_add(*dst, cov == 255 ? color
+                                              : gfx_color_mix(0, color, cov));
+    } else {
+        *dst = cov == 255 ? color : gfx_color_mix(*dst, color, cov);
+    }
+}
 
-    if (bx0 < clip.x0) bx0 = clip.x0;
-    if (by0 < clip.y0) by0 = clip.y0;
-    if (bx1 > clip.x1) bx1 = clip.x1;
-    if (by1 > clip.y1) by1 = clip.y1;
-
+/* Bresenham, in the form that treats both axes alike so no case analysis is
+ * needed for steep versus shallow lines. */
+static void walk_hard(int x0, int y0, int x1, int y1, gfx_color_t color,
+                      unsigned flags)
+{
     const int dx = im_abs(x1 - x0);
     const int dy = -im_abs(y1 - y0);
     const int sx = x0 < x1 ? 1 : -1;
     const int sy = y0 < y1 ? 1 : -1;
     int err = dx + dy;
-
     bool first = true;
 
     for (;;) {
-        if (!(first && open_start) &&
-            x0 >= clip.x0 && x0 < clip.x1 && y0 >= clip.y0 && y0 < clip.y1) {
-            gfx_color_t *const dst = &fb[(size_t)y0 * GFX_WIDTH + x0];
-            *dst = blend ? gfx_color_add(*dst, color) : color;
+        if (!(first && (flags & GFX_LINE_OPEN))) {
+            plot(x0, y0, color, flags, 255);
         }
         first = false;
+
         if (x0 == x1 && y0 == y1) {
             break;
         }
@@ -455,6 +451,108 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
         if (e2 >= dy) { err += dy; x0 += sx; }
         if (e2 <= dx) { err += dx; y0 += sy; }
     }
+}
+
+/* Xiaolin Wu, in the form the integer endpoints here allow.
+ *
+ * Step along whichever axis the line is longer on; the other coordinate is a
+ * Q16 accumulator, and its fractional part is how far the true line sits
+ * between two pixels. Light both, in proportion.
+ *
+ * Wu's published algorithm spends most of its length on fractional endpoints,
+ * which need their own partial coverage at each end. Nothing here has them -
+ * every caller is plotting a curve that has already been rounded to whole
+ * pixels - so the ends land exactly on a pixel, the fraction there is zero,
+ * and all of that goes away.
+ *
+ * A pixel whose fraction is zero skips its neighbour entirely rather than
+ * adding a zero-coverage contribution. That is not just a saving: under
+ * GFX_LINE_ADD a zero-coverage add is still a read, a mix and a write, and on
+ * an axis-aligned line every single step would take it.
+ */
+static void walk_smooth(int x0, int y0, int x1, int y1, gfx_color_t color,
+                        unsigned flags)
+{
+    const int dx = x1 - x0;
+    const int dy = y1 - y0;
+    const int adx = im_abs(dx);
+    const int ady = im_abs(dy);
+
+    if (adx == 0 && ady == 0) {
+        if (!(flags & GFX_LINE_OPEN)) {
+            plot(x0, y0, color, flags, 255);
+        }
+        return;
+    }
+
+    const bool shallow = adx >= ady;
+    const int steps = shallow ? adx : ady;
+    const int major = shallow ? (dx > 0 ? 1 : -1) : (dy > 0 ? 1 : -1);
+
+    /* How far the minor coordinate moves per step along the major axis. */
+    const int32_t slope =
+        (int32_t)(((int64_t)(shallow ? dy : dx) << 16) / steps);
+
+    int32_t minor = (int32_t)(shallow ? y0 : x0) << 16;
+    int at = shallow ? x0 : y0;
+
+    for (int i = 0; i <= steps; i++) {
+        if (!(i == 0 && (flags & GFX_LINE_OPEN))) {
+            /* Round toward the pixel the line is actually in: the accumulator
+             * can go negative off the top or left of the screen, and a shift
+             * of a negative value floors, which is what is wanted here. */
+            const int whole = (int)(minor >> 16);
+            const uint32_t frac = (uint32_t)(minor >> 8) & 0xFFu;
+
+            if (shallow) {
+                plot(at, whole, color, flags, (uint8_t)(255u - frac));
+                if (frac) {
+                    plot(at, whole + 1, color, flags, (uint8_t)frac);
+                }
+            } else {
+                plot(whole, at, color, flags, (uint8_t)(255u - frac));
+                if (frac) {
+                    plot(whole + 1, at, color, flags, (uint8_t)frac);
+                }
+            }
+        }
+        at += major;
+        minor += slope;
+    }
+}
+
+/* The dirty box is worked out up front, from the line's own bounding box
+ * intersected with the clip rect, and marked ONCE - rather than per pixel the
+ * way gfx_pixel() would. A diagonal line's bounding box is mostly empty, so
+ * this claims more than it writes; that only ever costs bus time, whereas
+ * claiming too little leaves stale pixels on the panel. */
+static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
+                      unsigned flags)
+{
+    /* Only pay for clipping when some of the line is actually outside. */
+    if (outcode(x0, y0) | outcode(x1, y1)) {
+        if (!clip_line(&x0, &y0, &x1, &y1)) {
+            return;
+        }
+    }
+
+    /* A smoothed line lights one pixel beyond the geometric line, on the side
+     * the fraction leans toward - so the box has to allow for it. */
+    const int spread = (flags & GFX_LINE_SMOOTH) ? 1 : 0;
+
+    int bx0 = im_min(x0, x1) - spread, bx1 = im_max(x0, x1) + 1 + spread;
+    int by0 = im_min(y0, y1) - spread, by1 = im_max(y0, y1) + 1 + spread;
+
+    if (bx0 < clip.x0) bx0 = clip.x0;
+    if (by0 < clip.y0) by0 = clip.y0;
+    if (bx1 > clip.x1) bx1 = clip.x1;
+    if (by1 > clip.y1) by1 = clip.y1;
+
+    if (flags & GFX_LINE_SMOOTH) {
+        walk_smooth(x0, y0, x1, y1, color, flags);
+    } else {
+        walk_hard(x0, y0, x1, y1, color, flags);
+    }
 
     if (bx0 < bx1 && by0 < by1) {
         dirty_mark(bx0, by0, bx1 - bx0, by1 - by0);
@@ -463,17 +561,13 @@ static void draw_line(int x0, int y0, int x1, int y1, gfx_color_t color,
 
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color)
 {
-    draw_line(x0, y0, x1, y1, color, false, false);
+    draw_line(x0, y0, x1, y1, color, 0);
 }
 
-void gfx_line_add(int x0, int y0, int x1, int y1, gfx_color_t color)
+void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color,
+                 unsigned flags)
 {
-    draw_line(x0, y0, x1, y1, color, true, false);
-}
-
-void gfx_line_add_open(int x0, int y0, int x1, int y1, gfx_color_t color)
-{
-    draw_line(x0, y0, x1, y1, color, true, true);
+    draw_line(x0, y0, x1, y1, color, flags);
 }
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)

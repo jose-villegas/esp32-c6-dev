@@ -140,10 +140,10 @@ static void draw_floor(uint32_t now_ms, uint8_t ink)
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
 
-            gfx_line(sx(off, -far), sy(off, -far, 0),
-                     sx(off,  far), sy(off,  far, 0), c);
-            gfx_line(sx(-far, off), sy(-far, off, 0),
-                     sx( far, off), sy( far, off, 0), c);
+            gfx_line_ex(sx(off, -far), sy(off, -far, 0),
+                        sx(off,  far), sy(off,  far, 0), c, GFX_LINE_SMOOTH);
+            gfx_line_ex(sx(-far, off), sy(-far, off, 0),
+                        sx( far, off), sy( far, off, 0), c, GFX_LINE_SMOOTH);
         }
     }
 }
@@ -163,8 +163,8 @@ static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
     const int32_t fim = (im * reach) / 255;
     const int32_t ft  = (t  * reach) / 255;
 
-    gfx_line(sx(0, 0), sy(0, 0, 0), sx(fre, fim), sy(fre, fim, ft),
-             lit(COL_AXIS, ink));
+    gfx_line_ex(sx(0, 0), sy(0, 0, 0), sx(fre, fim), sy(fre, fim, ft),
+                lit(COL_AXIS, ink), GFX_LINE_SMOOTH);
 }
 
 static void draw_label(int x, int y, const char *text, uint8_t ink)
@@ -242,7 +242,7 @@ static void draw_zeros(int32_t pen_t_q8, uint8_t ink)
  * middle of the picture - come out brighter and mixed instead of showing
  * whichever piece happened to be drawn last. */
 /* `joined` says this segment continues one already drawn, so its starting
- * pixel has been put down already - see gfx_line_add_open(). */
+ * pixel has been put down already - see GFX_LINE_OPEN in gfx.h. */
 static void draw_stroke(int x0, int y0, int x1, int y1,
                         boot_anim_stroke_t s, uint8_t ink, bool joined)
 {
@@ -264,11 +264,9 @@ static void draw_stroke(int x0, int y0, int x1, int y1,
         const int bx = shallow ? x1 : x1 + off;
         const int by = shallow ? y1 + off : y1;
 
-        if (joined) {
-            gfx_line_add_open(ax, ay, bx, by, c);
-        } else {
-            gfx_line_add(ax, ay, bx, by, c);
-        }
+        gfx_line_ex(ax, ay, bx, by, c,
+                    GFX_LINE_ADD | GFX_LINE_SMOOTH |
+                    (joined ? GFX_LINE_OPEN : 0u));
     }
 }
 

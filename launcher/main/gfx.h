@@ -87,40 +87,61 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
 
-/* A one-pixel line from (x0, y0) to (x1, y1), both endpoints included.
+/* A line from (x0, y0) to (x1, y1), both endpoints included.
  *
  * Coordinates may be anywhere, on screen or not: a line is shortened to its
  * visible part before anything is drawn, so one running far off the panel
  * costs almost nothing and one entirely off it costs a handful of compares.
- * Feeding this unbounded coordinates is fine - the floor grid in boot_anim.c
- * does exactly that, running its lines until they leave the screen.
  *
  * Exists because the startup animation plots a curve, and a curve is a few
  * hundred short segments - see boot_anim.c. Nothing before it needed a line
  * at all, which is why this is the newest primitive in the file. */
 void gfx_line(int x0, int y0, int x1, int y1, gfx_color_t color);
 
-/* The same line, ADDED to what is already there rather than replacing it -
- * gfx_color_add() per pixel, so two strokes crossing make a brighter, mixed
- * colour instead of whichever was drawn second.
+/*---------------------------------------------------------------------------
+ * Lines, with options
  *
- * Costs a read as well as a write per pixel, so it is the one to reach for
- * when overlap is the point and not otherwise. The startup animation is that
- * case: its curve crosses itself constantly, and flat writes made it look
- * like stacked wires rather than one lit object. */
-void gfx_line_add(int x0, int y0, int x1, int y1, gfx_color_t color);
+ * Three independent choices - how it composites, whether it is smoothed, and
+ * whether it owns its first pixel - which is eight combinations. They are
+ * flags on one function rather than eight named ones, because they genuinely
+ * are independent: every pair of them is used together somewhere in
+ * boot_anim.c, and a family of gfx_line_add_smooth_open() spellings would be
+ * both unreadable and a standing invitation to add a ninth.
+ *
+ * gfx_line() above is the no-flags case, kept as its own name because it is
+ * what most callers want and reads better than passing a zero.
+ *-------------------------------------------------------------------------*/
 
-/* The same, with the STARTING pixel left undrawn.
+/* Add to what is already in the framebuffer instead of replacing it, so two
+ * strokes crossing on a black field make a brighter, mixed colour rather than
+ * whichever was drawn second. Costs a read as well as a write per pixel. */
+#define GFX_LINE_ADD    (1u << 0)
+
+/* Antialias: light the two pixels either side of the true line in proportion
+ * to how much of each the line actually covers, rather than snapping to the
+ * nearer one. Doubles the pixels written.
+ *
+ * Worth knowing before reaching for it: this panel is RGB565, so red and blue
+ * have 5 bits and the smallest step either can show is 1/31. Coverage finer
+ * than about 5 bits is invisible on two channels out of three - which is why
+ * the implementation does not bother with anything more precise, and why the
+ * result looks the same as a far more careful version would. */
+#define GFX_LINE_SMOOTH (1u << 1)
+
+/* Leave the STARTING pixel undrawn.
  *
  * For chaining segments into a polyline. Two segments that meet share a
- * pixel, and under additive blending a shared pixel is added twice - so a
- * curve drawn as a few hundred short segments comes out beaded, with a
- * brighter dot at every joint. Drawing each segment half-open puts exactly
- * one contribution on every pixel of the chain.
+ * pixel, and under GFX_LINE_ADD a shared pixel is added twice - so a curve
+ * drawn as a few hundred short segments comes out beaded, with a brighter dot
+ * at every joint. Drawing each segment half-open puts exactly one
+ * contribution on every pixel of the chain.
  *
- * Only useful for the second segment onward: the first has nothing before it
+ * Only useful from the second segment onward: the first has nothing before it
  * to have drawn its start. */
-void gfx_line_add_open(int x0, int y0, int x1, int y1, gfx_color_t color);
+#define GFX_LINE_OPEN   (1u << 2)
+
+void gfx_line_ex(int x0, int y0, int x1, int y1, gfx_color_t color,
+                 unsigned flags);
 
 /* Draws at GFX_GLYPH_SCALE - the size the UI is laid out around. */
 void gfx_text(int x, int y, const char *text, gfx_color_t color);
