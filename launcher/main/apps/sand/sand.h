@@ -81,6 +81,32 @@
  * anyone is expected to reach. */
 #define SAND_MAX_EMITTERS 16
 
+/* One grain currently in flight from sand_explode() - see sand_enable_blast()
+ * and sand_explode() for the mechanic this belongs to.
+ *
+ * `index` is y*w+x - the same row-major index crack_run()'s frontier
+ * (sand_reactions.c) already uses uint16_t for, and for the same reason: this
+ * grid is never more than 65,536 cells. `cell` is the exact byte (material
+ * and variant) that was thrown, kept so the flight pass can tell, before
+ * touching anything, whether the grain it threw is still the one sitting at
+ * `index` - ordinary gravity in the sweep, a reaction, or an external
+ * sand_set()/sand_erase() can all have touched that exact cell since this
+ * entry's last turn, and a stale entry must drop rather than fly whatever now
+ * happens to be there. `dir` is which of the eight ring directions (see
+ * ring_dir() in sand_priv.h) it keeps flying.
+ *
+ * Four bytes, not the three a bare (index, dir) pair would need - the extra
+ * byte is what makes that identity check possible at all, and on top of that
+ * costs nothing: a uint16_t plus two uint8_ts already rounds up to four for
+ * alignment, so the byte is free. Even a generous few hundred of these is
+ * still three orders of magnitude under a real per-cell velocity field - see
+ * docs/Sand/Explosion-Plan.md for the full comparison. */
+typedef struct {
+    uint16_t index;
+    cell_t   cell;
+    uint8_t  dir;
+} blast_t;
+
 typedef struct {
     uint8_t *cells;      /* w * h, row-major, caller-owned */
     int      w, h;
@@ -220,6 +246,15 @@ typedef struct {
     uint8_t *block_state;
     int      block_cols, block_rows;   /* set once, by sand_init() */
 
+    /* Optional, caller-owned, `blast_max` entries: grains currently in
+     * flight from sand_explode() - see sand_enable_blast(). NULL disables
+     * the whole mechanic, the same way dirty_rows/block_state above disable
+     * theirs. blast_count is how many of blast_buf's entries are live right
+     * now, always <= blast_max. */
+    blast_t *blast_buf;
+    int      blast_max;
+    int      blast_count;
+
     int      last_load_dx, last_load_dy;
 
     /* The DITHERED direction of the last step, as opposed to the nearest
@@ -332,6 +367,23 @@ void sand_enable_sleeping(sand_t *s, uint8_t *blocks);
  * it. Always false if block-sleeping was never enabled. */
 bool sand_block_settled(const sand_t *s, int bx, int by);
 
+/* Let sand_explode() throw grains outward instead of doing nothing.
+ *
+ * The same caller-provided-buffer shape as sand_enable_sleeping() and
+ * sand_track_dirty_rows() above, and for the same reason: a board that never
+ * explodes should not pay for the mechanic, not even the struct space, and a
+ * test can size `buf` deliberately small to exercise the cap on purpose (see
+ * sand_explode()'s own comment on what happens once it fills).
+ *
+ * `max` is how many of `buf`'s entries may be in flight at once - a bounded
+ * transient list, the same shape crack_run() already uses for CRACK_MAX
+ * (sand_reactions.c), not a per-cell flag: an explosion throws at most a few
+ * hundred grains for a few dozen steps each, so this is a few hundred
+ * entries of blast_t, not another byte on every one of the grid's cells.
+ *
+ * NULL disables the mechanic entirely - sand_explode() becomes a no-op. */
+void sand_enable_blast(sand_t *s, blast_t *buf, int max);
+
 /* Out-of-bounds reads return STONE, not empty.
  *
  * That is deliberate: it makes the walls solid for free, so the movement code
@@ -406,6 +458,57 @@ int sand_emitter_count(const sand_t *s);
 /* Read emitter `i` back - for drawing a marker at it, say. False, leaving
  * the outputs untouched, if `i` is not currently a valid emitter index. */
 bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
+
+/* Push every occupied cell within `radius` of the centre outward, to be moved
+ * by the flight pass at the tail of sand_step() - see sand.c's step_blast()
+ * and its own comment on why that pass has to run LAST, after everything
+ * else that can move or replace a cell. Each queued grain moves one cell per
+ * step, in the direction pointing away from (cx, cy), quantised the same way
+ * sand_gravity_direction() already quantises gravity into eight directions.
+ *
+ * Same signature shape as sand_spawn() and sand_erase() above - a centre and
+ * a radius - because it belongs to that family: no material owns it and no
+ * reaction fires it, so tests call it directly and the app calls it from a
+ * temporary mode (see app_sand.c). See docs/Sand/Explosion-Plan.md for the
+ * design this implements and why it needs no per-cell velocity field.
+ *
+ * A no-op if sand_enable_blast() was never called - there is nowhere to
+ * queue an entry. Also a no-op for any cell with no defined outward
+ * direction, which is exactly the centre cell itself; every other occupied
+ * cell in the disc gets one.
+ *
+ * Past the buffer's own capacity, the excess grains simply are not queued
+ * and so do not fly - graceful degradation, exactly like CRACK_MAX
+ * truncating a crack rather than failing. A blast bigger than the buffer is
+ * a smaller-looking blast, not a bug. */
+void sand_explode(sand_t *s, int cx, int cy, int radius);
+
+/* Chance in 256, per step, that a flying grain keeps flying rather than
+ * settling exactly where it is.
+ *
+ * A per-entry step counter was the obvious alternative and was rejected for
+ * two reasons. This project already expresses "how often does X happen this
+ * step" as a chance in 256 everywhere a rate is needed - mobility, falls,
+ * scatter, flare, heat_chance - so a roll here reads like the rest of the
+ * file instead of introducing a second idiom. And geometric decay gives the
+ * right SHAPE of distribution for free: most grains stop within the first
+ * few steps and a few carry much further, which is what a blast actually
+ * looks like, without a separate spread parameter to tune by hand - one
+ * knob, "how far things fly", rather than a rate and a cap that would have
+ * to agree with each other. It also keeps a blast_t entry down to a
+ * position, the thrown cell and a direction - there is no count to store.
+ *
+ * 200 is a STARTING POINT, not a measurement - there is no device capture
+ * behind it the way SAND_REBOUND_GAIN has one. Arithmetically, a decay
+ * chance of d gives an expected 1/(1 - d/256) further moves once a grain is
+ * already flying; at 200 that is 256/56 =~ 4.6, so a typical grain clears a
+ * handful of cells while a geometric tail keeps a minority going much
+ * further - the right SHAPE for a blast, on paper. Whether it is the right
+ * SIZE has only been watched on a host grid, never on the panel. Tune once
+ * an actual blast can be watched on real hardware - see
+ * docs/Sand/Explosion-Plan.md's "Device" section for what to look at
+ * first. */
+#define SAND_BLAST_DECAY  200
 
 /* FRICTION
  *

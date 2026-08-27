@@ -156,6 +156,9 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     clear_content_flags(s);
     s->dirty_rows = NULL;
     s->block_state = NULL;
+    s->blast_buf   = NULL;
+    s->blast_max   = 0;
+    s->blast_count = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
      * step_one_row()), whether or not block_state exists, so block_cols/
@@ -216,6 +219,17 @@ bool sand_block_settled(const sand_t *s, int bx, int by)
            (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
 }
 
+void sand_enable_blast(sand_t *s, blast_t *buf, int max)
+{
+    s->blast_buf   = buf;
+    s->blast_max   = (buf != NULL) ? max : 0;
+    /* Nothing can already be in flight against a buffer that was just handed
+     * over - the same reasoning sand_enable_sleeping() gives for zeroing
+     * `blocks`, applied to a count rather than a memset since there is no
+     * grid content of `buf`'s own to know anything about yet. */
+    s->blast_count = 0;
+}
+
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
 {
     s->dirty_rows = rows;
@@ -235,6 +249,13 @@ void sand_clear(sand_t *s)
     if (s->block_state != NULL) {
         memset(s->block_state, 0, (size_t)s->block_cols * (size_t)s->block_rows);
     }
+    /* Any entry still in flight names a cell this memset just wiped, so its
+     * stored `cell` byte can no longer match what is actually there - the
+     * flight pass would drop every one of them on its next turn anyway (see
+     * step_blast()'s verify-before-moving check). Dropping them here instead
+     * reaches the same outcome without paying for it: no stale index
+     * survives into a grid that has just been handed back empty. */
+    s->blast_count = 0;
 }
 
 cell_t sand_at(const sand_t *s, int x, int y)
@@ -354,6 +375,58 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
     sand_remove_emitters(s, cx, cy, radius);
 
     return removed;
+}
+
+void sand_explode(sand_t *s, int cx, int cy, int radius)
+{
+    if (s->blast_buf == NULL) {
+        return;   /* sand_enable_blast() was never called - see its comment */
+    }
+
+    const int r2 = radius * radius;
+
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            if (dx * dx + dy * dy > r2) {
+                continue;
+            }
+            if (s->blast_count >= s->blast_max) {
+                return;   /* over the cap - the rest simply do not fly */
+            }
+
+            const int x = cx + dx;
+            const int y = cy + dy;
+            if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
+                continue;
+            }
+
+            const size_t at = (size_t)y * (size_t)s->w + (size_t)x;
+            const cell_t cell = s->cells[at];
+            if (CELL_IS_EMPTY(cell)) {
+                continue;
+            }
+
+            /* (dx, dy) IS the vector from the centre to this cell, so
+             * handing it straight to the same quantiser gravity uses gives
+             * "away from the centre" in one of the eight directions the
+             * rest of the simulation already works in - no separate angle
+             * math needed. The one input this can never resolve is the
+             * centre cell itself, where (dx, dy) is (0, 0) - sand_gravity_
+             * direction() reports that as no direction at all, and this
+             * simply leaves that cell where it is rather than throw it
+             * nowhere in particular. */
+            int qdx, qdy;
+            sand_gravity_direction(dx, dy, &qdx, &qdy);
+            if (qdx == 0 && qdy == 0) {
+                continue;
+            }
+
+            blast_t *entry = &s->blast_buf[s->blast_count++];
+            entry->index = (uint16_t)at;
+            entry->cell  = cell;
+            entry->dir   = (uint8_t)ring_of(qdx, qdy);
+        }
+    }
 }
 
 /*---------------------------------------------------------------------------
@@ -1137,6 +1210,88 @@ static void build_xflow(xflow_t *f, int gx, int gy)
     f->bias_dg_q8 = bx * f->dg[0] + by * f->dg[1];
 }
 
+/* The flight pass: every entry in s->blast_buf moves exactly one cell along
+ * the direction sand_explode() gave it, or stops. Called from sand_step(),
+ * immediately before finalize_settling() - see docs/Sand/Explosion-Plan.md's
+ * "Where the pass runs, and why it must be LAST" for the two reasons that
+ * position is not a preference. In short: running after every other pass
+ * that can move or replace a cell is what keeps an entry's stored position
+ * honest - nothing else can have touched it again before this pass's own
+ * next turn - and it is what turns a plain outward push into a ballistic arc
+ * for nothing extra, since gravity has already pulled in the sweep above by
+ * the time this runs and "down" plus "out, decaying" simply add.
+ *
+ * A single `if` with nothing queued, which is every step on a board that has
+ * never exploded - the same shape sand_step_gas()'s own may_have_gas gate
+ * gives a board with no gas on it. */
+static void step_blast(sand_t *s)
+{
+    if (s->blast_count == 0) {
+        return;
+    }
+
+    const int w = s->w;
+    int kept = 0;
+
+    for (int i = 0; i < s->blast_count; i++) {
+        const blast_t entry = s->blast_buf[i];
+
+        /* Verify before moving. Nothing marks this index as "spoken for" -
+         * that would be the per-cell flag this whole design exists to
+         * avoid - so ordinary gravity in the sweep above, a reaction, or an
+         * external sand_set()/sand_erase() may already have touched this
+         * exact cell since the entry's last turn. If what sits there now is
+         * not byte-for-byte what was thrown, drop the entry silently rather
+         * than fly whatever happens to be there instead. Grains get lost
+         * this way occasionally and nobody will ever see it - the
+         * alternative is a per-cell "in flight" bit, which is the 40 KB
+         * this whole design exists to avoid (see sand.h's blast_t). */
+        if (s->cells[entry.index] != entry.cell) {
+            continue;
+        }
+
+        /* The roll happens before the move attempt: a grain whose flight
+         * just ran out should not also get one free move from the same roll
+         * that grounded it. */
+        if (!rng_chance(&s->rng, SAND_BLAST_DECAY)) {
+            continue;
+        }
+
+        const int x = (int)((unsigned)entry.index % (unsigned)w);
+        const int y = (int)((unsigned)entry.index / (unsigned)w);
+        const int *d = ring_dir(entry.dir);
+        const int nx = x + d[0];
+        const int ny = y + d[1];
+
+        /* Empty only - not can_enter()'s denser-fluid displacement. v1 does
+         * not push, displace or swap with anything (see the plan's "v1
+         * keeps it simple, deliberately"), so containment falls out of this
+         * one check with no raycast: a blast inside a sealed vessel throws
+         * its grains up to the wall and stops them there, because the wall
+         * is never empty. sand_at() reading out-of-bounds as STONE folds
+         * the grid-edge case into this same check for free, the same trick
+         * can_enter()'s own callers already lean on. */
+        if (!CELL_IS_EMPTY(sand_at(s, nx, ny))) {
+            continue;
+        }
+
+        const size_t at  = entry.index;
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+
+        s->cells[nat] = entry.cell;
+        s->cells[at]  = SAND_EMPTY;
+        latch_content_flags(s, entry.cell);
+        mark_move(s, x, y, nx, ny);
+
+        s->blast_buf[kept].index = (uint16_t)nat;
+        s->blast_buf[kept].cell  = entry.cell;
+        s->blast_buf[kept].dir   = entry.dir;
+        kept++;
+    }
+
+    s->blast_count = kept;
+}
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Emitters get their one attempt per step FIRST, before gravity is even
@@ -1278,6 +1433,16 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * check (mirroring sand_step_liquids()'s pattern, not
      * sand_step_gas()'s) is enough. */
     sand_step_reactions(s);
+
+    /* Last of all, and deliberately so - see step_blast()'s own comment and
+     * docs/Sand/Explosion-Plan.md's "Where the pass runs, and why it must be
+     * LAST". Everything above this line has already had its one chance to
+     * move or replace a cell this step; running flight after all of it is
+     * what lets an entry trust its own stored position at the top of its
+     * next turn, and it is what makes a thrown grain arc instead of flying
+     * in a straight line - gravity already pulled in the sweep, this only
+     * adds the outward half. */
+    step_blast(s);
 
     finalize_settling(s, settled_bit);
 }

@@ -10958,6 +10958,265 @@ static void test_material_can_emit_matches_every_brush_by_kind(void)
     }
 }
 
+/* --- explosions -----------------------------------------------------------
+ *
+ * sand_explode() throws grains outward one cell per step, in a bounded
+ * transient list rather than a per-cell velocity field - see
+ * docs/Sand/Explosion-Plan.md, which this whole section implements.
+ */
+
+/* One entry per cell of the 8x8 fixture grid - big enough that no test below
+ * needs to think about the cap, except the one written specifically to
+ * exercise it (which uses its own, deliberately tiny buffer instead). */
+static blast_t blast_buf[W * H];
+
+/* Written FIRST, because it is what the plan calls out as forcing the actual
+ * design decision: "stop when blocked" (what this implements) versus a
+ * radial line-of-sight raycast from the centre (the obvious first instinct
+ * the plan rejects) would both pass every other test in this file, but only
+ * the first one keeps a blast that starts inside a sealed container from
+ * reaching outside it. */
+static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
+{
+    fixture();
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    /* A stone box drawn on the grid itself, not merely relying on the grid's
+     * own edge (sand_at()'s off-grid-is-STONE convention is exercised by the
+     * separate bounds test below) - x=0/W-1 and y=0/H-1. The payload sits at
+     * its centre with two or three empty cells of clearance on every side,
+     * so a thrown grain has real room to fly before it ever meets the wall. */
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (x == 0 || x == W - 1 || y == 0 || y == H - 1) {
+                sand_set(&s, x, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+            }
+        }
+    }
+    sand_set(&s, 3, 3, SAND_FIRST_SHADE);
+    sand_set(&s, 4, 3, SAND_FIRST_SHADE);
+    sand_set(&s, 3, 4, SAND_FIRST_SHADE);
+    sand_set(&s, 4, 4, SAND_FIRST_SHADE);
+    const int before = sand_count(&s);
+
+    /* Centred on one corner of the 2x2 payload, radius 1: its two occupied
+     * cardinal neighbours (RIGHT and DOWN) each get thrown towards a wall
+     * that is three cells away - not an immediate bounce, an actual flight. */
+    sand_explode(&s, 3, 3, 1);
+
+    for (int i = 0; i < 30; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            if (x == 0 || x == W - 1 || y == 0 || y == H - 1) {
+                TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
+                    CELL_MATERIAL(sand_at(&s, x, y)),
+                    "the wall must still be exactly the wall - a flying grain "
+                    "that reached it must have stopped, not passed through "
+                    "or displaced it");
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, sand_count(&s),
+        "a blast conserves grains even when it is fully contained");
+}
+
+static void test_a_blast_conserves_grains(void)
+{
+    fixture();
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    for (int y = 2; y < 5; y++) {
+        for (int x = 2; x < 6; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    const int expected = sand_count(&s);
+
+    sand_explode(&s, 3, 3, 2);
+
+    /* Checked every step, not just at the end - the same idiom as
+     * test_dithering_still_conserves_grains - so a bug that briefly
+     * duplicates or drops a cell mid-flight cannot cancel itself out before
+     * a final comparison would ever see it. */
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+            "a blast MOVES cells - it must never create or destroy one");
+    }
+}
+
+static void test_a_blast_at_the_edge_stays_in_bounds(void)
+{
+    /* Every corner, and the middle of one edge - each centred exactly on the
+     * grid boundary, so most of the disc is off-grid and every direction is
+     * exercised against the wall sand_at() makes of it, not a painted one. */
+    static const struct { int cx, cy; } spots[] = {
+        { 0, 0 }, { W - 1, 0 }, { 0, H - 1 }, { W - 1, H - 1 }, { W / 2, 0 },
+    };
+
+    for (size_t i = 0; i < sizeof(spots) / sizeof(spots[0]); i++) {
+        fixture();
+        sand_enable_blast(&s, blast_buf, W * H);
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                sand_set(&s, x, y, SAND_FIRST_SHADE);
+            }
+        }
+        const int expected = sand_count(&s);
+
+        sand_explode(&s, spots[i].cx, spots[i].cy, 3);
+
+        for (int step = 0; step < 20; step++) {
+            sand_step(&s, 0, 1000, 0);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+                "a blast centred on the grid edge must not lose grains off "
+                "it, nor manufacture any from the off-grid cells it can "
+                "never queue an entry for - CRACK_MAX exists for the same "
+                "worst-case reason");
+        }
+    }
+}
+
+static void test_a_dropped_entry_never_moves_someone_elses_cell(void)
+{
+    fixture();
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    sand_set(&s, 4, 4, SAND_FIRST_SHADE);
+    sand_explode(&s, 3, 4, 1);   /* (4,4) is the RIGHT neighbour of centre */
+
+    /* Something else claims the exact cell the entry still names, before it
+     * ever gets another turn - a reaction or a second paint stroke would do
+     * this on the real board just as easily as this test does it directly. */
+    sand_set(&s, 4, 4, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT),
+        sand_at(&s, 4, 4),
+        "the entry must have been dropped - the cell it named no longer "
+        "holds the grain it threw");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 5, 4),
+        "relocating the stone would have moved it exactly here - a dropped "
+        "entry must not move whatever now sits in its old cell instead");
+}
+
+static blast_t tiny_blast_buf[2];
+
+static void test_the_cap_degrades_gracefully(void)
+{
+    fixture();
+    sand_enable_blast(&s, tiny_blast_buf, 2);
+
+    /* Three FULL-WIDTH rows, the same shape the sleeping tests settle - not
+     * a free-floating block. Full width matters here specifically: every
+     * cell's sliding diagonals are either another occupied cell in the same
+     * rows or off-grid (which sand_at() reads as solid too), so nothing in
+     * it can move under ordinary gravity AT ALL, on any edge. A free block
+     * narrower than its own support looked simpler but was not - its
+     * corner cells had an open diagonal past their own footprint and slid
+     * away under plain gravity regardless of the blast, which is exactly
+     * the false failure this shape rules out. */
+    for (int y = 5; y <= 7; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    const int expected = sand_count(&s);
+
+    /* Centre (3,6), radius 1: the four cardinal neighbours all qualify, in
+     * sand_explode()'s own dy-then-dx scan order - UP, LEFT, RIGHT, DOWN.
+     * The buffer holds 2, so UP and LEFT get an entry; RIGHT and DOWN do
+     * not, and - being part of a fully stable bed - must simply stay
+     * exactly where they are. */
+    sand_explode(&s, 3, 6, 1);
+
+    for (int i = 0; i < 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 6),
+        "the RIGHT neighbour did not fit in a buffer of 2 and must not fly");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 7),
+        "the DOWN neighbour did not fit either, for the same reason");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
+        "over the cap is a smaller-looking blast, not a bug - nothing may "
+        "be lost");
+}
+
+/* The failure this guards against is invisible to every test above: a
+ * grain thrown into open air above a settled, sleeping pile freezes there
+ * forever if the block it landed in is never told it is worth examining
+ * again - see Adding-a-Material.md's own lesson on exactly this shape of
+ * bug. Reuses settle_with_sleeping()/assert_nothing_left_to_do() from the
+ * "sleeping" section above, which already embody the right check: run the
+ * same final grid again with sleeping OFF, and require that nothing at all
+ * moves. */
+static void test_a_blast_wakes_the_blocks_it_touches(void)
+{
+    static const char *bed[] = {
+        "........",
+        "........",
+        "........",
+        "........",
+        "........",
+        "oooooooo",
+        "oooooooo",
+        "oooooooo",
+    };
+    settle_with_sleeping(bed, 8, 100, 0, 1000);
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    /* Centre inside the now-asleep bed, radius 1: the UP neighbour is
+     * thrown off the bed's own surface into the open air above it - exactly
+     * the displaced-grain-freezes-mid-air scenario this test exists for, if
+     * the block it lands in is never woken back up. */
+    sand_explode(&s, 3, 6, 1);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    assert_nothing_left_to_do(0, 1000);
+}
+
+static void test_detonating_empty_space_is_a_no_op(void)
+{
+    fixture();
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    sand_explode(&s, 4, 4, 3);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "there was nothing there to throw, so nothing may appear from it");
+
+    sand_step(&s, 0, 1000, 0);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, sand_count(&s),
+        "and stepping afterwards must not conjure anything either");
+}
+
+static void test_without_a_buffer_explode_does_nothing(void)
+{
+    fixture();
+    /* sand_enable_blast() deliberately never called. */
+
+    sand_set(&s, 4, 4, SAND_FIRST_SHADE);
+    sand_explode(&s, 4, 4, 2);
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 4),
+        "with no buffer enabled, sand_explode() must be a pure no-op");
+
+    for (int i = 0; i < 10; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    /* Getting here at all is most of what this test is for - step_blast()
+     * must treat "no buffer" exactly like "nothing queued" rather than ever
+     * touching a NULL blast_buf. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_count(&s),
+        "and ordinary gravity alone must still account for the one grain");
+}
+
 /* --- free fall and shaking ---------------------------------------------- */
 
 static void test_nothing_moves_in_free_fall(void)
@@ -13853,6 +14112,15 @@ void run_sand_suite(void)
     RUN_TEST(test_erase_count_excludes_emitters);
     RUN_TEST(test_sand_init_clears_emitters_from_a_previous_use);
     RUN_TEST(test_material_can_emit_matches_every_brush_by_kind);
+
+    RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
+    RUN_TEST(test_a_blast_conserves_grains);
+    RUN_TEST(test_a_blast_at_the_edge_stays_in_bounds);
+    RUN_TEST(test_a_dropped_entry_never_moves_someone_elses_cell);
+    RUN_TEST(test_the_cap_degrades_gracefully);
+    RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
+    RUN_TEST(test_detonating_empty_space_is_a_no_op);
+    RUN_TEST(test_without_a_buffer_explode_does_nothing);
 
     RUN_TEST(test_nothing_moves_in_free_fall);
     RUN_TEST(test_shaking_spreads_a_pile_sideways);
