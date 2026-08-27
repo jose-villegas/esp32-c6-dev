@@ -60,6 +60,12 @@ static ui_text_style_t text_style;
 static ui_transform_t transform;
 static bool            transform_valid;
 
+/* See ui.h's own comment above ui_layout_generation() for what this counts
+ * and, more importantly, what it is not. Bumped in the same branch of
+ * ui_set_transform() below that already calls ui_invalidate() - a genuine
+ * transform change is the one and only thing that increments it. */
+static uint32_t layout_generation;
+
 /* microui asks us for text metrics rather than measuring anything itself.
  * `font` is whatever ctx.style->font held when the widget that wants
  * metrics ran - see ui_set_font() in ui.h for how it gets there. It is
@@ -209,6 +215,10 @@ void ui_set_transform(ui_transform_t t)
     }
     transform       = t;
     transform_valid = ui_transform_is_axis_preserving(t);
+    /* Past transforms_equal()'s early return, so this IS a genuine change -
+     * see ui_layout_generation()'s comment in ui.h for what counts as one
+     * and why this is the only place that gets to bump it. */
+    layout_generation++;
     if (!transform_valid) {
         ESP_LOGE(TAG, "ui_set_transform: transform is not a rotation by a "
                  "multiple of 90 degrees, translation or scale - this "
@@ -231,6 +241,11 @@ mu_Context *ui_context(void)
     return &ctx;
 }
 
+uint32_t ui_layout_generation(void)
+{
+    return layout_generation;
+}
+
 void ui_invalidate(void)
 {
     invalidated = true;
@@ -249,6 +264,11 @@ void ui_init(void)
     text_style      = UI_TEXT_PLAIN;
     transform       = ui_transform_identity();
     transform_valid = true;
+    /* Explicit, not left to a zeroed static's implicit value - see
+     * ui_layout_generation()'s comment in ui.h. 0 is simply the first value
+     * a monotonic counter can have; nothing reads meaning into it beyond
+     * "no genuine transform change has happened yet this run". */
+    layout_generation = 0;
 
     /* Palette. Deliberately dark: this is an OLED, so black pixels are off
      * pixels - it costs less power and looks better than a grey chrome. */

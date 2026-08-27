@@ -16,9 +16,13 @@
  * right at the accepted minimum touch target; five columns would be 368 / 5 =
  * 74 px = 5.8 mm, under any guideline going. Four is the most columns that
  * still keeps a tile at or above a fingertip - this reasoning is the entire
- * justification for PALETTE_COLS/PALETTE_TILE below and cannot be recovered
- * from the numbers alone, which is why it is written out here rather than
- * left for the constants to speak for themselves.
+ * justification for PALETTE_TILE below and for palette_cols()'s floor(width /
+ * PALETTE_TILE), and cannot be recovered from the numbers alone, which is why
+ * it is written out here rather than left for the arithmetic to speak for
+ * itself. Four is not hardcoded any more - palette_cols() derives it from
+ * whichever width the panel is actually filling - but it is still the answer
+ * this reasoning gives at both real widths this panel is ever drawn at (368
+ * and, at a quarter turn, 448); see palette_cols()'s own comment.
  *
  * THE SCREEN SIZE IS DUPLICATED, NOT SHARED
  *
@@ -52,8 +56,57 @@
 #define PALETTE_SCREEN_W 368
 #define PALETTE_SCREEN_H 448
 
-#define PALETTE_COLS 4
+/* WHY THE COLUMN COUNT IS DERIVED, NOT FIXED
+ *
+ * A grid is a description of how content fills a rect, so it has to be
+ * recomputed for the rect it is actually filling - fixing it at compile time
+ * baked in an assumption (the panel is always 368 px wide) that a quarter
+ * turn already breaks elsewhere in this file (see palette_tile_rect()'s own
+ * comment on screen_w/screen_h being the LOGICAL, not physical, canvas).
+ * palette_cols() below is that recomputation: the same 92 px touch-target
+ * floor this file's top comment justifies, applied to whatever width is
+ * actually available rather than assumed. At both real screen widths this
+ * panel ever sees - 368 (upright) and 448 (a quarter turn) - it still comes
+ * out to 4, by calculation rather than coincidence: floor(368/92) = 4 exactly
+ * (368 is a multiple of 92), and floor(448/92) = 4 with 80 px left over
+ * (448 = 4*92 + 80). See suite_palette.c's own test of this across a range of
+ * widths, including both. */
 #define PALETTE_TILE 92
+
+/* Upper bound on what palette_cols()/PALETTE_COLS_FOR() below can return.
+ *
+ * Not protecting any fixed-size array - there is none in this file or in
+ * app_sand.c's callers keyed by column count; PALETTE_COLS used to be a
+ * plain constant read directly wherever a column count was needed, never an
+ * array dimension. This exists purely so a caller passing a huge or garbage
+ * screen_w (the function takes a plain int, so nothing stops one) gets a
+ * capped, sane column count back instead of one dividing 368 px of touch
+ * target across an absurd number of columns. 16 is far above anything the
+ * touch-target reasoning above would ever justify - the whole argument
+ * caps out at 4 - so this bound is never the thing actually limiting a real
+ * call. */
+#define PALETTE_COLS_MAX 16
+
+/* The formula palette_cols() computes, as a preprocessor constant expression
+ * so PALETTE_FITS below can evaluate it inside a _Static_assert - a plain
+ * function call cannot appear there. palette_cols() is defined in palette.c
+ * IN TERMS OF this macro rather than reimplementing the same arithmetic, so
+ * there is exactly one formula and no way for the runtime and compile-time
+ * versions to drift apart. floor(w / PALETTE_TILE), clamped to
+ * [1, PALETTE_COLS_MAX]. */
+#define PALETTE_COLS_FOR(w) \
+    ((((w) / PALETTE_TILE) < 1) ? 1 : \
+     (((w) / PALETTE_TILE) > PALETTE_COLS_MAX ? PALETTE_COLS_MAX : \
+      ((w) / PALETTE_TILE)))
+
+/* How many columns a `screen_w`-wide canvas gets - see this file's own
+ * "WHY THE COLUMN COUNT IS DERIVED, NOT FIXED" comment above. Every caller
+ * that used to read the constant PALETTE_COLS now calls this with the
+ * LOGICAL canvas width (see ui.h's ui_width(), not GFX_WIDTH) and threads
+ * the result through explicitly, the same way screen_w/screen_h are already
+ * threaded through palette_tile_rect() and friends below - never a hidden
+ * global. */
+int palette_cols(int screen_w);
 
 /* Duplicated from gfx.h's GFX_CHAR_W/GFX_CHAR_H - see this file's own top
  * comment ("THE SCREEN SIZE IS DUPLICATED, NOT SHARED") for why: gfx.h drags
@@ -63,75 +116,93 @@
 #define PALETTE_CHAR_W 16
 #define PALETTE_CHAR_H 16
 
-/* Rows a `count`-brush palette needs, ceiling-divided so a partial last row
- * still gets counted. `count` is a compile-time constant at its only call
- * site (BRUSH_COUNT in app_sand.c), which is what makes PALETTE_FITS below
- * usable inside a _Static_assert. */
-#define PALETTE_ROWS(count) (((count) + PALETTE_COLS - 1) / PALETTE_COLS)
+/* Rows a `count`-brush palette needs at `cols` columns, ceiling-divided so a
+ * partial last row still gets counted. Both are compile-time constants at
+ * PALETTE_FITS's only call site (BRUSH_COUNT and PALETTE_COLS_FOR(...) in
+ * app_sand.c), which is what keeps PALETTE_FITS usable inside a
+ * _Static_assert. */
+#define PALETTE_ROWS(count, cols) (((count) + (cols) - 1) / (cols))
 
-/* The panel's pixel height for `count` brushes, derived rather than
- * hardcoded - see PALETTE_ROWS above. */
-#define PALETTE_HEIGHT(count) (PALETTE_ROWS(count) * PALETTE_TILE)
+/* The panel's pixel height for `count` brushes at `cols` columns, derived
+ * rather than hardcoded - see PALETTE_ROWS above. */
+#define PALETTE_HEIGHT(count, cols) (PALETTE_ROWS(count, cols) * PALETTE_TILE)
 
-/* Whether a `count`-brush panel fits the screen AT EVERY QUARTER TURN. The
- * panel is drawn upright on a 368x448 screen, but the board can be held any
- * of four ways and the panel is redrawn turned to match (see app_sand.c's
- * draw_palette()) rather than moved or resized - so "fits" cannot mean fits
- * the tall 448 px dimension alone, or a panel that is fine upright would run
- * off the edge the moment the board is turned 90 degrees and the same 448 px
- * of panel height has only 368 px of screen width to land in. The real
- * constraint is the SHORTER of the two screen dimensions, since that is what
- * every quarter turn's long axis eventually has to fit inside.
+/* Whether a `count`-brush panel fits the screen AT EVERY QUARTER TURN.
  *
- * Today's panel is PALETTE_HEIGHT(BRUSH_COUNT) == 368, which passes against
- * either dimension - so this is pinning a property that currently holds by
- * luck (nothing before this exercised the narrow-side case), not fixing a
- * panel that was actually overflowing. The grid must never be hand-synced to
- * the brush list: assert this against the real brush count, e.g.
+ * Columns are no longer one fixed number the panel carries into every
+ * orientation - they are recomputed per screen_w (see palette_cols() above),
+ * so "fits" can no longer be answered by checking one derived height against
+ * whichever screen dimension is shorter the way it used to be: the two real
+ * orientations this panel is ever drawn at now potentially compute DIFFERENT
+ * column counts, and each has its own height to check against its own
+ * paired screen dimension. So this checks both pairings explicitly -
+ * (screen_w=PALETTE_SCREEN_W, screen_h=PALETTE_SCREEN_H) and the swapped
+ * pair a quarter turn produces - rather than reusing one shared height
+ * against a shared minimum. (At today's PALETTE_TILE, both pairings happen
+ * to derive the same column count - 4 - so this is currently equivalent to
+ * the old shared-minimum check; it is written the more general way because
+ * that equivalence is a coincidence of 92 dividing both 368 and 448 the same
+ * number of times, not a property PALETTE_TILE is guaranteed to keep.)
+ *
+ * Today's panel is 368 px tall in the upright pairing and exactly 368 px
+ * tall (== PALETTE_SCREEN_W) in the turned one - so the turned pairing is
+ * pinning a property that currently holds with NO margin at all, not fixing
+ * a panel that was actually overflowing. The grid must never be hand-synced
+ * to the brush list: assert this against the real brush count, e.g.
  *
  *     _Static_assert(PALETTE_FITS(BRUSH_COUNT), "palette panel taller than "
- *                    "the screen - too many brushes for PALETTE_COLS");
+ *                    "the screen - too many brushes for the panel's derived "
+ *                    "column count");
  *
  * so a 17th brush fails the BUILD instead of silently drawing a row that
  * runs off the bottom of the screen at some turns and not others. */
 #define PALETTE_FITS(count) \
-    (PALETTE_HEIGHT(count) <= \
-     ((PALETTE_SCREEN_W < PALETTE_SCREEN_H) ? PALETTE_SCREEN_W : PALETTE_SCREEN_H))
+    (PALETTE_HEIGHT(count, PALETTE_COLS_FOR(PALETTE_SCREEN_W)) <= \
+        PALETTE_SCREEN_H && \
+     PALETTE_HEIGHT(count, PALETTE_COLS_FOR(PALETTE_SCREEN_H)) <= \
+        PALETTE_SCREEN_W)
 
-/* Where tile `index` sits, in screen pixels - the grid is PALETTE_COLS wide
- * and PALETTE_ROWS(count) tall, centred on a `screen_w` x `screen_h` canvas.
- * `screen_w`/`screen_h` is the LOGICAL canvas (see ui.h's ui_width()/
- * ui_height()), not always PALETTE_SCREEN_W/PALETTE_SCREEN_H: under a
- * quarter turn the two swap, and this centres against whichever is current
- * rather than assuming the upright pair. Horizontally a full row exactly
- * fills the panel when screen_w is 368 (PALETTE_COLS * PALETTE_TILE == 368,
- * so a full row starts at x=0); vertically the whole block is offset down by
+/* Where tile `index` sits, in screen pixels - the grid is `cols` wide and
+ * PALETTE_ROWS(count, cols) tall, centred on a `screen_w` x `screen_h`
+ * canvas. `cols` is the caller's own palette_cols(screen_w) - passed in
+ * explicitly rather than recomputed here, the same way screen_w/screen_h are
+ * already threaded through rather than assumed, so this function never has
+ * to guess which canvas `cols` was derived from. `screen_w`/`screen_h` is
+ * the LOGICAL canvas (see ui.h's ui_width()/ui_height()), not always
+ * PALETTE_SCREEN_W/PALETTE_SCREEN_H: under a quarter turn the two swap, and
+ * this centres against whichever is current rather than assuming the
+ * upright pair. Horizontally a full row exactly fills the panel when
+ * `cols * PALETTE_TILE` equals screen_w - which palette_cols() makes true
+ * up to the leftover PALETTE_TILE cannot fill, so a full row starts at
+ * x=0 or close to it; vertically the whole block is offset down by
  * (screen_h - rows * PALETTE_TILE) / 2 so the sand shows evenly above and
  * below it.
  *
- * A row short of PALETTE_COLS tiles - only ever the LAST row - is centred
- * the same way the whole block is centred vertically: its own row width is
+ * A row short of `cols` tiles - only ever the LAST row - is centred the
+ * same way the whole block is centred vertically: its own row width is
  * `row_count * PALETTE_TILE`, and that block is offset by
  * (screen_w - row_width) / 2 from the left edge. A full row's row_count is
- * PALETTE_COLS, which makes that same formula land back on x=0 - so there
- * is only one centring rule here, not a special case for the last row and a
- * separate one for every other. */
-void palette_tile_rect(int index, int count, int screen_w, int screen_h,
-                       int *x, int *y, int *w, int *h);
+ * `cols`, which makes that same formula land back on the panel's own left
+ * edge - so there is only one centring rule here, not a special case for
+ * the last row and a separate one for every other. */
+void palette_tile_rect(int index, int count, int cols, int screen_w,
+                       int screen_h, int *x, int *y, int *w, int *h);
 
 /* Which tile contains (px, py), or -1 for none - including a point in the
  * empty part of a centred partial row, a point outside the panel entirely,
  * and negative coordinates. Must stay exactly consistent with
- * palette_tile_rect() - see this file's top comment. `screen_w`/`screen_h`
- * must be the same logical canvas passed to palette_tile_rect() for the two
- * to agree - see that function's own comment on why this is not always
- * PALETTE_SCREEN_W/PALETTE_SCREEN_H. */
-int palette_hit(int px, int py, int count, int screen_w, int screen_h);
+ * palette_tile_rect() - see this file's top comment. `cols`, `screen_w` and
+ * `screen_h` must be the same values passed to palette_tile_rect() for the
+ * two to agree - see that function's own comment on why `cols` is threaded
+ * through rather than recomputed, and on why screen_w/screen_h are not
+ * always PALETTE_SCREEN_W/PALETTE_SCREEN_H. */
+int palette_hit(int px, int py, int count, int cols, int screen_w,
+                int screen_h);
 
-/* The panel's own bounds - PALETTE_COLS * PALETTE_TILE wide,
- * PALETTE_HEIGHT(count) tall, centred on a `screen_w` x `screen_h` canvas -
- * for the caller to clear or restore. */
-void palette_panel_rect(int count, int screen_w, int screen_h,
+/* The panel's own bounds - `cols * PALETTE_TILE` wide,
+ * PALETTE_HEIGHT(count, cols) tall, centred on a `screen_w` x `screen_h`
+ * canvas - for the caller to clear or restore. */
+void palette_panel_rect(int count, int cols, int screen_w, int screen_h,
                         int *x, int *y, int *w, int *h);
 
 /* Where to start drawing a `len`-character label so gfx_text_turned(), at

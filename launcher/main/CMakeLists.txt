@@ -114,6 +114,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_ui.c"
         "../test/suites/suite_ui_style.c"
         "../test/suites/suite_ui_transform.c"
+        "../test/suites/suite_ui_centered_rect.c"
         "../test/suites/suite_display.c"
         ${app_suites}
     )

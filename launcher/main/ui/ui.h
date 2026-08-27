@@ -123,6 +123,28 @@ void ui_set_font(const gfx_font_t *font);
  * ui_begin()/ui_set_transform()/ui_end(), not by nesting calls to this. */
 void ui_set_transform(ui_transform_t t);
 
+/* Increments every time the shell's canvas shape genuinely changes -
+ * currently, every time ui_set_transform() is called with a transform that
+ * differs from the one already in force (the same "differs" transforms_equal()
+ * checks in ui.c, and the same event that makes that function call
+ * ui_invalidate()). Starts at 0, set explicitly in ui_init() rather than left
+ * to a zeroed static's implicit value.
+ *
+ * THIS IS NOT A CALLBACK AND NOBODY SUBSCRIBES TO IT
+ *
+ * It is a cheap number, nothing more - a caller reads it, remembers what it
+ * read, and later compares a fresh read against that memory to learn whether
+ * a genuine change happened in between. That is exactly how ui_end()'s own
+ * hash comparison and ui_set_transform()'s own transforms_equal() check
+ * already work, and it is the whole mechanism: no list of listeners, no
+ * event fired at the moment it changes, nothing invoked on a caller's behalf.
+ * The natural next move for whoever meets this counter cold is to reach for a
+ * subscriber list or a push notification built around it - resist that; nothing
+ * here is being pushed anywhere, and the counter's entire value comes from being
+ * something a caller pulls and diffs on its own schedule, same as an app
+ * already does for `palette_drawn_quarter` in app_sand.c, just generalised. */
+uint32_t ui_layout_generation(void);
+
 /* The logical canvas size: the physical viewport (GFX_WIDTH x GFX_HEIGHT)
  * mapped through the inverse of the current transform. Callers building a UI
  * must ask these instead of assuming GFX_WIDTH/GFX_HEIGHT directly - under a
@@ -131,6 +153,41 @@ void ui_set_transform(ui_transform_t t);
  * a gap at it. */
 int ui_width(void);
 int ui_height(void);
+
+/*---------------------------------------------------------------------------
+ * Fixed-width content
+ *
+ * A canvas under a changing transform holds two different kinds of content.
+ * FILL content - a banner, a status strip - has no natural width of its own
+ * and always spans whatever width the canvas currently is; the launcher's
+ * banner is the model for this and needs no helper, since mu_layout_row()
+ * with a -1 column already does exactly that.
+ *
+ * FIXED content - a small number of large tap targets sized to what they
+ * need to say - should stay that width and centre in the canvas rather than
+ * stretch to fill it. The sand app's boot menu is the model this
+ * generalises: it already centres a hand-placed pair of buttons this way.
+ *
+ * ui_centered_rect() is the shared primitive for the fixed case. Pure
+ * geometry, `canvas_w` taken as a parameter rather than read internally via
+ * ui_width() - that is what keeps it host-testable without pulling in
+ * gfx.h/BSP, the same split ui_bezel_spans() (ui_style.h) and
+ * ui_transform_rect() (ui_transform.h) already use. */
+
+/* A rect `w` wide, `h` tall, horizontally centred within a canvas `canvas_w`
+ * wide, at vertical position `y`. For content with a natural width of its
+ * own - a small number of large tap targets - that should stay that width
+ * and centre rather than stretch to fill a wider canvas. Fill content (a
+ * banner, a status strip) has no natural width and should not use this.
+ *
+ * Does not clamp `w` to `canvas_w`: a `w` that exceeds `canvas_w` yields a
+ * negative x, which is a caller bug (a button wider than the screen it is
+ * being centred on) rather than something to paper over silently here. Clamp
+ * at the call site if `w` might ever exceed `canvas_w`. */
+static inline mu_Rect ui_centered_rect(int canvas_w, int w, int h, int y)
+{
+    return (mu_Rect){ (canvas_w - w) / 2, y, w, h };
+}
 
 /* Close the frame and paint it, but only if it would look any different from
  * what is already on screen. Returns whether it drew.

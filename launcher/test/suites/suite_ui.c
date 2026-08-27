@@ -131,12 +131,76 @@ static void test_invalidate_forces_a_repaint(void)
         "this UI - returning to the launcher after an app has been running");
 }
 
+/*---------------------------------------------------------------------------
+ * ui_layout_generation()
+ *
+ * Device-only for the same reason the rest of this suite is: the counter
+ * lives inside ui_set_transform(), in ui.c, which pulls in gfx.h and cannot
+ * link on a host - see ui.h's own comment above ui_layout_generation() and
+ * this task's report on why suite_ui_transform.c (host, pure ui_transform_t
+ * math) is not where this belongs. fixture() above already gives each test
+ * a freshly ui_init()'d context, transform reset to identity and the
+ * generation reset to its defined starting value - these tests read deltas
+ * off that rather than hard-coding the starting value itself, so they do
+ * not need to know or care what it is.
+ *-------------------------------------------------------------------------*/
+
+static void test_layout_generation_unchanged_by_a_repeated_equal_transform(void)
+{
+    fixture();
+    ui_set_transform(ui_transform_identity());
+    const uint32_t gen = ui_layout_generation();
+
+    ui_set_transform(ui_transform_identity());
+    ui_set_transform(ui_transform_identity());
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(gen, ui_layout_generation(),
+        "setting the transform already in force must not bump the generation "
+        "- this is the same transforms_equal() check ui_set_transform() uses "
+        "to decide whether to call ui_invalidate()");
+}
+
+static void test_layout_generation_increments_by_one_per_genuine_change(void)
+{
+    fixture();
+    ui_set_transform(ui_transform_identity());
+    const uint32_t before = ui_layout_generation();
+
+    ui_set_transform(ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT));
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(before + 1, ui_layout_generation(),
+        "a transform that genuinely differs from the one in force must bump "
+        "the generation by exactly one");
+}
+
+static void test_layout_generation_counts_a_sequence_of_genuine_changes(void)
+{
+    fixture();
+    ui_set_transform(ui_transform_identity());
+    const uint32_t start = ui_layout_generation();
+
+    /* Four calls, three of which are genuine changes - the repeat of turn 1
+     * must not double-count, the same property the first test above checks
+     * in isolation, now inside a longer sequence. */
+    ui_set_transform(ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT));
+    ui_set_transform(ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT));
+    ui_set_transform(ui_transform_quarter_turn(2, GFX_WIDTH, GFX_HEIGHT));
+    ui_set_transform(ui_transform_quarter_turn(3, GFX_WIDTH, GFX_HEIGHT));
+
+    TEST_ASSERT_EQUAL_UINT32_MESSAGE(start + 3, ui_layout_generation(),
+        "three genuine changes among four calls must bump the generation "
+        "exactly three times, not four and not fewer");
+}
+
 void run_ui_suite(void)
 {
     RUN_TEST(test_an_unchanged_ui_is_not_repainted);
     RUN_TEST(test_only_the_canvas_that_changed_repaints);
     RUN_TEST(test_a_canvas_is_repainted_when_something_draws_over_it);
     RUN_TEST(test_invalidate_forces_a_repaint);
+    RUN_TEST(test_layout_generation_unchanged_by_a_repeated_equal_transform);
+    RUN_TEST(test_layout_generation_increments_by_one_per_genuine_change);
+    RUN_TEST(test_layout_generation_counts_a_sequence_of_genuine_changes);
 }
 
 SUITE_REGISTER(run_ui_suite);

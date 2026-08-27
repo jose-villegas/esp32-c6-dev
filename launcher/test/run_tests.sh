@@ -65,6 +65,7 @@ $TEST_DIR/suites/suite_gfx_font.c
 $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c
+$TEST_DIR/suites/suite_ui_centered_rect.c
 $TEST_DIR/suites/suite_display.c
 $MAIN_DIR/input/touch_fsm.c
 $MAIN_DIR/input/gesture.c

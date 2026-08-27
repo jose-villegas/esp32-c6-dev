@@ -210,12 +210,14 @@ static const cell_t brushes[] = {
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
 /* The palette panel's grid is derived from BRUSH_COUNT, never hand-synced to
- * it - see palette.h. This is what makes adding a 15th brush a BUILD failure
- * if it ever pushed the panel past the bottom of the screen, rather than a
- * silently clipped row discovered by looking at the device. */
+ * it - see palette.h. This is what makes adding a brush that pushes the
+ * panel past the bottom of the screen (at either real orientation - see
+ * PALETTE_FITS's own comment) a BUILD failure, rather than a silently
+ * clipped row discovered by looking at the device. */
 _Static_assert(PALETTE_FITS(BRUSH_COUNT),
                "the palette panel for BRUSH_COUNT brushes is taller than the "
-               "448px screen - see PALETTE_COLS/PALETTE_TILE in palette.h");
+               "screen at some orientation - see palette_cols()/PALETTE_TILE "
+               "in palette.h");
 
 /* Whether a brush places a persistent source ("a tap") instead of pouring -
  * toggled by tapping the already-selected tile in the palette (see
@@ -1269,7 +1271,18 @@ static void draw_palette(const input_t *input)
 
     /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
      * logical canvas swaps dimensions under a quarter-turn transform, the
-     * same reasoning draw_menu() below already follows. */
+     * same reasoning draw_menu() below already follows.
+     *
+     * cols is recomputed from ui_width() every time this function runs, not
+     * cached anywhere - immediate mode already redescribes the whole panel
+     * every frame (see this function's own top comment), so a plain call
+     * here is all a genuinely resized canvas needs to be picked up; nothing
+     * has to compare against a remembered value the way palette_drawn_quarter
+     * still does below for the ghost-tile fix, which is about a stale
+     * FOOTPRINT left in the framebuffer, not about this loop's own layout
+     * math being wrong. */
+    const int cols = palette_cols(ui_width());
+
     if (mu_begin_window_ex(ctx, "Sand Palette",
                            mu_rect(0, 0, ui_width(), ui_height()),
                            MU_OPT_NOTITLE | MU_OPT_NORESIZE |
@@ -1277,7 +1290,7 @@ static void draw_palette(const input_t *input)
 
         for (int i = 0; i < BRUSH_COUNT; i++) {
             int x, y, w, h;
-            palette_tile_rect(i, BRUSH_COUNT, ui_width(), ui_height(),
+            palette_tile_rect(i, BRUSH_COUNT, cols, ui_width(), ui_height(),
                               &x, &y, &w, &h);
 
             /* Inset by the grout first so neighbouring tiles do not fuse
@@ -1778,9 +1791,10 @@ static void draw_menu(const input_t *input)
          * placed at an absolute rect instead. */
         const int total_h = 2 * MENU_BTN_H + MENU_BTN_GAP;
         const int top      = (ui_height() - total_h) / 2;
-        const int x        = (ui_width() - MENU_BTN_W) / 2;
 
-        mu_layout_set_next(ctx, mu_rect(x, top, MENU_BTN_W, MENU_BTN_H), 0);
+        mu_layout_set_next(ctx,
+                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top),
+                           0);
         if (mu_button(ctx, "START")) {
             start_sim();
         }
@@ -1791,8 +1805,10 @@ static void draw_menu(const input_t *input)
         char label[24];
         snprintf(label, sizeof label, "QUALITY: %s", qualities[quality].name);
 
-        mu_layout_set_next(ctx, mu_rect(x, top + MENU_BTN_H + MENU_BTN_GAP,
-                                        MENU_BTN_W, MENU_BTN_H), 0);
+        mu_layout_set_next(ctx,
+                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H,
+                                            top + MENU_BTN_H + MENU_BTN_GAP),
+                           0);
         if (mu_button(ctx, label)) {
             quality = (quality + 1) % QUALITY_COUNT;
         }
