@@ -2,7 +2,7 @@
 
 #include <stdbool.h>
 
-#include "post.h"
+#include "boot/post.h"
 
 /* Draws the retained POST results as rows starting at `top`, returning the y
  * below the last row. With `failures_only`, absent optional peripherals and

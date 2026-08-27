@@ -26,7 +26,7 @@
  * end fades into.
  *===========================================================================*/
 
-#include "boot_anim.h"
+#include "boot/boot_anim.h"
 
 #include "gfx/gfx.h"
 #include "util/intmath.h"

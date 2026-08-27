@@ -9,7 +9,7 @@
  * only 23 characters wide, which is narrower than most of the detail strings.
  *===========================================================================*/
 
-#include "post_ui.h"
+#include "boot/post_ui.h"
 
 #include <stdio.h>
 #include <string.h>

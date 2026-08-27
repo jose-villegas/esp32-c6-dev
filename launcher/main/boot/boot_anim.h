@@ -41,7 +41,7 @@
 
 #include <stdint.h>
 
-#include "boot_anim_curve.h"
+#include "boot/boot_anim_curve.h"
 
 #define BOOT_ANIM_Q    12
 #define BOOT_ANIM_ONE  (1 << BOOT_ANIM_Q)   /* 4096 == 1.0 */

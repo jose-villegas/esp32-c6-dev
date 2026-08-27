@@ -1,7 +1,9 @@
 # The shell and the board drivers. Apps are NOT listed here - see below.
 set(app_srcs
     "main.c"
-    "boot_anim.c"
+    "boot/boot_anim.c"
+    "boot/post.c"
+    "boot/post_ui.c"
     "gfx/gfx.c"
     "gfx/icons.c"
     "input/touch.c"
@@ -10,8 +12,6 @@ set(app_srcs
     "input/buttons.c"
     "input/gesture.c"
     "input/imu.c"
-    "post.c"
-    "post_ui.c"
     "ui/ui.c"
     "ui/ui_launcher.c"
 )
@@ -97,7 +97,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
     # The suites are shared with the host runner - same sources, so what passes
     # on a laptop is the same set of assertions the board makes.
     list(APPEND app_srcs
-        "selftest.c"
+        "boot/selftest.c"
         "../test/suites.c"
         "../test/suites/suite_touch_fsm.c"
         "../test/suites/suite_gesture.c"

@@ -15,18 +15,18 @@
 #include <string.h>
 
 #include "app.h"
-#include "boot_anim.h"
+#include "boot/boot_anim.h"
 #include "input/gesture.h"
 #include "gfx/gfx.h"
-#include "post.h"
-#include "post_ui.h"
+#include "boot/post.h"
+#include "boot/post_ui.h"
 #include "input/buttons.h"
 #include "input/touch.h"
 #include "ui/ui.h"
 #include "ui/ui_launcher.h"
 
 #if CONFIG_LAUNCHER_SELFTEST
-#include "selftest.h"
+#include "boot/selftest.h"
 #endif
 
 #include "bsp/esp-bsp.h"

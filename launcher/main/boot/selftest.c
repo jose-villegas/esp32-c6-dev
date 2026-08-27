@@ -15,7 +15,7 @@
  * booting device is a verified device.
  *===========================================================================*/
 
-#include "selftest.h"
+#include "boot/selftest.h"
 
 #include <stdio.h>
 
@@ -44,8 +44,17 @@ int selftest_run(void)
      * is decided at compile time by what was built in - see suites.h. */
     suites_run_all();
 
-    const int failures = UNITY_END();
+    int failures = UNITY_END();
     const int64_t elapsed_ms = (esp_timer_get_time() - started) / 1000;
+
+    /* A suite that did not fit is a test that did not run. Folded into the
+     * count so the sentinel below - and every harness that reads it - sees a
+     * failed run rather than a green one that tested less than it claims. */
+    if (suites_dropped() > 0) {
+        ESP_LOGE(TAG, "%d suite(s) dropped; raise SUITE_MAX in suites.h",
+                 suites_dropped());
+        failures += suites_dropped();
+    }
 
     /* A sentinel on its own line, so an automated harness can tell a finished
      * run from a board that went quiet mid-test. */

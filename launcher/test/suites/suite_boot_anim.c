@@ -26,7 +26,7 @@
 #include "unity.h"
 #include "suites.h"
 
-#include "boot_anim.h"
+#include "boot/boot_anim.h"
 
 /* The panel these numbers are laid out for. Named here rather than pulled
  * from gfx.h, which needs the BSP; gfx_dirty.h mirrors the same two numbers

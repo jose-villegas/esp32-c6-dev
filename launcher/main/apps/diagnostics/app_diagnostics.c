@@ -32,7 +32,7 @@
 
 #include "../../app.h"
 #include "../../gfx/gfx.h"
-#include "../../post_ui.h"
+#include "../../boot/post_ui.h"
 #include "../../ui/ui.h"
 
 #define PAGE_COUNT     2
