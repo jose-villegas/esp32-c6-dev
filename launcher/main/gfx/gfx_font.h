@@ -17,6 +17,7 @@
  *===========================================================================*/
 #pragma once
 
+#include <stddef.h>   /* NULL, used by the advance field of a monospace font */
 #include <stdint.h>
 #include <stdbool.h>
 

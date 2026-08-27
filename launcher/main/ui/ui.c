@@ -60,17 +60,23 @@ static ui_text_style_t text_style;
 static ui_transform_t transform;
 static bool            transform_valid;
 
-/* microui asks us for text metrics rather than measuring anything itself. */
+/* microui asks us for text metrics rather than measuring anything itself.
+ * `font` is whatever ctx.style->font held when the widget that wants
+ * metrics ran - see ui_set_font() in ui.h for how it gets there. It is
+ * NULL only before ui_init() has run (mu_init() leaves it that way, and
+ * ui_init() is what first sets it); fall back to gfx_default_font() rather
+ * than deref a NULL, so a widget measured before ui_init() gets a sane
+ * answer instead of a crash. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
-    (void)font;
-    return gfx_text_width(str, len);
+    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_default_font();
+    return gfx_font_text_width(f, str, len, GFX_GLYPH_SCALE);
 }
 
 static int measure_text_height(mu_Font font)
 {
-    (void)font;
-    return gfx_text_height();
+    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_default_font();
+    return gfx_font_height(f, GFX_GLYPH_SCALE);
 }
 
 /*---------------------------------------------------------------------------
@@ -153,6 +159,29 @@ void ui_set_text_style(ui_text_style_t style)
     }
 }
 
+/* WHY THIS ONE DOES NOT NEED ui_invalidate(), UNLIKE ui_set_text_style() ABOVE
+ *
+ * This is the third time this question has come up in this file, and the
+ * first time the answer is no. The other two - ui_set_text_style() and
+ * ui_set_transform() below - apply their effect at RENDER time, inside
+ * draw_command(), so the command list ui_end() hashes is byte-identical
+ * whether or not the setting changed; without a manual ui_invalidate() the
+ * repaint would be skipped and the old look would stay on screen.
+ *
+ * A font change is different because mu_Font is not read only at render
+ * time - it is baked into the command list itself. ctx.style->font rides
+ * along inside every mu_TextCommand (see mu_draw_text() in microui.c), and
+ * both metric callbacks above take it too, so a font change moves layout:
+ * different metrics mean different positions and sizes for every control
+ * that measured text this frame, not just different pixels for the same
+ * geometry. Those are different bytes, so hash_canvas() sees the change on
+ * its own and mark_changed_canvases() repaints without being told to. See
+ * ui_set_text_style()'s comment above for the full argument this mirrors. */
+void ui_set_font(const gfx_font_t *font)
+{
+    ctx.style->font = (mu_Font)(font ? font : gfx_default_font());
+}
+
 static bool transforms_equal(ui_transform_t a, ui_transform_t b)
 {
     return a.a == b.a && a.b == b.b && a.c == b.c &&
@@ -212,6 +241,7 @@ void ui_init(void)
     mu_init(&ctx);
     ctx.text_width  = measure_text_width;
     ctx.text_height = measure_text_height;
+    ctx.style->font = (mu_Font)gfx_default_font();
 
     base_draw_frame = ctx.draw_frame;
     ctx.draw_frame  = styled_draw_frame;
@@ -397,13 +427,19 @@ static void draw_command(const mu_Command *cmd)
     case MU_COMMAND_TEXT: {
         const mu_Color ink  = cmd->text.color;
         const mu_Color halo = ui_text_halo(ink);
+        const gfx_font_t *font = cmd->text.font ?
+            (const gfx_font_t *)cmd->text.font : gfx_default_font();
 
         /* The command's position is mapped once; the quarter turn it maps
          * through decides which gfx entry point can even draw a rotated
          * glyph. Under identity this is quarter 0 and mx/my equal the
          * command's own position exactly (see ui_transform_rect()'s Q16.16
-         * exactness note in ui_transform.h), so the branch below is not an
-         * approximation of today's behaviour - it IS today's behaviour. */
+         * exactness note in ui_transform.h). gfx_text_font() takes the
+         * quarter turn directly and draws quarter 0 exactly as gfx_text()
+         * did, so calling it unconditionally is not an approximation of
+         * the old two-branch behaviour - it IS that behaviour, collapsed
+         * into the one entry point that already handled both cases
+         * underneath. */
         int mx, my;
         ui_transform_point(t, cmd->text.pos.x, cmd->text.pos.y, &mx, &my);
         const int quarter = ui_transform_quarter(t);
@@ -429,13 +465,8 @@ static void draw_command(const mu_Command *cmd)
              * always fall down-and-right on screen would instead fall
              * down-and-right in LOGICAL space, which is some other physical
              * direction entirely once turn is nonzero. */
-            if (quarter == 0) {
-                gfx_text(mx + passes[i].dx, my + passes[i].dy, cmd->text.str,
-                         color);
-            } else {
-                gfx_text_turned(mx + passes[i].dx, my + passes[i].dy,
-                                cmd->text.str, color, GFX_GLYPH_SCALE, quarter);
-            }
+            gfx_text_font(mx + passes[i].dx, my + passes[i].dy, cmd->text.str,
+                          color, GFX_GLYPH_SCALE, quarter, font);
         }
         break;
     }
