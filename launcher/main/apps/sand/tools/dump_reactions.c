@@ -1121,11 +1121,10 @@ static void emit_pairwise_table(void)
  * will read from, not a place for this file's own internals to leak into.
  * This is a SEPARATE section, appended after the pairwise table, showing
  * one representative sentence per group (see group_id_t) with its slots
- * colour-marked, so a reader can see how much of each sentence is a
- * generated slot and how much is hand-written glue inside an emit_*()
- * function.
+ * marked, so a reader can see how much of each sentence is a generated
+ * slot and how much is hand-written glue inside an emit_*() function.
  *
- * Every coloured RATE and OBJECT word below is pulled through the exact
+ * Every marked RATE and OBJECT word below is pulled through the exact
  * same adverb()/to_name()/prose_name() calls (and the exact same live
  * reaction_t rows) the real per-material clauses use above - so those
  * words track material.c and cannot go stale the way a typed-out example
@@ -1134,29 +1133,50 @@ static void emit_pairwise_table(void)
  * transcribed by hand from that function here, and needs a matching edit
  * if that function's own wording ever changes - each example below names
  * the emit_*() function and fields it mirrors, to make that edit findable.
- *---------------------------------------------------------------------*/
+ *
+ * The slots are marked with inline LaTeX colour spans -
+ * $\textcolor{#RRGGBB}{\text{...}}$, SINGLE dollars on each side. An
+ * earlier version used $${\color{...}...}$$ per slot and failed three ways
+ * at once: $$...$$ is DISPLAY math (a block element), so every marked span
+ * broke onto its own centred line and shredded the sentence; VSCode's math
+ * extension reads a bare $ as its own inline delimiter, so it saw $$ as two
+ * of those and threw a KaTeX parse error; and even rendered correctly,
+ * KaTeX sets the words in an italic serif math font that clashes with the
+ * surrounding sans prose. A version after that switched to plain markdown
+ * emphasis - **bold**, `code`, *italic* - which sidesteps all three
+ * failures but loses colour: three visual weights cannot carry five
+ * distinct slots, so Subject had to share **bold** with Verb and Cause had
+ * to fold into unmarked glue. Inline single-dollar math keeps colour and
+ * drops the block-math and font problems: $\textcolor{...}{\text{...}}$
+ * flows inline, renders upright (`\text{}` switches back out of math
+ * italics), and every one of the five slots below gets its own colour
+ * rather than sharing a channel. */
 
-/* Five slot colours - SUBJECT/VERB/OBJECT/RATE/CAUSE - chosen to hold up
- * on both github.com's light and dark themes; GLUE is deliberately left
- * uncoloured (plain markdown text) rather than given a sixth colour, both
- * because it renders in the reader's own theme colour for free that way,
- * and because "uncoloured" is itself the legend's own answer to "is this
- * hand-written glue or a generated slot?" Plain saturated CSS names were
- * ruled out here on purpose: yellow is unreadable on a white background
- * (the brief's own caution) and plain orange/blue are the same problem in
- * one theme or the other (orange washes out on white the way yellow does;
- * blue goes murky on GitHub's near-black dark background, ~#0d1117). Each
- * hex below sits in the mid-luminance band that reads on both: dark enough
- * to hold up against white, light enough to hold up against near-black. */
-#define COL_SUBJECT "#B22222" /* firebrick */
-#define COL_VERB    "#2255AA" /* mid blue */
-#define COL_OBJECT  "#1E7B4D" /* mid green */
-#define COL_RATE    "#A0522D" /* sienna - not orange/yellow, see above */
-#define COL_CAUSE   "#8E44AD" /* amethyst */
+typedef enum {
+    MARK_NONE,    /* glue (see the Legend below) - printed as ordinary
+                   * markdown text, in the reader's own theme colour. */
+    MARK_SUBJECT, /* #B22222 */
+    MARK_VERB,    /* #2255AA */
+    MARK_OBJECT,  /* #1E7B4D */
+    MARK_RATE,    /* Rate / frequency - #A0522D */
+    MARK_CAUSE,   /* #8E44AD */
+} mark_t;
+
+/* The five slot colours, luminance-checked against both GitHub light and
+ * dark (~#0d1117) backgrounds - see this section's own top comment. Indexed
+ * by mark_t; MARK_NONE has no entry because print_marked() never looks one
+ * up for it (glue stays unmarked plain text, the reader's own theme
+ * colour). */
+static const char *const mark_colors[] = {
+    [MARK_SUBJECT] = "#B22222",
+    [MARK_VERB]    = "#2255AA",
+    [MARK_OBJECT]  = "#1E7B4D",
+    [MARK_RATE]    = "#A0522D",
+    [MARK_CAUSE]   = "#8E44AD",
+};
 
 typedef struct {
-    const char *color; /* NULL = glue: printed as ordinary markdown text,
-                         * never inside a coloured math span. */
+    mark_t mark;
     const char *text;
 } seg_t;
 
@@ -1172,21 +1192,6 @@ static const mrow_t *find_row(const char *name)
     exit(1);
 }
 
-/* GitHub's math rendering (KaTeX) drops ordinary whitespace inside a
- * $$...$$ block - without this, a two-word coloured span like "leaves
- * smoke" would render as "leavessmoke". Only text that goes inside a
- * coloured span ever passes through here. */
-static void print_span_text(const char *text)
-{
-    for (const char *p = text; *p != '\0'; p++) {
-        if (*p == ' ') {
-            printf("\\space ");
-        } else {
-            putchar((unsigned char)*p);
-        }
-    }
-}
-
 static void print_plain(const seg_t *segs, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
@@ -1195,37 +1200,35 @@ static void print_plain(const seg_t *segs, size_t n)
     printf("\n");
 }
 
-/* Each coloured slot is its OWN $$...$$ span, with ordinary markdown text
- * (real spaces, the reader's own theme colour) in between - not one span
- * per sentence with \color scoping the glue text too, because KaTeX's
- * default text colour inside math mode is not guaranteed to track the
- * page theme the way normal markdown text does, and glue is supposed to
- * look exactly like normal prose. */
-static void print_colored(const seg_t *segs, size_t n)
+/* Each marked slot gets its colour span applied exactly once, directly
+ * around its own text - never nested and never doubled - so a slot that
+ * also happens to sit next to another marked slot (e.g. a rate word next
+ * to a cause placeholder) still emits as two independent single-dollar
+ * spans, never a run that could collide into "$$". Single dollars only -
+ * see this section's own top comment for why $$ (display math) is not an
+ * option here. */
+static void print_marked(const seg_t *segs, size_t n)
 {
     for (size_t i = 0; i < n; i++) {
-        if (segs[i].color != NULL) {
-            printf("$${\\color{%s}", segs[i].color);
-            print_span_text(segs[i].text);
-            printf("}$$");
-        } else {
+        if (segs[i].mark == MARK_NONE) {
             printf("%s", segs[i].text);
+        } else {
+            printf("$\\textcolor{%s}{\\text{%s}}$",
+                   mark_colors[segs[i].mark], segs[i].text);
         }
     }
     printf("\n");
 }
 
-/* Plain sentence first, then the colour-marked form immediately after -
- * so the section stays legible without a renderer (a raw diff, an editor,
- * CI) and not only on github.com. Neither ever goes in a markdown table -
- * LaTeX-in-table rendering on GitHub is unverified, this file's own math
- * spans are not. */
+/* Plain sentence first, then the marked form immediately after - so the
+ * section stays legible without a renderer (a raw diff, an editor, CI)
+ * and not only on github.com. */
 static void print_example(const char *heading, const seg_t *segs, size_t n)
 {
     printf("\n**%s**\n\n", heading);
     print_plain(segs, n);
     printf("\n");
-    print_colored(segs, n);
+    print_marked(segs, n);
     printf("\n");
 }
 
@@ -1242,57 +1245,56 @@ static void emit_anatomy(void)
            "it came from where.\n");
 
     printf("\n### Legend\n\n");
-    printf("- $${\\color{%s}Subject}$$ (Subject) - which row the sentence "
-           "is about (an `all_rows[]` entry - `materials[]` or an "
-           "extended material). A per-material bullet never restates this "
-           "- the `###` heading already says it - so every example below "
-           "writes it out explicitly to make the sentence stand on its "
-           "own.\n", COL_SUBJECT);
-    printf("- $${\\color{%s}Verb}$$ (Verb) - the wording tied to the field "
-           "driving the clause. `field_docs[]` carries a `verb` string per "
-           "field for exactly this reason, but phase 1 never actually "
-           "reads that column back out (grep `->verb` in this file - "
-           "nothing matches): today the words are typed directly into the "
+    printf("Five colours, one per slot - a colour span can carry more "
+           "channels than bold/code/italic could, so Subject and Cause "
+           "each get one of their own rather than sharing.\n\n");
+    printf("- Subject (`#B22222`) - which row the sentence is about (an "
+           "`all_rows[]` entry - `materials[]` or an extended material). "
+           "Already the `###` heading for every per-material bullet, so it "
+           "needs no distinct marker there; each example below still "
+           "writes the subject out explicitly, in colour, so the sentence "
+           "stands on its own outside that table.\n");
+    printf("- Verb (`#2255AA`) - the wording tied to the field driving the "
+           "clause. `field_docs[]` carries a `verb` string per field for "
+           "exactly this reason, but phase 1 never actually reads that "
+           "column back out (grep `->verb` in this file - nothing "
+           "matches): today the words are typed directly into the "
            "matching `emit_*()` printf() call, kept in sync with "
-           "`field_docs[]` by hand instead of by the compiler.\n",
-           COL_VERB);
-    printf("- $${\\color{%s}Object}$$ (Object) - the field's VALUE, "
-           "decoded by kind: `to_name()` for an FK_TARGET id or a whole "
-           "MATX() cell spec, or `wetting_liquids` for the derived list of "
-           "materials with `wets != 0`.\n", COL_OBJECT);
-    printf("- $${\\color{%s}Rate\\space /\\space frequency}$$ (Rate / "
-           "frequency) - the ladder bucket: `adverb_for()` for a genuine "
-           "per-step rate (SCALE_RATE), or `chance_bucket_for()` through "
-           "frequency_words[]/ease_words[] for a one-shot chance "
-           "(SCALE_CHANCE). Two different ladders share this one colour "
-           "because both answer the same question - \"which of five "
-           "bands\" - for the same kind of raw byte; only the vocabulary "
-           "differs, and it is DIFFERENT for a reason (see ease_words[]'s "
-           "own comment above).\n", COL_RATE);
-    printf("- $${\\color{%s}Cause}$$ (Cause) - a trigger that lives at a "
-           "read site in sand_reactions.c, not in this table - rendered as "
-           "the literal `%s` placeholder rather than guessed at.\n",
-           COL_CAUSE, CAUSE);
-    printf("- Glue (left uncoloured - your own theme's ordinary text "
-           "colour, not a sixth colour of its own) - prose typed by hand "
-           "inside the `emit_*()` function itself: connective words, "
-           "punctuation, the parts no field drives.\n");
+           "`field_docs[]` by hand instead of by the compiler.\n");
+    printf("- Object (`#1E7B4D`) - the field's VALUE, decoded by kind: "
+           "`to_name()` for an FK_TARGET id or a whole MATX() cell spec, "
+           "or `wetting_liquids` for the derived list of materials with "
+           "`wets != 0`.\n");
+    printf("- Rate / frequency (`#A0522D`) - the ladder bucket: "
+           "`adverb_for()` for a genuine per-step rate (SCALE_RATE), or "
+           "`chance_bucket_for()` through frequency_words[]/ease_words[] "
+           "for a one-shot chance (SCALE_CHANCE). Two different ladders "
+           "share this one channel because both answer the same question "
+           "- \"which of five bands\" - for the same kind of raw byte; "
+           "only the vocabulary differs, and it is DIFFERENT for a reason "
+           "(see ease_words[]'s own comment above).\n");
+    printf("- Cause (`#8E44AD`) - a trigger that lives at a read site in "
+           "sand_reactions.c, not in this table - rendered as the literal "
+           "`%s` placeholder rather than guessed at.\n", CAUSE);
+    printf("- Glue (left unmarked, the reader's own theme colour) - prose "
+           "typed by hand inside the `emit_*()` function itself: "
+           "connective words, punctuation, the parts no field drives.\n");
 
     printf("\n### Examples\n\n");
     printf("One representative sentence per group (see group_id_t), "
            "subject written out explicitly (see Subject above) and "
            "prefixed to the real per-material clause. Plain text first, "
-           "then the same sentence with its slots colour-marked.\n");
+           "then the same sentence with its slots marked.\n");
 
     /* GRP_IGNITE - emit_ignite(), self-ignition branch: flammability,
      * ignites_to == self_id. */
     {
         const mrow_t *row = find_row("Wood");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Wood" }, { NULL, ": " },
-            { COL_VERB, "Catches" }, { NULL, " fire " },
-            { COL_RATE, adverb("flammability", row->r->flammability) },
-            { NULL, " and burns where it stands, rather than flaring "
+            { MARK_SUBJECT, "Wood" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Catches" }, { MARK_NONE, " fire " },
+            { MARK_RATE, adverb("flammability", row->r->flammability) },
+            { MARK_NONE, " and burns where it stands, rather than flaring "
                     "away." },
         };
         print_example("Ignite - GRP_IGNITE: flammability, ignites_to "
@@ -1303,15 +1305,15 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Fire");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Fire" }, { NULL, ": " },
-            { NULL, "Is a heat source in its own right; " },
-            { COL_RATE, adverb("residue", row->r->residue) },
-            { NULL, " " },
-            { COL_VERB, "leaves smoke" },
-            { NULL, " when it burns out. Touched by a quenching liquid, "
+            { MARK_SUBJECT, "Fire" }, { MARK_NONE, ": " },
+            { MARK_NONE, "Is a heat source in its own right; " },
+            { MARK_RATE, adverb("residue", row->r->residue) },
+            { MARK_NONE, " " },
+            { MARK_VERB, "leaves smoke" },
+            { MARK_NONE, " when it burns out. Touched by a quenching liquid, "
                     "becomes " },
-            { COL_OBJECT, prose_name(to_name(row->r->quench_to)) },
-            { NULL, "." },
+            { MARK_OBJECT, prose_name(to_name(row->r->quench_to)) },
+            { MARK_NONE, "." },
         };
         print_example("Burn - GRP_BURN: burns, residue, quench_to "
                        "(emit_burn)", segs, ARRAY_LEN(segs));
@@ -1322,12 +1324,12 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Sand");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Sand" }, { NULL, ": " },
-            { COL_VERB, "Melts" }, { NULL, " to " },
-            { COL_OBJECT, prose_name(to_name(row->r->heats_to)) },
-            { NULL, " " },
-            { COL_RATE, adverb("heat_chance", row->r->heat_chance) },
-            { NULL, "." },
+            { MARK_SUBJECT, "Sand" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Melts" }, { MARK_NONE, " to " },
+            { MARK_OBJECT, prose_name(to_name(row->r->heats_to)) },
+            { MARK_NONE, " " },
+            { MARK_RATE, adverb("heat_chance", row->r->heat_chance) },
+            { MARK_NONE, "." },
         };
         print_example("Transform - GRP_TRANSFORM: heats_to, heat_chance "
                        "(emit_transform)", segs, ARRAY_LEN(segs));
@@ -1338,10 +1340,10 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Metal");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Metal" }, { NULL, ": " },
-            { COL_VERB, "Passes heat on" }, { NULL, " " },
-            { COL_RATE, adverb("conducts", row->r->conducts) },
-            { NULL, ", without banking any of it itself." },
+            { MARK_SUBJECT, "Metal" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Passes heat on" }, { MARK_NONE, " " },
+            { MARK_RATE, adverb("conducts", row->r->conducts) },
+            { MARK_NONE, ", without banking any of it itself." },
         };
         print_example("Temperature - GRP_TEMPERATURE: conducts "
                        "(emit_temperature)", segs, ARRAY_LEN(segs));
@@ -1351,10 +1353,10 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Ice");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Ice" }, { NULL, ": " },
-            { COL_VERB, "Chills whatever it touches" }, { NULL, " " },
-            { COL_RATE, adverb("chills", row->r->chills) },
-            { NULL, "." },
+            { MARK_SUBJECT, "Ice" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Chills whatever it touches" }, { MARK_NONE, " " },
+            { MARK_RATE, adverb("chills", row->r->chills) },
+            { MARK_NONE, "." },
         };
         print_example("Cold - GRP_COLD: chills (emit_cold)", segs,
                        ARRAY_LEN(segs));
@@ -1364,10 +1366,10 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Steam");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Steam" }, { NULL, ": " },
-            { COL_VERB, "Warms whatever it touches" }, { NULL, " " },
-            { COL_RATE, adverb("warms", row->r->warms) },
-            { NULL, ", without igniting or quenching anything." },
+            { MARK_SUBJECT, "Steam" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Warms whatever it touches" }, { MARK_NONE, " " },
+            { MARK_RATE, adverb("warms", row->r->warms) },
+            { MARK_NONE, ", without igniting or quenching anything." },
         };
         print_example("Warmth - GRP_WARMTH: warms (emit_warmth)", segs,
                        ARRAY_LEN(segs));
@@ -1377,12 +1379,12 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Snow");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Snow" }, { NULL, ": " },
-            { COL_VERB, "Melts in any liquid it touches" }, { NULL, " " },
-            { COL_RATE, adverb("thaws", row->r->thaws) },
-            { NULL, ", becoming " },
-            { COL_OBJECT, prose_name(to_name(row->r->heats_to)) },
-            { NULL, "." },
+            { MARK_SUBJECT, "Snow" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Melts in any liquid it touches" }, { MARK_NONE, " " },
+            { MARK_RATE, adverb("thaws", row->r->thaws) },
+            { MARK_NONE, ", becoming " },
+            { MARK_OBJECT, prose_name(to_name(row->r->heats_to)) },
+            { MARK_NONE, "." },
         };
         print_example("Thaw - GRP_THAW: thaws, heats_to (emit_thaw)", segs,
                        ARRAY_LEN(segs));
@@ -1393,13 +1395,13 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Sand");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Sand" }, { NULL, ": " },
-            { COL_VERB, "Soaks up" }, { NULL, " any " },
-            { COL_OBJECT, wetting_liquids }, { NULL, " it touches " },
-            { COL_RATE, adverb("soaks", row->r->soaks) },
-            { NULL, ", becoming " },
-            { COL_OBJECT, prose_name(to_name(row->r->soaks_to)) },
-            { NULL, " once it takes a unit in." },
+            { MARK_SUBJECT, "Sand" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Soaks up" }, { MARK_NONE, " any " },
+            { MARK_OBJECT, wetting_liquids }, { MARK_NONE, " it touches " },
+            { MARK_RATE, adverb("soaks", row->r->soaks) },
+            { MARK_NONE, ", becoming " },
+            { MARK_OBJECT, prose_name(to_name(row->r->soaks_to)) },
+            { MARK_NONE, " once it takes a unit in." },
         };
         print_example("Wet - GRP_WET: soaks, soaks_to, wetting_liquids "
                        "(emit_wet)", segs, ARRAY_LEN(segs));
@@ -1407,16 +1409,16 @@ static void emit_anatomy(void)
 
     /* GRP_ACID - emit_acid(), the dissolves branch: dissolves (a genuine
      * rate) and fizz (a one-shot chance) side by side - two different
-     * ladders, one slot colour. */
+     * ladders, one slot marker. */
     {
         const mrow_t *row = find_row("Acid");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Acid" }, { NULL, ": " },
-            { COL_VERB, "Dissolves an adjacent cell" }, { NULL, " " },
-            { COL_RATE, adverb("dissolves", row->r->dissolves) },
-            { NULL, ", " },
-            { COL_RATE, adverb("fizz", row->r->fizz) },
-            { NULL, " leaving smoke behind." },
+            { MARK_SUBJECT, "Acid" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Dissolves an adjacent cell" }, { MARK_NONE, " " },
+            { MARK_RATE, adverb("dissolves", row->r->dissolves) },
+            { MARK_NONE, ", " },
+            { MARK_RATE, adverb("fizz", row->r->fizz) },
+            { MARK_NONE, " leaving smoke behind." },
         };
         print_example("Acid - GRP_ACID: dissolves, fizz (emit_acid)", segs,
                        ARRAY_LEN(segs));
@@ -1426,10 +1428,10 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Plant");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Plant" }, { NULL, ": " },
-            { COL_VERB, "Grows into wet soil" }, { NULL, " " },
-            { COL_RATE, adverb("grows", row->r->grows) },
-            { NULL, ", against gravity, spending a level of that soil's "
+            { MARK_SUBJECT, "Plant" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Grows into wet soil" }, { MARK_NONE, " " },
+            { MARK_RATE, adverb("grows", row->r->grows) },
+            { MARK_NONE, ", against gravity, spending a level of that soil's "
                     "moisture per cell." },
         };
         print_example("Grow - GRP_GROW: grows (emit_grow)", segs,
@@ -1454,19 +1456,19 @@ static void emit_anatomy(void)
         snprintf(clings_to, sizeof(clings_to), "%s",
                  prose_name(to_name(row->r->clings_to)));
         const seg_t segs[] = {
-            { COL_SUBJECT, "Plant" }, { NULL, ": " },
-            { NULL, "A straight run of 6 cells " },
-            { COL_RATE, adverb("harden_chance", row->r->harden_chance) },
-            { NULL, " " }, { COL_VERB, "hardens" }, { NULL, " into " },
-            { COL_OBJECT, hardens_to },
-            { NULL, ", up to 2 cells wider at the foot than at the tip, "
+            { MARK_SUBJECT, "Plant" }, { MARK_NONE, ": " },
+            { MARK_NONE, "A straight run of 6 cells " },
+            { MARK_RATE, adverb("harden_chance", row->r->harden_chance) },
+            { MARK_NONE, " " }, { MARK_VERB, "hardens" }, { MARK_NONE, " into " },
+            { MARK_OBJECT, hardens_to },
+            { MARK_NONE, ", up to 2 cells wider at the foot than at the tip, "
                     "and " },
-            { COL_RATE, adverb("holds_line", row->r->holds_line) },
-            { NULL, " a limb holds its own direction (rather than bending "
+            { MARK_RATE, adverb("holds_line", row->r->holds_line) },
+            { MARK_NONE, " a limb holds its own direction (rather than bending "
                     "back toward gravity); the hardened body counts as "
                     "part of " },
-            { COL_OBJECT, clings_to },
-            { NULL, "." },
+            { MARK_OBJECT, clings_to },
+            { MARK_NONE, "." },
         };
         print_example("Harden - GRP_HARDEN: harden_chance, hardens_to, "
                        "holds_line, clings_to (emit_harden)", segs,
@@ -1477,13 +1479,13 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Wood");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Wood" }, { NULL, ": " },
-            { NULL, "Standing in wet soil, " }, { COL_VERB, "sprouts" },
-            { NULL, " " },
-            { COL_OBJECT, prose_name(to_name(row->r->sprouts_to)) },
-            { NULL, " beside itself " },
-            { COL_RATE, adverb("sprouts", row->r->sprouts) },
-            { NULL, "." },
+            { MARK_SUBJECT, "Wood" }, { MARK_NONE, ": " },
+            { MARK_NONE, "Standing in wet soil, " }, { MARK_VERB, "sprouts" },
+            { MARK_NONE, " " },
+            { MARK_OBJECT, prose_name(to_name(row->r->sprouts_to)) },
+            { MARK_NONE, " beside itself " },
+            { MARK_RATE, adverb("sprouts", row->r->sprouts) },
+            { MARK_NONE, "." },
         };
         print_example("Regrow - GRP_REGROW: sprouts, sprouts_to "
                        "(emit_regrow)", segs, ARRAY_LEN(segs));
@@ -1494,10 +1496,10 @@ static void emit_anatomy(void)
     {
         const mrow_t *row = find_row("Glass");
         const seg_t segs[] = {
-            { COL_SUBJECT, "Glass" }, { NULL, ": " },
-            { COL_VERB, "Shatters" }, { NULL, " into " },
-            { COL_OBJECT, prose_name(to_name(row->r->shatters_to)) },
-            { NULL, " " }, { COL_CAUSE, CAUSE }, { NULL, "." },
+            { MARK_SUBJECT, "Glass" }, { MARK_NONE, ": " },
+            { MARK_VERB, "Shatters" }, { MARK_NONE, " into " },
+            { MARK_OBJECT, prose_name(to_name(row->r->shatters_to)) },
+            { MARK_NONE, " " }, { MARK_CAUSE, CAUSE }, { MARK_NONE, "." },
         };
         print_example("Shatter - GRP_SHATTER: shatters_to (emit_shatter)",
                        segs, ARRAY_LEN(segs));

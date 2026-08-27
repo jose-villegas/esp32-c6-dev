@@ -153,104 +153,106 @@ Not a markup pass on the table above - that table stays as clean prose, unedited
 
 ### Legend
 
-- $${\color{#B22222}Subject}$$ (Subject) - which row the sentence is about (an `all_rows[]` entry - `materials[]` or an extended material). A per-material bullet never restates this - the `###` heading already says it - so every example below writes it out explicitly to make the sentence stand on its own.
-- $${\color{#2255AA}Verb}$$ (Verb) - the wording tied to the field driving the clause. `field_docs[]` carries a `verb` string per field for exactly this reason, but phase 1 never actually reads that column back out (grep `->verb` in this file - nothing matches): today the words are typed directly into the matching `emit_*()` printf() call, kept in sync with `field_docs[]` by hand instead of by the compiler.
-- $${\color{#1E7B4D}Object}$$ (Object) - the field's VALUE, decoded by kind: `to_name()` for an FK_TARGET id or a whole MATX() cell spec, or `wetting_liquids` for the derived list of materials with `wets != 0`.
-- $${\color{#A0522D}Rate\space /\space frequency}$$ (Rate / frequency) - the ladder bucket: `adverb_for()` for a genuine per-step rate (SCALE_RATE), or `chance_bucket_for()` through frequency_words[]/ease_words[] for a one-shot chance (SCALE_CHANCE). Two different ladders share this one colour because both answer the same question - "which of five bands" - for the same kind of raw byte; only the vocabulary differs, and it is DIFFERENT for a reason (see ease_words[]'s own comment above).
-- $${\color{#8E44AD}Cause}$$ (Cause) - a trigger that lives at a read site in sand_reactions.c, not in this table - rendered as the literal `[TODO: trigger]` placeholder rather than guessed at.
-- Glue (left uncoloured - your own theme's ordinary text colour, not a sixth colour of its own) - prose typed by hand inside the `emit_*()` function itself: connective words, punctuation, the parts no field drives.
+Five colours, one per slot - a colour span can carry more channels than bold/code/italic could, so Subject and Cause each get one of their own rather than sharing.
+
+- Subject (`#B22222`) - which row the sentence is about (an `all_rows[]` entry - `materials[]` or an extended material). Already the `###` heading for every per-material bullet, so it needs no distinct marker there; each example below still writes the subject out explicitly, in colour, so the sentence stands on its own outside that table.
+- Verb (`#2255AA`) - the wording tied to the field driving the clause. `field_docs[]` carries a `verb` string per field for exactly this reason, but phase 1 never actually reads that column back out (grep `->verb` in this file - nothing matches): today the words are typed directly into the matching `emit_*()` printf() call, kept in sync with `field_docs[]` by hand instead of by the compiler.
+- Object (`#1E7B4D`) - the field's VALUE, decoded by kind: `to_name()` for an FK_TARGET id or a whole MATX() cell spec, or `wetting_liquids` for the derived list of materials with `wets != 0`.
+- Rate / frequency (`#A0522D`) - the ladder bucket: `adverb_for()` for a genuine per-step rate (SCALE_RATE), or `chance_bucket_for()` through frequency_words[]/ease_words[] for a one-shot chance (SCALE_CHANCE). Two different ladders share this one channel because both answer the same question - "which of five bands" - for the same kind of raw byte; only the vocabulary differs, and it is DIFFERENT for a reason (see ease_words[]'s own comment above).
+- Cause (`#8E44AD`) - a trigger that lives at a read site in sand_reactions.c, not in this table - rendered as the literal `[TODO: trigger]` placeholder rather than guessed at.
+- Glue (left unmarked, the reader's own theme colour) - prose typed by hand inside the `emit_*()` function itself: connective words, punctuation, the parts no field drives.
 
 ### Examples
 
-One representative sentence per group (see group_id_t), subject written out explicitly (see Subject above) and prefixed to the real per-material clause. Plain text first, then the same sentence with its slots colour-marked.
+One representative sentence per group (see group_id_t), subject written out explicitly (see Subject above) and prefixed to the real per-material clause. Plain text first, then the same sentence with its slots marked.
 
 **Ignite - GRP_IGNITE: flammability, ignites_to (emit_ignite)**
 
 Wood: Catches fire readily and burns where it stands, rather than flaring away.
 
-$${\color{#B22222}Wood}$$: $${\color{#2255AA}Catches}$$ fire $${\color{#A0522D}readily}$$ and burns where it stands, rather than flaring away.
+$\textcolor{#B22222}{\text{Wood}}$: $\textcolor{#2255AA}{\text{Catches}}$ fire $\textcolor{#A0522D}{\text{readily}}$ and burns where it stands, rather than flaring away.
 
 
 **Burn - GRP_BURN: burns, residue, quench_to (emit_burn)**
 
 Fire: Is a heat source in its own right; sometimes leaves smoke when it burns out. Touched by a quenching liquid, becomes steam.
 
-$${\color{#B22222}Fire}$$: Is a heat source in its own right; $${\color{#A0522D}sometimes}$$ $${\color{#2255AA}leaves\space smoke}$$ when it burns out. Touched by a quenching liquid, becomes $${\color{#1E7B4D}steam}$$.
+$\textcolor{#B22222}{\text{Fire}}$: Is a heat source in its own right; $\textcolor{#A0522D}{\text{sometimes}}$ $\textcolor{#2255AA}{\text{leaves smoke}}$ when it burns out. Touched by a quenching liquid, becomes $\textcolor{#1E7B4D}{\text{steam}}$.
 
 
 **Transform - GRP_TRANSFORM: heats_to, heat_chance (emit_transform)**
 
 Sand: Melts to glass readily.
 
-$${\color{#B22222}Sand}$$: $${\color{#2255AA}Melts}$$ to $${\color{#1E7B4D}glass}$$ $${\color{#A0522D}readily}$$.
+$\textcolor{#B22222}{\text{Sand}}$: $\textcolor{#2255AA}{\text{Melts}}$ to $\textcolor{#1E7B4D}{\text{glass}}$ $\textcolor{#A0522D}{\text{readily}}$.
 
 
 **Temperature - GRP_TEMPERATURE: conducts (emit_temperature)**
 
 Metal: Passes heat on instantly, without banking any of it itself.
 
-$${\color{#B22222}Metal}$$: $${\color{#2255AA}Passes\space heat\space on}$$ $${\color{#A0522D}instantly}$$, without banking any of it itself.
+$\textcolor{#B22222}{\text{Metal}}$: $\textcolor{#2255AA}{\text{Passes heat on}}$ $\textcolor{#A0522D}{\text{instantly}}$, without banking any of it itself.
 
 
 **Cold - GRP_COLD: chills (emit_cold)**
 
 Ice: Chills whatever it touches swiftly.
 
-$${\color{#B22222}Ice}$$: $${\color{#2255AA}Chills\space whatever\space it\space touches}$$ $${\color{#A0522D}swiftly}$$.
+$\textcolor{#B22222}{\text{Ice}}$: $\textcolor{#2255AA}{\text{Chills whatever it touches}}$ $\textcolor{#A0522D}{\text{swiftly}}$.
 
 
 **Warmth - GRP_WARMTH: warms (emit_warmth)**
 
 Steam: Warms whatever it touches swiftly, without igniting or quenching anything.
 
-$${\color{#B22222}Steam}$$: $${\color{#2255AA}Warms\space whatever\space it\space touches}$$ $${\color{#A0522D}swiftly}$$, without igniting or quenching anything.
+$\textcolor{#B22222}{\text{Steam}}$: $\textcolor{#2255AA}{\text{Warms whatever it touches}}$ $\textcolor{#A0522D}{\text{swiftly}}$, without igniting or quenching anything.
 
 
 **Thaw - GRP_THAW: thaws, heats_to (emit_thaw)**
 
 Snow: Melts in any liquid it touches steadily, becoming water.
 
-$${\color{#B22222}Snow}$$: $${\color{#2255AA}Melts\space in\space any\space liquid\space it\space touches}$$ $${\color{#A0522D}steadily}$$, becoming $${\color{#1E7B4D}water}$$.
+$\textcolor{#B22222}{\text{Snow}}$: $\textcolor{#2255AA}{\text{Melts in any liquid it touches}}$ $\textcolor{#A0522D}{\text{steadily}}$, becoming $\textcolor{#1E7B4D}{\text{water}}$.
 
 
 **Wet - GRP_WET: soaks, soaks_to, wetting_liquids (emit_wet)**
 
 Sand: Soaks up any water it touches readily, becoming dirt once it takes a unit in.
 
-$${\color{#B22222}Sand}$$: $${\color{#2255AA}Soaks\space up}$$ any $${\color{#1E7B4D}water}$$ it touches $${\color{#A0522D}readily}$$, becoming $${\color{#1E7B4D}dirt}$$ once it takes a unit in.
+$\textcolor{#B22222}{\text{Sand}}$: $\textcolor{#2255AA}{\text{Soaks up}}$ any $\textcolor{#1E7B4D}{\text{water}}$ it touches $\textcolor{#A0522D}{\text{readily}}$, becoming $\textcolor{#1E7B4D}{\text{dirt}}$ once it takes a unit in.
 
 
 **Acid - GRP_ACID: dissolves, fizz (emit_acid)**
 
 Acid: Dissolves an adjacent cell swiftly, sometimes leaving smoke behind.
 
-$${\color{#B22222}Acid}$$: $${\color{#2255AA}Dissolves\space an\space adjacent\space cell}$$ $${\color{#A0522D}swiftly}$$, $${\color{#A0522D}sometimes}$$ leaving smoke behind.
+$\textcolor{#B22222}{\text{Acid}}$: $\textcolor{#2255AA}{\text{Dissolves an adjacent cell}}$ $\textcolor{#A0522D}{\text{swiftly}}$, $\textcolor{#A0522D}{\text{sometimes}}$ leaving smoke behind.
 
 
 **Grow - GRP_GROW: grows (emit_grow)**
 
 Plant: Grows into wet soil readily, against gravity, spending a level of that soil's moisture per cell.
 
-$${\color{#B22222}Plant}$$: $${\color{#2255AA}Grows\space into\space wet\space soil}$$ $${\color{#A0522D}readily}$$, against gravity, spending a level of that soil's moisture per cell.
+$\textcolor{#B22222}{\text{Plant}}$: $\textcolor{#2255AA}{\text{Grows into wet soil}}$ $\textcolor{#A0522D}{\text{readily}}$, against gravity, spending a level of that soil's moisture per cell.
 
 
 **Harden - GRP_HARDEN: harden_chance, hardens_to, holds_line, clings_to (emit_harden)**
 
 Plant: A straight run of 6 cells sometimes hardens into wood, up to 2 cells wider at the foot than at the tip, and usually a limb holds its own direction (rather than bending back toward gravity); the hardened body counts as part of wood.
 
-$${\color{#B22222}Plant}$$: A straight run of 6 cells $${\color{#A0522D}sometimes}$$ $${\color{#2255AA}hardens}$$ into $${\color{#1E7B4D}wood}$$, up to 2 cells wider at the foot than at the tip, and $${\color{#A0522D}usually}$$ a limb holds its own direction (rather than bending back toward gravity); the hardened body counts as part of $${\color{#1E7B4D}wood}$$.
+$\textcolor{#B22222}{\text{Plant}}$: A straight run of 6 cells $\textcolor{#A0522D}{\text{sometimes}}$ $\textcolor{#2255AA}{\text{hardens}}$ into $\textcolor{#1E7B4D}{\text{wood}}$, up to 2 cells wider at the foot than at the tip, and $\textcolor{#A0522D}{\text{usually}}$ a limb holds its own direction (rather than bending back toward gravity); the hardened body counts as part of $\textcolor{#1E7B4D}{\text{wood}}$.
 
 
 **Regrow - GRP_REGROW: sprouts, sprouts_to (emit_regrow)**
 
 Wood: Standing in wet soil, sprouts leaf beside itself readily.
 
-$${\color{#B22222}Wood}$$: Standing in wet soil, $${\color{#2255AA}sprouts}$$ $${\color{#1E7B4D}leaf}$$ beside itself $${\color{#A0522D}readily}$$.
+$\textcolor{#B22222}{\text{Wood}}$: Standing in wet soil, $\textcolor{#2255AA}{\text{sprouts}}$ $\textcolor{#1E7B4D}{\text{leaf}}$ beside itself $\textcolor{#A0522D}{\text{readily}}$.
 
 
 **Shatter - GRP_SHATTER: shatters_to (emit_shatter)**
 
 Glass: Shatters into sand [TODO: trigger].
 
-$${\color{#B22222}Glass}$$: $${\color{#2255AA}Shatters}$$ into $${\color{#1E7B4D}sand}$$ $${\color{#8E44AD}[TODO:\space trigger]}$$.
+$\textcolor{#B22222}{\text{Glass}}$: $\textcolor{#2255AA}{\text{Shatters}}$ into $\textcolor{#1E7B4D}{\text{sand}}$ $\textcolor{#8E44AD}{\text{[TODO: trigger]}}$.
 
