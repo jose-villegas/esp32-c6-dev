@@ -109,6 +109,60 @@ static void test_channels_blend_independently_green_stays_put(void)
         "green must stay at zero while red and blue move independently");
 }
 
+/*-----------------------------------------------------------------------------
+ * gfx_color_rgb888 - unpacking a panel colour back to 0xRRGGBB.
+ *
+ * The property under test is GFX_RGB(gfx_color_rgb888(c)) == c for every c -
+ * see gfx_color_rgb888()'s own comment in gfx_color.h for why bit replication
+ * is what makes that hold exactly rather than approximately. A spread of
+ * colours is used rather than an exhaustive sweep of all 65536 gfx_color_t
+ * values, since the replication argument is per-channel and does not depend
+ * on the other two channels' values - so a handful of colours that between
+ * them exercise every channel at 0 and at its own maximum is as convincing as
+ * the full sweep and a great deal cheaper.
+ *---------------------------------------------------------------------------*/
+
+/* 0xRRGGBB constants covering pure black, pure white, each channel alone at
+ * its own maximum (0xF80000/0x00FC00/0x0000F8 - the largest 0xRRGGBB value
+ * GFX_RGB565 truncates to R5=31/G6=63/B5=31 respectively), and a few
+ * arbitrary colours that mix all three channels at once. */
+static const uint32_t rgb888_spread[] = {
+    0x000000, 0xFFFFFF,
+    0xF80000, 0x00FC00, 0x0000F8,
+    0x336699, 0x8899AA, 0x5C7AAF, 0x1A2B3C, 0xE0D0C0,
+};
+#define RGB888_SPREAD_N (sizeof(rgb888_spread) / sizeof(rgb888_spread[0]))
+
+static void test_round_trip_is_exact_for_a_spread_of_colours(void)
+{
+    for (size_t i = 0; i < RGB888_SPREAD_N; i++) {
+        const gfx_color_t c = GFX_RGB(rgb888_spread[i]);
+        TEST_ASSERT_EQUAL_HEX16_MESSAGE(c, GFX_RGB(gfx_color_rgb888(c)),
+            "GFX_RGB(gfx_color_rgb888(c)) must reproduce c exactly - a "
+            "plain shift instead of bit replication would land one bucket "
+            "short and the colour would read darker every time it crosses "
+            "this layer");
+    }
+}
+
+static void test_expanding_a_colour_twice_is_idempotent(void)
+{
+    /* Feeding an already-expanded colour back through GFX_RGB() and
+     * gfx_color_rgb888() a second time must land on exactly the same
+     * 0xRRGGBB, not merely one that happens to look right once - the
+     * expansion has to be a fixed point of the round trip, since the UI
+     * layer reads a panel colour into an 8-bit mu_Color once and nothing
+     * downstream of that is allowed to keep drifting it. */
+    for (size_t i = 0; i < RGB888_SPREAD_N; i++) {
+        const gfx_color_t c = GFX_RGB(rgb888_spread[i]);
+        const uint32_t once  = gfx_color_rgb888(c);
+        const uint32_t twice = gfx_color_rgb888(GFX_RGB(once));
+        TEST_ASSERT_EQUAL_HEX32_MESSAGE(once, twice,
+            "a second pass through GFX_RGB()/gfx_color_rgb888() must not "
+            "change the already-expanded colour any further");
+    }
+}
+
 void run_gfx_color_suite(void)
 {
     RUN_TEST(test_t_zero_returns_a_exactly);
@@ -117,6 +171,8 @@ void run_gfx_color_suite(void)
     RUN_TEST(test_black_toward_white_at_half_gives_mid_grey);
     RUN_TEST(test_a_known_pair_blends_to_a_known_result);
     RUN_TEST(test_channels_blend_independently_green_stays_put);
+    RUN_TEST(test_round_trip_is_exact_for_a_spread_of_colours);
+    RUN_TEST(test_expanding_a_colour_twice_is_idempotent);
 }
 
 SUITE_REGISTER(run_gfx_color_suite);

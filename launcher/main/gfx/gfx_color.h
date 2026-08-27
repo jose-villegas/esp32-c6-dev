@@ -49,6 +49,42 @@ typedef uint16_t gfx_color_t;
  * mistake, and it does not crash: it shifts the hue, because a 5-bit channel
  * blended with 8-bit arithmetic gets weighted wrong relative to the 6-bit
  * one. */
+/* The 0xRRGGBB a packed panel colour came from - the inverse of GFX_RGB().
+ *
+ * Same byte-swap-then-unpack as gfx_color_mix() above, but expanding each
+ * channel back to 8 bits by BIT REPLICATION (v << 3 | v >> 2 for a 5-bit
+ * channel, v << 2 | v >> 4 for 6-bit) rather than a plain left shift.
+ *
+ * Replication is what makes GFX_RGB(gfx_color_rgb888(c)) == c for every c: a
+ * plain shift (v << 3, say) leaves the low bits zero, so packing that value
+ * back down with GFX_RGB565's own truncating >> 3 recovers v exactly only by
+ * accident of rounding - most values land one bucket short and the colour
+ * reads slightly darker each time it makes the round trip. Replication fills
+ * those low bits with the channel's own high bits instead, which are exactly
+ * what a truncating right-shift throws away first: for a 5-bit v, v8 = (v <<
+ * 3) | (v >> 2) has v in bits 7..3 and v's own top 3 bits in bits 2..0, so
+ * v8 >> 3 is v again whatever v was - not just for the values a shift would
+ * have gotten right anyway. This is what any UI code that reads a panel
+ * colour into microui's 8-bit mu_Color needs: a value that survives being
+ * carried through this layer and mapped back down, not merely one that looks
+ * close. */
+static inline uint32_t gfx_color_rgb888(gfx_color_t c)
+{
+    /* Undo the byte swap to get back to native-endian RGB565 - see
+     * gfx_color_mix() above for the same first step. */
+    const uint16_t native = (uint16_t)((c >> 8) | (c << 8));
+
+    const uint8_t r5 = (uint8_t)((native >> 11) & 0x1Fu); /* 5 bits */
+    const uint8_t g6 = (uint8_t)((native >> 5)  & 0x3Fu); /* 6 bits */
+    const uint8_t b5 = (uint8_t)( native        & 0x1Fu); /* 5 bits */
+
+    const uint8_t r8 = (uint8_t)((r5 << 3) | (r5 >> 2));
+    const uint8_t g8 = (uint8_t)((g6 << 2) | (g6 >> 4));
+    const uint8_t b8 = (uint8_t)((b5 << 3) | (b5 >> 2));
+
+    return ((uint32_t)r8 << 16) | ((uint32_t)g8 << 8) | b8;
+}
+
 static inline gfx_color_t gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t)
 {
     /* Undo the byte swap to get back to native-endian RGB565. */
