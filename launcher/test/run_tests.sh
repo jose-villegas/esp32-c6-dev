@@ -65,9 +65,11 @@ $TEST_DIR/suites/suite_gfx_font.c
 $TEST_DIR/suites/suite_icons.c
 $TEST_DIR/suites/suite_ui_style.c
 $TEST_DIR/suites/suite_ui_transform.c
+$TEST_DIR/suites/suite_display.c
 $MAIN_DIR/input/touch_fsm.c
 $MAIN_DIR/input/gesture.c
 $MAIN_DIR/input/button_fsm.c
+$MAIN_DIR/display/display.c
 "
 
 # App-owned sources, discovered rather than listed, so adding or deleting an

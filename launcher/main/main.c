@@ -16,7 +16,9 @@
 
 #include "app.h"
 #include "boot/boot_anim.h"
+#include "display/display.h"
 #include "input/gesture.h"
+#include "input/imu.h"
 #include "gfx/gfx.h"
 #include "boot/post.h"
 #include "boot/post_ui.h"
@@ -50,6 +52,19 @@ static const char *TAG = "shell";
 #define HOME_HINT_MARGIN  10
 #define HOME_HINT_RGB     0x4A5268
 
+/* How often orientation is resampled, not every frame.
+ *
+ * The render loop reaches several hundred fps once partial updates are
+ * doing their job, and imu_read() is an I2C transaction - real bus time, not
+ * a memory read. A quarter-turn decision needs nothing like frame-rate
+ * resolution, and display.h's hysteresis wants a dwell between samples
+ * anyway, not a reading every 2-4 ms it would have to filter through.
+ *
+ * 10 Hz (100 ms) is plenty: a genuine reorientation is caught within a
+ * tenth of a second, far below what a human notices as lag, and it leaves
+ * the overwhelming majority of frames untouched. */
+#define DISPLAY_SAMPLE_MS 100
+
 /* --- app registry ------------------------------------------------------- */
 
 /* Filled in before app_main() by the constructors APP_REGISTER() emits. No
@@ -69,6 +84,36 @@ void app_register(const app_t *app)
 
 const app_t *const *app_list(void) { return apps; }
 int app_list_count(void) { return apps_registered; }
+
+/* --- display orientation -------------------------------------------------
+ *
+ * Owned here, not by any one app - see display.h's top comment for why.
+ * main.c samples gravity, feeds display_update(), and on a change pushes the
+ * new quarter into ui_set_transform() so the launcher, every boot menu and
+ * every app UI rotate together instead of each deciding for itself. */
+
+/* Sensor axes to screen axes - a board-layout fact, found by experiment, not
+ * derivable from the datasheet; see app_sand.c's own copy of this mapping
+ * for the full explanation of which axis is which and why the negation is
+ * there.
+ *
+ * Duplicated rather than shared: this is now the SECOND reader of the IMU,
+ * alongside app_sand.c's, and unifying the two is deliberately out of scope
+ * here. Two small, independent readers of a sensor that only ever answers
+ * "which way is down" is a fine place to leave that, at least for now;
+ * forcing them to share a single reader is a separate piece of work with its
+ * own tradeoffs (whose polling rate wins? whose smoothing?) that this task
+ * does not need to settle. */
+#define DISPLAY_GRAVITY_X(s)  (-(s)->ay)
+#define DISPLAY_GRAVITY_Y(s)  ( (s)->ax)
+
+/* The shell's one display_t - see display.h's top comment on why the module
+ * itself stays a plain struct-and-functions decision function with no
+ * singleton of its own, and display_shell_quarter()'s own comment for why
+ * the accessor is declared there but defined here. */
+static display_t shell_display;
+
+int display_shell_quarter(void) { return display_quarter(&shell_display); }
 
 /* Sorted so the menu order is stable. Without this it follows link order,
  * which changes when a file is added and makes the list jump around. */
@@ -220,6 +265,14 @@ void app_main(void)
     touch_start();
     buttons_start();
 
+    /* Not fatal if this fails - the display sampling below just finds
+     * imu_ready() false forever after and the shell stays upright, the same
+     * graceful fallback app_sand.c's own imu_init() failure gets. */
+    if (!imu_init()) {
+        ESP_LOGW(TAG, "No IMU - display orientation stays upright");
+    }
+    display_init(&shell_display);
+
     ui_launcher_init();
 
     const app_t *current = NULL;   /* NULL means the launcher is showing */
@@ -227,6 +280,7 @@ void app_main(void)
     int64_t previous_us = esp_timer_get_time();
     int64_t fps_window_start = previous_us;
     uint32_t frames = 0;
+    int64_t next_display_sample_us = previous_us;
 
     sort_apps();
     ESP_LOGI(TAG, "Ready, %d app%s registered",
@@ -242,6 +296,27 @@ void app_main(void)
 
         touch_read(&input);
         buttons_read(&input.boot, &input.power);
+
+        /* Resampled at DISPLAY_SAMPLE_MS, not every frame - see that
+         * constant's own comment. Ahead of step_app(), so a transform change
+         * this iteration is already in force before anything below builds a
+         * UI frame or maps this frame's touch through it - draw_palette() in
+         * app_sand.c used to have to get this same ordering right locally
+         * for exactly the same reason; now it is main.c's job once, for
+         * everything. */
+        if (now_us >= next_display_sample_us) {
+            next_display_sample_us = now_us + (int64_t)DISPLAY_SAMPLE_MS * 1000;
+
+            imu_sample_t sample;
+            if (imu_ready() && imu_read(&sample)) {
+                const int gx = DISPLAY_GRAVITY_X(&sample);
+                const int gy = DISPLAY_GRAVITY_Y(&sample);
+                if (display_update(&shell_display, gx, gy)) {
+                    ui_set_transform(ui_transform_quarter_turn(
+                        display_quarter(&shell_display), GFX_WIDTH, GFX_HEIGHT));
+                }
+            }
+        }
 
         step_app(&current, &input, dt_ms);
 

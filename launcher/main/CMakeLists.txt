@@ -4,6 +4,7 @@ set(app_srcs
     "boot/boot_anim.c"
     "boot/post.c"
     "boot/post_ui.c"
+    "display/display.c"
     "gfx/gfx.c"
     "gfx/icons.c"
     "input/touch.c"
@@ -113,6 +114,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_ui.c"
         "../test/suites/suite_ui_style.c"
         "../test/suites/suite_ui_transform.c"
+        "../test/suites/suite_display.c"
         ${app_suites}
     )
 endif()

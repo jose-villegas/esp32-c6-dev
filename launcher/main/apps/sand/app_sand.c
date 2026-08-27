@@ -48,6 +48,7 @@
 #include "esp_timer.h"
 
 #include "../../app.h"
+#include "../../display/display.h"
 #include "../../gfx/gfx.h"
 #include "../../input/imu.h"
 #include "../../ui/ui.h"
@@ -316,6 +317,13 @@ static tilt_t      tilt;
 static bool        failed;
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
+/* Which shell quarter the palette panel was last actually painted at - see
+ * sand_frame()'s SAND_UI_PALETTE handling, which repaints the sand
+ * underneath before redrawing the panel whenever display_shell_quarter()
+ * has moved on since this was set. Meaningless while the panel is closed;
+ * set fresh every time SAND_UI_OPEN_PALETTE fires, never read before then. */
+static int         palette_drawn_quarter;
+
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Rolling averages, purely for the log line - a release build has nobody
  * watching the serial console to read them, so it carries none of this. */
@@ -435,6 +443,34 @@ static void seed_row_runs_full_width(void)
         row_run_x1[i * ROW_MAX_RUNS] = (uint16_t)grid_w;
         row_run_n[i] = 1;
     }
+}
+
+/* Marks the whole sand canvas for a full repaint on the next
+ * draw_dirty_rows() call: every row's run-tracking reseeded as one
+ * full-width span (seed_row_runs_full_width() just above), every row
+ * flagged dirty, and the whole screen marked dirty in gfx so the panel's
+ * send is not narrowed by whatever the sand itself would otherwise have
+ * decided was worth sending.
+ *
+ * The shared answer to "something that was covering part of the sand just
+ * moved or vanished, and what it stops covering has to come back":
+ * SAND_UI_CLOSE_PALETTE below uses this when the panel closes, and the
+ * SAND_UI_PALETTE handling uses it when the panel's own footprint moves
+ * under a shell orientation change while it is still open - two different
+ * triggers for the identical underlying fact, kept as one function so they
+ * cannot drift into two slightly different reseeds of the same three
+ * things.
+ *
+ * Only marks; does not call draw_dirty_rows() itself. Callers differ on
+ * whether the repaint has to land THIS frame - the palette-open case still
+ * has a panel to draw on top afterwards, so it calls draw_dirty_rows() right
+ * after this - or can simply wait for the next ordinary frame to pick the
+ * flags up on its own, which is what the close case below does. */
+static void mark_sand_fully_dirty(void)
+{
+    seed_row_runs_full_width();
+    memset(dirty_rows, 1, (size_t)grid_h);
+    gfx_mark_all_dirty();
 }
 
 /* Builds the active grid at the chosen quality, then does everything
@@ -983,11 +1019,16 @@ static gfx_color_t brush_color(cell_t c)
  * can only be turned in quarters - a diagonal tilt picks whichever quarter
  * it is nearest.
  *
- * Used by draw_mode_label() below to turn its text to follow the board's
- * physical "up", and by sand_frame()'s SAND_UI_PALETTE handling to turn the
- * whole palette panel the same way - see draw_palette()'s own top comment
- * for how that reading becomes the transform every tile draws and
- * hit-tests through. */
+ * Used only by draw_mode_label() below now, to turn its text to follow the
+ * board's physical "up". The palette panel used to share this - a second
+ * caller of exactly this function - but no longer computes its own turn at
+ * all; see draw_palette()'s own top comment for why, and display.h for the
+ * module that decides orientation now.
+ *
+ * NOT the same decision display.h makes, and deliberately so - see
+ * draw_mode_label()'s own comment just below for why this plain snap-to-
+ * nearest is still the right tool here even though display_update()'s
+ * hysteresis exists. */
 static int gravity_quarter_turn(int gx, int gy)
 {
     const int ax = gx < 0 ? -gx : gx;
@@ -1007,7 +1048,24 @@ static int gravity_quarter_turn(int gx, int gy)
  * looks like a bug the moment the device is not held upright.
  *
  * Snapped to one of four, because the font can only be turned in quarters -
- * a diagonal tilt picks whichever quarter it is nearest. */
+ * a diagonal tilt picks whichever quarter it is nearest.
+ *
+ * STILL ITS OWN gravity_quarter_turn() CALL - NOT display_shell_quarter()
+ *
+ * This looks like an inconsistency next to draw_palette(), which now just
+ * inherits the shell's orientation instead of computing one. It is not: the
+ * two draw through different paths. draw_palette() goes through microui,
+ * which every other described UI in this shell also goes through, and which
+ * is exactly what ui_set_transform() reaches - that is the whole reason the
+ * shell owning the transform is enough to turn the palette. draw_mode_label()
+ * instead calls gfx_text_turned() straight onto the app's own canvas,
+ * bypassing microui and the UI transform entirely, the same way the sand
+ * grid itself is painted. A transform set on the UI layer has no effect on
+ * either. So this is exactly the canvas-versus-chrome line: the palette is
+ * chrome (drawn through microui, like the launcher and every boot menu), the
+ * label is canvas (drawn straight onto this app's own framebuffer region,
+ * like the sand grid itself), and only chrome follows the shell's transform
+ * for free. The label keeps turning itself because nothing else will. */
 static void draw_mode_label(int gx, int gy)
 {
     /* The material's own name, so the label says what the finger will do
@@ -1138,32 +1196,33 @@ static mu_Color mu_color_hex(uint32_t rgb)
  * sand_ui_tile_clicked(), which is where "what a click on this tile means"
  * still lives, unchanged, and still host-tested - see suite_sand_ui.c.
  *
- * THE WHOLE PANEL TURNS WITH THE BOARD NOW
+ * THE WHOLE PANEL TURNS WITH THE BOARD - BUT NOT BY DECIDING SO ITSELF
  *
- * `turn` - sand_frame()'s own fresh gravity_quarter_turn() reading, taken
- * the same way draw_mode_label() takes it - is handed straight to
- * ui_set_transform() below, before ui_begin() opens the frame. That
- * ordering matters: ui_begin() calls feed_input(), which maps this frame's
- * touch through the CURRENTLY set transform (see ui.c's "Touch to mouse"
- * comment), so the transform for this frame has to be in force before that
- * happens, not after.
+ * This function used to compute its own quarter turn from gravity
+ * (gravity_quarter_turn()) and push it with ui_set_transform() before
+ * ui_begin(), which is what made every tile drawn below - and hit-tested,
+ * through the same transform - turn with the board. That decision now
+ * belongs to the shell (see display.h and main.c's display sampling): by
+ * the time this function runs, main.c has already called ui_set_transform()
+ * for whatever quarter is current, so the panel simply inherits it. No
+ * `turn` parameter, no ui_set_transform() call here any more - there would
+ * be nothing for this function to base one on that display_shell_quarter()
+ * does not already know, and a second opinion here could only disagree with
+ * the shell's.
  *
- * Once it is, every tile hit-tests through microui the same
+ * Every tile still hit-tests through microui the same
  * feed_input()-through-the-inverse-transform path every other described UI
- * in this shell already takes, so turning this window turns its
- * hit-testing right along with its drawing - nothing here hard-codes
- * physical screen coordinates the way palette_hit() used to, which is
- * exactly what makes this safe now and was not before ("Let microui
- * hit-test the palette's tiles"). Nothing in this loop branches on `turn`
- * by hand, either: draw_command() in ui.c derives the quarter turn from the
- * transform itself and picks gfx_text_font()'s turned glyph path
+ * in this shell takes (see ui.c's "Touch to mouse" comment), so turning the
+ * shell's transform turns this panel's hit-testing right along with its
+ * drawing - nothing here hard-codes physical screen coordinates the way
+ * palette_hit() used to. Nothing in this loop branches on the turn by hand,
+ * either: draw_command() in ui.c derives the quarter turn from whatever
+ * transform is in force and picks gfx_text_font()'s turned glyph path
  * accordingly, so mu_button()'s own centred label - and every rect this
  * loop draws - comes out turned for free. */
-static void draw_palette(const input_t *input, int turn)
+static void draw_palette(const input_t *input)
 {
     mu_Context *ctx = ui_context();
-
-    ui_set_transform(ui_transform_quarter_turn(turn, GFX_WIDTH, GFX_HEIGHT));
 
     ui_begin(input);
 
@@ -1375,11 +1434,11 @@ static void draw_palette(const input_t *input, int turn)
              * hand, and that hand-rolled centring is exactly what
              * mu_draw_control_text()'s plain centring plus draw_command()'s
              * own turn handling replaces - see this function's own top
-             * comment. draw_command() reads the quarter straight off the
-             * transform ui_set_transform() was given above and picks
-             * gfx_text_font()'s turned glyph path itself, so this loop never
-             * has to know which turn is in force to get a centred, correctly
-             * turned label. */
+             * comment. draw_command() reads the quarter straight off
+             * whatever transform is currently in force - main.c's, now, not
+             * this function's own - and picks gfx_text_font()'s turned glyph
+             * path itself, so this loop never has to know which turn is in
+             * force to get a centred, correctly turned label. */
         }
 
         mu_end_window(ctx);
@@ -1782,18 +1841,19 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     const unsigned actions = sand_ui_step(&ui, input);
 
     if (actions & SAND_UI_CLOSE_PALETTE) {
-        /* Forces a full repaint of the sand underneath the panel - the same
-         * seeding start_sim() uses to force a fresh grid's first frame out
-         * in full, reused here via seed_row_runs_full_width() rather than
-         * duplicated, so draw_dirty_rows() treats every row as needing a
-         * full-width send on the very next frame and paints over every
-         * pixel the panel touched.
+        /* Forces a full repaint of the sand underneath the panel - see
+         * mark_sand_fully_dirty()'s own comment for why this is the same
+         * operation the SAND_UI_PALETTE handling below uses for an
+         * orientation change while the panel is still open, and why it is
+         * only marked here rather than drawn: this function returns
+         * immediately below, so the actual redraw happens on the very next
+         * ordinary frame's own call to draw_dirty_rows() rather than here.
          *
-         * The two accumulators are zeroed rather than left to keep counting
-         * through the pause: left alone, the wall-clock time the panel was
-         * open would cash in as a burst of catch-up steps and pour the
-         * instant it closes, which would read as a stutter or a sudden blob
-         * under the finger rather than as nothing having happened while
+         * The two accumulators are zeroed below rather than left to keep
+         * counting through the pause: left alone, the wall-clock time the
+         * panel was open would cash in as a burst of catch-up steps and pour
+         * the instant it closes, which would read as a stutter or a sudden
+         * blob under the finger rather than as nothing having happened while
          * paused.
          *
          * SAND_UI_SHOW_LABEL is sand_ui_step()'s own answer to whether the
@@ -1817,24 +1877,30 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * - leaving this out is the obvious failure: the whole shell would
          * come up haloed after the palette had ever been opened once.
          *
-         * ui_set_transform(ui_transform_identity()) sits alongside it for
-         * exactly the same reason, and is no longer merely a guard against a
-         * hypothetical future transform - draw_palette() now genuinely
-         * leaves the transform turned (see that function's own top comment),
-         * so without this the launcher and the sand boot menu would come up
-         * turned the next time either drew a frame, the same way they would
-         * come up haloed without the text-style restore above. Both restores
-         * are load-bearing now for the same reason: ambient UI state that
-         * outlives the frame it was set for has to be put back by whoever
-         * set it, on the same exit path that undoes the other. */
-        ui_set_transform(ui_transform_identity());
+         * THE TRANSFORM ITSELF IS NOT RESTORED HERE ANY MORE
+         *
+         * This used to also reset ui_set_transform(ui_transform_identity()),
+         * for what was at the time the same reason as the text style:
+         * draw_palette() left the transform turned, and something had to put
+         * it back before the launcher or the sand boot menu drew again.
+         *
+         * That reasoning no longer applies, because the transform is no
+         * longer this app's to leave turned OR to put back. main.c now owns
+         * it for the whole shell (see display.h and main.c's display
+         * sampling) and sets it from the board's actual orientation on its
+         * own schedule, independent of whether this panel happens to be
+         * open. If this app reset it to identity here, it would fight the
+         * shell the moment the board was genuinely held sideways: the
+         * launcher would snap upright the instant the palette closed, and
+         * stay upright - wrong - until the shell's own next sample corrected
+         * it, on a board that never stopped being sideways. An app must not
+         * touch the shell's transform at all; it only ever inherits
+         * whatever main.c has already set. */
         ui_set_text_style(UI_TEXT_PLAIN);
 
         sim_accumulator_q8 = 0;
         pour_accumulator_ms = 0;
-        seed_row_runs_full_width();
-        memset(dirty_rows, 1, (size_t)grid_h);
-        gfx_mark_all_dirty();
+        mark_sand_fully_dirty();
         return;
     }
 
@@ -1845,11 +1911,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          *
          * sand_ui_step() already flipped ui.screen to SAND_UI_PALETTE, so
          * falling through to the SAND_UI_PALETTE branch just below means
-         * read_gravity_input(dt_ms, ...)/run_sim_steps()/handle_pour_input()/
-         * draw_dirty_rows() are never reached on the very frame the panel
-         * opens, exactly as they are skipped on every later frame by that
-         * same branch - the sim is paused from the same frame the panel
-         * becomes visible, not one frame later. */
+         * run_sim_steps()/handle_pour_input() are never reached again while
+         * the panel is open - the sim is paused from the same frame the
+         * panel becomes visible, not one frame later. draw_dirty_rows() is a
+         * partial exception: the PALETTE branch calls it itself, but only on
+         * an orientation change, to repaint what the panel's own move
+         * uncovers - see that branch's own comment. */
         label_left_ms = 0;
     }
 
@@ -1866,21 +1933,13 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * its callers elsewhere - the tests in suite_sand_ui.c - still
          * check it, but nothing here needs to read it any more).
          *
-         * Gravity is read every frame the panel is up, same as an ordinary
-         * running frame below, and for the same reason draw_mode_label()
-         * reads it: `turn` follows the board's physical "up", and is handed
-         * straight to draw_palette() so the whole panel - not just a label -
-         * turns with it. This is a real IMU transaction every frame the
-         * panel is open, not just on a change, but ui_set_transform() inside
-         * draw_palette() only invalidates the screen when the transform it
-         * is given actually differs from last frame's (see ui.c), so
-         * holding the board steady still costs no repaint - only the read
-         * itself, which draw_mode_label() already pays on every ordinary
-         * frame regardless. */
-        int gx, gy, flow, jostle, rotation;
-        imu_sample_t sample = { 0 };
-        read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
-        const int turn = gravity_quarter_turn(gx, gy);
+         * Orientation itself is no longer read here at all - it used to cost
+         * a real IMU transaction every frame the panel was open, just to
+         * recompute a `turn` that only fed draw_palette(). Now the shell has
+         * already decided it (see main.c's display sampling), and
+         * display_shell_quarter() below is a plain read of that decision,
+         * not a sensor access. */
+        const int quarter = display_shell_quarter();
 
         if (actions & SAND_UI_OPEN_PALETTE) {
             /* The panel just opened: the framebuffer still holds whatever
@@ -1892,9 +1951,57 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * replace those pixels rather than comparing equal and leaving
              * them on screen. */
             ui_invalidate();
+
+            /* Nothing to erase yet: the sand already fills the whole canvas
+             * correctly (nothing else was drawn over it), so this is just
+             * establishing the baseline the check just below compares
+             * against on every later frame. */
+            palette_drawn_quarter = quarter;
+        } else if (quarter != palette_drawn_quarter) {
+            /* The shell's orientation moved on since this panel was last
+             * painted - the board was turned while the palette stayed open.
+             * draw_palette() below paints UI_NO_BACKGROUND (see its own top
+             * comment: the frozen sand showing through the grout between
+             * tiles is the intended look, not a bug an opaque fill would be
+             * a lazy way to paper over), so nothing ever erases a tile's OLD
+             * footprint on its own. The panel is a square region placed by
+             * ui_transform_quarter_turn(), which lands it somewhere
+             * different on the physical screen at each quarter turn, so
+             * whatever the previous footprint covered that the new one does
+             * not is still sitting in the framebuffer as a ghost tile until
+             * something repaints it.
+             *
+             * The sand simulation itself never rotates - draw_dirty_rows()
+             * always paints in physical canvas coordinates, transform or no
+             * transform - so "repaint" here just means putting the frozen
+             * sand back the way it already looks, across the whole canvas
+             * rather than working out exactly which pixels the old
+             * footprint touched. mark_sand_fully_dirty() is the identical
+             * three-step reseed SAND_UI_CLOSE_PALETTE uses above for the
+             * same underlying reason (something that was covering the sand
+             * moved) - see its own comment. Unlike that path, this one calls
+             * draw_dirty_rows() itself, right here: there is still a panel
+             * to draw on top afterward this same frame, rather than a
+             * return that leaves the redraw for the next ordinary frame to
+             * pick up.
+             *
+             * draw_emitter_markers() follows for the same reason the
+             * ordinary running frame below always pairs it with
+             * draw_dirty_rows(): the markers are drawn straight over the
+             * grid's own pixels, not stored in it, so a full repaint of the
+             * grid alone would erase them without this. Nothing here calls
+             * advance_shine() or passes shine_moved - the simulation is
+             * paused while the panel is open, so this repaint happens only
+             * on an actual orientation change, never once per frame; ticking
+             * the shine on a static canvas would be paying an animation cost
+             * for a picture that already looks right. */
+            mark_sand_fully_dirty();
+            draw_dirty_rows(false);
+            draw_emitter_markers();
+            palette_drawn_quarter = quarter;
         }
 
-        draw_palette(input, turn);
+        draw_palette(input);
         return;
     }
 
