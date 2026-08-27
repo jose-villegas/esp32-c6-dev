@@ -17,12 +17,16 @@ static struct {
 } suites[SUITE_MAX];
 
 static int registered;
+static int dropped;
 
 void suite_register(const char *name, suite_fn fn)
 {
     if (registered >= SUITE_MAX) {
-        /* Silently dropping a suite would mean a green run that did not
-         * actually test everything, which is worse than no tests at all. */
+        /* Counted as well as printed. A dropped suite is a test that did not
+         * run, and a printf on its own leaves that as one line in a boot log
+         * nobody reads, directly above a summary saying everything passed.
+         * suites_dropped() is what turns the run red - see both runners. */
+        dropped++;
         printf("SUITE OVERFLOW: '%s' was not registered (max %d)\n",
                name, SUITE_MAX);
         return;
@@ -30,6 +34,11 @@ void suite_register(const char *name, suite_fn fn)
     suites[registered].name = name;
     suites[registered].fn   = fn;
     registered++;
+}
+
+int suites_dropped(void)
+{
+    return dropped;
 }
 
 void suites_run_all(void)

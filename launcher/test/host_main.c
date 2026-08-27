@@ -9,6 +9,8 @@
  * green run here is the same set of assertions the board will make.
  *===========================================================================*/
 
+#include <stdio.h>
+
 #include "unity.h"
 #include "suites.h"
 
@@ -23,5 +25,14 @@ int main(void)
 
     suites_run_all();
 
-    return UNITY_END();
+    int failures = UNITY_END();
+
+    /* A suite that did not fit is a test that did not run, so this run must
+     * not come back green having quietly checked less than the whole set. */
+    if (suites_dropped() > 0) {
+        printf("FAIL: %d suite(s) dropped; raise SUITE_MAX in suites.h\n",
+               suites_dropped());
+        failures += suites_dropped();
+    }
+    return failures;
 }

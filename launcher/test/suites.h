@@ -41,3 +41,11 @@ void suite_register(const char *name, suite_fn fn);
 
 /* Runs every registered suite, in name order so the output is stable. */
 void suites_run_all(void);
+
+/* How many suites did NOT fit and were dropped - see suite_register().
+ *
+ * Both runners fail when this is nonzero. It is checked there rather than in
+ * a suite of its own for the obvious reason: a guard that registers like
+ * everything else could be the very suite that gets dropped, and would then
+ * be the one thing not reporting the problem. */
+int suites_dropped(void);
