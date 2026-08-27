@@ -273,7 +273,28 @@ void app_main(void)
     }
     display_init(&shell_display);
 
+    /* display_init() leaves quarter at a neutral 0 on purpose - see its own
+     * comment. DISPLAY_DEFAULT_QUARTER is what THIS shell actually boots
+     * into, a fact about this one board, and main.c is where that belongs.
+     * Set directly rather than through display_update(): quarter is a
+     * plain field on a struct main.c already owns, and there is no prior
+     * gravity reading to synthesise here - this is the state before the
+     * first sample, not a transition from one orientation to another. */
+    shell_display.quarter = DISPLAY_DEFAULT_QUARTER;
+
     ui_launcher_init();
+
+    /* ui_init() (inside ui_launcher_init() above) resets the transform to
+     * identity - it has to, so a stale transform from a previous run of a
+     * host test or a future warm-restart path can never leak in - which
+     * means the DISPLAY_DEFAULT_QUARTER just set above is not actually in
+     * force yet. Apply it now, once, before the frame loop below ever
+     * builds a UI frame or maps a touch through it, so the very first
+     * thing drawn is already in the board's normal held orientation
+     * instead of starting upright and visibly turning into place once the
+     * loop's own periodic sample confirms what was already decided. */
+    ui_set_transform(ui_transform_quarter_turn(
+        display_quarter(&shell_display), GFX_WIDTH, GFX_HEIGHT));
 
     const app_t *current = NULL;   /* NULL means the launcher is showing */
     input_t input = { 0 };

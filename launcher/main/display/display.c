@@ -16,6 +16,11 @@
 
 void display_init(display_t *d)
 {
+    /* 0, always - a neutral reset with no opinion about which way the
+     * board is actually held. DISPLAY_DEFAULT_QUARTER (display.h) is a
+     * physical fact about THIS shell's board, not something a
+     * device-agnostic module should bake into its own idea of "reset" -
+     * main.c applies it explicitly, once, right after this call. */
     d->quarter = 0;
 }
 

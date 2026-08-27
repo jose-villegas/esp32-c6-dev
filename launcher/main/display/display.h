@@ -91,6 +91,25 @@ typedef struct {
  * represent - a board that has not been read yet is assumed held the most
  * common way, and the first real reading corrects it if that guess was
  * wrong, the same as any other update. */
+/* The orientation the SHELL applies at boot, before the first gravity
+ * sample arrives - main.c sets this once, right after display_init(),
+ * which itself stays a neutral 0 with no opinion about it (see that
+ * function's own comment: this is a physical fact about one board, not
+ * something a device-agnostic module should bake into its own reset).
+ *
+ * Physically determined, not derivable from anything in this file: 0/1/2/3
+ * name a quarter-turn from the panel's native upright (GFX_WIDTH x
+ * GFX_HEIGHT, 368 x 448 - a "portrait" shape), and this board is normally
+ * held sideways to that, USB connector to the right. Which of the four
+ * numbers that actually is depends on how the case is held versus how the
+ * panel's native rows and columns are wired, which is not visible from
+ * source - the same category of fact GRAVITY_SCREEN_X/Y in
+ * apps/sand/app_sand.c records, and found the same way: hold the board the
+ * way it is meant to be held, flash, and see which quarter the launcher's
+ * buttons actually come up in. 1 is a first guess, not a measurement -
+ * change this constant, not the logic around it, once it is wrong. */
+#define DISPLAY_DEFAULT_QUARTER 1
+
 void display_init(display_t *d);
 
 /* Feed the current gravity vector, in whatever consistent units the caller's
