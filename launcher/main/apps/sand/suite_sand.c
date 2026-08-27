@@ -7963,6 +7963,76 @@ static void test_two_pours_apart_in_time_lay_down_different_shades(void)
         "one flat speckle however many times it was poured");
 }
 
+
+/* A grain carries its shade wherever it goes.
+ *
+ * This is the invariant the whole of the layering rests on, and nothing
+ * asserted it. The shade is chosen once, at spawn, and layers only mean
+ * anything because a grain that falls, slides, avalanches and gets buried
+ * arrives with the shade it started with - so a buried surface is still
+ * the shade it was when it was a surface.
+ *
+ * It holds today because the sweep MOVES cells rather than making new
+ * ones: the byte travels, and the shade is in the byte. That is easy to
+ * break by accident. Anything that re-rolls a shade when a grain settles,
+ * or picks one from where the grain has landed, would leave every other
+ * test passing and quietly turn every pile back into uniform speckle.
+ *
+ * Checked as a MULTISET rather than cell by cell, because where each
+ * grain ends up is the sweep's business and not this test's. What matters
+ * is that the same shades are still on the board, in the same numbers. */
+static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
+{
+    int before[MATERIAL_VARIANTS] = { 0 }, after[MATERIAL_VARIANTS] = { 0 };
+
+    fixture();
+    sand_clear(&s);
+
+    /* A floor, and a step for the grains to slide off - so they fall, land,
+     * pile up and topple sideways rather than just dropping straight. */
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 0; x < W / 2; x++) {
+        sand_set(&s, x, H - 2, STONE);
+    }
+    sand_spawn(&s, W / 2, 1, 2, MAT_SAND);
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_SAND) {
+                before[CELL_VARIANT(c)]++;
+            }
+        }
+    }
+    int poured = 0;
+    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+        poured += before[v];
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, poured, "the pour must have landed");
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_SAND) {
+                after[CELL_VARIANT(c)]++;
+            }
+        }
+    }
+    for (int v = 0; v < MATERIAL_VARIANTS; v++) {
+        TEST_ASSERT_EQUAL_MESSAGE(before[v], after[v],
+            "a grain must arrive with the shade it was poured with - the "
+            "sweep moves cells, so the shade rides in the byte, and if "
+            "anything re-rolled it on the way then a buried surface would "
+            "no longer be the shade it was when it was a surface");
+    }
+}
+
 /* Every material has a colour, and every extended material has one too.
  *
  * The palette is one flat array of 256 entries indexed by the whole cell
@@ -11980,6 +12050,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_air_agrees_about_weight_speed_and_lifetime);
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
+    RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
     RUN_TEST(test_the_right_extended_materials_are_speckled);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
