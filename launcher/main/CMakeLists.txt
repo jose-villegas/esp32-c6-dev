@@ -2,6 +2,7 @@
 set(app_srcs
     "main.c"
     "gfx.c"
+    "icons.c"
     "touch.c"
     "touch_fsm.c"
     "button_fsm.c"
@@ -104,6 +105,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_gfx.c"
         "../test/suites/suite_gfx_dirty.c"
         "../test/suites/suite_gfx_color.c"
+        "../test/suites/suite_icons.c"
         "../test/suites/suite_ui.c"
         ${app_suites}
     )

@@ -49,6 +49,7 @@
 
 #include "../../app.h"
 #include "../../gfx.h"
+#include "../../icons.h"
 #include "../../imu.h"
 #include "../../ui.h"
 #include "palette.h"
@@ -1087,24 +1088,6 @@ static void draw_mode_label(int gx, int gy)
 #define PALETTE_BADGE_BORDER_COLOR  0x141414
 #define PALETTE_BADGE_FILL_COLOR    0xF2F2F2
 
-/* The check mark's strokes: six small squares, each PALETTE_BADGE_CHECK_
- * STROKE pixels, stepped diagonally from the badge's own (bx, by) origin -
- * see the badge's own comment in draw_palette() for why there is no glyph
- * to draw this with instead.
- *
- * The first three step down-right (the short, descending limb); the last
- * three continue on from there stepping up-right (the longer, ascending
- * limb) - two steps against three, which is what reads as a check rather
- * than a V or a plain diagonal tick. The third and fourth entries share a
- * point on purpose: that shared point IS the vertex where the two limbs
- * meet, not a separate stroke of its own, so six blocks draw a two-limbed
- * mark rather than two disconnected ones. */
-#define PALETTE_BADGE_CHECK_STROKE  3
-static const int palette_badge_check_blocks[6][2] = {
-    { 1, 4 }, { 3, 6 }, { 5, 8 },      /* short limb, descending */
-    { 7, 6 }, { 9, 4 }, { 11, 2 },     /* long limb, ascending */
-};
-
 /* The material picker overlay - drawn on open, on selection, and on a
  * quarter-turn change (see sand_frame()'s SCREEN_PALETTE handling below),
  * never per frame. The invariant that makes drawn-on-change safe at all is
@@ -1122,14 +1105,28 @@ static const int palette_badge_check_blocks[6][2] = {
  * fits the screen either way it is held. */
 static void draw_palette(int turn)
 {
-    int px, py, pw, ph;
-    palette_panel_rect(BRUSH_COUNT, &px, &py, &pw, &ph);
-
-    /* Clear the panel's own background first, so no sand shows through
-     * between tiles - this is also what erases a pressed-in bezel that has
-     * just moved off a tile, since every tile gets redrawn below anyway. */
-    gfx_fill_rect(px, py, pw, ph, gfx_rgb(COL_BACKGROUND));
-
+    /* No panel-wide background fill here on purpose - the sand underneath
+     * shows through PALETTE_GROUT's 2px gap between tiles instead of being
+     * painted over. Three things make that safe:
+     *
+     *   - the simulation is paused for as long as this panel is open (see
+     *     sand_frame()'s SCREEN_PALETTE handling), so the frame underneath
+     *     is frozen - nothing repaints it, so nothing can bleed through or
+     *     flicker while the panel is up;
+     *   - every tile paints its own bezel and face opaquely within its
+     *     grout inset, so a redraw on selection or on a quarter-turn change
+     *     fully covers the tile it is redrawing - the old fill's stated job
+     *     of erasing a pressed-in bezel that has moved off a tile is
+     *     already done by that tile being redrawn;
+     *   - the grout ring itself is simply never painted, so it keeps
+     *     showing whatever sand pixels were already there and already sent
+     *     to the panel - those pixels have not changed, so they need no
+     *     dirty marking either.
+     *
+     * Closing the panel is unaffected: close_palette() already reseeds
+     * every row's runs to full width and marks everything dirty, so the
+     * sand repaints in full regardless of what this panel did or did not
+     * cover while it was open. */
     for (int i = 0; i < BRUSH_COUNT; i++) {
         int x, y, w, h;
         palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
@@ -1224,18 +1221,14 @@ static void draw_palette(int turn)
                          PALETTE_BADGE_SIZE - 2 * PALETTE_BADGE_INSET,
                          gfx_rgb(PALETTE_BADGE_FILL_COLOR));
 
-            /* BRUSH_SPAWN alone gets the check mark - see
-             * palette_badge_check_blocks' own comment for what the six
-             * blocks are and why there are six of them. Drawn in the same
-             * border colour as the box, the same maximum-contrast choice
-             * for the same reason. */
+            /* BRUSH_SPAWN alone gets the check mark - icons.h's icon_check(),
+             * shared with the diagnostics app's checkbox toggles rather than
+             * a shape of this badge's own. Drawn in the same border colour
+             * as the box, the same maximum-contrast choice for the same
+             * reason. */
             if (brush_mode[i] == BRUSH_SPAWN) {
-                for (int b = 0; b < 6; b++) {
-                    gfx_fill_rect(bx + palette_badge_check_blocks[b][0],
-                                 by + palette_badge_check_blocks[b][1],
-                                 PALETTE_BADGE_CHECK_STROKE,
-                                 PALETTE_BADGE_CHECK_STROKE, border);
-                }
+                icon_check(bx, by, PALETTE_BADGE_SIZE, PALETTE_BADGE_SIZE,
+                          border);
             }
         }
 

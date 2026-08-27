@@ -29,6 +29,7 @@
 #include <string.h>
 
 #include "gfx.h"
+#include "icons.h"
 
 /* Per-canvas hash of the last painted output, indexed by microui's container
  * pool slot, which is stable for as long as a window keeps being used. */
@@ -176,14 +177,24 @@ static void draw_command(const mu_Command *cmd)
     }
 
     case MU_COMMAND_ICON: {
-        /* microui's icons are close/check/collapsed/expanded. Nothing here
-         * uses them, so draw a small marker rather than pull in glyph artwork
-         * we would not otherwise need. */
+        /* microui's icons are close/check/collapsed/expanded. MU_ICON_CHECK
+         * is real artwork (icons.h's icon_check()) because two callers now
+         * need it: the diagnostics app's two mu_checkbox() toggles, and
+         * app_sand.c's palette spawn badge, which draws the same shape
+         * directly rather than through a command. The other three stay a
+         * small centred-square placeholder - a deliberate gap, not an
+         * oversight, because nothing in this shell closes a window or
+         * collapses a tree yet to ask for them. */
         const mu_Color c = cmd->icon.color;
         const mu_Rect r = cmd->icon.rect;
-        gfx_fill_rect(r.x + r.w / 3, r.y + r.h / 3, r.w / 3, r.h / 3,
-                      gfx_rgb(((uint32_t)c.r << 16) |
-                              ((uint32_t)c.g << 8)  | c.b));
+        const gfx_color_t color = gfx_rgb(((uint32_t)c.r << 16) |
+                                          ((uint32_t)c.g << 8)  | c.b);
+        if (cmd->icon.id == MU_ICON_CHECK) {
+            icon_check(r.x, r.y, r.w, r.h, color);
+        } else {
+            gfx_fill_rect(r.x + r.w / 3, r.y + r.h / 3, r.w / 3, r.h / 3,
+                          color);
+        }
         break;
     }
 
