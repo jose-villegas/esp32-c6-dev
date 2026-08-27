@@ -701,13 +701,15 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * `disc_count` is exact_disc_count()'s own EXACT total for this call's
      * radius, computed here at RUNTIME from whatever radius this call
      * actually received, instead of once at compile time from a single
-     * constant radius. `keep` is how much of that disc this specific
-     * buffer can actually hold: the whole disc when it fits (every
-     * existing small-radius test and caller gets EXACTLY today's
-     * full-density behaviour, unchanged), or the buffer's own capacity
-     * when it does not - see queue_outward_impulse()'s own comment for
-     * how `keep`-out-of-`disc_count` turns into an even thinning rather
-     * than a truncation.
+     * constant radius. `keep` is how much of that disc this call can
+     * actually queue right now: the whole disc when it fits in what is
+     * actually free (every existing small-radius test and caller gets
+     * EXACTLY today's full-density behaviour, unchanged), or whatever
+     * room is left when it does not - see `room`'s own comment just
+     * below for why that has to be the buffer's REMAINING space rather
+     * than its total capacity, and queue_outward_impulse()'s own comment
+     * for how `keep`-out-of-`disc_count` turns into an even thinning
+     * rather than a truncation.
      *
      * EXACT, NOT A SAFE OVER-ESTIMATE - deliberately, and this is the one
      * place that distinction actually bites. APP_IMPULSE_MAX used to be
@@ -728,8 +730,40 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * exact_disc_count() costs a handful of integer square roots more
      * than the formula did, entirely negligible next to the per-cell work
      * the rest of this function already does once per detonation. */
+    /* AGAINST REMAINING ROOM, NOT TOTAL CAPACITY - `s->impulse_max` is how
+     * big the buffer IS, not how much of it is FREE right now. Nothing
+     * here resets `s->impulse_count` to zero on entry, so a SECOND
+     * explosion fired while a FIRST one's grains are still mid-arc
+     * (SAND_IMPULSE_SPEED_RAMP hasn't decayed them out yet - see that
+     * constant's own comment) finds `s->impulse_count` already above
+     * zero. Sizing `keep` from `s->impulse_max` there would compute a
+     * density as if the WHOLE buffer were free, seed that many entries
+     * into queue_outward_impulse()'s accumulator, and then watch
+     * sand_impulse() itself silently refuse every entry past the
+     * buffer's REAL remaining room (its own
+     * `impulse_count >= impulse_max` guard - safe, no crash, no
+     * overflow, but exactly the lopsided, one-sided truncation this
+     * whole mechanism exists to avoid, reintroduced via contention
+     * between two blasts instead of bias within one: the first rings
+     * queued would still land, the later ones would not, because they
+     * physically run out of buffer, not because the density math ever
+     * knew to expect that. `room` is what closes that gap - the
+     * buffer's ACTUAL free space at the moment THIS call runs, so `keep`
+     * never promises more than what is really left, however many other
+     * in-flight entries got there first. A single, uncontended
+     * detonation (`impulse_count` already 0 on entry, the only case a
+     * manual DETONATE tap can ever produce today) sees
+     * `room == s->impulse_max` and this is a no-op change; it starts
+     * mattering the moment a second caller can trigger sand_explode()
+     * while a first is still resolving - a chain of igniting gas
+     * pockets, say, not yet wired up but exactly the shape of caller
+     * this generality was always meant to survive. Do not simplify this
+     * back to `s->impulse_max` - see
+     * test_two_overlapping_blasts_share_the_buffer_evenly (suite_sand.c)
+     * for a test that fails immediately if someone does. */
     const int disc_count = exact_disc_count(radius);
-    const int keep = (disc_count < s->impulse_max) ? disc_count : s->impulse_max;
+    const int room = s->impulse_max - s->impulse_count;
+    const int keep = (disc_count < room) ? disc_count : room;
     int accum = 0;
 
     queue_outward_impulse(s, cx, cy, 0, 0, r2, disc_count, keep, &accum);

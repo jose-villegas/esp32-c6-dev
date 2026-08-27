@@ -902,21 +902,27 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * caller and test still gets full seeding, unchanged, because `keep`
  * equals the true count exactly when the disc fits. Above it, thinning
  * costs exactly what the measurement above predicts it would - at
- * DETONATE_RADIUS_PX's shipped 96 px against the real, device-corrected
- * 2,048-entry budget (see SAND_IMPULSE_BUDGET_BYTES's own comment in
- * app_sand.c for why this number is smaller than an earlier host-only
- * estimate - a live device capture, not more arithmetic, is what fixed
- * it), that is ~28% of that radius's true 7,213-cell disc, and "grains
- * outside the footprint" measured 67.1 against build_sand_dune_scene()
- * (500-seed sweep) - well below the 106-107 a full-density 24-25-cell
- * blast reaches at this same budget, though still ahead of that smaller
- * blast on reach and destruction - see DETONATE_RADIUS_PX's own comment
- * in app_sand.c for the full account and the honest tradeoff it leaves
- * open. The conclusion above did not change: seeding sparsely is still worse,
- * cell for cell, than seeding fully. What changed is that a caller no
- * longer has to choose between honouring that conclusion and fitting in
- * the memory it was actually given - sand_explode() spends every entry
- * the buffer allows before it starts thinning at all. */
+ * 96 px against the real, device-corrected 2,048-entry budget (see
+ * SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c for why this
+ * number is smaller than an earlier host-only estimate - a live device
+ * capture, not more arithmetic, is what fixed it): ~28% of that radius's
+ * true 7,213-cell disc, and "grains outside the footprint" measured 67.1
+ * against build_sand_dune_scene() - well below the 106-107 a full-density
+ * 24-25-cell blast reaches at this same budget, though still ahead of
+ * that smaller blast on reach and destruction. A real device confirmed
+ * 96 px thinned detonating successfully, at a visibly small result - and
+ * given that exact tradeoff, DETONATE_RADIUS_PX was retuned down to 25
+ * cells (50 px) instead, trading the extra reach and destruction back
+ * for the full-density number, a choice this mechanic's design leaves
+ * entirely open and is not this comment's place to relitigate - see
+ * DETONATE_RADIUS_PX's own comment in app_sand.c for the full account
+ * and the figure that decision actually landed on. The conclusion above
+ * did not change either way: seeding sparsely is still worse, cell for
+ * cell, than seeding fully. What changed is that a caller no longer has
+ * to choose between honouring that conclusion and fitting in the memory
+ * it was actually given - sand_explode() spends every entry the buffer
+ * allows before it starts thinning at all, whatever radius it is asked
+ * to thin. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* FRICTION

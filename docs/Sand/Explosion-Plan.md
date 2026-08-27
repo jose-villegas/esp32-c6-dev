@@ -454,24 +454,55 @@ Unconditionally, regardless of what the reorder attempt cost:
 observed 14,592-byte largest-block figure instead of total free heap -
 12 KB (12,288 bytes), leaving real but deliberately modest margin below
 the one number this project actually has. `APP_IMPULSE_MAX` followed it
-down to 2,048 entries. At `DETONATE_RADIUS_PX`'s 96 px, whose true disc
-holds 7,213 cells, that budget now seeds roughly 28% of it - measured at
-67.1 "grains outside the footprint" against `build_sand_dune_scene()`
-(500-seed sweep, the real shipped `sand_explode()`) against 121.2 for
-the same radius at full, unaffordable density, and against 106-107 for
-a smaller radius (24-25 cells) that fits this same tighter budget at
-FULL density with no thinning at all - the smaller blast currently wins
-on that specific number, though the bigger one still reaches roughly 5x
-further and destroys roughly 3-5x more. `DETONATE_RADIUS_PX` stayed at
-96 on the judgment that reach and destruction are a real part of what
-"much bigger" meant and a full-density smaller blast does not supply
-them, but this is the closest call this mechanic has produced yet and
-is flagged as such rather than treated as settled - see
-`DETONATE_RADIUS_PX`'s own comment in app_sand.c. Whatever combination
-ships next, the thing that must not happen a third time is calling it
+down to 2,048 entries. At `DETONATE_RADIUS_PX`'s then-current 96 px,
+whose true disc holds 7,213 cells, that budget seeded roughly 28% of it -
+measured at 67.1 "grains outside the footprint" against
+`build_sand_dune_scene()` (500-seed sweep, the real shipped
+`sand_explode()`) against 121.2 for the same radius at full,
+unaffordable density, and against 106-107 for a smaller radius (24-25
+cells) that fits this same tighter budget at FULL density with no
+thinning at all.
+
+A REAL DEVICE THEN CONFIRMED THE FIX ITSELF WORKS: 96 px detonating
+successfully, no crash, no allocation failure - "now it does explode,
+it's tiny but maybe that's as far we can push it," in the user's own
+words. Handed the actual tradeoff above rather than just that
+impression, the user chose the other side of it: `DETONATE_RADIUS_PX`
+retuned to 25 cells (50 px) - the largest radius `exact_disc_count()`
+confirms still fits inside 2,048 entries at ZERO thinning, not a round
+number - trading the bigger radius's extra reach and destruction back
+for the fuller "outside" number, re-measured at 106.5 (800-seed sweep)
+right where the estimate above predicted. See `DETONATE_RADIUS_PX`'s own
+comment in app_sand.c for the full account. Whatever radius ships next,
+the thing that must not happen a third time is calling a MEMORY change
 safe from arithmetic alone: only a live capture of
 `heap_caps_get_largest_free_block()` at the point `impulse_buf` is
-allocated can actually confirm it.)*
+allocated can actually confirm that class of fix - the radius itself, by
+contrast, is now genuinely just a gameplay dial and can be retuned on
+host numbers alone, which is exactly what just happened.)*
+
+*(A CONCURRENCY BUG in the density math surfaced on a code read once the
+allocation story settled: `keep` was sized against `s->impulse_max` -
+the buffer's TOTAL capacity - not against how much of it an EARLIER,
+still-in-flight explosion had already spent. `sand_impulse()` itself
+never overflows regardless (its own `impulse_count >= impulse_max` guard
+is unconditional), but the DENSITY the accumulator aims for was computed
+as if the whole buffer were free, so a second explosion fired before a
+first one's grains finished would seed entries the buffer no longer had
+room for, and lose them one by one to that guard - reintroducing the
+exact lopsided, one-sided truncation this whole mechanism exists to
+prevent, via contention between two blasts instead of bias within one.
+Harmless for a single manual DETONATE tap (which never overlaps itself)
+but load-bearing for the still-banked reactions hookup below (a chain of
+igniting gas pockets is exactly a burst of near-simultaneous
+`sand_explode()` calls). Fixed by sizing `keep` against
+`s->impulse_max - s->impulse_count` - the buffer's REMAINING room -
+instead, proven by a host test
+(`test_two_overlapping_blasts_share_the_buffer_evenly`, suite_sand.c)
+that fires two explosions back to back with no `sand_step()` between
+them and checks the second one's exact queued indices by hand against
+the real remaining capacity; written against the bug first and confirmed
+failing before the fix landed.)*
 
 ### The quantitative half
 

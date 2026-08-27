@@ -11283,6 +11283,117 @@ static void test_the_cap_degrades_gracefully(void)
         "be lost");
 }
 
+/* THE BUG THIS PINS: sand_explode()'s density math used to size `keep`
+ * against `s->impulse_max` - the buffer's TOTAL capacity - not against
+ * how much of it a still-in-flight EARLIER explosion had already spent.
+ * sand_impulse() itself never overflows regardless (its own
+ * `impulse_count >= impulse_max` guard is unconditional), but the
+ * DENSITY the accumulator aims for was computed as if the whole buffer
+ * were free, so a second explosion fired before a first one's grains
+ * finish would seed entries the buffer no longer had room for, and
+ * sand_impulse() would silently refuse them one by one - reintroducing
+ * the exact lopsided, one-sided truncation the accumulator exists to
+ * prevent, just from CONTENTION between two blasts instead of bias
+ * within one. See sand_explode()'s own comment on `room` in sand.c for
+ * the fix and the full reasoning; this proves it holds.
+ *
+ * THE SCENE: axis_impulse_buf[8] (8 entries total, no more), grid fully
+ * packed with sand so every disc candidate either explosion visits is
+ * occupied and queueable - no gravity-direction or empty-cell exits to
+ * complicate which candidates are "true" disc members. Two blasts, far
+ * enough apart (x 0-2 versus x 3-7) that neither's core or ring ever
+ * touches the other's cells, fired back to back with NO sand_step() in
+ * between - the first blast's four grains are still exactly where they
+ * were queued, "in flight" in every sense this bug cares about.
+ *
+ * FIRST BLAST: centre (1,1), radius 1 - the same shape test_the_cap_
+ * degrades_gracefully already works out by hand: disc_count 5, buffer
+ * fully free (room 8), so `keep` == 5 and all 4 real neighbours (the
+ * centre itself has no direction to throw it in) queue cleanly.
+ * impulse_count is 4 afterward - checked below as this test's own
+ * precondition, not really the property under test.
+ *
+ * SECOND BLAST: centre (5,2), radius 2 - true disc_count 13 (see
+ * exact_disc_count()'s own comment in sand.c), fired with only
+ * `s->impulse_max - s->impulse_count` == 8 - 4 == 4 entries of room
+ * actually left. Worked by hand against THAT room, in sand_explode()'s
+ * own ring-then-edge scan order (centre, then ring 1's four diagonals-
+ * then-cardinals interleaved per column, then ring 2's own edges - see
+ * sand_explode()'s "QUEUED BY RING" comment in sand.h): accum starts at
+ * 0, gains keep=4 per true disc member (r2 <= 4) visited, fires whenever
+ * it reaches disc_count=13 -
+ *   (0,0) centre:  accum  0->4,  no fire (no direction either way)
+ *   (-1,-1):       accum  4->8,  no fire
+ *   (-1,1):        accum  8->12, no fire
+ *   (0,-1) UP:     accum 12->16, FIRES (->3) - 1st: (5,1), index 13
+ *   (0,1):         accum  3->7,  no fire
+ *   (1,-1):        accum  7->11, no fire
+ *   (1,1):         accum 11->15, FIRES (->2) - 2nd: (6,3), index 30
+ *   (-1,0):        accum  2->6,  no fire
+ *   (1,0):         accum  6->10, no fire
+ *   ring 2, (0,-2) - the only ring-2 top/bottom cell inside r2<=4:
+ *                  accum 10->14, FIRES (->1) - 3rd: (5,0), index 5
+ *   (0,2):         accum  1->5,  no fire
+ *   ring 2, (-2,0) - the only ring-2 left cell inside r2<=4:
+ *                  accum  5->9,  no fire
+ *   ring 2, (2,0) - the only ring-2 right cell inside r2<=4:
+ *                  accum  9->13, FIRES (->0) - 4th: (7,2), index 23
+ * Exactly 4 fires for a `keep` of 4, ending with accum back at 0 - the
+ * whole disc visited, the whole `room` spent, nothing wasted and nothing
+ * overrun. Against the OLD, buggy `keep` (computed from `s->impulse_max`
+ * == 8, not `room` == 4), the SAME accumulator instead fires 8 times,
+ * and the first 4 of those 8 - (-1,-1) index 12, (0,-1) index 13,
+ * (0,1) index 29, (1,1) index 30 - are what actually queue before
+ * sand_impulse()'s own hard cap silently swallows the remaining 4: a
+ * completely different, ring-1-only set that never reaches ring 2 at
+ * all, which is exactly the lopsided shape this test exists to catch. */
+static void test_two_overlapping_blasts_share_the_buffer_evenly(void)
+{
+    fixture();
+    sand_enable_impulses(&s, axis_impulse_buf, 8);
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    sand_explode(&s, 1, 1, 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(4, s.impulse_count,
+        "precondition: the first blast's own 4 real neighbours must all "
+        "have queued cleanly against a fully free buffer, or this test "
+        "is not actually exercising a second blast with only 4 slots "
+        "left");
+
+    /* NO sand_step() HERE - the first blast's grains stay exactly where
+     * they were queued, still "in flight" by every measure sand_explode()
+     * itself can see (s->impulse_count unchanged), which is the whole
+     * scenario this test exists to create. */
+    sand_explode(&s, 5, 2, 2);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(8, s.impulse_count,
+        "the second blast had exactly 4 slots of real room left and must "
+        "have filled every one of them, no more and no less");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(1 * W + 5),
+        s.impulse_buf[4].index,
+        "worked by hand against room=4 (see this test's own top comment): "
+        "UP, (5,1), fires first");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(3 * W + 6),
+        s.impulse_buf[5].index,
+        "down-right, (6,3), fires second");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(0 * W + 5),
+        s.impulse_buf[6].index,
+        "ring 2's own UP cell, (5,0), fires third - reaching ring 2 at "
+        "all is exactly what the old, buggy keep (sized from the WHOLE "
+        "buffer instead of what was actually left) never did, because it "
+        "ran out of real room while still inside ring 1");
+    TEST_ASSERT_EQUAL_UINT16_MESSAGE((uint16_t)(2 * W + 7),
+        s.impulse_buf[7].index,
+        "and RIGHT, (7,2), fires fourth and last - the buffer's own "
+        "final slot, spent evenly across the whole disc rather than "
+        "concentrated in the first ring the scan happened to reach");
+}
+
 /* The failure this guards against is invisible to every test above: a
  * grain thrown into open air above a settled, sleeping pile freezes there
  * forever if the block it landed in is never told it is worth examining
@@ -13012,20 +13123,26 @@ static void bfs_distance_from_footprint(const bool *footprint, int w, int h,
  * believed. See SAND_IMPULSE_BUDGET_BYTES's own comment in app_sand.c
  * for the full arithmetic of both incidents.
  *
- * THE FIX WAS NOT A SMALLER RADIUS EITHER TIME. It was decoupling buffer
- * size from radius entirely: APP_IMPULSE_MAX (app_sand.c) is now a FIXED
+ * NEITHER FIX WAS A SMALLER RADIUS. Both were decoupling buffer size
+ * from radius entirely: APP_IMPULSE_MAX (app_sand.c) is now a FIXED
  * entry count chosen once from the device's own heap budget - now
  * against the observed largest-contiguous-block number, not total free
  * heap - and sand_explode() itself (sand.c) now THINS its own seeding
  * density automatically whenever a disc's true cell count would exceed
  * whatever buffer it was actually given - evenly, across the whole disc,
  * rather than truncating its shape - see queue_outward_impulse()'s own
- * comment in sand.c. This constant follows DETONATE_RADIUS_PX's own
- * value rather than drifting from it, same as before, but the radius
- * itself no longer has anything to do with whether the buffer allocates -
- * see DETONATE_RADIUS_PX's own comment in app_sand.c for the measured
- * cost of the automatic thinning at this exact radius. */
-#define DUNE_BLAST_RADIUS 48
+ * comment in sand.c. That decoupling is what let the radius become a
+ * genuinely free choice again - which is exactly what it became next:
+ * a real device confirmed 96 px allocating and detonating without a
+ * crash, at a visibly thinned density, and the user chose to trade that
+ * size back down for a SMALLER radius at FULL density instead, on the
+ * actual measured numbers (see DETONATE_RADIUS_PX's own comment in
+ * app_sand.c for the full account and the "why 25 cells, not a round
+ * number" derivation). This constant follows DETONATE_RADIUS_PX's own
+ * value rather than drifting from it, same as before - the point of the
+ * fix was never that the radius COULDN'T shrink, only that it no longer
+ * HAD to just to keep the buffer allocating. */
+#define DUNE_BLAST_RADIUS 25
 
 /* A FIXED ENTRY COUNT MIRRORING APP_IMPULSE_MAX EXACTLY, not a formula in
  * DUNE_BLAST_RADIUS - see APP_IMPULSE_MAX's own comment in app_sand.c for
@@ -13147,26 +13264,25 @@ static void test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint(void
     const int cx = (min_x + max_x) / 2;
     const int cy = (min_y + max_y) / 2;
 
-    /* AT THE 48-CELL RADIUS THIS BLASTS AT (DUNE_BLAST_RADIUS - the "much
-     * bigger radius" request itself, not a value shrunk to dodge the
-     * memory bug it once caused - see that constant's own comment for
-     * why the radius no longer has to shrink), cy + DUNE_BLAST_RADIUS
-     * routinely reaches REAL_H - the grid's own bottom edge - because a
-     * settled dune's own bounding-box centre sits close to the floor it
-     * settled on (a wide, short pile with height well under its own
-     * radius, not a tall one), and half the blast's vertical reach is
-     * ~48 cells either side of a centre that is itself only ~30 cells
-     * above the true floor. This is not a scene bug to fix: the real
-     * device's own screen has exactly this edge, at exactly this
-     * distance from a dune poured the same way, so a blast this size
-     * genuinely does reach it there too. Verified this still measures
-     * something real rather than a degenerate scene: "outside"/
-     * "destroyed" stayed small fractions of `before` (a 500-seed sweep
-     * against the real, shipped sand_explode() - its own automatic
-     * thinning included, not a re-implementation - averaged 1.66% and
-     * 5.81% at this radius and budget, not a plurality of the dune,
-     * still less all of it) - see this test's own assertions below,
-     * unchanged, for the actual bar. */
+    /* AT THE 25-CELL RADIUS THIS BLASTS AT (DUNE_BLAST_RADIUS - a
+     * deliberate, user-chosen retune toward "small and dense" after a
+     * real device confirmed a bigger, thinned blast working, not a value
+     * forced down by a memory bug - see that constant's own comment for
+     * the full account and the tradeoff it was chosen over). A settled
+     * dune's own bounding-box centre sits only ~30 cells above the true
+     * floor (a wide, short pile with height well under a 48-cell radius,
+     * the value this scene used before), so unlike that larger radius
+     * this smaller one does not reliably reach REAL_H - the grid's own
+     * bottom edge - and does not need to: full-density seeding at this
+     * radius is what the scene is measuring, not edge contact. Verified
+     * this still measures something real rather than a degenerate scene:
+     * "outside"/"destroyed" stayed small fractions of `before` (an
+     * 800-seed sweep against the real, shipped sand_explode() - at full
+     * density, zero thinning, since this radius's true disc fits inside
+     * DUNE_IMPULSE_MAX entirely - averaged 2.63% and 1.94% at this
+     * radius and budget, not a plurality of the dune, still less all of
+     * it) - see this test's own assertions below, unchanged, for the
+     * actual bar. */
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
 
     /* Past the deterministic flight-time bound (see SAND_IMPULSE_SPEED_
@@ -15461,6 +15577,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_blast_at_the_edge_stays_in_bounds);
     RUN_TEST(test_a_dropped_entry_never_moves_someone_elses_cell);
     RUN_TEST(test_the_cap_degrades_gracefully);
+    RUN_TEST(test_two_overlapping_blasts_share_the_buffer_evenly);
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
     RUN_TEST(test_a_flying_grain_keeps_its_outward_push_while_falling);
     RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);

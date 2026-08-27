@@ -170,54 +170,57 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * ERASE_RADIUS_PX) was an unmeasured starting point, picked only to look
  * obviously larger on screen than either existing brush.
  *
- * WAS 48, DOUBLED TO 96 - a device pass on the retuned, displacement-
- * enabled blast (see sand.h's SAND_IMPULSE_SPEED_RAMP/SAND_EXPLODE_
- * INITIAL_SPEED/SAND_EXPLODE_CORE_DIVISOR) came back with one piece of
- * feedback, "it needs a much bigger radius in general," and nothing
- * else. 96 px is 48 cells at CELL_MIN - a disc a bit over half the
- * 184-cell-wide screen - which is what "much bigger" has to mean at this
- * scale rather than another small bump.
+ * THE SHORT HISTORY, because this number has moved several times and
+ * each move was a real, device-confirmed lesson: WAS 48, DOUBLED TO 96
+ * on a device request for "a much bigger radius in general" - which
+ * broke the feature outright on real hardware, twice, for two different
+ * reasons a device flash caught each time (see SAND_IMPULSE_BUDGET_
+ * BYTES's own comment for both). Neither failure was fixed by touching
+ * this constant: the impulse buffer is a FIXED entry count (APP_IMPULSE_
+ * MAX, decoupled from this radius entirely) chosen from the device's
+ * real heap budget, and sand_explode() itself (sand.c) THINS its own
+ * seeding density automatically whenever a disc's true cell count would
+ * exceed whatever buffer it was actually given - see queue_outward_
+ * impulse()'s own comment in sand.c for how. That made 96 px allocate
+ * successfully - a real device confirmed it detonating without a crash -
+ * but thinned to only ~28% of its own 7,213-cell disc against the
+ * corrected 2,048-entry budget, and the user's own reaction to that
+ * result on the actual board was "it's tiny but maybe that's as far we
+ * can push it."
  *
- * THAT DOUBLING BROKE THE FEATURE OUTRIGHT ON REAL HARDWARE, TWICE, for
- * two different reasons a device flash caught each time - see
- * SAND_IMPULSE_BUDGET_BYTES's own comment below for the full arithmetic
- * of both. Neither failure was a reason to give the radius back: this
- * app's own impulse buffer is now sized as a FIXED entry count
- * (APP_IMPULSE_MAX, decoupled from this radius entirely - see its own
- * comment) chosen from the device's real heap budget, and sand_explode()
- * itself (sand.c) THINS its own seeding density automatically whenever a
- * disc's true cell count would exceed whatever buffer it was actually
- * given, spreading the reduced density evenly across the whole disc
- * rather than truncating its shape or failing to allocate at all - see
- * queue_outward_impulse()'s own comment in sand.c for how.
+ * IT WASN'T. Handed the actual measured tradeoff - 96 px thinned scores
+ * 67.1 "grains outside the footprint" against build_sand_dune_scene(),
+ * while a SMALLER radius that fits the same 2,048-entry budget at FULL
+ * density (no thinning at all) scores 106-107 on the same metric, at the
+ * cost of much less reach (2.3 vs 11.6 average max-throw) and less
+ * destruction (48-79 vs 235) - the user chose the smaller, fully-seeded
+ * blast: it reads as MORE powerful despite being physically smaller,
+ * which is the whole reason "grains outside the footprint" was adopted
+ * as this mechanic's own pass/fail criterion in the first place (see
+ * that test's own comment in suite_sand.c - "the user's own criterion").
  *
- * THE HONEST COST OF THAT, at the CORRECTED (12 KB / 2,048-entry) budget:
- * 96 px's true disc holds 7,213 cells (exact_disc_count(48) - see
- * sand.c), so this budget seeds only ~28% of it - measured at 67.1
- * "grains outside the footprint" against build_sand_dune_scene() (real
- * sand_explode(), 500-seed sweep), against 121.2 for the same radius at
- * full density (unaffordable on this device) and 106-107 for a SMALLER
- * radius (24-25 cells) that fits this same budget at FULL density with
- * no thinning at all. The smaller, fully-seeded blast currently wins on
- * this specific number; the bigger, thinned one still wins on how far
- * material actually travels (11.6 vs 2.3 average max-throw distance) and
- * how much it destroys (235.6 vs ~48-79). This constant stays at 96 -
- * the size actually asked for - because that reach-and-destruction
- * difference is a large, real part of what "much bigger" was asking for
- * and a smaller full-density radius does not deliver it; but this
- * tradeoff is close enough, and this budget corrected downward steeply
- * enough (24,576 to 12,288 bytes - see SAND_IMPULSE_BUDGET_BYTES's own
- * comment for why), that it is worth a real look on the device rather
- * than taking this call as settled from host numbers alone. If a bigger
- * "outside" number matters more than the reach, drop this back toward
- * 48-50 px instead of raising APP_IMPULSE_MAX - the budget is a hardware
- * fact, not a gameplay dial.
+ * 50 px (25 cells at CELL_MIN) IS THE ANSWER TO A SPECIFIC QUESTION, not
+ * a round number: the largest radius whose exact_disc_count() (sand.c)
+ * still fits inside APP_IMPULSE_MAX with ZERO thinning. Checked directly
+ * rather than estimated - exact_disc_count(25) is 1,961, comfortably
+ * under the 2,048-entry budget; exact_disc_count(26) is 2,121, already
+ * over it. 25 cells is therefore the largest radius this budget can
+ * still seed at full density, which is exactly what "small and dense"
+ * means as a concrete number rather than a preference. Re-measured at
+ * this exact radius and budget: 106.5 "grains outside the footprint"
+ * against build_sand_dune_scene() (800-seed sweep, real sand_explode()),
+ * landing right in the 106-107 range the estimate above predicted -
+ * against 2.4 average max-throw and 78.7 average destroyed, both well
+ * down from 96 px's 11.6 and 235.6, which is the reach and destruction
+ * this choice deliberately gives up in exchange.
  *
- * DETONATE_RADIUS_PX is otherwise a free gameplay dial, same as it always
- * looked like one: raising it further changes how thin an oversized
- * blast gets, never whether it allocates. Nothing below this line needs
- * to move when it changes. */
-#define DETONATE_RADIUS_PX  96
+ * DETONATE_RADIUS_PX is otherwise a free gameplay dial, same as it
+ * always looked like one: raising it past 50 px re-engages thinning
+ * (see the history above for what that costs), never whether it
+ * allocates. Nothing below this line needs to move when it changes -
+ * see APP_IMPULSE_MAX's own comment for why sizing is deliberately
+ * independent of whatever this constant is set to. */
+#define DETONATE_RADIUS_PX  50
 
 /* A FIXED ENTRY COUNT, not a formula in DETONATE_RADIUS_PX - the single
  * most important change this constant went through. It used to be
