@@ -75,7 +75,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     # build.diag/sdkconfig. Kept to ONE line on purpose: this PowerShell
     # block is a bash double-quoted string, where PowerShell backtick
     # line-continuations are bash command substitution - a parse error.
-    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag\" -D SDKCONFIG=build.diag/sdkconfig build
+    #
+    # SDKCONFIG_DEFAULTS also layers in sdkconfig.defaults.diag_autorun, on
+    # top of sdkconfig.defaults.diag - CONFIG_LAUNCHER_SELFTEST_AUTORUN
+    # defaults to n (see Kconfig.projbuild), so without this third file the
+    # suites would compile in but not run at boot, and the capture below
+    # would wait the full 300s for a SELFTEST_COMPLETE line that never
+    # comes. Interactive --diag builds (build_flash.sh / build_flash_diag.sh)
+    # deliberately do NOT layer this file - that is what makes them boot
+    # fast instead of running the suites automatically.
+    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun\" -D SDKCONFIG=build.diag/sdkconfig build
     if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
     idf.py -B build.diag -p '$COM_PORT' flash
     exit \$LASTEXITCODE

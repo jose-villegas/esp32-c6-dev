@@ -37,6 +37,7 @@
 #include "../../gfx/gfx.h"
 #include "../../input/imu.h"
 #include "../../boot/post_ui.h"
+#include "../../boot/selftest.h"
 #include "../../ui/ui.h"
 
 #define PAGE_COUNT     2
@@ -48,6 +49,15 @@ static int page;
  * visit would defeat the point of leaving the board on this screen while
  * physically turning it through its holds to read the numbers off. */
 static int show_orientation;
+
+/* Last selftest_run() result, persisted across frames like show_orientation
+ * above rather than reset in diagnostics_enter(): re-running the checks on
+ * every visit already happens via post_rerun() for the (cheap) POST report,
+ * but the self test suite is a separate, heavier action the user explicitly
+ * asks for by tapping the button below - it must not silently re-run just
+ * because the page was revisited. -1 means "never tapped yet", so it reads
+ * differently from a run that tapped and found zero failures. */
+static int selftest_failures = -1;
 
 /* Sensor axes to screen axes - the SAME board-layout fact main.c's
  * DISPLAY_GRAVITY_X/Y and app_sand.c's GRAVITY_SCREEN_X/Y already carry,
@@ -139,6 +149,33 @@ static void draw_toggles_page(const input_t *input)
                      display_shell_quarter());
             mu_text(ctx, line);
         }
+
+        /* An ACTION, not a persistent toggle like the checkboxes above -
+         * this runs once when tapped rather than reflecting a state the
+         * page tracks continuously. selftest_run() runs synchronously and
+         * blocks for whatever the full suite currently costs; that is fine
+         * and expected here, since the whole point of gating autorun behind
+         * CONFIG_LAUNCHER_SELFTEST_AUTORUN (see main.c) is that this cost is
+         * now paid only when this button is pressed, not on every boot. It
+         * already prints its own SELFTEST_COMPLETE line and logs to the
+         * console the same way it always has - nothing about selftest.c
+         * changes here, only when it gets called. */
+        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        if (mu_button(ctx, "run self test suite")) {
+            selftest_failures = selftest_run();
+        }
+
+        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+        char selftest_line[48];
+        if (selftest_failures < 0) {
+            snprintf(selftest_line, sizeof selftest_line, "self test: not run yet");
+        } else if (selftest_failures == 0) {
+            snprintf(selftest_line, sizeof selftest_line, "self test: all passed");
+        } else {
+            snprintf(selftest_line, sizeof selftest_line, "self test: %d failure(s)",
+                     selftest_failures);
+        }
+        mu_text(ctx, selftest_line);
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
         mu_text(ctx, "BOOT for the POST report");

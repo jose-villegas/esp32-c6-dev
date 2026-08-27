@@ -246,12 +246,24 @@ void app_main(void)
         show_post_failures();
     }
 
-#if CONFIG_LAUNCHER_SELFTEST
+#if CONFIG_LAUNCHER_SELFTEST && CONFIG_LAUNCHER_SELFTEST_AUTORUN
     /* Diagnostics build only - a default build compiles none of this. The
      * suites draw to the framebuffer and drive the panel, so they run before
      * the shell paints anything of its own. A failure is reported rather than
      * fatal: the harness reads the result from the console, and a board that
-     * still boots is easier to investigate than one that does not. */
+     * still boots is easier to investigate than one that does not.
+     *
+     * Nested behind a second flag, not just CONFIG_LAUNCHER_SELFTEST: this
+     * used to run unconditionally whenever the suites were compiled in,
+     * which made every diagnostics build pay the full suite's wall-clock
+     * cost - hundreds of tests, including device-only perf-budget tests
+     * that run full-grid simulations - on every boot, regardless of whether
+     * the visit had anything to do with testing. LAUNCHER_SELFTEST_AUTORUN
+     * is what an automated harness like tools/report_test_results.sh turns
+     * on; ordinary interactive --diag use leaves it off and triggers the
+     * suite on demand from the Diagnostics app instead. This stays a
+     * compile-time #if, not a runtime check, because it is a boot-time cost
+     * question: the point is to not even pay for the decision at boot. */
     if (selftest_run() != 0) {
         ESP_LOGE(TAG, "self test reported failures");
     }
