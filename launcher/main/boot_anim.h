@@ -64,8 +64,19 @@
 #define BOOT_ANIM_T_PX   9     /* pixels per unit of t            */
 #define BOOT_ANIM_T_MAX 35     /* the top of the climb            */
 
-/* The floor grid, in whole units either side of the origin. */
-#define BOOT_ANIM_GRID_RINGS 3
+/* The floor grid has no edge: its lines run until they leave the panel, and
+ * what bounds it is a fade rather than a boundary.
+ *
+ * A grid drawn to a fixed square reads as a square tile floating in the dark,
+ * which is a thing sitting in the scene. A grid that thins out with distance
+ * reads as a plane carrying on past the screen, which is what a coordinate
+ * plane actually is. gfx_line() clips, so rings that fall off the edge cost
+ * nothing to ask for.
+ *
+ * RINGS is therefore how far the fade reaches rather than how big the floor
+ * is: ring FADE is fully dark, so nothing past it is worth drawing at all. */
+#define BOOT_ANIM_GRID_RINGS 7
+#define BOOT_ANIM_GRID_FADE  7
 
 /* Where one unit along each axis lands, in Q8 pixels.
  *
@@ -201,18 +212,18 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
  * transfer plus however much curve there is to draw by then.
  *-------------------------------------------------------------------------*/
 
-#define BOOT_ANIM_MS 5000
+#define BOOT_ANIM_MS 3000
 
-#define BOOT_ANIM_AXES_MS        800   /* the axes grow out of the origin */
+#define BOOT_ANIM_AXES_MS        450   /* the axes grow out of the origin */
 
-#define BOOT_ANIM_GRID_START_MS  250
-#define BOOT_ANIM_GRID_RING_MS    90   /* each ring waits for the one inside */
-#define BOOT_ANIM_GRID_FADE_MS   450
+#define BOOT_ANIM_GRID_START_MS  150
+#define BOOT_ANIM_GRID_RING_MS    45   /* each ring waits for the one inside */
+#define BOOT_ANIM_GRID_FADE_MS   300
 
-#define BOOT_ANIM_PEN_START_MS   900
-#define BOOT_ANIM_PEN_MS        3200
+#define BOOT_ANIM_PEN_START_MS   520
+#define BOOT_ANIM_PEN_MS        1980
 
-#define BOOT_ANIM_FADE_START_MS 4400   /* dissolve into the launcher */
+#define BOOT_ANIM_FADE_START_MS 2650   /* dissolve into the launcher */
 
 /* 0 before `start_ms`, 255 from `start_ms + dur_ms` on, linear between. */
 static inline uint8_t boot_anim_ramp(uint32_t now_ms, uint32_t start_ms,
@@ -246,35 +257,40 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
 }
 
 /* Floor grid lines fade in from the origin outward - `ring` is 1 for the
- * first line either side of an axis, 2 for the next, and so on. */
+ * first line either side of an axis, 2 for the next, and so on - and fade
+ * OUT again with distance, which is what gives the floor no edge.
+ *
+ * The two fades multiply. The first is the animation arriving; the second is
+ * the plane receding, and it is what the eye reads as depth on a projection
+ * that has no perspective in it at all. */
+/* The brightest the floor is ever allowed to get.
+ *
+ * Low, and the number that mattered most here. The floor is backdrop: it says
+ * where the plane is and then gets out of the way. Drawn at anything like
+ * full strength it competes with the curve for attention and wins, because
+ * there is a great deal more of it - which is exactly what the first version
+ * of this did, and the curve disappeared into a plaid tablecloth. */
+#define BOOT_ANIM_GRID_MAX 56
+
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
+    if (ring >= BOOT_ANIM_GRID_FADE) {
+        return 0;
+    }
     const uint32_t start = BOOT_ANIM_GRID_START_MS +
                            (uint32_t)ring * BOOT_ANIM_GRID_RING_MS;
-    return boot_anim_ramp(now_ms, start, BOOT_ANIM_GRID_FADE_MS);
-}
+    const uint32_t arrived = boot_anim_ramp(now_ms, start,
+                                            BOOT_ANIM_GRID_FADE_MS);
 
-/* How much of the curve has been drawn, as a Q12 fraction of its length.
- *
- * A fraction of LENGTH, not of t: the samples are spaced at a constant
- * distance ON SCREEN (see tools/gen_zeta_curve.py), so walking them at a
- * constant rate moves the pen at a constant speed. Pacing by t instead would
- * crawl round the wide loops and race up the straight stretches between
- * them. */
-static inline int32_t boot_anim_pen(uint32_t now_ms)
-{
-    const uint8_t linear = boot_anim_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
-                                          BOOT_ANIM_PEN_MS);
-    return ((int32_t)linear * BOOT_ANIM_ONE) / 255;
-}
+    /* Squared, not linear: a linear falloff still has visible lines most of
+     * the way out and then stops, which puts an edge back on the floor in a
+     * different place. Squared, the outer rings are already almost gone by
+     * the time they run out. */
+    const uint32_t left = (uint32_t)(BOOT_ANIM_GRID_FADE - ring);
+    const uint32_t near = left * left * BOOT_ANIM_GRID_MAX /
+                          ((uint32_t)BOOT_ANIM_GRID_FADE * BOOT_ANIM_GRID_FADE);
 
-/* Everything drawn is mixed up from the background by this, so the last
- * stretch dissolves the whole picture rather than cutting from a lit screen
- * straight to the menu. */
-static inline uint8_t boot_anim_ink(uint32_t now_ms)
-{
-    return (uint8_t)(255u - boot_anim_ramp(now_ms, BOOT_ANIM_FADE_START_MS,
-                                           BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
+    return (uint8_t)((arrived * near) / 255u);
 }
 
 _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
@@ -322,24 +338,93 @@ static inline uint32_t boot_anim_hue_rgb(int hue)
     }
 }
 
+/* The grid's own colour, as a hue wheel position, drifting with time and
+ * with distance from the origin.
+ *
+ * The floor is the one thing on screen that is up the whole time and does
+ * nothing, so it is where a slow colour change costs nothing and is not in
+ * competition with anything. Distance is folded in as well as time, so the
+ * rings do not all change together - the colour travels outward as a wave
+ * instead of the whole floor blinking. */
+#define BOOT_ANIM_GRID_HUE_MS     2600   /* one whole turn takes this long */
+#define BOOT_ANIM_GRID_HUE_SPREAD 70     /* wheel positions per ring outward */
+
+static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
+{
+    const uint32_t turn = (now_ms % BOOT_ANIM_GRID_HUE_MS) *
+                          BOOT_ANIM_HUE_TURN / BOOT_ANIM_GRID_HUE_MS;
+    return (int)turn + ring * BOOT_ANIM_GRID_HUE_SPREAD;
+}
+
+/* How much of the curve has been drawn, as a Q12 fraction of its length.
+ *
+ * A fraction of LENGTH, not of t: the samples are spaced at a constant
+ * distance ON SCREEN (see tools/gen_zeta_curve.py), so walking them at a
+ * constant rate moves the pen at a constant speed. Pacing by t instead would
+ * crawl round the wide loops and race up the straight stretches between
+ * them. */
+static inline int32_t boot_anim_pen(uint32_t now_ms)
+{
+    const uint8_t linear = boot_anim_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
+                                          BOOT_ANIM_PEN_MS);
+    return ((int32_t)linear * BOOT_ANIM_ONE) / 255;
+}
+
+/* Everything drawn is mixed up from the background by this, so the last
+ * stretch dissolves the whole picture rather than cutting from a lit screen
+ * straight to the menu. */
+static inline uint8_t boot_anim_ink(uint32_t now_ms)
+{
+    return (uint8_t)(255u - boot_anim_ramp(now_ms, BOOT_ANIM_FADE_START_MS,
+                                           BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
+}
+
 #define BOOT_ANIM_HUE_START 875    /* azure, at the foot of the climb */
 #define BOOT_ANIM_HUE_SWEEP 1200   /* most of a turn by the top       */
 
-/* How far behind the pen its trail still glows, as a Q12 fraction of the
- * whole curve. Half of it, which is a long way on purpose: a short trail
- * reads as a spark being dragged along, and what is wanted is the curve
- * lighting up and settling back down behind the pen over about a second and
- * a half.
+/* SEVERAL PENS, NOT ONE
+ *
+ * One pen puts one colour on the curve at a time, and this panel can show
+ * rather more than that. Five of them run the same curve at a fixed spacing,
+ * each carrying its own fifth of the wheel, so at any moment most of the
+ * gamut is on screen at once and the curve reads as being washed by colour
+ * rather than drawn in it.
+ *
+ * The leading pen is still the one that reveals the curve; the rest travel
+ * over ground already covered. */
+#define BOOT_ANIM_TRAILS    5
+
+/* How far apart the pens run, as a Q12 fraction of the whole curve. */
+#define BOOT_ANIM_TRAIL_GAP 768
+
+/* How far behind a pen its own trail still glows. A quarter of the curve
+ * each: long enough to fade out slowly rather than read as a spark being
+ * dragged along, short enough that five of them stay five bands instead of
+ * merging into one uniform glow.
  *
  * A power of two so the falloff below is a shift rather than a divide, of
- * which there would otherwise be several thousand a frame. */
-#define BOOT_ANIM_TRAIL_SHIFT 11
+ * which there would otherwise be tens of thousands a frame. */
+#define BOOT_ANIM_TRAIL_SHIFT 10
 #define BOOT_ANIM_TRAIL_Q12   (1 << BOOT_ANIM_TRAIL_SHIFT)
 
-/* Strokes at least this lit are drawn two pixels wide instead of one, so the
- * live end of the curve is visibly heavier than the settled part. */
-#define BOOT_ANIM_FAT_TRAIL 200
-#define BOOT_ANIM_FAT_WIDTH 2
+/* Strokes at least this lit are drawn this many pixels across instead of
+ * one, so the live parts of the curve are visibly heavier than the settled
+ * ones. */
+#define BOOT_ANIM_FAT_TRAIL 150
+#define BOOT_ANIM_FAT_WIDTH 3
+
+/* Where pen `k` is, as a Q12 fraction of the curve. Negative until it has set
+ * off, which is what staggers their starts without a second clock. */
+static inline int32_t boot_anim_trail_pos(int32_t pen_q12, int k)
+{
+    return pen_q12 - (int32_t)k * BOOT_ANIM_TRAIL_GAP;
+}
+
+/* The wheel position pen `k` carries, spread evenly round it. */
+static inline int boot_anim_trail_hue(int k)
+{
+    return k * (BOOT_ANIM_HUE_TURN / BOOT_ANIM_TRAILS);
+}
 
 typedef struct {
     int     hue;     /* wheel position; boot_anim_hue_rgb() wraps it */
@@ -349,14 +434,23 @@ typedef struct {
 } boot_anim_stroke_t;
 
 /* How one piece of the curve is coloured: `along_q12` is where that piece
- * sits along the curve, `pen_q12` is where the pen has got to.
+ * sits along the curve, `pen_q12` is where the LEADING pen has got to.
  *
  * Two things are added. A BASE, which depends only on position and is what
- * the finished picture looks like once the pen has stopped; and a TRAIL,
- * which depends on how far behind the pen the piece is, and is what makes
- * the drawing look like drawing.
+ * the finished picture looks like once the pens have stopped; and whichever
+ * PEN is closest in front of this piece, which is what makes the drawing look
+ * like drawing.
  *
- * The trail falls off linearly rather than as a square. A squared falloff
+ * The strongest pen wins outright rather than the five being summed. Summing
+ * saturates wherever two trails overlap - and they overlap constantly - so
+ * the bands smear into one bright stretch and their colours average out
+ * toward white, which is the opposite of the point.
+ *
+ * Its hue is mixed in BY STRENGTH rather than switched to, so a piece of
+ * curve halfway between two pens comes out halfway between their colours
+ * instead of snapping from one to the other as the lead changes.
+ *
+ * Each trail falls off linearly rather than as a square. A squared falloff
  * piles the glow up right behind the head and is over almost at once, and a
  * trail that fades out slowly is the entire point of having one. */
 static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
@@ -364,31 +458,34 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
 {
     boot_anim_stroke_t s;
 
-    s.hue = BOOT_ANIM_HUE_START +
-            (int)((along_q12 * BOOT_ANIM_HUE_SWEEP) >> BOOT_ANIM_Q);
-
     const int32_t base_glow  = 132 + ((along_q12 * 60) >> BOOT_ANIM_Q);
     const int32_t base_bloom = (along_q12 * 24) >> BOOT_ANIM_Q;
+    const int base_hue = BOOT_ANIM_HUE_START +
+                         (int)((along_q12 * BOOT_ANIM_HUE_SWEEP) >> BOOT_ANIM_Q);
 
-    int32_t behind = pen_q12 - along_q12;
-    if (behind < 0) {
-        behind = 0;
+    int32_t best = 0;
+    int     best_hue = 0;
+
+    for (int k = 0; k < BOOT_ANIM_TRAILS; k++) {
+        const int32_t behind = boot_anim_trail_pos(pen_q12, k) - along_q12;
+        if (behind < 0 || behind >= BOOT_ANIM_TRAIL_Q12) {
+            continue;   /* this piece is ahead of that pen, or long past it */
+        }
+        const int32_t trail = 255 - ((behind * 255) >> BOOT_ANIM_TRAIL_SHIFT);
+        if (trail > best) {
+            best = trail;
+            best_hue = boot_anim_trail_hue(k);
+        }
     }
-    const int32_t trail = behind >= BOOT_ANIM_TRAIL_Q12
-        ? 0 : 255 - ((behind * 255) >> BOOT_ANIM_TRAIL_SHIFT);
 
-    /* Lerp toward full brightness, and only a little toward white. Pushing
-     * the bloom hard was tried and is wrong: the trail goes white exactly
-     * where it is brightest, which throws away the colour it exists to show
-     * and leaves a picture that could have been drawn in one ink. Brightness
-     * carries the trail; hue carries the height. */
-    /* (trail + 1) >> 8, not trail / 255: a shift is a divide's worth of
-     * cycles cheaper and there are several thousand of these a frame, and
-     * the +1 is what makes the shift land exactly on the endpoints - without
-     * it a full-strength trail comes out one short of full brightness. */
-    s.glow  = (uint8_t)(base_glow  + (((255 - base_glow) * (trail + 1)) >> 8));
-    s.bloom = (uint8_t)(base_bloom + (((90 - base_bloom) * (trail + 1)) >> 8));
-    s.width = trail >= BOOT_ANIM_FAT_TRAIL ? BOOT_ANIM_FAT_WIDTH : 1;
+    /* (best + 1) >> 8, not best / 255: a shift is a divide's worth of cycles
+     * cheaper and there are tens of thousands of these a frame, and the +1 is
+     * what makes the shift land exactly on the endpoints - without it a
+     * full-strength trail comes out one short of full brightness. */
+    s.hue   = base_hue + ((best_hue * (best + 1)) >> 8);
+    s.glow  = (uint8_t)(base_glow  + (((255 - base_glow) * (best + 1)) >> 8));
+    s.bloom = (uint8_t)(base_bloom + (((90 - base_bloom) * (best + 1)) >> 8));
+    s.width = best >= BOOT_ANIM_FAT_TRAIL ? BOOT_ANIM_FAT_WIDTH : 1;
 
     return s;
 }

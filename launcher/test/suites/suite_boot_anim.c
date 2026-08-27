@@ -217,17 +217,22 @@ static void test_the_whole_scene_fits_on_the_panel(void)
             "the curve ran off the top or bottom of the panel");
     }
 
-    const int32_t edge = BOOT_ANIM_GRID_RINGS * BOOT_ANIM_ONE;
-    for (int a = -1; a <= 1; a += 2) {
-        for (int b = -1; b <= 1; b += 2) {
-            const int x = boot_anim_screen_x(PANEL_W, a * edge, b * edge);
-            const int y = boot_anim_screen_y(PANEL_H, a * edge, b * edge, 0);
-            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
-                "a corner of the floor is off the side of the panel");
-            TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
-                "a corner of the floor is off the panel");
-        }
-    }
+    /* The floor deliberately has no corners to check - its lines run off the
+     * panel and are clipped, which is what makes it read as a plane rather
+     * than a tile. What must still fit is the ends of the two axis arms,
+     * because those carry labels. */
+    const int32_t arm = 4 * BOOT_ANIM_ONE;
+    const int re_x = boot_anim_screen_x(PANEL_W, arm, 0);
+    const int re_y = boot_anim_screen_y(PANEL_H, arm, 0, 0);
+    const int im_x = boot_anim_screen_x(PANEL_W, 0, arm);
+    const int im_y = boot_anim_screen_y(PANEL_H, 0, arm, 0);
+
+    TEST_ASSERT_TRUE_MESSAGE(re_x >= 0 && re_x < PANEL_W &&
+                             re_y >= 0 && re_y < PANEL_H,
+        "the end of the real axis is off the panel");
+    TEST_ASSERT_TRUE_MESSAGE(im_x >= 0 && im_x < PANEL_W &&
+                             im_y >= 0 && im_y < PANEL_H,
+        "the end of the imaginary axis is off the panel");
 
     const int top = boot_anim_screen_y(PANEL_H, 0, 0,
                                        (BOOT_ANIM_T_MAX + 1) << BOOT_ANIM_TQ);
@@ -378,6 +383,55 @@ static void test_the_floor_fades_in_from_the_origin_outward(void)
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_alpha(t, 3));
 }
 
+/* The floor has no edge: it fades out with distance instead of stopping.
+ * Long after everything has arrived, each ring must still be dimmer than the
+ * one inside it, all the way down to nothing. */
+static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
+{
+    const uint32_t settled = BOOT_ANIM_MS;
+
+    for (int ring = 2; ring < BOOT_ANIM_GRID_FADE; ring++) {
+        TEST_ASSERT_TRUE_MESSAGE(
+            boot_anim_grid_alpha(settled, ring) <
+            boot_anim_grid_alpha(settled, ring - 1),
+            "a floor ring was no dimmer than the one inside it - the grid "
+            "would read as a tile with an edge rather than as a plane");
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0,
+        boot_anim_grid_alpha(settled, BOOT_ANIM_GRID_FADE),
+        "the floor should be completely gone by the end of its fade");
+}
+
+/* Backdrop, not subject. The floor covers far more of the screen than the
+ * curve does, so if it is ever allowed near full brightness it wins the
+ * picture - which is exactly what happened before this cap existed. */
+static void test_the_floor_stays_dim_enough_to_be_a_backdrop(void)
+{
+    for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
+        for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
+            TEST_ASSERT_TRUE_MESSAGE(
+                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_MAX,
+                "the floor got brighter than its cap");
+        }
+    }
+}
+
+static void test_the_floor_colour_travels_with_time_and_distance(void)
+{
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_grid_hue(BOOT_ANIM_GRID_HUE_MS / 4, 1) >
+        boot_anim_grid_hue(0, 1),
+        "the floor colour should move on as time passes");
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_grid_hue(0, 2) > boot_anim_grid_hue(0, 1),
+        "rings should not all change together - the drift travels outward");
+
+    /* A whole period brings it back round to where it started. */
+    TEST_ASSERT_EQUAL_UINT32(
+        boot_anim_hue_rgb(boot_anim_grid_hue(0, 1)),
+        boot_anim_hue_rgb(boot_anim_grid_hue(BOOT_ANIM_GRID_HUE_MS, 1)));
+}
+
 static void test_the_axes_are_there_before_the_curve_starts_climbing(void)
 {
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_axis_reach(BOOT_ANIM_AXES_MS));
@@ -446,20 +500,71 @@ static void test_height_changes_the_hue(void)
         "height reads as colour");
 }
 
-/* The trail: bright at the pen, fading behind it, and gone by the time it is
- * a whole trail-length back. */
-static void test_the_trail_is_brightest_at_the_pen_and_fades_behind_it(void)
+/* One pen's trail, sampled within the gap before the next pen contributes
+ * anything - so this is that pen alone, fading. */
+static void test_a_pens_trail_fades_behind_it(void)
+{
+    const int32_t pen = BOOT_ANIM_ONE / 2;
+    const int32_t step = BOOT_ANIM_TRAIL_GAP / 4;
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, boot_anim_stroke(pen, pen).glow,
+        "the stroke under the leading pen should be at full brightness");
+
+    uint8_t last = 255;
+    for (int32_t back = step; back < BOOT_ANIM_TRAIL_GAP; back += step) {
+        const uint8_t glow = boot_anim_stroke(pen - back, pen).glow;
+        TEST_ASSERT_TRUE_MESSAGE(glow < last,
+            "the trail should fade with distance behind its pen");
+        last = glow;
+    }
+}
+
+/* Every pen is a bright point of its own, spaced back along the curve. That
+ * is the whole difference from a single trail: several live bands at once. */
+static void test_every_pen_is_lit_at_its_own_position(void)
+{
+    const int32_t pen = BOOT_ANIM_ONE;
+
+    for (int k = 0; k < BOOT_ANIM_TRAILS; k++) {
+        const int32_t at = boot_anim_trail_pos(pen, k);
+        TEST_ASSERT_TRUE_MESSAGE(at > 0,
+            "a pen never sets off before the curve is finished");
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, boot_anim_stroke(at, pen).glow,
+            "a pen was not at full brightness at its own position");
+    }
+}
+
+/* And each carries a different part of the wheel, which is what puts most of
+ * the gamut on screen at once. */
+static void test_the_pens_carry_different_colours(void)
+{
+    for (int a = 0; a < BOOT_ANIM_TRAILS; a++) {
+        for (int b = a + 1; b < BOOT_ANIM_TRAILS; b++) {
+            TEST_ASSERT_TRUE_MESSAGE(
+                boot_anim_trail_hue(a) != boot_anim_trail_hue(b),
+                "two pens carry the same hue - they would read as one band");
+        }
+    }
+
+    const int spread = boot_anim_trail_hue(BOOT_ANIM_TRAILS - 1) -
+                       boot_anim_trail_hue(0);
+    TEST_ASSERT_TRUE_MESSAGE(spread > BOOT_ANIM_HUE_TURN / 2,
+        "the pens should be spread round the wheel, not bunched on one side");
+}
+
+/* A pen's hue is mixed in BY STRENGTH rather than switched to, so a piece of
+ * curve part way behind a pen is part way toward that pen's colour. Without
+ * this the bands snap between colours as the nearest pen changes. */
+static void test_a_pens_colour_arrives_gradually(void)
 {
     const int32_t pen = BOOT_ANIM_ONE / 2;
 
-    const boot_anim_stroke_t at   = boot_anim_stroke(pen, pen);
-    const boot_anim_stroke_t near = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_Q12 / 4, pen);
-    const boot_anim_stroke_t far  = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_Q12, pen);
+    const int under = boot_anim_stroke(pen, pen).hue;
+    const int half  = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP / 2, pen).hue;
+    const int base  = boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP + 1, pen).hue;
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(255, at.glow,
-        "the stroke under the pen should be at full brightness");
-    TEST_ASSERT_TRUE_MESSAGE(at.glow > near.glow && near.glow > far.glow,
-        "the trail should fade with distance behind the pen");
+    TEST_ASSERT_TRUE_MESSAGE(under > half && half > base,
+        "a pen's hue should fade in with its trail rather than switch on");
 }
 
 /* Beyond the trail's reach, only the base is left - which is what the
@@ -495,9 +600,12 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(BOOT_ANIM_FAT_WIDTH,
         boot_anim_stroke(pen, pen).width,
         "the stroke at the pen should be the fat one");
+
+    /* Just short of the next pen's position, where the leading pen's trail
+     * has faded below the threshold and the next one has not arrived. */
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(1,
-        boot_anim_stroke(pen - BOOT_ANIM_TRAIL_Q12, pen).width,
-        "a stroke a whole trail-length back should be thin again");
+        boot_anim_stroke(pen - BOOT_ANIM_TRAIL_GAP + 1, pen).width,
+        "a stroke between two pens should be thin again");
 }
 
 void run_boot_anim_suite(void)
@@ -526,13 +634,19 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_curve_is_finished_before_the_dissolve_starts);
     RUN_TEST(test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end);
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
+    RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);
+    RUN_TEST(test_the_floor_stays_dim_enough_to_be_a_backdrop);
+    RUN_TEST(test_the_floor_colour_travels_with_time_and_distance);
     RUN_TEST(test_the_axes_are_there_before_the_curve_starts_climbing);
 
     RUN_TEST(test_every_hue_is_fully_saturated);
     RUN_TEST(test_the_hue_wheel_joins_up);
     RUN_TEST(test_the_hue_wheel_has_no_seams);
     RUN_TEST(test_height_changes_the_hue);
-    RUN_TEST(test_the_trail_is_brightest_at_the_pen_and_fades_behind_it);
+    RUN_TEST(test_a_pens_trail_fades_behind_it);
+    RUN_TEST(test_every_pen_is_lit_at_its_own_position);
+    RUN_TEST(test_the_pens_carry_different_colours);
+    RUN_TEST(test_a_pens_colour_arrives_gradually);
     RUN_TEST(test_settled_curve_keeps_its_colour);
     RUN_TEST(test_the_trail_never_washes_out_to_white);
     RUN_TEST(test_the_live_end_of_the_curve_is_drawn_thicker);
