@@ -10997,12 +10997,23 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
     sand_set(&s, 4, 3, SAND_FIRST_SHADE);
     sand_set(&s, 3, 4, SAND_FIRST_SHADE);
     sand_set(&s, 4, 4, SAND_FIRST_SHADE);
-    const int before = sand_count(&s);
 
     /* Centred on one corner of the 2x2 payload, radius 1: its two occupied
      * cardinal neighbours (RIGHT and DOWN) each get thrown towards a wall
      * that is three cells away - not an immediate bounce, an actual flight. */
     sand_explode(&s, 3, 3, 1);
+
+    /* sand_explode() clears a small core before it queues anything - see
+     * SAND_BLAST_CORE_DIVISOR - so the centre itself must be an actual
+     * cavity right away, with no step required to see it. Checked before
+     * anything else runs, since ordinary gravity may well cave something
+     * back into it over the steps that follow (that is the point of
+     * clearing one), which would hide a core that was never cleared at
+     * all behind a coincidence. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 3, 3),
+        "the blast's own centre must be a real hole, not four grains still "
+        "occupying their original footprint");
+    const int after_explode = sand_count(&s);
 
     for (int i = 0; i < 30; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -11019,8 +11030,13 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
             }
         }
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(before, sand_count(&s),
-        "a blast conserves grains even when it is fully contained");
+    /* Measured AFTER the explode, not before it - see
+     * test_a_blast_conserves_grains's own comment on why the core's removal
+     * is a real, one-time drop in the count and everything from here on is
+     * the invariant that has to hold. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(after_explode, sand_count(&s),
+        "outside the core, a blast conserves grains even when it is fully "
+        "contained");
 }
 
 static void test_a_blast_conserves_grains(void)
@@ -11033,9 +11049,17 @@ static void test_a_blast_conserves_grains(void)
             sand_set(&s, x, y, SAND_FIRST_SHADE);
         }
     }
-    const int expected = sand_count(&s);
 
     sand_explode(&s, 3, 3, 2);
+
+    /* Measured AFTER the explode, not before it. sand_explode() clears a
+     * small core outright before it queues anything - see
+     * SAND_BLAST_CORE_DIVISOR - so the grain count genuinely, deliberately
+     * drops once, right here: that is a real removal, exactly like any
+     * other sand_erase() call, not something the flight pass did. The
+     * invariant from here on is that nothing ELSE may touch the count -
+     * outside the core, a blast only ever relocates a cell. */
+    const int expected = sand_count(&s);
 
     /* Checked every step, not just at the end - the same idiom as
      * test_dithering_still_conserves_grains - so a bug that briefly
@@ -11044,7 +11068,8 @@ static void test_a_blast_conserves_grains(void)
     for (int i = 0; i < 60; i++) {
         sand_step(&s, 0, 1000, 0);
         TEST_ASSERT_EQUAL_INT_MESSAGE(expected, sand_count(&s),
-            "a blast MOVES cells - it must never create or destroy one");
+            "once the core is cleared, the flight pass that follows MOVES "
+            "cells - it must never itself create or destroy one");
     }
 }
 
@@ -11065,9 +11090,13 @@ static void test_a_blast_at_the_edge_stays_in_bounds(void)
                 sand_set(&s, x, y, SAND_FIRST_SHADE);
             }
         }
-        const int expected = sand_count(&s);
 
         sand_explode(&s, spots[i].cx, spots[i].cy, 3);
+
+        /* Measured AFTER the explode - see test_a_blast_conserves_grains's
+         * own comment on why the core's removal is real and everything
+         * past this point is the invariant under test. */
+        const int expected = sand_count(&s);
 
         for (int step = 0; step < 20; step++) {
             sand_step(&s, 0, 1000, 0);
@@ -11125,14 +11154,23 @@ static void test_the_cap_degrades_gracefully(void)
             sand_set(&s, x, y, SAND_FIRST_SHADE);
         }
     }
-    const int expected = sand_count(&s);
 
     /* Centre (3,6), radius 1: the four cardinal neighbours all qualify, in
      * sand_explode()'s own dy-then-dx scan order - UP, LEFT, RIGHT, DOWN.
      * The buffer holds 2, so UP and LEFT get an entry; RIGHT and DOWN do
      * not, and - being part of a fully stable bed - must simply stay
-     * exactly where they are. */
+     * exactly where they are. Radius 1 also means the cleared core (radius
+     * 1 / SAND_BLAST_CORE_DIVISOR = 0) is only the centre cell itself,
+     * (3,6) - neither RIGHT (4,6) nor DOWN (3,7) is it. */
     sand_explode(&s, 3, 6, 1);
+
+    /* Measured AFTER the explode - see test_a_blast_conserves_grains's own
+     * comment on why the core's removal is real and everything past this
+     * point is the invariant under test: RIGHT and DOWN specifically, since
+     * they were never queued at all, must survive completely untouched -
+     * neither flown, nor caved into the core the way a cell adjacent to it
+     * legitimately might have been. */
+    const int expected = sand_count(&s);
 
     for (int i = 0; i < 20; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -11181,6 +11219,79 @@ static void test_a_blast_wakes_the_blocks_it_touches(void)
     }
 
     assert_nothing_left_to_do(0, 1000);
+}
+
+/* THE REGRESSION GUARD. Every test above this line already existed the day
+ * a real device reported: "in water nothing happens, in sand also no
+ * holes, i can see some faint movement when near pixels they do move but
+ * that's it." None of them caught it, because none of them detonated
+ * somewhere with no adjacent empty cell anywhere inside the radius - a
+ * packed bed, or a body of water - which is the one scene the plan's v1
+ * "stop on any obstruction" rule could never move a single grain in: every
+ * queued entry's very first target was already occupied, so every entry
+ * died on turn one, and the mechanic was silently a no-op everywhere it
+ * was actually supposed to matter.
+ *
+ * Packed on every side, deliberately, with only ONE piece of open space
+ * anywhere on the board (row 0) and it nowhere near the blast: this is
+ * exactly the scene that read as nothing happening. */
+static void test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius(void)
+{
+    fixture();
+    sand_enable_blast(&s, blast_buf, W * H);
+
+    for (int y = 1; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+
+    sand_explode(&s, 4, 5, 2);
+
+    /* A cavity exists - immediately, and independent of the flight pass,
+     * the decay roll, or a single step having run: sand_explode() clears
+     * its core (here, the plus-shaped disc (4,5)/(3,5)/(5,5)/(4,4)/(4,6))
+     * before it ever queues an entry - see SAND_BLAST_CORE_DIVISOR. */
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_EMPTY, sand_at(&s, 4, 5),
+        "the blast's own core must be an actual hole, not repositioned "
+        "grains still filling the same footprint");
+
+    for (int i = 0; i < 30; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* Grains reached beyond the original radius. Row 1 is 4 cells from the
+     * centre, well outside radius 2, and started this test fully packed
+     * (all 8 columns). There is no path for any of it to empty except
+     * something above the core collapsing down into the space the core
+     * opened, one cell at a time, exactly the way
+     * test_undermining_a_sleeping_pile_collapses_it already proves a hole
+     * propagates - and row 0 has nothing above it to refill whichever
+     * column runs out of material first, so that column's row-1 cell is
+     * left empty once things settle.
+     *
+     * Which column that turns out to be is NOT fixed to directly above
+     * the centre: the core's own diagonal-adjacent cells (3,4) and (5,4)
+     * are themselves queued flight entries (see SAND_BLAST_CORE_DIVISOR),
+     * and retrying-until-clear (see step_blast()'s "blocked means wait")
+     * can walk the disturbance sideways by the time it reaches this far
+     * up - column 4 collapsing was only ever the simplest of several
+     * columns that could plausibly hollow out first. So this checks the
+     * row generally rather than one hand-picked cell: some column in the
+     * blast's own horizontal span must have given up material this far
+     * out, not necessarily the one directly above where it started. A
+     * "stop on any obstruction" rule with no cleared core could never have
+     * produced this from a fully packed bed at all, regardless of which
+     * column ends up being the one that shows it. */
+    int empty_in_row1 = 0;
+    for (int x = 2; x <= 6; x++) {
+        if (sand_at(&s, x, 1) == SAND_EMPTY) {
+            empty_in_row1++;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, empty_in_row1,
+        "the disturbance must reach further than the blast radius itself - "
+        "this is the exact scene that read as \"no holes\" on the panel");
 }
 
 static void test_detonating_empty_space_is_a_no_op(void)
@@ -14119,6 +14230,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_dropped_entry_never_moves_someone_elses_cell);
     RUN_TEST(test_the_cap_degrades_gracefully);
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
+    RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);
     RUN_TEST(test_detonating_empty_space_is_a_no_op);
     RUN_TEST(test_without_a_buffer_explode_does_nothing);
 

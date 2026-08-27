@@ -459,12 +459,51 @@ int sand_emitter_count(const sand_t *s);
  * the outputs untouched, if `i` is not currently a valid emitter index. */
 bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
 
+/* How much of the blast radius sand_explode() clears outright before it
+ * queues a single flight entry - the cleared radius is `radius /
+ * SAND_BLAST_CORE_DIVISOR`.
+ *
+ * Without this, sand_explode() only ever SEEDS entries; it never makes
+ * room for them. In an incompressible medium - a packed bed, a body of
+ * water - every cell inside the radius starts out surrounded by more of
+ * the same material, so the very first move every entry attempts is
+ * blocked. A blocked entry now waits rather than dying (see step_blast()'s
+ * own comment), but waiting for a gap that nothing will ever open is still
+ * nothing happening: measured on a device, this is exactly what read as
+ * "in water nothing happens, in sand also no holes" before this existed.
+ *
+ * A cleared core sidesteps the problem instead of trying to out-wait it:
+ * it is an actual cavity, present the instant sand_explode() returns, that
+ * the rest of the disc collapses into and slides through as steps pass -
+ * the same mechanism test_undermining_a_sleeping_pile_collapses_it already
+ * relies on, aimed at a hole this call dug on purpose instead of one
+ * sand_erase() happened to be asked for elsewhere.
+ *
+ * A fraction of the blast's OWN radius, not an independent constant, so a
+ * bigger blast gets a bigger cavity automatically instead of the same
+ * fixed-size hole no matter how large the outer radius grows. 2 (half the
+ * radius) is a starting point, not a measurement: big enough that even
+ * radius 1 clears its own centre cell, small enough that a wide blast
+ * still has a genuine annulus of material outside the core for the flight
+ * pass to do something with, rather than the whole disc being one bare
+ * hole with nothing thrown outward at all. */
+#define SAND_BLAST_CORE_DIVISOR  2
+
 /* Push every occupied cell within `radius` of the centre outward, to be moved
  * by the flight pass at the tail of sand_step() - see sand.c's step_blast()
  * and its own comment on why that pass has to run LAST, after everything
  * else that can move or replace a cell. Each queued grain moves one cell per
  * step, in the direction pointing away from (cx, cy), quantised the same way
  * sand_gravity_direction() already quantises gravity into eight directions.
+ *
+ * FIRST clears a core - see SAND_BLAST_CORE_DIVISOR's own comment for why a
+ * blast that only ever queues flight entries can never actually move
+ * anything once the medium it is detonating in has no gaps of its own.
+ * That core is an ordinary sand_erase(), so it counts as a real, immediate
+ * removal - not something the flight pass or its decay roll has any part
+ * in - and it is why sand_explode() is no longer purely additive to the
+ * grain count the way sand_spawn()/sand_erase() individually are: see the
+ * comment on conservation this implies, below.
  *
  * Same signature shape as sand_spawn() and sand_erase() above - a centre and
  * a radius - because it belongs to that family: no material owns it and no
@@ -473,14 +512,25 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * design this implements and why it needs no per-cell velocity field.
  *
  * A no-op if sand_enable_blast() was never called - there is nowhere to
- * queue an entry. Also a no-op for any cell with no defined outward
+ * queue an entry, and the core is left uncleared too, so a disabled blast
+ * mechanic costs the board nothing at all, not even the erase. Beyond the
+ * core, this is also a no-op for any cell with no defined outward
  * direction, which is exactly the centre cell itself; every other occupied
- * cell in the disc gets one.
+ * cell in the annulus between the core and the full radius gets one.
  *
  * Past the buffer's own capacity, the excess grains simply are not queued
  * and so do not fly - graceful degradation, exactly like CRACK_MAX
  * truncating a crack rather than failing. A blast bigger than the buffer is
- * a smaller-looking blast, not a bug. */
+ * a smaller-looking blast, not a bug.
+ *
+ * CONSERVATION, NOW WITH AN EXCEPTION: sand_spawn() and sand_erase() are
+ * each individually exact - every cell they touch is accounted for in what
+ * they return. sand_explode() is not: the cells the core removes are gone
+ * for good, on purpose, the same as any other sand_erase() call. Everything
+ * OUTSIDE the core is still pure relocation - the flight pass this call
+ * seeds never creates or destroys a cell - so "outside the core, the count
+ * is conserved" is the honest invariant here, not "the count is conserved"
+ * outright. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* Chance in 256, per step, that a flying grain keeps flying rather than

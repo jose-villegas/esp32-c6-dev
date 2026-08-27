@@ -383,6 +383,16 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
         return;   /* sand_enable_blast() was never called - see its comment */
     }
 
+    /* Clear a cavity FIRST, before a single flight entry is queued - see
+     * SAND_BLAST_CORE_DIVISOR's own comment in sand.h for why a blast that
+     * only ever seeds entries can never move anything once the medium it
+     * detonates in has no gap of its own to offer. Reuses sand_erase()
+     * rather than a second hand-rolled clearing loop: it already does
+     * everything a write like this owes the simulation (marks rows dirty,
+     * wakes the blocks it touches), and "the middle of the blast is simply
+     * gone" is exactly what sand_erase() already means. */
+    sand_erase(s, cx, cy, radius / SAND_BLAST_CORE_DIVISOR);
+
     const int r2 = radius * radius;
 
     for (int dy = -radius; dy <= radius; dy++) {
@@ -1210,8 +1220,9 @@ static void build_xflow(xflow_t *f, int gx, int gy)
     f->bias_dg_q8 = bx * f->dg[0] + by * f->dg[1];
 }
 
-/* The flight pass: every entry in s->blast_buf moves exactly one cell along
- * the direction sand_explode() gave it, or stops. Called from sand_step(),
+/* The flight pass: every entry in s->blast_buf either moves exactly one
+ * cell along the direction sand_explode() gave it, waits another turn for
+ * its way to clear, or is finally dropped. Called from sand_step(),
  * immediately before finalize_settling() - see docs/Sand/Explosion-Plan.md's
  * "Where the pass runs, and why it must be LAST" for the two reasons that
  * position is not a preference. In short: running after every other pass
@@ -1220,6 +1231,17 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * next turn - and it is what turns a plain outward push into a ballistic arc
  * for nothing extra, since gravity has already pulled in the sweep above by
  * the time this runs and "down" plus "out, decaying" simply add.
+ *
+ * BLOCKED MEANS WAIT, NOT STOP. A cell in the way used to drop the entry on
+ * the spot - fine for open air, wrong for anything packed: a blast into a
+ * bed of sand or a body of water starts with every queued cell surrounded
+ * by more of the same material, so that rule dropped nearly everything on
+ * its very first turn and only the annulus already touching open space (or
+ * the cavity sand_explode() now clears - see SAND_BLAST_CORE_DIVISOR in
+ * sand.h) ever went anywhere. Keeping a blocked entry instead lets it try
+ * again next step, once whatever was ahead of it has had a chance to move
+ * out of the way - which is what lets a cleared core's cavity unpack
+ * outward over several steps instead of being a single frozen ring.
  *
  * A single `if` with nothing queued, which is every step on a board that has
  * never exploded - the same shape sand_step_gas()'s own may_have_gas gate
@@ -1250,11 +1272,29 @@ static void step_blast(sand_t *s)
             continue;
         }
 
-        /* The roll happens before the move attempt: a grain whose flight
-         * just ran out should not also get one free move from the same roll
-         * that grounded it. */
+        /* The roll happens before the move attempt, and it happens EVERY
+         * turn - blocked or not. Two ways to write this, and the choice
+         * matters:
+         *
+         *   roll every turn (this)   a wedged entry ages out on the same
+         *                            geometric schedule as one that has
+         *                            been moving the whole time
+         *   roll only on a move      a wedged entry pays nothing for
+         *                            waiting, so it waits FOREVER if its
+         *                            target never opens
+         *
+         * The second sounds more generous - "it never got to move, why
+         * should it decay" - but it breaks the one guarantee the whole
+         * design rests on: every entry's lifetime is bounded. A sealed
+         * vessel or an undisturbed pile is exactly the case where a
+         * blocked entry's target may never open at all, and that is
+         * precisely when an unbounded wait would show up: entries surviving
+         * indefinitely, silently occupying the list, for no visible reason
+         * on the board. Rolling every turn keeps every entry - moving or
+         * merely hoping to - on the same bounded, geometric clock
+         * everything else in this file already trusts. */
         if (!rng_chance(&s->rng, SAND_BLAST_DECAY)) {
-            continue;
+            continue;   /* out of flight - settles exactly where it is */
         }
 
         const int x = (int)((unsigned)entry.index % (unsigned)w);
@@ -1267,11 +1307,16 @@ static void step_blast(sand_t *s)
          * not push, displace or swap with anything (see the plan's "v1
          * keeps it simple, deliberately"), so containment falls out of this
          * one check with no raycast: a blast inside a sealed vessel throws
-         * its grains up to the wall and stops them there, because the wall
+         * its grains up to the wall and they wait there, because the wall
          * is never empty. sand_at() reading out-of-bounds as STONE folds
          * the grid-edge case into this same check for free, the same trick
          * can_enter()'s own callers already lean on. */
         if (!CELL_IS_EMPTY(sand_at(s, nx, ny))) {
+            /* Blocked means WAIT: keep the entry exactly as it is - same
+             * position, same direction, already-spent decay roll and
+             * all - so it gets another turn next step rather than being
+             * dropped for something that may clear a moment later. */
+            s->blast_buf[kept++] = entry;
             continue;
         }
 
