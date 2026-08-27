@@ -8,3 +8,17 @@
 # core.autocrlf, so this holds regardless of how any one clone is configured.
 *.sh text eol=lf
 *.py text eol=lf
+
+# C sources, for a duller reason than the scripts above: nothing breaks if a
+# .c file is checked out with CRLF. main/ had simply drifted to 18 CRLF files
+# against 45 LF ones with no rule deciding which, and that is not merely
+# untidy. Any tool that rewrites a file whole - a scripted edit, an editor
+# with its own default, a merge driver - silently converts every line it
+# touches, so a three-line change arrives as a diff of the entire file with
+# the three lines somewhere inside it. That happened twice while the startup
+# animation was being written, and cost more to notice than to fix.
+#
+# eol=lf overrides the checking-out machine's core.autocrlf, same as above,
+# so this holds however any one clone is configured.
+*.c text eol=lf
+*.h text eol=lf
