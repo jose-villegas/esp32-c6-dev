@@ -106,7 +106,19 @@ static inline int boot_anim_origin_y(int h) { return (h * 3) / 4; }
 /* (value, height) -> pixel.
  *
  * The shift is 20 because a Q12 value times a Q8 pixels-per-unit is Q20. t is
- * already Q8, so its own term only sheds 8. */
+ * already Q8, so its own term only sheds 8.
+ *
+ * NOT util/fixed.h, deliberately, and this is the reason the axis vectors are
+ * Q8 rather than Q12 in the first place. fx_mul_floor() exists to make the
+ * widening cast unforgettable at sites that need one; these do not need one,
+ * because the operands were sized so the product cannot overflow an int32 -
+ * the largest is about 1.7e8 against a 2.1e9 ceiling. Routing them through a
+ * 64-bit helper would put back the arithmetic the scale choice exists to
+ * avoid, on a path that runs several thousand times a frame.
+ *
+ * Both terms are also summed BEFORE the shift, which fx_mul_floor() cannot
+ * express: flooring each product separately and then adding can land a pixel
+ * off the one the geometry asks for. */
 static inline int boot_anim_screen_x(int w, int32_t re_q12, int32_t im_q12)
 {
     return boot_anim_origin_x(w) +
@@ -168,6 +180,10 @@ static inline boot_anim_pt_t boot_anim_spline(boot_anim_pt_t c0,
                                               boot_anim_pt_t c2,
                                               int32_t t_q12)
 {
+    /* 32-bit throughout, for the same reason boot_anim_screen_x() is - see
+     * its comment on why util/fixed.h is not used here. t_q12 is at most
+     * BOOT_ANIM_ONE, so the weights are at most 2.0 in Q12 and the three
+     * weighted samples sum to well under 4e7. */
     const int32_t u  = BOOT_ANIM_ONE - t_q12;
     const int32_t w0 = (u * u) >> BOOT_ANIM_Q;
     const int32_t w2 = (t_q12 * t_q12) >> BOOT_ANIM_Q;

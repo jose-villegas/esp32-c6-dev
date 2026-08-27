@@ -29,6 +29,7 @@
 #include "boot/boot_anim.h"
 
 #include "gfx/gfx.h"
+#include "util/fixed.h"
 #include "util/intmath.h"
 
 #include "esp_log.h"
@@ -315,7 +316,7 @@ static void draw_heads(int32_t pen, uint8_t ink)
             continue;       /* not set off yet, or finished */
         }
 
-        const int i = (int)(((int64_t)at * span) >> BOOT_ANIM_Q);
+        const int i = fx_mul_floor(at, span, BOOT_ANIM_Q);
         const boot_anim_pt_t p = boot_anim_sample(i);
 
         draw_head(sx(p.re, p.im), sy(p.re, p.im, p.t),
@@ -365,8 +366,8 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink)
         /* How far into the whole curve this span sits, and how far the next
          * one does, so the colour can be interpolated across it rather than
          * stepping once per sample. */
-        const int32_t a0 = (int32_t)(((int64_t)i * BOOT_ANIM_ONE) / span);
-        const int32_t a1 = (int32_t)(((int64_t)(i + 1) * BOOT_ANIM_ONE) / span);
+        const int32_t a0 = fx_div_round(i, span, BOOT_ANIM_Q);
+        const int32_t a1 = fx_div_round(i + 1, span, BOOT_ANIM_Q);
 
         /* A partial span for the one the pen is inside: without it the head
          * would jump from sample to sample, and a sample is six pixels. */
