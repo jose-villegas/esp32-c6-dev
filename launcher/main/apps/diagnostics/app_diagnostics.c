@@ -31,9 +31,9 @@
  *===========================================================================*/
 
 #include "../../app.h"
-#include "../../gfx.h"
+#include "../../gfx/gfx.h"
 #include "../../post_ui.h"
-#include "../../ui.h"
+#include "../../ui/ui.h"
 
 #define PAGE_COUNT     2
 #define COL_BACKGROUND 0x0A0C14

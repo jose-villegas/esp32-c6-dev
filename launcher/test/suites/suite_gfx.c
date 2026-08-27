@@ -28,7 +28,7 @@
 #include "esp_log.h"
 #include "esp_timer.h"
 
-#include "gfx.h"
+#include "gfx/gfx.h"
 
 static const char *TAG = "device_tests";
 

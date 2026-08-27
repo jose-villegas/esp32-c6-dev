@@ -24,14 +24,14 @@
  * overlaps - otherwise the repaint erases what was on top.
  *===========================================================================*/
 
-#include "ui.h"
+#include "ui/ui.h"
 
 #include <string.h>
 
 #include "esp_log.h"
 
-#include "gfx.h"
-#include "icons.h"
+#include "gfx/gfx.h"
+#include "gfx/icons.h"
 
 static const char *TAG = "ui";
 

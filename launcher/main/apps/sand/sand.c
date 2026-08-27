@@ -21,7 +21,7 @@
 
 #include <string.h>
 
-#include "intmath.h"
+#include "util/intmath.h"
 
 
 /* tan(22.5 deg) is the boundary between "straight down" and "diagonal"; its

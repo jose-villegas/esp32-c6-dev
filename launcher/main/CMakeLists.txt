@@ -1,18 +1,18 @@
 # The shell and the board drivers. Apps are NOT listed here - see below.
 set(app_srcs
     "main.c"
-    "gfx.c"
-    "icons.c"
-    "touch.c"
-    "touch_fsm.c"
-    "button_fsm.c"
-    "buttons.c"
-    "gesture.c"
-    "imu.c"
+    "gfx/gfx.c"
+    "gfx/icons.c"
+    "input/touch.c"
+    "input/touch_fsm.c"
+    "input/button_fsm.c"
+    "input/buttons.c"
+    "input/gesture.c"
+    "input/imu.c"
     "post.c"
     "post_ui.c"
-    "ui.c"
-    "ui_launcher.c"
+    "ui/ui.c"
+    "ui/ui_launcher.c"
 )
 
 # Apps are discovered, not listed.

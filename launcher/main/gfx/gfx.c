@@ -1,5 +1,5 @@
-#include "gfx.h"
-#include "gfx_dirty.h"
+#include "gfx/gfx.h"
+#include "gfx/gfx_dirty.h"
 
 #include <string.h>
 

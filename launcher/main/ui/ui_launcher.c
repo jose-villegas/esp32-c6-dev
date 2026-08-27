@@ -6,11 +6,11 @@
  * logic - is in ui.c, so an app can build its own UI the same way.
  *===========================================================================*/
 
-#include "ui_launcher.h"
+#include "ui/ui_launcher.h"
 
 #include "app.h"
-#include "gfx.h"
-#include "ui.h"
+#include "gfx/gfx.h"
+#include "ui/ui.h"
 
 #define COL_BACKGROUND 0x0A0C14
 

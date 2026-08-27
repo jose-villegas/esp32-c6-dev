@@ -49,7 +49,7 @@
 
 #include <stdint.h>
 
-#include "gfx_color.h"
+#include "gfx/gfx_color.h"
 
 /* icon_check_blocks() never returns more than this many blocks - see its own
  * comment for where 16 comes from. */

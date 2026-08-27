@@ -13,7 +13,7 @@
 
 #include "unity.h"
 #include "suites.h"
-#include "touch_fsm.h"
+#include "input/touch_fsm.h"
 
 /* Time is supplied, never read from a clock, so tests are instant and
  * deterministic. All helpers work in milliseconds for readability. */

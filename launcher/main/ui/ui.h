@@ -36,8 +36,8 @@
 
 #include "app.h"
 #include "microui.h"
-#include "ui_style.h"
-#include "ui_transform.h"
+#include "ui/ui_style.h"
+#include "ui/ui_transform.h"
 
 /* Shared metrics, so the shell and any app UI look like one product. */
 #define UI_TITLE_HEIGHT   56

@@ -15,14 +15,14 @@
 #include <string.h>
 
 #include "app.h"
-#include "gesture.h"
-#include "gfx.h"
+#include "input/gesture.h"
+#include "gfx/gfx.h"
 #include "post.h"
 #include "post_ui.h"
-#include "buttons.h"
-#include "touch.h"
-#include "ui.h"
-#include "ui_launcher.h"
+#include "input/buttons.h"
+#include "input/touch.h"
+#include "ui/ui.h"
+#include "ui/ui_launcher.h"
 
 #if CONFIG_LAUNCHER_SELFTEST
 #include "selftest.h"

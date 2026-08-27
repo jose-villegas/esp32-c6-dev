@@ -2,9 +2,9 @@
  * icons - drawing half of the module; see icons.h for the geometry half and
  * why they are split.
  *===========================================================================*/
-#include "icons.h"
+#include "gfx/icons.h"
 
-#include "gfx.h"
+#include "gfx/gfx.h"
 
 void icon_check(int x, int y, int w, int h, gfx_color_t color)
 {

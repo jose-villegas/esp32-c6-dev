@@ -1,4 +1,4 @@
-#include "touch_fsm.h"
+#include "input/touch_fsm.h"
 
 #include <string.h>
 

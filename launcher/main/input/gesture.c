@@ -1,4 +1,4 @@
-#include "gesture.h"
+#include "input/gesture.h"
 
 bool gesture_is_home_swipe(const input_t *input, int screen_height)
 {
