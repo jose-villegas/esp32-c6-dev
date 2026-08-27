@@ -118,35 +118,41 @@ int display_shell_quarter(void) { return display_quarter(&shell_display); }
 /* Which edge the exit gesture (and its hint bar) live on, for the shell's
  * current quarter turn.
  *
- * The rule, ergonomic rather than content-driven: the exit edge is always
- * OPPOSITE wherever the USB connector currently sits, since USB is where a
- * cable might occupy that edge, leaving the far side as the one a hand can
- * actually reach.
+ * The rule is content-driven, not a fixed physical reference: the exit
+ * gesture lives on whichever PHYSICAL edge the CONTENT's own logical bottom
+ * currently maps to - the same edge a button pinned to the bottom of the
+ * logical canvas would render against, tracking rotation exactly the way
+ * ui_transform_rect() already makes buttons and text do (see ui.c's
+ * draw_command() TEXT case). An earlier version of this function instead put
+ * the exit edge opposite wherever the USB connector sits, on the reasoning
+ * that a cable might occupy that edge - ergonomically plausible, but wrong
+ * in practice: tested on the board, Portrait needs the exit gesture at the
+ * physical BOTTOM, not the USB-opposite LEFT that rule produced.
  *
- * USB position rotates with the case: it is a single fixed feature of the
- * rigid physical case, so its edge - read against whichever orientation the
- * board is currently in - turns by the same 90 degrees per quarter that
- * content does. display.h's own table gives the USB edge for quarters 0 and
- * 1 as MEASURED facts (checked against the physical board); quarters 2 and 3
- * are not independently measured there, and are DERIVED here by continuing
- * that same 90-degree step:
+ * The table below is not hand-derived - hand-derivation is exactly how the
+ * USB-opposite rule went wrong. It comes from mapping a thin strip along the
+ * logical canvas's bottom edge, { 0, logical_h - 4, logical_w, 4 }, through
+ * ui_transform_quarter_turn(quarter, GFX_WIDTH, GFX_HEIGHT) and
+ * ui_transform_rect() (the same pair the exhaustive sweep already proved
+ * exact) and reading off which physical edge the mapped rect landed against:
  *
- *   0  Portrait,               USB right  (measured)   -> exit edge LEFT
- *   1  Landscape,               USB top    (measured)   -> exit edge BOTTOM
- *   2  Portrait, upside down,   USB left   (derived)     -> exit edge RIGHT
- *   3  Landscape, upside down,  USB bottom (derived)     -> exit edge TOP
+ *   0  Portrait               -> exit edge BOTTOM
+ *   1  Landscape               -> exit edge LEFT
+ *   2  Portrait, upside down   -> exit edge TOP
+ *   3  Landscape, upside down  -> exit edge RIGHT
  *
- * One more 90-degree step from quarter 3 returns to quarter 0's USB right,
- * closing the loop - a necessary check on the derivation, since a rigid
- * case's own features cannot rotate independently of each other and so must
- * return to where they started after four quarters. */
+ * Each step advances the edge by one quarter turn (BOTTOM -> LEFT -> TOP ->
+ * RIGHT -> BOTTOM), which is what rotating a single fixed edge through four
+ * 90-degree content turns should produce, and matches quarter 0 needing no
+ * correction at all - identity transform, logical bottom is physical
+ * bottom. */
 static gesture_edge_t exit_edge_for_quarter(int quarter)
 {
     static const gesture_edge_t edge_for_quarter[4] = {
-        GESTURE_EDGE_LEFT,    /* quarter 0: Portrait,              USB right */
-        GESTURE_EDGE_BOTTOM,  /* quarter 1: Landscape,             USB top */
-        GESTURE_EDGE_RIGHT,   /* quarter 2: Portrait upside down,  USB left [derived] */
-        GESTURE_EDGE_TOP,     /* quarter 3: Landscape upside down, USB bottom [derived] */
+        GESTURE_EDGE_BOTTOM,  /* quarter 0: Portrait */
+        GESTURE_EDGE_LEFT,    /* quarter 1: Landscape */
+        GESTURE_EDGE_TOP,     /* quarter 2: Portrait upside down */
+        GESTURE_EDGE_RIGHT,   /* quarter 3: Landscape upside down */
     };
     return edge_for_quarter[quarter];
 }
