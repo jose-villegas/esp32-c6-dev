@@ -984,10 +984,10 @@ static gfx_color_t brush_color(cell_t c)
  * it is nearest.
  *
  * Used by draw_mode_label() below to turn its text to follow the board's
- * physical "up". draw_palette()'s panel used to share this too, but no
- * longer calls it - see that function's own top comment: the panel is
- * drawn upright regardless of how the board is held, until rotation - a
- * separate change from this one - turns it on deliberately. */
+ * physical "up", and by sand_frame()'s SAND_UI_PALETTE handling to turn the
+ * whole palette panel the same way - see draw_palette()'s own top comment
+ * for how that reading becomes the transform every tile draws and
+ * hit-tests through. */
 static int gravity_quarter_turn(int gx, int gy)
 {
     const int ax = gx < 0 ? -gx : gx;
@@ -1138,25 +1138,32 @@ static mu_Color mu_color_hex(uint32_t rgb)
  * sand_ui_tile_clicked(), which is where "what a click on this tile means"
  * still lives, unchanged, and still host-tested - see suite_sand_ui.c.
  *
- * NO TRANSFORM, STILL, BUT NOT FOR THE OLD REASON
+ * THE WHOLE PANEL TURNS WITH THE BOARD NOW
  *
- * This does not call ui_set_transform() the way ui_launcher.c-style UIs
- * might - but the reason has changed. Every tile hit-tests through microui
- * now, the same feed_input()-through-the-inverse-transform path every other
- * described UI in this shell already takes (see ui.c's own "Touch to
- * mouse" comment), so turning this window WOULD turn its hit-testing right
- * along with its drawing - nothing here still hard-codes physical screen
- * coordinates the way palette_hit() used to.
+ * `turn` - sand_frame()'s own fresh gravity_quarter_turn() reading, taken
+ * the same way draw_mode_label() takes it - is handed straight to
+ * ui_set_transform() below, before ui_begin() opens the frame. That
+ * ordering matters: ui_begin() calls feed_input(), which maps this frame's
+ * touch through the CURRENTLY set transform (see ui.c's "Touch to mouse"
+ * comment), so the transform for this frame has to be in force before that
+ * happens, not after.
  *
- * The transform stays identity anyway, on purpose: rotation is a separate
- * change from this one, and needs to be verifiable on its own rather than
- * folded into the diff that moved hit-testing to microui. This comment
- * explaining why it is now SAFE to turn the transform on is not the same
- * thing as it being on - do not re-add one here without that change also
- * confirming, end to end, that it actually works. */
-static void draw_palette(const input_t *input)
+ * Once it is, every tile hit-tests through microui the same
+ * feed_input()-through-the-inverse-transform path every other described UI
+ * in this shell already takes, so turning this window turns its
+ * hit-testing right along with its drawing - nothing here hard-codes
+ * physical screen coordinates the way palette_hit() used to, which is
+ * exactly what makes this safe now and was not before ("Let microui
+ * hit-test the palette's tiles"). Nothing in this loop branches on `turn`
+ * by hand, either: draw_command() in ui.c derives the quarter turn from the
+ * transform itself and picks gfx_text_font()'s turned glyph path
+ * accordingly, so mu_button()'s own centred label - and every rect this
+ * loop draws - comes out turned for free. */
+static void draw_palette(const input_t *input, int turn)
 {
     mu_Context *ctx = ui_context();
+
+    ui_set_transform(ui_transform_quarter_turn(turn, GFX_WIDTH, GFX_HEIGHT));
 
     ui_begin(input);
 
@@ -1211,7 +1218,8 @@ static void draw_palette(const input_t *input)
 
         for (int i = 0; i < BRUSH_COUNT; i++) {
             int x, y, w, h;
-            palette_tile_rect(i, BRUSH_COUNT, &x, &y, &w, &h);
+            palette_tile_rect(i, BRUSH_COUNT, ui_width(), ui_height(),
+                              &x, &y, &w, &h);
 
             /* Inset by the grout first so neighbouring tiles do not fuse
              * into one surface - the button itself, bezel included, is
@@ -1330,9 +1338,13 @@ static void draw_palette(const input_t *input)
              * every swatch from snow's near-white to stone's near-black
              * cannot itself be made of the swatch it sits on.
              *
-             * Drawn upright, like every other command in this frame - see
-             * this function's own top comment on why nothing here turns
-             * with the board for now (rotation waits on its own change). */
+             * Laid out relative to the tile's own logical (ix, iy) corner,
+             * like everything else in this loop - see this function's own
+             * top comment on why that is enough to turn with the board: the
+             * badge's rects go through draw_command() exactly like the
+             * bezel spans above, so a quarter-turn transform carries this
+             * along with the tile it sits on without this loop naming a
+             * turn anywhere. */
             if (material_can_emit(brushes[i])) {
                 const mu_Color border = mu_color_hex(PALETTE_BADGE_BORDER_COLOR);
                 const mu_Color fill   = mu_color_hex(PALETTE_BADGE_FILL_COLOR);
@@ -1357,13 +1369,17 @@ static void draw_palette(const input_t *input)
 
             /* The name itself is no longer drawn here - mu_button() already
              * drew it, centred in (ix,iy,iw,ih), when it ran above (see
-             * this loop's own comment at that call site). There is no
-             * per-turn positioning left to do either: palette_label_origin()
-             * existed to centre a string at any of four quarter turns, and
-             * this frame only ever draws turn 0 - the plain centring
-             * mu_draw_control_text() already does on its own covers that
-             * one case exactly, which is what makes the manual call this
-             * used to be here redundant now rather than merely optional. */
+             * this loop's own comment at that call site). There is still no
+             * per-turn positioning to do here: palette_label_origin()
+             * existed to centre a string at any of four quarter turns by
+             * hand, and that hand-rolled centring is exactly what
+             * mu_draw_control_text()'s plain centring plus draw_command()'s
+             * own turn handling replaces - see this function's own top
+             * comment. draw_command() reads the quarter straight off the
+             * transform ui_set_transform() was given above and picks
+             * gfx_text_font()'s turned glyph path itself, so this loop never
+             * has to know which turn is in force to get a centred, correctly
+             * turned label. */
         }
 
         mu_end_window(ctx);
@@ -1801,14 +1817,16 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * - leaving this out is the obvious failure: the whole shell would
          * come up haloed after the palette had ever been opened once.
          *
-         * ui_set_transform(ui_transform_identity()) is kept alongside it as
-         * a guard, even though draw_palette() no longer calls
-         * ui_set_transform() at all (see that function's own top comment on
-         * why it draws upright) - so nothing in this app currently leaves
-         * the transform other than identity. The guard costs nothing and
-         * protects against exactly the failure mode the text-style restore
-         * above exists for, in case a transform is ever reintroduced here
-         * without whoever adds it remembering to undo it on close too. */
+         * ui_set_transform(ui_transform_identity()) sits alongside it for
+         * exactly the same reason, and is no longer merely a guard against a
+         * hypothetical future transform - draw_palette() now genuinely
+         * leaves the transform turned (see that function's own top comment),
+         * so without this the launcher and the sand boot menu would come up
+         * turned the next time either drew a frame, the same way they would
+         * come up haloed without the text-style restore above. Both restores
+         * are load-bearing now for the same reason: ambient UI state that
+         * outlives the frame it was set for has to be put back by whoever
+         * set it, on the same exit path that undoes the other. */
         ui_set_transform(ui_transform_identity());
         ui_set_text_style(UI_TEXT_PLAIN);
 
@@ -1848,17 +1866,22 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * its callers elsewhere - the tests in suite_sand_ui.c - still
          * check it, but nothing here needs to read it any more).
          *
-         * No gravity read here any more, and no `turn` - draw_palette() no
-         * longer takes one. The only thing gravity ever fed while this
-         * screen was up was the panel's own rotation, and this panel has
-         * never actually turned with the board: it draws upright regardless
-         * of how the board is held, on purpose, even now that every tile's
-         * hit-test goes through microui and WOULD turn correctly with a
-         * transform - see draw_palette()'s own top comment for why turning
-         * it on is still being left for a separate change. With nothing
-         * left to compute from it, reading gravity here would cost a real
-         * IMU transaction for a value nothing uses - removed rather than
-         * kept "just in case", the same as any other dead read would be. */
+         * Gravity is read every frame the panel is up, same as an ordinary
+         * running frame below, and for the same reason draw_mode_label()
+         * reads it: `turn` follows the board's physical "up", and is handed
+         * straight to draw_palette() so the whole panel - not just a label -
+         * turns with it. This is a real IMU transaction every frame the
+         * panel is open, not just on a change, but ui_set_transform() inside
+         * draw_palette() only invalidates the screen when the transform it
+         * is given actually differs from last frame's (see ui.c), so
+         * holding the board steady still costs no repaint - only the read
+         * itself, which draw_mode_label() already pays on every ordinary
+         * frame regardless. */
+        int gx, gy, flow, jostle, rotation;
+        imu_sample_t sample = { 0 };
+        read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
+        const int turn = gravity_quarter_turn(gx, gy);
+
         if (actions & SAND_UI_OPEN_PALETTE) {
             /* The panel just opened: the framebuffer still holds whatever
              * the app last drew (running sand, or the boot menu), and the
@@ -1871,7 +1894,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
             ui_invalidate();
         }
 
-        draw_palette(input);
+        draw_palette(input, turn);
         return;
     }
 

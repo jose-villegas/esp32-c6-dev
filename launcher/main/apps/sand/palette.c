@@ -14,32 +14,33 @@ static int row_tile_count(int row, int count)
     return (remaining < PALETTE_COLS) ? remaining : PALETTE_COLS;
 }
 
-static int row_left_x(int row_count)
+static int row_left_x(int row_count, int screen_w)
 {
-    return (PALETTE_SCREEN_W - row_count * PALETTE_TILE) / 2;
+    return (screen_w - row_count * PALETTE_TILE) / 2;
 }
 
-static int panel_top_y(int count)
+static int panel_top_y(int count, int screen_h)
 {
     const int rows = PALETTE_ROWS(count);
-    return (PALETTE_SCREEN_H - rows * PALETTE_TILE) / 2;
+    return (screen_h - rows * PALETTE_TILE) / 2;
 }
 
-void palette_tile_rect(int index, int count, int *x, int *y, int *w, int *h)
+void palette_tile_rect(int index, int count, int screen_w, int screen_h,
+                       int *x, int *y, int *w, int *h)
 {
     const int row = index / PALETTE_COLS;
     const int col = index % PALETTE_COLS;
     const int row_count = row_tile_count(row, count);
 
-    *x = row_left_x(row_count) + col * PALETTE_TILE;
-    *y = panel_top_y(count) + row * PALETTE_TILE;
+    *x = row_left_x(row_count, screen_w) + col * PALETTE_TILE;
+    *y = panel_top_y(count, screen_h) + row * PALETTE_TILE;
     *w = PALETTE_TILE;
     *h = PALETTE_TILE;
 }
 
-int palette_hit(int px, int py, int count)
+int palette_hit(int px, int py, int count, int screen_w, int screen_h)
 {
-    const int top = panel_top_y(count);
+    const int top = panel_top_y(count, screen_h);
     const int rows = PALETTE_ROWS(count);
 
     if (py < top || py >= top + rows * PALETTE_TILE) {
@@ -48,7 +49,7 @@ int palette_hit(int px, int py, int count)
     const int row = (py - top) / PALETTE_TILE;
 
     const int row_count = row_tile_count(row, count);
-    const int left = row_left_x(row_count);
+    const int left = row_left_x(row_count, screen_w);
     const int row_w = row_count * PALETTE_TILE;
 
     if (px < left || px >= left + row_w) {
@@ -63,10 +64,18 @@ int palette_hit(int px, int py, int count)
     return index;
 }
 
-void palette_panel_rect(int count, int *x, int *y, int *w, int *h)
+void palette_panel_rect(int count, int screen_w, int screen_h,
+                        int *x, int *y, int *w, int *h)
 {
-    *x = 0;
-    *y = panel_top_y(count);
+    /* row_left_x(PALETTE_COLS, ...) is exactly the panel's own left edge: a
+     * full-width row (row_count == PALETTE_COLS) IS the panel's own width,
+     * centred the same way. This used to be hardcoded to 0, which only
+     * happened to be right because PALETTE_COLS * PALETTE_TILE ==
+     * PALETTE_SCREEN_W (368 == 368) in the upright case - at screen_w == 448
+     * (a quarter turn), the 368px-wide panel no longer fills the canvas and
+     * has to be centred like everything else here. */
+    *x = row_left_x(PALETTE_COLS, screen_w);
+    *y = panel_top_y(count, screen_h);
     *w = PALETTE_COLS * PALETTE_TILE;
     *h = PALETTE_HEIGHT(count);
 }

@@ -99,31 +99,40 @@
      ((PALETTE_SCREEN_W < PALETTE_SCREEN_H) ? PALETTE_SCREEN_W : PALETTE_SCREEN_H))
 
 /* Where tile `index` sits, in screen pixels - the grid is PALETTE_COLS wide
- * and PALETTE_ROWS(count) tall, centred on the screen. Horizontally a full
- * row exactly fills the panel (PALETTE_COLS * PALETTE_TILE == 368, so a full
- * row starts at x=0); vertically the whole block is offset down by
- * (PALETTE_SCREEN_H - rows * PALETTE_TILE) / 2 so the sand shows evenly
- * above and below it.
+ * and PALETTE_ROWS(count) tall, centred on a `screen_w` x `screen_h` canvas.
+ * `screen_w`/`screen_h` is the LOGICAL canvas (see ui.h's ui_width()/
+ * ui_height()), not always PALETTE_SCREEN_W/PALETTE_SCREEN_H: under a
+ * quarter turn the two swap, and this centres against whichever is current
+ * rather than assuming the upright pair. Horizontally a full row exactly
+ * fills the panel when screen_w is 368 (PALETTE_COLS * PALETTE_TILE == 368,
+ * so a full row starts at x=0); vertically the whole block is offset down by
+ * (screen_h - rows * PALETTE_TILE) / 2 so the sand shows evenly above and
+ * below it.
  *
  * A row short of PALETTE_COLS tiles - only ever the LAST row - is centred
  * the same way the whole block is centred vertically: its own row width is
  * `row_count * PALETTE_TILE`, and that block is offset by
- * (PALETTE_SCREEN_W - row_width) / 2 from the left edge. A full row's
- * row_count is PALETTE_COLS, which makes that same formula land back on
- * x=0 - so there is only one centring rule here, not a special case for the
- * last row and a separate one for every other. */
-void palette_tile_rect(int index, int count, int *x, int *y, int *w, int *h);
+ * (screen_w - row_width) / 2 from the left edge. A full row's row_count is
+ * PALETTE_COLS, which makes that same formula land back on x=0 - so there
+ * is only one centring rule here, not a special case for the last row and a
+ * separate one for every other. */
+void palette_tile_rect(int index, int count, int screen_w, int screen_h,
+                       int *x, int *y, int *w, int *h);
 
 /* Which tile contains (px, py), or -1 for none - including a point in the
  * empty part of a centred partial row, a point outside the panel entirely,
  * and negative coordinates. Must stay exactly consistent with
- * palette_tile_rect() - see this file's top comment. */
-int palette_hit(int px, int py, int count);
+ * palette_tile_rect() - see this file's top comment. `screen_w`/`screen_h`
+ * must be the same logical canvas passed to palette_tile_rect() for the two
+ * to agree - see that function's own comment on why this is not always
+ * PALETTE_SCREEN_W/PALETTE_SCREEN_H. */
+int palette_hit(int px, int py, int count, int screen_w, int screen_h);
 
 /* The panel's own bounds - PALETTE_COLS * PALETTE_TILE wide,
- * PALETTE_HEIGHT(count) tall, centred on the screen - for the caller to
- * clear or restore. */
-void palette_panel_rect(int count, int *x, int *y, int *w, int *h);
+ * PALETTE_HEIGHT(count) tall, centred on a `screen_w` x `screen_h` canvas -
+ * for the caller to clear or restore. */
+void palette_panel_rect(int count, int screen_w, int screen_h,
+                        int *x, int *y, int *w, int *h);
 
 /* Where to start drawing a `len`-character label so gfx_text_turned(), at
  * `turn` quarter turns, ends up centred in the rect (x, y, w, h).
