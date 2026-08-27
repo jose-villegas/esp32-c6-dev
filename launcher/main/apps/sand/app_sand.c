@@ -1055,7 +1055,20 @@ static void close_palette(void)
  * comment on that composition where sand_frame() calls open_palette(). */
 static void handle_palette_input(const input_t *input)
 {
-    if (input->boot.pressed || input->boot.released || input->boot.held) {
+    /* On the RELEASE, never on the press. Closing on boot.pressed split a
+     * single physical press across two screens: the panel went away on the
+     * press edge, and the matching release edge arrived several frames
+     * later with screen already back to SCREEN_RUNNING, where
+     * handle_brush_input() consumed it and cycled the brush forward one.
+     * Tapping a tile and then closing therefore selected the material
+     * AFTER the one tapped.
+     *
+     * Acting on the release keeps both edges of a press inside the state
+     * that started it - the same reason cycling itself moved off .pressed.
+     * boot.held is safe alongside it because button_fsm suppresses the
+     * release of a press that became a hold, so a hold delivers exactly
+     * one of these two and never both. */
+    if (input->boot.released || input->boot.held) {
         close_palette();
         return;
     }
