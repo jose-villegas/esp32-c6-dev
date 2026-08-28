@@ -1354,8 +1354,20 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
  * each panel edge but its own diagonal still fell short of the panel's,
  * so all four corners stayed empty no matter how dense or bright the
  * grid inside that diamond got. Bigger, not denser or brighter, is what
- * corners need. */
-#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 220
+ * corners need - and even 220 (86%) still left the farthest corner from
+ * the drifted-off-centre origin uncovered, worked out by inverting the
+ * projection for each of the four corners directly rather than guessing:
+ * the corner most out of reach at BOOT_ANIM_FADE_START_MS - the collapse's
+ * own first instant, ink at 255 - needed just over 8 units, and this
+ * floor's own reach (BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12) is
+ * only 7. Past 256 (past "full size") on purpose: the camera keeps
+ * turning throughout the collapse, so the reach a corner needs keeps
+ * growing the whole time ink is fading it out anyway - chasing every
+ * corner for the WHOLE 1.5s would mean an ever-growing grid that looks
+ * stranger than a few corners quietly going uncovered late, once the
+ * picture is already dim. This is sized to cover every corner at the
+ * moment that matters most: right as the collapse begins. */
+#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 340
 
 static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 {
