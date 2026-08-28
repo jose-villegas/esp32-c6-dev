@@ -196,6 +196,11 @@ and the height *t* up the critical line, straight up - and then plots
 `zeta(1/2 + it)` climbing that axis. Where the curve touches the vertical
 axis, zeta is zero, and those five points are the first five nontrivial zeros.
 
+The camera orbits as the curve climbs, pitching from a side-on view toward a
+near-top-down one in step with the curve's own progress, so the helix seen
+from the side ends up reading almost face-on, as the spiral it always was -
+see `boot_anim_view()` in `boot_anim.h`.
+
 Three files, split by what can be tested where:
 
 | | |
