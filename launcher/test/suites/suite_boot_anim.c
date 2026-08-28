@@ -653,41 +653,39 @@ static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
 
 /* Backdrop, not subject. The floor covers far more of the screen than the
  * curve does, so if it is ever allowed near full brightness it wins the
- * picture - which is exactly what happened before this cap existed.
- *
- * The cap itself ramps up during the collapse (see boot_anim_grid_ceiling())
- * so the now-shrunk, densely packed grid can read clearly instead of fading
- * into the dim backdrop level that only worked when it covered the whole
- * panel - so the bound checked here is that per-moment ceiling, not the
- * flat BOOT_ANIM_GRID_MAX. */
+ * picture - which is exactly what happened before this cap existed. It is
+ * boot_anim_grid_whiten(), not this cap, that is allowed to grow the
+ * floor's visibility over time now - see that function's own comment. */
 static void test_the_floor_stays_dim_enough_to_be_a_backdrop(void)
 {
     for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
-        const uint8_t ceiling = boot_anim_grid_ceiling(t);
         for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
             TEST_ASSERT_TRUE_MESSAGE(
-                boot_anim_grid_alpha(t, ring) <= ceiling,
+                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_MAX,
                 "the floor got brighter than its cap");
         }
     }
 }
 
-/* Before the collapse begins, the ceiling is exactly the old flat cap - the
- * boost is scoped to the collapse window, not a general loosening. */
-static void test_the_floor_cap_is_unboosted_before_the_collapse(void)
+/* Starts at 0 the moment the floor itself appears, climbs steadily, never
+ * doubles back, and reaches its cap - not full white - by the time
+ * everything else has faded away. */
+static void test_the_floor_whitens_steadily_from_its_own_start_to_a_cap(void)
 {
-    TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_MAX, boot_anim_grid_ceiling(0));
-    TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_MAX,
-                            boot_anim_grid_ceiling(BOOT_ANIM_FADE_START_MS));
-}
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_whiten(BOOT_ANIM_GRID_START_MS));
+    TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_WHITEN_MAX,
+                            boot_anim_grid_whiten(BOOT_ANIM_MS));
+    TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_GRID_WHITEN_MAX < 255,
+        "the rings should keep a last trace of their own hue, not become "
+        "indistinguishable from the flat-white axes");
 
-/* And by the end of the collapse window, the floor is allowed to reach all
- * the way up to the boosted ceiling - the ramp actually gets there. */
-static void test_the_floor_cap_reaches_its_boost_by_the_end_of_the_collapse(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(
-        BOOT_ANIM_GRID_BOOST_MAX,
-        boot_anim_grid_ceiling(BOOT_ANIM_FADE_START_MS + BOOT_ANIM_COLLAPSE_MS));
+    uint8_t last = 0;
+    for (uint32_t t = BOOT_ANIM_GRID_START_MS; t <= BOOT_ANIM_MS; t += 25) {
+        const uint8_t w = boot_anim_grid_whiten(t);
+        TEST_ASSERT_TRUE_MESSAGE(w >= last,
+            "whitening must never step backwards as time moves forward");
+        last = w;
+    }
 }
 
 static void test_the_floor_colour_travels_with_time_and_distance(void)
@@ -1075,8 +1073,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
     RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);
     RUN_TEST(test_the_floor_stays_dim_enough_to_be_a_backdrop);
-    RUN_TEST(test_the_floor_cap_is_unboosted_before_the_collapse);
-    RUN_TEST(test_the_floor_cap_reaches_its_boost_by_the_end_of_the_collapse);
+    RUN_TEST(test_the_floor_whitens_steadily_from_its_own_start_to_a_cap);
     RUN_TEST(test_the_floor_colour_travels_with_time_and_distance);
     RUN_TEST(test_the_axes_are_there_before_the_curve_starts_climbing);
 

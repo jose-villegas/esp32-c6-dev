@@ -487,43 +487,6 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * of this did, and the curve disappeared into a plaid tablecloth. */
 #define BOOT_ANIM_GRID_MAX 56
 
-/* ...except during the collapse (see BOOT_ANIM_COLLAPSE_MS's own comment),
- * when the ceiling ramps up toward BOOT_ANIM_GRID_BOOST_MAX instead - the
- * backdrop reasoning above stops applying once the grid IS what is left:
- * by then it has shrunk in together with the motif and is not competing
- * with a full-size curve for attention any more, so it can afford to light
- * up rather than stay dim, which is also what keeps its now much tighter
- * spacing (see draw_floor()'s own comment on why it shrinks at all)
- * reading as a dense, deliberately packed grid instead of fading into the
- * same low brightness that worked when it covered the whole panel.
- * BOOT_ANIM_FADE_START_MS, not BOOT_ANIM_FINALE_END_MS, only because the
- * latter is not computable this early in the file - the two are asserted
- * equal where FINALE_END_MS is actually defined. */
-#define BOOT_ANIM_GRID_BOOST_MAX 230
-
-/* Quickly, not over the whole collapse: everything drawn - grid included -
- * is also multiplied by boot_anim_ink(), which fades linearly to 0 over
- * that exact same BOOT_ANIM_FADE_START_MS..BOOT_ANIM_MS window. Ramping the
- * ceiling up over the full window too meant the boost was always fighting
- * the fade it shared a clock with - low ceiling early when ink was still
- * high, high ceiling late when ink had already faded most of the way to
- * black, and no point where both were high at once, so raising
- * BOOT_ANIM_GRID_BOOST_MAX barely changed what was actually visible.
- * Reaching the ceiling quickly instead means there genuinely is a moment -
- * right as the collapse begins, before ink has faded much - where the grid
- * is both dense and near the boosted brightness at once; from there it
- * simply holds at the boosted ceiling and fades out with everything else,
- * on ink's own clock, same as before. */
-#define BOOT_ANIM_GRID_BOOST_MS 350
-
-static inline uint8_t boot_anim_grid_ceiling(uint32_t now_ms)
-{
-    const uint8_t u8 = tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_GRID_BOOST_MS));
-    return (uint8_t)tween_lerp_i32(BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_BOOST_MAX,
-                                   u8);
-}
-
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
     if (ring >= BOOT_ANIM_GRID_FADE) {
@@ -539,11 +502,45 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
      * different place. Squared, the outer rings are already almost gone by
      * the time they run out. */
     const uint32_t left = (uint32_t)(BOOT_ANIM_GRID_FADE - ring);
-    const uint32_t ceiling = boot_anim_grid_ceiling(now_ms);
-    const uint32_t near = left * left * ceiling /
+    const uint32_t near = left * left * BOOT_ANIM_GRID_MAX /
                           ((uint32_t)BOOT_ANIM_GRID_FADE * BOOT_ANIM_GRID_FADE);
 
     return (uint8_t)((arrived * near) / 255u);
+}
+
+/* How far the grid's own hue has been mixed toward white, by now - see
+ * draw_floor()'s own comment for why whitening the COLOUR, not just
+ * raising its alpha, is what makes the ring-by-ring wave in
+ * boot_anim_grid_alpha()/grid_hue() actually read as one. A saturated hue
+ * lifted only partway off black stays dim and colour-muddy no matter how
+ * opaque it gets; mixed most of the way toward white it reads brightly at
+ * the same alpha, the same way the axes (drawn flat white - see
+ * boot_anim.c's COL_WHITE) always read clearly regardless of their own.
+ *
+ * Climbs from the moment the floor itself first appears
+ * (BOOT_ANIM_GRID_START_MS) - not only once the motif starts to shrink or
+ * the collapse begins - all the way to BOOT_ANIM_MS, the same instant
+ * everything else has faded to black on boot_anim_ink()'s own clock. Plain
+ * tween_ramp(), not eased: an ease-out would spend most of the climb in
+ * the first stretch and then sit near the cap for most of the animation,
+ * which is not "slowly adding up" - a steady, linear climb is. The picture
+ * at any moment is the sum of two things moving in opposite directions,
+ * the grid getting whiter and ink taking the whole picture down, not one
+ * fighting the other the way an earlier, collapse-only version of this
+ * did (see the boot_anim_grid_ceiling() this replaced, back when the
+ * boost and the fade shared too short a window to both be doing much at
+ * once).
+ *
+ * Capped short of full white (255) so even at the very end the rings keep
+ * a last trace of their own hue instead of becoming indistinguishable
+ * from the axes. */
+#define BOOT_ANIM_GRID_WHITEN_MAX 235
+
+static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
+{
+    const uint8_t u8 = tween_ramp(now_ms, BOOT_ANIM_GRID_START_MS,
+                                  BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
+    return (uint8_t)tween_lerp_i32(0, BOOT_ANIM_GRID_WHITEN_MAX, u8);
 }
 
 _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
