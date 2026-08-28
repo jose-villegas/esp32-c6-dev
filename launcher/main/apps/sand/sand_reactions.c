@@ -392,6 +392,35 @@ static void crack_run(sand_t *s, int x, int y, int w, int h,
 static inline bool emit_into_empty_neighbor(sand_t *s, int x, int y, int w,
                                             int h, uint8_t spec);
 
+/* FORCED INLINE, and that is a performance fix rather than a preference.
+ *
+ * The wet-earth branch below (723fac6) pushed this function past GCC's
+ * size heuristic. At the commit before it the symbol does not exist at
+ * all - inlined at all four call sites - and at 723fac6 it is emitted
+ * out of line with a cold .part.0 split beside it, so every scene that
+ * carries heat pays for a call it did not used to make.
+ *
+ * Host, best of seven with all five candidates interleaved, simulation
+ * byte-identical either way: full screen of fire -12.1%, lava stress
+ * -6.5%, four liquids -5.1%, thermal shock -4.8%, and both liquid-free
+ * controls flat. Measure-by-deleting the wet-earth branch outright is
+ * WORSE than this (-9.5% on fire against -12.1%), which is what says the
+ * cost is the shape of the code and not the work that branch does.
+ *
+ * Both obvious alternatives lost, measured rather than reasoned: hinting
+ * the branch unlikely with __builtin_expect - the idiom
+ * move_liquid_grain() uses in sand_liquid.c - moved nothing, and
+ * splitting the branch into its own noinline function bought about 1%,
+ * because it shrank this function without getting it back under the
+ * threshold.
+ *
+ * Forcing an inline is not free on this chip, and this campaign has
+ * twice measured it costing more than the call once the loop outgrew the
+ * 32 KB i-cache (attempts 07 and 08). This forces four call sites at
+ * once, so it is a bet only a device capture can settle - that capture
+ * is pending as this lands. If it disagrees with the host, take this
+ * attribute back out: the revert is the finding, not a failure.
+ */
 /* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
  * bounds and the roll succeeds - heat WITHOUT burning.
  *
@@ -402,7 +431,8 @@ static inline bool emit_into_empty_neighbor(sand_t *s, int x, int y, int w,
  * have both, neither, or one.
  *
  * Returns whether it changed anything. */
-static inline bool try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
+static inline __attribute__((always_inline)) bool
+try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
 {
     if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
         return false;

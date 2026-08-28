@@ -944,6 +944,13 @@ decree, nothing was ratcheted up to what the code happens to cost:
 each budget sits a tenth below its own fresh measurement, and each
 test stops failing only when that tenth is actually won.
 
+**Still `failures=13` after the sixteenth attempt**, and that is the
+right outcome to expect from a round that went well: it took the fire
+screen down 10.4%, the lava stress scene 6.5%, thermal shock 4.9% and
+the four liquids 3.6% - between a third and a half of the tenth each of
+those rows owes - without moving a single budget. A row turns green
+when its own tenth is won, not when it improves.
+
 The measured baselines that capture established (µs, per step except
 the cascade's single step): settled screen 260, full-size step 6434,
 settled-pile flip 6529, mixed scene 12999, water 16043, every-material
@@ -956,10 +963,21 @@ NOT materialise on the device (water 16043 against a predicted
 12-13.5k) - the host ratio is scene-specific and unstable, as this
 file already warns, and the wave's tail commits also landed in
 between. Second, the liquid-free controls both moved ~+10% against the
-50-commit-older build (full step 5867→6434, flip 5959→6529), which is
-either a layout-lottery double hit or a genuine global per-cell cost
-from the wave's tail - unattributed at the time of the re-base, and
-the first question for the next optimization round.
+50-commit-older build (full step 5867→6434, flip 5959→6529), which was
+unattributed at the time of the re-base. **It has since been
+attributed**, in the fifteenth tuning attempt, and to neither of the
+two candidates this paragraph originally offered: a device bisect put
+it on one commit, `e03aabd`, whose added line *never executes* in
+either control and cost ~5% purely by changing how GCC scheduled
+`sand_step` around it. Same instructions, differently ordered - a
+third category beside "new work" and "layout".
+
+Both controls have since been read again, four captures across three
+builds, and they land on one of exactly two value-pairs - (6005, 6100)
+or (6263, 6356) - with nothing in between. See the sixteenth attempt:
+the layout lottery on this target may be quantised rather than
+continuous, which if it holds makes "which state did the control land
+in" a much sharper test than "is the delta under 4%".
 
 One tooling note that has since been corrected: the eleventh attempt
 flagged the generated report as reading the every-material budget as

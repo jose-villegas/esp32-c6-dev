@@ -1,5 +1,5 @@
 /*=============================================================================
- * boot_anim - drawing the startup animation, and the five seconds it owns.
+ * boot_anim - drawing the startup animation, and the three seconds it owns.
  *
  * The projection, the smoothing, the colour and the timeline are all in
  * boot_anim.h, where they are host-testable, and the curve is a generated
@@ -93,9 +93,13 @@ static int sx(int32_t re, int32_t im)
     return boot_anim_screen_x(GFX_WIDTH, re, im);
 }
 
-static int sy(int32_t re, int32_t im, int32_t t)
+/* `view` carries the frame's camera state - see boot_anim_view() in
+ * boot_anim.h - so it is threaded down alongside now_ms and ink rather than
+ * recomputed here: it is the same for every point drawn this frame, and the
+ * trig it is built from is worth paying for once, not per point. */
+static int sy(int32_t re, int32_t im, int32_t t, const boot_anim_view_t *view)
 {
-    return boot_anim_screen_y(GFX_HEIGHT, re, im, t);
+    return boot_anim_screen_y(GFX_HEIGHT, re, im, t, view);
 }
 
 /* A whole number of grid units, as a Q12 value. */
@@ -118,7 +122,8 @@ static int32_t units(int n)
  * boundary is what removes the floor's edge. */
 #define FLOOR_REACH 24
 
-static void draw_floor(uint32_t now_ms, uint8_t ink)
+static void draw_floor(uint32_t now_ms, uint8_t ink,
+                       const boot_anim_view_t *view)
 {
     const int32_t far = units(FLOOR_REACH);
 
@@ -141,10 +146,10 @@ static void draw_floor(uint32_t now_ms, uint8_t ink)
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
 
-            gfx_line_ex(sx(off, -far), sy(off, -far, 0),
-                        sx(off,  far), sy(off,  far, 0), c, 0u);
-            gfx_line_ex(sx(-far, off), sy(-far, off, 0),
-                        sx( far, off), sy( far, off, 0), c, 0u);
+            gfx_line_ex(sx(off, -far), sy(off, -far, 0, view),
+                        sx(off,  far), sy(off,  far, 0, view), c, 0u);
+            gfx_line_ex(sx(-far, off), sy(-far, off, 0, view),
+                        sx( far, off), sy( far, off, 0, view), c, 0u);
         }
     }
 }
@@ -158,13 +163,14 @@ static void draw_floor(uint32_t now_ms, uint8_t ink)
  * A fraction rather than a pixel count, so the three arms - which are three
  * different lengths on screen - still arrive at their ends together. */
 static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
-                     uint8_t ink)
+                     uint8_t ink, const boot_anim_view_t *view)
 {
     const int32_t fre = (re * reach) / 255;
     const int32_t fim = (im * reach) / 255;
     const int32_t ft  = (t  * reach) / 255;
 
-    gfx_line_ex(sx(0, 0), sy(0, 0, 0), sx(fre, fim), sy(fre, fim, ft),
+    gfx_line_ex(sx(0, 0), sy(0, 0, 0, view),
+                sx(fre, fim), sy(fre, fim, ft, view),
                 lit(COL_AXIS, ink), 0u);
 }
 
@@ -180,7 +186,8 @@ static void draw_label(int x, int y, const char *text, uint8_t ink)
                     LABEL_SCALE);
 }
 
-static void draw_axes(uint32_t now_ms, uint8_t ink)
+static void draw_axes(uint32_t now_ms, uint8_t ink,
+                      const boot_anim_view_t *view)
 {
     const uint8_t reach = boot_anim_axis_reach(now_ms);
     if (reach == 0) {
@@ -194,20 +201,20 @@ static void draw_axes(uint32_t now_ms, uint8_t ink)
     const int32_t top = (BOOT_ANIM_T_MAX << BOOT_ANIM_TQ) +
                         (1 << BOOT_ANIM_TQ);
 
-    draw_arm(arm, 0, 0, reach, ink);      /* real      */
-    draw_arm(0, arm, 0, reach, ink);      /* imaginary */
-    draw_arm(0, 0, top, reach, ink);      /* t         */
+    draw_arm(arm, 0, 0, reach, ink, view);      /* real      */
+    draw_arm(0, arm, 0, reach, ink, view);      /* imaginary */
+    draw_arm(0, 0, top, reach, ink, view);      /* t         */
 
     /* Named rather than tick-marked. Which axis is which is the one thing a
      * reader cannot work out from the picture, and three short labels say it
      * where a ladder of numbers up a 315px axis would just be clutter. */
     if (reach == 255) {
-        draw_label(sx(arm, 0) + LABEL_GAP * 2, sy(arm, 0, 0) + LABEL_GAP,
-                   "Re", ink);
-        draw_label(sx(0, arm) - LABEL_GAP * 2, sy(0, arm, 0) + LABEL_GAP,
-                   "Im", ink);
-        draw_label(sx(0, 0) + LABEL_GAP * 2, sy(0, 0, top) - LABEL_GAP, "t",
-                   ink);
+        draw_label(sx(arm, 0) + LABEL_GAP * 2,
+                   sy(arm, 0, 0, view) + LABEL_GAP, "Re", ink);
+        draw_label(sx(0, arm) - LABEL_GAP * 2,
+                   sy(0, arm, 0, view) + LABEL_GAP, "Im", ink);
+        draw_label(sx(0, 0) + LABEL_GAP * 2,
+                   sy(0, 0, top, view) - LABEL_GAP, "t", ink);
     }
 }
 
@@ -222,14 +229,16 @@ static void draw_axes(uint32_t now_ms, uint8_t ink)
  * happens at is one of the numbers the Riemann hypothesis is about. Drawn
  * white and flat rather than blended, so they stay legible through whatever
  * the curve is doing around them. */
-static void draw_zeros(int32_t pen_t_q8, uint8_t ink)
+static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
+                       const boot_anim_view_t *view)
 {
     for (int i = 0; i < BOOT_ANIM_ZEROS; i++) {
         const int32_t t = boot_anim_zero_t[i];
         if (t > pen_t_q8) {
             break;      /* the table is in order, so nothing after it either */
         }
-        gfx_fill_rect(sx(0, 0) - ZERO_DOT / 2, sy(0, 0, t) - ZERO_DOT / 2,
+        gfx_fill_rect(sx(0, 0) - ZERO_DOT / 2,
+                      sy(0, 0, t, view) - ZERO_DOT / 2,
                       ZERO_DOT, ZERO_DOT, lit(COL_ZERO, ink));
     }
 }
@@ -306,7 +315,8 @@ static void draw_head(int x, int y, uint32_t rgb, uint8_t ink)
  * The leading pen is skipped once it reaches the end: a bright dot left
  * sitting on the finish of a static curve reads as a blemish rather than as
  * a pen. */
-static void draw_heads(int32_t pen, uint8_t ink)
+static void draw_heads(int32_t pen, uint8_t ink,
+                       const boot_anim_view_t *view)
 {
     const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
 
@@ -319,7 +329,7 @@ static void draw_heads(int32_t pen, uint8_t ink)
         const int i = fx_mul_floor(at, span, BOOT_ANIM_Q);
         const boot_anim_pt_t p = boot_anim_sample(i);
 
-        draw_head(sx(p.re, p.im), sy(p.re, p.im, p.t),
+        draw_head(sx(p.re, p.im), sy(p.re, p.im, p.t, view),
                   boot_anim_hue_rgb(boot_anim_stroke(at, pen).hue), ink);
     }
 }
@@ -333,7 +343,8 @@ static void draw_heads(int32_t pen, uint8_t ink)
  *
  * Returns the height the pen has climbed to, which is what decides how many
  * of the zeros have been marked. */
-static int32_t draw_curve(uint32_t now_ms, uint8_t ink)
+static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
+                          const boot_anim_view_t *view)
 {
     const int32_t pen = boot_anim_pen(now_ms);
     if (pen <= 0) {
@@ -353,7 +364,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink)
 
     boot_anim_pt_t head = boot_anim_sample(0);
     int px = sx(head.re, head.im);
-    int py = sy(head.re, head.im, head.t);
+    int py = sy(head.re, head.im, head.t, view);
     bool drawn = false;      /* has any segment been laid down yet? */
 
     for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
@@ -378,7 +389,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink)
 
             head = boot_anim_spline(c0, c1, c2, t);
             const int nx = sx(head.re, head.im);
-            const int ny = sy(head.re, head.im, head.t);
+            const int ny = sy(head.re, head.im, head.t, view);
             const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
 
             draw_stroke(px, py, nx, ny, boot_anim_stroke(along, pen), ink,
@@ -389,7 +400,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink)
         }
     }
 
-    draw_heads(pen, ink);
+    draw_heads(pen, ink, view);
     return head.t;
 }
 
@@ -401,14 +412,23 @@ static void draw_frame(uint32_t now_ms)
 {
     const uint8_t ink = boot_anim_ink(now_ms);
 
+    /* Built from boot_anim_pen(now_ms) - the SAME progress that paces the
+     * curve, not an independent clock - so the camera finishes its orbit
+     * exactly when the curve finishes drawing. See boot_anim_view()'s own
+     * comment in boot_anim.h for why that coupling is deliberate. Built once
+     * here and threaded to every draw_* call below rather than reconstructed
+     * per point: the trig it costs is worth paying for once a frame. */
+    const boot_anim_view_t view = boot_anim_view(GFX_HEIGHT,
+                                                 boot_anim_pen(now_ms));
+
     gfx_clear(COL_BG);
-    draw_floor(now_ms, ink);
-    draw_axes(now_ms, ink);
+    draw_floor(now_ms, ink, &view);
+    draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them
      * rather than the dots punching holes in it. */
-    const int32_t reached = draw_curve(now_ms, ink);
-    draw_zeros(reached, ink);
+    const int32_t reached = draw_curve(now_ms, ink, &view);
+    draw_zeros(reached, ink, &view);
 }
 
 void boot_anim_run(void)

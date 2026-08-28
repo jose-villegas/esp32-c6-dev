@@ -70,7 +70,22 @@ six-pair table, and:
   are already worked around in every script here, but worth knowing why
   if something in this pattern ever needs changing).
 - `docs/Notes/Display-and-Rendering.md`, "The cap sweeps" - the
-  `ROW_MAX_RUNS`/`LEAF_REFINE_MAX_RUNS`/`GATHER_MAX_PIXELS` results.
+  `ROW_MAX_RUNS`/`LEAF_REFINE_MAX_RUNS`/`GATHER_MAX_PIXELS` results,
+  and "The re-sweep, 2026-08-28" for the second pass over all three.
+
+**Before running either display sweep again, read that re-sweep.** All
+three caps have now been measured twice, and the second pass did it
+without hardware at all: `gfx_dirty.h` is header-only and free of
+ESP-IDF by design, and `send_one_row()`'s choice is pure logic over its
+state, so the whole decision replays on a host driven by `suite_sand.c`'s
+own scenes - and that replay reproduces the device's strip-send counters
+exactly. `ROW_MAX_RUNS` x `LEAF_REFINE_MAX_RUNS` came back **byte-
+identical across fifteen combinations** (both are structurally incapable
+of mattering to real scenes, for reasons that page gives), and
+`GATHER_MAX_PIXELS` was declined a second time on a memory argument.
+A host replay validated against the counters the device already reports
+is the cheaper first move here; these scripts are for what it cannot
+answer.
 
 ## Adding a new sweep
 

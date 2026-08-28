@@ -248,6 +248,33 @@ static void show_post_failures(void)
 
 /* --- main --------------------------------------------------------------- */
 
+/* Common tail of leaving whichever app is running, however the decision to
+ * leave was made - the swipe gesture below, or an opted-out app's own PWR
+ * fallback. */
+static void leave_app(const app_t **current, input_t *input,
+                      gesture_edge_t exit_edge)
+{
+    ESP_LOGI(TAG, "Leaving %s", (*current)->name);
+    (*current)->exit();
+    *current = NULL;
+    /* The app's output is still in the framebuffer, so the launcher must
+     * repaint even though its own description has not changed. */
+    ui_invalidate();
+    /* Draw it immediately, so the frame presented below is the home screen
+     * rather than the app's last one. */
+    ui_launcher_frame(input);
+    /* ui_invalidate() just forced ui_launcher_frame() to repaint its whole
+     * rect from the background colour up, which paints over the hint strip's
+     * band along with everything else - draw_home_hint() has to run again
+     * this same frame to put it back. Left out, the strip stayed missing
+     * indefinitely: draw_home_hint() only draws when gfx_region_dirty()
+     * already says its band is dirty for some OTHER reason, which the idle
+     * launcher's own unchanging menu never gives it, on this frame or any
+     * later one - the exact way an app is left is not something the idle
+     * branch in step_app() below sees again to retry. */
+    draw_home_hint(exit_edge);
+}
+
 /* Whichever of the launcher or the current app owns this frame, and the
  * transitions between them: choosing an app from the launcher, or swiping
  * home to leave one. */
@@ -281,15 +308,20 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
      * provide its own way back to the launcher. */
     if ((*current)->home_gesture &&
         gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
-        ESP_LOGI(TAG, "Leaving %s", (*current)->name);
-        (*current)->exit();
-        *current = NULL;
-        /* The app's output is still in the framebuffer, so the launcher must
-         * repaint even though its own description has not changed. */
-        ui_invalidate();
-        /* Draw it immediately, so the frame presented below is the home
-         * screen rather than the app's last one. */
-        ui_launcher_frame(input);
+        leave_app(current, input, exit_edge);
+        return;
+    }
+
+    /* A plain PWR press is a temporary, shell-level fallback for an app that
+     * opted out of the swipe gesture - today, only app_sand.c, whose own
+     * comment on home_gesture promises "a deliberate control of its own"
+     * still to come. Checked before frame() runs, the same as the swipe
+     * check above, so an app that also reads input->power.pressed for
+     * something else - app_sand.c's own handle_brush_input(), which toggles
+     * erase on it - never sees the press that just exited it: that frame's
+     * frame() call is skipped entirely, not merely overridden. */
+    if (!(*current)->home_gesture && input->power.pressed) {
+        leave_app(current, input, exit_edge);
         return;
     }
 

@@ -149,83 +149,227 @@ static void test_samples_are_clamped_rather_than_read_out_of_range(void)
 }
 
 /*---------------------------------------------------------------------------
+ * The camera
+ *-------------------------------------------------------------------------*/
+
+static void test_the_quarter_wave_starts_at_zero_and_ends_at_one(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, boot_anim_sin_quarter[0]);
+    TEST_ASSERT_EQUAL_INT(32767, boot_anim_sin_quarter[64]);
+}
+
+static void test_the_quarter_wave_rises_all_the_way(void)
+{
+    for (int i = 1; i < 65; i++) {
+        TEST_ASSERT_TRUE_MESSAGE(boot_anim_sin_quarter[i] >
+                                 boot_anim_sin_quarter[i - 1],
+            "the quarter wave must increase at every step - a dip means a "
+            "transposed or mistyped entry");
+    }
+}
+
+/* The identity that pins every entry down at once, checked across the full
+ * turn rather than just the arc the camera actually uses - a general-purpose
+ * table should hold everywhere, and this is what makes boot_anim_sin()/cos()
+ * safe to reuse for anything else that turns up needing one. */
+static void test_sin_squared_plus_cos_squared_is_one(void)
+{
+    for (uint32_t phase = 0; phase < 65536; phase += 7) {
+        const int64_t s = boot_anim_sin((uint16_t)phase);
+        const int64_t c = boot_anim_cos((uint16_t)phase);
+        const int64_t sum = s * s + c * c;
+        const int64_t one = (int64_t)32767 * 32767;
+
+        TEST_ASSERT_TRUE_MESSAGE(sum > one - one / 300 && sum < one + one / 300,
+            "sin^2 + cos^2 left the neighbourhood of 1");
+    }
+}
+
+static void test_the_quarter_points_are_exact(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, boot_anim_sin(0));
+    TEST_ASSERT_EQUAL_INT(32767, boot_anim_sin(16384));
+    TEST_ASSERT_EQUAL_INT(0, boot_anim_sin(32768));
+    TEST_ASSERT_EQUAL_INT(-32767, boot_anim_sin(49152));
+    TEST_ASSERT_EQUAL_INT(32767, boot_anim_cos(0));
+}
+
+/* At progress 0 the view must reproduce the ORIGINAL fixed camera - the one
+ * this whole file described before the orbit existed - to within a couple of
+ * Q8 units. Not bit-exact: D+C reconstructs A (see boot_anim.h's derivation
+ * comment) through two independently-rounded compile-time constants rather
+ * than the single rounding the old RE_Y/IM_Y had, so a unit or two of drift
+ * is the honest cost of that, not a bug. */
+static void test_the_view_starts_at_the_original_fixed_camera(void)
+{
+    const boot_anim_view_t v = boot_anim_view(PANEL_H, 0);
+
+    TEST_ASSERT_INT32_WITHIN_MESSAGE(2, 3064, v.re_y,
+        "at progress 0 the real axis' weight should match the original "
+        "sin(20) * Z_PX * 256");
+    TEST_ASSERT_INT32_WITHIN_MESSAGE(2, 6336, v.im_y,
+        "at progress 0 the imaginary axis' weight should match the "
+        "original sin(45) * Z_PX * 256");
+    TEST_ASSERT_INT32_WITHIN_MESSAGE(2, -(BOOT_ANIM_T_PX << 8), v.t_y,
+        "at progress 0 the t axis should still be at its full, unforeshortened "
+        "length - T_PX per unit, Q8");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_origin_y(PANEL_H), v.oy,
+        "at progress 0 the origin should sit exactly where it always did");
+}
+
+/* At full progress, t must have foreshortened a long way from where it
+ * started - the whole point of the orbit - while staying short of collapsing
+ * to nothing, which is the "with a tilt to be observable" half of the ask. */
+static void test_the_view_foreshortens_t_by_the_end_without_flattening_it(void)
+{
+    const boot_anim_view_t v0 = boot_anim_view(PANEL_H, 0);
+    const boot_anim_view_t v1 = boot_anim_view(PANEL_H, BOOT_ANIM_ONE);
+
+    const int32_t t0 = v0.t_y < 0 ? -v0.t_y : v0.t_y;
+    const int32_t t1 = v1.t_y < 0 ? -v1.t_y : v1.t_y;
+
+    TEST_ASSERT_TRUE_MESSAGE(t1 < t0 / 2,
+        "t should have foreshortened to well under half its starting length "
+        "by the end of the climb");
+    TEST_ASSERT_TRUE_MESSAGE(t1 > 0,
+        "t should not have foreshortened all the way to a point - some tilt "
+        "must stay observable");
+}
+
+/* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends as
+ * far below the top of the screen as it started above the bottom. */
+static void test_the_origin_ends_at_the_mirror_of_where_it_started(void)
+{
+    const int oy_start = boot_anim_view(PANEL_H, 0).oy;
+    const int oy_end   = boot_anim_view(PANEL_H, BOOT_ANIM_ONE).oy;
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_H - oy_start, oy_end,
+        "the origin should finish exactly as far from the top as it began "
+        "from the bottom");
+    TEST_ASSERT_TRUE_MESSAGE(oy_end < oy_start,
+        "the origin should have drifted upward, not down or sideways only");
+}
+
+static void test_the_origin_drifts_upward_without_doubling_back(void)
+{
+    int last_oy = boot_anim_view(PANEL_H, 0).oy;
+    for (int32_t p = 0; p <= BOOT_ANIM_ONE; p += 64) {
+        const int oy = boot_anim_view(PANEL_H, p).oy;
+        TEST_ASSERT_TRUE_MESSAGE(oy <= last_oy,
+            "the origin should drift steadily upward, never back down");
+        last_oy = oy;
+    }
+}
+
+/*---------------------------------------------------------------------------
  * The projection
  *-------------------------------------------------------------------------*/
 
 static void test_the_origin_maps_to_the_origin(void)
 {
+    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
+
     TEST_ASSERT_EQUAL_INT(boot_anim_origin_x(PANEL_W),
                           boot_anim_screen_x(PANEL_W, 0, 0));
     TEST_ASSERT_EQUAL_INT(boot_anim_origin_y(PANEL_H),
-                          boot_anim_screen_y(PANEL_H, 0, 0, 0));
+                          boot_anim_screen_y(PANEL_H, 0, 0, 0, &view));
 }
 
 /* The three axes have to go in three different directions, and each of the
  * six signs below is one that would silently mirror the picture if it were
- * wrong. t especially: screen y grows downward and height does not. */
+ * wrong. t especially: screen y grows downward and height does not.
+ *
+ * Checked at progress 0, the camera's starting orientation - see the camera
+ * section above for what changes as it orbits, and
+ * test_the_view_foreshortens_t_by_the_end_without_flattening_it() for the
+ * corresponding claim once it has. */
 static void test_the_three_axes_point_the_way_they_are_supposed_to(void)
 {
     const int32_t one = BOOT_ANIM_ONE;
     const int ox = boot_anim_origin_x(PANEL_W);
     const int oy = boot_anim_origin_y(PANEL_H);
+    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
 
     TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(PANEL_W, one, 0) > ox,
         "the real axis should run to the right");
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, one, 0, 0) > oy,
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, one, 0, 0, &view) > oy,
         "the real axis should run downward, into the floor");
 
     TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(PANEL_W, 0, one) < ox,
         "the imaginary axis should run to the left");
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, 0, one, 0) > oy,
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, 0, one, 0, &view) > oy,
         "the imaginary axis should run downward, into the floor");
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(ox, boot_anim_screen_x(PANEL_W, 0, 0),
         "t should not move a point sideways at all");
     TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_screen_y(PANEL_H, 0, 0, 1 << BOOT_ANIM_TQ) < oy,
+        boot_anim_screen_y(PANEL_H, 0, 0, 1 << BOOT_ANIM_TQ, &view) < oy,
         "t should run UP the screen, which is downward in y");
 }
 
 /* The imaginary axis at 45 degrees, which is what makes the floor read as a
- * floor: equal steps left and down. */
+ * floor: equal steps left and down. Checked at progress 0, same reasoning as
+ * the test above. */
 static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
 {
     const int ox = boot_anim_origin_x(PANEL_W);
     const int oy = boot_anim_origin_y(PANEL_H);
     const int32_t three = 3 * BOOT_ANIM_ONE;
+    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
 
     const int dx = ox - boot_anim_screen_x(PANEL_W, 0, three);
-    const int dy = boot_anim_screen_y(PANEL_H, 0, three, 0) - oy;
+    const int dy = boot_anim_screen_y(PANEL_H, 0, three, 0, &view) - oy;
 
     TEST_ASSERT_INT_WITHIN_MESSAGE(1, dx, dy,
         "the imaginary axis should go as far left as it goes down");
 }
 
-/* The layout guard: the whole scene has to land on the panel. Curve, floor
- * and the top of the t axis, so that changing a scale, an angle or the height
- * of the climb fails here rather than on the bench. */
-static void test_the_whole_scene_fits_on_the_panel(void)
+/* The layout guard: the whole scene has to land on the panel, at every
+ * moment of the climb - not just at the start. Swept across progress AND,
+ * at each progress, restricted to the part of the curve actually drawn by
+ * then, matching what boot_anim.c really shows: the point at the far top of
+ * the curve is not on screen yet while the camera is still side-on, so
+ * checking it there would be checking something the animation never shows.
+ *
+ * This is the test that would have caught the sign error the fixed-point
+ * derivation had during development - see boot_anim.h's derivation comment
+ * on how thoroughly this was cross-checked before being trusted. */
+static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
 {
-    for (int i = 0; i < BOOT_ANIM_CURVE_POINTS; i++) {
-        const boot_anim_pt_t p = boot_anim_sample(i);
-        const int x = boot_anim_screen_x(PANEL_W, p.re, p.im);
-        const int y = boot_anim_screen_y(PANEL_H, p.re, p.im, p.t);
+    for (int32_t progress = 0; progress <= BOOT_ANIM_ONE; progress += 96) {
+        const boot_anim_view_t view = boot_anim_view(PANEL_H, progress);
+        const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
+        const int last = (int)(((int64_t)progress * span) >> BOOT_ANIM_Q);
 
-        TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
-            "the curve ran off the side of the panel");
-        TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
-            "the curve ran off the top or bottom of the panel");
+        for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
+            const boot_anim_pt_t p = boot_anim_sample(i);
+            const int x = boot_anim_screen_x(PANEL_W, p.re, p.im);
+            const int y = boot_anim_screen_y(PANEL_H, p.re, p.im, p.t, &view);
+
+            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
+                "the drawn part of the curve ran off the side of the panel");
+            TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
+                "the drawn part of the curve ran off the top or bottom of "
+                "the panel");
+        }
     }
+}
 
-    /* The floor deliberately has no corners to check - its lines run off the
-     * panel and are clipped, which is what makes it read as a plane rather
-     * than a tile. What must still fit is the ends of the two axis arms,
-     * because those carry labels. */
+/* The floor and axis labels, checked only at progress 0: that is where the
+ * axes are drawn full length (see boot_anim.c's draw_axes(), which only
+ * labels them once the axis-growth animation - a separate, earlier ramp -
+ * has finished), and it is also the widest the fixed axis arms ever are,
+ * since the floor itself has no corners to check - its lines run off the
+ * panel and are clipped, which is what makes it read as a plane rather than
+ * a tile. */
+static void test_the_axis_labels_fit_on_the_panel(void)
+{
+    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
     const int32_t arm = 4 * BOOT_ANIM_ONE;
     const int re_x = boot_anim_screen_x(PANEL_W, arm, 0);
-    const int re_y = boot_anim_screen_y(PANEL_H, arm, 0, 0);
+    const int re_y = boot_anim_screen_y(PANEL_H, arm, 0, 0, &view);
     const int im_x = boot_anim_screen_x(PANEL_W, 0, arm);
-    const int im_y = boot_anim_screen_y(PANEL_H, 0, arm, 0);
+    const int im_y = boot_anim_screen_y(PANEL_H, 0, arm, 0, &view);
 
     TEST_ASSERT_TRUE_MESSAGE(re_x >= 0 && re_x < PANEL_W &&
                              re_y >= 0 && re_y < PANEL_H,
@@ -234,8 +378,8 @@ static void test_the_whole_scene_fits_on_the_panel(void)
                              im_y >= 0 && im_y < PANEL_H,
         "the end of the imaginary axis is off the panel");
 
-    const int top = boot_anim_screen_y(PANEL_H, 0, 0,
-                                       (BOOT_ANIM_T_MAX + 1) << BOOT_ANIM_TQ);
+    const int top = boot_anim_screen_y(
+        PANEL_H, 0, 0, (BOOT_ANIM_T_MAX + 1) << BOOT_ANIM_TQ, &view);
     TEST_ASSERT_TRUE_MESSAGE(top >= 0,
         "the top of the t axis is off the top of the panel");
 }
@@ -617,10 +761,20 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_every_listed_zero_is_on_the_climb_and_in_order);
     RUN_TEST(test_samples_are_clamped_rather_than_read_out_of_range);
 
+    RUN_TEST(test_the_quarter_wave_starts_at_zero_and_ends_at_one);
+    RUN_TEST(test_the_quarter_wave_rises_all_the_way);
+    RUN_TEST(test_sin_squared_plus_cos_squared_is_one);
+    RUN_TEST(test_the_quarter_points_are_exact);
+    RUN_TEST(test_the_view_starts_at_the_original_fixed_camera);
+    RUN_TEST(test_the_view_foreshortens_t_by_the_end_without_flattening_it);
+    RUN_TEST(test_the_origin_ends_at_the_mirror_of_where_it_started);
+    RUN_TEST(test_the_origin_drifts_upward_without_doubling_back);
+
     RUN_TEST(test_the_origin_maps_to_the_origin);
     RUN_TEST(test_the_three_axes_point_the_way_they_are_supposed_to);
     RUN_TEST(test_the_imaginary_axis_is_at_forty_five_degrees);
-    RUN_TEST(test_the_whole_scene_fits_on_the_panel);
+    RUN_TEST(test_the_whole_scene_fits_on_the_panel_throughout_the_orbit);
+    RUN_TEST(test_the_axis_labels_fit_on_the_panel);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
     RUN_TEST(test_a_repeated_point_pins_the_end_of_the_curve);

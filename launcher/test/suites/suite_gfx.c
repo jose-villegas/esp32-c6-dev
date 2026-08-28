@@ -544,6 +544,23 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
         "but it must still actually send something");
 }
 
+/* Every ratio test from here through test_two_far_corners_cost_less_than_
+ * a_full_band measures a full band - one gfx_fill_rect() over the whole
+ * 368x64 strip, presented alone via time_present() with nothing else
+ * queued - as its reference cost. Because nothing else is in flight, that
+ * reference is the UN-PIPELINED price: measured in isolation, a band
+ * costs 3,405 us.
+ *
+ * That is not what a band costs inside a real frame. send_full_row()
+ * (gfx.c) queues its draw_bitmap without waiting, and gfx_present()
+ * drains every queued band together at the end, so later bands' DMA
+ * overlaps earlier bands' CPU-side setup. Seven bands sent in a real
+ * frame come to 18,147 us, not 7 x 3,405 = 23,835 - that pipelined price
+ * is what run_present_against_scene() in suite_sand.c measures, with its
+ * three present-cost tests. Sanity-checking one of those numbers against
+ * the other by multiplying is not valid; the two measure different
+ * things, and both are correct for what they measure. */
+
 /* PROTOTYPE: measures the gather-copy path in gfx_present() - a strip whose
  * real dirty width is only a fraction of the band, written directly (not
  * through gfx_fill_rect(), which always claims the whole band via
@@ -618,6 +635,65 @@ static void test_a_short_wide_change_costs_less_than_a_full_band(void)
         "a box short enough in height must cost less than claiming the "
         "whole band, even at most of its width - orientation must not "
         "matter to whether gathering pays off");
+}
+
+/* Full width, most of a band's height: 368x48 is many times
+ * GATHER_MAX_PIXELS, far too big to gather - and yet a box at the full
+ * panel width is already contiguous in the framebuffer, row-major,
+ * GFX_WIDTH stride, so it needs no gather buffer at all. This is the
+ * case send_partial_band() exists for (see gfx.c): the same one
+ * transaction as a whole band, just not rounded up to the band's own 64
+ * rows.
+ *
+ * 90% is the threshold, not 75%, on purpose. 48 of a band's 64 rows is
+ * 75% of the band's pixels, and a present against this panel is ~94% bus
+ * time (see gfx.h and test_full_present_cost_splits_into_bus_time_and_
+ * overhead), so the honest floor - once the fixed per-transaction cost
+ * that does not shrink with the row count is counted - is around 78%.
+ * 90% sits comfortably inside that margin without being loose enough to
+ * pass by accident.
+ *
+ * And it really cannot pass by accident: before send_partial_band()
+ * existed, a full-width box took the identical code path as a whole
+ * band - the same single esp_lcd_panel_draw_bitmap() of the same
+ * 368x64 pixels out of fb - so `partial` and `full_band` were the same
+ * transaction and no ratio under 1.0 was reachable at all, let alone one
+ * under 0.9.
+ *
+ * Both halves are measured in this same run, like every other test in
+ * this file, so this is a ratio rather than an absolute number - it does
+ * not need re-pegging when the panel clock or the build's layout
+ * moves. */
+static void test_a_full_width_partial_height_change_costs_less_than_a_band(void)
+{
+    fixture();
+
+    gfx_clear(gfx_rgb(0x000000));
+    (void)time_present();
+
+    gfx_fill_rect(0, 0, GFX_WIDTH, 64, gfx_rgb(0x406020));
+    const int64_t full_band = time_present();
+
+    /* Full width, 48 of the band's 64 rows - the shape a wide pour
+     * leaves that has not yet grown to fill its whole strip. */
+    gfx_color_t *fb = gfx_framebuffer();
+    const int h = 48;
+    for (int y = 0; y < h; y++) {
+        for (int x = 0; x < GFX_WIDTH; x++) {
+            fb[y * GFX_WIDTH + x] = gfx_rgb(0x406020);
+        }
+    }
+    gfx_mark_dirty(0, 0, GFX_WIDTH, h);
+    const int64_t partial = time_present();
+
+    ESP_LOGI(TAG, "present: full band %lld us, full width x %d px (partial "
+                 "band) %lld us",
+             (long long)full_band, h, (long long)partial);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE((int)(full_band * 9 / 10), (int)partial,
+        "a full-width box shorter than a whole band must send fewer rows "
+        "and cost less than claiming the whole band - see "
+        "send_partial_band() in gfx.c");
 }
 
 /* Two small clusters in the same band but opposite corners - each cheap
@@ -951,6 +1027,7 @@ void run_gfx_suite(void)
     RUN_TEST(test_a_partial_change_costs_less_than_a_full_frame);
     RUN_TEST(test_a_narrow_change_costs_less_than_a_full_band);
     RUN_TEST(test_a_short_wide_change_costs_less_than_a_full_band);
+    RUN_TEST(test_a_full_width_partial_height_change_costs_less_than_a_band);
     RUN_TEST(test_two_far_corners_cost_less_than_a_full_band);
     RUN_TEST(test_three_far_apart_marks_falls_back_at_the_current_cap);
     RUN_TEST(test_a_near_budget_split_crosses_the_gather_threshold);

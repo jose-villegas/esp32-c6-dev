@@ -156,10 +156,12 @@ unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index)
                                     ? BRUSH_SPAWN : BRUSH_POUR;
     } else {
         /* A different tile: select it. Its own remembered mode is left
-         * exactly as it was - only erasing resets on selection, the same
-         * as always. */
+         * exactly as it was - only `mode` resets on selection, the same as
+         * always (ERASE and DETONATE alike: choosing a material means you
+         * want to place it, not erase or blow up whatever is already
+         * there). */
         ui->brush = index;
-        ui->erasing = false;   /* choosing a material means you want to place it */
+        ui->mode = SAND_MODE_PAINT;
     }
 
     return SAND_UI_REDRAW_PALETTE;
@@ -168,15 +170,17 @@ unsigned sand_ui_tile_clicked(sand_ui_t *ui, int index)
 /* BOOT is not read here at all - its release edge opens the palette from
  * sand_ui_step() itself, before this function is ever called for that
  * frame, and selecting a material happens in handle_palette_input() rather
- * than here. What is left is PWR: a plain press toggles erase, because
- * erase is binary and pressed often enough that a dedicated button's press
- * - with none of a hold's BUTTON_HOLD_US delay - is the right cost for it.
- * See app_sand.c's comment above `brushes[]` for the fuller reasoning on why
- * BOOT and PWR ended up with the jobs they have. */
+ * than here. What is left is PWR: a plain press cycles PAINT -> ERASE ->
+ * DETONATE -> PAINT, because none of the three needs a hold's
+ * BUTTON_HOLD_US delay - a dedicated button's press is the right cost for a
+ * control pressed this often. See sand_mode_t's own comment in sand_ui.h
+ * for why DETONATE rides along on this same cycle rather than getting a
+ * control of its own, and app_sand.c's comment above `brushes[]` for the
+ * fuller reasoning on why BOOT and PWR ended up with the jobs they have. */
 static unsigned handle_brush_input(sand_ui_t *ui, const input_t *input)
 {
     if (input->power.pressed) {
-        ui->erasing = !ui->erasing;
+        ui->mode = (sand_mode_t)((ui->mode + 1) % SAND_MODE_COUNT);
         return SAND_UI_SHOW_LABEL;
     }
     return 0;

@@ -156,6 +156,9 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     clear_content_flags(s);
     s->dirty_rows = NULL;
     s->block_state = NULL;
+    s->impulse_buf   = NULL;
+    s->impulse_max   = 0;
+    s->impulse_count = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
      * step_one_row()), whether or not block_state exists, so block_cols/
@@ -216,6 +219,17 @@ bool sand_block_settled(const sand_t *s, int bx, int by)
            (BLOCK_SETTLED_NEAREST | BLOCK_SETTLED_OTHER)) != 0;
 }
 
+void sand_enable_impulses(sand_t *s, impulse_t *buf, int max)
+{
+    s->impulse_buf   = buf;
+    s->impulse_max   = (buf != NULL) ? max : 0;
+    /* Nothing can already be in flight against a buffer that was just handed
+     * over - the same reasoning sand_enable_sleeping() gives for zeroing
+     * `blocks`, applied to a count rather than a memset since there is no
+     * grid content of `buf`'s own to know anything about yet. */
+    s->impulse_count = 0;
+}
+
 void sand_track_dirty_rows(sand_t *s, uint8_t *rows)
 {
     s->dirty_rows = rows;
@@ -235,6 +249,13 @@ void sand_clear(sand_t *s)
     if (s->block_state != NULL) {
         memset(s->block_state, 0, (size_t)s->block_cols * (size_t)s->block_rows);
     }
+    /* Any entry still in flight names a cell this memset just wiped, so its
+     * stored `cell` byte can no longer match what is actually there - the
+     * flight pass would drop every one of them on its next turn anyway (see
+     * step_impulses()'s verify-before-moving check). Dropping them here
+     * instead reaches the same outcome without paying for it: no stale
+     * index survives into a grid that has just been handed back empty. */
+    s->impulse_count = 0;
 }
 
 cell_t sand_at(const sand_t *s, int x, int y)
@@ -354,6 +375,506 @@ int sand_erase(sand_t *s, int cx, int cy, int radius)
     sand_remove_emitters(s, cx, cy, radius);
 
     return removed;
+}
+
+/* Integer floor(sqrt(v)), for exact_disc_count() below - Newton's method,
+ * which converges in a handful of iterations for anything this small (v
+ * is at most a grid dimension squared, a few hundred thousand at the
+ * largest quality this app offers). Not the same isqrt64() tilt.c already
+ * has: that one is `static` to its own file and built around int64_t
+ * magnitudes an accelerometer reading produces, neither of which this
+ * caller needs - a second, smaller copy for a second, smaller domain
+ * beats reaching across an unrelated file for one function. */
+static int isqrt_floor(int v)
+{
+    if (v <= 0) {
+        return 0;
+    }
+    int x = v;
+    int y = (x + 1) / 2;
+    while (y < x) {
+        x = y;
+        y = (x + v / x) / 2;
+    }
+    return x;
+}
+
+/* THE EXACT number of lattice cells inside a disc of this radius (dx*dx +
+ * dy*dy <= r*r), not an upper-bound estimate - see sand_explode()'s own
+ * comment for why exactness matters here specifically. For each row `dy`
+ * of the disc, the widest `dx` still inside it is floor(sqrt(r*r -
+ * dy*dy)), so that row holds exactly 2*dx + 1 cells (dx on either side of
+ * the centre column, plus the centre column itself); summing that over
+ * every row from -radius to radius gives the disc's true cell count in
+ * O(radius) integer square roots, far cheaper than walking the cells
+ * themselves. */
+static int exact_disc_count(int radius)
+{
+    if (radius < 0) {
+        return 0;
+    }
+    const int r2 = radius * radius;
+    int count = 0;
+    for (int dy = -radius; dy <= radius; dy++) {
+        const int rem = r2 - dy * dy;
+        if (rem < 0) {
+            continue;
+        }
+        count += 2 * isqrt_floor(rem) + 1;
+    }
+    return count;
+}
+
+/* Forward-declared: the shared implementation behind both sand_impulse()
+ * and this file's own annulus seeding lives right next to sand_impulse()
+ * itself, further down, not up here next to its other caller - see that
+ * function's own comment for why one body serves both. */
+static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
+                               bool allow_dislodge_static);
+
+/* One candidate cell of sand_explode()'s own annulus scan, below - split
+ * out so the ring-order loop that calls it (see that function's own
+ * comment on why ring order rather than row order) does not have to repeat
+ * this body once per edge of every ring it walks. (dx, dy) is the offset
+ * from the centre, exactly as sand_explode() itself receives it; `r2` is
+ * the outer radius squared, so this still enforces the true circular disc
+ * even though the ring loop that reaches it walks square Chebyshev shells,
+ * not circles - the shell order only decides SEQUENCE, this decides
+ * MEMBERSHIP, and the two are independent.
+ *
+ * `disc_count`, `keep` and `*accum` are what make this disc SELF-LIMITING
+ * to whatever buffer the caller actually has, instead of trusting the
+ * caller to have picked a radius small enough - see sand_explode()'s own
+ * comment on why that trust already failed once. `disc_count` is
+ * exact_disc_count()'s own exact count of how many true disc members this
+ * call's radius contains; `keep` is how many of them this blast may
+ * actually queue (min(disc_count, the buffer's own capacity)); `*accum`
+ * is a fixed-point accumulator, shared across every candidate this blast
+ * visits, that decides WHICH ones. This is a digital differential
+ * analyser - the same technique that rasterises a line one evenly-spaced
+ * pixel at a time, not a modulo stride: a stride aliases with the ring
+ * loop's own edge lengths (four edges per ring, of varying length) and
+ * can clump or gap in ways a flat "every Nth candidate" cannot see
+ * coming, where an accumulator that only advances on true disc members
+ * spreads them out as evenly as `keep`-out-of-`disc_count` can be spread,
+ * in scan order and therefore radially AND angularly at once. The bound
+ * this needs to hold: over any P true disc members actually visited (P is
+ * always <= disc_count, since disc_count IS the true total - not merely
+ * an upper bound on it, see exact_disc_count()'s own comment for why that
+ * distinction matters here), the number of times this fires is
+ * floor(P * keep / disc_count), which cannot exceed `keep` however P
+ * compares to disc_count, and is EXACTLY `keep` once the whole disc has
+ * been visited (P == disc_count). Never more selections than the
+ * caller's own buffer allows, and never fewer than the buffer can hold
+ * either - degrading the DENSITY evenly instead of truncating the SHAPE,
+ * which is what running out of room used to mean before this existed
+ * (see the ring-order comment's own note on that). */
+static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
+                                  int r2, int disc_count, int keep, int *accum)
+{
+    if (dx * dx + dy * dy > r2) {
+        return;
+    }
+
+    *accum += keep;
+    if (*accum < disc_count) {
+        return;
+    }
+    *accum -= disc_count;
+
+    /* (dx, dy) IS the vector from the centre to this cell, so handing it
+     * straight to the same quantiser gravity uses gives "away from the
+     * centre" in one of the eight directions the rest of the simulation
+     * already works in - no separate angle math needed. The one input
+     * this can never resolve is the centre cell itself, where (dx, dy) is
+     * (0, 0) - sand_gravity_direction() reports that as no direction at
+     * all, and this simply leaves that cell where it is rather than throw
+     * it nowhere in particular. (The centre cell still spends one unit of
+     * `keep` here even though it never queues anything - a fixed,
+     * one-time rounding cost identical at every radius, not worth a
+     * special case to refund.) */
+    int qdx, qdy;
+    sand_gravity_direction(dx, dy, &qdx, &qdy);
+    if (qdx == 0 && qdy == 0) {
+        return;
+    }
+
+    /* EVERY CANDIDATE GETS THE SAME SAND_EXPLODE_INITIAL_SPEED,
+     * DELIBERATELY, not because distance-scaled speed was never tried.
+     * "full push at the fireball's edge, decaying toward the outer
+     * radius" reads right and was measured, twice - once linear in the
+     * squared distance (free, since d2 is already computed two lines
+     * up), once a true linear falloff via sqrt - against the dune scene
+     * in suite_sand.c (test_the_sand_dune_scene_throws_grains_beyond_
+     * its_own_footprint). Both made the blast markedly WORSE by the
+     * scene's own numbers, not better: grains outside the footprint fell
+     * from an average of 57 to 4 and 3 respectively, and average throw
+     * distance fell from 71 to 55 and 48. The cells that actually
+     * produce "escaped the footprint" are disproportionately the ones
+     * near the outer radius - they have the least distance left to
+     * travel - and any falloff that reduces their push specifically
+     * guts the exact evidence a working blast is supposed to produce;
+     * the core-adjacent cells getting full speed does not compensate,
+     * because SAND_IMPULSE_SPEED_RAMP decays their push over TIME
+     * before they can cross the same distance from further inside.
+     * Flat speed stays until a falloff is found that does not trade the
+     * whole outer annulus for a marginally hotter core. */
+    /* `true` HERE, AND ONLY HERE - see queue_flying_grain()'s own comment
+     * for the density-scaled roll this unlocks and why a blast is the
+     * one caller that gets to make a wall's KIND_STATIC refusal a chance
+     * instead of a certainty. Every other detail of a dislodged wall
+     * cell's flight - speed, direction, everything after this call - is
+     * identical to any other entry; the toughness lives entirely in this
+     * one boolean and the roll behind it. */
+    queue_flying_grain(s, cx + dx, cy + dy, ring_of(qdx, qdy),
+                       SAND_EXPLODE_INITIAL_SPEED, true);
+}
+
+/* THE SHARED IMPLEMENTATION BEHIND sand_impulse() AND sand_explode()'s OWN
+ * ANNULUS SEEDING - one body, not two, so the bounds/empty/buffer-full
+ * checks that have nothing to do with walls stay in exactly one place.
+ * `allow_dislodge_static` is the ONE thing that differs between the two
+ * callers, and it is deliberately a parameter here rather than a second
+ * copy of this function: sand_impulse() (below) always passes false, so
+ * the PUBLIC primitive keeps its hard default - a wall cannot be thrown -
+ * for any caller that has not explicitly asked otherwise, while sand_
+ * explode()'s own seeding loop (queue_outward_impulse(), above) is the
+ * one caller that has, and passes true. A future caller of sand_impulse()
+ * itself (gunpowder, gas, whatever comes next) inherits the SAFE default
+ * automatically, the same as today - it does not inherit wall-breaking
+ * just because this function grew the capability somewhere inside it. */
+static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
+                               bool allow_dislodge_static)
+{
+    /* Disabled, or already full - see sand_impulse()'s own comment in
+     * sand.h on why both are silent no-ops rather than something a caller
+     * has to check for itself first. */
+    if (s->impulse_buf == NULL || s->impulse_count >= s->impulse_max) {
+        return;
+    }
+    if (x < 0 || x >= s->w || y < 0 || y >= s->h) {
+        return;
+    }
+
+    const size_t at = (size_t)y * (size_t)s->w + (size_t)x;
+    const cell_t cell = s->cells[at];
+    if (CELL_IS_EMPTY(cell)) {
+        return;   /* nothing there to throw */
+    }
+
+    /* A WALL CANNOT BE THROWN BY DEFAULT, any more than one can be
+     * entered - the missing HALF of can_impulse_enter()'s own rule
+     * (step_impulses(), this file), which only ever gated the
+     * DESTINATION a flying grain tries to move into. Nothing gated the
+     * SOURCE: this used to be "is there something here to throw", and a
+     * stone wall cell is very much something, so it queued exactly like
+     * a grain of sand would - and once queued, step_impulses() moved any
+     * entry into whatever open (or, since displacement, non-static) cell
+     * sat ahead of it, with no idea the thing it was moving happened to
+     * itself be a wall. A vessel wall thick enough that no earlier,
+     * smaller blast's radius ever reached it hid this for every round
+     * before it was fixed: the annulus simply never touched a wall cell
+     * to queue in the first place. Doubling the radius (see DETONATE_
+     * RADIUS_PX in app_sand.c) was what finally reached one, and the
+     * result was exactly what it sounds like - a chunk of the vessel's
+     * own wall, given an outward push like anything else in the annulus,
+     * walking itself into the genuinely empty space just outside the
+     * vessel and leaving the "sealed" box with a hole in it.
+     *
+     * KIND_STATIC, the same test can_impulse_enter() uses for the
+     * opposite half of this rule, because the reasoning is identical
+     * either direction: this simulation defines a wall as the one thing
+     * with no leverage to be moved BY anything, so BY DEFAULT it has none
+     * to be moved either.
+     *
+     * "BY DEFAULT" IS NO LONGER "ALWAYS", for the one caller that opts in
+     * (`allow_dislodge_static`) - a blast should read as TOUGHER against
+     * stone or glass than sand, not as an invisible wall no explosion can
+     * ever touch. `density` (material.h) is what already measures how
+     * hard this simulation treats something as being to move - can_enter()
+     * (sand_priv.h) gates whether a moving grain displaces what it lands
+     * on by comparing densities the exact same way - so reusing it here
+     * instead of inventing a second "toughness" field keeps one number
+     * meaning one thing everywhere it appears. The chance is `255 -
+     * density`, the same chance-in-256 idiom this project already uses
+     * for flammability, mobility and heat_chance (see tick_decay()'s own
+     * roll in sand_priv.h for the identical `(rng_next(&s->rng) & 0xFF)`
+     * pattern) rather than a new roll shape invented for one case. LOWER
+     * density means a HIGHER chance of being dislodged - not the reverse -
+     * because density is a measure of how much has to move, and a blast's
+     * push is finite: stone and glass (both density 200) are this board's
+     * heaviest materials and get only a 55-in-256 chance (about 21%),
+     * while wood (150, lighter, and correctly so - a beam gives way more
+     * easily than a stone wall) gets 105-in-256 (about 41%), nearly double
+     * - a real, visible difference in toughness rather than a coin flip
+     * that reads the same for every wall regardless of what it is built
+     * from. A failed roll is IDENTICAL to today's unconditional refusal:
+     * the wall holds, nothing else about this cell or this call changes.
+     * A cell that succeeds falls straight through to the same write every
+     * other entry gets, below - same speed, same direction, no other
+     * special-casing once it is airborne; the toughness lives entirely in
+     * whether it gets thrown at all. */
+    if (material_of(cell)->kind == KIND_STATIC) {
+        if (!allow_dislodge_static) {
+            return;
+        }
+        const int chance = 255 - (int)material_of(cell)->density;
+        if ((int)(rng_next(&s->rng) & 0xFF) >= chance) {
+            return;   /* the roll failed - the wall holds, same as always */
+        }
+    }
+
+    impulse_t *entry = &s->impulse_buf[s->impulse_count++];
+    entry->index = (uint16_t)at;
+    entry->cell  = cell;
+    entry->dir   = (uint8_t)dir;
+    entry->speed = (uint8_t)speed;
+}
+
+void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
+{
+    queue_flying_grain(s, x, y, dir, speed, false);
+}
+
+void sand_displace(sand_t *s, int cx, int cy, int radius)
+{
+    if (s->impulse_buf == NULL) {
+        return;   /* sand_enable_impulses() was never called - see its comment */
+    }
+
+    /* THE ONE CALLER OF sand_impulse(), seeding many radially. Everything
+     * about how a queued grain then moves - the flight pass, the arc, the
+     * cap, re-acquisition - is sand_impulse()'s and step_impulses()'s job,
+     * not this loop's; all this does is decide which cells qualify and
+     * which direction each one gets, which is the one part of a
+     * displacement that is genuinely specific to its shape.
+     *
+     * BY RING, OUTWARD FROM THE CENTRE - not by row. See this loop's own
+     * comment in sand.h ("QUEUED BY RING, OUTWARD FROM THE CENTRE") for
+     * why: a device pass on the first real-radius detonation found that
+     * scanning dy-then-dx handed the ENTIRE cap to the top nine or ten
+     * rows of the disc before the scan ever reached the core or the lower
+     * half, because that is what a top-to-bottom scan truncated by a cap
+     * does. `ring` is the Chebyshev distance from the centre -
+     * max(|dx|, |dy|) - not the true Euclidean one, because a SQUARE
+     * ring's border can be walked directly (four edges, no interior
+     * re-scan) where a true circular one would need either a sort or a
+     * repeated full-box scan per ring; the r2 check inside
+     * queue_outward_impulse() still enforces the real circular disc
+     * regardless of which square ring a cell's Chebyshev distance puts it
+     * in, so this only changes the ORDER cells are offered to
+     * sand_impulse() in, never which cells qualify. Every (dx, dy) with
+     * max(|dx|, |dy|) == ring is visited exactly once: ring 0 is the
+     * centre alone; each ring after that is its own square's top edge,
+     * bottom edge, then the left and right edges with the shared corners
+     * left out (already covered by the top/bottom pass). SUPERSEDED BY
+     * queue_outward_impulse()'s own accumulator, below, for what happens
+     * when the disc does not fit the buffer: this used to mean the buffer
+     * filling up partway through, truncating to a smaller-but-complete
+     * disc with an untouched outer band. That was safe, but it made
+     * DETONATE_RADIUS_PX and the buffer's own capacity (APP_IMPULSE_MAX in
+     * app_sand.c) two numbers a caller had to keep in sync by hand -
+     * exactly the step that got skipped once already, when the radius
+     * doubled without anyone re-deriving the buffer to match, and
+     * detonating silently stopped doing anything at all on real hardware.
+     * The ring order this comment describes is unchanged and still
+     * matters - it is what makes the accumulator's even thinning land
+     * radially AND angularly evenly instead of only within one ring - but
+     * "what happens when it doesn't fit" is now this function's own job,
+     * not a constraint on whoever picks the radius. */
+    const int r2 = radius * radius;
+
+    /* THE BUFFER'S CAPACITY IS NOW FIXED, INDEPENDENT OF radius - see
+     * APP_IMPULSE_MAX's own comment in app_sand.c, sized once from the
+     * device's real heap budget and never touched again when the radius
+     * changes. That inversion is what this pair of locals implements:
+     * `disc_count` is exact_disc_count()'s own EXACT total for this call's
+     * radius, computed here at RUNTIME from whatever radius this call
+     * actually received, instead of once at compile time from a single
+     * constant radius. `keep` is how much of that disc this call can
+     * actually queue right now: the whole disc when it fits in what is
+     * actually free (every existing small-radius test and caller gets
+     * EXACTLY today's full-density behaviour, unchanged), or whatever
+     * room is left when it does not - see `room`'s own comment just
+     * below for why that has to be the buffer's REMAINING space rather
+     * than its total capacity, and queue_outward_impulse()'s own comment
+     * for how `keep`-out-of-`disc_count` turns into an even thinning
+     * rather than a truncation.
+     *
+     * EXACT, NOT A SAFE OVER-ESTIMATE - deliberately, and this is the one
+     * place that distinction actually bites. APP_IMPULSE_MAX used to be
+     * SIZED from `(355*r*r)/113 + 5*r + 3`, a disc-lattice-point formula
+     * proven to always overshoot the true count (see that constant's old
+     * derivation, now folded into this history), which is exactly the
+     * right shape for a BUFFER ALLOCATION - wasting a little headroom on
+     * an over-estimate is harmless, and it must never come up short. A
+     * THINNING RATIO has the opposite tolerance: the same formula
+     * overshoots small discs badly enough to matter (radius 1's true
+     * count is 5, the formula's own estimate is 11 - more than double),
+     * and computing `keep` from an inflated total throws away density
+     * the buffer had room for. A blast whose buffer could hold every one
+     * of its 5 true neighbours would have thinned down to 3 anyway,
+     * exactly the regression that surfaced as two failing host tests the
+     * first time this used the old formula here - both expected a small,
+     * fully-buffered blast to queue EVERY neighbour, and got fewer.
+     * exact_disc_count() costs a handful of integer square roots more
+     * than the formula did, entirely negligible next to the per-cell work
+     * the rest of this function already does once per detonation. */
+    /* AGAINST REMAINING ROOM, NOT TOTAL CAPACITY - `s->impulse_max` is how
+     * big the buffer IS, not how much of it is FREE right now. Nothing
+     * here resets `s->impulse_count` to zero on entry, so a SECOND
+     * displacement fired while a FIRST one's grains are still mid-arc
+     * (SAND_IMPULSE_SPEED_RAMP hasn't decayed them out yet - see that
+     * constant's own comment) finds `s->impulse_count` already above
+     * zero. Sizing `keep` from `s->impulse_max` there would compute a
+     * density as if the WHOLE buffer were free, seed that many entries
+     * into queue_outward_impulse()'s accumulator, and then watch
+     * sand_impulse() itself silently refuse every entry past the
+     * buffer's REAL remaining room (its own
+     * `impulse_count >= impulse_max` guard - safe, no crash, no
+     * overflow, but exactly the lopsided, one-sided truncation this
+     * whole mechanism exists to avoid, reintroduced via contention
+     * between two blasts instead of bias within one: the first rings
+     * queued would still land, the later ones would not, because they
+     * physically run out of buffer, not because the density math ever
+     * knew to expect that. `room` is what closes that gap - the
+     * buffer's ACTUAL free space at the moment THIS call runs, so `keep`
+     * never promises more than what is really left, however many other
+     * in-flight entries got there first. A single, uncontended
+     * displacement (`impulse_count` already 0 on entry, the only case a
+     * manual DETONATE tap can ever produce today) sees
+     * `room == s->impulse_max` and this is a no-op change; it starts
+     * mattering the moment a second caller can trigger sand_displace()
+     * (directly, or through sand_explode(), below) while a first is
+     * still resolving - a chain of igniting gas pockets or confined-
+     * steam bursts, say, not yet wired up but exactly the shape of
+     * caller this generality was always meant to survive. Do not
+     * simplify this back to `s->impulse_max` - see
+     * test_two_overlapping_blasts_share_the_buffer_evenly (suite_sand.c)
+     * for a test that fails immediately if someone does. */
+    const int disc_count = exact_disc_count(radius);
+    const int room = s->impulse_max - s->impulse_count;
+    const int keep = (disc_count < room) ? disc_count : room;
+    int accum = 0;
+
+    queue_outward_impulse(s, cx, cy, 0, 0, r2, disc_count, keep, &accum);
+    for (int ring = 1; ring <= radius; ring++) {
+        for (int dx = -ring; dx <= ring; dx++) {
+            queue_outward_impulse(s, cx, cy, dx, -ring, r2, disc_count, keep, &accum);
+            queue_outward_impulse(s, cx, cy, dx,  ring, r2, disc_count, keep, &accum);
+        }
+        for (int dy = -ring + 1; dy <= ring - 1; dy++) {
+            queue_outward_impulse(s, cx, cy, -ring, dy, r2, disc_count, keep, &accum);
+            queue_outward_impulse(s, cx, cy,  ring, dy, r2, disc_count, keep, &accum);
+        }
+    }
+}
+
+void sand_explode(sand_t *s, int cx, int cy, int radius)
+{
+    if (s->impulse_buf == NULL) {
+        return;   /* sand_enable_impulses() was never called - see its comment */
+    }
+
+    /* FILL a cavity with fire, before a single flight entry is queued -
+     * see SAND_EXPLODE_CORE_DIVISOR's own comment in sand.h for why an
+     * explosion that only ever seeded entries could never move anything
+     * once the medium it detonates in has no gap of its own to offer, and
+     * for why fire is what fills that gap now rather than emptiness. An
+     * explosion flashes and leaves a plume; it does not silently delete
+     * whatever was standing there.
+     *
+     * FIRE IS sand_explode()'s OWN ADDITION, NOT sand_displace()'s -
+     * exactly the reason this function still exists as a thin wrapper
+     * (below) around the shared displacement primitive rather than the
+     * whole mechanism living in one place. Two separate reasons, not one:
+     * CORRECTNESS - a future caller wanting the displacement without the
+     * combustion (a banked idea: a stone shield over lava, breached by
+     * trapped steam PRESSURE rather than heat) must not set anything
+     * alight just because it pushed material around; steam is explicitly
+     * not fire, and folding fire into the shared primitive would make
+     * that impossible to ask for. And COST -
+     * converting a cell to MAT_FIRE latches `may_have_burning` (see
+     * latch_content_flags()), which keeps the ENTIRE reactions pass
+     * active every step until that fire burns itself out, plus whatever
+     * conducted-heat propagation follows from it; a caller that fires
+     * often and never wanted fire (a chain of confined-steam bursts,
+     * exactly the case above) would otherwise pay that ongoing simulation
+     * cost for a side effect it never asked for. sand_displace() never
+     * touches fire, smoke, or the burning flag at all, so it costs
+     * neither the correctness risk nor the ongoing expense - see its own
+     * tests for proof it produces neither.
+     *
+     * Every cell within the core radius is written, unconditionally -
+     * occupied or already empty alike. sand_erase() skips an already-empty
+     * cell because removing nothing is a no-op worth avoiding; there is no
+     * equivalent shortcut here; an empty cell becoming fire is exactly as
+     * real a change as an occupied one converting, and skipping it would
+     * leave a ring of untouched holes inside the fireball on any board that
+     * was not already packed solid.
+     *
+     * Written by hand rather than through a shared helper: place_cell() in
+     * sand_reactions.c is the worked example of what every write like this
+     * owes the simulation (latch the content flags a fresh cell arms, mark
+     * its row dirty, wake its block and neighbours), but it is `static` to
+     * that file, so this repeats the same four things directly instead of
+     * exporting it for one caller.
+     *
+     * CONSEQUENCES, NOT BUGS. Fire ignites flammable neighbours (wood, oil,
+     * gas) and boils adjacent water to steam, same as it always has - an
+     * explosion starting fires and boiling water is the feature, not a
+     * regression to guard against. And the fresh fire cells this loop just
+     * wrote are themselves occupied, non-empty cells inside `radius`, so
+     * sand_displace()'s own annulus loop, below, queues THEM as flight
+     * entries too, exactly like any other grain in the disc - the
+     * fireball's own edge gets thrown outward along with everything else,
+     * which is one more reason a real explosion's flash reads as an
+     * expanding thing rather than a static disc. */
+    /* A BARE SINGLE CELL turned out not to be enough of a seed once
+     * SAND_EXPLODE_CORE_DIVISOR grew from 2 to 3 - measured, not assumed:
+     * a 20,000-seed sweep of a fully packed radius-2 detonation (division
+     * gives core_radius 0 there, versus 1 at the old divisor) found the
+     * density-swap collapse simply never reaching far enough to open a
+     * cavity on about 11% of seeds, no matter how many further steps it
+     * was given - genuinely stuck, not merely slow, so more steps was not
+     * the fix. `radius >= 2` clamped to a minimum of 1 restores exactly
+     * the old, already-proven core shape at every radius small enough for
+     * plain division to have zeroed it out, while changing nothing at the
+     * radii that motivated raising the divisor in the first place: at a
+     * real detonation's scale (radius 24), 24 / 3 = 8 is already far
+     * above this floor, so the floor never engages there at all. radius
+     * 1 is deliberately excluded from the clamp - it stays at core_radius
+     * 0, the single centre cell every test and comment already assumes,
+     * since nothing measured that case as broken. */
+    const int core_radius_raw = radius / SAND_EXPLODE_CORE_DIVISOR;
+    const int core_radius = (core_radius_raw == 0 && radius >= 2)
+                                 ? 1 : core_radius_raw;
+    const int core_r2 = core_radius * core_radius;
+    for (int fdy = -core_radius; fdy <= core_radius; fdy++) {
+        for (int fdx = -core_radius; fdx <= core_radius; fdx++) {
+            if (fdx * fdx + fdy * fdy > core_r2) {
+                continue;
+            }
+            const int fx = cx + fdx;
+            const int fy = cy + fdy;
+            if (fx < 0 || fx >= s->w || fy < 0 || fy >= s->h) {
+                continue;
+            }
+            const size_t fat = (size_t)fy * (size_t)s->w + (size_t)fx;
+            /* Fresh, full-life fire - the same MATERIAL_VARIANTS - 1
+             * convention random_cell() (above in this file) uses for any
+             * transient material, so a blast's core reads exactly like
+             * fire painted by hand would: brightest right after ignition,
+             * fading from there via its own ordinary decay. */
+            const cell_t fire = CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1);
+            s->cells[fat] = fire;
+            latch_content_flags(s, fire);
+            mark_rows(s, fy, fy);
+            wake_block_and_neighbors(s, fx, fy);
+        }
+    }
+
+    sand_displace(s, cx, cy, radius);
 }
 
 /*---------------------------------------------------------------------------
@@ -1137,6 +1658,295 @@ static void build_xflow(xflow_t *f, int gx, int gy)
     f->bias_dg_q8 = bx * f->dg[0] + by * f->dg[1];
 }
 
+/* Whether a FLYING grain may swap into the cell currently holding `target`,
+ * as opposed to can_enter() (sand_priv.h), which answers the same question
+ * for ORDINARY gravity-driven movement.
+ *
+ * DELIBERATELY NOT can_enter(). That function says a mover displaces a
+ * target only if the target is a fluid (KIND_LIQUID/KIND_GAS) AND the mover
+ * is denser - the right rule for a grain settling under its own weight,
+ * because weight is the only force involved and a powder has no business
+ * sinking through another powder just because gravity is pulling on both of
+ * them identically. An impulse entry is not settling, though - something
+ * has already forced it into motion - and reusing can_enter() as-is turned
+ * out to make the flight pass nearly powerless exactly where the round that
+ * added displacement was aimed: a grain buried in an ordinary sand pile is
+ * surrounded by MORE SAND, same material, same density, and can_enter()'s
+ * mover > target test can never be true between two cells of identical
+ * density however hard either one is being pushed. That is not a fluid
+ * edge case, it is the ENTIRE INTERIOR of every powder scene this mechanic
+ * exists for - so a density gate copied from can_enter() would have looked
+ * reasonable while doing nothing for the one case that motivated this.
+ *
+ * THE ANSWER: density does not gate this at all - a flying grain may swap
+ * into ANY occupied, non-static cell, regardless of which of the two is
+ * denser. Speed does not need its own separate threshold either: this is
+ * only ever consulted from the branch below that already required this
+ * turn's rng_chance(entry.speed) roll to succeed, so every call here is
+ * already gated on the entry currently carrying enough of the blast's own
+ * force to be moving AT ALL this step - a roll that can never succeed once
+ * `speed` has ramped to zero (see SAND_IMPULSE_SPEED_RAMP's own comment in
+ * sand.h). A second, hand-picked "how much speed buys a push" constant
+ * would only be reproducing a threshold the ramp already enforces for free.
+ *
+ * STATIC IS STILL A WALL - the one thing this deliberately does NOT loosen.
+ * A shove has no leverage against something this simulation defines as
+ * immovable regardless of any arithmetic - stone, wood, glass, an extended
+ * material's structure - so KIND_STATIC never yields here any more than it
+ * does to can_enter(). This is what keeps a blast inside a sealed vessel
+ * from tunnelling its own way out through the wall: the wall was never the
+ * obstacle this rule exists to open, only the packed interior it contains.
+ * sand_at()'s out-of-bounds-reads-as-STONE convention folds the grid edge
+ * into the same guarantee for free, exactly as it already did for
+ * can_enter()'s own callers. */
+static inline bool can_impulse_enter(cell_t target)
+{
+    if (CELL_IS_EMPTY(target)) {
+        return true;
+    }
+    return material_of(target)->kind != KIND_STATIC;
+}
+
+/* The flight pass: every entry in s->impulse_buf either moves exactly one
+ * cell along the direction it was queued with, waits another turn for its
+ * way to clear, or is finally dropped. Called from sand_step(), immediately
+ * before finalize_settling() - see docs/Sand/Explosion-Plan.md's "Where the
+ * pass runs, and why it must be LAST" for the two reasons that position is
+ * not a preference. In short: running after every other pass that can move
+ * or replace a cell is what keeps an entry's stored position honest -
+ * nothing else can have touched it again before this pass's own next turn -
+ * and it is what turns a plain outward push into a ballistic arc for
+ * nothing extra, since gravity has already pulled in the sweep above by the
+ * time this runs and "down" plus "out, decaying" simply add.
+ *
+ * BLOCKED MEANS WAIT, NOT STOP. A cell in the way used to drop the entry on
+ * the spot - fine for open air, wrong for anything packed: an explosion
+ * into a bed of sand or a body of water starts with every queued cell
+ * surrounded by more of the same material, so that rule dropped nearly
+ * everything on its very first turn and only the annulus already touching
+ * open space (or the fire-filled core sand_explode() now writes - see
+ * SAND_EXPLODE_CORE_DIVISOR in sand.h - which a denser neighbour can swap
+ * straight through) ever went anywhere. Keeping a blocked entry instead
+ * lets it try again next step, once whatever was ahead of it has had a
+ * chance to move out of the way - which is what lets the disturbance the
+ * core's fire starts unpack outward over several steps instead of being a
+ * single frozen ring.
+ *
+ * WAIT STILL HAPPENS, BUT ONLY AGAINST A TRUE WALL NOW - see
+ * can_impulse_enter()'s own comment just above this function for why a
+ * flying grain shoulders aside any non-static occupant it meets instead of
+ * only ever moving into a genuinely empty cell. That shrinks "blocked" down
+ * to KIND_STATIC and the grid edge specifically, but does not remove the
+ * need for this branch: a wall is still a wall, and the wait-then-retry
+ * behaviour this comment describes is exactly what keeps an entry pinned
+ * against one bounded rather than dropped the instant it arrives.
+ *
+ * `dx`/`dy` is this step's own dithered gravity direction, the same one
+ * sand_step()'s main sweep just used - needed for RE-ACQUISITION, below,
+ * which is what makes a thrown grain arc at all rather than flying dead
+ * straight for exactly one cell. The sweep runs BEFORE this pass, every
+ * step, on every ordinary cell including ones this list still has an eye
+ * on: an airborne grain sitting in open air is not special to the sweep,
+ * so gravity moves it down one cell before this pass ever gets a turn on
+ * it that step. Naively, the entry's stored index then names a cell the
+ * grain no longer occupies, the identity check below fails, and the entry
+ * is dropped - meaning a grain gets exactly one outward hop, ever, then
+ * spends the rest of its fall as an ordinary grain with no more push. That
+ * reads as lateral scatter out of a crater, not an arc, and it is not a
+ * hypothetical: it is what "the crater works now but the grains don't
+ * arc" was.
+ *
+ * A single `if` with nothing queued, which is every step on a board with
+ * nothing in flight - the same shape sand_step_gas()'s own may_have_gas
+ * gate gives a board with no gas on it. */
+static void step_impulses(sand_t *s, int dx, int dy)
+{
+    if (s->impulse_count == 0) {
+        return;
+    }
+
+    const int w = s->w;
+    const int h = s->h;
+    int kept = 0;
+
+    for (int i = 0; i < s->impulse_count; i++) {
+        impulse_t entry = s->impulse_buf[i];
+
+        /* Verify before moving. Nothing marks this index as "spoken for" -
+         * that would be the per-cell flag this whole design exists to
+         * avoid - so ordinary gravity in the sweep above, a reaction, or an
+         * external sand_set()/sand_erase() may already have touched this
+         * exact cell since the entry's last turn.
+         *
+         * RE-ACQUIRE before giving up. The sweep just ran and can only have
+         * moved this exact grain to one of three cells: one step along
+         * gravity, or one of the two diagonal slides either side of it -
+         * the same three destinations step_one_grain() itself ever writes
+         * to. Check those for a byte-for-byte match before concluding the
+         * grain is truly gone.
+         *
+         * THIS IS SOUND, NOT A HACK, because of what "byte-for-byte match"
+         * already means everywhere else in this file: two cells holding
+         * the same material and the same variant are the same GRAIN as far
+         * as anything here can tell or cares - move_to()'s own swap logic
+         * already trusts that equivalence for the cell it displaces. If
+         * re-acquisition latches onto some OTHER grain that merely happens
+         * to carry an identical byte, nothing observable changes: the same
+         * material continues flying from a position gravity actually just
+         * put a matching grain at, and conservation still holds exactly,
+         * because nothing here creates or destroys a cell - it only decides
+         * which already-identical cell the entry's own bookkeeping follows.
+         * What it must NOT do, and does not: adopt a DIFFERENT byte. If
+         * nothing among the three candidates matches, the entry is still
+         * dropped exactly as before - see
+         * test_a_dropped_entry_never_moves_someone_elses_cell.
+         *
+         * Liquids are the one honest gap this leaves. A flying liquid cell
+         * that the cross-flow pass (sand_step_liquids(), which also runs
+         * before this one) redistributes sideways is not one of these three
+         * candidates, so it is simply lost, same as before this fix -
+         * accepted for now rather than chased, since a liquid's own amount-
+         * based movement does not preserve a single grain's identity the
+         * way a solid's swap does. */
+        if (s->cells[entry.index] != entry.cell) {
+            const int ox = (int)((unsigned)entry.index % (unsigned)w);
+            const int oy = (int)((unsigned)entry.index / (unsigned)w);
+            const int i_dir = ring_of(dx, dy);
+            const int *slide_a = ring_dir(i_dir + 7);
+            const int *slide_b = ring_dir(i_dir + 1);
+            const int cand[3][2] = {
+                { ox + dx,         oy + dy         },
+                { ox + slide_a[0], oy + slide_a[1] },
+                { ox + slide_b[0], oy + slide_b[1] },
+            };
+
+            bool reacquired = false;
+            for (int c = 0; c < 3 && !reacquired; c++) {
+                const int cx = cand[c][0];
+                const int cy = cand[c][1];
+                if ((unsigned)cx >= (unsigned)w ||
+                    (unsigned)cy >= (unsigned)h) {
+                    continue;
+                }
+                const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
+                if (s->cells[cat] == entry.cell) {
+                    entry.index = (uint16_t)cat;
+                    reacquired = true;
+                }
+            }
+            if (!reacquired) {
+                continue;
+            }
+        }
+
+        /* The roll happens before the move attempt, and it happens EVERY
+         * turn - blocked or not. Two ways to write this, and the choice
+         * matters:
+         *
+         *   roll every turn (this)   a wedged entry ages out on the same
+         *                            schedule as one that has been moving
+         *                            the whole time
+         *   roll only on a move      a wedged entry pays nothing for
+         *                            waiting, so it waits FOREVER if its
+         *                            target never opens
+         *
+         * The second sounds more generous - "it never got to move, why
+         * should it decay" - but it breaks the one guarantee the whole
+         * design rests on: every entry's lifetime is bounded. A sealed
+         * vessel or an undisturbed pile is exactly the case where a
+         * blocked entry's target may never open at all, and that is
+         * precisely when an unbounded wait would show up: entries surviving
+         * indefinitely, silently occupying the list, for no visible reason
+         * on the board. Rolling every turn keeps every entry - moving or
+         * merely hoping to - on the same bounded clock everything else in
+         * this file already trusts.
+         *
+         * The roll's own chance IS entry.speed - see
+         * SAND_IMPULSE_SPEED_RAMP's own comment in sand.h for why one byte
+         * carries both "chance this turn's move happens" and "how much
+         * flight is left" instead of a separate step counter alongside a
+         * fixed rate, and for why that is what turns the arc into an
+         * actual curve instead of a bent line. */
+        const bool rolled_move = rng_chance(&s->rng, entry.speed);
+
+        /* Ramps down every turn, for exactly the same "no exceptions"
+         * reason the roll above runs every turn - moved, blocked, or about
+         * to be dropped, `speed` ages regardless. Saturating rather than
+         * wrapping: once it reaches zero it stays there, so rng_chance()
+         * with a zero numerator never succeeds again and the entry is
+         * dropped, below, the very next time this runs - the ramp needs no
+         * separate "done flying" check of its own. */
+        entry.speed = (entry.speed > SAND_IMPULSE_SPEED_RAMP)
+                          ? (uint8_t)(entry.speed - SAND_IMPULSE_SPEED_RAMP)
+                          : 0;
+
+        if (!rolled_move) {
+            continue;   /* out of flight - settles exactly where it is */
+        }
+
+        const int x = (int)((unsigned)entry.index % (unsigned)w);
+        const int y = (int)((unsigned)entry.index / (unsigned)w);
+        const int *d = ring_dir(entry.dir);
+        const int nx = x + d[0];
+        const int ny = y + d[1];
+
+        /* can_impulse_enter(), NOT a bare CELL_IS_EMPTY() check any more -
+         * see that function's own comment for why a flying grain now
+         * shoulders aside any non-static occupant instead of waiting on
+         * only a genuinely empty cell. STATIC still blocks unconditionally,
+         * so containment still falls out of this one check with no
+         * raycast: a blast inside a sealed vessel throws its grains up to
+         * the wall and they wait there, exactly as before - only the
+         * packed interior on the way there stopped being a wall too.
+         * sand_at() reading out-of-bounds as STONE (KIND_STATIC) folds the
+         * grid edge into the same guarantee for free. */
+        const cell_t target = sand_at(s, nx, ny);
+        if (!can_impulse_enter(target)) {
+            /* Blocked means WAIT: keep the entry exactly as it is - same
+             * position, same direction, already-ramped speed and all - so
+             * it gets another turn next step rather than being dropped for
+             * something that may clear a moment later. Reached only for a
+             * true wall now, or the grid edge - see can_impulse_enter(). */
+            s->impulse_buf[kept++] = entry;
+            continue;
+        }
+
+        const size_t at  = entry.index;
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+
+        /* A SWAP, not an overwrite - move_to()'s own trick (sand_priv.h),
+         * reused here for the same reason: whatever the mover is displacing
+         * (empty, same as always, or now a real occupant) takes the cell
+         * the mover is vacating, rather than that occupant's cell being
+         * blanked. Conservation needs nothing extra to hold: two cells that
+         * both already existed a moment ago simply trade places, so the
+         * grand total is untouched whichever of the two cases this was. */
+        const cell_t displaced = s->cells[nat];
+
+        s->cells[nat] = entry.cell;
+        s->cells[at]  = displaced;
+        latch_content_flags(s, entry.cell);
+        /* The displaced occupant, if any, is not a fresh cell - it already
+         * existed on the board a moment ago, at `nat` - but every write
+         * owes the same bookkeeping regardless of whether what landed there
+         * is new, so this costs one more cheap latch rather than a special
+         * case for "not empty". Skipped only for the everyday case where
+         * there was nothing to displace at all. */
+        if (!CELL_IS_EMPTY(displaced)) {
+            latch_content_flags(s, displaced);
+        }
+        mark_move(s, x, y, nx, ny);
+
+        s->impulse_buf[kept].index = (uint16_t)nat;
+        s->impulse_buf[kept].cell  = entry.cell;
+        s->impulse_buf[kept].dir   = entry.dir;
+        s->impulse_buf[kept].speed = entry.speed;
+        kept++;
+    }
+
+    s->impulse_count = kept;
+}
+
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Emitters get their one attempt per step FIRST, before gravity is even
@@ -1278,6 +2088,16 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * check (mirroring sand_step_liquids()'s pattern, not
      * sand_step_gas()'s) is enough. */
     sand_step_reactions(s);
+
+    /* Last of all, and deliberately so - see step_impulses()'s own comment
+     * and docs/Sand/Explosion-Plan.md's "Where the pass runs, and why it
+     * must be LAST". Everything above this line has already had its one
+     * chance to move or replace a cell this step; running flight after all
+     * of it is what lets an entry trust its own stored position at the top
+     * of its next turn, and it is what makes a thrown grain arc instead of
+     * flying in a straight line - gravity already pulled in the sweep, this
+     * only adds the outward half. */
+    step_impulses(s, dx, dy);
 
     finalize_settling(s, settled_bit);
 }
