@@ -57,6 +57,10 @@
 #include "sand.h"
 #include "sand_ui.h"
 #include "tilt.h"
+#include "util/intmath.h"   /* im_abs() - see update_local_depth_axis() below,
+                             * which picks gravity's dominant axis the same
+                             * way sand.c's build_xflow() and
+                             * sand_gravity_direction() already do */
 
 static const char *TAG = "sand";
 
@@ -924,6 +928,218 @@ static uint32_t shine_elapsed_ms;
  * it changed, so whatever glass it had it still has. */
 static uint8_t row_has_shine[GRID_H_MAX];
 
+/* How much a WATER cell's grain hash is coarsened before it reaches
+ * material_colours() - see the comment inside paint_row_n() where that
+ * coarsening actually happens for the full account of why. 3 means an 8x8
+ * block of cells shares one hash value; the knob to turn if foam's blobs
+ * ever need to read bigger (raise this) or finer (lower it, back towards
+ * 0 - one cell per hash, the speckle every other material still gets).
+ *
+ * RAISED from 2 (4x4): asked for blobs MUCH bigger than that, not another
+ * small nudge - so this doubles the linear size again exactly the way the
+ * previous bump (from 1's 2x2) did, landing on 8x8, 4x the area of the 4x4
+ * puffs it replaces. Blobs that size read as proper drifting patches of
+ * foam rather than the puffs 4x4 gave, which is the point: bigger still,
+ * by the same doubling, not a differently-shaped change. */
+#define FOAM_BLOB_SHIFT 3
+
+/* How often the foam dither's phase advances - see material_set_foam_phase()
+ * in material.h for what the phase is for. 90 ms is roughly 11 changes a
+ * second: fast enough that the foam visibly shimmers instead of reading as
+ * a fixed texture, slow enough that it does not strobe. A look tuned by eye
+ * on the device, not measured - the first constant to move if foam ever
+ * reads too twitchy (raise it) or too static (lower it). */
+#define FOAM_PHASE_MS 90
+
+/* Real time accumulated toward the next foam phase step, carried across
+ * frames the same way shine_elapsed_ms is - see that variable's own use in
+ * advance_shine() just below for the pattern this follows. Driven by dt_ms
+ * rather than a frame count so foam animates at the same real-world rate
+ * whatever the frame rate happens to be; a frame-count phase would shimmer
+ * twice as fast at double the frame rate and freeze solid if frames ever
+ * stalled. */
+static uint32_t foam_elapsed_ms;
+
+/*=============================================================================
+ * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
+ * one that follows each puddle's own shape.
+ *
+ * Reported from the device, twice, about the OLD mechanism (a plain affine
+ * function of screen position, walked as a per-row depth_acc/depth_col_step
+ * pair that no longer exists in this file, set up once a frame by a
+ * material.c that no longer needs to either - see git log if the old shape
+ * is ever wanted back): "the sensibility against gravity makes it behave
+ * almost like platinum" - a uniform gradient swept across the WHOLE SCREEN,
+ * independent of where the water actually is, reads as a metallic sheen
+ * rather than depth through a medium - and "there is no arcs... maybe it's
+ * better if the depth just follows the shape of the
+ * puddle", asking, in so many words, for exactly what this is.
+ *
+ * LOCAL DEPTH, for a liquid cell: 0 if the neighbour one step TOWARD THE
+ * SURFACE (one step in the -gravity direction) is not the SAME MATERIAL - a
+ * different liquid, empty space, or solid all count as "not the same", the
+ * boundary of THIS material's own body - otherwise, one more than that
+ * neighbour's own local depth, clamped to 255. A puddle with a rock poking
+ * through it now dips back to a small depth right where the rock breaks its
+ * surface, instead of painting straight through the rock as if it were not
+ * there - exactly the "follows the shape of the puddle" the second report
+ * asked for. See suite_sand.c's test_local_depth_follows_the_puddles_own_
+ * shape for the actual before/after comparison, run through real
+ * sand_t/sand_step(), that motivated this.
+ *
+ * THE SURFACE DIRECTION comes from gravity's DOMINANT AXIS - `|gy| >= |gx|`
+ * picks vertical, else horizontal, WITH HYSTERESIS against last frame's own
+ * pick near the tie point - see AXIS_HYSTERESIS_PCT and
+ * update_local_depth_axis()'s own comments below for why a plain comparison
+ * is not enough - the exact idiom sand.c's build_xflow() and
+ * sand_gravity_direction() already use to bracket a genuinely diagonal
+ * gravity with the nearer of two rays rather than committing to one. This is
+ * simpler than that: a single dominant axis, no second ray, which is fine
+ * for a cosmetic effect where build_xflow()'s own approximation is already
+ * accepted for the SIMULATION's own movement.
+ *
+ * VERTICAL-DOMINANT gravity needs a value that persists ACROSS paint_row_n()
+ * CALLS - a column's local depth depends on the row above (or below) it,
+ * painted in a SEPARATE call - so col_local_depth[] below is a plain
+ * file-static array, GRID_W_MAX entries, the same pattern row_has_shine[]
+ * above already uses for the same reason (sized for the finest quality
+ * tier; a coarser one just uses less of it).
+ *
+ * HORIZONTAL-DOMINANT gravity needs no such thing: the neighbour toward the
+ * surface is one column over in the SAME row, which paint_row_n() already
+ * walks in one pass, so a plain local variable inside that one call carries
+ * it - see h_running_depth inside paint_row_n() below.
+ *
+ * WHICH WAY A ROW OR COLUMN SCAN HAS TO GO, so that "the neighbour toward
+ * the surface" is always the one already processed: ascending, unless
+ * gravity's dominant component is NEGATIVE (gravity up, in the vertical
+ * case; gravity left, in the horizontal one), in which case descending -
+ * see local_depth_reverse's own comment below.
+ *
+ * ROW ORDER, SPECIFICALLY: draw_dirty_rows() below normally walks cy
+ * ascending; this is safe to reverse for a gravity-up frame instead of
+ * needing a trickier fix inside the depth bookkeeping itself, because
+ * nothing else that loop does depends on row order - dirty_rows[cy],
+ * row_run_x0/x1/n and row_has_shine[cy] are all indexed by cy directly and
+ * read/written independently per row, and gfx_mark_dirty() only ever unions
+ * a bounding box of (y, height) pairs (dirty_mark(), gfx_dirty.h), which
+ * does not care what order the boxes arrive in either. See draw_dirty_rows()
+ * itself for where the reversal actually happens.
+ *
+ * STALE READINGS UNDER THE DIRTY-ROW OPTIMISATION ARE ACCEPTED, not a bug to
+ * chase down: only dirty rows call paint_row_n() at all (draw_dirty_rows()
+ * below skips any row whose dirty_rows[cy] is not set), so a column's
+ * stored local depth for a row that has not repainted in a while reflects
+ * whatever the puddle looked like the last time that row WAS painted, not
+ * necessarily its current shape. This costs nothing extra to accept - no new
+ * full-grid pass, which is the entire reason this stays cheap - and it
+ * matches the precedent already established and accepted for foam's own
+ * drift: only dirty rows repaint, so the animation (or, here, the depth
+ * reading) shows where the water is actually moving, which is nearly
+ * everywhere it is worth seeing. Do not "fix" this into a full-grid pass
+ * without re-deciding that trade-off on purpose.
+ *
+ * THE AXIS CAN FLIP BETWEEN FRAMES - a tilt crossing from mostly-vertical to
+ * mostly-horizontal gravity or back - and col_local_depth[]'s per-column
+ * readings are MEANINGLESS across that flip: a horizontal-dominant frame
+ * never writes col_local_depth[] at all (it has no need to; see above), so
+ * after any number of horizontal frames the array still holds whatever a
+ * vertical frame last left there, possibly many frames and a very different
+ * puddle shape ago - far worse than the ordinary per-row staleness just
+ * described, which is bounded to "since this row last repainted". See
+ * update_local_depth_axis() below for where this gets caught and reset. */
+static uint8_t col_local_depth[GRID_W_MAX];
+
+/* This frame's dominant gravity axis (true: vertical, |gy| >= |gx|) and
+ * whether the "toward the surface" scan has to run backwards (descending
+ * row for vertical, descending column for horizontal) - see LOCAL DEPTH's
+ * own comment above for the full mechanism these feed, and
+ * update_local_depth_axis() below for where they are set, once a frame. */
+static bool local_depth_axis_vertical;
+static bool local_depth_reverse;
+
+/* Last frame's local_depth_axis_vertical, kept only to detect the one
+ * transition col_local_depth[] cannot survive unreset - see LOCAL DEPTH's
+ * own comment above ("THE AXIS CAN FLIP BETWEEN FRAMES"). */
+static bool local_depth_prev_axis_vertical;
+
+/* How far the OTHER axis's magnitude has to exceed the CURRENTLY-dominant
+ * one, as a percentage, before update_local_depth_axis() below is willing
+ * to flip local_depth_axis_vertical - see that function for the Schmitt-
+ * trigger comparison this feeds.
+ *
+ * Reported from the device: "on exactly 45 degrees, basically holding the
+ * device on a corner, the shading becomes extremely noisy... almost like
+ * it's fighting multiple values." At exactly 45 degrees |gx| and |gy| are
+ * equal or nearly so, and a real hand does not hold that angle perfectly
+ * still - it wobbles by a degree or two, continuously - which was enough
+ * to cross a PLAIN `|gy| >= |gx|` comparison's tie point back and forth on
+ * nearly every frame: modelled against +/-2 degrees of realistic hand
+ * wobble around the tie point, the plain comparison flipped the dominant
+ * axis on 5-16% of frames, each flip wiping col_local_depth[] outright
+ * (see that array's own comment above) and switching between two entirely
+ * different measurement schemes - a persistent per-column array versus a
+ * per-row running value - exactly what "fighting multiple values"
+ * describes, and not an occasional glitch but the common case right at the
+ * angle being reported.
+ *
+ * The fix is hysteresis against the PREVIOUS frame's own axis choice, not
+ * the raw magnitudes alone: whichever axis is already dominant keeps that
+ * status until the OTHER one exceeds it by more than this percentage. 15
+ * was not a guess - the same wobble model dropped simulated flips to ZERO
+ * at both +/-2 and +/-3 degrees of wobble around 45, only reappearing at
+ * +/-4 degrees, comfortably past ordinary hand unsteadiness - while a
+ * genuine, sustained sweep away from 45 toward a clearly non-diagonal tilt
+ * still switches axis correctly, just a few degrees late, not stuck. This
+ * is the first number to move if a corner still chatters (raise it) or the
+ * axis feels sluggish to follow a real, deliberate tilt change (lower
+ * it). */
+#define AXIS_HYSTERESIS_PCT 15
+
+/* Called once per frame, alongside material_set_gravity() - same gravity
+ * vector, same reason: material_colours()'s liquid interior needs THIS
+ * frame's own local-depth walk, not last frame's, and working out which
+ * axis and direction that walk follows once here is what keeps
+ * paint_row_n() itself down to the plain comparisons LOCAL DEPTH's own
+ * comment above budgets for. */
+static void update_local_depth_axis(int gx, int gy)
+{
+    const int ax = im_abs(gx), ay = im_abs(gy);
+
+    /* Schmitt trigger against LAST frame's own choice, not a plain
+     * `ay >= ax` comparison - see AXIS_HYSTERESIS_PCT's own comment just
+     * above for why a plain comparison chatters at 45 degrees and why 15
+     * was chosen. `ax * 100 > ay * (100 + AXIS_HYSTERESIS_PCT)` is exactly
+     * `ax > ay * (1 + pct/100)` without the division or float that would
+     * otherwise need - integer-only, matching the rest of this mechanism.
+     * At gx == gy == 0 (flat, or free fall) both branches reduce to
+     * "neither clearly wins", so vertical simply keeps last frame's value
+     * unchanged - no division by zero, nothing to flip either way. */
+    const bool vertical = local_depth_prev_axis_vertical
+        ? !(ax * 100 > ay * (100 + AXIS_HYSTERESIS_PCT))   /* was vertical: only leave it if gx clearly wins */
+        : (ay * 100 > ax * (100 + AXIS_HYSTERESIS_PCT));    /* was horizontal: only enter it if gy clearly wins */
+
+    if (vertical != local_depth_prev_axis_vertical) {
+        /* THE RESET LOCAL DEPTH'S OWN COMMENT PROMISES: cheap (once a
+         * frame, and only on the rare frame the axis actually changes) and
+         * necessary (see "THE AXIS CAN FLIP BETWEEN FRAMES" above for why a
+         * stale per-column reading from the OTHER regime is not merely out
+         * of date the ordinary dirty-row way, but meaningless outright). */
+        memset(col_local_depth, 0, sizeof col_local_depth);
+    }
+    local_depth_prev_axis_vertical = vertical;
+    local_depth_axis_vertical = vertical;
+
+    /* Which way is "toward the surface" runs BACKWARDS along the dominant
+     * axis - descending row for vertical, descending column for horizontal
+     * - exactly when that axis's own gravity component is negative (gravity
+     * up, or gravity left). This single flag serves both the row-order
+     * decision (draw_dirty_rows()) and the column-scan decision
+     * (paint_row_n()) because they are the same question, asked on
+     * whichever axis is dominant this frame - never both at once. */
+    local_depth_reverse = vertical ? (gy < 0) : (gx < 0);
+}
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
@@ -939,16 +1155,142 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     const uint8_t *above = (cy > 0) ? row - grid_w : NULL;
     const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
 
-    for (int cx = 0; cx < grid_w; cx++) {
-        const bool edge =
-            (cx > 0            && CELL_IS_EMPTY(row[cx - 1])) ||
-            (cx < grid_w - 1   && CELL_IS_EMPTY(row[cx + 1])) ||
-            (above != NULL     && CELL_IS_EMPTY(above[cx]))   ||
-            (below != NULL     && CELL_IS_EMPTY(below[cx]));
+    /* LOCAL DEPTH's vertical-dominant case reads a FIXED neighbour row -
+     * "above" or "below", whichever is toward the surface this frame -
+     * chosen ONCE for the whole row, not per cell: gravity does not change
+     * from one column to the next. NULL exactly when that neighbour is off
+     * the grid (the top or bottom edge), which the per-cell check below
+     * reads as "not the same material" - the same off-grid-is-a-wall
+     * convention `mask` above already relies on. See col_local_depth[]'s
+     * own comment above this function for the full mechanism. */
+    const uint8_t *v_toward_surface = !local_depth_axis_vertical ? NULL
+                                     : local_depth_reverse ? below : above;
+
+    /* LOCAL DEPTH's horizontal-dominant case instead needs the whole ROW
+     * scanned surface-first, so its single running value (h_running_depth
+     * below) always sees an already-processed neighbour - see that same
+     * comment for why this direction, and only this one, needs the SCAN
+     * itself reversed rather than which array slot is read. A vertical-
+     * dominant frame does not care what order cx takes here (each column's
+     * depth walk is independent of every other column's, via
+     * col_local_depth[]), so cx_first/cx_step below default to the ordinary
+     * ascending scan whenever this frame is vertical-dominant. */
+    const int cx_first = (!local_depth_axis_vertical && local_depth_reverse)
+                              ? grid_w - 1 : 0;
+    const int cx_step  = (!local_depth_axis_vertical && local_depth_reverse)
+                              ? -1 : 1;
+
+    /* The horizontal case's own running value - needs no cross-call state
+     * at all, unlike col_local_depth[]: reset once per ROW, right here, not
+     * persisted across paint_row_n() calls, because the horizontal case's
+     * "toward the surface" neighbour always sits inside the SAME row this
+     * function is already walking start to finish. */
+    unsigned h_running_depth = 0u;
+
+    for (int cx_i = 0; cx_i < grid_w; cx_i++) {
+        const int cx = cx_first + cx_i * cx_step;
+
+        /* Which cardinal neighbours are empty, kept as separate bits
+         * rather than folded straight into a bool - a liquid rim needs to
+         * know WHICH side is open, not merely that one is, so it can shade
+         * itself by which way that side faces against gravity. See
+         * MATERIAL_EDGE_* in material.h, which this has to agree with:
+         * "above" is row - grid_w, i.e. cy - 1, which is UP the screen.
+         *
+         * UNCONDITIONAL, same as ever - every cell of every material pays
+         * these four tests, and that has to stay true: this is the
+         * hottest loop in the app, and nothing below may make the common
+         * case (a non-water cell, or an interior cell of anything) pay
+         * for more than this. */
+        unsigned mask =
+            ((cx > 0          && CELL_IS_EMPTY(row[cx - 1])) ? MATERIAL_EDGE_LEFT  : 0u) |
+            ((cx < grid_w - 1 && CELL_IS_EMPTY(row[cx + 1])) ? MATERIAL_EDGE_RIGHT : 0u) |
+            ((above != NULL   && CELL_IS_EMPTY(above[cx]))   ? MATERIAL_EDGE_UP    : 0u) |
+            ((below != NULL   && CELL_IS_EMPTY(below[cx]))   ? MATERIAL_EDGE_DOWN  : 0u);
+
+        /* The four DIAGONAL bits, which only a WATER RIM cell ever reads
+         * (material_colours()'s foam gate - see material.h's own comment
+         * on MATERIAL_EDGE_UP_LEFT and friends). Computed only when they
+         * can possibly matter: mask already came up non-zero on the
+         * cardinal test above (so this cell is a rim at all - an interior
+         * cell, water or otherwise, cannot be a rim and never reaches
+         * here), AND the cell is water (every other material ignores the
+         * diagonal bits entirely, so spending four more reads on a rim of
+         * oil, lava, acid, or anything else buys nothing). Every other
+         * cell - which is most of them, on a typical board - skips these
+         * four tests completely, so the per-cell cost of adding foam is
+         * paid only where foam can actually appear. */
+        if ((mask & MATERIAL_EDGE_CARDINAL) != 0 &&
+            CELL_MATERIAL(row[cx]) == MAT_WATER) {
+            mask |=
+                ((cx > 0          && above != NULL && CELL_IS_EMPTY(above[cx - 1])) ? MATERIAL_EDGE_UP_LEFT    : 0u) |
+                ((cx < grid_w - 1 && above != NULL && CELL_IS_EMPTY(above[cx + 1])) ? MATERIAL_EDGE_UP_RIGHT   : 0u) |
+                ((cx > 0          && below != NULL && CELL_IS_EMPTY(below[cx - 1])) ? MATERIAL_EDGE_DOWN_LEFT  : 0u) |
+                ((cx < grid_w - 1 && below != NULL && CELL_IS_EMPTY(below[cx + 1])) ? MATERIAL_EDGE_DOWN_RIGHT : 0u);
+        }
+
+        /* WATER samples the grain hash at a COARSER grid than every other
+         * material - shifted right by FOAM_BLOB_SHIFT on both axes, so an
+         * 8x8 block of cells shares one hash value instead of each cell
+         * rolling its own. The user wanted foam speckled in patches rather
+         * than single cells, "so it sort of resembles mist near the foam",
+         * and that is exactly what asking neighbouring cells the same
+         * question buys: they now agree on whether to foam, in blocks,
+         * instead of disagreeing one cell at a time. See
+         * test_foam_blobs_are_bigger_than_one_cell in suite_sand.c.
+         *
+         * No new parameter anywhere for this - `hash` is simply computed
+         * differently before it is handed to material_colours(), which
+         * stays as ignorant of blobs as it is of anything else about
+         * coordinates. That is only possible because water has exactly one
+         * consumer of its hash: material_colours()'s foam dither (see that
+         * function's own comment on its water branch, in material.c). Every
+         * other material still gets material_grain_hash(cx, cy) - the FINE,
+         * per-cell hash - completely unchanged: stone's and wood's speckle
+         * and glass's hatch all depend on adjacent cells disagreeing, and
+         * coarsening their hash the way water's is coarsened here would
+         * flatten them into the same striping bug material_grain_hash()'s
+         * own comment already tells the story of. */
+        const bool cell_is_water = CELL_MATERIAL(row[cx]) == MAT_WATER;
+        const unsigned hash = cell_is_water
+            ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
+            : material_grain_hash(cx, cy);
+
+        /* THE PER-CELL COST OF LOCAL DEPTH, in full: one comparison against
+         * a neighbour's material id, one conditional reset/increment, and
+         * one array read+write (vertical) or one local-variable read+write
+         * (horizontal) - a little more than the old affine walk's plain add
+         * and shift, and still nowhere near a per-cell divide or trig. See
+         * col_local_depth[]'s own comment above this function for the full
+         * mechanism. Computed for every cell, liquid or not - the same as
+         * the old depth_acc was - because material_colours() is the only
+         * consumer that ever reads it (only for a liquid's interior), and a
+         * branch to skip this for non-liquids would cost more than the
+         * comparison it would save. */
+        unsigned local_depth;
+        if (local_depth_axis_vertical) {
+            const bool same_material = (v_toward_surface != NULL) &&
+                (CELL_MATERIAL(v_toward_surface[cx]) == CELL_MATERIAL(row[cx]));
+            local_depth = same_material
+                ? (col_local_depth[cx] < 255u ? col_local_depth[cx] + 1u : 255u)
+                : 0u;
+            col_local_depth[cx] = (uint8_t)local_depth;
+        } else {
+            const bool has_h_neighbour =
+                local_depth_reverse ? (cx < grid_w - 1) : (cx > 0);
+            const int h_neighbour_cx = local_depth_reverse ? cx + 1 : cx - 1;
+            const bool same_material = has_h_neighbour &&
+                (CELL_MATERIAL(row[h_neighbour_cx]) == CELL_MATERIAL(row[cx]));
+            local_depth = same_material
+                ? (h_running_depth < 255u ? h_running_depth + 1u : 255u)
+                : 0u;
+            h_running_depth = local_depth;
+        }
+        const unsigned depth = local_depth;
 
         gfx_color_t col[3];
         const material_pattern_t pat =
-            material_colours(row[cx], material_grain_hash(cx, cy), edge, col);
+            material_colours(row[cx], hash, mask, depth, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
@@ -1144,7 +1486,22 @@ static void draw_dirty_rows(bool shine_moved)
     int redrawn = 0;
 #endif
 
-    for (int cy = 0; cy < grid_h; cy++) {
+    /* Ordinarily ascending - but see col_local_depth[]'s own comment in
+     * paint_row_n() ("ROW ORDER, SPECIFICALLY") for why a vertical-
+     * dominant, gravity-UP frame walks this loop in the OPPOSITE order
+     * instead: LOCAL DEPTH needs the row nearer the surface (here, the
+     * BOTTOM of the screen) painted first, so its freshly computed depth is
+     * what a dirty row further from the surface reads, not last frame's.
+     * Reversing here, rather than juggling which array slot means "toward
+     * the surface" inside the depth bookkeeping itself, is safe because
+     * nothing else in this loop depends on row order - dirty_rows[cy],
+     * row_run_x0/x1/n and row_has_shine[cy] are all indexed by cy directly,
+     * and gfx_mark_dirty() below only ever unions a bounding box, which
+     * does not care what order the boxes arrive in either. */
+    const bool reverse_rows = local_depth_axis_vertical && local_depth_reverse;
+
+    for (int i = 0; i < grid_h; i++) {
+        const int cy = reverse_rows ? (grid_h - 1 - i) : i;
         if (!dirty_rows[cy]) {
             continue;
         }
@@ -2359,6 +2716,32 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 
     run_sim_steps(gx, gy, jostle, flow, rotation, dt_ms);
+
+    /* Same gravity sand_step() above was just given, so a liquid rim's
+     * highlight tracks the same tilt the sand itself is responding to.
+     * Once per frame, not once per cell - see material_set_gravity()'s own
+     * comment for why that split is what keeps the paint loop cheap. */
+    material_set_gravity(gx, gy);
+
+    /* The liquid interior's LOCAL DEPTH walk needs its own per-frame fact
+     * from this same gravity vector - which axis is dominant, and which way
+     * along it is "toward the surface" - but it is not material_set_
+     * gravity()'s to compute: the persistent per-column array it feeds
+     * belongs to THIS file, which owns the row-by-row paint call sequence
+     * that array is carried across (see col_local_depth[]'s own comment in
+     * paint_row_n() below for the full mechanism, and why material.c has
+     * nothing left to do with depth at all). */
+    update_local_depth_axis(gx, gy);
+
+    /* Water's foam gets its own per-frame fact, deliberately a separate
+     * call from the one above rather than folded into it - see
+     * material_set_foam_phase()'s own comment in material.h for why gravity
+     * and phase must not be conflated. Driven by real elapsed time, not by
+     * how many frames have run, so foam shimmers at the same rate on a slow
+     * frame as a fast one - see FOAM_PHASE_MS's own comment for what that
+     * buys and why a frame count would not. */
+    foam_elapsed_ms += dt_ms;
+    material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();

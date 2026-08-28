@@ -2,6 +2,9 @@
                       * whether anything else does is a property of
                       * the toolchain rather than of this file */
 #include "material.h"
+#include "util/intmath.h"   /* im_len() - see material_set_gravity() below,
+                             * which measures gravity the same way
+                             * build_xflow() in sand.c does */
 
 /*=============================================================================
  * The table.
@@ -1741,10 +1744,580 @@ static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(15),
 };
 
-material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
-                                    gfx_color_t out[3])
+/*=============================================================================
+ * A liquid rim's specular highlight.
+ *
+ * A liquid's own variant is a FILL LEVEL, and palette[] is indexed by the
+ * whole cell byte, so fill level IS the shade - pale and thin, dark and
+ * deep. That is right at a SURFACE, which is the only place fill level
+ * means anything (see material_colours()'s own comment below for the
+ * interior half of this story). But a flat fill ramp paints the top of a
+ * pool and the underside of an overhang identically whenever they happen
+ * to sit at the same fill level, and a real surface does not: the side
+ * facing away from gravity catches the light, the side facing into it
+ * does not.
+ *
+ * `liquid_spec[mask]` is that difference, as a shade SHIFT added to a rim
+ * cell's own fill index before it is looked up in the palette - positive
+ * darkens, negative brightens (liquid's ramp runs pale-to-dark as fill
+ * rises, so brightening means moving DOWN the index - see
+ * material_set_gravity() and material_colours() below, and mind the sign).
+ *
+ * Filled in ONCE PER FRAME by material_set_gravity(), not read per cell as
+ * gravity - material_colours() runs per cell per painted row and is hot,
+ * so all the trig below happens exactly once a frame and the per-cell cost
+ * stays one array index, same as ever.
+ *
+ * Sized and indexed by MATERIAL_EDGE_MASK_COUNT - the number of values the
+ * CARDINAL mask alone can take - and NOT by MATERIAL_VARIANTS, even though
+ * both are 16 today. This table has never held a variant; it holds one
+ * entry per CARDINAL edge mask, and gravity has no opinion about the
+ * diagonal bits a water rim's foam reads, so there is nothing for this
+ * table to say about them. The two constants agreeing was a coincidence
+ * that used to double as the size, which is exactly the kind of thing that
+ * silently stops being true the day either one changes for an unrelated
+ * reason. */
+static int8_t liquid_spec[MATERIAL_EDGE_MASK_COUNT];
+
+/* How far liquid_spec's shift reaches, out of the sixteen levels a fill
+ * ramp has. A look tuned by eye on the device, not derived from anything -
+ * if the rim's highlight ever reads too strong or too faint, this is the
+ * first number to move.
+ *
+ * 10, up from 6: reported as still too subtle even after the interior
+ * gained its own depth gradient. Measured on water's ramp, this takes the
+ * rim's up-face-to-down-face range from 49 luminance to 81. */
+#define SPEC_STRENGTH 10
+
+/* Rounds n/d to the nearest integer, for n of either sign and d > 0.
+ *
+ * Plain integer division truncates towards zero, which is fine for the
+ * rest of this file's ramps (they only ever walk forward through a table)
+ * but wrong here: a specular term that rounds -0.5 to 0 every time is a
+ * highlight that is quietly weaker on one side than the other. */
+static int fx_round_div(int n, int d)
+{
+    if (n >= 0) {
+        return (n + d / 2) / d;
+    }
+    return -((-n + d / 2) / d);
+}
+
+/* Fills liquid_spec[] from this frame's gravity - see that table's own
+ * comment for what it holds and why it exists at all.
+ *
+ * For each of the MATERIAL_EDGE_MASK_COUNT cardinal MATERIAL_EDGE_* masks,
+ * the outward normal `n` is the sum of the unit vectors of whichever
+ * cardinal sides are empty.
+ * Because there are only two axes, `n`'s components collapse to the
+ * three cases the caller was told to expect: no empty side at all, or an
+ * opposite pair that cancels, gives (0, 0); exactly one empty side (or an
+ * opposite pair plus one more) gives a single unit axis; two ADJACENT
+ * empty sides give a diagonal of length sqrt(2). Nothing here needs a
+ * general vector length for that reason - `norm_q8` below just picks
+ * between "already unit length" and "divide by sqrt(2)" from how many of
+ * n's two components are nonzero.
+ *
+ * The specular value is the normalised dot product of `n` with MINUS
+ * gravity: +1 when the empty side faces straight against gravity (the top
+ * of a pool), -1 when it faces straight along it (the underside of a
+ * drip). Fixed point throughout, scaled by 256 the same way build_xflow()
+ * in sand.c measures its own bias from gravity - see that function's own
+ * comment for why im_len()'s ~4% approximation is fine for a quantity
+ * nothing reads to better precision than "which way, roughly how much".
+ *
+ * NO LONGER also derives a depth/wave walk the way this function once did -
+ * a liquid interior's `depth` and `wave` (material_colours()'s own comment
+ * has the full account) are LOCAL now, walked fresh per cell against the
+ * live grid by app_sand.c's paint_row_n(), not something gravity's
+ * direction alone can work out ahead of time here. This function's only
+ * remaining job is the specular table below, which is why it no longer
+ * takes a grid size either - see material.h's own comment on this
+ * function's declaration. */
+void material_set_gravity(int gx, int gy)
+{
+    const int len = im_len(gx, gy);
+    if (len == 0) {
+        /* Free fall, or the board laid flat with nothing driving it: no
+         * "up" to catch the light from, so no rim gets a highlight rather
+         * than dividing by a length of zero. */
+        for (unsigned m = 0; m < MATERIAL_EDGE_MASK_COUNT; m++) {
+            liquid_spec[m] = 0;
+        }
+        return;
+    }
+
+    /* Unit vector of MINUS gravity, scaled by 256 - the direction a rim's
+     * empty side has to face to catch the brightest highlight. */
+    const int ux_q8 = (-gx * 256) / len;
+    const int uy_q8 = (-gy * 256) / len;
+
+    for (unsigned mask = 0; mask < MATERIAL_EDGE_MASK_COUNT; mask++) {
+        const int nx = ((mask & MATERIAL_EDGE_RIGHT) ? 1 : 0) -
+                       ((mask & MATERIAL_EDGE_LEFT)  ? 1 : 0);
+        const int ny = ((mask & MATERIAL_EDGE_DOWN)  ? 1 : 0) -
+                       ((mask & MATERIAL_EDGE_UP)    ? 1 : 0);
+
+        if (nx == 0 && ny == 0) {
+            liquid_spec[mask] = 0;
+            continue;
+        }
+
+        const int raw_q8 = nx * ux_q8 + ny * uy_q8;
+        /* 181/256 is 1/sqrt(2), for the diagonal case; the axis-only case
+         * is already unit length and needs no scaling at all. */
+        const int norm_q8 = (nx != 0 && ny != 0) ? 181 : 256;
+        const int spec_q8 = (raw_q8 * norm_q8) / 256;   /* now in [-256,256] */
+
+        /* NEGATED: the ramp runs bright-to-dark as fill rises, so a
+         * positive specular term (facing away from gravity, wants to be
+         * BRIGHTER) has to SUBTRACT from the index rather than add to it.
+         * Getting this backwards inverts the whole effect - see
+         * test_a_liquid_rim_catches_the_light_from_above in suite_sand.c,
+         * which exists specifically to catch that mistake rather than
+         * trust the arithmetic by eye. */
+        liquid_spec[mask] =
+            (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
+    }
+}
+
+/*=============================================================================
+ * WATER'S FOAM: gathered at crevices, never on a flat run.
+ *
+ * A liquid rim already shades itself by which way its open side faces
+ * against gravity - liquid_spec[] above. Foam is a second, independent
+ * decoration on the same rim, and it answers a different question:
+ * gravity says which side of a straight surface is bright, foam says
+ * whether the surface is straight AT ALL.
+ *
+ * THE CURVATURE MEASURE. Count how many of a rim cell's EIGHT neighbours
+ * are empty - all eight bits of `mask`, cardinal and diagonal alike, off-
+ * grid counted as NOT empty exactly the way paint_row_n() already treats
+ * the board edge as solid wall. A perfectly straight edge - the top of a
+ * flat pool, say - has exactly 3 empty neighbours: the three cells on the
+ * open side. Fewer than 3 is a cell tucked into a CONCAVE notch; more than
+ * 3 is a cell sticking out of a CONVEX bump. Either way is curvature, so
+ * `curvature = abs(empty_count - 3)` is 0 on a straight run and grows in
+ * both directions away from it.
+ *
+ * NO MOTION FLAG, AND THIS IS THE WHOLE POINT. It would be easy to reach
+ * for "is the water moving" as a second gate, and it would be redundant:
+ * a calm pool's rim is smooth by construction, so curvature alone already
+ * reads as almost entirely flat, and a sloshing one is jagged along its
+ * whole length, so curvature alone already reads as almost entirely not.
+ * Measured on real sloshing water, 48x32, water only - the share of rim
+ * cells that are NOT flat (curvature > 0):
+ *
+ *     still, flat pool          4%
+ *     settled at 40 degrees    34%
+ *     8 steps into 40 degrees  66%
+ *     2 steps into 40 degrees  76%
+ *     2 steps into 75 degrees  94%
+ *
+ * 4% against 94% is curvature already doing the job a motion flag would
+ * have been added to do. Adding one anyway would be a second mechanism
+ * competing with the first to answer a question the first already
+ * answers - do not add it back in; if foam ever needs tuning, the
+ * threshold table below is where that tuning belongs.
+ *
+ * ANIMATING THE DITHER. Curvature decides WHERE foam gathers; the hash
+ * decided WHICH of those cells show it, and until now that hash was the
+ * stable per-cell grain hash every other speckled material already uses -
+ * the same value, every frame, for as long as the shape stays put. That
+ * read as a texture painted onto the water rather than as foam moving on
+ * it, reported in exactly those words: it "reads as part of the rim".
+ *
+ * `foam_phase` - set once a frame by material_set_foam_phase(), see that
+ * function's own comment in material.h for why it is a call separate from
+ * material_set_gravity() - gives the dither a second input that changes
+ * every frame even when the shape does not, so a cell's on/off answer keeps
+ * changing while the curvature that gates it stays fixed. It is ADDED to
+ * the hash (scaled by 0x9E37u first - see the mixing site below for why
+ * that constant specifically), and the reason is that addition ROTATES the
+ * low three bits' window of foaming values by one place every time the
+ * phase advances, so two CONSECUTIVE phases can never produce the same
+ * foam set: whatever was just inside the window has moved, and whatever
+ * was just outside has taken its place.
+ *
+ * XOR WAS TRIED FIRST AND IS WRONG, and worth recording exactly why so
+ * nobody "simplifies" this back. The reasoning at the time was that XOR
+ * would decorrelate a cell's answer from its neighbours' better than a
+ * plain shift would - which is backwards. water_foam_threshold's windows
+ * are power-of-two aligned (0, 2, 4, 6 out of 8), and XORing the low three
+ * bits by a fixed value maps an aligned window either ONTO ITSELF or onto
+ * a DIFFERENT aligned window, depending only on the phase's own low bits -
+ * so roughly half of all phase steps leave the foaming set completely
+ * unchanged. Enumerated across all eight phases, mixed with XOR:
+ *
+ *     threshold 2 (curvature 1)   4 of 8 consecutive pairs identical
+ *     threshold 4 (curvature 2)   6 of 8 consecutive pairs identical
+ *     threshold 6 (curvature 3+)  4 of 8 consecutive pairs identical
+ *
+ * Threshold 4 - medium curvature, the commonest case on a real board - is
+ * the worst of the three: the foam set changes on only 2 of every 8 phase
+ * steps, which is most of a full second of FOAM_PHASE_MS ticks producing
+ * nothing. Confirmed on a real sloshing scene, not just this table: phase
+ * 1 to phase 2 changed exactly zero cells out of 635 foaming rim cells.
+ * That is indistinguishable from the stable dither this change exists to
+ * replace, most of the time - the opposite of the goal.
+ *
+ * Addition does not have this failure mode, and does not reintroduce the
+ * unison the XOR attempt was trying (wrongly) to avoid either: at
+ * threshold 2, for instance, only 2 of the 8 hash values foam at any given
+ * phase, so the rim is never all-on or all-off regardless of which mixing
+ * is used - that property was never XOR's to provide. See
+ * test_foam_never_stalls_between_frames in suite_sand.c, which pins BOTH
+ * halves: the foam set is never degenerate (all-on/all-off) at any single
+ * phase, AND no two consecutive phases, across a full cycle of eight,
+ * produce an identical set at any of the three thresholds.
+ *
+ * NOT FORCING DIRTY ROWS, AND THIS IS DELIBERATE. app_sand.c's
+ * draw_dirty_rows() repaints only the rows something marked dirty, so an
+ * animated foam cell sitting in an otherwise-settled row will not actually
+ * be redrawn until that row changes for some other reason. Widening the
+ * repaint to cover "any row that might have foam in it" would mean walking
+ * the grid, or keeping a second row-tracking table the way row_has_shine[]
+ * exists for glass's shine - real cost, paid every frame, for a cosmetic
+ * dither. It is also unnecessary: foam only appears where curvature is
+ * nonzero, and a rim's curvature is nonzero because the water is IN MOTION
+ * (see the measurements above - a still pool is 4% non-flat, a sloshing one
+ * is up to 94%), and motion is exactly what already marks a row dirty every
+ * step. A settled pool's rim is flat, foams nowhere, and has nothing
+ * animating to miss; a moving one is being repainted anyway. Do not go
+ * looking for a way to force these rows dirty - there is nothing here that
+ * needs it. */
+
+/* FOAM's own colour - a side table, not a palette[] row, the same pattern
+ * glass_shine and stone_speckle already use above: there is no spare slot
+ * in palette[] for it, and a dither over an existing rim colour does not
+ * need an indexed row of its own the way a fill level does.
+ *
+ * Brighter and whiter than water's own palest ramp entry (0x77C4E8, the
+ * shallow end of the SHADES() run in palette[] above) - foam has to read
+ * as something sitting ON the water, not merely as the palest water there
+ * is. */
+static const gfx_color_t water_foam = GFX_RGB(0xE8F6FF);
+
+/* How far curvature is allowed to climb before it stops changing the
+ * foam density any further - see water_foam_threshold below. Curvature
+ * itself can reach 5 (an empty_count of 8, a cell exposed on every side),
+ * but a corner poking into open air should look exactly as heavily foamed
+ * as an ordinary jagged crevice one cell less exposed, not more so. */
+#define WATER_FOAM_CURVATURE_MAX 3
+
+/* Foam density at each curvature, expressed as a threshold against a mix
+ * of `hash` and this frame's foam phase (see below): a cell foams when that
+ * mix, masked to three bits, falls under the threshold for its curvature.
+ * So this is a DITHER, not a fill - a "heavy" cell still shows bare rim on
+ * 2 of its 8 possible values, and a "flat" one never foams at all, since
+ * the masked mix can never be less than 0.
+ *
+ * A look tuned by eye, not measured - the first thing to move if foam
+ * ever reads too sparse (raise these) or too busy (lower them). Kept as a
+ * named table rather than a formula so tuning it is an edit to plain
+ * numbers, not to arithmetic.
+ *
+ * RAISED from { 0, 2, 4, 6 }: reported as "the alternating is barely
+ * visible", which had two causes. FOAM_BLOB_SHIFT (app_sand.c) already
+ * covers one - each flip was a small area - by clumping foam into bigger
+ * blocks; this covers the other, there simply was not much foam to begin
+ * with. Curvature 0 stays 0 and MUST: a flat rim - the top of a still pool
+ * - has to never foam at any hash or phase, whatever the other three
+ * entries are, or foam stops meaning "the water is moving" and starts
+ * meaning "the water exists" - see
+ * test_a_flat_rim_still_never_foams in suite_sand.c, which pins exactly
+ * that after this change. */
+static const uint8_t water_foam_threshold[WATER_FOAM_CURVATURE_MAX + 1] = {
+    0,  /* curvature 0, flat   - no foam at all */
+    3,  /* curvature 1, light  - foams on 3 of 8 hash values */
+    5,  /* curvature 2, medium - foams on 5 of 8 */
+    7,  /* curvature 3+, heavy - foams on 7 of 8 */
+};
+
+/* THIS FRAME'S FOAM PHASE - see material_set_foam_phase() and its own
+ * comment in material.h for what it means and why it is a call of its own
+ * rather than folded into material_set_gravity(). Zero until the first
+ * frame sets it, which paints exactly the stable dither foam had before
+ * phase existed - a reasonable default for anything that reads
+ * material_colours() before a frame ever runs (tests included). */
+static unsigned foam_phase;
+
+void material_set_foam_phase(unsigned phase)
+{
+    foam_phase = phase;
+}
+
+/* How many of `mask`'s bits are set - the same manual bit-count
+ * suite_icons.c's popcount16() uses, kept here rather than shared because
+ * the two operate on different widths for different reasons and a shared
+ * helper would need to justify its own generality. No floating point, and
+ * cheap enough for a path already gated to water rim cells only - see
+ * paint_row_n() in app_sand.c for where that gate actually lives. */
+static unsigned material_popcount8(unsigned mask)
+{
+    unsigned count = 0;
+    for (unsigned bit = 0; bit < 8u; bit++) {
+        count += (mask >> bit) & 1u;
+    }
+    return count;
+}
+
+/* How many of the sixteen fill-ramp steps a liquid interior's depth
+ * gradient may brighten the shallowest cell by, relative to the body
+ * colour at the deepest - see material_colours()'s own comment on the
+ * liquid interior branch for why depth needs a cue here at all.
+ *
+ * A look knob, tuned against water's own ramp: index 15 (the body colour,
+ * MASS_MAX) measures 54 luminance, 11 measures 85, 8 measures 111 - so 4
+ * takes a full-height pool from about 54 at the bottom to about 85 at the
+ * top, present without being garish. Move it if the gradient ever reads
+ * too strong (lower it) or too subtle (raise it); it never touches the
+ * rim, which keeps its own two terms (fill level and liquid_spec[]'s
+ * specular) untouched by this constant entirely. */
+#define DEPTH_RANGE 4
+
+/* HOW MANY CELLS OF LOCAL DEPTH IT TAKES A LIQUID INTERIOR TO REACH FULL
+ * DARKENING - the material's own body colour, with none of DEPTH_RANGE's
+ * lightening left - clamped there for anything deeper, rather than needing
+ * to approach local depth's own 255 clamp the way this divide used to.
+ *
+ * WATER USED TO GET SOMETHING DIFFERENT HERE: an animated sum-of-sines wave
+ * table riding on top of this same local depth, and a haze BLEND toward a
+ * pale fog colour in place of the plain shade-index shift every other
+ * liquid used. Both are gone. The fog blend's own arithmetic (`depth_q`,
+ * dividing by 255) was tuned for the OLD screen-position depth, which
+ * legitimately spanned the full 0-255 range across the whole grid - local
+ * depth resets to 0 at every puddle's own surface and rarely exceeds a few
+ * dozen cells for any real pool in this app, so the fog blend sat pinned
+ * near its palest end for essentially every visible pool, and water read as
+ * a flat pale wash instead of depth-through-water: a genuine bug, not a
+ * taste call. The wave bands had their own, separate problem: local depth
+ * commits to a single dominant axis (see LOCAL DEPTH below) with a hard,
+ * unsmoothed switch between vertical and horizontal, and the bands rode
+ * straight over that seam with no blending between an axis-aligned reading
+ * and a diagonal one, reading as rigid columns (or rows) of matching colour
+ * rather than an organic gradient. Both mechanisms still exist, untouched,
+ * on the water-wave-fog-depth-banked branch, for anyone who wants to
+ * revisit that approach or reuse a piece of it - the wave-table technique,
+ * the fog-blend arithmetic - for a different effect later.
+ *
+ * Water's interior now uses EXACTLY the mechanism oil, lava and acid always
+ * did: a plain shade-index shift into the material's own ramp, darker with
+ * depth, fed by local depth alone. The SAME `/255` divide that produced
+ * water's fog bug also fed this plain shift for every liquid, just less
+ * visibly - a shade-index nudge saturating late is a smaller, less
+ * noticeable effect than an entire colour failing to darken - which is why
+ * this constant fixes the scale for all four liquids at once, not water
+ * alone.
+ *
+ * 24 was modelled against water's own ramp: it gives idx 11 (lum 85,
+ * lightened) at the very surface, exactly as DEPTH_RANGE's own comment
+ * above describes, and reaches idx 15 (lum 54, the full body colour) once
+ * local depth hits this constant - comfortably inside the range any real
+ * pool in this app actually reaches, rather than needing depth in the
+ * hundreds the way the old /255 divide did. */
+#define DEPTH_SATURATE_CELLS 24
+
+material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
+                                    unsigned depth, gfx_color_t out[3])
 {
     const uint8_t v = CELL_VARIANT(c);
+
+    /* A LIQUID paints one of two ways depending on whether this cell is a
+     * rim, and the split is not a cheat - it is what the variant actually
+     * MEANS. A liquid cell is only ever partially filled at a surface or
+     * in transit: mid-body, every cell wants to be full, and the only
+     * reason one dips below MASS_MAX is the levelling rule redistributing
+     * mass one step at a time (see material.h's own top comment on why the
+     * fill level exists at all). That is a transient of the SOLVER, not a
+     * claim that there is less water there - so painting an interior cell
+     * at anything but the full body colour shows the player an artefact of
+     * how the simulation works rather than anything true about the pool.
+     *
+     * It is also what fixes the comb. build_xflow()'s two-ray dither
+     * (sand.c) settles neighbouring interior columns to different fills
+     * while a pool is moving under tilt, one cell full and the next at
+     * mid-ramp, over and over - measured two steps into a strong tilt as
+     * alternating fills a whole 81 luminance apart, which reads on the
+     * panel as hard lines through the water. The dither cannot be turned
+     * off; it is what keeps a settled pool's surface reading the same
+     * slope at every angle rather than one fixed shape (see build_xflow()'s
+     * own comment for what THAT bug looked like). But the comb only ever
+     * shows up mid-body, so an interior cell that always paints full water
+     * makes it invisible without touching the simulation or the palette at
+     * all.
+     *
+     * BUT A FLAT INTERIOR READS AS FLAT, which is exactly what was reported
+     * once the comb stopped showing: a settled pool has NO fill variation
+     * to shade with at all - measured 0 of 747 interior cells anything but
+     * full at 40 degrees settled, 0 of 720 settled flat, and only 5% even 3
+     * steps into a tilt - so undoing the flat interior was never on the
+     * table; painting the FILL differently is painting almost nothing
+     * differently. `depth` is a new cue rather than a rescue of the old
+     * one: light attenuates with depth, so a deeper cell reads darker and a
+     * shallower one reads lighter, shifting the index toward the BRIGHT end
+     * of the ramp (see DEPTH_RANGE below) by up to DEPTH_RANGE steps as the
+     * cell gets shallower, from the body colour at the very deepest point.
+     *
+     * THIS USED TO ALSO CARRY WAVE BANDS AND, FOR WATER SPECIFICALLY, A HAZE
+     * BLEND in place of the plain shift below - both removed. See
+     * DEPTH_SATURATE_CELLS's own comment just above this function for why:
+     * the fog blend's range mismatch was a genuine bug (pinned near-pale for
+     * any depth a real pool here reaches), and the wave bands rode straight
+     * over local depth's own axis seam with no blending between an
+     * axis-aligned reading and a diagonal one, reading as rigid columns
+     * rather than an organic gradient. Water's interior now runs the exact
+     * same shift every other liquid always has - no more "water is
+     * special" fork in this branch.
+     *
+     * LOCAL DEPTH, NOT SCREEN POSITION. `depth` is 0 at this material's own
+     * boundary - the neighbour one step toward the surface is not the same
+     * material, whether that is a different liquid, empty space, or solid -
+     * and climbs by one for each further cell into the body, clamped at
+     * 255. That is a genuine per-puddle measurement, walked fresh from the
+     * live grid by app_sand.c's paint_row_n() (see LOCAL DEPTH's own long
+     * comment there for the full mechanism), not a screen-position gradient
+     * the way an earlier version of this cue was: that version was reported
+     * from the device as reading "almost like platinum" - a gradient swept
+     * across the WHOLE SCREEN, blind to where the water actually was, reads
+     * as a metallic sheen rather than depth through a medium - and as
+     * wanting to "just follow the shape of the puddle" instead, which this
+     * now does: an obstacle breaking a pool's surface shows up as a dip back
+     * to a small depth right where it interrupts the water, rather than a
+     * band painted straight through it.
+     *
+     * The one simplification this DOES still make is the SAME single-
+     * dominant-axis approximation build_xflow() (sand.c) already accepts
+     * for the simulation's own movement - `|gy| >= |gx|` picks a straight
+     * vertical or horizontal "toward the surface" rather than bracketing a
+     * genuinely diagonal gravity with two rays. Good enough for a cosmetic
+     * cue built on the same idiom already trusted for movement. The other
+     * accepted trade-off is staleness under the dirty-row optimisation -
+     * only rows something else marked dirty ever get repainted, so a
+     * column's stored depth for a row that has not repainted in a while can
+     * lag the puddle's current shape - see col_local_depth[]'s own comment
+     * in app_sand.c for why that costs nothing extra to accept and matches
+     * the precedent already established for foam's own drift.
+     *
+     * INTERIOR ONLY, DELIBERATELY NOT THE RIM. A rim cell already carries
+     * two terms - its own fill level, and liquid_spec[]'s specular shift -
+     * and both already use most of the ramp's range between them; a third
+     * term stacked on top would spend most of its own range clamped against
+     * whichever end the other two had already reached, buying little for
+     * the cost of a less legible rim. The interior had nothing until now,
+     * so it is the only place adding a term is clearly a gain rather than a
+     * diminishing one.
+     *
+     * The RIM is the opposite case: it is the one place a liquid's fill
+     * level is actually true, and it is what lets the pale film at a
+     * shallow edge, lava's bright skim, oil's murky olive and acid's vivid
+     * lime survive on screen at all - flattening those the way an earlier
+     * attempt at this fix did destroyed the very thing this pass exists to
+     * keep. A rim cell keeps exactly the fill-indexed lookup every other
+     * material already gets, shifted by liquid_spec[] indexed by the
+     * CARDINAL bits alone - see that table's own comment above for what
+     * the shift means and material_set_gravity() for where it comes from,
+     * and MATERIAL_EDGE_CARDINAL's own comment in material.h for why the
+     * index has to be masked down rather than used raw now that `mask`
+     * carries diagonal bits too.
+     *
+     * WATER'S rim then gets one thing no other liquid does: foam, gated
+     * purely by curvature - see this file's own comment on that above.
+     * Oil, lava and acid fall through this same block unchanged; only the
+     * id check below diverts water into the foam path.
+     *
+     * `hash` ITSELF ARRIVES ALREADY COARSENED FOR WATER. paint_row_n() in
+     * app_sand.c hands this function material_grain_hash(cx, cy) for every
+     * material except water, and material_grain_hash(cx >> FOAM_BLOB_SHIFT,
+     * cy >> FOAM_BLOB_SHIFT) for water - an 8x8 block of cells sharing one
+     * value instead of each rolling its own - so foam clusters in blobs
+     * rather than speckling one cell at a time. This function does not
+     * know that, and does not need to: it just uses whatever `hash` it was
+     * handed, the same as it always has.
+     *
+     * That is safe ONLY because foam is the SOLE consumer of water's hash.
+     * Water is KIND_LIQUID and returns from this function below, so it
+     * never reaches the `switch (CELL_MATERIAL(c))` further down that reads
+     * `hash` for glass, stone, wood and the extended materials' grain - the
+     * coarsening never touches any of them. If water is ever given a
+     * speckle of its own - the way stone and wood have one - it will want
+     * the FINE per-cell hash like everything else, and the day that
+     * happens this coarsening has to move from "every water cell,
+     * unconditionally" to "only where foam actually reads it", or the new
+     * speckle will silently stripe in 8x8 blocks with no test anywhere
+     * catching why. Nothing enforces that today - it is a fact about the
+     * rest of this file, not a type - which is exactly why it is written
+     * down here rather than left to be rediscovered. */
+    if (material_of(c)->kind == KIND_LIQUID) {
+        const uint8_t id = CELL_MATERIAL(c);
+        const unsigned cardinal = mask & MATERIAL_EDGE_CARDINAL;
+
+        if (cardinal == 0) {
+            /* THE SAME SHIFT FOR EVERY LIQUID, WATER INCLUDED - no more id
+             * check here at all. `depth` is clamped to DEPTH_SATURATE_CELLS
+             * before it ever reaches the divide, rather than trusting the
+             * divide itself to fall to zero cleanly past that point: depth
+             * is unsigned and can run all the way to 255 (paint_row_n()'s
+             * own clamp in app_sand.c), and DEPTH_SATURATE_CELLS - depth
+             * would wrap to a huge unsigned value the moment depth exceeds
+             * it if this cap were not applied first. */
+            const unsigned depth_capped = depth < DEPTH_SATURATE_CELLS
+                                              ? depth : DEPTH_SATURATE_CELLS;
+
+            /* Distance-to-saturation, out of DEPTH_RANGE whole shade steps -
+             * see DEPTH_SATURATE_CELLS's own comment above for the constant
+             * this divides by and why 255 was wrong. Plain integer
+             * arithmetic throughout, no intermediate fixed-point scale to
+             * promote to and shift back down again: that machinery existed
+             * only to keep a wave residual's fractional resolution alive
+             * through the merge, and there is no wave left to preserve. */
+            const int bright =
+                ((int)DEPTH_RANGE * (int)(DEPTH_SATURATE_CELLS - depth_capped))
+                    / (int)DEPTH_SATURATE_CELLS;
+            int idx = (int)MASS_MAX - bright;
+            idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
+            out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
+        } else {
+            int idx = (int)v + liquid_spec[cardinal];
+            idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
+            out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
+
+            if (id == MAT_WATER) {
+                const unsigned empty_count = material_popcount8(mask);
+                unsigned curvature = (empty_count > 3)
+                                        ? (empty_count - 3)
+                                        : (3 - empty_count);
+                if (curvature > WATER_FOAM_CURVATURE_MAX) {
+                    curvature = WATER_FOAM_CURVATURE_MAX;
+                }
+
+                /* ADD, never `^` - see the long comment above this file's
+                 * curvature block for why XOR fails: water_foam_threshold's
+                 * windows are power-of-two aligned, and XORing the low
+                 * three bits by a fixed value maps an aligned window onto
+                 * itself or another aligned window, so roughly half of all
+                 * phase steps leave the foaming set completely unchanged -
+                 * measured as 4, 6 and 4 of 8 consecutive phase pairs
+                 * identical at the three thresholds, worst at the commonest
+                 * (medium) curvature. Addition has no such alignment to
+                 * preserve: it ROTATES the window by one place every phase
+                 * step, so consecutive phases can never match. 0x9E37u is
+                 * the same constant either mixing would use - the point of
+                 * it here is only that it is ODD (ends in 7, an odd hex
+                 * digit), so multiplying `foam_phase` by it still steps
+                 * through all eight low-bit values as phase climbs by 1,
+                 * rather than by some larger stride that would revisit
+                 * values and stall in a different way. */
+                const unsigned dithered = hash + foam_phase * 0x9E37u;
+                if ((dithered & 7u) < water_foam_threshold[curvature]) {
+                    out[0] = water_foam;
+                }
+            }
+        }
+        out[1] = out[0];
+        out[2] = out[0];
+        return MATERIAL_FLAT;
+    }
 
     switch (CELL_MATERIAL(c)) {
     case MAT_EXTENDED:
@@ -1772,15 +2345,25 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
             return MATERIAL_SPECKLED;
         }
         break;
-    case MAT_GLASS:
+    case MAT_GLASS: {
+        /* CARDINAL bits only - see MATERIAL_EDGE_CARDINAL's own comment in
+         * material.h. `mask != 0` would be wrong now that the mask can
+         * carry diagonal bits a water rim reads: a pane with every
+         * cardinal neighbour occupied but one diagonal empty must stay
+         * interior, not spring an edge. */
+        const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
         out[0] = edge ? glass_edge_body[v][hash & 3u]
                       : glass_body[v][hash & 3u];
         out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
         out[2] = edge ? glass_edge_shine[v]  : glass_shine[v];
         return MATERIAL_HATCHED;
+    }
     case MAT_STONE:
-        out[0] = edge ? stone_edge_speckle[v][hash & 7u]
-                      : stone_speckle[v][hash & 7u];
+        /* Same CARDINAL-only test as glass above, and for the same reason -
+         * see MATERIAL_EDGE_CARDINAL's own comment in material.h. */
+        out[0] = ((mask & MATERIAL_EDGE_CARDINAL) != 0)
+                     ? stone_edge_speckle[v][hash & 7u]
+                     : stone_speckle[v][hash & 7u];
         out[1] = out[0];
         out[2] = out[0];
         return MATERIAL_SPECKLED;

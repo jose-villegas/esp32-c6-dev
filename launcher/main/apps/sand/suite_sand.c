@@ -10,7 +10,6 @@
  *   '.' empty, 'o' a grain.
  *===========================================================================*/
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -5053,10 +5052,13 @@ static void test_an_edge_shows_less_temperature_than_the_body(void)
         const uint8_t m = tempered[k];
         gfx_color_t body[3], ed[3], hot[3], hot_ed[3];
 
-        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, false, body);
-        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, true,  ed);
-        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, false, hot);
-        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, true, hot_ed);
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, 0u, 255u, body);
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u,
+                         MATERIAL_EDGE_LEFT, 255u, ed);
+        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, 0u, 255u,
+                         hot);
+        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u,
+                         MATERIAL_EDGE_LEFT, 255u, hot_ed);
 
         const gfx_color_t rest_body = body[0], rest_edge = ed[0];
         const gfx_color_t hot_body = hot[0], hot_edge = hot_ed[0];
@@ -5089,12 +5091,18 @@ static void test_an_edge_shows_less_temperature_than_the_body(void)
 static void test_each_material_is_painted_the_way_it_should_be(void)
 {
     const gfx_color_t *pal = material_palette();
+    /* Deepest depth - every KIND_LIQUID material below is asserted to
+     * paint EXACTLY its own body colour at this point, now that every
+     * liquid's interior (water included) uses the same plain shade-index
+     * shift into its own ramp - see material_colours()'s own comment on
+     * the liquid interior branch. */
 
     for (int m = 1; m < MAT_COUNT; m++) {
         for (int v = 0; v < MATERIAL_VARIANTS; v++) {
             const cell_t c = CELL_MAKE(m, v);
             gfx_color_t col[3] = { 0, 0, 0 };
-            const material_pattern_t pat = material_colours(c, 0u, false, col);
+            const material_pattern_t pat =
+                material_colours(c, 0u, 0u, 255u, col);
 
             char why[128];
             snprintf(why, sizeof why, "%s variant %d", materials[m].name, v);
@@ -5113,6 +5121,19 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                  * than as fire. */
                 TEST_ASSERT_EQUAL_MESSAGE(
                     v == 0 ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
+            } else if (materials[m].kind == KIND_LIQUID) {
+                /* mask 0 here (this loop never passes anything else), so
+                 * this is the INTERIOR case - see material_colours()'s own
+                 * comment on why that paints the full body colour rather
+                 * than the fill-indexed one, whatever variant this cell
+                 * happens to carry. The rim half of the same split gets
+                 * its own tests (test_a_liquid_body_paints_flat_inside and
+                 * friends, near the palette tests below) precisely because
+                 * this loop cannot exercise it without a mask to vary. */
+                TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat, why);
+                TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(m, MASS_MAX)],
+                                          col[0], why);
+                TEST_ASSERT_EQUAL_MESSAGE(col[0], col[2], why);
             } else {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat, why);
                 TEST_ASSERT_EQUAL_MESSAGE(pal[c], col[0], why);
@@ -5138,10 +5159,10 @@ static void test_glass_grain_is_quieter_than_stone(void)
 
     for (int v = 0; v < MATERIAL_VARIANTS; v++) {
         gfx_color_t g0[3], g1[3], s0[3], s1[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, false, g0);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, false, g1);
-        material_colours(CELL_MAKE(MAT_STONE, v), 0u, false, s0);
-        material_colours(CELL_MAKE(MAT_STONE, v), 7u, false, s1);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, g0);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, 0u, 255u, g1);
+        material_colours(CELL_MAKE(MAT_STONE, v), 0u, 0u, 255u, s0);
+        material_colours(CELL_MAKE(MAT_STONE, v), 7u, 0u, 255u, s1);
 
         glass_spread += colour_gap(g0[0], g1[0]);
         stone_spread += colour_gap(s0[0], s1[0]);
@@ -5164,8 +5185,8 @@ static void test_the_shine_does_not_vary_between_cells(void)
 {
     for (int v = 0; v < MATERIAL_VARIANTS; v++) {
         gfx_color_t a[3], b[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, false, a);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, false, b);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, a);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, 0u, 255u, b);
 
         char why[128];
         snprintf(why, sizeof why,
@@ -5195,7 +5216,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
 
         for (unsigned h = 0; h < 8u; h++) {
             gfx_color_t col[3] = { 0, 0, 0 };
-            material_colours(c, h, false, col);
+            material_colours(c, h, 0u, 255u, col);
             const gfx_color_t a = col[0];
             TEST_ASSERT_EQUAL_MESSAGE(col[0], col[1],
                 "a speckled cell is one flat colour - the variation is "
@@ -5221,14 +5242,1328 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
     /* Stable: the same cell asked twice gets the same answer. */
     gfx_color_t one[3], two[3];
     const cell_t c = CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT);
-    material_colours(c, 12345u, false, one);
-    material_colours(c, 12345u, false, two);
+    material_colours(c, 12345u, 0u, 255u, one);
+    material_colours(c, 12345u, 0u, 255u, two);
     TEST_ASSERT_EQUAL_MESSAGE(one[0], two[0],
         "the same cell must speckle the same way every time it is asked, "
         "or a stone wall shimmers");
 }
 
 
+/* panel_luminance() is defined further down this file, beside the soil-tone
+ * test it was written for. The rim/gravity test below needs the same
+ * helper rather than a second hand-rolled one, hence the forward
+ * declaration - it would be a stranger thing to duplicate luminance math
+ * than to declare a static function ahead of its definition. */
+static int panel_luminance(gfx_color_t c);
+
+/* A liquid's interior paints flat, whatever the comb underneath is doing.
+ *
+ * build_xflow()'s two-ray dither (sand.c) is what keeps a settled pool
+ * reading the same slope at ten degrees of tilt as at forty five, and that
+ * is worth keeping - the alternative, measured, is a pool that reads one
+ * fixed slope at every angle, which is the bug the dither exists to fix.
+ * Its price is that neighbouring INTERIOR columns of a moving pool settle
+ * to different fill levels one cell apart while it works - the comb.
+ * Measured two steps into a strong tilt: alternating fills a whole 81
+ * luminance apart, cell to cell, which on the panel is a hard line through
+ * the water.
+ *
+ * The fix does not reach into the simulation - it cannot, and this is
+ * exactly why: the dither is doing its job and the comb is a side effect
+ * of that job, not a mistake in it. It touches only what an INTERIOR cell
+ * is PAINTED as: always the body colour, whatever its own fill level says,
+ * because a fill below MASS_MAX in the middle of a body is not a true
+ * amount of water - it is the levelling rule's own bookkeeping, caught
+ * mid-step (see material_colours()'s own comment for the long version).
+ *
+ * This test builds exactly the shape the report measured - alternating
+ * MASS_MAX and a low fill across a row - inside a full border of water so
+ * every varied cell is genuinely interior (mask 0, checked explicitly
+ * rather than assumed), and asserts the comb is invisible: every interior
+ * cell paints the SAME colour, and that colour is the body's. */
+static void test_a_liquid_body_paints_flat_inside(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
+
+    enum { COMB_W = 8, COMB_H = 3 };
+    cell_t grid[COMB_H][COMB_W];
+
+    for (int y = 0; y < COMB_H; y++) {
+        for (int x = 0; x < COMB_W; x++) {
+            grid[y][x] = CELL_MAKE(MAT_WATER, MASS_MAX);
+        }
+    }
+    /* The comb itself, dropped into the middle row's interior columns -
+     * everything around it stays a solid full-water border. */
+    for (int x = 1; x < COMB_W - 1; x++) {
+        grid[1][x] = CELL_MAKE(MAT_WATER, (x % 2) ? 7 : MASS_MAX);
+    }
+
+    material_set_gravity(0, 0);   /* interior painting must not care either
+                                    * way - there is no rim here to shade,
+                                    * and every material_colours() call below
+                                    * passes an explicit depth of its own */
+
+    gfx_color_t seen = 0;
+    bool have_seen = false;
+    for (int x = 1; x < COMB_W - 1; x++) {
+        const cell_t c = grid[1][x];
+        const unsigned mask =
+            (CELL_IS_EMPTY(grid[1][x - 1]) ? MATERIAL_EDGE_LEFT  : 0u) |
+            (CELL_IS_EMPTY(grid[1][x + 1]) ? MATERIAL_EDGE_RIGHT : 0u) |
+            (CELL_IS_EMPTY(grid[0][x])     ? MATERIAL_EDGE_UP    : 0u) |
+            (CELL_IS_EMPTY(grid[2][x])     ? MATERIAL_EDGE_DOWN  : 0u);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, (int)mask,
+            "the border around the comb must make every varied cell "
+            "genuinely interior, or this test is not exercising the case "
+            "it claims to");
+
+        gfx_color_t col[3];
+        material_colours(c, 0u, mask, 255u, col);
+
+        char why[96];
+        snprintf(why, sizeof why,
+                 "comb column %d (fill %d) must paint the body colour, not "
+                 "its own fill level", x, CELL_VARIANT(c));
+        TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
+
+        if (have_seen) {
+            TEST_ASSERT_EQUAL_MESSAGE(seen, col[0],
+                "every interior cell of the comb must paint IDENTICALLY - "
+                "that is what makes the comb disappear rather than merely "
+                "change colour, and is the whole point of this change");
+        }
+        seen = col[0];
+        have_seen = true;
+    }
+}
+
+/* DEPTH gives the interior something to shade with again.
+ *
+ * test_a_liquid_body_paints_flat_inside just above pins that the comb fix
+ * makes every interior cell paint the flat body colour, whatever its own
+ * fill level says - and that is exactly why depth had to be invented rather
+ * than derived from fill: measured on a settled pool, 0 of 747 interior
+ * cells were anything but full at 40 degrees settled, 0 of 720 settled
+ * flat, and only 5% even 3 steps into a tilt. Fill level cannot carry a
+ * gradient a settled pool never varies. `depth` - a cell's own position
+ * along gravity, normalised across the grid's projected span - is the new
+ * cue, and this is the test that the cue actually reaches the panel.
+ *
+ * Same cell, same mask (0 - interior, so there is no rim shift or foam
+ * anywhere near this to confuse the comparison with), at the two ends of
+ * the depth range: 0 (shallowest) and 255 (deepest). The shallow one must
+ * paint BRIGHTER - light attenuates with depth, so less of it overhead
+ * should read as more of it - and the deep one must paint EXACTLY the body
+ * colour, palette[CELL_MAKE(id, MASS_MAX)], with no shift at all: the
+ * gradient only ever LIGHTENS a shallower cell relative to that body
+ * colour, it never darkens a deep one past it, or a pool would read darker
+ * than its own resting colour simply for being deep.
+ *
+ * `depth` 255 is well past DEPTH_SATURATE_CELLS (material.c's own constant
+ * for how many cells of local depth it takes to reach the body colour) -
+ * this is deliberately deeper than the clamp, not merely equal to it, so
+ * this test also pins that anything past the clamp reads exactly as the
+ * clamp does, not as something further darkened past it. */
+static void test_a_liquid_interior_is_shaded_by_depth(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const cell_t c = CELL_MAKE(MAT_WATER, MASS_MAX);
+
+    gfx_color_t shallow[3], deep[3];
+    material_colours(c, 0u, 0u, 0u, shallow);
+    material_colours(c, 0u, 0u, 255u, deep);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        panel_luminance(shallow[0]) > panel_luminance(deep[0]),
+        "a shallow interior cell (depth 0) must paint BRIGHTER than a deep "
+        "one (depth 255) - depth is the only cue left to shade a settled "
+        "pool's interior with, and if it does not lighten as a cell gets "
+        "shallower the interior is exactly as flat as it was before this "
+        "change");
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, MASS_MAX)], deep[0],
+        "and the deepest cell must paint EXACTLY the body colour, with no "
+        "shift applied at all - the gradient only ever lightens a "
+        "shallower cell relative to that body colour, it never darkens a "
+        "deep one past it, or a pool would read darker than its own "
+        "resting colour simply for being deep");
+}
+
+/* Depth is an INTERIOR-only cue - see material_colours()'s own comment on
+ * why a rim already carries two terms (its own fill level, and
+ * liquid_spec[]'s specular shift) and a third stacked on top would mostly
+ * spend its range clamped against whichever end the other two already
+ * reached. This is the test that pins the boundary: nothing outside a
+ * liquid's interior may read `depth` at all, whatever paint_row_n() hands
+ * it - not a rim cell, and not a material that is not a liquid to begin
+ * with.
+ *
+ * A RIM liquid cell (mask nonzero, a cardinal bit set) must paint
+ * identically at depth 0 and depth 255 - its own fill level and
+ * liquid_spec[]'s specular are the entire story there, and depth must not
+ * add a third, silent one. OIL rather than water for this half: a water
+ * rim also runs the foam dither (material_colours()'s own comment on
+ * curvature), and at the wrong hash/phase combination foam can overwrite
+ * `out[0]` identically regardless of depth, which would let a real depth
+ * leak into the rim's own fill-index arithmetic hide behind foam instead
+ * of being caught. Oil shares the exact same fill-indexed-plus-specular
+ * code path but never foams, so any such leak has nowhere left to hide.
+ * And two materials that are not liquids at all - stone and glass, both of
+ * which spend their own variant on something depth could plausibly be
+ * confused for (temperature) - must paint identically too: depth is
+ * meaningless to them, and the parameter has to be silently ignored
+ * rather than accidentally read through some shared code path. */
+static void test_only_a_liquid_interior_reads_depth(void)
+{
+    material_set_gravity(0, 0);   /* no specular term to confuse the
+                                            * rim comparison with */
+
+    gfx_color_t rim_shallow[3], rim_deep[3];
+    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 0u,
+                     rim_shallow);
+    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u,
+                     rim_deep);
+    TEST_ASSERT_EQUAL_MESSAGE(rim_shallow[0], rim_deep[0],
+        "a RIM liquid cell must paint identically at depth 0 and depth "
+        "255 - depth is the interior's business, not the rim's, which "
+        "already has its own fill level and liquid_spec[]'s specular "
+        "shift to show instead");
+
+    gfx_color_t glass_shallow[3], glass_deep[3];
+    material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 0u, glass_shallow);
+    material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 255u, glass_deep);
+    TEST_ASSERT_EQUAL_MESSAGE(glass_shallow[0], glass_deep[0],
+        "glass must ignore depth entirely - it is not a liquid, and depth "
+        "must not leak into a code path that has nothing to do with it");
+
+    gfx_color_t stone_shallow[3], stone_deep[3];
+    material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 0u, stone_shallow);
+    material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 255u, stone_deep);
+    TEST_ASSERT_EQUAL_MESSAGE(stone_shallow[0], stone_deep[0],
+        "and neither must stone - the same guarantee, on the other "
+        "non-liquid material whose variant could plausibly be confused "
+        "for depth");
+}
+
+/* A rim cell still shows its own fill level - the other half of the same
+ * split, and the half a previous attempt at this fix broke. That attempt
+ * composited the WHOLE liquid palette against the background, which
+ * flattened the rim along with the interior and erased the thing a
+ * shallow edge is FOR: the pale film at water's thin end, lava's bright
+ * skim, oil's murky olive and acid's vivid lime all come from the rim
+ * reading its own fill level, not some fixed edge tint.
+ *
+ * Checked under ZERO gravity, so the specular shift the next test covers
+ * cannot be what is making shallow and deep differ here - this is purely
+ * "does the ordinary fill ramp still work on a rim cell", which is what
+ * stops part 1 (the interior fix) from quietly swallowing the rim too.
+ *
+ * Back on WATER, having been on oil for a while. Water's rim now also
+ * carries foam (see material_colours()'s own comment on curvature), which
+ * is a dither keyed off hash, phase and mask - and a mask of a single
+ * cardinal bit with no diagonals is itself a curved shape (an empty count
+ * of 1, two away from the flat count of 3), so it foamed regardless of
+ * hash and broke this test the day foam landed. The fix is not to dodge
+ * onto a different liquid but to give the cell a mask that is
+ * DELIBERATELY FLAT: one cardinal side plus the two diagonals that lean
+ * against it is exactly 3 of 8 empty, which is curvature 0 - foam's
+ * threshold there is 0, so `(anything) & 7u < 0` can never be true and this
+ * cell cannot foam at any hash or any phase. Water is the material that
+ * matters most here, and it is back under direct coverage rather than
+ * standing in for it. */
+static void test_a_liquid_rim_still_shows_its_fill(void)
+{
+    material_set_gravity(0, 0);   /* no specular term to confuse this with */
+
+    const gfx_color_t *pal = material_palette();
+    /* Flat rim on the "up" side: MATERIAL_EDGE_UP plus its two leaning
+     * diagonals, exactly 3 of 8 neighbours empty - see this test's own
+     * top comment for why that shape, and only that shape, keeps foam out
+     * of a test that has nothing to do with it. */
+    const unsigned mask = MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                          MATERIAL_EDGE_UP_RIGHT;
+
+    gfx_color_t shallow[3], deep[3];
+    material_colours(CELL_MAKE(MAT_WATER, 1), 0u, mask, 255u, shallow);
+    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, mask, 255u,
+                     deep);
+
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, 1)], shallow[0],
+        "a rim cell must read its own fill level straight from the "
+        "palette - flattening this is the mistake a previous attempt at "
+        "hiding the comb made, and it erased the surface film the rim "
+        "exists to show");
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, MASS_MAX)], deep[0],
+        "and a full rim cell must read as full, not as whatever the "
+        "interior case would have painted it instead");
+    TEST_ASSERT_TRUE_MESSAGE(shallow[0] != deep[0],
+        "a shallow rim and a deep one must be visibly different colours, "
+        "or the fill ramp is dead on the one cell where it is supposed to "
+        "matter most");
+}
+
+/* The rim's highlight follows gravity, the way specularity should.
+ *
+ * A rim cell's brightness is not fixed by its fill level alone any more -
+ * it is shifted by how much its empty side faces AGAINST gravity, the same
+ * way light catches the top of a real pool and leaves the underside of a
+ * drip or an overhang dark. material_set_gravity() computes that shift
+ * once a frame into liquid_spec[]; this is the test that pins its SIGN.
+ *
+ * The sign is not a subtle miscalibration to get wrong. Liquid ramps run
+ * pale-to-dark as fill rises (material.h's own top comment), so brightening
+ * means moving DOWN the index - flip that and every pool on the board
+ * lights up along its underside and goes dark across its top, which is the
+ * exact opposite of what a real surface does and not something a glance at
+ * the device would necessarily catch, since a pool still looks LIT, just
+ * from the wrong side. Comparing against gravity's own direction, twice,
+ * at two different tilts, is what catches that rather than trusting the
+ * arithmetic by eye.
+ *
+ * Back on WATER, for the same reason test_a_liquid_rim_still_shows_its_fill
+ * is: water is the material that matters most here. Each mask below is a
+ * FLAT rim - one cardinal side plus its two leaning diagonals, exactly 3 of
+ * 8 empty - not the single cardinal bit this test used before foam
+ * existed, because a lone cardinal bit is itself curved (empty count 1,
+ * two away from flat) and foamed regardless of hash. liquid_spec[] is
+ * indexed by the CARDINAL bits alone (mask & MATERIAL_EDGE_CARDINAL - see
+ * that table's own comment in material.c), so adding the leaning diagonals
+ * changes nothing about which specular shift applies; it only changes
+ * curvature from 2 to 0, which is what keeps foam out of a test about the
+ * specular. */
+static void test_a_liquid_rim_catches_the_light_from_above(void)
+{
+    const uint8_t fill = 8;   /* mid-ramp, so a shift in either direction
+                               * has somewhere to go without clamping at
+                               * either end and hiding the difference */
+
+    material_set_gravity(0, 1000);   /* straight down */
+
+    gfx_color_t up[3], down[3];
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                         MATERIAL_EDGE_UP_RIGHT,
+                     255u,
+                     up);
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_DOWN | MATERIAL_EDGE_DOWN_LEFT |
+                         MATERIAL_EDGE_DOWN_RIGHT,
+                     255u,
+                     down);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        panel_luminance(up[0]) > panel_luminance(down[0]),
+        "with gravity pulling straight down, the empty side facing UP - "
+        "the top of a pool - must be the bright one; a sign flipped here "
+        "would light the underside of every overhang instead of its top");
+
+    material_set_gravity(1000, 0);   /* tilt: gravity now points right */
+
+    gfx_color_t left[3], right[3];
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_LEFT | MATERIAL_EDGE_UP_LEFT |
+                         MATERIAL_EDGE_DOWN_LEFT,
+                     255u,
+                     left);
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP_RIGHT |
+                         MATERIAL_EDGE_DOWN_RIGHT,
+                     255u,
+                     right);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        panel_luminance(left[0]) > panel_luminance(right[0]),
+        "and the highlight must follow the tilt rather than stay where it "
+        "was - once gravity points right, the side facing LEFT is the one "
+        "facing away from it, so that is the side that should catch the "
+        "light now");
+}
+
+/*=============================================================================
+ * LOCAL DEPTH - the depth signal now follows each puddle's own shape
+ * rather than a fixed screen-position gradient. See LOCAL DEPTH's own long
+ * comment in app_sand.c for the full mechanism and the two device reports
+ * ("almost like platinum"; "follows the shape of the puddle") that
+ * motivated it.
+ *
+ * paint_row_n() itself cannot be linked into this host suite - it lives in
+ * app_sand.c, which check_app_sources.sh only compile-checks, the same
+ * position FOAM_PHASE_MS's own accumulator has always been in - so each
+ * test below mirrors the algorithm it pins with a small test-local helper,
+ * built to match app_sand.c's real logic exactly, rather than calling into
+ * it.
+ *===========================================================================*/
+
+/* Mirrors paint_row_n()'s vertical-dominant local-depth walk (app_sand.c)
+ * for a FIXED straight-down gravity - the simplest case: surface up, "above"
+ * toward the surface, ascending row order. The axis-flip and horizontal-scan
+ * machinery is a different claim, pinned separately by
+ * test_local_depth_resets_when_gravitys_axis_flips below. Reads the LIVE
+ * grid via sand_at() rather than assuming a fixed shape, the same way
+ * paint_row_n() reads the live framebuffer row/above/below pointers -
+ * off-grid rows read as MAT_STONE (sand_at()'s own convention), which is
+ * "not the same material" as water and correctly reads as a boundary. */
+static void mirror_local_depth_column(sand_t *g, int cx, int h,
+                                      unsigned depth_out[])
+{
+    unsigned running = 0;
+    for (int cy = 0; cy < h; cy++) {
+        const cell_t here  = sand_at(g, cx, cy);
+        const cell_t above = sand_at(g, cx, cy - 1);
+        const bool same = CELL_MATERIAL(above) == CELL_MATERIAL(here);
+        running = same ? (running < 255u ? running + 1u : 255u) : 0u;
+        depth_out[cy] = running;
+    }
+}
+
+/* THE DEVICE COMPLAINT THIS PINS, verbatim: "the sensibility against
+ * gravity makes it behave almost like platinum", and "there is no arcs...
+ * maybe it's better if the depth just follows the shape of the puddle."
+ * Modelled before this change was written (an irregular pool with a rock
+ * island poking through it; a screen-position depth paints straight bands
+ * across the rock as if it were not there) and this is that same case,
+ * through the real automaton rather than a hand-authored grid.
+ *
+ * Builds a settled pool, via real sand_t/sand_step(), with a stone plug
+ * through the middle of ONE column's water and nothing interrupting a
+ * SECOND column elsewhere in the same pool. The two columns must see
+ * IDENTICAL local depth for every row ABOVE the plug - both are plain,
+ * uninterrupted water there - and must DIVERGE starting exactly at the row
+ * where the plugged column's water resumes below the rock: that column
+ * resets to a small depth right there, while the other keeps climbing. A
+ * pure screen-position depth - an affine function of cy alone, exactly what
+ * this change replaces - cannot tell the two columns apart at all, which is
+ * exactly the bug this test exists to catch a regression back into. */
+/* A grid of its own, sized for a settled pool deep enough to carry a
+ * two-cell rock plug with real water left above and below it - the
+ * standard W x H fixture (8x8) has no room for that. Named OBST_POOL_*,
+ * not the shorter POOL_W/POOL_H/pool/pool_cells this file already has, to
+ * avoid colliding with that unrelated fixture (the pour-source tests
+ * further down) - a different shape for a different purpose entirely. */
+#define OBST_POOL_W 6
+#define OBST_POOL_H 14
+static uint8_t obst_pool_cells[OBST_POOL_W * OBST_POOL_H];
+static sand_t  obst_pool;
+
+static void test_local_depth_follows_the_puddles_own_shape(void)
+{
+    enum { PW = OBST_POOL_W, PH = OBST_POOL_H };
+    sand_init(&obst_pool, obst_pool_cells, PW, PH, 4242u);
+
+    /* A plain rectangular pool. Off-grid reads as solid (sand_at()'s own
+     * convention), so the grid's own bottom and side edges already act as
+     * walls with no explicit border needed. The pool's own OUTLINE does not
+     * need to be irregular for this test - the irregularity that matters
+     * comes entirely from the rock plug below, not from the water's
+     * silhouette. */
+    for (int y = 2; y < PH; y++) {
+        for (int x = 0; x < PW; x++) {
+            sand_set(&obst_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    /* The obstacle: a two-cell rock plug straight through column OBST_X's
+     * water, with water left continuous above and below it - "an irregular
+     * pool with a rock island poking through it", the exact case that first
+     * suggested this whole change. */
+    enum { OBST_X = 3, OBST_Y0 = 7, OBST_Y1 = 8 };
+    sand_set(&obst_pool, OBST_X, OBST_Y0,
+             CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&obst_pool, OBST_X, OBST_Y1,
+             CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&obst_pool, 0, 1000, 0);   /* straight down, matching the
+                                               * mirror's own fixed gravity */
+    }
+
+    enum { CLEAR_X = 0 };   /* an unobstructed column, elsewhere in the same
+                             * pool */
+
+    unsigned depth_obstructed[PH], depth_clear[PH];
+    mirror_local_depth_column(&obst_pool, OBST_X, PH, depth_obstructed);
+    mirror_local_depth_column(&obst_pool, CLEAR_X, PH, depth_clear);
+
+    /* Sanity: the obstacle actually landed where this test built it, and
+     * water survived on both sides of it - otherwise the rest of this test
+     * proves nothing. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&obst_pool, OBST_X, OBST_Y0)),
+        "setup: the rock plug must still be stone after settling");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&obst_pool, OBST_X, OBST_Y1 + 1)),
+        "setup: water must still be there just below the plug, or this "
+        "test is not exercising the case it claims to");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&obst_pool, CLEAR_X, OBST_Y1 + 1)),
+        "setup: the comparison column must be plain water all the way "
+        "down, with nothing of its own to reset against");
+
+    /* ABOVE the plug: both columns are uninterrupted water from the same
+     * surface, so local depth must agree row for row - the two only differ
+     * once the obstacle actually intervenes. */
+    for (int y = 2; y < OBST_Y0; y++) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "row %d is above the obstacle in both columns - local "
+                 "depth must agree there, or this test is not isolating "
+                 "the obstacle's own effect", y);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(depth_clear[y], depth_obstructed[y],
+                                       why);
+    }
+
+    /* THE DIVERGENCE ITSELF: the row right below the plug is where the
+     * obstructed column's local depth must RESET to 0 - its neighbour
+     * toward the surface is stone, not water, so this cell IS the boundary
+     * of its own body rather than a continuation of the column above the
+     * rock - while the clear column keeps climbing from wherever it
+     * already was. */
+    const int first_row_below_plug = OBST_Y1 + 1;
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, depth_obstructed[first_row_below_plug],
+        "the water cell right below the rock plug must show local depth "
+        "0 - its neighbour toward the surface is stone, not water, so it "
+        "is a fresh boundary of its own body, not a continuation of the "
+        "column above the rock");
+    TEST_ASSERT_TRUE_MESSAGE(
+        depth_clear[first_row_below_plug] >
+            depth_obstructed[first_row_below_plug],
+        "at the same row, the CLEAR column must show strictly more local "
+        "depth than the obstructed one - it never reset, so it has been "
+        "climbing since the real surface while the obstructed column just "
+        "started over at the rock");
+
+    /* And it keeps climbing from there rather than staying stuck at the
+     * reset: a few more cells into the water below the plug, the
+     * obstructed column's own local depth must have grown past its
+     * post-reset value, exactly the way the clear column already has all
+     * along - the reset is a restart, not a ceiling. */
+    TEST_ASSERT_TRUE_MESSAGE(
+        depth_obstructed[PH - 1] > depth_obstructed[first_row_below_plug],
+        "local depth must keep climbing below the plug too, the same way "
+        "it does above it - a reset back to 0 that never climbs again "
+        "would mean the walk stopped working after the first obstacle, "
+        "not merely reset at it");
+
+    /* That material_colours() itself turns a `depth` value into a visibly
+     * different colour is already pinned directly, at controlled values, by
+     * test_a_liquid_interior_is_shaded_by_depth above - not repeated here
+     * with these particular (quite shallow) pool depths, which is the wrong
+     * place to prove it: DEPTH_RANGE's brightening is already close to
+     * maxed out within the first handful of cells of any pool, so two
+     * local depths this close together are not guaranteed to land on
+     * different quantised shades even though they are genuinely different
+     * NUMBERS - which is exactly the property this test exists to check. */
+}
+
+/* Mirrors app_sand.c's col_local_depth[]-plus-axis-flip-reset bookkeeping in
+ * miniature - not calling into app_sand.c itself, which cannot be linked
+ * here (see this section's own top comment) - to pin the ONE property that
+ * could otherwise only be checked by eye on the device: a stale per-column
+ * reading from a VERTICAL-gravity frame must not leak into a fresh
+ * VERTICAL-gravity frame across an intervening HORIZONTAL one, since the two
+ * regimes give the array two entirely different meanings (see
+ * update_local_depth_axis()'s own comment in app_sand.c for the full
+ * argument).
+ *
+ * `painted_cols`/`painted_count` simulate the DIRTY-ROW optimisation: a real
+ * vertical-dominant frame only writes col_local_depth[] for columns whose
+ * row actually repainted, so a faithful mirror of the reset has to leave
+ * SOME columns untouched by the frame that follows the flip, or the
+ * unconditional "write every column" a simpler mirror would use could mask
+ * a missing reset entirely - the untouched columns are exactly where a
+ * missing reset would otherwise leak frame 1's value through undetected. */
+typedef struct {
+    unsigned char depth[8];
+    bool          axis_vertical;
+} mirror_local_depth_state_t;
+
+static void mirror_local_depth_frame(mirror_local_depth_state_t *st,
+                                     bool this_axis_vertical,
+                                     const int *painted_cols,
+                                     size_t painted_count,
+                                     unsigned char fresh_value)
+{
+    if (this_axis_vertical != st->axis_vertical) {
+        /* THE RESET UNDER TEST: see update_local_depth_axis()'s own comment
+         * in app_sand.c for why this has to happen before this frame's own
+         * painting touches the array at all. */
+        memset(st->depth, 0, sizeof st->depth);
+    }
+    st->axis_vertical = this_axis_vertical;
+
+    if (this_axis_vertical) {
+        for (size_t i = 0; i < painted_count; i++) {
+            st->depth[painted_cols[i]] = fresh_value;
+        }
+    }
+    /* A horizontal-dominant frame never writes col_local_depth[] at all -
+     * see LOCAL DEPTH's own comment in app_sand.c for why the horizontal
+     * case needs only a single local variable and never touches this
+     * array. */
+}
+
+static void test_local_depth_resets_when_gravitys_axis_flips(void)
+{
+    mirror_local_depth_state_t st;
+    memset(&st, 0, sizeof st);
+
+    /* Frame 1, vertical: every column gets painted this frame, all with a
+     * distinctive nonzero value - stands in for a fully-dirty vertical
+     * frame. */
+    const int all_cols[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    mirror_local_depth_frame(&st, true, all_cols, 8, 77);
+    for (int i = 0; i < 8; i++) {
+        char why[128];
+        snprintf(why, sizeof why,
+                 "setup: column %d must read 77 right after frame 1, or "
+                 "the rest of this test proves nothing", i);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(77, st.depth[i], why);
+    }
+
+    /* Frame 2, horizontal: the axis itself has changed (vertical to
+     * horizontal), so THIS transition resets the array too - correct, if
+     * redundant, since a horizontal frame never writes col_local_depth[]
+     * anyway and has nothing of its own to protect it from. What actually
+     * matters is the transition just below. */
+    mirror_local_depth_frame(&st, false, NULL, 0, 0);
+
+    /* Frame 3, vertical again - the axis flips BACK, which is the
+     * transition this test exists for - but only column 0 is dirty this
+     * frame (most rows are NOT dirty on a typical frame; see LOCAL DEPTH's
+     * own comment in app_sand.c on why that staleness is normally
+     * accepted). If the reset on THIS transition were ever missing -
+     * suppose only the "entering horizontal" direction were wired up, say -
+     * a longer run of horizontal frames between two vertical ones (nothing
+     * about this sequence depends on there being exactly one) would leave
+     * columns 1-7 reading frame 1's 77, stale AND meaningless once the axis
+     * itself has changed and changed back, rather than the fresh 0 a
+     * genuinely reset array must show. */
+    const int just_col0[1] = { 0 };
+    mirror_local_depth_frame(&st, true, just_col0, 1, 3);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, st.depth[0],
+        "column 0 was actually painted this frame and must read its fresh "
+        "value");
+    for (int i = 1; i < 8; i++) {
+        char why[240];
+        snprintf(why, sizeof why,
+                 "column %d must read 0 right after the axis flips back "
+                 "to vertical, not 77 left over from frame 1 - the reset "
+                 "is what stops a horizontal-gravity gap from leaking a "
+                 "stale per-column reading into a fresh vertical one", i);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, st.depth[i], why);
+    }
+}
+
+/* test_wave_bands_are_sized_in_cells_not_in_grid_fractions and its
+ * wave_band_transitions() helper used to live here - a regression guard for
+ * the "wave bands are sized in cells, not in grid fractions" fix, walking
+ * paint_row_n()'s then-screen-position accumulator
+ * (material_depth_row_start()/material_wave_row_start(), material.h) at two
+ * different grid heights and asserting the band count agreed.
+ *
+ * REMOVED, not merely updated, because the mechanism it guarded no longer
+ * exists: local depth (see LOCAL DEPTH's own comment in app_sand.c) never
+ * touches grid_w/grid_h at all - it counts cells from each puddle's own
+ * boundary, full stop - so "the wave's period comes from the grid's extent
+ * instead of a fixed cell count" is not a regression this design can
+ * reintroduce short of literally bringing the screen-position walk back.
+ * The property this test protected is now a structural guarantee rather
+ * than a tuning outcome to keep re-checking. What replaced it as the live
+ * regression guard for THIS change is
+ * test_local_depth_follows_the_puddles_own_shape below, which is a strictly
+ * stronger claim: not just "grid-size-independent" but "follows the actual
+ * shape of the puddle, obstacles included". */
+
+/* test_water_interior_hazes_toward_fog_colour, test_only_water_hazes_its_
+ * interior, test_the_wave_table_matches_its_formula, test_wave_bands_vary_
+ * across_depth and test_wave_bands_drift_with_phase, plus TEST_DEPTH_RANGE
+ * and TEST_WAVE_FRAC_BITS, used to live here - the whole "WATER'S FOG"
+ * section, covering the haze blend and the wave-table bands stacked on top
+ * of local depth for water alone.
+ *
+ * REMOVED, not merely updated: on the device the fog blend's own arithmetic
+ * (tuned for the OLD screen-position depth, which legitimately spanned the
+ * full 0-255 range) turned out to be pinned near-maximum haze across every
+ * local depth a real pool in this app ever reaches, so water lost its
+ * saturated blue almost entirely - a genuine bug, not a taste call. The wave
+ * bands had their own, separate problem: local depth commits to a single
+ * dominant axis with a hard, unsmoothed switch between vertical and
+ * horizontal, and the bands rode straight over that seam, reading as rigid
+ * columns rather than an organic gradient. Water's interior now uses
+ * EXACTLY the same plain shade-index shift oil, lava and acid always have -
+ * see material_colours()'s own comment on the liquid interior branch, and
+ * DEPTH_SATURATE_CELLS's comment just above it for the scale fix that came
+ * out of the same round. The wave-table technique and the fog-blend
+ * arithmetic both still exist, untouched, on the water-wave-fog-depth-
+ * banked branch, for anyone who wants to revisit that approach or reuse a
+ * piece of it for a different effect later.
+ *
+ * test_deepest_water_interior_is_exactly_the_body_colour was broadened
+ * rather than deleted outright - see test_every_liquid_interior_is_
+ * exactly_the_body_colour_when_saturated below, next to test_a_liquid_
+ * interior_is_shaded_by_depth, which is now the shared mechanism it
+ * belongs beside rather than a water-only fog boundary. */
+
+/* THE SATURATION BOUNDARY, and now a claim about EVERY liquid rather than
+ * a water-only fog boundary: since water dropped its own fog/wave mechanism
+ * and rejoined the plain shade-index shift oil, lava and acid already used
+ * (see material_colours()'s own comment on the liquid interior branch),
+ * "the deepest interior cell is exactly the body colour" is a structural
+ * property of the one mechanism every liquid now shares, not a boundary
+ * water alone needs pinned. Depth 255 is comfortably past
+ * DEPTH_SATURATE_CELLS (material.c), so every one of these must paint
+ * EXACTLY palette[CELL_MAKE(id, MASS_MAX)], with no shift left at all. */
+static void test_every_liquid_interior_is_exactly_the_body_colour_when_saturated(void)
+{
+    static const uint8_t liquids[] = { MAT_WATER, MAT_OIL, MAT_LAVA,
+                                       MAT_ACID };
+    const gfx_color_t *pal = material_palette();
+
+    for (unsigned k = 0; k < sizeof liquids / sizeof liquids[0]; k++) {
+        const uint8_t id = liquids[k];
+        const gfx_color_t body = pal[CELL_MAKE(id, MASS_MAX)];
+
+        gfx_color_t col[3];
+        material_colours(CELL_MAKE(id, MASS_MAX), 0u, 0u, 255u, col);
+
+        char why[192];
+        snprintf(why, sizeof why,
+                 "%s's deepest interior cell must paint EXACTLY the plain "
+                 "body colour, with no shift left at all, now that every "
+                 "liquid shares the same saturating shade-index mechanism",
+                 materials[id].name);
+        TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
+    }
+}
+
+/* THE REGRESSION THIS WHOLE ROUND EXISTS FOR: a REALISTIC shallow pool -
+ * 10 to 20 cells deep, which is what nearly every visible pool in this app
+ * actually reaches - must still show a MEANINGFUL luminance difference
+ * between a cell near its own surface and one near its own bottom. This is
+ * a stronger claim than test_a_liquid_interior_is_shaded_by_depth above,
+ * which only proves depth 0 differs from depth 255 in the abstract - the
+ * old `/255` divide agreed with that in principle (it does eventually
+ * reach the deepest possible shade), it just took on the order of sixty
+ * cells of local depth to cross even a single shade step, which pinned any
+ * pool this app can actually build dead flat. This test builds a pool of
+ * exactly that realistic depth and checks the difference is a real
+ * fraction of the ramp's own full span, not merely present in the abstract.
+ *
+ * A plain pool via sand_set(), no obstacle and no stepping needed - this is
+ * a claim about material_colours() given a realistic depth value, not
+ * about the solver settling anything - and mirror_local_depth_column()
+ * (defined above, for test_local_depth_follows_the_puddles_own_shape)
+ * reads the REAL local depth back off the live grid, the same way
+ * paint_row_n() would, rather than asserting anything about a hand-picked
+ * depth number in isolation.
+ *
+ * The "meaningful" bar is a quarter of the ramp's own full span (depth 0
+ * versus depth 255, computed here rather than hand-typed), not a
+ * hand-picked luminance number: robust to the ramp ever being retuned,
+ * and still clearly nonzero enough that the old, pinned-flat bug cannot
+ * pass it by accident.
+ *
+ * PROVEN LOAD-BEARING, not merely written and trusted to catch anything:
+ * temporarily restoring the old `(...) / 255` divide in material.c's
+ * depth_q calculation turns this test RED - the surface and bottom rows
+ * land on the identical quantised shade (verified: both idx 12 at depths 1
+ * and 17), reproducing the reported bug exactly. Putting back the
+ * `/ DEPTH_SATURATE_CELLS` divide turns it GREEN again (idx 12 versus idx
+ * 14, a real two-step gap). */
+enum { SHALLOW_POOL_W = 4, SHALLOW_POOL_H = 20 };
+static uint8_t shallow_pool_cells[SHALLOW_POOL_W * SHALLOW_POOL_H];
+static sand_t  shallow_pool;
+
+static void test_a_shallow_puddle_still_shows_real_darkening(void)
+{
+    enum { PW = SHALLOW_POOL_W, PH = SHALLOW_POOL_H };
+    sand_init(&shallow_pool, shallow_pool_cells, PW, PH, 777u);
+
+    /* Rows 0-1 stay empty (the surface); rows 2..PH-1 are water - 18 rows,
+     * squarely inside the 10-20 cell range measured as broken. */
+    for (int y = 2; y < PH; y++) {
+        for (int x = 0; x < PW; x++) {
+            sand_set(&shallow_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    enum { NEAR_SURFACE_Y = 3, NEAR_BOTTOM_Y = PH - 1 };
+    unsigned depth[PH];
+    mirror_local_depth_column(&shallow_pool, 0, PH, depth);
+
+    const unsigned near_surface_depth = depth[NEAR_SURFACE_Y];
+    const unsigned near_bottom_depth  = depth[NEAR_BOTTOM_Y];
+    TEST_ASSERT_TRUE_MESSAGE(
+        near_bottom_depth >= near_surface_depth + 10 &&
+            near_bottom_depth <= near_surface_depth + 20,
+        "setup: these two rows must actually be 10-20 cells of local depth "
+        "apart, or this test is not exercising the range that was measured "
+        "as broken");
+
+    const cell_t c = CELL_MAKE(MAT_WATER, MASS_MAX);
+    gfx_color_t near_surface_col[3], near_bottom_col[3];
+    gfx_color_t shallowest[3], deepest[3];
+    material_colours(c, 0u, 0u, near_surface_depth, near_surface_col);
+    material_colours(c, 0u, 0u, near_bottom_depth, near_bottom_col);
+    material_colours(c, 0u, 0u, 0u, shallowest);
+    material_colours(c, 0u, 0u, 255u, deepest);
+
+    const int near_surface_lum = panel_luminance(near_surface_col[0]);
+    const int near_bottom_lum  = panel_luminance(near_bottom_col[0]);
+    const int full_span =
+        panel_luminance(shallowest[0]) - panel_luminance(deepest[0]);
+
+    char why[384];
+    snprintf(why, sizeof why,
+             "a realistic shallow pool (local depth %u near the surface, "
+             "%u near the bottom) must show a MEANINGFUL luminance "
+             "difference between the two (%d vs %d, against a full ramp "
+             "span of only %d) - the old /255 divide left exactly this "
+             "range pinned flat, which is the bug this whole round exists "
+             "to fix", near_surface_depth, near_bottom_depth,
+             near_surface_lum, near_bottom_lum, full_span);
+    TEST_ASSERT_TRUE_MESSAGE(
+        (near_surface_lum - near_bottom_lum) * 4 >= full_span, why);
+}
+
+/*=============================================================================
+ * WATER'S FOAM - gathered at crevices, never on a flat run.
+ *
+ * material_colours()'s own top comment (material.c) has the full account of
+ * why curvature - and only curvature - decides this: measured on real
+ * sloshing water, a flat pool's rim is non-flat in 4% of its cells and a
+ * pool two steps into a 75 degree tilt is non-flat in 94% of them, which is
+ * why no separate "is it moving" signal is wired in here or anywhere else.
+ *
+ * None of these four tests can reach into material.c's own `water_foam`
+ * constant - it is file-static, the same way glass_shine and stone_speckle
+ * already are, and these tests reach material_colours() only through
+ * material.h same as any other caller. Instead they lean on
+ * material_set_gravity(0, 0), which zeroes liquid_spec[] entirely (see that
+ * function's own free-fall branch), so that "did NOT foam" has an exact,
+ * checkable answer: the plain fill-indexed palette entry, with no shift
+ * applied at all. Foam is the one thing left that can make a rim cell
+ * disagree with that value once gravity contributes nothing. */
+
+/* Every test below reads this rim cell's own fill, at variant 12 - deep
+ * enough that the pale/dark ends of the ramp are not near either clamp,
+ * so a coincidental match with the foam colour is not a risk worth
+ * chasing down. */
+#define FOAM_TEST_FILL 12
+
+/* THE CURVATURE GATE ITSELF - the property every other foam test assumes
+ * without re-checking. A FLAT rim (exactly 3 of 8 neighbours empty, the
+ * shape of the top of an ordinary settled pool - one cardinal side plus
+ * the two diagonals that lean against it) must never foam, at ANY hash;
+ * sweeping all 8 values is what tells "never" apart from "not at this one
+ * hash I happened to try". A cell exposed on all 8 sides - as curved as a
+ * rim on this board can get - must foam for AT LEAST SOME hashes: foam is
+ * a dither (see water_foam_threshold's own comment in material.c), so it
+ * will not be every hash either, and asserting that would be asserting
+ * something the design never promised. */
+static void test_water_foams_where_its_rim_is_curved(void)
+{
+    material_set_gravity(0, 0);
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+
+    const unsigned flat_mask = MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                               MATERIAL_EDGE_UP_RIGHT;
+    const unsigned spike_mask =
+        MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
+        MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+        MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
+
+    int spike_foamed = 0;
+    for (unsigned hash = 0; hash < 8u; hash++) {
+        gfx_color_t flat_col[3], spike_col[3];
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                         flat_mask, 255u, flat_col);
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                         spike_mask, 255u, spike_col);
+
+        char why[192];
+        snprintf(why, sizeof why,
+                 "a flat water rim (curvature 0) must never foam, at hash "
+                 "%u - foam appearing on a straight run means the gate is "
+                 "reading something other than curvature", hash);
+        TEST_ASSERT_EQUAL_MESSAGE(plain, flat_col[0], why);
+
+        if (spike_col[0] != plain) {
+            spike_foamed++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, spike_foamed,
+        "a rim cell exposed on all 8 sides is as curved as this board's "
+        "rims get, and must foam for at least some of the 8 hash values - "
+        "if none of them do, curvature is not reaching the foam gate at "
+        "all");
+}
+
+/* GUARDS CHANGE 4 - raising water_foam_threshold's non-zero entries (change
+ * 4: { 0, 2, 4, 6 } to { 0, 3, 5, 7 }, to make the alternating foam actually
+ * visible) must not touch the ONE entry that is not a tuning knob at all:
+ * curvature 0, a flat rim, has to stay exactly 0. That is the one shape on
+ * this board that must never sprout foam - the top of a still pool - and
+ * raising the OTHER three thresholds is exactly the kind of edit that could
+ * bump this one too by a slip of the same find-and-replace, since all four
+ * entries sit in one small table (see water_foam_threshold in material.c).
+ *
+ * test_water_foams_where_its_rim_is_curved above already sweeps this same
+ * flat shape across all 8 hashes, but always at whatever the foam phase
+ * happened to be left at. That is not enough here: the dither compares
+ * `hash + foam_phase * 0x9E37u` against the threshold, so a mistake that
+ * raised the flat entry from 0 to something small - say 1 - would still
+ * read as "never foams" for MOST hash/phase combinations and only show up
+ * at the few where the mixed value happens to land under it. Sweeping the
+ * full 8x8 grid of hash and phase is what makes "never" mean never rather
+ * than "not at the one combination this test happened to try". */
+static void test_a_flat_rim_still_never_foams(void)
+{
+    material_set_gravity(0, 0);   /* no specular term to confuse a
+                                            * pure foam comparison with */
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+
+    /* Curvature 0: exactly 3 of 8 neighbours empty - one cardinal side plus
+     * the two diagonals that lean against it, the shape of the top of an
+     * ordinary settled pool. Same shape test_water_foams_where_its_rim_is_
+     * curved already uses for its own flat check. */
+    const unsigned flat_mask = MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                               MATERIAL_EDGE_UP_RIGHT;
+
+    for (unsigned phase = 0; phase < 8u; phase++) {
+        material_set_foam_phase(phase);
+        for (unsigned hash = 0; hash < 8u; hash++) {
+            gfx_color_t col[3];
+            material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                             flat_mask, 255u, col);
+
+            char why[192];
+            snprintf(why, sizeof why,
+                     "a flat water rim (curvature 0) must never foam, at "
+                     "hash %u and phase %u - if this ever foams, the "
+                     "raised thresholds from change 4 have bled into the "
+                     "one entry that must stay exactly 0", hash, phase);
+            TEST_ASSERT_EQUAL_MESSAGE(plain, col[0], why);
+        }
+    }
+
+    material_set_foam_phase(0);   /* leave global state as later tests
+                                   * assume it */
+}
+
+/* Oil, lava and acid share water's rim code path - the fill-indexed lookup
+ * shifted by liquid_spec[] - right up until the id check that hands water
+ * off into foam. This is the "water only" constraint, and the failure mode
+ * it exists to catch is specific: putting the id check one level too high
+ * (or leaving it out) would foam every liquid's rim alike, since curvature
+ * itself does not know or care which liquid it is measuring.
+ *
+ * Same high-curvature shape as the previous test's spike_mask, and the
+ * same hash sweep - if water can be made to foam by this shape, these
+ * three must be provably immune to it under the exact same inputs, not
+ * just "probably fine" under whatever the loop's default happened to be. */
+static void test_only_water_foams(void)
+{
+    material_set_gravity(0, 0);
+    const gfx_color_t *pal = material_palette();
+    const unsigned spike_mask =
+        MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
+        MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+        MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
+    static const uint8_t non_water[] = { MAT_OIL, MAT_LAVA, MAT_ACID };
+
+    for (unsigned k = 0; k < sizeof non_water / sizeof non_water[0]; k++) {
+        const uint8_t id = non_water[k];
+        const gfx_color_t plain = pal[CELL_MAKE(id, FOAM_TEST_FILL)];
+
+        for (unsigned hash = 0; hash < 8u; hash++) {
+            gfx_color_t col[3];
+            material_colours(CELL_MAKE(id, FOAM_TEST_FILL), hash, spike_mask,
+                             255u,
+                             col);
+
+            char why[128];
+            snprintf(why, sizeof why,
+                     "%s at maximum rim curvature must paint exactly what "
+                     "it painted before foam existed, at hash %u - only "
+                     "water may foam",
+                     materials[id].name, hash);
+            TEST_ASSERT_EQUAL_MESSAGE(plain, col[0], why);
+        }
+    }
+}
+
+/* Guards the interior fix 6a05faa exists for: `mask == 0` (no cardinal
+ * side open) must keep painting the flat body colour regardless of what
+ * the diagonal bits say, because an interior cell is never a rim and
+ * foam is a rim-only decoration. Swept across masks that are pure
+ * diagonal - no cardinal bit at all - specifically because that is the
+ * shape a broken cardinal test would miss: a mistake that gated foam (or
+ * the rim split generally) on `mask != 0` instead of
+ * `mask & MATERIAL_EDGE_CARDINAL` would light these up as rim cells, and
+ * every one of them must still read as plain interior water instead. */
+static void test_a_liquid_interior_never_foams(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
+
+    static const unsigned interior_masks[] = {
+        0u,
+        MATERIAL_EDGE_UP_LEFT,
+        MATERIAL_EDGE_UP_RIGHT,
+        MATERIAL_EDGE_DOWN_LEFT,
+        MATERIAL_EDGE_DOWN_RIGHT,
+        MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+            MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT,
+    };
+
+    for (unsigned k = 0;
+         k < sizeof interior_masks / sizeof interior_masks[0]; k++) {
+        for (unsigned hash = 0; hash < 8u; hash++) {
+            gfx_color_t col[3];
+            material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                             interior_masks[k], 255u, col);
+
+            char why[192];
+            snprintf(why, sizeof why,
+                     "an interior water cell (mask %#x, hash %u) must "
+                     "paint the flat body colour - diagonal bits with no "
+                     "cardinal side open do not make a cell a rim, and "
+                     "only a rim may foam", interior_masks[k], hash);
+            TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
+        }
+    }
+}
+
+/* THE REGRESSION GUARD for the trap the diagonal bits opened. Before this
+ * change, `mask != 0` was "is this cell an edge at all", and it was
+ * correct because the mask held nothing but the four cardinals. Adding
+ * bits 4-7 makes that test silently wrong: a cell with every cardinal
+ * neighbour occupied and exactly one diagonal empty would newly read as
+ * an edge, and glass and stone would start outlining cells they used to
+ * paint as solid interior - a change to two materials nobody asked to
+ * touch, from a mistake nowhere near either of their own code.
+ *
+ * Checked by comparing a diagonal-only mask directly against mask 0 for
+ * glass, stone, and a liquid: if MATERIAL_EDGE_CARDINAL is not what gates
+ * the edge test (or the mask ever changes shape again), this is the test
+ * that goes red, not some unrelated glass or stone test that merely
+ * happens to exercise an edge. */
+static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
+{
+    const unsigned diagonal_only = MATERIAL_EDGE_UP_LEFT;
+
+    {
+        gfx_color_t interior[3], diagonal[3];
+        const material_pattern_t pat_i = material_colours(
+            CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 255u, interior);
+        const material_pattern_t pat_d = material_colours(
+            CELL_MAKE(MAT_GLASS, 5), 1u, diagonal_only, 255u, diagonal);
+
+        TEST_ASSERT_EQUAL_MESSAGE(pat_i, pat_d,
+            "a lone diagonal neighbour must not change glass's pattern - "
+            "if this differs, glass just grew an outline nobody drew");
+        TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
+            "glass's body colour must be identical with a lone diagonal "
+            "neighbour empty - the cardinal test is what decides an edge, "
+            "not `mask != 0`");
+        TEST_ASSERT_EQUAL_MESSAGE(interior[1], diagonal[1],
+            "and its dither, which glass_edge_dither vs glass_dither would "
+            "otherwise silently swap in");
+        TEST_ASSERT_EQUAL_MESSAGE(interior[2], diagonal[2],
+            "and its shine, for the same reason");
+    }
+
+    {
+        gfx_color_t interior[3], diagonal[3];
+        material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 255u,
+                         interior);
+        material_colours(CELL_MAKE(MAT_STONE, 5), 1u, diagonal_only,
+                         255u,
+                         diagonal);
+
+        TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
+            "a lone diagonal neighbour must not switch stone onto its "
+            "edge speckle - stone_edge_speckle vs stone_speckle must both "
+            "still read as `mask & MATERIAL_EDGE_CARDINAL`, not `mask`");
+    }
+
+    {
+        gfx_color_t interior[3], diagonal[3];
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), 1u, 0u,
+                         255u,
+                         interior);
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), 1u,
+                         diagonal_only, 255u, diagonal);
+
+        TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
+            "a lone diagonal neighbour must not turn an interior water "
+            "cell into a rim - the interior/rim split reads "
+            "MATERIAL_EDGE_CARDINAL exactly like glass and stone do, and "
+            "a rim wrongly declared here could even start foaming");
+    }
+}
+
+/*=============================================================================
+ * FOAM ANIMATES: a phase, mixed into the dither, so the same shape keeps
+ * showing a DIFFERENT set of foamed cells from one frame to the next.
+ *
+ * Before this, foam was gated purely by (hash & 7u) against curvature's
+ * threshold - stable for as long as the shape held still, which read as a
+ * texture painted onto the water rather than something moving on it.
+ * material_set_foam_phase() (material.h) adds a second, frame-global input
+ * that material_colours() XORs into the hash before the same threshold test,
+ * so the same cell's answer keeps changing while its curvature does not.
+ *
+ * All three tests below share the same high-curvature mask - all eight
+ * neighbours empty, as curved as a rim on this board gets - because a flat
+ * mask's threshold is 0 (see water_foam_threshold's own comment in
+ * material.c) and `(anything) & 7u < 0` can never be true: a flat cell
+ * cannot be made to foam by ANY hash or phase, which would make it useless
+ * for pinning that phase changes the answer. */
+static const unsigned foam_spike_mask =
+    MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
+    MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+    MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
+
+/* THE PHASE ITSELF CHANGES THE ANSWER, for one cell whose shape and hash
+ * never change. A fixed hash at maximum curvature is swept across sixteen
+ * phase values - two full periods of the 3-bit dither the mixing formula
+ * cycles through, so a period this test happened to straddle badly cannot
+ * hide either outcome - and both a foaming and a non-foaming phase must
+ * turn up. Missing either half is a real, different failure: never foaming
+ * means material_set_foam_phase() is not reaching the dither at all; always
+ * foaming means something ELSE (the fixed hash, the fixed curvature) is
+ * deciding this and the phase is doing nothing. Pins CHANGE 1 - the phase
+ * existing and actually being read. */
+static void test_foam_moves_between_frames(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+    const unsigned fixed_hash = 3u;   /* arbitrary - any value works except
+                                       * one that happens to sit exactly on
+                                       * the threshold boundary for every
+                                       * phase in the sweep, which 3 does
+                                       * not */
+
+    bool ever_foamed = false;
+    bool ever_plain = false;
+
+    for (unsigned phase = 0; phase < 16u; phase++) {
+        material_set_foam_phase(phase);
+
+        gfx_color_t col[3];
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), fixed_hash,
+                         foam_spike_mask, 255u, col);
+
+        if (col[0] != plain) {
+            ever_foamed = true;
+        } else {
+            ever_plain = true;
+        }
+    }
+    material_set_foam_phase(0);   /* leave global state as later tests
+                                   * assume it, the same as material_set_
+                                   * gravity(0, 0) does at the top of other
+                                   * tests in this file */
+
+    TEST_ASSERT_TRUE_MESSAGE(ever_foamed,
+        "a fixed hash at maximum curvature must foam for at least one of "
+        "the sixteen phases swept here - if it never does, "
+        "material_set_foam_phase() is not reaching the dither at all");
+    TEST_ASSERT_TRUE_MESSAGE(ever_plain,
+        "and the same fixed hash, same shape, must ALSO read as plain rim "
+        "for at least one of those sixteen phases - foaming at every one of "
+        "them means the cell's shape is what decided this, not the phase, "
+        "and the animation this test exists to pin is not happening");
+}
+
+/* THE WINDOW MUST ROTATE, NOT STALL - the property ADD buys and XOR
+ * broke, and the one that actually matters to how foam reads on the panel.
+ *
+ * An earlier version of this test used XOR and checked a different,
+ * WRONG property: that two widely-separated phases (0 and 6) disagreed
+ * about a handful of hashes sharing one blob. That is not a unison bug -
+ * cells inside the same 2x2 blob are SUPPOSED to agree, by design (see
+ * test_foam_blobs_are_bigger_than_one_cell) - and it never caught the
+ * actual defect, which is that XOR's mixing can leave the foaming set
+ * IDENTICAL between two phases RIGHT NEXT TO EACH OTHER. Measured on a
+ * real sloshing scene at medium curvature, phase 1 to phase 2 changed
+ * exactly zero cells out of 635 - foam that is supposed to shimmer every
+ * tick instead sat there unchanged for a full step, indistinguishable
+ * from the stable dither this whole change exists to replace.
+ *
+ * So this test checks the two properties that actually separate a
+ * shimmer from either failure mode, swept across a full cycle of all 8
+ * phases and at each of the three curvatures the threshold table
+ * distinguishes (masks chosen for empty-neighbour counts of 4, 1 and 8 -
+ * curvature 1, 2 and 3 respectively; see material_colours()'s own comment
+ * on curvature for the count-to-curvature arithmetic), against a spread of
+ * eight DISTINCT hash values (0 through 7, a complete residue set) rather
+ * than a handful of real coordinates that could incidentally land in one
+ * blob:
+ *
+ *   NEITHER DEGENERATE. At any single phase, the foaming subset of the
+ *   eight hashes must be neither all of them nor none of them - the
+ *   genuine unison guard. This was never actually broken by XOR (with
+ *   only water_foam_threshold[curvature] of 8 values ever under the
+ *   threshold, the rim cannot turn wholly on or off under any mixing that
+ *   only permutes those 8 values) but is worth pinning in its own right.
+ *
+ *   NEVER STALLS. No two phases NEXT TO EACH OTHER may produce the
+ *   identical foaming subset, over the full 8-phase cycle. This is the
+ *   property XOR actually failed, at all three curvatures, worst at
+ *   medium (see the long comment on the mixing site in material.c for the
+ *   measured 4-of-8, 6-of-8, 4-of-8 breakdown) - and the one a future
+ *   change back to XOR would break again, which is exactly what this
+ *   assertion exists to catch. */
+static void test_foam_never_stalls_between_frames(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+
+    /* Empty-neighbour counts of 4, 1 and 8 give curvatures 1, 2 and 3 -
+     * one mask per row of water_foam_threshold[] that the flat entry
+     * (curvature 0, threshold 0) does not already cover trivially. */
+    const unsigned curvature1_mask =
+        MATERIAL_EDGE_UP | MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT |
+        MATERIAL_EDGE_UP_RIGHT;                        /* count 4 */
+    const unsigned curvature2_mask = MATERIAL_EDGE_UP;  /* count 1 */
+    const unsigned masks[3] = { curvature1_mask, curvature2_mask,
+                               foam_spike_mask /* count 8 */ };
+    static const unsigned curvatures[3] = { 1, 2, 3 };
+
+    for (unsigned m = 0; m < 3; m++) {
+        bool foamed[8][8];   /* [phase][hash] */
+
+        for (unsigned phase = 0; phase < 8u; phase++) {
+            material_set_foam_phase(phase);
+            for (unsigned hash = 0; hash < 8u; hash++) {
+                gfx_color_t col[3];
+                material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                                 masks[m], 255u, col);
+                foamed[phase][hash] = (col[0] != plain);
+            }
+        }
+
+        for (unsigned phase = 0; phase < 8u; phase++) {
+            unsigned count = 0;
+            for (unsigned hash = 0; hash < 8u; hash++) {
+                if (foamed[phase][hash]) {
+                    count++;
+                }
+            }
+
+            char why[192];
+            snprintf(why, sizeof why,
+                     "at curvature %u, phase %u: the foaming subset of all "
+                     "8 hashes must be neither every one of them nor none "
+                     "of them, or the rim is pulsing as a whole instead of "
+                     "shimmering cell by cell", curvatures[m], phase);
+            TEST_ASSERT_TRUE_MESSAGE(count > 0 && count < 8u, why);
+        }
+
+        for (unsigned phase = 0; phase < 8u; phase++) {
+            const unsigned next = (phase + 1u) % 8u;
+            bool differs = false;
+            for (unsigned hash = 0; hash < 8u; hash++) {
+                if (foamed[phase][hash] != foamed[next][hash]) {
+                    differs = true;
+                }
+            }
+
+            char why[256];
+            snprintf(why, sizeof why,
+                     "at curvature %u, phase %u to phase %u: the foaming "
+                     "set must change - two phases next to each other "
+                     "producing the identical set is exactly the stall "
+                     "XOR mixing introduced, measured as zero changed "
+                     "cells out of 635 on a real sloshing scene",
+                     curvatures[m], phase, next);
+            TEST_ASSERT_TRUE_MESSAGE(differs, why);
+        }
+    }
+
+    material_set_foam_phase(0);   /* leave global state as later tests
+                                   * assume it */
+}
+
+/* Mirrors FOAM_BLOB_SHIFT in app_sand.c. Duplicated rather than shared,
+ * because paint_row_n() - the only thing that actually applies the shift -
+ * is static to that file and this suite links against material.c alone, on
+ * the host. If FOAM_BLOB_SHIFT ever moves, this has to move with it by
+ * hand; there is no way around that without exposing a knob that exists
+ * only to be tuned by eye on the device. */
+#define TEST_FOAM_BLOB_SHIFT 3
+
+/* FOAM'S BLOBS ARE ACTUALLY BIGGER THAN ONE CELL - the coarse-sampling half
+ * of change 2, checked directly against material_grain_hash() rather than
+ * through paint_row_n(), which cannot be linked into a host test (it is
+ * `static` in app_sand.c).
+ *
+ * Two claims, both necessary. WITHIN an 8x8 block, cells must collapse to
+ * the identical shifted coordinate and therefore the identical hash -
+ * shifting cx and cy right by three turns every coordinate 0-7 into the
+ * same value, and likewise 8-15 - which is the entire mechanism a blob
+ * rests on: paint_row_n() hands every cell of a block this same hash, so
+ * they can only ever agree about whether to foam. The four cells sampled
+ * below are the four CORNERS of that 8x8 block - (0,0), (7,0), (0,7) and
+ * (7,7) relative to the block's own start - rather than an adjacent pair:
+ * an 8x8 block is 4x the area a 4x4 one was, so the adjacent-corner
+ * sub-sample that used to stand in for "the whole block" upstairs would
+ * now cover only a sliver of it. Testing the actual extremes proves the
+ * WHOLE block agrees, corner to corner, not just two cells that happen to
+ * sit next to each other. BETWEEN two blocks that hash must generally
+ * differ, or the "coarse grid" has collapsed to one giant block covering
+ * the whole board instead of a grid of small ones - checked at two block
+ * starts eight cells apart, exactly one block width, so an off-by-one in
+ * where a block begins cannot hide behind a coincidence. */
+static void test_foam_blobs_are_bigger_than_one_cell(void)
+{
+    static const int block_starts[] = { 0, 8 };
+    unsigned block_hash[2];
+    const int cy0 = 0;   /* 0 and cy0+7 = 7 both floor to the same block
+                         * only when the block starts at 0 - the corners
+                         * are the block's own first and last row, so
+                         * there is no mod-arithmetic edge case to reason
+                         * about the way an interior cy would need. */
+
+    for (unsigned b = 0; b < 2; b++) {
+        const int cx0 = block_starts[b];
+        const unsigned top_left = material_grain_hash(
+            cx0 >> TEST_FOAM_BLOB_SHIFT, cy0 >> TEST_FOAM_BLOB_SHIFT);
+        const unsigned top_right = material_grain_hash(
+            (cx0 + 7) >> TEST_FOAM_BLOB_SHIFT, cy0 >> TEST_FOAM_BLOB_SHIFT);
+        const unsigned bottom_left = material_grain_hash(
+            cx0 >> TEST_FOAM_BLOB_SHIFT, (cy0 + 7) >> TEST_FOAM_BLOB_SHIFT);
+        const unsigned bottom_right = material_grain_hash(
+            (cx0 + 7) >> TEST_FOAM_BLOB_SHIFT, (cy0 + 7) >> TEST_FOAM_BLOB_SHIFT);
+
+        char why[256];
+        snprintf(why, sizeof why,
+                 "all four corner cells of the 8x8 block starting at "
+                 "(%d,%d) must feed foam the identical hash, or foam "
+                 "speckles single cells the way every other material's "
+                 "grain does instead of clustering into the blob it is "
+                 "supposed to", cx0, cy0);
+        TEST_ASSERT_EQUAL_MESSAGE(top_left, top_right, why);
+        TEST_ASSERT_EQUAL_MESSAGE(top_left, bottom_left, why);
+        TEST_ASSERT_EQUAL_MESSAGE(top_left, bottom_right, why);
+
+        block_hash[b] = top_left;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(block_hash[0] != block_hash[1],
+        "two blocks eight cells apart must generally get DIFFERENT hashes, "
+        "or the coarse sampling has collapsed to one giant block instead "
+        "of a grid of small ones");
+}
 
 /* Burying lava does not delete it.
  *
@@ -7782,7 +9117,8 @@ static void test_the_right_extended_materials_are_speckled(void)
         int distinct = 0;
         gfx_color_t seen[8];
         for (unsigned hash = 0; hash < 8u; hash++) {
-            const material_pattern_t pat = material_colours(c, hash, false,
+            const material_pattern_t pat = material_colours(c, hash, 0u,
+                                                            255u,
                                                             col);
             char why[96];
             snprintf(why, sizeof why, "extended material %d", k);
@@ -15786,6 +17122,23 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_grain_is_quieter_than_stone);
     RUN_TEST(test_the_shine_does_not_vary_between_cells);
     RUN_TEST(test_stone_speckles_by_position_at_every_temperature);
+    RUN_TEST(test_a_liquid_body_paints_flat_inside);
+    RUN_TEST(test_a_liquid_interior_is_shaded_by_depth);
+    RUN_TEST(test_only_a_liquid_interior_reads_depth);
+    RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
+    RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
+    RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
+    RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
+    RUN_TEST(test_every_liquid_interior_is_exactly_the_body_colour_when_saturated);
+    RUN_TEST(test_a_shallow_puddle_still_shows_real_darkening);
+    RUN_TEST(test_water_foams_where_its_rim_is_curved);
+    RUN_TEST(test_a_flat_rim_still_never_foams);
+    RUN_TEST(test_only_water_foams);
+    RUN_TEST(test_a_liquid_interior_never_foams);
+    RUN_TEST(test_a_diagonal_neighbour_alone_is_not_an_edge);
+    RUN_TEST(test_foam_moves_between_frames);
+    RUN_TEST(test_foam_never_stalls_between_frames);
+    RUN_TEST(test_foam_blobs_are_bigger_than_one_cell);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
