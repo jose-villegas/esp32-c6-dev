@@ -10976,7 +10976,19 @@ static impulse_t impulse_buf[W * H];
  * radial line-of-sight raycast from the centre (the obvious first instinct
  * the plan rejects) would both pass every other test in this file, but only
  * the first one keeps a blast that starts inside a sealed container from
- * reaching outside it. */
+ * reaching outside it.
+ *
+ * HALF OF A TWO-PART GUARANTEE, not the whole of it, since a wall gained a
+ * density-scaled chance to be dislodged (see queue_flying_grain()'s own
+ * comment in sand.c). This half is the one that still has to hold
+ * absolutely: a WEAK OR DISTANT blast - radius 1, here, against a wall
+ * three cells away - never reaches the wall's own candidate cells at all,
+ * so the density roll never gets a turn and containment stays exact, the
+ * same as it always did. See test_a_strong_close_blast_can_breach_a_wall,
+ * right after this one, for the other half - proof the wall CAN give way
+ * when a blast is pointed directly at it with enough force, so that
+ * capability has real coverage instead of being an unverified side effect
+ * of the density roll's existence. */
 static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
 {
     fixture();
@@ -11042,6 +11054,154 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
         "outside the core, a blast only ever loses cells to fire being "
         "smothered, never creates or duplicates one, even when it is "
         "fully contained");
+}
+
+/* THE OTHER HALF - see test_a_blast_inside_a_sealed_vessel_stays_inside_it's
+ * own comment just above for the first. A small box (walls at x=1/x=6 and
+ * y=1/y=6, a 4x4 open interior) with genuine empty MARGIN outside its own
+ * walls (x=0, x=7, y=0, y=7 - not just the grid's implicit edge, which
+ * would give a dislodged cell nowhere to actually go and prove nothing),
+ * detonated close to one corner at a radius that reaches every wall cell
+ * at least once: centre (3,3), radius 4, so the nearest wall (x=1, two
+ * cells away) sits well inside the annulus and the farthest (x=6, three
+ * cells away) still does. Every wall cell this radius reaches gets its own
+ * independent density roll (see queue_flying_grain()'s own comment in
+ * sand.c) - stone's chance is 55-in-256 (~21%) per cell, and enough of the
+ * box wall falls inside this annulus that at least one succeeding is the
+ * expected outcome, not a coin flip on a single cell.
+ *
+ * fixture()'s own fixed seed (12345) is what makes this deterministic
+ * rather than a maybe: this exact scene, run against the real, shipped
+ * sand_explode(), was checked to produce exactly one escaped wall cell -
+ * the corner at (6,1), thrown to (7,0) - and that observed outcome is
+ * what this test asserts, the same way this project already treats an
+ * RNG-driven result as a fact to pin down by running the real code, not
+ * something to derive by hand from the generator's own algorithm (see the
+ * "20,000-seed sweep" and similar measured-not-argued precedents
+ * elsewhere in this file and in sand.h). If SAND_IMPULSE_SPEED_RAMP, the
+ * density formula, the RNG algorithm, or fixture()'s own seed ever change,
+ * this specific outcome may change with them and need re-checking the
+ * same way - it is not a law the way containment itself still is. */
+static void test_a_strong_close_blast_can_breach_a_wall(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    for (int y = 1; y <= 6; y++) {
+        for (int x = 1; x <= 6; x++) {
+            const bool on_wall = (x == 1 || x == 6 || y == 1 || y == 6);
+            if (on_wall) {
+                sand_set(&s, x, y, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+            }
+        }
+    }
+
+    sand_explode(&s, 3, 3, 4);
+
+    const int max_lifetime = (SAND_EXPLODE_INITIAL_SPEED +
+                              SAND_IMPULSE_SPEED_RAMP - 1) /
+                             SAND_IMPULSE_SPEED_RAMP;
+    for (int i = 0; i < max_lifetime + 20; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int stone_outside_box = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const bool inside_box = x >= 1 && x <= 6 && y >= 1 && y <= 6;
+            if (!inside_box && CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STONE) {
+                stone_outside_box++;
+            }
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, stone_outside_box,
+        "a strong enough blast pointed directly at a close wall must be "
+        "able to dislodge at least one wall cell past the box's own "
+        "margin - this is the capability the density roll exists to "
+        "provide, and it needs to be seen actually happening, not just "
+        "assumed from the roll's own arithmetic");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, 7, 0)),
+        "the corner cell at (6,1), the one this exact seed's rolls "
+        "dislodge, lands at (7,0) once it has somewhere open to fly "
+        "into - see this test's own top comment for why (7,0), "
+        "specifically, and not merely 'somewhere outside'");
+}
+
+/* THE OTHER HALF OF sand_explode()'s OWN SPLIT (see sand_displace()'s own
+ * comment in sand.h for the two reasons a caller might want the push
+ * without the fire - correctness, for a future pure-pressure event like
+ * confined steam, and cost, since fire latches `may_have_burning` and
+ * keeps the whole reactions pass alive until it burns out). Wood placed
+ * EXACTLY at the centre is the sharpest possible check: sand_explode()'s
+ * own core fill (SAND_EXPLODE_CORE_DIVISOR) would flash that exact cell
+ * into fire unconditionally, occupied or not, material or not.
+ * sand_displace() has no core concept to do that with at all - the centre
+ * offset is skipped for the ordinary "no direction to throw it in" reason
+ * every other test in this file already relies on (see queue_outward_
+ * impulse()'s own comment in sand.c), not because anything here decided
+ * to spare it. If that wood is still wood, nothing tried to burn it. */
+static void test_sand_displace_alone_never_creates_fire_or_smoke(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    for (int y = 1; y <= 5; y++) {
+        for (int x = 1; x <= 5; x++) {
+            sand_set(&s, x, y, SAND_FIRST_SHADE);
+        }
+    }
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_WOOD, 0));
+
+    sand_displace(&s, 3, 3, 3);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_WOOD, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "sand_displace() has nothing that fills a core with fire - the "
+        "centre cell must be exactly what it was before the call");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, s.impulse_count,
+        "the surrounding sand must actually have been queued to fly, or "
+        "this scene never exercised the displacement half of this "
+        "function at all - a test proving 'no fire' means nothing if "
+        "nothing else happened either");
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, x, y)),
+                "sand_displace() must never place fire anywhere on the "
+                "board - that is sand_explode()'s own addition on top of "
+                "this function, not something this function does itself");
+        }
+    }
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_FIRE, CELL_MATERIAL(c),
+                "still no fire anywhere after settling - nothing sand_"
+                "displace() did should have given the reactions pass "
+                "anything to ignite");
+            /* Smoke, in this simulation, is physically the same material
+             * a kettle's own steam is (see MAT_FIRE's own `.residue`
+             * comment in material.c) - a burnt-out flame or a finished
+             * log leaves MAT_STEAM behind, not a separate "smoke"
+             * material. Nothing in this scene ever boils water either,
+             * so any MAT_STEAM found here could only have come from
+             * something burning out - which nothing did. */
+            TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_STEAM, CELL_MATERIAL(c),
+                "and no smoke either - smoke/steam residue is what a "
+                "burnt-out fire or finished log leaves behind, and "
+                "nothing here was ever set alight to finish burning");
+        }
+    }
+    TEST_ASSERT_FALSE_MESSAGE(cell_is_burning(sand_at(&s, 3, 3)),
+        "the wood at the centre must not have caught fire from anything "
+        "sand_displace() did, however long the simulation runs "
+        "afterward");
 }
 
 static void test_a_blast_conserves_grains(void)
@@ -13484,7 +13644,19 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
  * inside must leave that outside margin exactly as empty as it started -
  * the inverse of the base scene's own claim, checked at the same real
  * scale rather than the tiny hand-built vessel the mechanism-level tests
- * above already cover. */
+ * above already cover.
+ *
+ * STILL THE "WEAK OR DISTANT" HALF of the two-part guarantee a wall's
+ * density-scaled dislodge chance now leaves (see test_a_strong_close_
+ * blast_can_breach_a_wall in the mechanism-level section above, and
+ * queue_flying_grain()'s own comment in sand.c, for the other half) -
+ * DUNE_BLAST_RADIUS against VESSEL_MARGIN's own distance is a genuinely
+ * weak comparison at this real scale (a 25-cell blast against a wall
+ * `VESSEL_MARGIN` cells away, VESSEL_MARGIN chosen well past that
+ * radius), so the annulus here never actually reaches a wall cell to
+ * roll against - this measures the common case, a built container
+ * still working as a container against an ordinary detonation, not a
+ * claim that no wall can ever be breached at any radius or distance. */
 #define VESSEL_MARGIN 20
 #define VESSEL_WALL   3
 static void build_dune_in_a_vessel_scene(sand_t *s)
@@ -13583,9 +13755,12 @@ static void test_the_vessel_scene_lets_nothing_reach_outside_it(void)
     free(impulses);
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, outside_occupied,
-        "nothing may ever occupy the margin outside a sealed vessel's "
-        "own walls, however powerful the blast inside becomes - this is "
-        "the inverse of the base dune scene's own claim");
+        "at a blast this weak relative to this vessel's own distance, "
+        "nothing may occupy the margin outside its walls - this is the "
+        "inverse of the base dune scene's own claim, for the common case "
+        "a built container is meant to survive; see test_a_strong_close_"
+        "blast_can_breach_a_wall for why 'never, at any radius' is no "
+        "longer the claim this project makes");
 }
 
 /* The base dune, with a strip of wood forming the floor it settles onto -
@@ -15573,6 +15748,8 @@ void run_sand_suite(void)
     RUN_TEST(test_material_can_emit_matches_every_brush_by_kind);
 
     RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
+    RUN_TEST(test_a_strong_close_blast_can_breach_a_wall);
+    RUN_TEST(test_sand_displace_alone_never_creates_fire_or_smoke);
     RUN_TEST(test_a_blast_conserves_grains);
     RUN_TEST(test_a_blast_at_the_edge_stays_in_bounds);
     RUN_TEST(test_a_dropped_entry_never_moves_someone_elses_cell);

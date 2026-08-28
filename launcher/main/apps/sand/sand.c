@@ -425,6 +425,13 @@ static int exact_disc_count(int radius)
     return count;
 }
 
+/* Forward-declared: the shared implementation behind both sand_impulse()
+ * and this file's own annulus seeding lives right next to sand_impulse()
+ * itself, further down, not up here next to its other caller - see that
+ * function's own comment for why one body serves both. */
+static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
+                               bool allow_dislodge_static);
+
 /* One candidate cell of sand_explode()'s own annulus scan, below - split
  * out so the ring-order loop that calls it (see that function's own
  * comment on why ring order rather than row order) does not have to repeat
@@ -512,13 +519,34 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
      * before they can cross the same distance from further inside.
      * Flat speed stays until a falloff is found that does not trade the
      * whole outer annulus for a marginally hotter core. */
-    sand_impulse(s, cx + dx, cy + dy, ring_of(qdx, qdy),
-                 SAND_EXPLODE_INITIAL_SPEED);
+    /* `true` HERE, AND ONLY HERE - see queue_flying_grain()'s own comment
+     * for the density-scaled roll this unlocks and why a blast is the
+     * one caller that gets to make a wall's KIND_STATIC refusal a chance
+     * instead of a certainty. Every other detail of a dislodged wall
+     * cell's flight - speed, direction, everything after this call - is
+     * identical to any other entry; the toughness lives entirely in this
+     * one boolean and the roll behind it. */
+    queue_flying_grain(s, cx + dx, cy + dy, ring_of(qdx, qdy),
+                       SAND_EXPLODE_INITIAL_SPEED, true);
 }
 
-void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
+/* THE SHARED IMPLEMENTATION BEHIND sand_impulse() AND sand_explode()'s OWN
+ * ANNULUS SEEDING - one body, not two, so the bounds/empty/buffer-full
+ * checks that have nothing to do with walls stay in exactly one place.
+ * `allow_dislodge_static` is the ONE thing that differs between the two
+ * callers, and it is deliberately a parameter here rather than a second
+ * copy of this function: sand_impulse() (below) always passes false, so
+ * the PUBLIC primitive keeps its hard default - a wall cannot be thrown -
+ * for any caller that has not explicitly asked otherwise, while sand_
+ * explode()'s own seeding loop (queue_outward_impulse(), above) is the
+ * one caller that has, and passes true. A future caller of sand_impulse()
+ * itself (gunpowder, gas, whatever comes next) inherits the SAFE default
+ * automatically, the same as today - it does not inherit wall-breaking
+ * just because this function grew the capability somewhere inside it. */
+static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
+                               bool allow_dislodge_static)
 {
-    /* Disabled, or already full - see this function's own comment in
+    /* Disabled, or already full - see sand_impulse()'s own comment in
      * sand.h on why both are silent no-ops rather than something a caller
      * has to check for itself first. */
     if (s->impulse_buf == NULL || s->impulse_count >= s->impulse_max) {
@@ -534,32 +562,66 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
         return;   /* nothing there to throw */
     }
 
-    /* A WALL CANNOT BE THROWN, any more than one can be entered - the
-     * missing HALF of can_impulse_enter()'s own rule (step_impulses(), this
-     * file), which only ever gated the DESTINATION a flying grain tries to
-     * move into. Nothing gated the SOURCE: this function's only check used
-     * to be "is there something here to throw", and a stone wall cell is
-     * very much something, so it queued exactly like a grain of sand
-     * would - and once queued, step_impulses() moves any entry into
-     * whatever open (or, since displacement, non-static) cell sits ahead
-     * of it, with no idea the thing it is moving happens to itself be a
-     * wall. A vessel wall thick enough that no earlier, smaller blast's
-     * radius ever reached it hid this for every round before this one: the
-     * annulus simply never touched a wall cell to queue in the first
-     * place. Doubling the radius (see DETONATE_RADIUS_PX in app_sand.c)
-     * was what finally reached one, and the result was exactly what it
-     * sounds like - a chunk of the vessel's own wall, given an outward
-     * push like anything else in the annulus, walking itself into the
-     * genuinely empty space just outside the vessel and leaving the
-     * "sealed" box with a hole in it.
+    /* A WALL CANNOT BE THROWN BY DEFAULT, any more than one can be
+     * entered - the missing HALF of can_impulse_enter()'s own rule
+     * (step_impulses(), this file), which only ever gated the
+     * DESTINATION a flying grain tries to move into. Nothing gated the
+     * SOURCE: this used to be "is there something here to throw", and a
+     * stone wall cell is very much something, so it queued exactly like
+     * a grain of sand would - and once queued, step_impulses() moved any
+     * entry into whatever open (or, since displacement, non-static) cell
+     * sat ahead of it, with no idea the thing it was moving happened to
+     * itself be a wall. A vessel wall thick enough that no earlier,
+     * smaller blast's radius ever reached it hid this for every round
+     * before it was fixed: the annulus simply never touched a wall cell
+     * to queue in the first place. Doubling the radius (see DETONATE_
+     * RADIUS_PX in app_sand.c) was what finally reached one, and the
+     * result was exactly what it sounds like - a chunk of the vessel's
+     * own wall, given an outward push like anything else in the annulus,
+     * walking itself into the genuinely empty space just outside the
+     * vessel and leaving the "sealed" box with a hole in it.
      *
      * KIND_STATIC, the same test can_impulse_enter() uses for the
      * opposite half of this rule, because the reasoning is identical
      * either direction: this simulation defines a wall as the one thing
-     * with no leverage to be moved BY anything, so it must have none to
-     * be moved either. */
+     * with no leverage to be moved BY anything, so BY DEFAULT it has none
+     * to be moved either.
+     *
+     * "BY DEFAULT" IS NO LONGER "ALWAYS", for the one caller that opts in
+     * (`allow_dislodge_static`) - a blast should read as TOUGHER against
+     * stone or glass than sand, not as an invisible wall no explosion can
+     * ever touch. `density` (material.h) is what already measures how
+     * hard this simulation treats something as being to move - can_enter()
+     * (sand_priv.h) gates whether a moving grain displaces what it lands
+     * on by comparing densities the exact same way - so reusing it here
+     * instead of inventing a second "toughness" field keeps one number
+     * meaning one thing everywhere it appears. The chance is `255 -
+     * density`, the same chance-in-256 idiom this project already uses
+     * for flammability, mobility and heat_chance (see tick_decay()'s own
+     * roll in sand_priv.h for the identical `(rng_next(&s->rng) & 0xFF)`
+     * pattern) rather than a new roll shape invented for one case. LOWER
+     * density means a HIGHER chance of being dislodged - not the reverse -
+     * because density is a measure of how much has to move, and a blast's
+     * push is finite: stone and glass (both density 200) are this board's
+     * heaviest materials and get only a 55-in-256 chance (about 21%),
+     * while wood (150, lighter, and correctly so - a beam gives way more
+     * easily than a stone wall) gets 105-in-256 (about 41%), nearly double
+     * - a real, visible difference in toughness rather than a coin flip
+     * that reads the same for every wall regardless of what it is built
+     * from. A failed roll is IDENTICAL to today's unconditional refusal:
+     * the wall holds, nothing else about this cell or this call changes.
+     * A cell that succeeds falls straight through to the same write every
+     * other entry gets, below - same speed, same direction, no other
+     * special-casing once it is airborne; the toughness lives entirely in
+     * whether it gets thrown at all. */
     if (material_of(cell)->kind == KIND_STATIC) {
-        return;
+        if (!allow_dislodge_static) {
+            return;
+        }
+        const int chance = 255 - (int)material_of(cell)->density;
+        if ((int)(rng_next(&s->rng) & 0xFF) >= chance) {
+            return;   /* the roll failed - the wall holds, same as always */
+        }
     }
 
     impulse_t *entry = &s->impulse_buf[s->impulse_count++];
@@ -569,95 +631,23 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
     entry->speed = (uint8_t)speed;
 }
 
-void sand_explode(sand_t *s, int cx, int cy, int radius)
+void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
+{
+    queue_flying_grain(s, x, y, dir, speed, false);
+}
+
+void sand_displace(sand_t *s, int cx, int cy, int radius)
 {
     if (s->impulse_buf == NULL) {
         return;   /* sand_enable_impulses() was never called - see its comment */
-    }
-
-    /* FILL a cavity with fire, before a single flight entry is queued -
-     * see SAND_EXPLODE_CORE_DIVISOR's own comment in sand.h for why an
-     * explosion that only ever seeded entries could never move anything
-     * once the medium it detonates in has no gap of its own to offer, and
-     * for why fire is what fills that gap now rather than emptiness. An
-     * explosion flashes and leaves a plume; it does not silently delete
-     * whatever was standing there.
-     *
-     * Every cell within the core radius is written, unconditionally -
-     * occupied or already empty alike. sand_erase() skips an already-empty
-     * cell because removing nothing is a no-op worth avoiding; there is no
-     * equivalent shortcut here; an empty cell becoming fire is exactly as
-     * real a change as an occupied one converting, and skipping it would
-     * leave a ring of untouched holes inside the fireball on any board that
-     * was not already packed solid.
-     *
-     * Written by hand rather than through a shared helper: place_cell() in
-     * sand_reactions.c is the worked example of what every write like this
-     * owes the simulation (latch the content flags a fresh cell arms, mark
-     * its row dirty, wake its block and neighbours), but it is `static` to
-     * that file, so this repeats the same four things directly instead of
-     * exporting it for one caller.
-     *
-     * CONSEQUENCES, NOT BUGS. Fire ignites flammable neighbours (wood, oil,
-     * gas) and boils adjacent water to steam, same as it always has - an
-     * explosion starting fires and boiling water is the feature, not a
-     * regression to guard against. And the fresh fire cells this loop just
-     * wrote are themselves occupied, non-empty cells inside `radius`, so
-     * the annulus loop below queues THEM as flight entries too, exactly
-     * like any other grain in the disc - the fireball's own edge gets
-     * thrown outward along with everything else, which is one more reason
-     * a real explosion's flash reads as an expanding thing rather than a
-     * static disc. */
-    /* A BARE SINGLE CELL turned out not to be enough of a seed once
-     * SAND_EXPLODE_CORE_DIVISOR grew from 2 to 3 - measured, not assumed:
-     * a 20,000-seed sweep of a fully packed radius-2 detonation (division
-     * gives core_radius 0 there, versus 1 at the old divisor) found the
-     * density-swap collapse simply never reaching far enough to open a
-     * cavity on about 11% of seeds, no matter how many further steps it
-     * was given - genuinely stuck, not merely slow, so more steps was not
-     * the fix. `radius >= 2` clamped to a minimum of 1 restores exactly
-     * the old, already-proven core shape at every radius small enough for
-     * plain division to have zeroed it out, while changing nothing at the
-     * radii that motivated raising the divisor in the first place: at a
-     * real detonation's scale (radius 24), 24 / 3 = 8 is already far
-     * above this floor, so the floor never engages there at all. radius
-     * 1 is deliberately excluded from the clamp - it stays at core_radius
-     * 0, the single centre cell every test and comment already assumes,
-     * since nothing measured that case as broken. */
-    const int core_radius_raw = radius / SAND_EXPLODE_CORE_DIVISOR;
-    const int core_radius = (core_radius_raw == 0 && radius >= 2)
-                                 ? 1 : core_radius_raw;
-    const int core_r2 = core_radius * core_radius;
-    for (int fdy = -core_radius; fdy <= core_radius; fdy++) {
-        for (int fdx = -core_radius; fdx <= core_radius; fdx++) {
-            if (fdx * fdx + fdy * fdy > core_r2) {
-                continue;
-            }
-            const int fx = cx + fdx;
-            const int fy = cy + fdy;
-            if (fx < 0 || fx >= s->w || fy < 0 || fy >= s->h) {
-                continue;
-            }
-            const size_t fat = (size_t)fy * (size_t)s->w + (size_t)fx;
-            /* Fresh, full-life fire - the same MATERIAL_VARIANTS - 1
-             * convention random_cell() (above in this file) uses for any
-             * transient material, so a blast's core reads exactly like
-             * fire painted by hand would: brightest right after ignition,
-             * fading from there via its own ordinary decay. */
-            const cell_t fire = CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1);
-            s->cells[fat] = fire;
-            latch_content_flags(s, fire);
-            mark_rows(s, fy, fy);
-            wake_block_and_neighbors(s, fx, fy);
-        }
     }
 
     /* THE ONE CALLER OF sand_impulse(), seeding many radially. Everything
      * about how a queued grain then moves - the flight pass, the arc, the
      * cap, re-acquisition - is sand_impulse()'s and step_impulses()'s job,
      * not this loop's; all this does is decide which cells qualify and
-     * which direction each one gets, which is the one part of an explosion
-     * that is genuinely specific to its shape.
+     * which direction each one gets, which is the one part of a
+     * displacement that is genuinely specific to its shape.
      *
      * BY RING, OUTWARD FROM THE CENTRE - not by row. See this loop's own
      * comment in sand.h ("QUEUED BY RING, OUTWARD FROM THE CENTRE") for
@@ -733,7 +723,7 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
     /* AGAINST REMAINING ROOM, NOT TOTAL CAPACITY - `s->impulse_max` is how
      * big the buffer IS, not how much of it is FREE right now. Nothing
      * here resets `s->impulse_count` to zero on entry, so a SECOND
-     * explosion fired while a FIRST one's grains are still mid-arc
+     * displacement fired while a FIRST one's grains are still mid-arc
      * (SAND_IMPULSE_SPEED_RAMP hasn't decayed them out yet - see that
      * constant's own comment) finds `s->impulse_count` already above
      * zero. Sizing `keep` from `s->impulse_max` there would compute a
@@ -751,14 +741,15 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
      * buffer's ACTUAL free space at the moment THIS call runs, so `keep`
      * never promises more than what is really left, however many other
      * in-flight entries got there first. A single, uncontended
-     * detonation (`impulse_count` already 0 on entry, the only case a
+     * displacement (`impulse_count` already 0 on entry, the only case a
      * manual DETONATE tap can ever produce today) sees
      * `room == s->impulse_max` and this is a no-op change; it starts
-     * mattering the moment a second caller can trigger sand_explode()
-     * while a first is still resolving - a chain of igniting gas
-     * pockets, say, not yet wired up but exactly the shape of caller
-     * this generality was always meant to survive. Do not simplify this
-     * back to `s->impulse_max` - see
+     * mattering the moment a second caller can trigger sand_displace()
+     * (directly, or through sand_explode(), below) while a first is
+     * still resolving - a chain of igniting gas pockets or confined-
+     * steam bursts, say, not yet wired up but exactly the shape of
+     * caller this generality was always meant to survive. Do not
+     * simplify this back to `s->impulse_max` - see
      * test_two_overlapping_blasts_share_the_buffer_evenly (suite_sand.c)
      * for a test that fails immediately if someone does. */
     const int disc_count = exact_disc_count(radius);
@@ -777,6 +768,113 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
             queue_outward_impulse(s, cx, cy,  ring, dy, r2, disc_count, keep, &accum);
         }
     }
+}
+
+void sand_explode(sand_t *s, int cx, int cy, int radius)
+{
+    if (s->impulse_buf == NULL) {
+        return;   /* sand_enable_impulses() was never called - see its comment */
+    }
+
+    /* FILL a cavity with fire, before a single flight entry is queued -
+     * see SAND_EXPLODE_CORE_DIVISOR's own comment in sand.h for why an
+     * explosion that only ever seeded entries could never move anything
+     * once the medium it detonates in has no gap of its own to offer, and
+     * for why fire is what fills that gap now rather than emptiness. An
+     * explosion flashes and leaves a plume; it does not silently delete
+     * whatever was standing there.
+     *
+     * FIRE IS sand_explode()'s OWN ADDITION, NOT sand_displace()'s -
+     * exactly the reason this function still exists as a thin wrapper
+     * (below) around the shared displacement primitive rather than the
+     * whole mechanism living in one place. Two separate reasons, not one:
+     * CORRECTNESS - a future caller wanting the displacement without the
+     * combustion (a banked idea: a stone shield over lava, breached by
+     * trapped steam PRESSURE rather than heat) must not set anything
+     * alight just because it pushed material around; steam is explicitly
+     * not fire, and folding fire into the shared primitive would make
+     * that impossible to ask for. And COST -
+     * converting a cell to MAT_FIRE latches `may_have_burning` (see
+     * latch_content_flags()), which keeps the ENTIRE reactions pass
+     * active every step until that fire burns itself out, plus whatever
+     * conducted-heat propagation follows from it; a caller that fires
+     * often and never wanted fire (a chain of confined-steam bursts,
+     * exactly the case above) would otherwise pay that ongoing simulation
+     * cost for a side effect it never asked for. sand_displace() never
+     * touches fire, smoke, or the burning flag at all, so it costs
+     * neither the correctness risk nor the ongoing expense - see its own
+     * tests for proof it produces neither.
+     *
+     * Every cell within the core radius is written, unconditionally -
+     * occupied or already empty alike. sand_erase() skips an already-empty
+     * cell because removing nothing is a no-op worth avoiding; there is no
+     * equivalent shortcut here; an empty cell becoming fire is exactly as
+     * real a change as an occupied one converting, and skipping it would
+     * leave a ring of untouched holes inside the fireball on any board that
+     * was not already packed solid.
+     *
+     * Written by hand rather than through a shared helper: place_cell() in
+     * sand_reactions.c is the worked example of what every write like this
+     * owes the simulation (latch the content flags a fresh cell arms, mark
+     * its row dirty, wake its block and neighbours), but it is `static` to
+     * that file, so this repeats the same four things directly instead of
+     * exporting it for one caller.
+     *
+     * CONSEQUENCES, NOT BUGS. Fire ignites flammable neighbours (wood, oil,
+     * gas) and boils adjacent water to steam, same as it always has - an
+     * explosion starting fires and boiling water is the feature, not a
+     * regression to guard against. And the fresh fire cells this loop just
+     * wrote are themselves occupied, non-empty cells inside `radius`, so
+     * sand_displace()'s own annulus loop, below, queues THEM as flight
+     * entries too, exactly like any other grain in the disc - the
+     * fireball's own edge gets thrown outward along with everything else,
+     * which is one more reason a real explosion's flash reads as an
+     * expanding thing rather than a static disc. */
+    /* A BARE SINGLE CELL turned out not to be enough of a seed once
+     * SAND_EXPLODE_CORE_DIVISOR grew from 2 to 3 - measured, not assumed:
+     * a 20,000-seed sweep of a fully packed radius-2 detonation (division
+     * gives core_radius 0 there, versus 1 at the old divisor) found the
+     * density-swap collapse simply never reaching far enough to open a
+     * cavity on about 11% of seeds, no matter how many further steps it
+     * was given - genuinely stuck, not merely slow, so more steps was not
+     * the fix. `radius >= 2` clamped to a minimum of 1 restores exactly
+     * the old, already-proven core shape at every radius small enough for
+     * plain division to have zeroed it out, while changing nothing at the
+     * radii that motivated raising the divisor in the first place: at a
+     * real detonation's scale (radius 24), 24 / 3 = 8 is already far
+     * above this floor, so the floor never engages there at all. radius
+     * 1 is deliberately excluded from the clamp - it stays at core_radius
+     * 0, the single centre cell every test and comment already assumes,
+     * since nothing measured that case as broken. */
+    const int core_radius_raw = radius / SAND_EXPLODE_CORE_DIVISOR;
+    const int core_radius = (core_radius_raw == 0 && radius >= 2)
+                                 ? 1 : core_radius_raw;
+    const int core_r2 = core_radius * core_radius;
+    for (int fdy = -core_radius; fdy <= core_radius; fdy++) {
+        for (int fdx = -core_radius; fdx <= core_radius; fdx++) {
+            if (fdx * fdx + fdy * fdy > core_r2) {
+                continue;
+            }
+            const int fx = cx + fdx;
+            const int fy = cy + fdy;
+            if (fx < 0 || fx >= s->w || fy < 0 || fy >= s->h) {
+                continue;
+            }
+            const size_t fat = (size_t)fy * (size_t)s->w + (size_t)fx;
+            /* Fresh, full-life fire - the same MATERIAL_VARIANTS - 1
+             * convention random_cell() (above in this file) uses for any
+             * transient material, so a blast's core reads exactly like
+             * fire painted by hand would: brightest right after ignition,
+             * fading from there via its own ordinary decay. */
+            const cell_t fire = CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1);
+            s->cells[fat] = fire;
+            latch_content_flags(s, fire);
+            mark_rows(s, fy, fy);
+            wake_block_and_neighbors(s, fx, fy);
+        }
+    }
+
+    sand_displace(s, cx, cy, radius);
 }
 
 /*---------------------------------------------------------------------------

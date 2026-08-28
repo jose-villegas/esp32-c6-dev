@@ -527,7 +527,18 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * already at capacity - the last one is graceful degradation, exactly
  * like CRACK_MAX truncating a crack rather than failing: past the cap,
  * calls simply queue nothing further, without the caller needing to track
- * the count itself or stop calling once it fills. */
+ * the count itself or stop calling once it fills.
+ *
+ * THIS PRIMITIVE'S OWN KIND_STATIC REFUSAL HAS NO EXCEPTIONS - a wall
+ * cannot be thrown through THIS function, by any caller, ever. sand_
+ * explode()'s own seeding loop reaches a static cell through a separate,
+ * internal path (queue_flying_grain() in sand.c) with a density-scaled
+ * chance to override that refusal - a blast should read as tougher
+ * against stone than sand, not indestructible - but that override is
+ * explicit, opt-in, and local to the one caller that asked for it; it is
+ * not a hidden exception buried in this shared primitive that some future
+ * caller (gunpowder, gas, whatever comes next) could trip over by
+ * accident. Calling sand_impulse() itself always gets the safe default. */
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 
 /* Chance in 256, per step, that a queued grain's outward move happens THIS
@@ -773,17 +784,30 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * did, for exactly the same reason. */
 #define SAND_EXPLODE_CORE_DIVISOR  5
 
-/* ONE CALLER OF sand_impulse(), seeding many radially. Fill a disc of
- * `radius` around (cx, cy) with fire at its core (see
- * SAND_EXPLODE_CORE_DIVISOR), then queue an outward-facing flight entry -
- * at SAND_EXPLODE_INITIAL_SPEED - for every occupied cell in the annulus
- * between the core and the full radius, direction quantised the same way
- * sand_gravity_direction() already quantises gravity into eight
- * directions. Everything about HOW a queued grain then moves - the flight
- * pass, the arc, the cap, re-acquisition - belongs to sand_impulse() and
- * step_impulses(); this function's only job is deciding WHICH cells get
- * queued and in which direction, which is the one thing genuinely specific
- * to an explosion shape.
+/* ONE CALLER OF sand_impulse(), seeding many radially. Queue an outward-
+ * facing flight entry - at SAND_EXPLODE_INITIAL_SPEED - for every occupied
+ * cell in the annulus between the core and the full radius, direction
+ * quantised the same way sand_gravity_direction() already quantises
+ * gravity into eight directions. Everything about HOW a queued grain then
+ * moves - the flight pass, the arc, the cap, re-acquisition - belongs to
+ * sand_impulse() and step_impulses(); this function's only job is
+ * deciding WHICH cells get queued and in which direction, which is the
+ * one thing genuinely specific to a displacement's shape.
+ *
+ * THE PURE DISPLACEMENT PRIMITIVE, WITH NO MATERIAL CONVERSION OF ITS
+ * OWN - split out from sand_explode() (below) specifically so a caller
+ * that wants the push without the fire has somewhere to call. A banked
+ * idea makes this concrete: a stone shield over lava, breached by trapped
+ * steam PRESSURE rather than heat, must not set anything alight just
+ * because it pushed material around - folding fire into this primitive
+ * would make that impossible to ask for. There is a second reason beside
+ * that correctness one: converting a cell to fire latches
+ * `may_have_burning` (see sand_explode()'s own comment in sand.c), which
+ * keeps the whole reactions pass active every step until that fire burns
+ * out - a real, ongoing cost a caller that fires often and never wanted
+ * fire (a chain of confined-steam bursts, say) has no reason to pay. This
+ * function never touches fire, smoke, or the burning flag at all, so it
+ * costs neither the correctness risk nor the ongoing expense.
  *
  * QUEUED BY RING, OUTWARD FROM THE CENTRE - not by row. An earlier version
  * scanned dy-outer, dx-inner, which reads as an ordinary nested loop right
@@ -802,54 +826,33 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * caller's buffer, however tight, degrades the same way this one
  * would if a future radius ever outgrew it again.
  *
- * FIRST fills a core with fire - see SAND_EXPLODE_CORE_DIVISOR's own
- * comment for why an explosion that only ever queued flight entries could
- * never actually move anything once the medium it is detonating in has no
- * gaps of its own, and for why fire rather than emptiness. That fill is a
- * real, immediate write - every cell in the core becomes fire, occupied or
- * already empty alike - not something sand_impulse() or the flight pass it
- * feeds has any part in, and it is why sand_explode() is no longer purely
- * additive to the grain count the way sand_spawn()/sand_erase()
- * individually are: see the comment on conservation this implies, below.
- * Placing fire is a normal write like any other in this file - it latches
- * the content flags a burning cell arms (so the reactions pass notices it),
- * marks rows dirty and wakes blocks - so fire near fuel ignites it and
- * fire touching water boils it to steam, exactly as painted fire would.
+ * Same signature shape as sand_spawn() and sand_erase() (a centre and a
+ * radius) and, like sand_explode() below, belongs to their family: no
+ * material owns it and no reaction fires it, so tests call it directly.
+ * See docs/Sand/Explosion-Plan.md for the design this and sand_explode()
+ * both implement and why neither needs a per-cell velocity field.
  *
- * Same signature shape as sand_spawn() and sand_erase() above - a centre and
- * a radius - because it belongs to that family: no material owns it and no
- * reaction fires it, so tests call it directly and the app calls it from a
- * temporary mode (see app_sand.c). See docs/Sand/Explosion-Plan.md for the
- * design this implements and why it needs no per-cell velocity field.
- *
- * A no-op if sand_enable_impulses() was never called - there is nowhere to
- * queue an entry, and the core is left unfilled too, so a disabled
- * mechanic costs the board nothing at all, not even the fire. Beyond the
- * core, this is also a no-op for any cell with no defined outward
- * direction, which is exactly the centre cell itself; every other occupied
- * cell in the annulus between the core and the full radius gets one.
+ * A no-op if sand_enable_impulses() was never called - there is nowhere
+ * to queue an entry. Also a no-op for any cell with no defined outward
+ * direction, which is exactly the centre cell itself; every other
+ * occupied cell in the annulus between the core and the full radius gets
+ * one.
  *
  * Past the buffer's own capacity, sand_impulse() itself already queues
  * nothing further - see its own comment - so this simply keeps scanning
- * the rest of the disc without incident. A blast bigger than the buffer is
- * a smaller, but still evenly-shaped, blast - see the ring-order comment
+ * the rest of the disc without incident. A push bigger than the buffer is
+ * a smaller, but still evenly-shaped, one - see the ring-order comment
  * above for why "smaller" no longer means "missing its entire lower
  * half" - not a bug.
  *
- * CONSERVATION, NOW BOUNDED RATHER THAN EXACT. sand_spawn() and sand_erase()
- * are each individually exact - every cell they touch is accounted for in
- * what they return. sand_explode() is not, in EITHER direction it might
- * first seem to move: filling an already-empty core cell with fire is a
- * real, deliberate increase, exactly once, right here - not a bug to guard
- * against, just what "the core flashes into fire even where there was
- * nothing to convert" means. From that point on the count can still fall
- * further: fire is a real burning cell now, and if the medium around it
- * ever traps it with no denser neighbour able to sink through and no
- * escape upward, smothered() (sand_reactions.c) puts it out for good, the
- * same as any other buried flame. What can never legitimately happen,
- * from either the fill or anything after it, is the count exceeding
- * (count before the call) + (empty cells the core just filled) - that
- * half is exact, always.
+ * CONSERVATION: EXACT, not merely bounded - unlike sand_explode() below,
+ * which fills a core with fire first (see its own comment on why that
+ * fill is a real, deliberate increase). This function alone neither
+ * creates nor destroys a single cell of material; every grain it queues
+ * is relocated, never conjured or deleted, whatever direction it ends up
+ * flying or whether it was already there. That holds even for a
+ * dislodged wall cell (see the density-toughness paragraph below) - the
+ * same material, just moved.
  *
  * EVERY OCCUPIED ANNULUS CELL IS SEEDED, NOT A SAMPLE OF THEM - TRIED AND
  * REJECTED, not left unconsidered. Once a flying grain could displace what
@@ -892,7 +895,7 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * no-op it produced. The fix is not a manual sparse mode a caller opts
  * into (that was tried above and lost) and not a smaller radius chosen
  * by hand to dodge the failure (that only relocates the same bug to
- * whatever radius is requested next) - it is sand_explode() itself
+ * whatever radius is requested next) - it is this function itself
  * degrading its OWN density automatically, only when a disc's true cell
  * count (exact_disc_count() in sand.c) exceeds the buffer it was
  * actually given, spread evenly across the whole disc via the same
@@ -920,9 +923,83 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * did not change either way: seeding sparsely is still worse, cell for
  * cell, than seeding fully. What changed is that a caller no longer has
  * to choose between honouring that conclusion and fitting in the memory
- * it was actually given - sand_explode() spends every entry the buffer
+ * it was actually given - this function spends every entry the buffer
  * allows before it starts thinning at all, whatever radius it is asked
- * to thin. */
+ * to thin.
+ *
+ * A WALL CAN NOW BE DISLODGED, TOUGHER RATHER THAN INVISIBLE. Every
+ * occupied annulus cell being seeded, above, used to mean "every occupied
+ * NON-STATIC cell" in practice - sand_impulse() itself refuses a
+ * KIND_STATIC source unconditionally (see its own comment), so stone,
+ * glass and wood sat inside a blast's own annulus completely untouched
+ * regardless of how much force reached them. This function's own seeding
+ * loop (queue_outward_impulse(), sand.c) now reaches a static candidate
+ * through a separate, explicit path (queue_flying_grain() there, with its
+ * `allow_dislodge_static` opt-in) that rolls a density-scaled chance
+ * instead of refusing outright - see that function's own comment for the
+ * formula and why lower density means an easier dislodge. sand_impulse()
+ * itself did not change at all: it still refuses every static source,
+ * every time, for every caller that has not explicitly asked otherwise,
+ * which today is every caller except this one. The toughness applies to
+ * displacement as a whole, not specifically to fire's own edge - a
+ * future pure-pressure caller (the confined-steam idea above) pushes
+ * against the exact same density-scaled resistance an explosion does,
+ * because both reach it through this one shared function. */
+void sand_displace(sand_t *s, int cx, int cy, int radius);
+
+/* A THIN WRAPPER AROUND sand_displace(), ABOVE, adding exactly one thing
+ * to it: a core of fire. Fill a disc of `radius` around (cx, cy) with
+ * fire at its core (see SAND_EXPLODE_CORE_DIVISOR), then hand the rest -
+ * the annulus, the density thinning, the wall-toughness roll, everything
+ * about a displacement that is not specific to fire - to sand_displace()
+ * entirely; see its own comment for all of it. This split exists for two
+ * reasons, not one - see sand_displace()'s own comment for both in full -
+ * and this function is what still needs the fire half: an explosion, as
+ * opposed to a bare push, is specifically the case that wants combustion.
+ *
+ * FIRST fills a core with fire - see SAND_EXPLODE_CORE_DIVISOR's own
+ * comment for why an explosion that only ever queued flight entries could
+ * never actually move anything once the medium it is detonating in has no
+ * gaps of its own, and for why fire rather than emptiness. That fill is a
+ * real, immediate write - every cell in the core becomes fire, occupied or
+ * already empty alike - not something sand_impulse() or the flight pass it
+ * feeds has any part in, and it is why sand_explode() is no longer purely
+ * additive to the grain count the way sand_spawn()/sand_erase()
+ * individually are: see the comment on conservation this implies, below.
+ * Placing fire is a normal write like any other in this file - it latches
+ * the content flags a burning cell arms (so the reactions pass notices it),
+ * marks rows dirty and wakes blocks - so fire near fuel ignites it and
+ * fire touching water boils it to steam, exactly as painted fire would.
+ *
+ * Same signature shape as sand_spawn() and sand_erase() above - a centre and
+ * a radius - because it belongs to that family: no material owns it and no
+ * reaction fires it, so tests call it directly and the app calls it from a
+ * temporary mode (see app_sand.c). See docs/Sand/Explosion-Plan.md for the
+ * design this implements and why it needs no per-cell velocity field.
+ *
+ * A no-op if sand_enable_impulses() was never called - there is nowhere to
+ * queue an entry, and the core is left unfilled too, so a disabled
+ * mechanic costs the board nothing at all, not even the fire. Everything
+ * past that check is sand_displace()'s own set of no-ops (an occupied
+ * centre cell with no direction to throw it in, a buffer already at
+ * capacity) - see its own comment.
+ *
+ * CONSERVATION, NOW BOUNDED RATHER THAN EXACT - unlike sand_displace()
+ * alone (see its own comment), because of the fire this wrapper adds.
+ * sand_spawn() and sand_erase() are each individually exact - every cell
+ * they touch is accounted for in what they return. sand_explode() is
+ * not, in EITHER direction it might first seem to move: filling an
+ * already-empty core cell with fire is a real, deliberate increase,
+ * exactly once, right here - not a bug to guard against, just what "the
+ * core flashes into fire even where there was nothing to convert" means.
+ * From that point on the count can still fall further: fire is a real
+ * burning cell now, and if the medium around it ever traps it with no
+ * denser neighbour able to sink through and no escape upward,
+ * smothered() (sand_reactions.c) puts it out for good, the same as any
+ * other buried flame. What can never legitimately happen, from either
+ * the fill or anything after it, is the count exceeding (count before
+ * the call) + (empty cells the core just filled) - that half is exact,
+ * always. */
 void sand_explode(sand_t *s, int cx, int cy, int radius);
 
 /* FRICTION

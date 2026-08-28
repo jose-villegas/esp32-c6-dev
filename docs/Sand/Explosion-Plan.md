@@ -504,6 +504,84 @@ them and checks the second one's exact queued indices by hand against
 the real remaining capacity; written against the bug first and confirmed
 failing before the fix landed.)*
 
+*(A WALL COULD NOT BE MOVED AT ALL, once `06ef74f` closed the wall-
+throwing bug (see the failure-mode note above this one) - `sand_impulse()`
+refused any `KIND_STATIC` source unconditionally, so stone, glass and
+wood sat inside a blast's own annulus completely untouched no matter how
+much force reached them. Device use surfaced this as a real gap: the
+user noticed the material never moved and wanted it to - "tougher,
+harder to dislodge than loose grains, not equally fragile," their own
+words, and explicitly NOT "only wood" or equal fragility with sand.
+`material.h`'s own `density` field is what already measures "how much
+has to move" everywhere else in this simulation (`can_enter()`,
+sand_priv.h, gates whether a moving grain displaces what it lands on by
+comparing densities the same way), so it is what decides this too rather
+than a new field invented for one case: sand_explode()'s own seeding
+loop rolls a `255 - density` chance-in-256 (the same idiom flammability,
+mobility and heat_chance already use) before queuing a static candidate,
+through a separate, explicit path (`queue_flying_grain()`'s
+`allow_dislodge_static` parameter, sand.c) that `sand_impulse()` itself
+never opts into - the primitive's own hard refusal is untouched for
+every other caller, present or future (gunpowder, gas, whatever comes
+next inherits the SAFE default, not the override). Stone and glass
+(density 200, this board's heaviest materials) get a 55-in-256 chance
+(~21%); wood (150) gets 105-in-256 (~41%), close to double - a wall now
+reads as tougher, in a material-specific way, rather than invisible to
+the mechanic entirely. Once queued, a dislodged wall cell flies with no
+other special-casing: same speed, same direction, same everything as
+any other entry - the toughness lives entirely in whether it gets
+thrown at all.
+
+The vessel-containment guarantee this project tested absolutely before
+is deliberately no longer absolute, and the test coverage was SPLIT
+rather than loosened: `test_a_blast_inside_a_sealed_vessel_stays_
+inside_it` (a weak, distant blast - radius 1 against a wall three cells
+away, never reaching a wall candidate to roll against at all) still
+proves the common case holds, and a new sibling,
+`test_a_strong_close_blast_can_breach_a_wall`, proves the wall CAN give
+way when a blast is pointed directly at it with enough force - a small
+box with real empty margin outside its own walls (not just the grid
+edge, which would give a dislodged cell nowhere to fly), detonated
+close enough that every wall cell gets at least one roll. That specific
+scene, run against the real, shipped `sand_explode()` with suite_sand.c's
+own fixed seed (12345), was checked to dislodge exactly one wall cell -
+the observed outcome the test pins, the same way an RNG-driven result
+gets treated everywhere else in this file: measured by running the real
+code, not derived by hand from the generator's own algorithm. The real-
+scale vessel scene (`test_the_vessel_scene_lets_nothing_reach_outside_
+it`, DUNE_BLAST_RADIUS 25 against VESSEL_MARGIN 20) stays in the "weak/
+distant" category at this radius and was swept across 300 independent
+seeds with zero breaches, confirming the common case holds broadly, not
+just for its one hardcoded seed.)*
+
+*(THE DISPLACEMENT PULLED OUT OF THE FIRE, into its own function,
+`sand_displace(sand_t *s, int cx, int cy, int radius)` - `sand_explode()`
+kept its own name and signature and now does nothing but fill a core with
+fire and call this. The reason: not every future caller of this mechanic
+wants combustion. A banked idea makes it concrete - a stone shield over
+lava, cracked open by trapped STEAM PRESSURE rather than heat, must not
+set anything alight just because it pushed material around, which
+`sand_explode()` as one function could never offer. Two reasons this
+mattered, not one: correctness (steam is explicitly not fire) and cost
+(converting a cell to `MAT_FIRE` latches `may_have_burning`, which keeps
+the whole reactions pass active every step until it burns out - a real,
+ongoing expense a caller that fires often and never wanted fire, like a
+chain of confined-steam bursts, has no reason to pay). The density-scaled
+wall-toughness roll from the paragraph above lives in `sand_displace()`
+itself, not duplicated into `sand_explode()` on top of it - a wall
+resists a pressure wave the same way whether or not that wave happens to
+be on fire, so a future pure-pressure caller pushes against the exact
+same resistance an explosion does, through the one shared function both
+reach it through. `sand_explode()`'s own external behaviour, and every
+existing test of it, is unchanged - confirmed by the full suite passing
+without a single change to any pre-existing `sand_explode()` test, and by
+re-running both the dune-scene and wall-breach sweeps against the split
+code and getting the identical numbers. Two small new tests instead prove
+`sand_displace()` alone: that it genuinely displaces material (nothing
+extra to check if it did not), and that it places no fire and leaves no
+smoke residue anywhere on the board, even with flammable wood sitting
+exactly where `sand_explode()`'s own core fill would have ignited it.)*
+
 ### The quantitative half
 
 `launcher/tools/report_performance.sh` for frame-budget numbers, before
