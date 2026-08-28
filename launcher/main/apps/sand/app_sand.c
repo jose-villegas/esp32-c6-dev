@@ -956,25 +956,54 @@ static uint8_t row_has_shine[GRID_H_MAX];
  * stalled. */
 static uint32_t foam_elapsed_ms;
 
-/* How often the interior's wave bands advance - see
- * material_set_wave_phase() in material.h for what the phase is for and why
- * it is its own setter rather than sharing foam_elapsed_ms above.
+/* How fast the interior's wave bands advance, in Q8 phase units per
+ * millisecond - see material_set_wave_phase() in material.h for what the
+ * phase is for and why it is its own setter rather than sharing
+ * foam_elapsed_ms above.
  *
- * 200 ms is a SLOW drift, deliberately much slower than foam's 90 - foam is
- * meant to shimmer, the interior's bands are meant to drift the way light
- * moves across the bottom of a real pool, and a look knob tuned by eye on
- * the device is the first thing to move if that drift ever reads too lazy
- * (lower it) or too busy (raise it). */
-#define WAVE_PHASE_MS 200
+ * This replaces what used to be a plain `wave_elapsed_ms / 200` integer
+ * divide: `wave_phase` held the exact same value for up to 200 ms, then
+ * jumped by exactly 1. Modeled at a realistic ~30 fps (dt=33 ms) over a
+ * 2-second window, sampling material_colours() at a fixed depth the whole
+ * time, that produced ZERO visible change on 95% of consecutive frames,
+ * then a sudden pop to the next band - "barely moving" plus an "artifact"
+ * on exactly the rows that are actively redrawing, rather than a smooth
+ * colour crawl. Coarse steps, not the spatial band width (WAVE_PERIOD_CELLS)
+ * or the table itself, were the actual bug.
+ *
+ * The fix is a continuously-advancing Q8 fixed-point accumulator instead of
+ * a millisecond counter fed through integer division: wave_phase_q8 below
+ * gains WAVE_PHASE_RATE_Q8 * dt_ms every frame, so the low bits move every
+ * frame and `(wave_phase_q8 >> 8) & 0xFF` changes gradually instead of
+ * holding-then-jumping. 26 was picked by choosing a target full-cycle
+ * duration and dividing it back out to a rate: a full 256-phase cycle at
+ * this rate takes 256 * 256 / 26 ~= 2520 ms, i.e. about 2.5 seconds,
+ * against the old mechanism's effective ~51 seconds (200 ms * 256) - still
+ * a slow drift, not a shimmer, but one that actually reads as motion.
+ * Modeled the same way as above (~30 fps, 2-second window), this rate holds
+ * only about 15% of consecutive frames unchanged, i.e. visible movement on
+ * roughly 85% of frames instead of 5%. Retuning this for a different target
+ * duration should go through the same division (256 * 256 / target_ms)
+ * rather than guessing at the raw constant.
+ *
+ * Still deliberately NOT shared with foam's clock even though both are now
+ * Q8 accumulators - foam shimmers and the interior drifts, and those two
+ * motions want independent rates for the accumulation itself now, not just
+ * independent offsets: tying them to one counter would mean retuning
+ * foam's shimmer rate drags the wave drift rate along with it, and vice
+ * versa. See material_set_wave_phase()'s own comment in material.h for the
+ * fuller argument. */
+#define WAVE_PHASE_RATE_Q8 26
 
-/* Real time accumulated toward the next wave phase step - the same pattern
- * foam_elapsed_ms above follows, and for the same reason: driven by dt_ms
- * rather than a frame count, so the bands drift at the same real-world rate
- * whatever the frame rate happens to be. A separate accumulator, not a
- * second read of foam_elapsed_ms, because the two advance at different
- * rates (see WAVE_PHASE_MS's own comment) and sharing one would tie them
- * together the moment either rate changed. */
-static uint32_t wave_elapsed_ms;
+/* Q8 fixed-point accumulator toward the next wave phase step - the same
+ * carried-across-frames pattern foam_elapsed_ms above follows, but advanced
+ * by a rate rather than counted in whole milliseconds (see
+ * WAVE_PHASE_RATE_Q8's own comment for why). Left as a plain uint32_t that
+ * wraps silently on overflow after a very long uptime - the same thing
+ * foam_elapsed_ms above already does, and accepted here for the same
+ * reason: only `(wave_phase_q8 >> 8) & 0xFFu` is ever read back, so a wrap
+ * of the underlying counter is invisible in the one place that matters. */
+static uint32_t wave_phase_q8;
 
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
@@ -2540,12 +2569,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
 
     /* And the interior's wave bands get their own per-frame fact, on their
-     * own clock - see WAVE_PHASE_MS's own comment above for why 200 ms is a
-     * slower drift than foam's 90, and material_set_wave_phase()'s own
+     * own clock - see WAVE_PHASE_RATE_Q8's own comment above for why this
+     * drifts slower than foam's shimmer, and material_set_wave_phase()'s own
      * comment in material.h for why this cannot be folded into the call
      * just above even though both run at exactly this point every frame. */
-    wave_elapsed_ms += dt_ms;
-    material_set_wave_phase(wave_elapsed_ms / WAVE_PHASE_MS);
+    wave_phase_q8 += dt_ms * WAVE_PHASE_RATE_Q8;
+    material_set_wave_phase((wave_phase_q8 >> 8) & 0xFFu);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();
