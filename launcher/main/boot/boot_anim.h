@@ -502,18 +502,21 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * Drawn at anything like full strength it competes with the curve for
  * attention and wins, because there is a great deal more of it - which is
  * exactly what the first version of this did, and the curve disappeared
- * into a plaid tablecloth. Higher than that first version landed on,
- * though (was 56): even the STARTING point turned out to read as too dark
- * once the squared falloff in boot_anim_grid_alpha() below and a shared
- * hue-mixed-with-alpha ceiling are both eating into it too - see that
- * function's own comment.
+ * into a plaid tablecloth. Pulled back down from 110 (a peak reached while
+ * the grid was still small and struggling to be seen at all - see the
+ * git history around BOOT_ANIM_GRID_CEILING_MAX for that whole chase):
+ * now that boot_anim_grid_shrink_q8() keeps the floor covering the whole
+ * panel from the very first frame (see its own comment), visibility is
+ * no longer the problem brightness has to solve on its own, and a floor
+ * this large at anything but a genuinely dim starting point overwhelms
+ * the curve it is supposed to sit behind.
  *
  * It does not stay here, though - see boot_anim_grid_climb() and
  * BOOT_ANIM_GRID_CEILING_MAX just below: that backdrop reasoning only
  * holds while the floor is still competing with a full-size curve for
  * attention, and stops applying once the picture is mostly the grid
  * itself. */
-#define BOOT_ANIM_GRID_MAX 110
+#define BOOT_ANIM_GRID_MAX 70
 
 /* How far along the grid's slow climb toward full visibility things are,
  * right now - the single clock both boot_anim_grid_alpha()'s own ceiling
@@ -546,16 +549,15 @@ static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
                       BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
 }
 
-/* All the way up to what the axes themselves get, at the far end of the
- * climb - no longer held back from it. An earlier version capped this
- * short of 255 to keep the floor reading as backdrop even at its
- * brightest; in practice that cap was still landing on a picture read as
- * "still dark", so the backdrop distinction is left to happen through
- * everything else about the floor (its low starting point, the squared
- * falloff below, competing with a lit curve early on) rather than through
- * an artificial ceiling below what a fully-lit pixel on this panel can
- * actually do. */
-#define BOOT_ANIM_GRID_CEILING_MAX 255
+/* Pulled back from 255 (matching the axes' own full brightness) once the
+ * floor stopped needing to fight for visibility at all - see
+ * BOOT_ANIM_GRID_MAX's own comment on why that fight moved to
+ * boot_anim_grid_shrink_q8() instead. Climbing to full axis-brightness
+ * was tuned for a floor that still needed every trick available just to
+ * be seen; a floor that already covers the whole panel from frame 1 only
+ * needs to climb enough to read as brightening over time, not enough to
+ * wash out toward the same flat white the axes are. */
+#define BOOT_ANIM_GRID_CEILING_MAX 170
 
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
@@ -593,15 +595,15 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
  * off black still reads as colour-muddy at any opacity unless it is also
  * moving toward white.
  *
- * All the way to full white by the end, same as BOOT_ANIM_GRID_CEILING_MAX
- * above - an earlier version held this a little short so the rings would
- * keep a last trace of their own hue, but that hedge was part of the same
- * "still dark" problem: colour and alpha both a little short of what the
- * axes get compounds into a floor that never quite gets there. Nothing
- * stops the CURVE reading distinctly even fully bloomed to white (see
- * boot_anim.c's own use of gfx_color_mix(..., COL_WHITE, s.bloom)); the
- * grid does not need the hedge here either. */
-#define BOOT_ANIM_GRID_WHITEN_MAX 255
+ * Pulled back from 255 (full white): boot_anim_grid_hue() already turns
+ * the floor's colour as a function of both TIME and RING - "the colour
+ * travels outward as a wave instead of the whole floor blinking", per its
+ * own comment - but a hue mixed almost all the way to white shows almost
+ * none of that turning; white has no hue left to see it in. Climbing this
+ * far short of white instead of all the way to it is what keeps the
+ * travelling colour wave actually visible while the floor still reads
+ * brighter over time the way BOOT_ANIM_GRID_CEILING_MAX's own climb does. */
+#define BOOT_ANIM_GRID_WHITEN_MAX 120
 
 static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 {
