@@ -82,6 +82,19 @@ static gfx_color_t lit(uint32_t rgb, uint8_t alpha)
     return gfx_color_mix(COL_BG, gfx_rgb(rgb), alpha);
 }
 
+/* `rgb`, first mixed `whiten` of the way toward white, then lifted `alpha`
+ * of the way off the background - see boot_anim_grid_whiten()'s own
+ * comment for why the floor needs the extra mix and lit() alone does not:
+ * a saturated hue only ever gets more OPAQUE through lit() on its own,
+ * never any less colour-muddy, and it is the colour itself moving toward
+ * white that is supposed to be doing most of the work of making the grid
+ * read here. */
+static gfx_color_t lit_whitened(uint32_t rgb, uint8_t whiten, uint8_t alpha)
+{
+    const gfx_color_t whitened = gfx_color_mix(gfx_rgb(rgb), COL_WHITE, whiten);
+    return gfx_color_mix(COL_BG, whitened, alpha);
+}
+
 /*---------------------------------------------------------------------------
  * Projection helpers
  *
@@ -137,25 +150,30 @@ static int32_t units(int n)
  * axis read as height instead of as a third line through the same point.
  *-------------------------------------------------------------------------*/
 
-/* How far a floor line is run before it is handed to gfx_line(). Well past
- * the panel on purpose: gfx_line() clips, so the off-screen part costs a few
- * compares, and running the lines out rather than stopping them at a tidy
- * boundary is what removes the floor's edge. */
-#define FLOOR_REACH 24
-
-/* Never shrunk - the floor is the background the motif shrinks INTO, not
- * one more thing shrinking along with it. Filling the panel edge to edge
- * for the whole five seconds is the one property it cannot give up: a
- * grid that shrank away with the curve would read as the whole world
- * shrinking, not as a spiral collapsing into a small icon sitting on a
- * plane that was always there. It still moves - centred on the origin,
- * whose PANEL position drifts throughout, same as ever - just never
- * scales. */
-static void draw_floor(uint32_t now_ms, uint8_t ink,
+/* Each ring is a closed square around the origin, not two unbounded lines -
+ * so a ring actually reads as a RING: a wave expanding outward from the
+ * origin, the way boot_anim_grid_alpha()'s own per-ring arrival stagger and
+ * boot_anim_grid_hue()'s own per-ring colour drift already implied one
+ * should. A Cartesian grid of crossing lines never delivers that, no matter
+ * how far out it runs - offsetting a pair of infinite lines by a ring's
+ * distance is not the same shape as a ring, it is still just two lines,
+ * and every ring's pair overlapping near the origin is what read as a
+ * cross rather than a set of waves.
+ *
+ * Shrinks with the motif, same as the axes and curve - see
+ * boot_anim_motif_shrink_q8()'s own comment. A dense mesh, not an empty
+ * panel, is the point once it is small: with BOOT_ANIM_GRID_RINGS rings
+ * packed into a fraction of their normal spacing, the covered pixels
+ * thicken up rather than thin out, and that filled-in look - the plane
+ * still visibly there, just close in on itself - is what "the origin
+ * settles small" is supposed to read as, not a grid shrinking away to
+ * nothing in a corner. Applied to `d` (the ring's half-width, in world
+ * units, before projection) rather than via csx()/csy() on the drawn
+ * corners, so a ring's whole shape scales uniformly rather than its
+ * corners sliding independently toward view->ox/oy. */
+static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
                        const boot_anim_view_t *view)
 {
-    const int32_t far = units(FLOOR_REACH);
-
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
         if (alpha == 0) {
@@ -165,21 +183,24 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
 
         /* The floor is the one thing on screen the whole time that is not
          * doing anything, so it is where a slow colour drift costs nothing
-         * and competes with nothing. */
-        const gfx_color_t c =
-            lit(boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)), alpha);
-        const int32_t d = units(ring);
+         * and competes with nothing. Whitened, not just lit(): see
+         * boot_anim_grid_whiten()'s own comment for why the hue itself
+         * climbs toward white over the whole animation rather than only
+         * getting more opaque. */
+        const gfx_color_t c = lit_whitened(
+            boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)),
+            boot_anim_grid_whiten(now_ms), alpha);
+        const int32_t d = (units(ring) * shrink_q8) >> 8;
 
-        /* Four lines per ring: two either side of the real axis, two either
-         * side of the imaginary one, each run past the edge of the panel. */
-        for (int sign = -1; sign <= 1; sign += 2) {
-            const int32_t off = sign * d;
+        const int x0 = sx(-d, -d, view), y0 = sy(-d, -d, 0, view);
+        const int x1 = sx( d, -d, view), y1 = sy( d, -d, 0, view);
+        const int x2 = sx( d,  d, view), y2 = sy( d,  d, 0, view);
+        const int x3 = sx(-d,  d, view), y3 = sy(-d,  d, 0, view);
 
-            gfx_line_ex(sx(off, -far, view), sy(off, -far, 0, view),
-                        sx(off,  far, view), sy(off,  far, 0, view), c, 0u);
-            gfx_line_ex(sx(-far, off, view), sy(-far, off, 0, view),
-                        sx( far, off, view), sy( far, off, 0, view), c, 0u);
-        }
+        gfx_line_ex(x0, y0, x1, y1, c, 0u);
+        gfx_line_ex(x1, y1, x2, y2, c, 0u);
+        gfx_line_ex(x2, y2, x3, y3, c, 0u);
+        gfx_line_ex(x3, y3, x0, y0, c, 0u);
     }
 }
 
@@ -552,7 +573,7 @@ static void draw_frame(uint32_t now_ms)
 
     gfx_clear(COL_BG);
     const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
-    draw_floor(now_ms, ink, &view);
+    draw_floor(now_ms, ink, shrink_q8, &view);
     draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them

@@ -249,11 +249,14 @@ static void test_the_view_foreshortens_t_by_the_end_of_the_curve(void)
  * its STARTING magnitude - "the spiral ends up pointing up as it was from
  * start" - while its SIGN has flipped, since continuing past the point
  * where it fully foreshortens necessarily means passing through zero. */
+/* "By the end of the finale" now means BOOT_ANIM_MS, not
+ * BOOT_ANIM_FINALE_END_MS - see BOOT_ANIM_COLLAPSE_MS's own comment: the
+ * turn itself does not even START until FINALE_END_MS, once every letter
+ * has landed, and runs for BOOT_ANIM_COLLAPSE_MS after that. */
 static void test_the_finale_turns_t_back_toward_vertical(void)
 {
     const boot_anim_view_t v0 = boot_anim_view(PANEL_W, PANEL_H, 0);
-    const boot_anim_view_t vf =
-        boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_FINALE_END_MS);
+    const boot_anim_view_t vf = boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_MS);
 
     const int32_t t0 = v0.t_y < 0 ? -v0.t_y : v0.t_y;
     const int32_t tf = vf.t_y < 0 ? -vf.t_y : vf.t_y;
@@ -268,13 +271,17 @@ static void test_the_finale_turns_t_back_toward_vertical(void)
  * this checks ox/oy against PANEL_H - VIEW_X and PANEL_W - VIEW_Y rather
  * than against VIEW_X/Y directly: that translation is the exact thing under
  * test, the same reasoning test_a_letter_starts_off_panel_to_the_left() and
- * the rest of "The title"'s tests apply on the other side of it. */
+ * the rest of "The title"'s tests apply on the other side of it.
+ *
+ * Checked at BOOT_ANIM_MS, not BOOT_ANIM_FINALE_END_MS - see
+ * BOOT_ANIM_COLLAPSE_MS's own comment: the drift does not start until
+ * every letter has landed and takes BOOT_ANIM_COLLAPSE_MS from there. */
 static void test_the_finale_settles_the_origin_at_its_view_target(void)
 {
     const boot_anim_view_t before =
         boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
     const boot_anim_view_t after =
-        boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_FINALE_END_MS);
+        boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_MS);
 
     TEST_ASSERT_TRUE_MESSAGE(after.ox != before.ox || after.oy != before.oy,
         "the origin should have moved during the finale");
@@ -378,27 +385,40 @@ static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
 }
 
 /* The layout guard: the whole CURVE has to land on the panel, at every
- * moment from power-on to the moment the finale finishes turning - not just
- * during the first, curve-drawing half of the orbit. Swept across time and,
- * before the curve is fully drawn, restricted to the part actually drawn by
- * then, matching what boot_anim.c really shows: a point at the far top of
- * the curve is not on screen yet while the pen has not reached it, so
- * checking it there would be checking something the animation never shows.
- * Once the curve IS fully drawn, every point of it stays checked for the
- * rest of the sweep, because the finale keeps turning the camera around a
- * curve that is now fully present.
+ * moment from power-on up to where the motif starts growing, and again once
+ * it has fully settled back down - not "always", any more. Swept across
+ * time and, before the curve is fully drawn, restricted to the part
+ * actually drawn by then, matching what boot_anim.c really shows: a point
+ * at the far top of the curve is not on screen yet while the pen has not
+ * reached it, so checking it there would be checking something the
+ * animation never shows.
  *
  * This is the test that would have caught the sign error the fixed-point
  * derivation had during development - see boot_anim.h's derivation comment
  * on how thoroughly this was cross-checked before being trusted.
  *
- * Swept to BOOT_ANIM_FADE_START_MS, not BOOT_ANIM_FINALE_END_MS: the curve
- * keeps climbing (boot_anim_pen()'s phase 2) for a few hundred ms after the
- * finale itself - camera, shift and shrink all done moving - finishes, and
- * that stretch needs covering too. */
+ * GROW and SETTLE are deliberately NOT held to zero overflow here, the
+ * same way the floor and the unbounded axes never were -
+ * see boot_anim_motif_shrink_q8()'s own top comment and draw_floor()'s: a
+ * motif big enough to swell past its own full size for a moment is going to
+ * run off the panel a little at its peak, on purpose, the same "let clipping
+ * do the work" reasoning the floor's own reach already leans on. What this
+ * sweep still guards against is a MUCH larger blowout than that - a broken
+ * projection running the curve off by hundreds of pixels rather than a
+ * clipped loop tip - and it still demands EXACT fit before the grow starts
+ * and after the settle finishes, which is the part that actually has to
+ * look tidy. */
+#define BOOT_ANIM_TEST_GROW_START_MS  BOOT_ANIM_TITLE_START_MS
+#define BOOT_ANIM_TEST_SETTLED_MS \
+    (BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS + \
+     BOOT_ANIM_SHRINK_SETTLE_MS)
+#define BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX 260
+
 static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
 {
-    for (uint32_t t = 0; t <= BOOT_ANIM_FADE_START_MS; t += 60) {
+    for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 60) {
+        const bool settled = t <= BOOT_ANIM_TEST_GROW_START_MS ||
+                             t >= BOOT_ANIM_TEST_SETTLED_MS;
         const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, t);
         const int32_t progress = boot_anim_pen(t);
         const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
@@ -416,11 +436,26 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
             const int x = view.ox + (((rawx - view.ox) * shrink_q8) >> 8);
             const int y = view.oy + (((rawy - view.oy) * shrink_q8) >> 8);
 
-            TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
-                "the drawn part of the curve ran off the side of the panel");
-            TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
-                "the drawn part of the curve ran off the top or bottom of "
-                "the panel");
+            if (settled) {
+                TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
+                    "the drawn part of the curve ran off the side of the "
+                    "panel outside the grow/settle transition");
+                TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
+                    "the drawn part of the curve ran off the top or bottom "
+                    "of the panel outside the grow/settle transition");
+                continue;
+            }
+
+            const int over_x = x < 0 ? -x : (x >= PANEL_W ? x - PANEL_W + 1 : 0);
+            const int over_y = y < 0 ? -y : (y >= PANEL_H ? y - PANEL_H + 1 : 0);
+            TEST_ASSERT_TRUE_MESSAGE(
+                over_x <= BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX,
+                "the grown motif ran off the side of the panel by far more "
+                "than a clipped loop tip");
+            TEST_ASSERT_TRUE_MESSAGE(
+                over_y <= BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX,
+                "the grown motif ran off the top or bottom of the panel by "
+                "far more than a clipped loop tip");
         }
     }
 }
@@ -616,17 +651,80 @@ static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
         "the floor should be completely gone by the end of its fade");
 }
 
-/* Backdrop, not subject. The floor covers far more of the screen than the
- * curve does, so if it is ever allowed near full brightness it wins the
- * picture - which is exactly what happened before this cap existed. */
+/* Backdrop, not subject - the floor covers far more of the screen than the
+ * curve does, so it is never let all the way up to the axes' own full 255.
+ * The ceiling itself climbs though (see boot_anim_grid_climb()'s own
+ * comment for why alpha has to climb alongside the whitening, not stay
+ * fixed while only the colour moves) - so the bound checked here is the
+ * per-moment BOOT_ANIM_GRID_CEILING_MAX, not the starting BOOT_ANIM_GRID_MAX. */
 static void test_the_floor_stays_dim_enough_to_be_a_backdrop(void)
 {
     for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
         for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
             TEST_ASSERT_TRUE_MESSAGE(
-                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_MAX,
+                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_CEILING_MAX,
                 "the floor got brighter than its cap");
         }
+    }
+}
+
+/* The clock boot_anim_grid_alpha()'s own ceiling and boot_anim_grid_whiten()
+ * both ride - starts flat at 0 before the floor appears, climbs steadily
+ * and monotonically, and reaches its top exactly at BOOT_ANIM_MS. */
+static void test_the_grid_climb_runs_the_whole_animation(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_climb(0));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_climb(BOOT_ANIM_GRID_START_MS));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_grid_climb(BOOT_ANIM_MS));
+
+    uint8_t last = 0;
+    for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
+        const uint8_t v = boot_anim_grid_climb(t);
+        TEST_ASSERT_TRUE_MESSAGE(v >= last,
+            "the climb must never step backwards as time moves forward");
+        last = v;
+    }
+}
+
+/* The floor's own opacity ceiling starts at BOOT_ANIM_GRID_MAX and climbs
+ * to BOOT_ANIM_GRID_CEILING_MAX alongside the whitening, rather than
+ * sitting fixed while only the colour moves - see boot_anim_grid_climb()'s
+ * own comment for why raising the colour alone was not enough. Checked
+ * through the innermost ring's own alpha, since the ceiling itself is not
+ * a separate exposed function. */
+static void test_the_floor_opacity_climbs_alongside_its_colour(void)
+{
+    /* Ring 1's own fade-in (BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS
+     * after BOOT_ANIM_GRID_START_MS) is long done by either of these, plus
+     * a little slack - so the only thing left changing its alpha between
+     * them is the ceiling itself climbing, not "arrived" still ramping. */
+    const uint32_t early_ms = BOOT_ANIM_GRID_START_MS +
+        BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS + 50;
+    const uint8_t early = boot_anim_grid_alpha(early_ms, 1);
+    const uint8_t late  = boot_anim_grid_alpha(BOOT_ANIM_MS, 1);
+    TEST_ASSERT_TRUE_MESSAGE(late > early,
+        "the floor's own opacity should climb over the animation, not "
+        "just its colour");
+}
+
+/* Starts at 0 the moment the floor itself appears, climbs steadily, never
+ * doubles back, and reaches its cap - not full white - by the time
+ * everything else has faded away. */
+static void test_the_floor_whitens_steadily_from_its_own_start_to_a_cap(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_whiten(BOOT_ANIM_GRID_START_MS));
+    TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_WHITEN_MAX,
+                            boot_anim_grid_whiten(BOOT_ANIM_MS));
+    TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_GRID_WHITEN_MAX < 255,
+        "the rings should keep a last trace of their own hue, not become "
+        "indistinguishable from the flat-white axes");
+
+    uint8_t last = 0;
+    for (uint32_t t = BOOT_ANIM_GRID_START_MS; t <= BOOT_ANIM_MS; t += 25) {
+        const uint8_t w = boot_anim_grid_whiten(t);
+        TEST_ASSERT_TRUE_MESSAGE(w >= last,
+            "whitening must never step backwards as time moves forward");
+        last = w;
     }
 }
 
@@ -1015,6 +1113,9 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
     RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);
     RUN_TEST(test_the_floor_stays_dim_enough_to_be_a_backdrop);
+    RUN_TEST(test_the_grid_climb_runs_the_whole_animation);
+    RUN_TEST(test_the_floor_opacity_climbs_alongside_its_colour);
+    RUN_TEST(test_the_floor_whitens_steadily_from_its_own_start_to_a_cap);
     RUN_TEST(test_the_floor_colour_travels_with_time_and_distance);
     RUN_TEST(test_the_axes_are_there_before_the_curve_starts_climbing);
 
