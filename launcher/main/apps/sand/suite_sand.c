@@ -5345,32 +5345,41 @@ static void test_a_liquid_body_paints_flat_inside(void)
  * "does the ordinary fill ramp still work on a rim cell", which is what
  * stops part 1 (the interior fix) from quietly swallowing the rim too.
  *
- * Uses OIL rather than water, deliberately: water's rim now also carries
- * foam (see material_colours()'s own comment on curvature), which is a
- * dither keyed off hash and mask and would make this test's single fixed
- * mask/hash pair fragile to exactly the change this test predates. Oil's
- * rim goes through the identical fill-ramp code path with none of that -
- * see test_only_water_foams, which is what actually pins foam being
- * water-only, so this test is free to stay about the fill ramp alone. */
+ * Back on WATER, having been on oil for a while. Water's rim now also
+ * carries foam (see material_colours()'s own comment on curvature), which
+ * is a dither keyed off hash, phase and mask - and a mask of a single
+ * cardinal bit with no diagonals is itself a curved shape (an empty count
+ * of 1, two away from the flat count of 3), so it foamed regardless of
+ * hash and broke this test the day foam landed. The fix is not to dodge
+ * onto a different liquid but to give the cell a mask that is
+ * DELIBERATELY FLAT: one cardinal side plus the two diagonals that lean
+ * against it is exactly 3 of 8 empty, which is curvature 0 - foam's
+ * threshold there is 0, so `(anything) & 7u < 0` can never be true and this
+ * cell cannot foam at any hash or any phase. Water is the material that
+ * matters most here, and it is back under direct coverage rather than
+ * standing in for it. */
 static void test_a_liquid_rim_still_shows_its_fill(void)
 {
     material_set_gravity(0, 0);   /* no specular term to confuse this with */
 
     const gfx_color_t *pal = material_palette();
-    const unsigned mask = MATERIAL_EDGE_UP;   /* any one side does - this
-                                               * is about the fill ramp,
-                                               * not about which side */
+    /* Flat rim on the "up" side: MATERIAL_EDGE_UP plus its two leaning
+     * diagonals, exactly 3 of 8 neighbours empty - see this test's own
+     * top comment for why that shape, and only that shape, keeps foam out
+     * of a test that has nothing to do with it. */
+    const unsigned mask = MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                          MATERIAL_EDGE_UP_RIGHT;
 
     gfx_color_t shallow[3], deep[3];
-    material_colours(CELL_MAKE(MAT_OIL, 1), 0u, mask, shallow);
-    material_colours(CELL_MAKE(MAT_OIL, MASS_MAX), 0u, mask, deep);
+    material_colours(CELL_MAKE(MAT_WATER, 1), 0u, mask, shallow);
+    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, mask, deep);
 
-    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_OIL, 1)], shallow[0],
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, 1)], shallow[0],
         "a rim cell must read its own fill level straight from the "
         "palette - flattening this is the mistake a previous attempt at "
         "hiding the comb made, and it erased the surface film the rim "
         "exists to show");
-    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_OIL, MASS_MAX)], deep[0],
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, MASS_MAX)], deep[0],
         "and a full rim cell must read as full, not as whatever the "
         "interior case would have painted it instead");
     TEST_ASSERT_TRUE_MESSAGE(shallow[0] != deep[0],
@@ -5397,12 +5406,17 @@ static void test_a_liquid_rim_still_shows_its_fill(void)
  * at two different tilts, is what catches that rather than trusting the
  * arithmetic by eye.
  *
- * Uses OIL rather than water, for the same reason the previous test does -
- * water's rim now dithers in foam keyed off hash and mask, and this test's
- * fixed hash of 0u with a single cardinal bit set is exactly the kind of
- * mask/hash pair that gate can catch. liquid_spec[] is shared by every
- * liquid, so oil pins the same specular sign water relies on without
- * foam anywhere near it. */
+ * Back on WATER, for the same reason test_a_liquid_rim_still_shows_its_fill
+ * is: water is the material that matters most here. Each mask below is a
+ * FLAT rim - one cardinal side plus its two leaning diagonals, exactly 3 of
+ * 8 empty - not the single cardinal bit this test used before foam
+ * existed, because a lone cardinal bit is itself curved (empty count 1,
+ * two away from flat) and foamed regardless of hash. liquid_spec[] is
+ * indexed by the CARDINAL bits alone (mask & MATERIAL_EDGE_CARDINAL - see
+ * that table's own comment in material.c), so adding the leaning diagonals
+ * changes nothing about which specular shift applies; it only changes
+ * curvature from 2 to 0, which is what keeps foam out of a test about the
+ * specular. */
 static void test_a_liquid_rim_catches_the_light_from_above(void)
 {
     const uint8_t fill = 8;   /* mid-ramp, so a shift in either direction
@@ -5412,8 +5426,14 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
     material_set_gravity(0, 1000);   /* straight down */
 
     gfx_color_t up[3], down[3];
-    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_UP, up);
-    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_DOWN, down);
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                         MATERIAL_EDGE_UP_RIGHT,
+                     up);
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_DOWN | MATERIAL_EDGE_DOWN_LEFT |
+                         MATERIAL_EDGE_DOWN_RIGHT,
+                     down);
 
     TEST_ASSERT_TRUE_MESSAGE(
         panel_luminance(up[0]) > panel_luminance(down[0]),
@@ -5424,9 +5444,13 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
     material_set_gravity(1000, 0);   /* tilt: gravity now points right */
 
     gfx_color_t left[3], right[3];
-    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_LEFT,
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_LEFT | MATERIAL_EDGE_UP_LEFT |
+                         MATERIAL_EDGE_DOWN_LEFT,
                      left);
-    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_RIGHT,
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
+                     MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP_RIGHT |
+                         MATERIAL_EDGE_DOWN_RIGHT,
                      right);
 
     TEST_ASSERT_TRUE_MESSAGE(
@@ -5661,7 +5685,252 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
     }
 }
 
+/*=============================================================================
+ * FOAM ANIMATES: a phase, mixed into the dither, so the same shape keeps
+ * showing a DIFFERENT set of foamed cells from one frame to the next.
+ *
+ * Before this, foam was gated purely by (hash & 7u) against curvature's
+ * threshold - stable for as long as the shape held still, which read as a
+ * texture painted onto the water rather than something moving on it.
+ * material_set_foam_phase() (material.h) adds a second, frame-global input
+ * that material_colours() XORs into the hash before the same threshold test,
+ * so the same cell's answer keeps changing while its curvature does not.
+ *
+ * All three tests below share the same high-curvature mask - all eight
+ * neighbours empty, as curved as a rim on this board gets - because a flat
+ * mask's threshold is 0 (see water_foam_threshold's own comment in
+ * material.c) and `(anything) & 7u < 0` can never be true: a flat cell
+ * cannot be made to foam by ANY hash or phase, which would make it useless
+ * for pinning that phase changes the answer. */
+static const unsigned foam_spike_mask =
+    MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
+    MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+    MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
 
+/* THE PHASE ITSELF CHANGES THE ANSWER, for one cell whose shape and hash
+ * never change. A fixed hash at maximum curvature is swept across sixteen
+ * phase values - two full periods of the 3-bit dither the mixing formula
+ * cycles through, so a period this test happened to straddle badly cannot
+ * hide either outcome - and both a foaming and a non-foaming phase must
+ * turn up. Missing either half is a real, different failure: never foaming
+ * means material_set_foam_phase() is not reaching the dither at all; always
+ * foaming means something ELSE (the fixed hash, the fixed curvature) is
+ * deciding this and the phase is doing nothing. Pins CHANGE 1 - the phase
+ * existing and actually being read. */
+static void test_foam_moves_between_frames(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+    const unsigned fixed_hash = 3u;   /* arbitrary - any value works except
+                                       * one that happens to sit exactly on
+                                       * the threshold boundary for every
+                                       * phase in the sweep, which 3 does
+                                       * not */
+
+    bool ever_foamed = false;
+    bool ever_plain = false;
+
+    for (unsigned phase = 0; phase < 16u; phase++) {
+        material_set_foam_phase(phase);
+
+        gfx_color_t col[3];
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), fixed_hash,
+                         foam_spike_mask, col);
+
+        if (col[0] != plain) {
+            ever_foamed = true;
+        } else {
+            ever_plain = true;
+        }
+    }
+    material_set_foam_phase(0);   /* leave global state as later tests
+                                   * assume it, the same as material_set_
+                                   * gravity(0, 0) does at the top of other
+                                   * tests in this file */
+
+    TEST_ASSERT_TRUE_MESSAGE(ever_foamed,
+        "a fixed hash at maximum curvature must foam for at least one of "
+        "the sixteen phases swept here - if it never does, "
+        "material_set_foam_phase() is not reaching the dither at all");
+    TEST_ASSERT_TRUE_MESSAGE(ever_plain,
+        "and the same fixed hash, same shape, must ALSO read as plain rim "
+        "for at least one of those sixteen phases - foaming at every one of "
+        "them means the cell's shape is what decided this, not the phase, "
+        "and the animation this test exists to pin is not happening");
+}
+
+/* THE WINDOW MUST ROTATE, NOT STALL - the property ADD buys and XOR
+ * broke, and the one that actually matters to how foam reads on the panel.
+ *
+ * An earlier version of this test used XOR and checked a different,
+ * WRONG property: that two widely-separated phases (0 and 6) disagreed
+ * about a handful of hashes sharing one blob. That is not a unison bug -
+ * cells inside the same 2x2 blob are SUPPOSED to agree, by design (see
+ * test_foam_blobs_are_bigger_than_one_cell) - and it never caught the
+ * actual defect, which is that XOR's mixing can leave the foaming set
+ * IDENTICAL between two phases RIGHT NEXT TO EACH OTHER. Measured on a
+ * real sloshing scene at medium curvature, phase 1 to phase 2 changed
+ * exactly zero cells out of 635 - foam that is supposed to shimmer every
+ * tick instead sat there unchanged for a full step, indistinguishable
+ * from the stable dither this whole change exists to replace.
+ *
+ * So this test checks the two properties that actually separate a
+ * shimmer from either failure mode, swept across a full cycle of all 8
+ * phases and at each of the three curvatures the threshold table
+ * distinguishes (masks chosen for empty-neighbour counts of 4, 1 and 8 -
+ * curvature 1, 2 and 3 respectively; see material_colours()'s own comment
+ * on curvature for the count-to-curvature arithmetic), against a spread of
+ * eight DISTINCT hash values (0 through 7, a complete residue set) rather
+ * than a handful of real coordinates that could incidentally land in one
+ * blob:
+ *
+ *   NEITHER DEGENERATE. At any single phase, the foaming subset of the
+ *   eight hashes must be neither all of them nor none of them - the
+ *   genuine unison guard. This was never actually broken by XOR (with
+ *   only water_foam_threshold[curvature] of 8 values ever under the
+ *   threshold, the rim cannot turn wholly on or off under any mixing that
+ *   only permutes those 8 values) but is worth pinning in its own right.
+ *
+ *   NEVER STALLS. No two phases NEXT TO EACH OTHER may produce the
+ *   identical foaming subset, over the full 8-phase cycle. This is the
+ *   property XOR actually failed, at all three curvatures, worst at
+ *   medium (see the long comment on the mixing site in material.c for the
+ *   measured 4-of-8, 6-of-8, 4-of-8 breakdown) - and the one a future
+ *   change back to XOR would break again, which is exactly what this
+ *   assertion exists to catch. */
+static void test_foam_never_stalls_between_frames(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+
+    /* Empty-neighbour counts of 4, 1 and 8 give curvatures 1, 2 and 3 -
+     * one mask per row of water_foam_threshold[] that the flat entry
+     * (curvature 0, threshold 0) does not already cover trivially. */
+    const unsigned curvature1_mask =
+        MATERIAL_EDGE_UP | MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT |
+        MATERIAL_EDGE_UP_RIGHT;                        /* count 4 */
+    const unsigned curvature2_mask = MATERIAL_EDGE_UP;  /* count 1 */
+    const unsigned masks[3] = { curvature1_mask, curvature2_mask,
+                               foam_spike_mask /* count 8 */ };
+    static const unsigned curvatures[3] = { 1, 2, 3 };
+
+    for (unsigned m = 0; m < 3; m++) {
+        bool foamed[8][8];   /* [phase][hash] */
+
+        for (unsigned phase = 0; phase < 8u; phase++) {
+            material_set_foam_phase(phase);
+            for (unsigned hash = 0; hash < 8u; hash++) {
+                gfx_color_t col[3];
+                material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                                 masks[m], col);
+                foamed[phase][hash] = (col[0] != plain);
+            }
+        }
+
+        for (unsigned phase = 0; phase < 8u; phase++) {
+            unsigned count = 0;
+            for (unsigned hash = 0; hash < 8u; hash++) {
+                if (foamed[phase][hash]) {
+                    count++;
+                }
+            }
+
+            char why[192];
+            snprintf(why, sizeof why,
+                     "at curvature %u, phase %u: the foaming subset of all "
+                     "8 hashes must be neither every one of them nor none "
+                     "of them, or the rim is pulsing as a whole instead of "
+                     "shimmering cell by cell", curvatures[m], phase);
+            TEST_ASSERT_TRUE_MESSAGE(count > 0 && count < 8u, why);
+        }
+
+        for (unsigned phase = 0; phase < 8u; phase++) {
+            const unsigned next = (phase + 1u) % 8u;
+            bool differs = false;
+            for (unsigned hash = 0; hash < 8u; hash++) {
+                if (foamed[phase][hash] != foamed[next][hash]) {
+                    differs = true;
+                }
+            }
+
+            char why[256];
+            snprintf(why, sizeof why,
+                     "at curvature %u, phase %u to phase %u: the foaming "
+                     "set must change - two phases next to each other "
+                     "producing the identical set is exactly the stall "
+                     "XOR mixing introduced, measured as zero changed "
+                     "cells out of 635 on a real sloshing scene",
+                     curvatures[m], phase, next);
+            TEST_ASSERT_TRUE_MESSAGE(differs, why);
+        }
+    }
+
+    material_set_foam_phase(0);   /* leave global state as later tests
+                                   * assume it */
+}
+
+/* Mirrors FOAM_BLOB_SHIFT in app_sand.c. Duplicated rather than shared,
+ * because paint_row_n() - the only thing that actually applies the shift -
+ * is static to that file and this suite links against material.c alone, on
+ * the host. If FOAM_BLOB_SHIFT ever moves, this has to move with it by
+ * hand; there is no way around that without exposing a knob that exists
+ * only to be tuned by eye on the device. */
+#define TEST_FOAM_BLOB_SHIFT 1
+
+/* FOAM'S BLOBS ARE ACTUALLY BIGGER THAN ONE CELL - the coarse-sampling half
+ * of change 2, checked directly against material_grain_hash() rather than
+ * through paint_row_n(), which cannot be linked into a host test (it is
+ * `static` in app_sand.c).
+ *
+ * Two claims, both necessary. WITHIN a 2x2 block, all four cells must
+ * collapse to the identical shifted coordinate and therefore the identical
+ * hash - shifting cx and cy right by one turns (0,cy) and (1,cy) into the
+ * same value, and likewise the row below - which is the entire mechanism a
+ * blob rests on: paint_row_n() hands every one of those four cells this
+ * same hash, so they can only ever agree about whether to foam. BETWEEN two
+ * blocks that hash must generally differ, or the "coarse grid" has
+ * collapsed to one giant block covering the whole board instead of a grid
+ * of small ones - checked at two block starts four cells apart so an
+ * off-by-one in where a block begins cannot hide behind a coincidence. */
+static void test_foam_blobs_are_bigger_than_one_cell(void)
+{
+    static const int block_starts[] = { 0, 4 };
+    unsigned block_hash[2];
+    const int cy = 2;   /* EVEN, same as every block_starts entry - a block
+                        * only lands cleanly on the shifted grid when both
+                        * of its corners share a floor(), and an odd
+                        * coordinate here would silently split this block
+                        * across two shifted rows instead of testing one */
+
+    for (unsigned b = 0; b < 2; b++) {
+        const int cx0 = block_starts[b];
+        const unsigned top_left = material_grain_hash(
+            cx0 >> TEST_FOAM_BLOB_SHIFT, cy >> TEST_FOAM_BLOB_SHIFT);
+        const unsigned top_right = material_grain_hash(
+            (cx0 + 1) >> TEST_FOAM_BLOB_SHIFT, cy >> TEST_FOAM_BLOB_SHIFT);
+        const unsigned bottom_left = material_grain_hash(
+            cx0 >> TEST_FOAM_BLOB_SHIFT, (cy + 1) >> TEST_FOAM_BLOB_SHIFT);
+        const unsigned bottom_right = material_grain_hash(
+            (cx0 + 1) >> TEST_FOAM_BLOB_SHIFT, (cy + 1) >> TEST_FOAM_BLOB_SHIFT);
+
+        char why[224];
+        snprintf(why, sizeof why,
+                 "all four cells of the 2x2 block starting at (%d,%d) must "
+                 "feed foam the identical hash, or foam speckles single "
+                 "cells the way every other material's grain does instead "
+                 "of clustering into the blob it is supposed to", cx0, cy);
+        TEST_ASSERT_EQUAL_MESSAGE(top_left, top_right, why);
+        TEST_ASSERT_EQUAL_MESSAGE(top_left, bottom_left, why);
+        TEST_ASSERT_EQUAL_MESSAGE(top_left, bottom_right, why);
+
+        block_hash[b] = top_left;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(block_hash[0] != block_hash[1],
+        "two blocks four cells apart must generally get DIFFERENT hashes, "
+        "or the coarse sampling has collapsed to one giant block instead "
+        "of a grid of small ones");
+}
 
 /* Burying lava does not delete it.
  *
@@ -16150,6 +16419,9 @@ void run_sand_suite(void)
     RUN_TEST(test_only_water_foams);
     RUN_TEST(test_a_liquid_interior_never_foams);
     RUN_TEST(test_a_diagonal_neighbour_alone_is_not_an_edge);
+    RUN_TEST(test_foam_moves_between_frames);
+    RUN_TEST(test_foam_never_stalls_between_frames);
+    RUN_TEST(test_foam_blobs_are_bigger_than_one_cell);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);

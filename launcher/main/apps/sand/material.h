@@ -1194,3 +1194,22 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
  * called per cell per painted row, and hot - pays for it with a single
  * array index and nothing else. See material.c for the derivation. */
 void material_set_gravity(int gx, int gy);
+
+/* Called once per frame, before painting, with a value that climbs steadily
+ * over real time - see app_sand.c's own FOAM_PHASE_MS for how it derives one
+ * from dt_ms.
+ *
+ * Deliberately a SEPARATE call from material_set_gravity() above, even
+ * though both run at the same point in sand_frame() and both feed
+ * material_colours(). Gravity is a per-frame FACT about the board - where
+ * "down" currently points - and phase is a per-frame fact about the CLOCK -
+ * how much time has passed. Folding a clock reading into the gravity setter
+ * would make the two impossible to test apart: a test that wants to sweep
+ * phase alone would have to also supply a gravity vector, and a test that
+ * wants to sweep gravity alone would be at the mercy of whatever the phase
+ * happened to be. Two setters, two independent things to reason about.
+ *
+ * See material_colours()'s own comment on foam for what the phase is
+ * for and how it is mixed into the foam dither - it is not simply added to
+ * the hash, and the reason why is written there. */
+void material_set_foam_phase(unsigned phase);

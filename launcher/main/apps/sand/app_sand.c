@@ -924,6 +924,31 @@ static uint32_t shine_elapsed_ms;
  * it changed, so whatever glass it had it still has. */
 static uint8_t row_has_shine[GRID_H_MAX];
 
+/* How much a WATER cell's grain hash is coarsened before it reaches
+ * material_colours() - see the comment inside paint_row_n() where that
+ * coarsening actually happens for the full account of why. 1 means a 2x2
+ * block of cells shares one hash value; the knob to turn if foam's blobs
+ * ever need to read bigger (raise this) or finer (lower it, back towards
+ * 0 - one cell per hash, the speckle every other material still gets). */
+#define FOAM_BLOB_SHIFT 1
+
+/* How often the foam dither's phase advances - see material_set_foam_phase()
+ * in material.h for what the phase is for. 90 ms is roughly 11 changes a
+ * second: fast enough that the foam visibly shimmers instead of reading as
+ * a fixed texture, slow enough that it does not strobe. A look tuned by eye
+ * on the device, not measured - the first constant to move if foam ever
+ * reads too twitchy (raise it) or too static (lower it). */
+#define FOAM_PHASE_MS 90
+
+/* Real time accumulated toward the next foam phase step, carried across
+ * frames the same way shine_elapsed_ms is - see that variable's own use in
+ * advance_shine() just below for the pattern this follows. Driven by dt_ms
+ * rather than a frame count so foam animates at the same real-world rate
+ * whatever the frame rate happens to be; a frame-count phase would shimmer
+ * twice as fast at double the frame rate and freeze solid if frames ever
+ * stalled. */
+static uint32_t foam_elapsed_ms;
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
@@ -979,9 +1004,36 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                 ((cx < grid_w - 1 && below != NULL && CELL_IS_EMPTY(below[cx + 1])) ? MATERIAL_EDGE_DOWN_RIGHT : 0u);
         }
 
+        /* WATER samples the grain hash at a COARSER grid than every other
+         * material - shifted right by FOAM_BLOB_SHIFT on both axes, so a
+         * 2x2 block of cells shares one hash value instead of each cell
+         * rolling its own. The user wanted foam speckled in patches rather
+         * than single cells, "so it sort of resembles mist near the foam",
+         * and that is exactly what asking neighbouring cells the same
+         * question buys: they now agree on whether to foam, in blocks,
+         * instead of disagreeing one cell at a time. See
+         * test_foam_blobs_are_bigger_than_one_cell in suite_sand.c.
+         *
+         * No new parameter anywhere for this - `hash` is simply computed
+         * differently before it is handed to material_colours(), which
+         * stays as ignorant of blobs as it is of anything else about
+         * coordinates. That is only possible because water has exactly one
+         * consumer of its hash: material_colours()'s foam dither (see that
+         * function's own comment on its water branch, in material.c). Every
+         * other material still gets material_grain_hash(cx, cy) - the FINE,
+         * per-cell hash - completely unchanged: stone's and wood's speckle
+         * and glass's hatch all depend on adjacent cells disagreeing, and
+         * coarsening their hash the way water's is coarsened here would
+         * flatten them into the same striping bug material_grain_hash()'s
+         * own comment already tells the story of. */
+        const bool cell_is_water = CELL_MATERIAL(row[cx]) == MAT_WATER;
+        const unsigned hash = cell_is_water
+            ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
+            : material_grain_hash(cx, cy);
+
         gfx_color_t col[3];
         const material_pattern_t pat =
-            material_colours(row[cx], material_grain_hash(cx, cy), mask, col);
+            material_colours(row[cx], hash, mask, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
@@ -2398,6 +2450,16 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * Once per frame, not once per cell - see material_set_gravity()'s own
      * comment for why that split is what keeps the paint loop cheap. */
     material_set_gravity(gx, gy);
+
+    /* Water's foam gets its own per-frame fact, deliberately a separate
+     * call from the one above rather than folded into it - see
+     * material_set_foam_phase()'s own comment in material.h for why gravity
+     * and phase must not be conflated. Driven by real elapsed time, not by
+     * how many frames have run, so foam shimmers at the same rate on a slow
+     * frame as a fast one - see FOAM_PHASE_MS's own comment for what that
+     * buys and why a frame count would not. */
+    foam_elapsed_ms += dt_ms;
+    material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();

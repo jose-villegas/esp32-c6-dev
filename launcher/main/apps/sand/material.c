@@ -1905,7 +1905,74 @@ void material_set_gravity(int gx, int gy)
  * have been added to do. Adding one anyway would be a second mechanism
  * competing with the first to answer a question the first already
  * answers - do not add it back in; if foam ever needs tuning, the
- * threshold table below is where that tuning belongs. */
+ * threshold table below is where that tuning belongs.
+ *
+ * ANIMATING THE DITHER. Curvature decides WHERE foam gathers; the hash
+ * decided WHICH of those cells show it, and until now that hash was the
+ * stable per-cell grain hash every other speckled material already uses -
+ * the same value, every frame, for as long as the shape stays put. That
+ * read as a texture painted onto the water rather than as foam moving on
+ * it, reported in exactly those words: it "reads as part of the rim".
+ *
+ * `foam_phase` - set once a frame by material_set_foam_phase(), see that
+ * function's own comment in material.h for why it is a call separate from
+ * material_set_gravity() - gives the dither a second input that changes
+ * every frame even when the shape does not, so a cell's on/off answer keeps
+ * changing while the curvature that gates it stays fixed. It is ADDED to
+ * the hash (scaled by 0x9E37u first - see the mixing site below for why
+ * that constant specifically), and the reason is that addition ROTATES the
+ * low three bits' window of foaming values by one place every time the
+ * phase advances, so two CONSECUTIVE phases can never produce the same
+ * foam set: whatever was just inside the window has moved, and whatever
+ * was just outside has taken its place.
+ *
+ * XOR WAS TRIED FIRST AND IS WRONG, and worth recording exactly why so
+ * nobody "simplifies" this back. The reasoning at the time was that XOR
+ * would decorrelate a cell's answer from its neighbours' better than a
+ * plain shift would - which is backwards. water_foam_threshold's windows
+ * are power-of-two aligned (0, 2, 4, 6 out of 8), and XORing the low three
+ * bits by a fixed value maps an aligned window either ONTO ITSELF or onto
+ * a DIFFERENT aligned window, depending only on the phase's own low bits -
+ * so roughly half of all phase steps leave the foaming set completely
+ * unchanged. Enumerated across all eight phases, mixed with XOR:
+ *
+ *     threshold 2 (curvature 1)   4 of 8 consecutive pairs identical
+ *     threshold 4 (curvature 2)   6 of 8 consecutive pairs identical
+ *     threshold 6 (curvature 3+)  4 of 8 consecutive pairs identical
+ *
+ * Threshold 4 - medium curvature, the commonest case on a real board - is
+ * the worst of the three: the foam set changes on only 2 of every 8 phase
+ * steps, which is most of a full second of FOAM_PHASE_MS ticks producing
+ * nothing. Confirmed on a real sloshing scene, not just this table: phase
+ * 1 to phase 2 changed exactly zero cells out of 635 foaming rim cells.
+ * That is indistinguishable from the stable dither this change exists to
+ * replace, most of the time - the opposite of the goal.
+ *
+ * Addition does not have this failure mode, and does not reintroduce the
+ * unison the XOR attempt was trying (wrongly) to avoid either: at
+ * threshold 2, for instance, only 2 of the 8 hash values foam at any given
+ * phase, so the rim is never all-on or all-off regardless of which mixing
+ * is used - that property was never XOR's to provide. See
+ * test_foam_never_stalls_between_frames in suite_sand.c, which pins BOTH
+ * halves: the foam set is never degenerate (all-on/all-off) at any single
+ * phase, AND no two consecutive phases, across a full cycle of eight,
+ * produce an identical set at any of the three thresholds.
+ *
+ * NOT FORCING DIRTY ROWS, AND THIS IS DELIBERATE. app_sand.c's
+ * draw_dirty_rows() repaints only the rows something marked dirty, so an
+ * animated foam cell sitting in an otherwise-settled row will not actually
+ * be redrawn until that row changes for some other reason. Widening the
+ * repaint to cover "any row that might have foam in it" would mean walking
+ * the grid, or keeping a second row-tracking table the way row_has_shine[]
+ * exists for glass's shine - real cost, paid every frame, for a cosmetic
+ * dither. It is also unnecessary: foam only appears where curvature is
+ * nonzero, and a rim's curvature is nonzero because the water is IN MOTION
+ * (see the measurements above - a still pool is 4% non-flat, a sloshing one
+ * is up to 94%), and motion is exactly what already marks a row dirty every
+ * step. A settled pool's rim is flat, foams nowhere, and has nothing
+ * animating to miss; a moving one is being repainted anyway. Do not go
+ * looking for a way to force these rows dirty - there is nothing here that
+ * needs it. */
 
 /* FOAM's own colour - a side table, not a palette[] row, the same pattern
  * glass_shine and stone_speckle already use above: there is no spare slot
@@ -1925,13 +1992,12 @@ static const gfx_color_t water_foam = GFX_RGB(0xE8F6FF);
  * as an ordinary jagged crevice one cell less exposed, not more so. */
 #define WATER_FOAM_CURVATURE_MAX 3
 
-/* Foam density at each curvature, expressed as a threshold against
- * `hash & 7u`: a cell foams when its stable per-cell hash (already passed
- * in, already material_grain_hash(), already the same value every frame -
- * see that function's own comment) falls under the threshold for its
- * curvature. So this is a DITHER, not a fill - a "heavy" cell still shows
- * bare rim on 2 of its 8 hash values, and a "flat" one never foams at all,
- * since hash & 7u can never be less than 0.
+/* Foam density at each curvature, expressed as a threshold against a mix
+ * of `hash` and this frame's foam phase (see below): a cell foams when that
+ * mix, masked to three bits, falls under the threshold for its curvature.
+ * So this is a DITHER, not a fill - a "heavy" cell still shows bare rim on
+ * 2 of its 8 possible values, and a "flat" one never foams at all, since
+ * the masked mix can never be less than 0.
  *
  * A look tuned by eye, not measured - the first thing to move if foam
  * ever reads too sparse (raise these) or too busy (lower them). Kept as a
@@ -1943,6 +2009,19 @@ static const uint8_t water_foam_threshold[WATER_FOAM_CURVATURE_MAX + 1] = {
     4,  /* curvature 2, medium - foams on 4 of 8 */
     6,  /* curvature 3+, heavy - foams on 6 of 8 */
 };
+
+/* THIS FRAME'S FOAM PHASE - see material_set_foam_phase() and its own
+ * comment in material.h for what it means and why it is a call of its own
+ * rather than folded into material_set_gravity(). Zero until the first
+ * frame sets it, which paints exactly the stable dither foam had before
+ * phase existed - a reasonable default for anything that reads
+ * material_colours() before a frame ever runs (tests included). */
+static unsigned foam_phase;
+
+void material_set_foam_phase(unsigned phase)
+{
+    foam_phase = phase;
+}
 
 /* How many of `mask`'s bits are set - the same manual bit-count
  * suite_icons.c's popcount16() uses, kept here rather than shared because
@@ -2004,7 +2083,30 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
      * WATER'S rim then gets one thing no other liquid does: foam, gated
      * purely by curvature - see this file's own comment on that above.
      * Oil, lava and acid fall through this same block unchanged; only the
-     * id check below diverts water into the foam path. */
+     * id check below diverts water into the foam path.
+     *
+     * `hash` ITSELF ARRIVES ALREADY COARSENED FOR WATER. paint_row_n() in
+     * app_sand.c hands this function material_grain_hash(cx, cy) for every
+     * material except water, and material_grain_hash(cx >> FOAM_BLOB_SHIFT,
+     * cy >> FOAM_BLOB_SHIFT) for water - a 2x2 block of cells sharing one
+     * value instead of each rolling its own - so foam clusters in blobs
+     * rather than speckling one cell at a time. This function does not
+     * know that, and does not need to: it just uses whatever `hash` it was
+     * handed, the same as it always has.
+     *
+     * That is safe ONLY because foam is the SOLE consumer of water's hash.
+     * Water is KIND_LIQUID and returns from this function below, so it
+     * never reaches the `switch (CELL_MATERIAL(c))` further down that reads
+     * `hash` for glass, stone, wood and the extended materials' grain - the
+     * coarsening never touches any of them. If water is ever given a
+     * speckle of its own - the way stone and wood have one - it will want
+     * the FINE per-cell hash like everything else, and the day that
+     * happens this coarsening has to move from "every water cell,
+     * unconditionally" to "only where foam actually reads it", or the new
+     * speckle will silently stripe in 2x2 blocks with no test anywhere
+     * catching why. Nothing enforces that today - it is a fact about the
+     * rest of this file, not a type - which is exactly why it is written
+     * down here rather than left to be rediscovered. */
     if (material_of(c)->kind == KIND_LIQUID) {
         const uint8_t id = CELL_MATERIAL(c);
         const unsigned cardinal = mask & MATERIAL_EDGE_CARDINAL;
@@ -2024,7 +2126,26 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                 if (curvature > WATER_FOAM_CURVATURE_MAX) {
                     curvature = WATER_FOAM_CURVATURE_MAX;
                 }
-                if ((hash & 7u) < water_foam_threshold[curvature]) {
+
+                /* ADD, never `^` - see the long comment above this file's
+                 * curvature block for why XOR fails: water_foam_threshold's
+                 * windows are power-of-two aligned, and XORing the low
+                 * three bits by a fixed value maps an aligned window onto
+                 * itself or another aligned window, so roughly half of all
+                 * phase steps leave the foaming set completely unchanged -
+                 * measured as 4, 6 and 4 of 8 consecutive phase pairs
+                 * identical at the three thresholds, worst at the commonest
+                 * (medium) curvature. Addition has no such alignment to
+                 * preserve: it ROTATES the window by one place every phase
+                 * step, so consecutive phases can never match. 0x9E37u is
+                 * the same constant either mixing would use - the point of
+                 * it here is only that it is ODD (ends in 7, an odd hex
+                 * digit), so multiplying `foam_phase` by it still steps
+                 * through all eight low-bit values as phase climbs by 1,
+                 * rather than by some larger stride that would revisit
+                 * values and stall in a different way. */
+                const unsigned dithered = hash + foam_phase * 0x9E37u;
+                if ((dithered & 7u) < water_foam_threshold[curvature]) {
                     out[0] = water_foam;
                 }
             }
