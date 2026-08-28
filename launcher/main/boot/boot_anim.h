@@ -478,14 +478,55 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * The two fades multiply. The first is the animation arriving; the second is
  * the plane receding, and it is what the eye reads as depth on a projection
  * that has no perspective in it at all. */
-/* The brightest the floor is ever allowed to get, most of the animation.
+/* The brightest the floor is allowed to get at the very start - low, and
+ * the number that mattered most when this was the ONLY ceiling. The floor
+ * is backdrop: it says where the plane is and then gets out of the way.
+ * Drawn at anything like full strength it competes with the curve for
+ * attention and wins, because there is a great deal more of it - which is
+ * exactly what the first version of this did, and the curve disappeared
+ * into a plaid tablecloth.
  *
- * Low, and the number that mattered most here. The floor is backdrop: it says
- * where the plane is and then gets out of the way. Drawn at anything like
- * full strength it competes with the curve for attention and wins, because
- * there is a great deal more of it - which is exactly what the first version
- * of this did, and the curve disappeared into a plaid tablecloth. */
+ * It does not stay this low, though - see boot_anim_grid_climb() and
+ * BOOT_ANIM_GRID_CEILING_MAX just below: that reasoning only holds while
+ * the floor is still competing with a full-size curve for attention, and
+ * stops applying once the picture is mostly the grid itself. */
 #define BOOT_ANIM_GRID_MAX 56
+
+/* How far along the grid's slow climb toward full visibility things are,
+ * right now - the single clock both boot_anim_grid_alpha()'s own ceiling
+ * and boot_anim_grid_whiten() ride, so the grid's opacity and its colour
+ * climb together rather than one alone. Raising either by itself was not
+ * enough: mixing the hue toward white fixes how COLOUR-MUDDY it reads at
+ * a given opacity, but the actual peak brightness is set by the opacity
+ * itself - gfx_color_mix(BLACK, WHITE, 56) is still only a dim grey,
+ * around (56,56,56), no matter how white the target colour is. The axes
+ * read clearly because they are mixed straight off boot_anim_ink(), up to
+ * 255, not off a deliberately low cap like BOOT_ANIM_GRID_MAX - so the
+ * grid's own ceiling has to actually climb toward that same range too, not
+ * just its hue.
+ *
+ * Starts at the moment the floor itself first appears
+ * (BOOT_ANIM_GRID_START_MS) - not only once the motif starts to shrink or
+ * the collapse begins - and climbs all the way to BOOT_ANIM_MS, the same
+ * instant everything else has faded to black on boot_anim_ink()'s own
+ * clock. Plain tween_ramp(), not eased: an ease-out would spend most of
+ * the climb in the first stretch and then sit near the cap for most of
+ * the animation, which is not "slowly adding up" - a steady, linear climb
+ * is. The picture at any moment is the sum of two things moving in
+ * opposite directions, the grid climbing and ink taking the whole picture
+ * down, not one fighting the other the way an earlier, collapse-only
+ * version of this ceiling did (too short a shared window for both to be
+ * doing much at once). */
+static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
+{
+    return tween_ramp(now_ms, BOOT_ANIM_GRID_START_MS,
+                      BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
+}
+
+/* Capped short of the axes' own full 255 so even at its brightest the
+ * floor still reads as backdrop rather than becoming a second set of
+ * axes. */
+#define BOOT_ANIM_GRID_CEILING_MAX 235
 
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
@@ -502,34 +543,20 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
      * different place. Squared, the outer rings are already almost gone by
      * the time they run out. */
     const uint32_t left = (uint32_t)(BOOT_ANIM_GRID_FADE - ring);
-    const uint32_t near = left * left * BOOT_ANIM_GRID_MAX /
+    const uint32_t ceiling = (uint32_t)tween_lerp_i32(
+        BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_CEILING_MAX,
+        boot_anim_grid_climb(now_ms));
+    const uint32_t near = left * left * ceiling /
                           ((uint32_t)BOOT_ANIM_GRID_FADE * BOOT_ANIM_GRID_FADE);
 
     return (uint8_t)((arrived * near) / 255u);
 }
 
 /* How far the grid's own hue has been mixed toward white, by now - see
- * draw_floor()'s own comment for why whitening the COLOUR, not just
- * raising its alpha, is what makes the ring-by-ring wave in
- * boot_anim_grid_alpha()/grid_hue() actually read as one. A saturated hue
- * lifted only partway off black stays dim and colour-muddy no matter how
- * opaque it gets; mixed most of the way toward white it reads brightly at
- * the same alpha, the same way the axes (drawn flat white - see
- * boot_anim.c's COL_WHITE) always read clearly regardless of their own.
- *
- * Climbs from the moment the floor itself first appears
- * (BOOT_ANIM_GRID_START_MS) - not only once the motif starts to shrink or
- * the collapse begins - all the way to BOOT_ANIM_MS, the same instant
- * everything else has faded to black on boot_anim_ink()'s own clock. Plain
- * tween_ramp(), not eased: an ease-out would spend most of the climb in
- * the first stretch and then sit near the cap for most of the animation,
- * which is not "slowly adding up" - a steady, linear climb is. The picture
- * at any moment is the sum of two things moving in opposite directions,
- * the grid getting whiter and ink taking the whole picture down, not one
- * fighting the other the way an earlier, collapse-only version of this
- * did (see the boot_anim_grid_ceiling() this replaced, back when the
- * boost and the fade shared too short a window to both be doing much at
- * once).
+ * boot_anim_grid_climb()'s own comment for why the colour needs to climb
+ * ALONGSIDE the alpha ceiling, not instead of it: a saturated hue lifted
+ * off black still reads as colour-muddy at any opacity unless it is also
+ * moving toward white.
  *
  * Capped short of full white (255) so even at the very end the rings keep
  * a last trace of their own hue instead of becoming indistinguishable
@@ -538,9 +565,8 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 
 static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 {
-    const uint8_t u8 = tween_ramp(now_ms, BOOT_ANIM_GRID_START_MS,
-                                  BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
-    return (uint8_t)tween_lerp_i32(0, BOOT_ANIM_GRID_WHITEN_MAX, u8);
+    return (uint8_t)tween_lerp_i32(0, BOOT_ANIM_GRID_WHITEN_MAX,
+                                   boot_anim_grid_climb(now_ms));
 }
 
 _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
