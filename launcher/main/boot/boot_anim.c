@@ -168,22 +168,15 @@ static int32_t units(int n)
  * result read as a bare cross rather than a grid; bounded, dense and
  * bright, the same construction reads as intended.)
  *
- * Its OWN shrink, not the shared motif one the axes and curve use - see
- * boot_anim_grid_shrink_q8()'s own comment for why: the floor's natural
- * reach is far smaller than the curve's, so it never needed to settle
- * nearly as small to stay on panel through the collapse, and settling it
- * that far anyway is what left "still dark" complaints partly unsolved -
- * a big, densely-ringed floor reads; a small one, no matter how bright,
- * does not cover enough of the panel to. A dense mesh, not an empty
- * panel, is still the point once it does settle: with BOOT_ANIM_GRID_RINGS
- * rings packed into a fraction of their normal spacing, the covered
- * pixels thicken up rather than thin out, and that filled-in look - the
- * plane still visibly there, just close in on itself - is what "the
- * origin settles small" is supposed to read as, not a grid shrinking away
- * to nothing in a corner. Applied to `d`/`far` (world units, before
- * projection) rather than via csx()/csy() on the drawn endpoints, so the
- * whole grid scales uniformly rather than each endpoint sliding
- * independently toward view->ox/oy. */
+ * Its OWN shrink, not the shared motif one the axes and curve use, and a
+ * CONSTANT rather than something that grows or settles over time - see
+ * boot_anim_grid_shrink_q8()'s own comment: the floor is sized to cover
+ * every one of the panel's four corners for the WHOLE animation, from the
+ * very first frame, which is not something a curve that starts small and
+ * grows into place can do - there is always a window before it has grown.
+ * Applied to `d`/`far` (world units, before projection) rather than via
+ * csx()/csy() on the drawn endpoints, so the whole grid scales uniformly
+ * rather than each endpoint sliding independently toward view->ox/oy. */
 static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
