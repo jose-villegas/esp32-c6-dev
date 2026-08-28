@@ -663,6 +663,38 @@ static bool leaf_overlay_on;
 void gfx_set_leaf_overlay(bool on) { leaf_overlay_on = on; }
 bool gfx_debug_leaf_overlay(void) { return leaf_overlay_on; }
 
+/* Per-strip counts of which send path gfx_present() actually took: how
+ * many of STRIP_COUNT strips went out as one whole-band send_full_row()
+ * versus how many gathered at least one run instead versus how many went
+ * out full-width but at LESS than the whole band's height - counted where
+ * send_one_row() below makes that choice, once per strip either way. See
+ * send_partial_band() for what that third path is and why it exists.
+ *
+ * Exists for a device test that wants to know not just how long
+ * gfx_present() took but WHY, against a real sand scene's dirty pattern
+ * rather than the synthetic marks the rest of this file's tests use - see
+ * suite_sand.c. Not reset by gfx_present() itself, so a caller can
+ * accumulate across exactly the frames it is measuring by calling
+ * gfx_reset_strip_send_counts() right before its own timed window. */
+static int dev_strips_sent_full;
+static int dev_strips_sent_gathered;
+static int dev_strips_sent_partial;
+
+void gfx_reset_strip_send_counts(void)
+{
+    dev_strips_sent_full = 0;
+    dev_strips_sent_gathered = 0;
+    dev_strips_sent_partial = 0;
+}
+
+void gfx_get_strip_send_counts(int *full_bands, int *gathered,
+                               int *partial_bands)
+{
+    if (full_bands)     { *full_bands     = dev_strips_sent_full; }
+    if (gathered)       { *gathered       = dev_strips_sent_gathered; }
+    if (partial_bands)  { *partial_bands  = dev_strips_sent_partial; }
+}
+
 /* Outlines whichever rectangle is about to be sent, one row and one column
  * of pixels deep - shows exactly which segments of the strip/gather split
  * are triggering an update on a real interaction, and which path each one
@@ -828,7 +860,18 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
 /* Sends row's whole band, full width - too many cells dirty to be worth
  * gathering them independently. Queues without waiting, batched with
  * whichever other rows do the same; gfx_present() drains them all together
- * at the end. */
+ * at the end.
+ *
+ * That queue-without-waiting is what makes a band's cost depend on what
+ * else is in flight with it. Measured alone - one band presented with
+ * nothing else queued, as every ratio test in suite_gfx.c does - it
+ * costs 3,405 us. Measured inside a real frame, where later bands' DMA
+ * overlaps earlier bands' CPU-side setup here, seven bands come to
+ * 18,147 us, not 7 x 3,405 = 23,835 - the price
+ * run_present_against_scene() in suite_sand.c measures with its three
+ * present-cost tests. Both numbers are correct; they answer different
+ * questions, and multiplying the isolated price by the band count does
+ * not recover the pipelined one. */
 static void send_full_row(int row, int *queued)
 {
     const int y = row * STRIP_HEIGHT;
@@ -865,6 +908,46 @@ static void send_full_row(int row, int *queued)
     esp_lcd_panel_draw_bitmap(panel, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
                               fb + (size_t)y * GFX_WIDTH);
     (*queued)++;
+}
+
+/* Sends a full-width box at its OWN height, straight out of the
+ * framebuffer, with no gather and no copy.
+ *
+ * The third send path, and the cheapest: a box spanning the full panel
+ * width is already contiguous in `fb` - row-major, GFX_WIDTH stride - so
+ * the rows from y0 to y1 are exactly the bytes the panel wants, in
+ * order, with nothing to pack. That makes it send_full_row() without the
+ * rounding up: same one transaction, same queue-without-waiting, fewer
+ * pixels on the bus.
+ *
+ * It is possible at all because the box carries a real sub-strip Y
+ * extent. That does not come from the strip grid, which is 64 rows
+ * coarse - it comes from the per-cell cell_y0/cell_y1 boxes in
+ * gfx_dirty.h, which dirty_mark() narrows through union_cell_y() and
+ * run_box() unions across the run. A reader who assumes the tracking is
+ * strip-granular will not believe this change is possible; it is the
+ * cell layer that makes it so.
+ *
+ * Measured on a host replay of this decision that reproduces the
+ * device's own strip-send counters exactly: 10.1% fewer pixels per frame
+ * on the falling-sand scene, 10.3% on the lava stress scene, and 0.0% on
+ * the thermal shock lattice, whose strips really are dirty full height.
+ *
+ * Returns false when it declines, so the caller falls back to the whole
+ * band. It declines for one reason only: the debug overlay's borders are
+ * sized for a whole cell, and drawing them round a short box would need
+ * its own save/restore for no benefit while debugging. */
+static bool send_partial_band(int y0, int y1, int *queued)
+{
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    if (debug_overlay_on) {
+        return false;
+    }
+#endif
+    esp_lcd_panel_draw_bitmap(panel, 0, y0, GFX_WIDTH, y1,
+                              fb + (size_t)y0 * GFX_WIDTH);
+    (*queued)++;
+    return true;
 }
 
 /* collect_runs_from_mask(), collect_dirty_runs(), run_is_leaf_eligible(),
@@ -923,12 +1006,33 @@ static void send_one_row(int row, int *queued)
             const size_t area = (size_t)(box_x1[r] - box_x0[r]) *
                                 (size_t)(box_y1[r] - box_y0[r]);
             if (area > GATHER_MAX_PIXELS) {
+                /* Too big to gather - but if it is full width it needs no
+                 * gathering at all. See send_partial_band(). A box at the
+                 * full panel width means the run covers every column, so
+                 * this is the row's only run - returning here rather than
+                 * continuing the loop is safe. */
+                if (box_x0[r] == 0 && box_x1[r] == GFX_WIDTH &&
+                    box_y1[r] - box_y0[r] < STRIP_HEIGHT &&
+                    send_partial_band(box_y0[r], box_y1[r], queued)) {
+#if CONFIG_LAUNCHER_DEVELOPMENT
+                    dev_strips_sent_partial++;
+#endif
+                    return;
+                }
+#if CONFIG_LAUNCHER_DEVELOPMENT
+                dev_strips_sent_full++;
+#endif
                 send_full_row(row, queued);
                 return;
             }
         }
     }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    if (n > 0) {
+        dev_strips_sent_gathered++;
+    }
+#endif
     for (int r = 0; r < n; r++) {
         send_run(row, run_start[r], run_end[r], box_x0[r], box_x1[r],
                 box_y0[r], box_y1[r], split_n[r], split_x0[r], split_x1[r],
@@ -960,3 +1064,27 @@ void gfx_present(void)
         xSemaphoreTake(strip_sent, portMAX_DELAY);
     }
 }
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Test-only: sends the ENTIRE framebuffer as one esp_lcd_panel_draw_bitmap()
+ * call, bypassing every decision gfx_present() makes above it - no strip
+ * loop, no dirty_row_is_dirty() check, no collect_dirty_runs(), no leaf
+ * refinement, no gather-vs-full-band choice. What is left over is as close
+ * to raw QSPI bus time as this driver can be made to give up.
+ *
+ * The SPI driver still has to split a transfer this big into chunks no
+ * bigger than spi_trans_max_bytes (one STRIP_HEIGHT band's worth - see
+ * panel_bring_up()'s bus config, GFX_WIDTH * STRIP_HEIGHT *
+ * sizeof(gfx_color_t)), but esp_lcd_panel_io_spi.c arms the completion
+ * callback only on the LAST chunk of a draw_bitmap() call ("mark
+ * en_trans_done_cb only at the last round to avoid premature completion
+ * callback" - its own comment), so exactly one strip_sent give still means
+ * the whole frame, every chunk, has actually left the bus - not just the
+ * first chunk. One wait is correct here for the same reason gfx_present()
+ * above waits once per QUEUED call rather than once per byte. */
+void gfx_present_raw_full_frame_for_test(void)
+{
+    esp_lcd_panel_draw_bitmap(panel, 0, 0, GFX_WIDTH, GFX_HEIGHT, fb);
+    xSemaphoreTake(strip_sent, portMAX_DELAY);
+}
+#endif

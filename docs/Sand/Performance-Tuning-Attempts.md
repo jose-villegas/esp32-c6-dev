@@ -2930,6 +2930,471 @@ ruled out a watchdog collision, which reproduces exactly too.
 
 ---
 
+## The sixteenth attempt: a function that fell out of its callers, and a heuristic already at its ceiling
+
+Two changes shipped, and they have nothing to do with each other. One is
+the fourth appearance of this campaign's oldest mechanism - the inlining
+cliff - found by bisecting a regression nobody had attributed. The other
+is a third send path in `gfx_present()` that had simply never been
+written, found by proving that the two tunables the round was convened to
+sweep do literally nothing.
+
+Three things were also *retired*: this file's own metal hypothesis, the
+premise that the gather heuristic is nearly dead, and a comment in the
+tree calling a zero a target. All three were killed by measurement, and
+all three are corrected in the same changes rather than left standing.
+
+### Step 0: the window, closed with a capture that already existed
+
+The round opened on a drift nobody had explained. Between
+`performance_20260826_183646` and `performance_20260828_014644`, with no
+optimisation work in between, the reaction-heavy scenes got materially
+worse while the pure-sand controls got *better* - the every-material flip
+up 15%, the lava stress scene up 8%, both controls down 7%. That pattern
+is not the layout lottery: layout does not sort itself by whether a scene
+touches the reactions pass.
+
+A second capture of nearly the same tree then put a floor under it. The
+`020527` capture differs from `014644` only by a comment change and a
+Python-only edit, so every difference between them is pure relink:
+**+4.3% and +4.2% on the two controls**. Re-read against that floor, most
+of the drift is noise and the signal is concentrated in two rows - the
+every-material flip at +14.4% and the lava stress scene at +6.8%. The
+fire, four-liquid, thermal-shock, boiler and smoke rows are all inside
+the relink floor and were dropped from the hunt.
+
+The window itself then closed almost entirely on its own. A capture from
+the middle of it, `performance_20260827_145948`, was already sitting in
+`results/` unread, and it carries essentially the *whole* drift:
+
+| scene | 08-26 18:36 | 08-27 14:59 | 08-28 01:46 |
+|---|---:|---:|---:|
+| every-material flip | 78,617 | 90,374 | 90,677 |
+| lava stress | 127,386 | 137,194 | 137,508 |
+| full screen of fire | 297,220 | 310,730 | 309,034 |
+
+Forty-five commits instead of ninety, and no work at all to get there.
+**Read the captures you already have before generating new ones**: this
+one was taken for an unrelated reason and answered half the question.
+
+### The harness: the repo's own suite, compiled for the host
+
+The eleventh attempt's method - rebuild every commit in the range and
+re-time it on the host - needs a harness that reproduces the device
+benchmarks. That harness has always been a hand-copy of the scene
+builders, which is a drift risk in exactly the place drift is fatal: a
+copy that stops matching the scene the device times is a bisect that
+attributes the wrong commit.
+
+This round did it differently. `suite_sand.c` is compiled *as it stands
+at each commit*, with `-DDEVICE_BUILD`, against three shim headers - a
+Unity whose assertions are no-ops, an `esp_timer` backed by
+`QueryPerformanceCounter` that records every call, and an `esp_log` that
+writes to stderr. The harness then calls the device benchmark functions
+directly and recovers the timed window as the widest gap between
+consecutive clock reads. Nothing is copied; the scenes timed are the
+scenes the device times, at whatever commit is checked out.
+
+Two builds' worth of caution, kept: the scene builders and the nine
+benchmark bodies were diffed between the two ends of the window first and
+are byte-identical, so nothing in the range changes what is being
+measured; and every comparison below is best-of-N with every commit
+visited in every round, alternate rounds walking the list backwards,
+against the harness's documented 40% within-run drift.
+
+### The bisect: one commit, and it is not subtle
+
+Forty-six builds, seven scenes, best of five interleaved. The measured
+windows are whole-window microseconds and the scenes differ in step
+count, so only the column-wise ratios mean anything:
+
+| commit | everymat | lava | fire | liquids | thermal | step | pileflip |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| ... 26 commits, `255f920` through `a2daa87` | 26,452-27,378 | 17,848-19,027 | 11,564-12,675 | 15,651-16,975 | 11,704-12,386 | 297-366 | 591-719 |
+| `a2daa87` (the commit before) | 26,868 | 19,027 | 12,406 | 16,291 | 12,170 | 310 | 603 |
+| **`723fac6` Smelt metal from dirt** | **28,636** | **19,518** | **13,762** | **16,888** | **12,512** | 311 | 611 |
+| ... 18 commits, `6eb4229` through `ff6622f` | 28,030-28,536 | 19,304-19,851 | 13,517-14,056 | 16,251-16,835 | 12,257-12,658 | 311-366 | 594-758 |
+
+One step, everything after it stays up, and the two liquid-free controls
+do not move across it at all - 310 → 311 and 603 → 611. A layout shift
+cannot leave two controls flat while moving five reaction scenes, which
+is the tenth attempt's rule doing its job for the fourth time.
+
+The fire row is the tell. A full screen of `MAT_FIRE` contains no dirt
+and no metal; a commit that adds a dirt-to-metal reaction has no business
+touching it, and it moved 10.9%.
+
+### The cost was the inlining cliff, again
+
+`723fac6` does two things to `sand_reactions.c`. It adds a wet-earth
+branch inside `try_heat_transform()` - dirt with moisture in it spends
+the roll driving off one level as steam instead of smelting - and it
+extracts `emit_into_empty_neighbor()` out of `try_flare()` so the new
+branch can share it.
+
+The commit message flagged the extraction as an unmeasured risk, and
+named the wrong casualty. `try_flare()` was fine. What broke is that
+`try_heat_transform()`'s own body grew past GCC's size heuristic:
+
+| | `try_heat_transform` | `sand_step_reactions` |
+|---|---|---:|
+| `a2daa87` | no symbol - inlined at all four call sites | 0x3bc0 |
+| `723fac6` | **0x400, out of line, plus a 0x3c0 `.part.0` cold split** | 0x3c80 |
+
+Four call sites, all on paths that carry heat, all of them now paying for
+a call and a cold split that had not existed the day before.
+
+### Five candidates, interleaved, and the two obvious ones lost
+
+Host, best of seven, all five builds interleaved in one session,
+simulation verified byte-identical by material histograms at three points
+in two scenes:
+
+| | everymat | lava | fire | liquids | thermal | step | pileflip |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| baseline | 27,862 | 19,393 | 14,007 | 16,388 | 12,579 | 357 | 691 |
+| `__builtin_expect` on the branch | +0.1% | -0.8% | +0.7% | -0.2% | -1.0% | +0.6% | -3.0% |
+| branch split into a `noinline` helper | 0.0% | -1.0% | -0.8% | -0.8% | -2.1% | -1.7% | +1.7% |
+| branch **deleted outright** | +0.5% | -4.5% | -9.5% | -3.0% | -4.1% | -2.0% | +1.7% |
+| **`always_inline` on the function** | +0.5% | **-6.5%** | **-12.1%** | **-5.1%** | **-4.8%** | -1.1% | +0.7% |
+
+The cold hint - the idiom `move_liquid_grain()` uses, and the first thing
+anyone would reach for - moved nothing, because the size heuristic counts
+the branch whether or not the branch is laid out cold. Splitting it into
+its own `noinline` function shrank the caller without getting it back
+under the threshold, and bought about 1%.
+
+The decisive row is the fourth. **Deleting the feature's work entirely
+measures worse than keeping it and forcing the inline** - -9.5% against
+-12.1% on fire. That is what puts the cost on the shape of the code
+rather than on anything the branch does, and it is a cleaner statement
+than any amount of reading the disassembly.
+
+### The device agreed, which is the part worth noticing
+
+Two captures of the shipped change (`3cf88c3`), agreeing with each other
+to within 4 us on every row, against the `020527` baseline:
+
+| scene | before | after | device | host predicted |
+|---|---:|---:|---:|---:|
+| full screen of fire | 307,878 | 275,903 | **-10.4%** | -12.1% |
+| lava stress | 136,000 | 127,145 | **-6.5%** | -6.5% |
+| thermal shock | 101,451 | 96,508 | **-4.9%** | -4.8% |
+| four liquids | 127,570 | 122,948 | **-3.6%** | -5.1% |
+| every-material flip | 89,961 | 89,635 | -0.4% | no move |
+
+Every prediction landed, including the negative one. This file has spent
+two attempts warning that a host win is a hypothesis until the device
+measures it (the eleventh's 26% recovering 20% by a different mechanism,
+the fourteenth's +8% arriving as +16%), so the round where the host was
+right on all five rows is worth marking - and worth explaining. The
+earlier misses were changes that altered *how much work* the code does,
+where the host and the device weigh the work differently. This one alters
+*where the code sits*, and a call is a call on both machines.
+
+### Why attempts 07 and 08 did not apply
+
+Forcing four call sites inline is exactly what this file has twice
+recorded as costing more than the call, once the loop outgrows the 32 KB
+i-cache. It did not happen here, and the device objdump says why:
+
+| | `.text` total | `try_heat_transform` | `sand_step_reactions` | `crack_run` |
+|---|---:|---|---:|---:|
+| before (`10446f3`) | 21,148 | 0x2c0, out of line | 0x291e | 0x7f2 |
+| after (`3cf88c3`) | 21,734 | **gone - inlined** | **0x2850** | **0x43a** |
+
+`sand_step_reactions` got 206 bytes *smaller* and `crack_run` 952
+smaller, for a total growth of 586 bytes across four folded call sites.
+The compiler had been paying more to keep the call than the inline costs.
+
+That is the distinguishing feature, and it is worth stating as a rule
+rather than as this one case: **forcing an inline is a trap when it
+overrides a decision the compiler made about code that was written to be
+called, and a fix when it restores a decision the compiler used to make
+and lost.** Attempts 07 and 08 were the first; this is the second. The
+cheap way to tell them apart is to look at the commit that changed it - if
+a symbol appeared out of line at a commit that was not about that
+function, the compiler changed its mind, and changing it back is
+restoration rather than override.
+
+### Metal: the counter has to be taken mid-flight, not on the constructor
+
+The every-material flip's +14.4% is the one row the inline fix does not
+explain, and this file's own "Metal" section had a candidate ready:
+`MATX_METAL` shipped with `conducts = 248` against stone and glass's 220,
+which puts the mean conduction walk near `CONDUCT_REACH` where 220 falls
+off at five or six - unpriced, because *no benchmark scene contains any
+extended material*.
+
+The last clause is where it went wrong, and the correction is the most
+transferable thing in this round. Every scene does enumerate
+`MAT_EMPTY + 1 .. MAT_COUNT - 1`, so nothing **paints** an extended
+material. But a reaction **makes** one. A host material histogram of the
+every-material scene, at the exact points the device benchmark measures:
+
+| | metal cells |
+|---|---:|
+| as painted | 0 |
+| after the 120 settle steps | **300** |
+| after the 20 measured steps | **311** |
+
+Metal has been in that benchmark since the day it existed, smelted out of
+the dirt that sits beside lava everywhere in the all-pairs tiling. Two
+cells of leaf turn up as well.
+
+So the eighth attempt's call-counter question - *does this code even
+run* - has a second failure mode beside the one that attempt found.
+Counting what a scene is **built from** is not counting what it
+**contains** once the simulation has run. The counter has to be taken on
+the scene mid-flight.
+
+### And the hypothesis it was there to test is dead anyway
+
+Three probes on the every-material flip, host, best of five interleaved,
+each one a single-field change:
+
+| probe | everymat |
+|---|---:|
+| metal `conducts` 248 → 220 (stone's own figure) | **-0.0%** |
+| metal `conducts` 248 → 0 (not a conductor at all) | -2.9 to -3.1% |
+| dirt → metal switched off entirely | -4.5% |
+
+**The walk length costs nothing.** The whole "248 puts the mean walk near
+`CONDUCT_REACH` where 220 falls off at 5-6" argument is arithmetic about
+a walk that does not happen: `conduct_heat()` stops the moment the next
+cell is not itself a conductor, and in a scene where conductors are
+scattered rather than laid in runs, the walk ends at depth 1 whatever the
+roll says. A long `conducts` only buys distance where there is a long run
+of conductor to cross - a rod, a wall, a pipe - and no benchmark has one.
+
+What the every-material flip actually pays for is metal *existing* and
+being a conductor at all (about 3%), inside a total feature cost of about
+4.5%. That is the price of a material, not a regression, and there is
+nothing to reclaim without removing the feature. The `Tuning-At-a-Glance`
+section naming the walk length as the unpriced cost is corrected in the
+same change that records this - a hypothesis this round's own numbers
+killed does not get to stay standing.
+
+The suggestion in that section - build a device scene with a real metal
+rod, where the walk runs at its full designed length - is still the right
+experiment, and it is now clearly a question about *the rod*, not about
+the benchmark board.
+
+---
+
+### The other half: the present path, and two tunables that do nothing
+
+New device counters had shown how `gfx_present()` sends each of seven
+strips - as a whole band (~3,405 us in isolation) or as a gathered packed
+region - against real sand scenes:
+
+| scene | present/frame | full-band sends | gathered |
+|---|---:|---:|---:|
+| falling sand checkerboard | 10,852 us | 76 | 13 |
+| lava stress | 13,018 us | 100 | 4 |
+| **thermal shock lattice** | **17,922 us** | **70** | **0** |
+
+Ten frames times seven strips is seventy, so every strip of every frame
+of the thermal scene went out whole. The round's brief called that number
+the one to move, and set out to re-sweep the three caps governing the
+choice - `ROW_MAX_RUNS`, `LEAF_REFINE_MAX_RUNS`, `GATHER_MAX_PIXELS` -
+last swept in the sixth attempt against a much older app.
+
+#### The replay, and why it can be trusted
+
+`gfx_dirty.h` is header-only and free of ESP-IDF by design, and
+`send_one_row()`'s choice is pure logic over its state. So the whole
+decision can be replayed on the host: include the real header, reimplement
+only the twelve-line choice with the two `draw_bitmap` calls replaced by
+counters, and drive it with `suite_sand.c`'s own scenes, its own
+`sand_step()`, and its own `mirror_app_sand_marking()`.
+
+It reproduces the device's strip-send counters **exactly** - 76/13,
+100/4, 70/0 - which is the only reason anything below is worth reading.
+A model that agrees with hardware on the numbers you already have is
+allowed to make claims about the numbers you do not.
+
+#### Negative result one: two of the three caps are inert
+
+`ROW_MAX_RUNS` swept at 2, 3, 4, 6, 8, crossed with
+`LEAF_REFINE_MAX_RUNS` at 2, 3, 4 - fifteen builds - and **every counter
+on all three scenes is identical to the shipped 2/2.** Not close.
+Identical.
+
+Both have a reason, and both reasons are structural rather than a matter
+of the value:
+
+- `ROW_MAX_RUNS` cannot matter because a checkerboard row needs 92 runs
+  (so every cap in the range falls back to the full-row span) and a slab
+  row needs one. There is no scene in between.
+- `LEAF_REFINE_MAX_RUNS` cannot matter because refinement first requires
+  `run_is_leaf_eligible()`, and a cell marked at its full column width
+  and full strip height is never eligible - which is every cell in these
+  scenes.
+
+#### Negative result two: the tracker is at its ceiling, not failing
+
+The stronger question is not "what do these caps buy" but "what is left
+to buy at all". So: an **oracle** - the exact set of cells whose byte
+changed this frame, diffed against a snapshot, marked with no cap of any
+kind. No implementation can beat it.
+
+| scene | shipped marking | oracle | difference |
+|---|---:|---:|---:|
+| falling sand | 92,552 px/frame | 92,552 | **0.0%** |
+| lava stress | 117,950 px/frame | 114,416 | -3.0% |
+| thermal shock | 164,864 px/frame | 164,864 | **0.0%** |
+
+The thermal lattice's seventy-out-of-seventy is **correct behaviour**.
+480 compartments really do dirty every strip across its full width and
+full height, every frame; there is no zero to move, and the brief's
+premise - and the comment in the tree that said the same thing - were
+both wrong. The gather heuristic is not nearly dead. It is nearly maxed
+out, which is close to the opposite.
+
+#### The win was a path that had never been written
+
+The two send paths are "gather a box into a fixed buffer" and "send the
+whole 64-row band", and there was no third. There should have been: a box
+that already spans the **full panel width** is contiguous in the
+framebuffer - row-major, `GFX_WIDTH` stride - so it needs no gather
+buffer and nothing packed. It can go straight out of `fb` at its own
+height. A full-width box 23 rows tall (368x23 is just past
+`GATHER_MAX_PIXELS`) was being sent as 64.
+
+| scene | before | with the partial band | |
+|---|---:|---:|---:|
+| falling sand | 92,552 px/frame | 83,168 | **-10.1%** |
+| lava stress | 117,950 px/frame | 105,769 | **-10.3%** |
+| thermal shock | 164,864 px/frame | 164,864 | 0.0% |
+
+At the 0.1031 us/px the raw-blit decomposition pins (16,998 us over
+164,864 px), that is roughly -970 us and -1,260 us a frame on the two
+scenes it touches, for **no extra memory and nothing copied**.
+
+It is possible only because the box carries a real sub-strip Y extent,
+and that is worth saying out loud because a reader who assumes the
+tracking is strip-granular will not believe the change is possible: the
+extent comes from the per-cell `cell_y0`/`cell_y1` boxes that
+`dirty_mark()` narrows through `union_cell_y()`, unioned across the run
+by `run_box()`. The cell layer, not the leaf layer - the leaf layer only
+refines x.
+
+#### `GATHER_MAX_PIXELS`, swept twice now and declined twice
+
+The cap sweep itself, for the record, so nobody sweeps it a third time:
+
+| `GATHER_MAX_PIXELS` | buffer | falling sand | lava stress | thermal |
+|---:|---:|---:|---:|---:|
+| **8,192** (shipped) | 16 KB | 92,552 | 117,950 | 164,864 |
+| 11,776 | 23 KB | 89,240 | 117,361 | 164,864 |
+| 14,336 | 28 KB | 87,694 | 107,425 | 164,864 |
+| 16,384 | 32 KB | 86,112 | 107,425 | 164,864 |
+| 20,480 | 40 KB | 83,536 | 106,873 | 163,150 |
+| 23,552 (a whole band) | 46 KB | 83,168 | 105,769 | 161,041 |
+
+Raising it does buy pixels, and it is still the wrong trade. Every pixel
+it saves is bought by *gathering* it - a `memcpy` out of the framebuffer
+into a DMA buffer that the bus then waits on, where a full band is read
+in place - and the buffer has to grow to match. `gfx_init()` logs 67,568
+bytes of heap free after the framebuffer, and the sand app then takes
+about 41.5 KB for its grid; 12 KB more for `gather_buf` is a large
+fraction of what is left, to buy 5-9%. The partial-band path reaches the
+same pixel totals as the extreme row of that table - 83,168 and 105,769,
+exactly - for zero bytes and zero copying, and the two do not stack.
+
+The sixth attempt swept this cap and kept the default because its device
+tests never approached the budget. This round swept it against three real
+scenes and kept the default because something else gets more for nothing.
+Different reasons, same answer, twice.
+
+### A full band has two prices, and the tree said neither
+
+Reading the capture logs turned up a discrepancy worth writing down, and
+it is not about anything this round changed. An isolated full band
+measures **3,405 us**. Seven bands in a real frame measure **18,147 us**,
+not 7 x 3,405 = 23,835. `send_full_row()` queues its transfer without
+waiting and `gfx_present()` drains them all at the end, so inside a real
+frame the bands pipeline and an isolated one has nothing to overlap with.
+
+Both suites are correct and each measures one price: `suite_gfx.c`'s
+ratio tests measure the un-pipelined one, the three present-cost tests
+measure the pipelined one. Nothing in the tree said so, which meant
+anyone sanity-checking a present number by multiplying got 23,835 against
+a measured 18,147 and concluded the measurement was broken. Recorded now
+in all three places - both suites and `send_full_row()` itself.
+
+### An observation: the layout lottery may be quantised
+
+The layout lottery has been treated throughout this file as a continuous
+noise band - "differences under a few percent are layout until they
+reproduce". Four captures suggest it may not be continuous at all.
+
+Across four device captures of three different builds, the two
+liquid-free controls take one of exactly **two value-pairs**, never
+anything between:
+
+| capture | full-size step | settled-pile flip |
+|---|---:|---:|
+| `014644` | 6,005 | 6,100 |
+| `020527` | **6,263** | **6,356** |
+| `025832` | 6,005 | 6,100 |
+| `030847` | 6,005 | 6,100 |
+
+The host bisect shows the same shape on a different machine with a
+different compiler. Over the back half of the 46-build range the
+settled-pile control reads 598-611 for six consecutive builds and then
+696-758 for the fourteen after it, with no build landing between; the
+front half is noisier and does not show it.
+
+If this holds, the useful test is not "is the delta inside the 4% floor"
+but "which of the two states did the control land in" - a sharper
+instrument than anything this campaign has used, and one that would have
+made several earlier attributions cheaper. **Four device captures and one
+host sweep is an observation, not a proof.** The experiment that would
+settle it: take five captures of five builds that differ only in a
+comment, and see whether the controls take five values or two.
+
+### What this attempt is worth carrying
+
+**Read the captures you already have before taking new ones.** A capture
+taken for an unrelated reason, sitting unread in `results/`, halved a
+45-commit bisect before any of it was run.
+
+**Compile the repo's own test suite rather than copying its scenes.** A
+hand-copied benchmark scene is a bisect that can silently attribute the
+wrong commit. Shims for Unity, `esp_timer` and `esp_log` are cheaper than
+the copy and cannot drift.
+
+**Deleting a feature's work to price it can under-state it.** Removing
+the wet-earth branch measured -9.5% where forcing the inline measured
+-12.1%: the branch's cost was never its work, and measure-by-deleting
+alone would have concluded the feature was expensive and left the real
+cost in place.
+
+**Forcing an inline is a trap when it overrides the compiler and a fix
+when it restores it.** The distinguishing evidence is cheap: if a symbol
+appeared out of line at a commit that was not about that function, and
+folding it back makes the object *smaller*, the compiler had lost a
+decision rather than made one.
+
+**Count what a scene contains, not what it is built from.** The
+every-material benchmark paints no extended material and holds 311 cells
+of metal by the time it is measured, because a reaction makes them. The
+eighth attempt's counter is still the right tool; it has to be pointed at
+the scene mid-flight.
+
+**Build the oracle before optimising the heuristic.** One host experiment
+- the exact changed-cell set, uncapped - showed there was nothing left to
+win in two of three scenes, and turned a planned three-way cap sweep into
+two structural negative results and a search somewhere else.
+
+**A cap that two sweeps have declined to move should say so where it is
+defined.** This one has now been swept twice, for different reasons each
+time, and the record of the second sweep is the thing that stops a third.
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

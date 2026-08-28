@@ -60,6 +60,12 @@ static ui_text_style_t text_style;
 static ui_transform_t transform;
 static bool            transform_valid;
 
+/* See ui.h's own comment above ui_layout_generation() for what this counts
+ * and, more importantly, what it is not. Bumped in the same branch of
+ * ui_set_transform() below that already calls ui_invalidate() - a genuine
+ * transform change is the one and only thing that increments it. */
+static uint32_t layout_generation;
+
 /* microui asks us for text metrics rather than measuring anything itself.
  * `font` is whatever ctx.style->font held when the widget that wants
  * metrics ran - see ui_set_font() in ui.h for how it gets there. It is
@@ -209,6 +215,10 @@ void ui_set_transform(ui_transform_t t)
     }
     transform       = t;
     transform_valid = ui_transform_is_axis_preserving(t);
+    /* Past transforms_equal()'s early return, so this IS a genuine change -
+     * see ui_layout_generation()'s comment in ui.h for what counts as one
+     * and why this is the only place that gets to bump it. */
+    layout_generation++;
     if (!transform_valid) {
         ESP_LOGE(TAG, "ui_set_transform: transform is not a rotation by a "
                  "multiple of 90 degrees, translation or scale - this "
@@ -231,6 +241,11 @@ mu_Context *ui_context(void)
     return &ctx;
 }
 
+uint32_t ui_layout_generation(void)
+{
+    return layout_generation;
+}
+
 void ui_invalidate(void)
 {
     invalidated = true;
@@ -249,6 +264,11 @@ void ui_init(void)
     text_style      = UI_TEXT_PLAIN;
     transform       = ui_transform_identity();
     transform_valid = true;
+    /* Explicit, not left to a zeroed static's implicit value - see
+     * ui_layout_generation()'s comment in ui.h. 0 is simply the first value
+     * a monotonic counter can have; nothing reads meaning into it beyond
+     * "no genuine transform change has happened yet this run". */
+    layout_generation = 0;
 
     /* Palette. Deliberately dark: this is an OLED, so black pixels are off
      * pixels - it costs less power and looks better than a grey chrome. */
@@ -395,6 +415,33 @@ int ui_height(void)
     return logical_viewport().h;
 }
 
+/* See ui.h for the full argument. Short version: mu_begin_window_ex() only
+ * seeds cnt->rect the FIRST time a given window title is ever opened, and
+ * remembers it forever after - correct for a desktop window manager, wrong
+ * here, where a window's rect must track ui_width()/ui_height() every frame.
+ * So this always passes the current logical canvas as the rect, and then -
+ * unlike mu_begin_window_ex() - checks whether that is actually what the
+ * container ended up with. If a stale rect from an earlier, differently
+ * sized orientation is still in force, it is force-corrected here and
+ * ui_invalidate() is called so THIS frame repaints using the corrected rect,
+ * rather than leaving the fix to take effect only next frame. */
+int ui_begin_screen(mu_Context *ctx, const char *title, int opt)
+{
+    const mu_Rect r = mu_rect(0, 0, ui_width(), ui_height());
+    const int open = mu_begin_window_ex(ctx, title, r, opt);
+
+    if (open) {
+        mu_Container *cnt = mu_get_current_container(ctx);
+        if (cnt->rect.x != r.x || cnt->rect.y != r.y ||
+            cnt->rect.w != r.w || cnt->rect.h != r.h) {
+            cnt->rect = r;
+            ui_invalidate();
+        }
+    }
+
+    return open;
+}
+
 /*---------------------------------------------------------------------------
  * Painting
  *
@@ -429,20 +476,61 @@ static void draw_command(const mu_Command *cmd)
         const mu_Color halo = ui_text_halo(ink);
         const gfx_font_t *font = cmd->text.font ?
             (const gfx_font_t *)cmd->text.font : gfx_default_font();
-
-        /* The command's position is mapped once; the quarter turn it maps
-         * through decides which gfx entry point can even draw a rotated
-         * glyph. Under identity this is quarter 0 and mx/my equal the
-         * command's own position exactly (see ui_transform_rect()'s Q16.16
-         * exactness note in ui_transform.h). gfx_text_font() takes the
-         * quarter turn directly and draws quarter 0 exactly as gfx_text()
-         * did, so calling it unconditionally is not an approximation of
-         * the old two-branch behaviour - it IS that behaviour, collapsed
-         * into the one entry point that already handled both cases
-         * underneath. */
-        int mx, my;
-        ui_transform_point(t, cmd->text.pos.x, cmd->text.pos.y, &mx, &my);
         const int quarter = ui_transform_quarter(t);
+
+        /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT JUST ITS ORIGIN
+         *
+         * Every other command here (MU_COMMAND_RECT/ICON/CLIP) maps its
+         * whole rect through ui_transform_rect() - the one function proven
+         * exact under any quarter turn. This used to map only cmd->text.pos
+         * and then walk gfx_text_font()'s per-glyph step table from there,
+         * which reconstructs the string's physical footprint from a single
+         * mapped point plus an assumed direction instead of transforming
+         * the string's own bounding box the way everything else does. That
+         * mismatch is exact and reproducible: mapping a point does not
+         * commute with "walk N glyphs and take the far edge" the way
+         * mapping a box's far corner does, so at quarter 1 and 3 the drawn
+         * string landed a full glyph cell off from where the box says it
+         * should be, and at quarter 2 it was off on both axes - reported on
+         * hardware as rotated button/label text drifting off-centre.
+         *
+         * So this measures the string's LOGICAL box - the same
+         * gfx_font_text_width()/gfx_font_height() measurement
+         * measure_text_width()/measure_text_height() above already use to
+         * size it, so the two can never disagree about the string's extent
+         * - and maps that whole box through ui_transform_rect(), exactly
+         * like the other three commands. */
+        const int tw = gfx_font_text_width(font, cmd->text.str, -1,
+                                           GFX_GLYPH_SCALE);
+        const int th = gfx_font_height(font, GFX_GLYPH_SCALE);
+        const mu_Rect box = ui_transform_rect(
+            t, (mu_Rect){ cmd->text.pos.x, cmd->text.pos.y, tw, th });
+
+        /* gfx_text_font()'s (x, y) is the FIRST GLYPH's cell, not a corner
+         * of the box - at quarter 0 and 1 the string walks forward (+x or
+         * +y) away from the box's own top-left corner, so that corner IS
+         * the origin; at quarter 2 and 3 it walks backward from the FAR end
+         * of the box, one glyph cell in from that far edge. This is
+         * app_sand/palette.c's palette_label_origin() port of exactly this
+         * same problem (see its own comment and suite_palette.c's tests for
+         * the four corner/direction pairs and the proof it centres
+         * correctly at every turn) - ported rather than called directly
+         * because ui/ sits below apps/, so ui.c pulling in apps/sand/ would
+         * be a backwards layering dependency. palette_label_origin() itself
+         * is untouched and stays the reference implementation, even though
+         * nothing calls it for the palette any more now that the palette
+         * rotates as one whole microui-drawn unit. The step is the font's
+         * own cell width at this scale - the same value gfx_text_font()'s
+         * step table advances by per glyph (today's font is monospace, the
+         * same assumption palette_label_origin() already makes with
+         * PALETTE_CHAR_W). */
+        const int step_w = font->cell_w * GFX_GLYPH_SCALE;
+        int mx = box.x, my = box.y;
+        if (quarter == 2) {
+            mx = box.x + box.w - step_w;
+        } else if (quarter == 3) {
+            my = box.y + box.h - step_w;
+        }
 
         ui_text_pass_t passes[UI_TEXT_MAX_PASSES];
         const int n = ui_text_passes(text_style, passes, UI_TEXT_MAX_PASSES);
@@ -547,6 +635,27 @@ static bool rects_overlap(mu_Rect a, mu_Rect b)
            a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+/* cnt->rect is LOGICAL - ui_begin_screen() always seeds it from
+ * ui_width()/ui_height() (see that function's own comment) - but every use
+ * below (the dirty-band check, the overlap check, and the background clear)
+ * needs the PHYSICAL footprint on the actual framebuffer, the same as every
+ * command draw_command() paints already gets by going through
+ * ui_transform_rect() before it ever reaches gfx. Under an odd quarter
+ * (Landscape or Landscape upside down, where GFX_WIDTH != GFX_HEIGHT means
+ * logical and physical dimensions differ) the two rects are not even the
+ * same shape: an unrotated (0, 0, 448, 368) clipped straight onto a
+ * 368x448 physical framebuffer covers only its first 368 of 448 rows,
+ * silently leaving the bottom 80 physical rows out of the background clear
+ * below - whatever was there before stays on screen. Reported on hardware as
+ * pieces of the previous frame stuck in place after rotating from Portrait
+ * to Landscape - it is not particular to the rotation itself, only to
+ * anything that repaints a canvas while an odd quarter is in force, rotation
+ * being the most common way to land there. */
+static mu_Rect canvas_physical_rect(const mu_Container *cnt)
+{
+    return ui_transform_rect(effective_transform(), cnt->rect);
+}
+
 /* Which canvases changed. Also repaint one whose bands are already dirty:
  * something has drawn underneath it this frame, so its pixels are gone
  * however unchanged its own description is. */
@@ -556,12 +665,12 @@ static void mark_changed_canvases(int n, bool *repaint)
         const mu_Container *cnt = ctx.root_list.items[i];
         const int slot = (int)(cnt - ctx.containers);
         const uint64_t h = hash_canvas(cnt);
+        const mu_Rect phys = canvas_physical_rect(cnt);
 
         if (invalidated ||
             slot < 0 || slot >= MU_CONTAINERPOOL_SIZE ||
             h != canvas_hash[slot] ||
-            gfx_region_dirty(cnt->rect.x, cnt->rect.y,
-                             cnt->rect.w, cnt->rect.h)) {
+            gfx_region_dirty(phys.x, phys.y, phys.w, phys.h)) {
             repaint[i] = true;
         }
     }
@@ -578,8 +687,8 @@ static void propagate_repaint_over_overlaps(int n, bool *repaint)
         }
         for (int j = i + 1; j < n && j < MU_ROOTLIST_SIZE; j++) {
             if (!repaint[j] &&
-                rects_overlap(ctx.root_list.items[i]->rect,
-                              ctx.root_list.items[j]->rect)) {
+                rects_overlap(canvas_physical_rect(ctx.root_list.items[i]),
+                              canvas_physical_rect(ctx.root_list.items[j]))) {
                 repaint[j] = true;
             }
         }
@@ -600,7 +709,8 @@ static bool repaint_marked_canvases(int n, const bool *repaint,
         /* Clear only this canvas's rect, not the screen. Everything gfx draws
          * marks its own bands, so nothing else needs marking here. */
         if (background_rgb != UI_NO_BACKGROUND) {
-            gfx_fill_rect(cnt->rect.x, cnt->rect.y, cnt->rect.w, cnt->rect.h,
+            const mu_Rect phys = canvas_physical_rect(cnt);
+            gfx_fill_rect(phys.x, phys.y, phys.w, phys.h,
                           gfx_rgb(background_rgb));
         }
 

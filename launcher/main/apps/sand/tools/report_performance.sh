@@ -91,8 +91,13 @@ echo "=== Capturing self-test output ==="
 python "$LAUNCHER_DIR/tools/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
 
 echo "=== Generating performance report ==="
+# Both halves of a frame: the simulation's budgets live in the sand suite,
+# the draw's live in the gfx one. Reporting only the first hid the fact
+# that a present costs as much as a step - measured 2026-08-28, when a
+# scattered scene turned out to spend a full-screen send every frame.
 python "$SCRIPT_DIR/report_performance.py" "$RAW_CAPTURE" "$OUT_MD" \
-    --source "$LAUNCHER_DIR/main/apps/sand/suite_sand.c"
+    --source "$LAUNCHER_DIR/main/apps/sand/suite_sand.c" \
+    --source "$LAUNCHER_DIR/test/suites/suite_gfx.c"
 
 echo "=== Report:       $OUT_MD ==="
 echo "=== Raw capture:  $RAW_CAPTURE ==="

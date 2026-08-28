@@ -48,6 +48,7 @@
 #include "esp_timer.h"
 
 #include "../../app.h"
+#include "../../display/display.h"
 #include "../../gfx/gfx.h"
 #include "../../input/imu.h"
 #include "../../ui/ui.h"
@@ -164,6 +165,184 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * that guarantee rather than replacing it. */
 #define ERASE_EMITTER_RADIUS_PX  32
 
+/* Its own radius, not the eraser's borrowed one - a blast has to read as
+ * bigger than a corrective tool, not the same size as one. 48 (three times
+ * ERASE_RADIUS_PX) was an unmeasured starting point, picked only to look
+ * obviously larger on screen than either existing brush.
+ *
+ * THE SHORT HISTORY, because this number has moved several times and
+ * each move was a real, device-confirmed lesson: WAS 48, DOUBLED TO 96
+ * on a device request for "a much bigger radius in general" - which
+ * broke the feature outright on real hardware, twice, for two different
+ * reasons a device flash caught each time (see SAND_IMPULSE_BUDGET_
+ * BYTES's own comment for both). Neither failure was fixed by touching
+ * this constant: the impulse buffer is a FIXED entry count (APP_IMPULSE_
+ * MAX, decoupled from this radius entirely) chosen from the device's
+ * real heap budget, and sand_explode() itself (sand.c) THINS its own
+ * seeding density automatically whenever a disc's true cell count would
+ * exceed whatever buffer it was actually given - see queue_outward_
+ * impulse()'s own comment in sand.c for how. That made 96 px allocate
+ * successfully - a real device confirmed it detonating without a crash -
+ * but thinned to only ~28% of its own 7,213-cell disc against the
+ * corrected 2,048-entry budget, and the user's own reaction to that
+ * result on the actual board was "it's tiny but maybe that's as far we
+ * can push it."
+ *
+ * IT WASN'T. Handed the actual measured tradeoff - 96 px thinned scores
+ * 67.1 "grains outside the footprint" against build_sand_dune_scene(),
+ * while a SMALLER radius that fits the same 2,048-entry budget at FULL
+ * density (no thinning at all) scores 106-107 on the same metric, at the
+ * cost of much less reach (2.3 vs 11.6 average max-throw) and less
+ * destruction (48-79 vs 235) - the user chose the smaller, fully-seeded
+ * blast: it reads as MORE powerful despite being physically smaller,
+ * which is the whole reason "grains outside the footprint" was adopted
+ * as this mechanic's own pass/fail criterion in the first place (see
+ * that test's own comment in suite_sand.c - "the user's own criterion").
+ *
+ * 50 px (25 cells at CELL_MIN) IS THE ANSWER TO A SPECIFIC QUESTION, not
+ * a round number: the largest radius whose exact_disc_count() (sand.c)
+ * still fits inside APP_IMPULSE_MAX with ZERO thinning. Checked directly
+ * rather than estimated - exact_disc_count(25) is 1,961, comfortably
+ * under the 2,048-entry budget; exact_disc_count(26) is 2,121, already
+ * over it. 25 cells is therefore the largest radius this budget can
+ * still seed at full density, which is exactly what "small and dense"
+ * means as a concrete number rather than a preference. Re-measured at
+ * this exact radius and budget: 106.5 "grains outside the footprint"
+ * against build_sand_dune_scene() (800-seed sweep, real sand_explode()),
+ * landing right in the 106-107 range the estimate above predicted -
+ * against 2.4 average max-throw and 78.7 average destroyed, both well
+ * down from 96 px's 11.6 and 235.6, which is the reach and destruction
+ * this choice deliberately gives up in exchange.
+ *
+ * DETONATE_RADIUS_PX is otherwise a free gameplay dial, same as it
+ * always looked like one: raising it past 50 px re-engages thinning
+ * (see the history above for what that costs), never whether it
+ * allocates. Nothing below this line needs to move when it changes -
+ * see APP_IMPULSE_MAX's own comment for why sizing is deliberately
+ * independent of whatever this constant is set to. */
+#define DETONATE_RADIUS_PX  50
+
+/* A FIXED ENTRY COUNT, not a formula in DETONATE_RADIUS_PX - the single
+ * most important change this constant went through. It used to be
+ * `(355*r*r)/113 + 5*r + 3` at DETONATE_RADIUS_PX's own radius (in
+ * cells), a hard upper bound on that radius's disc - see sand.c's
+ * queue_outward_impulse() for where that formula and its pi-approximation
+ * proof now live, since a disc's true size is what decides SEEDING
+ * DENSITY at runtime today, not what decides this buffer's size at
+ * compile time. Coupling the two was exactly the bug: a radius change
+ * silently resized the allocation this constant makes, and nothing
+ * checked whether the new size still fit the device until it didn't (see
+ * DETONATE_RADIUS_PX's own comment for the incident).
+ *
+ * 2,048 is SAND_IMPULSE_BUDGET_BYTES / sizeof(impulse_t) exactly - 12,288
+ * / 6 - chosen as a round entry count rather than left as a byte-only
+ * figure so this constant reads the same way every other buffer's own
+ * MAX in this file does (GRID_W_MAX, BLOCK_COLS_MAX, ...): a count of
+ * things, with the byte cost one multiply away. See SAND_IMPULSE_BUDGET_
+ * BYTES's own comment immediately below for the heap arithmetic this
+ * count is answerable to, and the _Static_assert that keeps the two from
+ * drifting apart if either is ever hand-edited on its own. */
+#define APP_IMPULSE_MAX  2048
+
+/* THE BUDGET APP_IMPULSE_MAX MUST NOT EXCEED - a HARDWARE decision, made
+ * ONCE here, deliberately independent of DETONATE_RADIUS_PX or anything
+ * else that might change for gameplay reasons. That independence is the
+ * whole point: DETONATE_RADIUS_PX doubling once already sailed straight
+ * past what the device can actually spare, and nothing caught it until a
+ * device flash reported detonate as a total no-op - not weaker, not
+ * shorter-ranged, NOTHING, because sand_explode()'s first line is
+ * `if (s->impulse_buf == NULL) return;` and a failed malloc hits that
+ * silently, with only an ESP_LOGE (see below, where impulse_buf is
+ * allocated) that nobody was watching for. A radius-independent budget
+ * means that specific failure mode cannot recur no matter how large a
+ * future radius request gets - see DETONATE_RADIUS_PX's own comment for
+ * how sand_explode() now spends whatever this budget affords instead of
+ * demanding more of it.
+ *
+ * THIS BUDGET WAS WRONG ONCE ALREADY, AT 24,576 BYTES, AND A DEVICE
+ * FLASH IS WHAT CAUGHT IT - not host arithmetic, which had already
+ * signed off on that number and was still wrong. The mistake was sizing
+ * against a real boot log's TOTAL FREE HEAP (76,068 bytes, everything
+ * this app's own fixed buffers - dirty_rows/sleep_blocks/grid/row_run_*,
+ * ~43,480 bytes together, none of them scaling with the blast radius -
+ * subtracted from it). Total free heap is the wrong number for a SINGLE
+ * malloc() call to be judged against: what a single allocation actually
+ * needs is one contiguous run at least that large, and a heap can have
+ * plenty of total free bytes while its largest unbroken run is much
+ * smaller than their sum. That is exactly what a live serial capture at
+ * 82851a9 found: `impulse_buf`'s malloc failing on THREE separate
+ * detonate attempts, at THREE different quality settings (grid sizes
+ * 18,178 / 10,304 / 4,514 bytes), with `heap_caps_get_largest_free_
+ * block()` reporting an IDENTICAL 14,592 bytes every single time -
+ * unmoved by a grid allocation that itself varied by nearly 4x across
+ * those three runs. A number that does not move with the one thing in
+ * this app that changes size is not describing this app's own
+ * allocations at all; it is describing something upstream of them (heap
+ * layout left behind by whatever ran before this app, most likely -
+ * see start_sim()'s own comment on moving this allocation first, which
+ * was the other half of this same fix) that 76,068 bytes of TOTAL free
+ * heap never had any way to reveal.
+ *
+ * THE BUDGET IS NOW SET AGAINST THAT OBSERVED NUMBER, NOT TOTAL FREE
+ * HEAP: 12 KB (12,288 bytes) against a measured 14,592-byte largest
+ * block leaves 2,304 bytes (about 16%) of margin for allocator overhead
+ * and whatever this specific board's fragmentation looks like on a run
+ * that was not captured. That margin is deliberately real but not huge -
+ * three identical captures in a row is a strong signal this number is a
+ * structural property of this board's heap layout, not noise that might
+ * land anywhere on the next boot, so a small margin is buying protection
+ * against overhead and rounding, not against this number moving on its
+ * own. STILL NOT A NUMBER THIS PROJECT HAS BISECTED TO ITS OWN FAILURE
+ * THRESHOLD - it is one considered step below the one real data point
+ * available, and the honest thing to say about it is exactly that: see
+ * docs/Sand/Explosion-Plan.md's "Two failure modes to watch for by name"
+ * for both incidents this constant has now been through and what each
+ * one got wrong.
+ *
+ * WHY A FIXED BYTE BUDGET RATHER THAN A RADIUS CAP: a radius cap has to
+ * be re-derived by hand every time either the radius or impulse_t's own
+ * size changes (see impulse_t's comment in sand.h - it has already grown
+ * once, from 4 bytes to 6), and a hand re-derivation is exactly the step
+ * that got skipped the one time this mattered. A fixed byte budget needs
+ * re-deriving only when the HARDWARE changes - a new board, more PSRAM,
+ * a leaner framebuffer, or (as just happened) a better understanding of
+ * what this same board's heap was already doing - and it never needs
+ * touching just because a gameplay radius moved. See the _Static_assert
+ * immediately below for the guard this buys: it now confirms two
+ * independent, hand-chosen constants agree with each other, rather than
+ * re-deriving one from a radius that might have drifted - and see that
+ * assert's own message for what it CANNOT check, which is whether this
+ * number is actually right on real hardware. Nothing at compile time
+ * can check that; only a device flash can, which is exactly how the
+ * 24,576-byte version of this constant was caught. */
+#define SAND_IMPULSE_BUDGET_BYTES  12288
+
+/* CONFIRMS TWO HAND-CHOSEN CONSTANTS AGREE WITH EACH OTHER - NOTHING
+ * MORE. This assert cannot know, and does not claim to know, whether
+ * SAND_IMPULSE_BUDGET_BYTES itself is actually safe on real hardware -
+ * that is a fact about this board's live heap layout, discovered once
+ * already by a device flash after host arithmetic said everything was
+ * fine, and no compile-time check can substitute for the next one. What
+ * this assert catches is the OTHER way these two constants can drift:
+ * someone raising APP_IMPULSE_MAX (for a denser blast, say) without
+ * checking it against the budget at all. Necessary, not sufficient - see
+ * SAND_IMPULSE_BUDGET_BYTES's own comment for the failure mode this
+ * assert is structurally unable to catch. */
+_Static_assert(
+    (unsigned long)APP_IMPULSE_MAX * sizeof(impulse_t) <= SAND_IMPULSE_BUDGET_BYTES,
+    "APP_IMPULSE_MAX * sizeof(impulse_t) exceeds SAND_IMPULSE_BUDGET_BYTES - "
+    "these are two independently-chosen constants that must agree. This "
+    "assert passing is NOT proof detonate works on real hardware - this "
+    "exact budget already failed a live device flash once at a larger "
+    "value (24,576 bytes) that this same assert also happily passed, "
+    "because the real failure was the budget being sized against total "
+    "free heap instead of the largest contiguous block a single malloc() "
+    "call actually needs - see SAND_IMPULSE_BUDGET_BYTES's own comment "
+    "for that incident. Shrink APP_IMPULSE_MAX, or raise "
+    "SAND_IMPULSE_BUDGET_BYTES only after a fresh device capture of "
+    "heap_caps_get_largest_free_block() at the point impulse_buf is "
+    "allocated - never from arithmetic alone.");
+
 /* What the finger puts down.
  *
  * Selected from the palette panel (BOOT's release edge opens it - see
@@ -177,14 +356,14 @@ static int cell, grid_w, grid_h, block_cols, block_rows;
  * pushed everything after it that much further away. The panel costs one
  * press to open and one tap to choose, whatever this list grows to.
  *
- * PWR still toggles the eraser directly, unchanged from before the panel
- * existed - see sand_ui.c's handle_brush_input(). Erase is
- * pressed often enough, and is purely binary (on/off, nothing to browse),
- * that a plain press is the cheaper action for it: a HOLD costs
- * BUTTON_HOLD_US (600 ms) of waiting before it even registers, every single
- * time, and paying that tax on a control used this often would make erasing
- * feel sluggish next to the immediacy pouring already has. A dedicated
- * button's press has none of that cost.
+ * PWR still cycles PAINT/ERASE/DETONATE directly, unchanged from before the
+ * panel existed - see sand_ui.c's handle_brush_input() and sand_mode_t's
+ * own comment in sand_ui.h for why DETONATE rides along on this cycle
+ * rather than living in the palette. A plain press is the cheaper action
+ * for all three: a HOLD costs BUTTON_HOLD_US (600 ms) of waiting before it
+ * even registers, every single time, and paying that tax on a control used
+ * this often would make erasing feel sluggish next to the immediacy
+ * pouring already has. A dedicated button's press has none of that cost.
  *
  * MAT_WOOD but not MAT_STEAM: every entry here costs a tile in the palette
  * panel - see BRUSH_COUNT and the _Static_assert on PALETTE_FITS below - so
@@ -209,12 +388,14 @@ static const cell_t brushes[] = {
 #define BRUSH_COUNT ((int)(sizeof(brushes) / sizeof(brushes[0])))
 
 /* The palette panel's grid is derived from BRUSH_COUNT, never hand-synced to
- * it - see palette.h. This is what makes adding a 15th brush a BUILD failure
- * if it ever pushed the panel past the bottom of the screen, rather than a
- * silently clipped row discovered by looking at the device. */
+ * it - see palette.h. This is what makes adding a brush that pushes the
+ * panel past the bottom of the screen (at either real orientation - see
+ * PALETTE_FITS's own comment) a BUILD failure, rather than a silently
+ * clipped row discovered by looking at the device. */
 _Static_assert(PALETTE_FITS(BRUSH_COUNT),
                "the palette panel for BRUSH_COUNT brushes is taller than the "
-               "448px screen - see PALETTE_COLS/PALETTE_TILE in palette.h");
+               "screen at some orientation - see palette_cols()/PALETTE_TILE "
+               "in palette.h");
 
 /* Whether a brush places a persistent source ("a tap") instead of pouring -
  * toggled by tapping the already-selected tile in the palette (see
@@ -242,12 +423,12 @@ static uint8_t brush_mode[BRUSH_COUNT];   /* brush_mode_t per brush */
  * rather than owning copies of them, the same way sand_t borrows `cells`
  * instead of allocating its own grid.
  *
- * `ui.screen`, `ui.brush` and `ui.erasing` replace the old file-scope
- * `screen`, `brush` and `erasing` statics - one definition rather than
- * three, now that the state machine that reads and writes them lives in
+ * `ui.screen`, `ui.brush` and `ui.mode` replace the old file-scope
+ * `screen`, `brush` and `mode` statics - one definition rather than three,
+ * now that the state machine that reads and writes them lives in
  * sand_ui.c. Zero-initialised the same way those statics were: `ui.screen`
- * starts at SAND_UI_MENU (0), `ui.brush` at 0, `ui.erasing` at false -
- * matching sand_enter()'s and start_sim()'s own resets below. */
+ * starts at SAND_UI_MENU (0), `ui.brush` at 0, `ui.mode` at SAND_MODE_PAINT
+ * (0) - matching sand_enter()'s and start_sim()'s own resets below. */
 static sand_ui_t ui = {
     .brushes     = brushes,
     .modes       = brush_mode,
@@ -298,6 +479,10 @@ static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
 static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * settled blocks to skip - see
                                    * sand_enable_sleeping() */
+static impulse_t  *impulse_buf;  /* APP_IMPULSE_MAX entries: grains in
+                                   * flight from DETONATE - see
+                                   * sand_enable_impulses(). Scaffolding,
+                                   * like sand_mode_t itself. */
 
 /* Up to ROW_MAX_RUNS (row_runs.h) separate cell-index ranges per row - not
  * pixel ranges, and not a single min/max span - recording where a row's
@@ -315,6 +500,13 @@ static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
 static uint32_t    label_left_ms;    /* countdown for the mode label */
+
+/* Which shell quarter the palette panel was last actually painted at - see
+ * sand_frame()'s SAND_UI_PALETTE handling, which repaints the sand
+ * underneath before redrawing the panel whenever display_shell_quarter()
+ * has moved on since this was set. Meaningless while the panel is closed;
+ * set fresh every time SAND_UI_OPEN_PALETTE fires, never read before then. */
+static int         palette_drawn_quarter;
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Rolling averages, purely for the log line - a release build has nobody
@@ -437,6 +629,34 @@ static void seed_row_runs_full_width(void)
     }
 }
 
+/* Marks the whole sand canvas for a full repaint on the next
+ * draw_dirty_rows() call: every row's run-tracking reseeded as one
+ * full-width span (seed_row_runs_full_width() just above), every row
+ * flagged dirty, and the whole screen marked dirty in gfx so the panel's
+ * send is not narrowed by whatever the sand itself would otherwise have
+ * decided was worth sending.
+ *
+ * The shared answer to "something that was covering part of the sand just
+ * moved or vanished, and what it stops covering has to come back":
+ * SAND_UI_CLOSE_PALETTE below uses this when the panel closes, and the
+ * SAND_UI_PALETTE handling uses it when the panel's own footprint moves
+ * under a shell orientation change while it is still open - two different
+ * triggers for the identical underlying fact, kept as one function so they
+ * cannot drift into two slightly different reseeds of the same three
+ * things.
+ *
+ * Only marks; does not call draw_dirty_rows() itself. Callers differ on
+ * whether the repaint has to land THIS frame - the palette-open case still
+ * has a panel to draw on top afterwards, so it calls draw_dirty_rows() right
+ * after this - or can simply wait for the next ordinary frame to pick the
+ * flags up on its own, which is what the close case below does. */
+static void mark_sand_fully_dirty(void)
+{
+    seed_row_runs_full_width();
+    memset(dirty_rows, 1, (size_t)grid_h);
+    gfx_mark_all_dirty();
+}
+
 /* Builds the active grid at the chosen quality, then does everything
  * sand_enter() used to do unconditionally: allocate (only on the first-ever
  * call - see the header comment on why every allocation is sized for
@@ -453,7 +673,7 @@ static void start_sim(void)
     sim_accumulator_q8 = 0;
     pour_accumulator_ms = 0;
     ui.brush = 0;
-    ui.erasing = false;
+    ui.mode = SAND_MODE_PAINT;
     label_left_ms = 0;
     failed = false;
 
@@ -466,6 +686,77 @@ static void start_sim(void)
     if (grid == NULL) {
         grid = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
     }
+    /* impulse_buf GOES LAST, AFTER grid, DELIBERATELY - TRIED GOING FIRST
+     * INSTEAD AND A DEVICE FLASH MADE IT WORSE. A live serial capture
+     * that showed impulse_buf's malloc failing with "largest free block
+     * is 14592" at three different quality settings was misread once as
+     * "impulse_buf never gets a fair shot because grid/dirty_rows/
+     * sleep_blocks fragment the heap ahead of it" - grid's own request
+     * (GRID_W_MAX * GRID_H_MAX) is actually a FIXED 41,216 bytes
+     * regardless of quality (the varying numbers in that capture were
+     * the ACTIVE grid_w*grid_h subset in use, not the allocation size),
+     * and it succeeded cleanly in all three captures. So the real
+     * picture those three captures agree on is: this heap reliably has
+     * one contiguous run big enough for grid's 41,216 bytes, and roughly
+     * 14,592 bytes left over after grid and the small buffers land -
+     * which is a single largest-block ordering fact, not a fragmentation
+     * problem this app's own allocation order was causing.
+     *
+     * Moving impulse_buf's smaller (12,288-byte, see APP_IMPULSE_MAX)
+     * request to go FIRST was tried anyway, on the chance that ordering
+     * still mattered - and a device flash of that build produced "no
+     * memory for the grid" instead, a WORSE failure than impulse_buf
+     * alone failing: impulse_buf grabbed a piece of the one heap region
+     * big enough for it, and grid's subsequent 41,216-byte request then
+     * found nowhere left to land, tripping the mandatory-buffer fallback
+     * below (`ui.screen = SAND_UI_RUNNING` with the grid's own "could not
+     * allocate" message). Reordering does not create more contiguous
+     * space anywhere in the heap - it only decides who gets first pick of
+     * what already exists - and on THIS device grid is the one allocation
+     * that needs the single largest contiguous run, so it has to be the
+     * one that picks first. This ordering (grid and the other mandatory
+     * buffers before impulse_buf) is the one three real device captures
+     * confirm actually works; do not move impulse_buf ahead of grid
+     * again without a fresh device capture that shows it helping,
+     * because the only capture that ever tried has already shown it
+     * hurting. */
+    if (impulse_buf == NULL) {
+        impulse_buf = malloc((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf));
+        /* LOUD, BUT NOT FATAL - unlike every buffer in the big OR-check
+         * below. Those are all load-bearing for the simulation existing at
+         * all; this one is not - sand_enable_impulses(NULL, ...) is a
+         * documented, safe way to disable just the blast mechanic (see its
+         * own comment in sand.h), and sand_explode() already no-ops
+         * gracefully without it. Refusing to run the WHOLE app because the
+         * one buffer detonate needs could not be found would strand a
+         * player who only ever wanted to pour sand behind a "no memory"
+         * screen for a feature they were not using. What must not happen
+         * instead is silence: this exact allocation has already failed
+         * silently on real hardware twice, at two different budgets this
+         * app shipped believing were safe - see SAND_IMPULSE_BUDGET_
+         * BYTES's own comment for both incidents and what each got wrong.
+         *
+         * THE %u THIS LOGS - largest_free_block, from heap_caps_get_
+         * largest_free_block() - IS THE DIAGNOSTIC THAT SOLVED THIS. Not
+         * a guess added for completeness: a live serial capture of this
+         * exact line, at three different grid sizes, is what showed the
+         * largest free block sitting at an identical 14,592 bytes
+         * regardless of quality - the observation that turned "why did
+         * this fail" into "the buffer was never sized against the right
+         * number" (total free heap, not the actual largest contiguous
+         * run malloc() has to satisfy from). Keep this argument in every
+         * failure log this file ever adds for an allocation that matters -
+         * total free bytes told a story that was flatly wrong twice
+         * running; the largest block told the truth in one capture. */
+        if (impulse_buf == NULL) {
+            ESP_LOGE(TAG, "Could not allocate the %d-entry blast buffer "
+                          "(%u bytes) - detonate will be a no-op this "
+                          "session; largest free block is %u",
+                     APP_IMPULSE_MAX,
+                     (unsigned)((size_t)APP_IMPULSE_MAX * sizeof(*impulse_buf)),
+                     (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        }
+    }
     if (row_run_x0 == NULL) {
         row_run_x0 = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(*row_run_x0));
     }
@@ -475,6 +766,9 @@ static void start_sim(void)
     if (row_run_n == NULL) {
         row_run_n = malloc(GRID_H_MAX * sizeof(*row_run_n));
     }
+    /* impulse_buf is deliberately NOT in this list - see the loud-but-not-
+     * fatal log right where it is allocated, above, for why a failure
+     * there disables one optional mechanic rather than the whole app. */
     if (grid == NULL || dirty_rows == NULL || sleep_blocks == NULL ||
         row_run_x0 == NULL || row_run_x1 == NULL || row_run_n == NULL) {
         ESP_LOGE(TAG, "Could not allocate a %d x %d grid (%d bytes); "
@@ -521,6 +815,13 @@ static void start_sim(void)
      * thing the simulation can hold rather than the least - every settled
      * grain runs the whole decision path each step to conclude nothing. */
     sand_enable_sleeping(&sim, sleep_blocks);
+
+    /* DETONATE scaffolding - see sand_mode_t's own comment in sand_ui.h.
+     * Enabled unconditionally rather than only once the mode is first
+     * cycled to, so an allocation failure is caught here alongside every
+     * other one above instead of surfacing later as a silent no-op the
+     * first time someone actually cycles PWR round to it. */
+    sand_enable_impulses(&sim, impulse_buf, APP_IMPULSE_MAX);
     tilt_reset(&tilt, IMU_COUNTS_PER_G);
 
     if (!imu_init()) {
@@ -983,11 +1284,16 @@ static gfx_color_t brush_color(cell_t c)
  * can only be turned in quarters - a diagonal tilt picks whichever quarter
  * it is nearest.
  *
- * Used by draw_mode_label() below to turn its text to follow the board's
- * physical "up", and by sand_frame()'s SAND_UI_PALETTE handling to turn the
- * whole palette panel the same way - see draw_palette()'s own top comment
- * for how that reading becomes the transform every tile draws and
- * hit-tests through. */
+ * Used only by draw_mode_label() below now, to turn its text to follow the
+ * board's physical "up". The palette panel used to share this - a second
+ * caller of exactly this function - but no longer computes its own turn at
+ * all; see draw_palette()'s own top comment for why, and display.h for the
+ * module that decides orientation now.
+ *
+ * NOT the same decision display.h makes, and deliberately so - see
+ * draw_mode_label()'s own comment just below for why this plain snap-to-
+ * nearest is still the right tool here even though display_update()'s
+ * hysteresis exists. */
 static int gravity_quarter_turn(int gx, int gy)
 {
     const int ax = gx < 0 ? -gx : gx;
@@ -1007,7 +1313,24 @@ static int gravity_quarter_turn(int gx, int gy)
  * looks like a bug the moment the device is not held upright.
  *
  * Snapped to one of four, because the font can only be turned in quarters -
- * a diagonal tilt picks whichever quarter it is nearest. */
+ * a diagonal tilt picks whichever quarter it is nearest.
+ *
+ * STILL ITS OWN gravity_quarter_turn() CALL - NOT display_shell_quarter()
+ *
+ * This looks like an inconsistency next to draw_palette(), which now just
+ * inherits the shell's orientation instead of computing one. It is not: the
+ * two draw through different paths. draw_palette() goes through microui,
+ * which every other described UI in this shell also goes through, and which
+ * is exactly what ui_set_transform() reaches - that is the whole reason the
+ * shell owning the transform is enough to turn the palette. draw_mode_label()
+ * instead calls gfx_text_turned() straight onto the app's own canvas,
+ * bypassing microui and the UI transform entirely, the same way the sand
+ * grid itself is painted. A transform set on the UI layer has no effect on
+ * either. So this is exactly the canvas-versus-chrome line: the palette is
+ * chrome (drawn through microui, like the launcher and every boot menu), the
+ * label is canvas (drawn straight onto this app's own framebuffer region,
+ * like the sand grid itself), and only chrome follows the shell's transform
+ * for free. The label keeps turning itself because nothing else will. */
 static void draw_mode_label(int gx, int gy)
 {
     /* The material's own name, so the label says what the finger will do
@@ -1019,7 +1342,9 @@ static void draw_mode_label(int gx, int gy)
      * layout below needs to know a suffix exists. */
     char text_buf[24];
     const char *text;
-    if (ui.erasing) {
+    if (ui.mode == SAND_MODE_DETONATE) {
+        text = "DETONATE";   /* scaffolding - see sand_mode_t in sand_ui.h */
+    } else if (ui.mode == SAND_MODE_ERASE) {
         text = "ERASE";
     } else if (ui.modes[ui.brush] == BRUSH_SPAWN) {
         snprintf(text_buf, sizeof text_buf, "%s SOURCE",
@@ -1060,9 +1385,19 @@ static void draw_mode_label(int gx, int gy)
 
     /* Coloured as the material itself, so the label needs no colour table of
      * its own - see brush_color()'s own comment for why an extended cell
-     * cannot just have its variant bumped like an ordinary one. */
-    const gfx_color_t ink =
-        ui.erasing ? gfx_rgb(0xFF8A5C) : brush_color(brushes[ui.brush]);
+     * cannot just have its variant bumped like an ordinary one. ERASE and
+     * DETONATE have no material to read a colour from, so each gets one
+     * picked by hand instead - a warmer orange for the corrective eraser, a
+     * hotter red for DETONATE since it is the one mode here that can
+     * actually rearrange the board. */
+    gfx_color_t ink;
+    if (ui.mode == SAND_MODE_DETONATE) {
+        ink = gfx_rgb(0xFF3B3B);
+    } else if (ui.mode == SAND_MODE_ERASE) {
+        ink = gfx_rgb(0xFF8A5C);
+    } else {
+        ink = brush_color(brushes[ui.brush]);
+    }
 
     gfx_text_turned(x, y, text, ink, LABEL_SCALE, turn);
 }
@@ -1138,32 +1473,33 @@ static mu_Color mu_color_hex(uint32_t rgb)
  * sand_ui_tile_clicked(), which is where "what a click on this tile means"
  * still lives, unchanged, and still host-tested - see suite_sand_ui.c.
  *
- * THE WHOLE PANEL TURNS WITH THE BOARD NOW
+ * THE WHOLE PANEL TURNS WITH THE BOARD - BUT NOT BY DECIDING SO ITSELF
  *
- * `turn` - sand_frame()'s own fresh gravity_quarter_turn() reading, taken
- * the same way draw_mode_label() takes it - is handed straight to
- * ui_set_transform() below, before ui_begin() opens the frame. That
- * ordering matters: ui_begin() calls feed_input(), which maps this frame's
- * touch through the CURRENTLY set transform (see ui.c's "Touch to mouse"
- * comment), so the transform for this frame has to be in force before that
- * happens, not after.
+ * This function used to compute its own quarter turn from gravity
+ * (gravity_quarter_turn()) and push it with ui_set_transform() before
+ * ui_begin(), which is what made every tile drawn below - and hit-tested,
+ * through the same transform - turn with the board. That decision now
+ * belongs to the shell (see display.h and main.c's display sampling): by
+ * the time this function runs, main.c has already called ui_set_transform()
+ * for whatever quarter is current, so the panel simply inherits it. No
+ * `turn` parameter, no ui_set_transform() call here any more - there would
+ * be nothing for this function to base one on that display_shell_quarter()
+ * does not already know, and a second opinion here could only disagree with
+ * the shell's.
  *
- * Once it is, every tile hit-tests through microui the same
+ * Every tile still hit-tests through microui the same
  * feed_input()-through-the-inverse-transform path every other described UI
- * in this shell already takes, so turning this window turns its
- * hit-testing right along with its drawing - nothing here hard-codes
- * physical screen coordinates the way palette_hit() used to, which is
- * exactly what makes this safe now and was not before ("Let microui
- * hit-test the palette's tiles"). Nothing in this loop branches on `turn`
- * by hand, either: draw_command() in ui.c derives the quarter turn from the
- * transform itself and picks gfx_text_font()'s turned glyph path
+ * in this shell takes (see ui.c's "Touch to mouse" comment), so turning the
+ * shell's transform turns this panel's hit-testing right along with its
+ * drawing - nothing here hard-codes physical screen coordinates the way
+ * palette_hit() used to. Nothing in this loop branches on the turn by hand,
+ * either: draw_command() in ui.c derives the quarter turn from whatever
+ * transform is in force and picks gfx_text_font()'s turned glyph path
  * accordingly, so mu_button()'s own centred label - and every rect this
  * loop draws - comes out turned for free. */
-static void draw_palette(const input_t *input, int turn)
+static void draw_palette(const input_t *input)
 {
     mu_Context *ctx = ui_context();
-
-    ui_set_transform(ui_transform_quarter_turn(turn, GFX_WIDTH, GFX_HEIGHT));
 
     ui_begin(input);
 
@@ -1210,15 +1546,25 @@ static void draw_palette(const input_t *input, int turn)
 
     /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
      * logical canvas swaps dimensions under a quarter-turn transform, the
-     * same reasoning draw_menu() below already follows. */
-    if (mu_begin_window_ex(ctx, "Sand Palette",
-                           mu_rect(0, 0, ui_width(), ui_height()),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+     * same reasoning draw_menu() below already follows.
+     *
+     * cols is recomputed from ui_width() every time this function runs, not
+     * cached anywhere - immediate mode already redescribes the whole panel
+     * every frame (see this function's own top comment), so a plain call
+     * here is all a genuinely resized canvas needs to be picked up; nothing
+     * has to compare against a remembered value the way palette_drawn_quarter
+     * still does below for the ghost-tile fix, which is about a stale
+     * FOOTPRINT left in the framebuffer, not about this loop's own layout
+     * math being wrong. */
+    const int cols = palette_cols(ui_width());
+
+    if (ui_begin_screen(ctx, "Sand Palette",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         for (int i = 0; i < BRUSH_COUNT; i++) {
             int x, y, w, h;
-            palette_tile_rect(i, BRUSH_COUNT, ui_width(), ui_height(),
+            palette_tile_rect(i, BRUSH_COUNT, cols, ui_width(), ui_height(),
                               &x, &y, &w, &h);
 
             /* Inset by the grout first so neighbouring tiles do not fuse
@@ -1375,11 +1721,11 @@ static void draw_palette(const input_t *input, int turn)
              * hand, and that hand-rolled centring is exactly what
              * mu_draw_control_text()'s plain centring plus draw_command()'s
              * own turn handling replaces - see this function's own top
-             * comment. draw_command() reads the quarter straight off the
-             * transform ui_set_transform() was given above and picks
-             * gfx_text_font()'s turned glyph path itself, so this loop never
-             * has to know which turn is in force to get a centred, correctly
-             * turned label. */
+             * comment. draw_command() reads the quarter straight off
+             * whatever transform is currently in force - main.c's, now, not
+             * this function's own - and picks gfx_text_font()'s turned glyph
+             * path itself, so this loop never has to know which turn is in
+             * force to get a centred, correctly turned label. */
         }
 
         mu_end_window(ctx);
@@ -1465,6 +1811,25 @@ static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
  * dropped instead of dumping a pile in one go. */
 static void handle_pour_input(const input_t *input, uint32_t dt_ms)
 {
+    if (ui.mode == SAND_MODE_DETONATE) {
+        /* Fires on the press EDGE, not through the `applications` catch-up
+         * loop below. That loop runs every frame while a finger is held, so
+         * wiring DETONATE through it would detonate continuously for as
+         * long as the screen is touched - a fine stress test (see the
+         * plan's "full screen of packed sand, then rapid repeat presses"),
+         * useless for looking at any ONE blast, which is the entire reason
+         * this mode exists. input->pressed is the touch-down edge - true
+         * for exactly one frame per tap - so this is one sand_explode()
+         * call per press, however long the finger then stays down. */
+        pour_accumulator_ms = 0;   /* do not let held time leak into paint/erase */
+        if (input->pressed) {
+            const int cx = input->x / cell;
+            const int cy = input->y / cell;
+            sand_explode(&sim, cx, cy, (DETONATE_RADIUS_PX + cell / 2) / cell);
+        }
+        return;
+    }
+
     if (!input->down) {
         pour_accumulator_ms = 0;
         return;
@@ -1477,7 +1842,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * spawn mode skips the accumulator/pour path for this frame completely
      * - it must never both place a tap and pour a blob from the same
      * touch. */
-    if (!ui.erasing && ui.modes[ui.brush] == BRUSH_SPAWN) {
+    if (ui.mode == SAND_MODE_PAINT && ui.modes[ui.brush] == BRUSH_SPAWN) {
         /* Only on the PRESS edge, never every frame the finger stays down
          * - one tap places one tap. input->pressed fires exactly once per
          * physical press, so this call (and the log below, if it fails)
@@ -1522,7 +1887,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * table: the smallest result is POUR_RADIUS_PX at the coarsest cell,
      * (10 + 3) / 6 = 2. */
     for (int i = 0; i < applications; i++) {
-        if (ui.erasing) {
+        if (ui.mode == SAND_MODE_ERASE) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
             /* Wider than the sweep above on purpose - see
              * ERASE_EMITTER_RADIUS_PX's own comment for why a point target
@@ -1645,7 +2010,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
                              int64_t draw_us, int awake_blocks, int awake_cells,
                              int64_t now)
 {
-    if (input->down && !ui.erasing) {
+    if (input->down && ui.mode == SAND_MODE_PAINT) {
         pour_step_us_total += step_us;
         pour_draw_us_total += draw_us;
         pour_awake_total += awake_blocks;
@@ -1695,7 +2060,7 @@ static void track_pour_split(const input_t *input, int64_t step_us,
 
 /* The boot menu: START begins the simulation at the current quality, and the
  * quality button cycles HIGH/MEDIUM/LOW and stays on the menu. Modeled on
- * ui_launcher.c's own frame - same ui_begin()/mu_begin_window_ex()/
+ * ui_launcher.c's own frame - same ui_begin()/ui_begin_screen()/
  * mu_end_window()/ui_end() shape, one full-screen window with no chrome.
  *
  * The shell (main.c) draws the home-swipe hint over whatever the app drew
@@ -1709,19 +2074,19 @@ static void draw_menu(const input_t *input)
 
     /* ui_width()/ui_height(), not GFX_WIDTH/GFX_HEIGHT - see ui.h: the
      * logical canvas swaps dimensions under a quarter-turn transform. */
-    if (mu_begin_window_ex(ctx, "Sand Menu",
-                           mu_rect(0, 0, ui_width(), ui_height()),
-                           MU_OPT_NOTITLE | MU_OPT_NORESIZE |
-                           MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+    if (ui_begin_screen(ctx, "Sand Menu",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
 
         /* Both buttons centered as one block, so microui's default top-down
          * row layout is bypassed with mu_layout_set_next() and each button
          * placed at an absolute rect instead. */
         const int total_h = 2 * MENU_BTN_H + MENU_BTN_GAP;
         const int top      = (ui_height() - total_h) / 2;
-        const int x        = (ui_width() - MENU_BTN_W) / 2;
 
-        mu_layout_set_next(ctx, mu_rect(x, top, MENU_BTN_W, MENU_BTN_H), 0);
+        mu_layout_set_next(ctx,
+                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top),
+                           0);
         if (mu_button(ctx, "START")) {
             start_sim();
         }
@@ -1732,8 +2097,10 @@ static void draw_menu(const input_t *input)
         char label[24];
         snprintf(label, sizeof label, "QUALITY: %s", qualities[quality].name);
 
-        mu_layout_set_next(ctx, mu_rect(x, top + MENU_BTN_H + MENU_BTN_GAP,
-                                        MENU_BTN_W, MENU_BTN_H), 0);
+        mu_layout_set_next(ctx,
+                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H,
+                                            top + MENU_BTN_H + MENU_BTN_GAP),
+                           0);
         if (mu_button(ctx, label)) {
             quality = (quality + 1) % QUALITY_COUNT;
         }
@@ -1782,18 +2149,19 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     const unsigned actions = sand_ui_step(&ui, input);
 
     if (actions & SAND_UI_CLOSE_PALETTE) {
-        /* Forces a full repaint of the sand underneath the panel - the same
-         * seeding start_sim() uses to force a fresh grid's first frame out
-         * in full, reused here via seed_row_runs_full_width() rather than
-         * duplicated, so draw_dirty_rows() treats every row as needing a
-         * full-width send on the very next frame and paints over every
-         * pixel the panel touched.
+        /* Forces a full repaint of the sand underneath the panel - see
+         * mark_sand_fully_dirty()'s own comment for why this is the same
+         * operation the SAND_UI_PALETTE handling below uses for an
+         * orientation change while the panel is still open, and why it is
+         * only marked here rather than drawn: this function returns
+         * immediately below, so the actual redraw happens on the very next
+         * ordinary frame's own call to draw_dirty_rows() rather than here.
          *
-         * The two accumulators are zeroed rather than left to keep counting
-         * through the pause: left alone, the wall-clock time the panel was
-         * open would cash in as a burst of catch-up steps and pour the
-         * instant it closes, which would read as a stutter or a sudden blob
-         * under the finger rather than as nothing having happened while
+         * The two accumulators are zeroed below rather than left to keep
+         * counting through the pause: left alone, the wall-clock time the
+         * panel was open would cash in as a burst of catch-up steps and pour
+         * the instant it closes, which would read as a stutter or a sudden
+         * blob under the finger rather than as nothing having happened while
          * paused.
          *
          * SAND_UI_SHOW_LABEL is sand_ui_step()'s own answer to whether the
@@ -1817,24 +2185,30 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * - leaving this out is the obvious failure: the whole shell would
          * come up haloed after the palette had ever been opened once.
          *
-         * ui_set_transform(ui_transform_identity()) sits alongside it for
-         * exactly the same reason, and is no longer merely a guard against a
-         * hypothetical future transform - draw_palette() now genuinely
-         * leaves the transform turned (see that function's own top comment),
-         * so without this the launcher and the sand boot menu would come up
-         * turned the next time either drew a frame, the same way they would
-         * come up haloed without the text-style restore above. Both restores
-         * are load-bearing now for the same reason: ambient UI state that
-         * outlives the frame it was set for has to be put back by whoever
-         * set it, on the same exit path that undoes the other. */
-        ui_set_transform(ui_transform_identity());
+         * THE TRANSFORM ITSELF IS NOT RESTORED HERE ANY MORE
+         *
+         * This used to also reset ui_set_transform(ui_transform_identity()),
+         * for what was at the time the same reason as the text style:
+         * draw_palette() left the transform turned, and something had to put
+         * it back before the launcher or the sand boot menu drew again.
+         *
+         * That reasoning no longer applies, because the transform is no
+         * longer this app's to leave turned OR to put back. main.c now owns
+         * it for the whole shell (see display.h and main.c's display
+         * sampling) and sets it from the board's actual orientation on its
+         * own schedule, independent of whether this panel happens to be
+         * open. If this app reset it to identity here, it would fight the
+         * shell the moment the board was genuinely held sideways: the
+         * launcher would snap upright the instant the palette closed, and
+         * stay upright - wrong - until the shell's own next sample corrected
+         * it, on a board that never stopped being sideways. An app must not
+         * touch the shell's transform at all; it only ever inherits
+         * whatever main.c has already set. */
         ui_set_text_style(UI_TEXT_PLAIN);
 
         sim_accumulator_q8 = 0;
         pour_accumulator_ms = 0;
-        seed_row_runs_full_width();
-        memset(dirty_rows, 1, (size_t)grid_h);
-        gfx_mark_all_dirty();
+        mark_sand_fully_dirty();
         return;
     }
 
@@ -1845,11 +2219,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          *
          * sand_ui_step() already flipped ui.screen to SAND_UI_PALETTE, so
          * falling through to the SAND_UI_PALETTE branch just below means
-         * read_gravity_input(dt_ms, ...)/run_sim_steps()/handle_pour_input()/
-         * draw_dirty_rows() are never reached on the very frame the panel
-         * opens, exactly as they are skipped on every later frame by that
-         * same branch - the sim is paused from the same frame the panel
-         * becomes visible, not one frame later. */
+         * run_sim_steps()/handle_pour_input() are never reached again while
+         * the panel is open - the sim is paused from the same frame the
+         * panel becomes visible, not one frame later. draw_dirty_rows() is a
+         * partial exception: the PALETTE branch calls it itself, but only on
+         * an orientation change, to repaint what the panel's own move
+         * uncovers - see that branch's own comment. */
         label_left_ms = 0;
     }
 
@@ -1866,21 +2241,13 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
          * its callers elsewhere - the tests in suite_sand_ui.c - still
          * check it, but nothing here needs to read it any more).
          *
-         * Gravity is read every frame the panel is up, same as an ordinary
-         * running frame below, and for the same reason draw_mode_label()
-         * reads it: `turn` follows the board's physical "up", and is handed
-         * straight to draw_palette() so the whole panel - not just a label -
-         * turns with it. This is a real IMU transaction every frame the
-         * panel is open, not just on a change, but ui_set_transform() inside
-         * draw_palette() only invalidates the screen when the transform it
-         * is given actually differs from last frame's (see ui.c), so
-         * holding the board steady still costs no repaint - only the read
-         * itself, which draw_mode_label() already pays on every ordinary
-         * frame regardless. */
-        int gx, gy, flow, jostle, rotation;
-        imu_sample_t sample = { 0 };
-        read_gravity_input(dt_ms, &sample, &gx, &gy, &flow, &jostle, &rotation);
-        const int turn = gravity_quarter_turn(gx, gy);
+         * Orientation itself is no longer read here at all - it used to cost
+         * a real IMU transaction every frame the panel was open, just to
+         * recompute a `turn` that only fed draw_palette(). Now the shell has
+         * already decided it (see main.c's display sampling), and
+         * display_shell_quarter() below is a plain read of that decision,
+         * not a sensor access. */
+        const int quarter = display_shell_quarter();
 
         if (actions & SAND_UI_OPEN_PALETTE) {
             /* The panel just opened: the framebuffer still holds whatever
@@ -1892,9 +2259,57 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * replace those pixels rather than comparing equal and leaving
              * them on screen. */
             ui_invalidate();
+
+            /* Nothing to erase yet: the sand already fills the whole canvas
+             * correctly (nothing else was drawn over it), so this is just
+             * establishing the baseline the check just below compares
+             * against on every later frame. */
+            palette_drawn_quarter = quarter;
+        } else if (quarter != palette_drawn_quarter) {
+            /* The shell's orientation moved on since this panel was last
+             * painted - the board was turned while the palette stayed open.
+             * draw_palette() below paints UI_NO_BACKGROUND (see its own top
+             * comment: the frozen sand showing through the grout between
+             * tiles is the intended look, not a bug an opaque fill would be
+             * a lazy way to paper over), so nothing ever erases a tile's OLD
+             * footprint on its own. The panel is a square region placed by
+             * ui_transform_quarter_turn(), which lands it somewhere
+             * different on the physical screen at each quarter turn, so
+             * whatever the previous footprint covered that the new one does
+             * not is still sitting in the framebuffer as a ghost tile until
+             * something repaints it.
+             *
+             * The sand simulation itself never rotates - draw_dirty_rows()
+             * always paints in physical canvas coordinates, transform or no
+             * transform - so "repaint" here just means putting the frozen
+             * sand back the way it already looks, across the whole canvas
+             * rather than working out exactly which pixels the old
+             * footprint touched. mark_sand_fully_dirty() is the identical
+             * three-step reseed SAND_UI_CLOSE_PALETTE uses above for the
+             * same underlying reason (something that was covering the sand
+             * moved) - see its own comment. Unlike that path, this one calls
+             * draw_dirty_rows() itself, right here: there is still a panel
+             * to draw on top afterward this same frame, rather than a
+             * return that leaves the redraw for the next ordinary frame to
+             * pick up.
+             *
+             * draw_emitter_markers() follows for the same reason the
+             * ordinary running frame below always pairs it with
+             * draw_dirty_rows(): the markers are drawn straight over the
+             * grid's own pixels, not stored in it, so a full repaint of the
+             * grid alone would erase them without this. Nothing here calls
+             * advance_shine() or passes shine_moved - the simulation is
+             * paused while the panel is open, so this repaint happens only
+             * on an actual orientation change, never once per frame; ticking
+             * the shine on a static canvas would be paying an animation cost
+             * for a picture that already looks right. */
+            mark_sand_fully_dirty();
+            draw_dirty_rows(false);
+            draw_emitter_markers();
+            palette_drawn_quarter = quarter;
         }
 
-        draw_palette(input, turn);
+        draw_palette(input);
         return;
     }
 
@@ -1908,8 +2323,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     if (actions & SAND_UI_SHOW_LABEL) {
         label_left_ms = LABEL_MS;
         if (input->power.pressed) {
-            ESP_LOGI(TAG, "brush: %s",
-                     ui.erasing ? "erase" : material_name(brushes[ui.brush]));
+            const char *mode_name = (ui.mode == SAND_MODE_DETONATE) ? "detonate"
+                                   : (ui.mode == SAND_MODE_ERASE)    ? "erase"
+                                   : material_name(brushes[ui.brush]);
+            ESP_LOGI(TAG, "brush: %s", mode_name);
         }
     }
 
@@ -1969,6 +2386,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 }
 
+/* .home_gesture deliberately left unset (false) - see app_t's own comment.
+ * A touch drag starting near a screen edge to steer or pour sand is easy to
+ * mistake for the shell's swipe-home gesture, so this app needs that
+ * detection off entirely rather than merely hiding its hint strip, and
+ * provides its own way back to the launcher instead. */
 const app_t app_sand = {
     .name    = "Falling Sand",
     .summary = "Tilt to steer, touch to pour",

@@ -61,6 +61,24 @@
  * sand_ui.c) and read by app_sand.c's handle_pour_input(). */
 typedef enum { BRUSH_POUR, BRUSH_SPAWN } brush_mode_t;
 
+/* PAINT / ERASE / DETONATE - PWR cycles it, independently of `brush` and of
+ * brush_mode_t above. This is a DIFFERENT axis from brush_mode_t: that one
+ * says how the SELECTED MATERIAL gets applied (poured, or left as a
+ * standing source); this one says what the finger does at all, and a
+ * material is only one of its three answers.
+ *
+ * DETONATE is TEMPORARY EVALUATION SCAFFOLDING for
+ * docs/Sand/Explosion-Plan.md - a way to fire sand_explode() with a finger
+ * before any material or trigger owns it, so the mechanic can be judged on
+ * its own. It rides on the same cycle as ERASE rather than sitting in
+ * brush_mode_t or brushes[] because it is not a material: nothing paints an
+ * explosion, so it has no cell to remember and no tile of its own in the
+ * palette. It can be deleted outright the day the plan's questions are
+ * answered, without touching sand.c/sand.h at all - see
+ * app_sand.c's DETONATE branch of handle_pour_input(). */
+typedef enum { SAND_MODE_PAINT, SAND_MODE_ERASE, SAND_MODE_DETONATE } sand_mode_t;
+#define SAND_MODE_COUNT 3
+
 /* Which screen the sand app is showing. SAND_UI_MENU is never acted on by
  * sand_ui_step() - the boot menu is microui-driven and stays entirely in
  * app_sand.c - but it lives in this enum anyway so `screen` has one
@@ -85,8 +103,8 @@ typedef struct {
     int           brush_count;
 
     sand_ui_screen_t screen;
-    int      brush;          /* index into brushes[]/modes[] */
-    bool     erasing;        /* PWR toggles it, independently of the brush */
+    int         brush;       /* index into brushes[]/modes[] */
+    sand_mode_t mode;        /* PAINT/ERASE/DETONATE - PWR cycles it */
 
     /* Set by open_palette() when a finger is already down as the panel
      * opens. Cleared by sand_ui_step() itself, the first SAND_UI_PALETTE
@@ -130,9 +148,10 @@ unsigned sand_ui_step(sand_ui_t *ui, const input_t *input);
  *     eligible to be a source at all - an ineligible tile has no mode to
  *     toggle into, so this does nothing rather than flip a bit nothing
  *     ever reads;
- *   - any OTHER tile is selected instead: `erasing` is cleared (choosing a
- *     material means you want to place it), and that tile's own remembered
- *     mode is left exactly as it was;
+ *   - any OTHER tile is selected instead: `mode` resets to SAND_MODE_PAINT
+ *     (choosing a material means you want to place it, not erase or blow
+ *     up whatever is already there), and that tile's own remembered
+ *     BRUSH_POUR/BRUSH_SPAWN mode is left exactly as it was;
  *   - and while `swallow_release` is armed, this does nothing at all and
  *     returns 0 - see that field's own comment on sand_ui_t.
  *

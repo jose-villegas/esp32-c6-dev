@@ -138,11 +138,12 @@ static void cube_exit(void)
 /* Exported as the struct itself rather than a pointer to it, so the registry
  * in main.c can take its address in a static initializer. */
 const app_t app_cube = {
-    .name    = "3D Cube",
-    .summary = "Gouraud-shaded software rasterizer",
-    .enter   = cube_enter,
-    .frame   = cube_frame,
-    .exit    = cube_exit,
+    .name         = "3D Cube",
+    .summary      = "Gouraud-shaded software rasterizer",
+    .enter        = cube_enter,
+    .frame        = cube_frame,
+    .exit         = cube_exit,
+    .home_gesture = true,
 };
 
 APP_REGISTER(app_cube);

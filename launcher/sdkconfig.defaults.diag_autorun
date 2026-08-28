@@ -1,0 +1,8 @@
+# Layered on top of sdkconfig.defaults.diag by tools/report_test_results.sh
+# only - turns the suites LAUNCHER_SELFTEST already compiled in back on for
+# automatic boot-time execution, which that script's 300s serial capture of
+# SELFTEST_COMPLETE depends on. Ordinary interactive --diag use (build_flash.sh
+# --diag / build_flash_diag.sh) does NOT layer this file, so it keeps booting
+# without paying the suite's wall-clock cost - see Kconfig.projbuild's
+# LAUNCHER_SELFTEST_AUTORUN help text.
+CONFIG_LAUNCHER_SELFTEST_AUTORUN=y

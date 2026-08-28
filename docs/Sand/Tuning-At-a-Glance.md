@@ -1,7 +1,7 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-fifteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+sixteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
 budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
 budget met, none ever raised**; a wave of new materials then put four back over, and
 the eleventh sorted the accident from the feature. The twelfth found a gate that could
@@ -13,9 +13,13 @@ quantised it to 0/45/90 degrees without anyone pricing the trade. The fifteenth
 shipped no code at all — it was a fresh device capture chasing down two loose ends
 the eleventh attempt and the 2026-08-26 re-base had left open, and it found both,
 plus a watchdog that had been charging its own console output to the benchmarks
-it was meant to be guarding. The prose file holds the full derivations and is the
-authority when the two disagree; this page is for a first read, a refresher, or
-finding which attempt taught the lesson you half-remember.
+it was meant to be guarding. The sixteenth bisected a drift nobody had attributed
+and found the inlining cliff for the fourth time — one commit had grown a heat
+function past GCC's size heuristic and knocked it out of four callers at once —
+then went looking for the gather heuristic's remaining slack and found there was
+none, only a send path nobody had written. The prose file holds the full
+derivations and is the authority when the two disagree; this page is for a first
+read, a refresher, or finding which attempt taught the lesson you half-remember.
 
 ---
 
@@ -70,9 +74,20 @@ warns), and both liquid-free controls moved ~+10% against the older build
 (5,867→6,434 and 5,959→6,529) — layout-lottery double hit or a genuine
 global per-cell cost from the wave's tail, not yet attributed.
 
+**Five rows moved on 2026-08-28, and the budgets did not.** The sixteenth
+attempt's inline fix (`3cf88c3`) took the fire screen to 275,903 (−10.4%), the
+lava stress scene to 127,145 (−6.5%), thermal shock to 96,508 (−4.9%), the four
+liquids to 122,948 (−3.6%) and the fire cascade to 397,435 — reproduced by two
+captures agreeing to within 4 µs on every row. Every one of them is still a
+failing reduction target, and no target was touched: closing a tenth is the work,
+and this is between a third and a half of it on four rows. The every-material
+flip did not move (89,635), which was the prediction, and its remaining gap is
+the largest on the board.
+
 Fixed RNG seeds make identical builds reproduce these numbers to the microsecond.
 What moves them *between* builds is flash layout, not chance — see
-[the layout lottery](#the-layout-lottery) below.
+[the layout lottery](#the-layout-lottery) below, and the sixteenth attempt's
+evidence that the lottery may have only **two tickets** rather than a continuum.
 
 **The fourteenth attempt has no device data behind it and spent host time rather
 than saving it.** Host-relative, best of 5, interleaved, landed build against HEAD:
@@ -86,51 +101,75 @@ device capture, in the wrong direction**, by something in the neighbourhood of t
 and this round's cost lands on every liquid cell whether or not the gravity it runs
 under ever leaves the axis.
 
-**That prediction still stands, untested.** The fifteenth attempt's device captures
-are all pre-4bdcf77 — the attribution round it ran chased two older findings, not
-this one, and none of its numbers include the fourteenth attempt's fix. The next
-device capture taken after 4bdcf77 lands is the one that tests it.
+**That prediction is settled, and this paragraph used to say the opposite.** It
+read "still stands, untested — the next device capture taken after 4bdcf77 lands
+is the one that tests it", which contradicted the re-base note four paragraphs
+above it: `4bdcf77` landed at 16:39 on 2026-08-26 and
+`performance_20260826_183646` was taken at 18:36, so the measured column in the
+table above **already carries the fix** — which is exactly what that note meant
+by "the water and mixed rows now carry the fourteenth attempt's real device
+cost". Six captures since read water at 18,476-18,898 and mixed at
+14,029-14,398: flat, inside the relink floor, nothing further pending. The
+fourteenth attempt's bill was paid at the re-base and has not moved since.
 
 ---
 
-## Metal: a conductor twice conducts, and no scene measures it
+## Metal: measured at last, and the hypothesis was wrong
 
-The metal-smelting change (`docs/Sand/Metal-Smelting-Plan.md`) gave
-`MATX_METAL` a `conducts` of 248, against stone and glass's 220 — a
-deliberately higher figure, since metal moving heat a long way is the
-whole point of the material. Rolled per cell crossed
-(`(conducts/256)^depth`), 248 puts the mean walk at roughly
-`CONDUCT_REACH` (32 cells) where 220 falls off closer to 5-6.
+**This section used to say the unpriced cost was metal's conduction
+WALK, and that no benchmark scene contained an extended material. Both
+halves were wrong, and the sixteenth attempt measured them.**
 
-**Every extended material appears in no benchmark scene at all.** The
-"every material at once" scene (and every other scene in the scoreboard
-above) enumerates `MAT_EMPTY + 1 .. MAT_COUNT - 1` — the ordinary
-fourteen — and stops there, so metal's entire cost, a conductor walk
-with a mean roughly five times stone's, ships into this round's
-scoreboard completely unmeasured. Round five is already open with all
-thirteen budgets red; this is a fourteenth material's cost landing on
-top of that, unpriced.
+The claim was that `MATX_METAL`'s `conducts` of 248, against stone and
+glass's 220, puts the mean walk (`(conducts/256)^depth`, capped at
+`CONDUCT_REACH` = 32) near the cap where 220 falls off at five or six —
+and that it shipped unmeasured because no scene paints an extended
+material.
 
-What exists instead of a device number: a host test
-(`test_a_metal_run_conducts_further_than_a_stone_one`,
-`suite_sand.c`) pins the qualitative claim — heat crosses a 20-cell
-metal run inside a ten-step budget where a 20-cell stone run, real
-per-material figures, does not — so a regression that flattens the two
-figures back together fails loudly on the host, in well under a second,
-long before anyone reaches for a device capture. It is a tripwire, not a
-measurement: it says nothing about microseconds, only that the intended
-gap between the two conductors still exists in the table.
+Nothing paints one. A **reaction makes one**. A host material histogram
+of the every-material flip, taken at the exact points the device
+benchmark measures rather than on the scene's constructor:
 
-**Not yet built:** a device scene with metal actually on the grid — the
-self-growing rod is the obvious candidate, since it exercises the walk
-at its full designed length (measured on host at 33 cells, one past the
-plan's own stated 32 — see the rod-termination test's own comment for
-the off-by-one) rather than a single boil-through. Whether that is worth
-adding mid-round, alongside the fourteenth material's own unpriced
-walk-length cost, is a scheduling call the next round should make with
-eyes open rather than by omission.
+| | metal cells |
+|---|---:|
+| as painted | 0 |
+| after the 120 settle steps | **300** |
+| after the 20 measured steps | **311** |
 
----
+Metal has been in that benchmark since the day it existed, smelted out
+of the dirt that sits beside lava everywhere in the all-pairs tiling.
+
+And the walk costs nothing. Three single-field probes, host, best of five
+interleaved, on that scene:
+
+| probe | every-material flip |
+|---|---:|
+| `conducts` 248 → 220, stone's own figure | **-0.0%** |
+| `conducts` 248 → 0, not a conductor at all | -2.9 to -3.1% |
+| dirt → metal switched off entirely | -4.5% |
+
+The walk-length arithmetic describes a walk that does not happen:
+`conduct_heat()` stops the moment the next cell is not itself a
+conductor, so in a scene where conductors are scattered rather than laid
+in runs it ends at depth 1 whatever the roll says. A long `conducts` buys
+distance only where there is a long run of conductor to cross — a rod, a
+wall, a pipe — and no benchmark has one. What the scene actually pays is
+for metal existing and conducting at all, inside a total feature cost of
+about 4.5%: the price of a material, not a regression.
+
+**Still not built, and now a sharper question than it was:** a device
+scene with a real metal rod, where the walk runs at its full designed
+length (measured on host at 33 cells, one past the plan's stated 32 —
+see the rod-termination test's own comment for the off-by-one). That is
+a question about the rod, not about the benchmark board.
+
+The host tripwire `test_a_metal_run_conducts_further_than_a_stone_one`
+(`suite_sand.c`) still earns its place: it pins the qualitative claim
+that heat crosses a 20-cell metal run inside a ten-step budget where a
+20-cell stone run does not, so flattening the two figures back together
+fails loudly in well under a second. It says nothing about microseconds —
+and the numbers above are now the answer to what it costs.
+
 
 ## The campaign, one line per attempt
 
@@ -155,6 +194,7 @@ the next person from re-running them.
 | 13 | 🟢 | Two scenes for the shape of load nothing had measured | Everything benchmarked so far was a transient; nothing measured a heat source left running. A thermal shock lattice (480 glass-ringed compartments) and a boiler (a stone basin held at a sustained boil) shipped as a pair, each with a host guard whose assertions were checked by breaking the scene: **24 of 33** individually turned red. Ten steps was a measured decision, not a round one — the only window where the last third of new cullet still clears **15%** of the total instead of trailing off. An earlier boiler draft's exact-conservation count held by **one step**; a floor replaced it. No optimisation shipped — two device ceilings added, both provisional. |
 | 14 | 🟠 | Two rays, dithered in space instead of time | Cross-flow's nearest-axis fix (30335ae) was correct but unpriced: a settled surface could only ever be perpendicular to one of eight directions, so it quantised to 0/45/90 — measured as two values across the whole tilt range, ≈0.00 below 22.5° and ≈0.94 above. The near-vertical octant couldn't tilt at all: its ray is horizontal, and a horizontal ray moves mass only within a row. The fix moves the dither from TIME into SPACE — a fixed per-column pattern choosing between two rays — and compares gravitational potential rather than raw mass. Cost: **+8%** on host water at the axis gravity every benchmark uses, **+29-37%** off-axis, which no budget measures. Slow alternation was rejected on a measurement: switching axis on a settled pool costs **1,582** units of churn against the flicker guard's own ceiling of 60. |
 | 15 | 🟠 | Two loose ends closed, and a watchdog counting itself in | An attribution round — no code shipped. Pinned the stale 2026-08-25 capture to `4b5168c` by matching its 272 self-test names against `RUN_TEST()` declarations at each candidate, then validated the method by rebuilding that commit fresh a day later: four rows exact, one off by **1 µs**. The liquid-free controls' **+9.6%**: byte-identical simulation and unchanged instruction count end to end, then isolated by device bisect to one commit, `e03aabd` — a line that **never executes** in either control, costing **~5%** purely from how GCC rescheduled `sand_step` around it once it existed. Round five's 28% host win: real on device too, confirmed by `objdump` moving exactly the blocks it should — but only **20%** of the gate's cost there, because the device's real water regression was `move_liquid_grain` **nearly tripling** across four separate commits, not the gate. Underneath both: a task watchdog silently charging its own console dump to the benchmark loop it shares a UART with, **up to 2.6×**, deterministically — two of the current thirteen budgets were pegged from contaminated rows and are too loose by an unknown amount. |
+| 16 | 🟢 | A function that fell out of its callers, and a heuristic at its ceiling | An unattributed drift, bisected over 45 commits on the host by compiling the repo's **own** `suite_sand.c` with `-DDEVICE_BUILD` against Unity/timer shims — no hand-copied scenes to drift. One step, controls flat across it: `723fac6` grew `try_heat_transform()` past GCC's size heuristic and knocked it **out of four call sites at once**. Forcing it back in: device **fire −10.4%, lava −6.5%, thermal −4.9%, four liquids −3.6%**, two captures agreeing to 4 µs, and the host predicted every one including the null. Attempts 07/08's i-cache trap did not fire because the object got *smaller* — the compiler had been paying more to keep the call. Also retired this page's own metal hypothesis (`conducts` 248→220 measures **−0.0%**) after a mid-flight counter found **311 cells of metal** in a scene that paints none. Second half: `ROW_MAX_RUNS` × `LEAF_REFINE_MAX_RUNS`, fifteen builds, **byte-identical counters** — both inert; and an **oracle** marking the exact changed cells, uncapped, sends the same pixels as the shipped marking, so the gather path is at its ceiling, not failing. The win was a **third send path** nobody had written: a full-width box is contiguous in the framebuffer, so it goes out at its own height — **−10% pixels a frame**, no memory, no copy. |
 
 ---
 
@@ -190,7 +230,15 @@ Same code, **3.2 ms vs 3.9 ms** — two builds that never touched the hot functi
 20% apart, purely because unrelated code shifted where things landed in flash.
 This is the noise floor under every number here: differences under a few percent
 are layout until they reproduce, and budgets carry margin so a rebuild alone
-cannot flip them. The antidote (found in attempt 10): **keep control benchmarks in
+cannot flip them. **It may not be a continuum.** Across four device captures of
+three builds the two liquid-free controls take one of exactly two value-pairs —
+(6,005, 6,100) three times and (6,263, 6,356) once — never anything between, and
+the sixteenth attempt's 46-build host sweep shows the same two-level shape on a
+different machine with a different compiler. If that holds, the useful test is
+not "is the delta inside the floor" but "which state did the control land in",
+which is a far sharper instrument. Four captures and one sweep is an
+observation, not a proof; the experiment that settles it is five captures of
+five builds differing only in a comment. The antidote (found in attempt 10): **keep control benchmarks in
 every capture.** Three of the seven tests never touch liquid — when only the
 liquid numbers moved, the cause had to be in the liquid path. A global layout
 shift can't leave three tests byte-identical.
@@ -343,6 +391,11 @@ names the attempt that paid for it.
 | **Bisect on the host.** Rebuilding and re-timing a commit range costs twenty minutes and no flash cycles, and answers the question a regression actually poses — *when did this start* — with a byte-identical simulation either side. | 11 |
 | **A capture measures a tree, not a project.** Check the flashed build against the code before diagnosing anything with it. This one was fifty commits stale and said so nowhere. | 11 |
 | **Count what skipping *saves*, not just what is skippable.** 19.3% of cells were provably idle and skipping them measured −0.1%, because the cells were already cheap to fall through. | 12 |
+| **Count what a scene *contains*, not what it is built from.** A benchmark that paints no metal held 311 cells of it by the time it was timed, because a reaction makes them. Take the counter mid-flight. | 16 |
+| **Forcing an inline is a trap when it overrides the compiler, a fix when it restores it.** If a symbol appeared out of line at a commit that was not about that function, and folding it back makes the object *smaller*, the compiler lost a decision rather than made one. | 07 · 08 · 16 |
+| **Build the oracle before optimising the heuristic.** The uncapped, exact-changed-cell ideal sent the same pixels as the shipped code on two of three scenes — turning a three-way cap sweep into two negative results and a search elsewhere. | 16 |
+| **Deleting a feature's work can under-state its cost.** Removing the branch measured −9.5% where fixing its code shape measured −12.1%: measure-by-deleting alone would have blamed the feature and left the real cost in place. | 16 |
+| **Compile the suite, do not copy its scenes.** A hand-copied benchmark is a bisect that can attribute the wrong commit; three shim headers are cheaper and cannot drift. | 16 |
 
 ---
 

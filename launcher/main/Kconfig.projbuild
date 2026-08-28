@@ -56,4 +56,24 @@ menu "Launcher"
             collects the results over the serial console and exits non-zero if
             anything failed.
 
+    config LAUNCHER_SELFTEST_AUTORUN
+        bool "Run the on-device test suites automatically at boot"
+        depends on LAUNCHER_SELFTEST
+        default n
+        help
+            LAUNCHER_SELFTEST above compiles the suites in; this decides
+            whether they also RUN automatically at boot, versus sitting
+            compiled-in until triggered on demand from the Diagnostics app's
+            toggle screen.
+
+            Off by default. The suite count has grown well past the "roughly
+            half a second" boot/selftest.c's own comment once described, so
+            paying that cost on every boot of an interactive diagnostics
+            session - just to check the POST report or flip a toggle - makes
+            the build too slow to use for anything else. Turn this on only
+            for an automated harness that needs the suites to run themselves,
+            such as tools/report_test_results.sh, which layers
+            sdkconfig.defaults.diag_autorun on top of sdkconfig.defaults.diag
+            for exactly that reason.
+
 endmenu
