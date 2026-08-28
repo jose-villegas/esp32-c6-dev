@@ -5351,15 +5351,10 @@ static void test_a_liquid_body_paints_flat_inside(void)
         grid[1][x] = CELL_MAKE(MAT_WATER, (x % 2) ? 7 : MASS_MAX);
     }
 
-    material_set_gravity(0, 0, 64, 64);   /* interior painting must not care
-                                            * either way - there is no rim
-                                            * here to shade, and every
-                                            * material_colours() call below
-                                            * passes an explicit depth of its
-                                            * own, so the 64x64 grid size
-                                            * here is an arbitrary
-                                            * placeholder never actually
-                                            * read */
+    material_set_gravity(0, 0);   /* interior painting must not care either
+                                    * way - there is no rim here to shade,
+                                    * and every material_colours() call below
+                                    * passes an explicit depth of its own */
 
     /* A wave contribution of exactly 0, not merely 255 (the table's last
      * entry, but not itself 0 - see zero_wave_index()'s own comment) - the
@@ -5482,7 +5477,7 @@ static void test_a_liquid_interior_is_shaded_by_depth(void)
  * rather than accidentally read through some shared code path. */
 static void test_only_a_liquid_interior_reads_depth(void)
 {
-    material_set_gravity(0, 0, 64, 64);   /* no specular term to confuse the
+    material_set_gravity(0, 0);   /* no specular term to confuse the
                                             * rim comparison with */
 
     gfx_color_t rim_shallow[3], rim_deep[3];
@@ -5528,7 +5523,7 @@ static void test_only_a_liquid_interior_reads_depth(void)
  * hide behind. */
 static void test_the_wave_bands_do_not_reach_the_rim_either(void)
 {
-    material_set_gravity(0, 0, 64, 64);   /* no specular term to confuse the
+    material_set_gravity(0, 0);   /* no specular term to confuse the
                                             * rim comparison with */
 
     /* DIRECTLY, first: a rim cell must paint identically at `wave` 0 and
@@ -5601,7 +5596,7 @@ static void test_the_wave_bands_do_not_reach_the_rim_either(void)
  * standing in for it. */
 static void test_a_liquid_rim_still_shows_its_fill(void)
 {
-    material_set_gravity(0, 0, 64, 64);   /* no specular term to confuse this with */
+    material_set_gravity(0, 0);   /* no specular term to confuse this with */
 
     const gfx_color_t *pal = material_palette();
     /* Flat rim on the "up" side: MATERIAL_EDGE_UP plus its two leaning
@@ -5665,7 +5660,7 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
                                * has somewhere to go without clamping at
                                * either end and hiding the difference */
 
-    material_set_gravity(0, 1000, 64, 64);   /* straight down */
+    material_set_gravity(0, 1000);   /* straight down */
 
     gfx_color_t up[3], down[3];
     material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
@@ -5685,7 +5680,7 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
         "the top of a pool - must be the bright one; a sign flipped here "
         "would light the underside of every overhang instead of its top");
 
-    material_set_gravity(1000, 0, 64, 64);   /* tilt: gravity now points right */
+    material_set_gravity(1000, 0);   /* tilt: gravity now points right */
 
     gfx_color_t left[3], right[3];
     material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
@@ -5876,87 +5871,303 @@ static void test_wave_bands_drift_with_phase(void)
         "only this single test cell happens to have moved");
 }
 
-/* THE REGRESSION GUARD for the whole "wave bands are sized in cells, not in
- * grid fractions" fix - the reason WAVE_PERIOD_CELLS and the wave's own
- * accumulator (material_wave_row_start()/material_wave_col_step()) exist at
- * all. Before this change, the wave table was read at `depth`, which is
- * normalised across the WHOLE GRID's projected span - so on a board a few
- * hundred cells tall, a puddle only a couple of dozen cells deep barely
- * moved `depth` at all, and painted with essentially no variation. Walking
- * the ACTUAL per-cell accumulator paint_row_n() uses - material_set_gravity()
- * then material_wave_row_start(cy) for each of a 24-cell span, gravity
- * straight down - is what proves the fix rather than merely the formula:
- * this is the same walk the real renderer performs, at two very different
- * grid heights.
+/*=============================================================================
+ * LOCAL DEPTH - the depth signal now follows each puddle's own shape
+ * rather than a fixed screen-position gradient. See LOCAL DEPTH's own long
+ * comment in app_sand.c for the full mechanism and the two device reports
+ * ("almost like platinum"; "follows the shape of the puddle") that
+ * motivated it.
  *
- * MEASURED (this file's own report - see the comment at the top of this
- * function's helper for the numbers, not asserted verbatim here so a
- * future retune of WAVE_AMP or DEPTH_RANGE does not make this test
- * brittle): 14 luminance transitions over a 24-cell span, at BOTH a 64x224
- * grid and a 32x128 grid - same count despite grid_h differing by nearly
- * 2x, which is exactly the property a fixed-cells period has to have and a
- * grid-fraction period cannot. Measured the same way over the SAME 24-cell
- * span with the SHIPPED (pre-fix) behaviour - `wave` fixed equal to
- * `depth`, the coupling this fix removes - the transition count is 0: a
- * puddle that shallow was a rounding error against a ~224-row grid, and
- * read as one flat colour.
- *
- * N is chosen well under the measured 14 (margin for the exact transition
- * count to move a little as the table or DEPTH_RANGE is retuned) and well
- * over the 0-or-1 the shipped bug gave the same span - the gap between
- * "essentially none" and "several bands" is the entire point being
- * guarded, not the precise number 14 itself. */
-static int wave_band_transitions(int grid_w, int grid_h, int span)
+ * paint_row_n() itself cannot be linked into this host suite - it lives in
+ * app_sand.c, which check_app_sources.sh only compile-checks, the same
+ * position FOAM_PHASE_MS's and WAVE_PHASE_RATE_Q8's own accumulators have
+ * always been in (see WAVE_PHASE_RATE_Q8's own comment in app_sand.c) - so
+ * each test below mirrors the algorithm it pins with a small test-local
+ * helper, built to match app_sand.c's real logic exactly, rather than
+ * calling into it.
+ *===========================================================================*/
+
+/* Mirrors paint_row_n()'s vertical-dominant local-depth walk (app_sand.c)
+ * for a FIXED straight-down gravity - the simplest case: surface up, "above"
+ * toward the surface, ascending row order. The axis-flip and horizontal-scan
+ * machinery is a different claim, pinned separately by
+ * test_local_depth_resets_when_gravitys_axis_flips below. Reads the LIVE
+ * grid via sand_at() rather than assuming a fixed shape, the same way
+ * paint_row_n() reads the live framebuffer row/above/below pointers -
+ * off-grid rows read as MAT_STONE (sand_at()'s own convention), which is
+ * "not the same material" as water and correctly reads as a boundary. */
+static void mirror_local_depth_column(sand_t *g, int cx, int h,
+                                      unsigned depth_out[])
 {
-    material_set_gravity(0, 1000, grid_w, grid_h);   /* straight down */
-
-    int prev_lum = -1;
-    int transitions = 0;
-
-    for (int cy = 0; cy < span; cy++) {
-        int depth_i =
-            material_depth_row_start(cy) >> MATERIAL_DEPTH_FRAC_BITS;
-        depth_i = depth_i < 0 ? 0 : (depth_i > 255 ? 255 : depth_i);
-        const unsigned depth = (unsigned)depth_i;
-        const unsigned wave = (unsigned char)(
-            material_wave_row_start(cy) >> MATERIAL_WAVE_FRAC_BITS);
-
-        gfx_color_t col[3];
-        material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, depth, wave,
-                         col);
-        const int lum = panel_luminance(col[0]);
-        if (prev_lum >= 0 && lum != prev_lum) {
-            transitions++;
-        }
-        prev_lum = lum;
+    unsigned running = 0;
+    for (int cy = 0; cy < h; cy++) {
+        const cell_t here  = sand_at(g, cx, cy);
+        const cell_t above = sand_at(g, cx, cy - 1);
+        const bool same = CELL_MATERIAL(above) == CELL_MATERIAL(here);
+        running = same ? (running < 255u ? running + 1u : 255u) : 0u;
+        depth_out[cy] = running;
     }
-    return transitions;
 }
 
-static void test_wave_bands_are_sized_in_cells_not_in_grid_fractions(void)
+/* THE DEVICE COMPLAINT THIS PINS, verbatim: "the sensibility against
+ * gravity makes it behave almost like platinum", and "there is no arcs...
+ * maybe it's better if the depth just follows the shape of the puddle."
+ * Modelled before this change was written (an irregular pool with a rock
+ * island poking through it; a screen-position depth paints straight bands
+ * across the rock as if it were not there) and this is that same case,
+ * through the real automaton rather than a hand-authored grid.
+ *
+ * Builds a settled pool, via real sand_t/sand_step(), with a stone plug
+ * through the middle of ONE column's water and nothing interrupting a
+ * SECOND column elsewhere in the same pool. The two columns must see
+ * IDENTICAL local depth for every row ABOVE the plug - both are plain,
+ * uninterrupted water there - and must DIVERGE starting exactly at the row
+ * where the plugged column's water resumes below the rock: that column
+ * resets to a small depth right there, while the other keeps climbing. A
+ * pure screen-position depth - an affine function of cy alone, exactly what
+ * this change replaces - cannot tell the two columns apart at all, which is
+ * exactly the bug this test exists to catch a regression back into. */
+/* A grid of its own, sized for a settled pool deep enough to carry a
+ * two-cell rock plug with real water left above and below it - the
+ * standard W x H fixture (8x8) has no room for that. Named OBST_POOL_*,
+ * not the shorter POOL_W/POOL_H/pool/pool_cells this file already has, to
+ * avoid colliding with that unrelated fixture (the pour-source tests
+ * further down) - a different shape for a different purpose entirely. */
+#define OBST_POOL_W 6
+#define OBST_POOL_H 14
+static uint8_t obst_pool_cells[OBST_POOL_W * OBST_POOL_H];
+static sand_t  obst_pool;
+
+static void test_local_depth_follows_the_puddles_own_shape(void)
 {
-    /* Mirrors WAVE_PERIOD_CELLS (material.c) by hand, the same convention
-     * TEST_FOAM_BLOB_SHIFT already follows for FOAM_BLOB_SHIFT above: if
-     * WAVE_PERIOD_CELLS ever moves, this has to move with it, since the
-     * whole point being tested is "one full pass through the table spans
-     * exactly this many cells". */
-    const int span = 24;
+    enum { PW = OBST_POOL_W, PH = OBST_POOL_H };
+    sand_init(&obst_pool, obst_pool_cells, PW, PH, 4242u);
 
-    const int bands_tall = wave_band_transitions(64, 224, span);
-    const int bands_short = wave_band_transitions(32, 128, span);
+    /* A plain rectangular pool. Off-grid reads as solid (sand_at()'s own
+     * convention), so the grid's own bottom and side edges already act as
+     * walls with no explicit border needed. The pool's own OUTLINE does not
+     * need to be irregular for this test - the irregularity that matters
+     * comes entirely from the rock plug below, not from the water's
+     * silhouette. */
+    for (int y = 2; y < PH; y++) {
+        for (int x = 0; x < PW; x++) {
+            sand_set(&obst_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
 
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(8, bands_tall,
-        "a 24-cell-deep pool must cross at least 8 luminance bands on a "
-        "224-row grid - measured 14 with the fix in place and 0 with the "
-        "shipped (grid-normalised) behaviour over the same span, so 8 is "
-        "comfortably between 'flat' and 'the real number', not a hair "
-        "above the bug's own reading");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(bands_tall, bands_short,
-        "the band count must be the SAME whatever the grid's own "
-        "dimensions are - a 64x224 grid and a 32x128 grid have to agree, "
-        "or the wave's period is still coming from the grid's extent "
-        "rather than from a fixed number of cells");
+    /* The obstacle: a two-cell rock plug straight through column OBST_X's
+     * water, with water left continuous above and below it - "an irregular
+     * pool with a rock island poking through it", the exact case that first
+     * suggested this whole change. */
+    enum { OBST_X = 3, OBST_Y0 = 7, OBST_Y1 = 8 };
+    sand_set(&obst_pool, OBST_X, OBST_Y0,
+             CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_set(&obst_pool, OBST_X, OBST_Y1,
+             CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+
+    for (int i = 0; i < 40; i++) {
+        sand_step(&obst_pool, 0, 1000, 0);   /* straight down, matching the
+                                               * mirror's own fixed gravity */
+    }
+
+    enum { CLEAR_X = 0 };   /* an unobstructed column, elsewhere in the same
+                             * pool */
+
+    unsigned depth_obstructed[PH], depth_clear[PH];
+    mirror_local_depth_column(&obst_pool, OBST_X, PH, depth_obstructed);
+    mirror_local_depth_column(&obst_pool, CLEAR_X, PH, depth_clear);
+
+    /* Sanity: the obstacle actually landed where this test built it, and
+     * water survived on both sides of it - otherwise the rest of this test
+     * proves nothing. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&obst_pool, OBST_X, OBST_Y0)),
+        "setup: the rock plug must still be stone after settling");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&obst_pool, OBST_X, OBST_Y1 + 1)),
+        "setup: water must still be there just below the plug, or this "
+        "test is not exercising the case it claims to");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&obst_pool, CLEAR_X, OBST_Y1 + 1)),
+        "setup: the comparison column must be plain water all the way "
+        "down, with nothing of its own to reset against");
+
+    /* ABOVE the plug: both columns are uninterrupted water from the same
+     * surface, so local depth must agree row for row - the two only differ
+     * once the obstacle actually intervenes. */
+    for (int y = 2; y < OBST_Y0; y++) {
+        char why[160];
+        snprintf(why, sizeof why,
+                 "row %d is above the obstacle in both columns - local "
+                 "depth must agree there, or this test is not isolating "
+                 "the obstacle's own effect", y);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(depth_clear[y], depth_obstructed[y],
+                                       why);
+    }
+
+    /* THE DIVERGENCE ITSELF: the row right below the plug is where the
+     * obstructed column's local depth must RESET to 0 - its neighbour
+     * toward the surface is stone, not water, so this cell IS the boundary
+     * of its own body rather than a continuation of the column above the
+     * rock - while the clear column keeps climbing from wherever it
+     * already was. */
+    const int first_row_below_plug = OBST_Y1 + 1;
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, depth_obstructed[first_row_below_plug],
+        "the water cell right below the rock plug must show local depth "
+        "0 - its neighbour toward the surface is stone, not water, so it "
+        "is a fresh boundary of its own body, not a continuation of the "
+        "column above the rock");
+    TEST_ASSERT_TRUE_MESSAGE(
+        depth_clear[first_row_below_plug] >
+            depth_obstructed[first_row_below_plug],
+        "at the same row, the CLEAR column must show strictly more local "
+        "depth than the obstructed one - it never reset, so it has been "
+        "climbing since the real surface while the obstructed column just "
+        "started over at the rock");
+
+    /* And it keeps climbing from there rather than staying stuck at the
+     * reset: a few more cells into the water below the plug, the
+     * obstructed column's own local depth must have grown past its
+     * post-reset value, exactly the way the clear column already has all
+     * along - the reset is a restart, not a ceiling. */
+    TEST_ASSERT_TRUE_MESSAGE(
+        depth_obstructed[PH - 1] > depth_obstructed[first_row_below_plug],
+        "local depth must keep climbing below the plug too, the same way "
+        "it does above it - a reset back to 0 that never climbs again "
+        "would mean the walk stopped working after the first obstacle, "
+        "not merely reset at it");
+
+    /* That material_colours() itself turns a `depth`/`wave` pair into a
+     * visibly different colour is already pinned directly, at controlled
+     * values, by test_a_liquid_interior_is_shaded_by_depth and
+     * test_wave_bands_vary_across_depth above - not repeated here with
+     * these particular (quite shallow) pool depths, which is the wrong
+     * place to prove it: DEPTH_RANGE's brightening is already close to
+     * maxed out within the first handful of cells of any pool, so two
+     * local depths this close together are not guaranteed to land on
+     * different quantised shades even though they are genuinely different
+     * NUMBERS - which is exactly the property this test exists to check. */
 }
+
+/* Mirrors app_sand.c's col_local_depth[]-plus-axis-flip-reset bookkeeping in
+ * miniature - not calling into app_sand.c itself, which cannot be linked
+ * here (see this section's own top comment) - to pin the ONE property that
+ * could otherwise only be checked by eye on the device: a stale per-column
+ * reading from a VERTICAL-gravity frame must not leak into a fresh
+ * VERTICAL-gravity frame across an intervening HORIZONTAL one, since the two
+ * regimes give the array two entirely different meanings (see
+ * update_local_depth_axis()'s own comment in app_sand.c for the full
+ * argument).
+ *
+ * `painted_cols`/`painted_count` simulate the DIRTY-ROW optimisation: a real
+ * vertical-dominant frame only writes col_local_depth[] for columns whose
+ * row actually repainted, so a faithful mirror of the reset has to leave
+ * SOME columns untouched by the frame that follows the flip, or the
+ * unconditional "write every column" a simpler mirror would use could mask
+ * a missing reset entirely - the untouched columns are exactly where a
+ * missing reset would otherwise leak frame 1's value through undetected. */
+typedef struct {
+    unsigned char depth[8];
+    bool          axis_vertical;
+} mirror_local_depth_state_t;
+
+static void mirror_local_depth_frame(mirror_local_depth_state_t *st,
+                                     bool this_axis_vertical,
+                                     const int *painted_cols,
+                                     size_t painted_count,
+                                     unsigned char fresh_value)
+{
+    if (this_axis_vertical != st->axis_vertical) {
+        /* THE RESET UNDER TEST: see update_local_depth_axis()'s own comment
+         * in app_sand.c for why this has to happen before this frame's own
+         * painting touches the array at all. */
+        memset(st->depth, 0, sizeof st->depth);
+    }
+    st->axis_vertical = this_axis_vertical;
+
+    if (this_axis_vertical) {
+        for (size_t i = 0; i < painted_count; i++) {
+            st->depth[painted_cols[i]] = fresh_value;
+        }
+    }
+    /* A horizontal-dominant frame never writes col_local_depth[] at all -
+     * see LOCAL DEPTH's own comment in app_sand.c for why the horizontal
+     * case needs only a single local variable and never touches this
+     * array. */
+}
+
+static void test_local_depth_resets_when_gravitys_axis_flips(void)
+{
+    mirror_local_depth_state_t st;
+    memset(&st, 0, sizeof st);
+
+    /* Frame 1, vertical: every column gets painted this frame, all with a
+     * distinctive nonzero value - stands in for a fully-dirty vertical
+     * frame. */
+    const int all_cols[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
+    mirror_local_depth_frame(&st, true, all_cols, 8, 77);
+    for (int i = 0; i < 8; i++) {
+        char why[128];
+        snprintf(why, sizeof why,
+                 "setup: column %d must read 77 right after frame 1, or "
+                 "the rest of this test proves nothing", i);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(77, st.depth[i], why);
+    }
+
+    /* Frame 2, horizontal: the axis itself has changed (vertical to
+     * horizontal), so THIS transition resets the array too - correct, if
+     * redundant, since a horizontal frame never writes col_local_depth[]
+     * anyway and has nothing of its own to protect it from. What actually
+     * matters is the transition just below. */
+    mirror_local_depth_frame(&st, false, NULL, 0, 0);
+
+    /* Frame 3, vertical again - the axis flips BACK, which is the
+     * transition this test exists for - but only column 0 is dirty this
+     * frame (most rows are NOT dirty on a typical frame; see LOCAL DEPTH's
+     * own comment in app_sand.c on why that staleness is normally
+     * accepted). If the reset on THIS transition were ever missing -
+     * suppose only the "entering horizontal" direction were wired up, say -
+     * a longer run of horizontal frames between two vertical ones (nothing
+     * about this sequence depends on there being exactly one) would leave
+     * columns 1-7 reading frame 1's 77, stale AND meaningless once the axis
+     * itself has changed and changed back, rather than the fresh 0 a
+     * genuinely reset array must show. */
+    const int just_col0[1] = { 0 };
+    mirror_local_depth_frame(&st, true, just_col0, 1, 3);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, st.depth[0],
+        "column 0 was actually painted this frame and must read its fresh "
+        "value");
+    for (int i = 1; i < 8; i++) {
+        char why[240];
+        snprintf(why, sizeof why,
+                 "column %d must read 0 right after the axis flips back "
+                 "to vertical, not 77 left over from frame 1 - the reset "
+                 "is what stops a horizontal-gravity gap from leaking a "
+                 "stale per-column reading into a fresh vertical one", i);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, st.depth[i], why);
+    }
+}
+
+/* test_wave_bands_are_sized_in_cells_not_in_grid_fractions and its
+ * wave_band_transitions() helper used to live here - a regression guard for
+ * the "wave bands are sized in cells, not in grid fractions" fix, walking
+ * paint_row_n()'s then-screen-position accumulator
+ * (material_depth_row_start()/material_wave_row_start(), material.h) at two
+ * different grid heights and asserting the band count agreed.
+ *
+ * REMOVED, not merely updated, because the mechanism it guarded no longer
+ * exists: local depth (see LOCAL DEPTH's own comment in app_sand.c) never
+ * touches grid_w/grid_h at all - it counts cells from each puddle's own
+ * boundary, full stop - so "the wave's period comes from the grid's extent
+ * instead of a fixed cell count" is not a regression this design can
+ * reintroduce short of literally bringing the screen-position walk back.
+ * The property this test protected is now a structural guarantee rather
+ * than a tuning outcome to keep re-checking. What replaced it as the live
+ * regression guard for THIS change is
+ * test_local_depth_follows_the_puddles_own_shape below, which is a strictly
+ * stronger claim: not just "grid-size-independent" but "follows the actual
+ * shape of the puddle, obstacles included". */
 
 /*=============================================================================
  * WATER'S FOG - depth and wave merge into ONE haze BLEND for water alone,
@@ -6153,7 +6364,7 @@ static void test_only_water_hazes_its_interior(void)
  * something the design never promised. */
 static void test_water_foams_where_its_rim_is_curved(void)
 {
-    material_set_gravity(0, 0, 64, 64);
+    material_set_gravity(0, 0);
     const gfx_color_t *pal = material_palette();
     const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
 
@@ -6211,7 +6422,7 @@ static void test_water_foams_where_its_rim_is_curved(void)
  * than "not at the one combination this test happened to try". */
 static void test_a_flat_rim_still_never_foams(void)
 {
-    material_set_gravity(0, 0, 64, 64);   /* no specular term to confuse a
+    material_set_gravity(0, 0);   /* no specular term to confuse a
                                             * pure foam comparison with */
     const gfx_color_t *pal = material_palette();
     const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
@@ -6257,7 +6468,7 @@ static void test_a_flat_rim_still_never_foams(void)
  * just "probably fine" under whatever the loop's default happened to be. */
 static void test_only_water_foams(void)
 {
-    material_set_gravity(0, 0, 64, 64);
+    material_set_gravity(0, 0);
     const gfx_color_t *pal = material_palette();
     const unsigned spike_mask =
         MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
@@ -17223,7 +17434,8 @@ void run_sand_suite(void)
     RUN_TEST(test_the_wave_table_matches_its_formula);
     RUN_TEST(test_wave_bands_vary_across_depth);
     RUN_TEST(test_wave_bands_drift_with_phase);
-    RUN_TEST(test_wave_bands_are_sized_in_cells_not_in_grid_fractions);
+    RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
+    RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
     RUN_TEST(test_water_interior_hazes_toward_fog_colour);
     RUN_TEST(test_deepest_water_interior_is_exactly_the_body_colour);
     RUN_TEST(test_only_water_hazes_its_interior);
