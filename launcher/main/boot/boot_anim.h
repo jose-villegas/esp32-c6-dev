@@ -226,7 +226,7 @@ typedef struct {
 
 #define BOOT_ANIM_Z_PX  35     /* pixels per unit of zeta's value */
 #define BOOT_ANIM_T_PX   9     /* pixels per unit of t            */
-#define BOOT_ANIM_T_MAX 70     /* the top of the climb            */
+#define BOOT_ANIM_T_MAX 126    /* the top of the climb            */
 
 /* The top of phase 1's climb specifically - see boot_anim_pen()'s "TWO
  * PHASES" comment - kept apart from BOOT_ANIM_T_MAX because boot_anim.c's
@@ -550,16 +550,42 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
 #define BOOT_ANIM_TITLE_VIEW_W 448
 #define BOOT_ANIM_TITLE_VIEW_H 368
 
-/* Where the word rests, in the viewer's frame - approximately a third of
- * the way across and a little over a quarter down, measured against a real
- * render rather than derived from anything else on screen. */
-#define BOOT_ANIM_TITLE_VIEW_X 170
-#define BOOT_ANIM_TITLE_VIEW_Y 100
+/* Where the word rests, in the viewer's frame - the golden rectangle
+ * spiral inscribed in it, not a number picked by eye.
+ *
+ * Inscribe a golden rectangle R0 in the 448x368 frame, width-matched
+ * (448 x 448/phi = 448 x 276.9) and centred vertically. Cut it into a
+ * spiral, one square at a time, turning the same way each cut - left, TOP,
+ * right, BOTTOM, the mirror of an earlier attempt that turned left,
+ * bottom, right, top and put the motif on the wrong side of its own
+ * nesting:
+ *
+ *   square 1, from the left of R0 -> R1 (171.1 x 276.9), on the right
+ *   square 2, from the top of R1  -> R2 (171.1 x 105.8), on the bottom
+ *   square 3, from the right of R2 -> R3 (65.3 x 105.8), on the left
+ *   square 4, from the bottom of R3 -> R4 (65.3 x 40.4), on top
+ *
+ * R1 is the first rectangle the spiral sets aside, on the side opposite
+ * the biggest square - the natural home for something that reads as
+ * separate from the motif growing in that square. The word centres on R1
+ * horizontally, but sits near its TOP rather than centred on it - square
+ * 2's own top edge, which is R1's top edge too, both cut from the frame's
+ * shared top at once. BOOT_ANIM_TITLE_VIEW_X/Y is that point, minus half
+ * the word's own box (BOOT_ANIM_TITLE_LEN cells of 8*SCALE+GAP, less one
+ * trailing GAP, by 8*SCALE) - gfx_text_font()'s (x, y) is a corner, not a
+ * centre - and nudged down by half that box's own height again so the
+ * word's CENTRE, not its top edge, sits on the line. */
+#define BOOT_ANIM_TITLE_VIEW_X 283
+#define BOOT_ANIM_TITLE_VIEW_Y 58
 
 #define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
                                             * after the one before it       */
 #define BOOT_ANIM_TITLE_FLIGHT_MS   900   /* how long ONE letter's flight is */
-#define BOOT_ANIM_TITLE_ENTRY_PX    260   /* how far off-panel it starts    */
+#define BOOT_ANIM_TITLE_ENTRY_PX    320   /* how far off-panel it starts -
+                                            * must clear BOOT_ANIM_TITLE_VIEW_X
+                                            * itself, the first letter's own
+                                            * final_x, or its flight starts
+                                            * already on the panel          */
 
 /* The wobble: how many oscillations are packed into the early part of the
  * flight (as a raw phase value - see boot_anim_sin()'s own 65536-per-turn
@@ -979,15 +1005,19 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 #define BOOT_ANIM_PHI_EXTRA_PHASE 10377   /* round(57 / 360 * 65536) */
 
 /* Where the origin settles once the finale finishes, in the VIEWER's frame
- * - see "The title"'s own top comment on why that frame, not the panel's:
- * ox and oy are PANEL coordinates, and the panel is mounted a quarter turn
- * from how it is held, so a target chosen by eye on an actual photo of the
- * board (as these were, on top of an earlier render) is a point in the
- * frame the person taking that photo sees, not in ox/oy directly. Below and
- * left of the word rather than tucked under its baseline, which read as a
- * collision. boot_anim_view() is what turns this back into ox/oy. */
-#define BOOT_ANIM_FINALE_ORIGIN_VIEW_X 65
-#define BOOT_ANIM_FINALE_ORIGIN_VIEW_Y 200
+ * - see "The title"'s own top comment on why that frame, not the panel's,
+ * and BOOT_ANIM_TITLE_VIEW_X's for the golden rectangle spiral this and the
+ * word are both now placed from.
+ *
+ * The corner square 1 and square 2 share: square 1 is the whole big square
+ * the motif spirals inward through, and square 2's own top edge - the
+ * first cut back into it - lands exactly on this point where it meets the
+ * dividing line square 1 sits behind. Not the innermost (4th-division)
+ * vertex an earlier attempt anchored to: that one wound up close enough to
+ * the word above it to collide with it. boot_anim_view() is what turns
+ * this VIEW point back into ox/oy. */
+#define BOOT_ANIM_FINALE_ORIGIN_VIEW_X 277
+#define BOOT_ANIM_FINALE_ORIGIN_VIEW_Y 217
 
 /* How far the two floor-plane axes reach once unbounded, matching the
  * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the
@@ -1061,19 +1091,21 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  *
  * The number: continuing the turn to BOOT_ANIM_PHI_EXTRA_PHASE regrows the
  * t axis's screen weight back toward its starting size (see that constant's
- * own comment), which - with the origin frozen close to the top of the
- * panel, room having only ever been reserved on ONE side of it, for the
- * climb the curve made getting there - would run the tall end of an
- * unshrunk curve off the panel. Shrinking it back down as the turn resumes
- * is what keeps the same curve inside the same room. BOOT_ANIM_SHRINK_MS
- * and BOOT_ANIM_SHRINK_FLOOR_Q8 were both chosen by sweeping the actual
+ * own comment), which - with the origin settling well short of the panel's
+ * own centre, room only ever reserved on ONE side of it, for the climb the
+ * curve made getting there - would run the tall end of an unshrunk curve
+ * off the panel; more so now that the climb itself reaches nearly twice as
+ * high as it did when this floor was first tuned (BOOT_ANIM_T_MAX 126, not
+ * 70). Shrinking it back down as the turn resumes is what keeps the same
+ * curve inside the same room. BOOT_ANIM_SHRINK_MS and
+ * BOOT_ANIM_SHRINK_FLOOR_Q8 were both chosen by sweeping the actual
  * projection at a 5ms step across the whole finale and shrinking until
  * nothing overflowed, with headroom to spare - not derived from geometry,
- * because oy is fixed but the panel edge closest to the curve's reach
- * changes with it, which is exactly the kind of thing worth measuring
- * rather than re-deriving by hand. */
+ * because the origin's position and the panel edge closest to the curve's
+ * reach both move when either is retuned, which is exactly the kind of
+ * thing worth measuring rather than re-deriving by hand. */
 #define BOOT_ANIM_SHRINK_MS        900
-#define BOOT_ANIM_SHRINK_FLOOR_Q8  51    /* ~0.2, floor is held once reached */
+#define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* floor is held once reached */
 
 static inline int boot_anim_curve_shrink_q8(uint32_t now_ms)
 {

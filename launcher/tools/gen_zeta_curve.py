@@ -47,14 +47,14 @@ from math import factorial
 
 # --- zeta -----------------------------------------------------------------
 
-# 64, not the 48 that was enough while the climb stopped at t ~ 35: Borwein's
+# 100, not the 64 that was enough while the climb stopped at t ~ 70: Borwein's
 # error bound degrades with the imaginary part, and extending the climb to
-# t ~ 70 brought the same failure back at the new top - an order of 48 was
-# only good to ~7e-4 by t ~ 56 - which the zero check below caught again,
+# t ~ 126 brought the same failure back at the new top - an order of 80 was
+# only good to ~3e-4 by t ~ 124 - which the zero check below caught again,
 # being an assertion about a number that should be zero rather than about a
-# number that merely looks plausible. 64 is good to ~5e-9 at the new
-# farthest zero checked (t ~ 69.5), comfortably past this file's 1e-6 bar.
-_N = 64
+# number that merely looks plausible. 100 is good to ~3e-9 at the new
+# farthest zero checked (t ~ 124.3), comfortably past this file's 1e-6 bar.
+_N = 100
 
 
 def _borwein_d(n):
@@ -86,12 +86,18 @@ def zeta(s):
 # These four MUST match boot_anim.h. They are here because the sampling
 # depends on them: a different height or scale wants its points spaced
 # differently.
-T_MAX = 70.0        # BOOT_ANIM_T_MAX
+T_MAX = 126.0       # BOOT_ANIM_T_MAX - int16 Q8 tops out at 32767/256 =
+                    # 127.996; stopped short of that rather than at it, so
+                    # rounding a sample's own t up never overflows
 T_PER_Z = 9.0 / 35.0  # BOOT_ANIM_T_PX / BOOT_ANIM_Z_PX - unchanged: a
                       # property of the projection, not of how far up it climbs
-STEP = 0.18         # target spacing between samples, in plane units
+STEP = 0.14         # target spacing between samples, in plane units - was
+                    # 0.18; tightened so the table stays at least 3x its
+                    # previous length even though most of the extra T_MAX
+                    # this climb already had (70) went into this step
+                    # rather than height alone
 Q = 12              # BOOT_ANIM_Q, for re/im
-TQ = 8              # t is stored in Q8: 70 * 256 still fits an int16
+TQ = 8              # t is stored in Q8: 126 * 256 still fits an int16
 
 # Where phase 1 of the reveal - the part boot_anim.h's boot_anim_pen() paces
 # identically to before this climb was extended - hands off to phase 2. The
@@ -110,7 +116,12 @@ ZEROS = [
     14.134725142, 21.022039639, 25.010857580, 30.424876126, 32.935061588,
     37.586178159, 40.918719012, 43.327073281, 48.005150881, 49.773832478,
     52.970321478, 56.446247697, 59.347044003, 60.831778525, 65.112544048,
-    67.079810529, 69.546401711,
+    67.079810529, 69.546401711, 72.067157674, 75.704690699, 77.144840069,
+    79.337375020, 82.910380854, 84.735492981, 87.425274613, 88.809111208,
+    92.491899271, 94.651344041, 95.870634228, 98.831194218, 101.317851006,
+    103.725538040, 105.446623052, 107.168611184, 111.029535543, 111.874659177,
+    114.320220915, 116.226680321, 118.790782866, 121.370125002, 122.946829294,
+    124.256818554,
 ]
 
 
