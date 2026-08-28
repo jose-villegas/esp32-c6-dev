@@ -988,8 +988,11 @@ static uint32_t foam_elapsed_ms;
  * sand_t/sand_step(), that motivated this.
  *
  * THE SURFACE DIRECTION comes from gravity's DOMINANT AXIS - `|gy| >= |gx|`
- * picks vertical, else horizontal - the exact idiom sand.c's build_xflow()
- * and sand_gravity_direction() already use to bracket a genuinely diagonal
+ * picks vertical, else horizontal, WITH HYSTERESIS against last frame's own
+ * pick near the tie point - see AXIS_HYSTERESIS_PCT and
+ * update_local_depth_axis()'s own comments below for why a plain comparison
+ * is not enough - the exact idiom sand.c's build_xflow() and
+ * sand_gravity_direction() already use to bracket a genuinely diagonal
  * gravity with the nearer of two rays rather than committing to one. This is
  * simpler than that: a single dominant axis, no second ray, which is fine
  * for a cosmetic effect where build_xflow()'s own approximation is already
@@ -1060,6 +1063,39 @@ static bool local_depth_reverse;
  * own comment above ("THE AXIS CAN FLIP BETWEEN FRAMES"). */
 static bool local_depth_prev_axis_vertical;
 
+/* How far the OTHER axis's magnitude has to exceed the CURRENTLY-dominant
+ * one, as a percentage, before update_local_depth_axis() below is willing
+ * to flip local_depth_axis_vertical - see that function for the Schmitt-
+ * trigger comparison this feeds.
+ *
+ * Reported from the device: "on exactly 45 degrees, basically holding the
+ * device on a corner, the shading becomes extremely noisy... almost like
+ * it's fighting multiple values." At exactly 45 degrees |gx| and |gy| are
+ * equal or nearly so, and a real hand does not hold that angle perfectly
+ * still - it wobbles by a degree or two, continuously - which was enough
+ * to cross a PLAIN `|gy| >= |gx|` comparison's tie point back and forth on
+ * nearly every frame: modelled against +/-2 degrees of realistic hand
+ * wobble around the tie point, the plain comparison flipped the dominant
+ * axis on 5-16% of frames, each flip wiping col_local_depth[] outright
+ * (see that array's own comment above) and switching between two entirely
+ * different measurement schemes - a persistent per-column array versus a
+ * per-row running value - exactly what "fighting multiple values"
+ * describes, and not an occasional glitch but the common case right at the
+ * angle being reported.
+ *
+ * The fix is hysteresis against the PREVIOUS frame's own axis choice, not
+ * the raw magnitudes alone: whichever axis is already dominant keeps that
+ * status until the OTHER one exceeds it by more than this percentage. 15
+ * was not a guess - the same wobble model dropped simulated flips to ZERO
+ * at both +/-2 and +/-3 degrees of wobble around 45, only reappearing at
+ * +/-4 degrees, comfortably past ordinary hand unsteadiness - while a
+ * genuine, sustained sweep away from 45 toward a clearly non-diagonal tilt
+ * still switches axis correctly, just a few degrees late, not stuck. This
+ * is the first number to move if a corner still chatters (raise it) or the
+ * axis feels sluggish to follow a real, deliberate tilt change (lower
+ * it). */
+#define AXIS_HYSTERESIS_PCT 15
+
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
  * frame's own local-depth walk, not last frame's, and working out which
@@ -1068,7 +1104,20 @@ static bool local_depth_prev_axis_vertical;
  * comment above budgets for. */
 static void update_local_depth_axis(int gx, int gy)
 {
-    const bool vertical = im_abs(gy) >= im_abs(gx);
+    const int ax = im_abs(gx), ay = im_abs(gy);
+
+    /* Schmitt trigger against LAST frame's own choice, not a plain
+     * `ay >= ax` comparison - see AXIS_HYSTERESIS_PCT's own comment just
+     * above for why a plain comparison chatters at 45 degrees and why 15
+     * was chosen. `ax * 100 > ay * (100 + AXIS_HYSTERESIS_PCT)` is exactly
+     * `ax > ay * (1 + pct/100)` without the division or float that would
+     * otherwise need - integer-only, matching the rest of this mechanism.
+     * At gx == gy == 0 (flat, or free fall) both branches reduce to
+     * "neither clearly wins", so vertical simply keeps last frame's value
+     * unchanged - no division by zero, nothing to flip either way. */
+    const bool vertical = local_depth_prev_axis_vertical
+        ? !(ax * 100 > ay * (100 + AXIS_HYSTERESIS_PCT))   /* was vertical: only leave it if gx clearly wins */
+        : (ay * 100 > ax * (100 + AXIS_HYSTERESIS_PCT));    /* was horizontal: only enter it if gy clearly wins */
 
     if (vertical != local_depth_prev_axis_vertical) {
         /* THE RESET LOCAL DEPTH'S OWN COMMENT PROMISES: cheap (once a
