@@ -35,12 +35,16 @@ static const char *TAG = "buttons";
  *   bit 1  power key falling edge
  *   bit 2  power key long press
  *   bit 3  power key short press
- * Only the short press is enabled. The long press is a separate interrupt at
- * its own threshold (REG 0x27 bits 5:4, irqlevel - 1/1.5/2/2.5 s) and nothing
- * here needs it yet. Power-off is a different threshold again (REG 0x27 bits
- * 3:2, offlevel - 4/6/8/10 s), gated by its own enable bit (REG 0x22 bit 1,
- * btn_pwroff_en) that firmware could clear - this bit does not touch it. */
+ * Short and long press are both enabled; rising/falling edge are not (see
+ * buttons.h - there is no `down` level to build from them). Long press fires
+ * at its own threshold (REG 0x27 bits 5:4, irqlevel - 1/1.5/2/2.5 s),
+ * independent of the PMU's own power-off, a different threshold again (REG
+ * 0x27 bits 3:2, offlevel - 4/6/8/10 s) gated by its own enable bit (REG
+ * 0x22 bit 1, btn_pwroff_en) that firmware could clear - this bit does not
+ * touch it, so both the long-press interrupt below and the PMU's own
+ * eventual power-off can fire from the same sustained hold. */
 #define AXP2101_PKEY_SHORT   (1u << 3)
+#define AXP2101_PKEY_LONG    (1u << 2)
 
 /* REG 0x27, IRQLEVEL/OFFLEVEL/ONLEVEL setting - three independent thresholds
  * packed into one register: bits 5:4 the long-press IRQ above, bits 3:2 the
@@ -65,9 +69,13 @@ static bool pmu_ready;
 
 static button_fsm_t boot_fsm;
 
-/* PWR is an event, so there is nothing to debounce and nothing to hold - just
- * a flag waiting to be collected. */
+/* PWR is an event, so there is nothing to debounce - just flags waiting to be
+ * collected. Two of them, one per interrupt bit enabled below: the PMU
+ * itself is what decides "held", by timing the press against its own
+ * irqlevel threshold, so there is no local hold-timer state to keep the way
+ * BOOT's button_fsm_t needs one. */
 static bool power_pressed;
+static bool power_held;
 
 /* Shared between the polling task and the render loop. The chip is
  * single-core, so a spinlock-guarded critical section is both correct and
@@ -108,22 +116,23 @@ static void pmu_init(void)
         return;
     }
 
-    /* Enable the short-press interrupt, leaving the other enables alone -
-     * charging and battery events are the PMU's business and stamping over
-     * them would be rude. */
+    /* Enable the short-press and long-press interrupts, leaving the other
+     * enables alone - charging and battery events are the PMU's business and
+     * stamping over them would be rude. */
     uint8_t enables = 0;
     if (!pmu_read(AXP2101_REG_INTEN2, &enables)) {
         ESP_LOGW(TAG, "AXP2101 did not answer; PWR button unavailable");
         return;
     }
-    if (!pmu_write(AXP2101_REG_INTEN2, enables | AXP2101_PKEY_SHORT)) {
-        ESP_LOGW(TAG, "Could not enable the PWR button interrupt");
+    if (!pmu_write(AXP2101_REG_INTEN2,
+                   enables | AXP2101_PKEY_SHORT | AXP2101_PKEY_LONG)) {
+        ESP_LOGW(TAG, "Could not enable the PWR button interrupts");
         return;
     }
 
     /* Clear anything already latched, so a press from before boot does not
      * arrive as the first event of the session. */
-    pmu_write(AXP2101_REG_INTSTS2, AXP2101_PKEY_SHORT);
+    pmu_write(AXP2101_REG_INTSTS2, AXP2101_PKEY_SHORT | AXP2101_PKEY_LONG);
 
     pmu_ready = true;
     ESP_LOGI(TAG, "PWR button via AXP2101, BOOT button on GPIO %d", BOOT_GPIO);
@@ -151,20 +160,31 @@ static void pmu_init(void)
     }
 }
 
-static bool pmu_take_short_press(void)
+/* One I2C read serves both events rather than one each - poll_once() runs at
+ * POLL_HZ regardless of whether anything happened, so halving its bus traffic
+ * here is free. */
+static void pmu_take_events(bool *short_press, bool *long_press)
 {
+    *short_press = false;
+    *long_press  = false;
+
     uint8_t status = 0;
     if (!pmu_read(AXP2101_REG_INTSTS2, &status)) {
-        return false;
-    }
-    if ((status & AXP2101_PKEY_SHORT) == 0) {
-        return false;
+        return;
     }
 
-    /* Write the bit back to clear it. Only this bit: writing 0xFF would clear
-     * every other latched event too, and something else may care about those. */
-    pmu_write(AXP2101_REG_INTSTS2, AXP2101_PKEY_SHORT);
-    return true;
+    const uint8_t fired = status & (AXP2101_PKEY_SHORT | AXP2101_PKEY_LONG);
+    if (fired == 0) {
+        return;
+    }
+
+    /* Write the fired bits back to clear them. Only these two: writing 0xFF
+     * would clear every other latched event too, and something else may care
+     * about those. */
+    pmu_write(AXP2101_REG_INTSTS2, fired);
+
+    *short_press = (status & AXP2101_PKEY_SHORT) != 0;
+    *long_press  = (status & AXP2101_PKEY_LONG) != 0;
 }
 
 /*---------------------------------------------------------------------------
@@ -174,13 +194,19 @@ static bool pmu_take_short_press(void)
 static void poll_once(void)
 {
     const bool boot_down = gpio_get_level(BOOT_GPIO) == 0;   /* active low */
-    const bool power_now = pmu_ready && pmu_take_short_press();
+    bool short_press = false, long_press = false;
+    if (pmu_ready) {
+        pmu_take_events(&short_press, &long_press);
+    }
     const int64_t now_us = esp_timer_get_time();
 
     portENTER_CRITICAL(&lock);
     button_fsm_update(&boot_fsm, boot_down, now_us);
-    if (power_now) {
+    if (short_press) {
         power_pressed = true;
+    }
+    if (long_press) {
+        power_held = true;
     }
     portEXIT_CRITICAL(&lock);
 }
@@ -224,13 +250,14 @@ void buttons_read(button_t *boot, button_t *power)
     boot->released = button_fsm_take_released(&boot_fsm);
     boot->held     = button_fsm_take_held(&boot_fsm);
 
-    /* Not a level because only the short-press interrupt is enabled, not
-     * because the PMU cannot report one - see buttons.h. */
+    /* Not a level because the PMU's edge interrupts are not enabled, not
+     * because it cannot report one - see buttons.h. */
     power->down     = false;
     power->pressed  = power_pressed;
     power->released = false;
-    power->held     = false;   /* long-press interrupt is not enabled - see buttons.h */
+    power->held     = power_held;
     power_pressed   = false;
+    power_held      = false;
 
     portEXIT_CRITICAL(&lock);
 }

@@ -312,15 +312,19 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
         return;
     }
 
-    /* A plain PWR press is a temporary, shell-level fallback for an app that
-     * opted out of the swipe gesture - today, only app_sand.c, whose own
-     * comment on home_gesture promises "a deliberate control of its own"
-     * still to come. Checked before frame() runs, the same as the swipe
-     * check above, so an app that also reads input->power.pressed for
-     * something else - app_sand.c's own handle_brush_input(), which toggles
-     * erase on it - never sees the press that just exited it: that frame's
-     * frame() call is skipped entirely, not merely overridden. */
-    if (!(*current)->home_gesture && input->power.pressed) {
+    /* A HELD PWR is a temporary, shell-level fallback for an app that opted
+     * out of the swipe gesture - today, only app_sand.c, whose own comment
+     * on home_gesture promises "a deliberate control of its own" still to
+     * come. Held, not a plain press: app_sand.c's own handle_brush_input()
+     * already reads input->power.pressed to cycle brush mode (erase,
+     * explosion, ...), and a short press is how the PMU reports that same
+     * cycling gesture everywhere else in this shell too - stealing it here
+     * would silence that cycling the instant this fallback existed. held
+     * fires from the PMU's own separate long-press interrupt (see buttons.h),
+     * so the two are independent presses, not the same edge read twice.
+     * Checked before frame() runs, the same as the swipe check above, so
+     * app_sand.c never sees the hold that just exited it. */
+    if (!(*current)->home_gesture && input->power.held) {
         leave_app(current, input, exit_edge);
         return;
     }
