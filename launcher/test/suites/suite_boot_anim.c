@@ -651,20 +651,60 @@ static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
         "the floor should be completely gone by the end of its fade");
 }
 
-/* Backdrop, not subject. The floor covers far more of the screen than the
- * curve does, so if it is ever allowed near full brightness it wins the
- * picture - which is exactly what happened before this cap existed. It is
- * boot_anim_grid_whiten(), not this cap, that is allowed to grow the
- * floor's visibility over time now - see that function's own comment. */
+/* Backdrop, not subject - the floor covers far more of the screen than the
+ * curve does, so it is never let all the way up to the axes' own full 255.
+ * The ceiling itself climbs though (see boot_anim_grid_climb()'s own
+ * comment for why alpha has to climb alongside the whitening, not stay
+ * fixed while only the colour moves) - so the bound checked here is the
+ * per-moment BOOT_ANIM_GRID_CEILING_MAX, not the starting BOOT_ANIM_GRID_MAX. */
 static void test_the_floor_stays_dim_enough_to_be_a_backdrop(void)
 {
     for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
         for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
             TEST_ASSERT_TRUE_MESSAGE(
-                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_MAX,
+                boot_anim_grid_alpha(t, ring) <= BOOT_ANIM_GRID_CEILING_MAX,
                 "the floor got brighter than its cap");
         }
     }
+}
+
+/* The clock boot_anim_grid_alpha()'s own ceiling and boot_anim_grid_whiten()
+ * both ride - starts flat at 0 before the floor appears, climbs steadily
+ * and monotonically, and reaches its top exactly at BOOT_ANIM_MS. */
+static void test_the_grid_climb_runs_the_whole_animation(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_climb(0));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_climb(BOOT_ANIM_GRID_START_MS));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_grid_climb(BOOT_ANIM_MS));
+
+    uint8_t last = 0;
+    for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 25) {
+        const uint8_t v = boot_anim_grid_climb(t);
+        TEST_ASSERT_TRUE_MESSAGE(v >= last,
+            "the climb must never step backwards as time moves forward");
+        last = v;
+    }
+}
+
+/* The floor's own opacity ceiling starts at BOOT_ANIM_GRID_MAX and climbs
+ * to BOOT_ANIM_GRID_CEILING_MAX alongside the whitening, rather than
+ * sitting fixed while only the colour moves - see boot_anim_grid_climb()'s
+ * own comment for why raising the colour alone was not enough. Checked
+ * through the innermost ring's own alpha, since the ceiling itself is not
+ * a separate exposed function. */
+static void test_the_floor_opacity_climbs_alongside_its_colour(void)
+{
+    /* Ring 1's own fade-in (BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS
+     * after BOOT_ANIM_GRID_START_MS) is long done by either of these, plus
+     * a little slack - so the only thing left changing its alpha between
+     * them is the ceiling itself climbing, not "arrived" still ramping. */
+    const uint32_t early_ms = BOOT_ANIM_GRID_START_MS +
+        BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS + 50;
+    const uint8_t early = boot_anim_grid_alpha(early_ms, 1);
+    const uint8_t late  = boot_anim_grid_alpha(BOOT_ANIM_MS, 1);
+    TEST_ASSERT_TRUE_MESSAGE(late > early,
+        "the floor's own opacity should climb over the animation, not "
+        "just its colour");
 }
 
 /* Starts at 0 the moment the floor itself appears, climbs steadily, never
@@ -1073,6 +1113,8 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
     RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);
     RUN_TEST(test_the_floor_stays_dim_enough_to_be_a_backdrop);
+    RUN_TEST(test_the_grid_climb_runs_the_whole_animation);
+    RUN_TEST(test_the_floor_opacity_climbs_alongside_its_colour);
     RUN_TEST(test_the_floor_whitens_steadily_from_its_own_start_to_a_cap);
     RUN_TEST(test_the_floor_colour_travels_with_time_and_distance);
     RUN_TEST(test_the_axes_are_there_before_the_curve_starts_climbing);
