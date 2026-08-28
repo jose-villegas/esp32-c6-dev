@@ -390,10 +390,15 @@ static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
  *
  * This is the test that would have caught the sign error the fixed-point
  * derivation had during development - see boot_anim.h's derivation comment
- * on how thoroughly this was cross-checked before being trusted. */
+ * on how thoroughly this was cross-checked before being trusted.
+ *
+ * Swept to BOOT_ANIM_FADE_START_MS, not BOOT_ANIM_FINALE_END_MS: the curve
+ * keeps climbing (boot_anim_pen()'s phase 2) for a few hundred ms after the
+ * finale itself - camera, shift and shrink all done moving - finishes, and
+ * that stretch needs covering too. */
 static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
 {
-    for (uint32_t t = 0; t <= BOOT_ANIM_FINALE_END_MS; t += 60) {
+    for (uint32_t t = 0; t <= BOOT_ANIM_FADE_START_MS; t += 60) {
         const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, t);
         const int32_t progress = boot_anim_pen(t);
         const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
@@ -441,7 +446,7 @@ static void test_the_axis_labels_fit_on_the_panel(void)
         "the end of the imaginary axis is off the panel");
 
     const int top = boot_anim_screen_y(
-        PANEL_H, 0, 0, (BOOT_ANIM_T_MAX + 1) << BOOT_ANIM_TQ, &view);
+        PANEL_H, 0, 0, (BOOT_ANIM_T_MAX_PHASE1 + 1) << BOOT_ANIM_TQ, &view);
     TEST_ASSERT_TRUE_MESSAGE(top >= 0,
         "the top of the t axis is off the top of the panel");
 }
@@ -558,12 +563,35 @@ static void test_the_ease_keeps_its_endpoints_and_leads_in_the_middle(void)
         "an ease-out is ahead of linear part way through, not behind it");
 }
 
-static void test_the_pen_runs_from_nothing_to_the_whole_curve(void)
+/* Phase 1 only - see boot_anim_pen()'s own "TWO PHASES" comment. It reaches
+ * BOOT_ANIM_CURVE_PHASE1_FRACTION, not BOOT_ANIM_ONE, at the end of
+ * BOOT_ANIM_PEN_MS now; test_the_pen_reaches_the_whole_curve_by_the_fade()
+ * covers phase 2's own end. */
+static void test_the_pen_runs_from_nothing_to_phase_ones_end(void)
 {
     TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(0));
     TEST_ASSERT_EQUAL_INT32(0, boot_anim_pen(BOOT_ANIM_PEN_START_MS));
-    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_ONE,
+    TEST_ASSERT_EQUAL_INT32(BOOT_ANIM_CURVE_PHASE1_FRACTION,
         boot_anim_pen(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS));
+}
+
+/* Phase 2: continues past phase 1's end rather than sitting still, and
+ * reaches the whole curve by the time the fade begins - see
+ * test_the_curve_is_finished_before_the_dissolve_starts() for that half,
+ * kept as its own test since it is really a claim about the fade, not
+ * about the pen. */
+static void test_the_pen_keeps_climbing_through_phase_two(void)
+{
+    const uint32_t phase1_end_ms =
+        BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
+    const uint32_t mid_ms =
+        (phase1_end_ms + BOOT_ANIM_FADE_START_MS) / 2;
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_pen(mid_ms) > BOOT_ANIM_CURVE_PHASE1_FRACTION,
+        "the pen should have climbed past where phase 1 left it");
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_pen(mid_ms) < BOOT_ANIM_ONE,
+        "the pen should not have reached the end of the curve yet");
 }
 
 static void test_the_curve_is_finished_before_the_dissolve_starts(void)
@@ -995,7 +1023,8 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_a_ramp_is_flat_before_and_after);
     RUN_TEST(test_a_ramp_never_goes_backwards);
     RUN_TEST(test_the_ease_keeps_its_endpoints_and_leads_in_the_middle);
-    RUN_TEST(test_the_pen_runs_from_nothing_to_the_whole_curve);
+    RUN_TEST(test_the_pen_runs_from_nothing_to_phase_ones_end);
+    RUN_TEST(test_the_pen_keeps_climbing_through_phase_two);
     RUN_TEST(test_the_curve_is_finished_before_the_dissolve_starts);
     RUN_TEST(test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end);
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);

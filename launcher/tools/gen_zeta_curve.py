@@ -47,12 +47,14 @@ from math import factorial
 
 # --- zeta -----------------------------------------------------------------
 
-# 48, not the 32 that is enough at small t: Borwein's error bound degrades
-# with the imaginary part, and at t ~ 33 an order of 32 was only good to
-# 5e-6 - which the zero check below caught, being an assertion about a
-# number that should be zero rather than about a number that merely looks
-# plausible.
-_N = 48
+# 64, not the 48 that was enough while the climb stopped at t ~ 35: Borwein's
+# error bound degrades with the imaginary part, and extending the climb to
+# t ~ 70 brought the same failure back at the new top - an order of 48 was
+# only good to ~7e-4 by t ~ 56 - which the zero check below caught again,
+# being an assertion about a number that should be zero rather than about a
+# number that merely looks plausible. 64 is good to ~5e-9 at the new
+# farthest zero checked (t ~ 69.5), comfortably past this file's 1e-6 bar.
+_N = 64
 
 
 def _borwein_d(n):
@@ -84,11 +86,20 @@ def zeta(s):
 # These four MUST match boot_anim.h. They are here because the sampling
 # depends on them: a different height or scale wants its points spaced
 # differently.
-T_MAX = 35.0        # BOOT_ANIM_T_MAX
-T_PER_Z = 9.0 / 35.0  # BOOT_ANIM_T_PX / BOOT_ANIM_Z_PX
+T_MAX = 70.0        # BOOT_ANIM_T_MAX
+T_PER_Z = 9.0 / 35.0  # BOOT_ANIM_T_PX / BOOT_ANIM_Z_PX - unchanged: a
+                      # property of the projection, not of how far up it climbs
 STEP = 0.18         # target spacing between samples, in plane units
 Q = 12              # BOOT_ANIM_Q, for re/im
-TQ = 8              # t is stored in Q8: 35 * 256 still fits an int16
+TQ = 8              # t is stored in Q8: 70 * 256 still fits an int16
+
+# Where phase 1 of the reveal - the part boot_anim.h's boot_anim_pen() paces
+# identically to before this climb was extended - hands off to phase 2. The
+# original T_MAX: everything up to here is (up to floating-point noise in
+# the arc-length walk below) the same table this file shipped when the climb
+# stopped at 35, so the picture during phase 1 does not change. See
+# boot_anim_pen()'s own comment for what happens at this handoff.
+PHASE1_T_MAX = 35.0
 
 # The imaginary parts of the first nontrivial zeros of zeta, from the
 # literature (Odlyzko's tables). The curve is drawn crossing the t axis at
@@ -97,16 +108,29 @@ TQ = 8              # t is stored in Q8: 35 * 256 still fits an int16
 # rounded integers that actually ship.
 ZEROS = [
     14.134725142, 21.022039639, 25.010857580, 30.424876126, 32.935061588,
+    37.586178159, 40.918719012, 43.327073281, 48.005150881, 49.773832478,
+    52.970321478, 56.446247697, 59.347044003, 60.831778525, 65.112544048,
+    67.079810529, 69.546401711,
 ]
 
 
 def sample():
-    """The curve, at roughly equal spacing on screen."""
-    fine = 8000
+    """The curve, at roughly equal spacing on screen.
+
+    Returns (points, phase1_count): phase1_count is how many of the leading
+    points fall at or before PHASE1_T_MAX - see that constant's own comment.
+    """
+    # fine/(fine-1) scaled up with T_MAX from the 8000/35 this was tuned at,
+    # so the spacing of the underlying grid - and so which points the
+    # arc-length walk below picks - is the same over [0, PHASE1_T_MAX] as it
+    # always was, not coarsened by covering twice the range with the same
+    # number of samples.
+    fine = round(8000 * T_MAX / 35.0)
     raw = [(T_MAX * i / (fine - 1), zeta(complex(0.5, T_MAX * i / (fine - 1))))
            for i in range(fine)]
 
     out = [raw[0]]
+    phase1_count = 1
     acc = 0.0
     for i in range(1, fine):
         dt = raw[i][0] - raw[i - 1][0]
@@ -115,9 +139,11 @@ def sample():
         if acc >= STEP:
             out.append(raw[i])
             acc = 0.0
+            if raw[i][0] <= PHASE1_T_MAX:
+                phase1_count = len(out)
     if out[-1][0] != raw[-1][0]:
         out.append(raw[-1])
-    return out
+    return out, phase1_count
 
 
 def q(value, bits):
@@ -139,7 +165,7 @@ def main():
         if abs(zeta(complex(0.5, t))) > 1e-6:
             sys.exit(f"zeta(1/2 + {t}i) should vanish, got {zeta(complex(0.5, t))}")
 
-    pts = sample()
+    pts, phase1_count = sample()
     for _, z in pts:
         if abs(q(z.real, Q)) > 32767 or abs(q(z.imag, Q)) > 32767:
             sys.exit("a sample does not fit in an int16 at this Q")
@@ -160,6 +186,11 @@ def main():
     w("#pragma once\n\n#include <stdint.h>\n\n")
 
     w("#define BOOT_ANIM_CURVE_POINTS %d\n\n" % len(pts))
+
+    w("/* How many of the leading points are phase 1 of the reveal - see\n"
+      " * PHASE1_T_MAX's own comment in tools/gen_zeta_curve.py and\n"
+      " * boot_anim_pen()'s in boot_anim.h. */\n")
+    w("#define BOOT_ANIM_CURVE_PHASE1_POINTS %d\n\n" % phase1_count)
 
     w("typedef struct {\n    int16_t re, im;   /* Q%d */\n    int16_t t;        /* Q%d */\n"
       "} boot_anim_sample_t;\n\n" % (Q, TQ))

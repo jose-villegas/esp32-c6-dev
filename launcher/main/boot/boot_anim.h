@@ -226,7 +226,16 @@ typedef struct {
 
 #define BOOT_ANIM_Z_PX  35     /* pixels per unit of zeta's value */
 #define BOOT_ANIM_T_PX   9     /* pixels per unit of t            */
-#define BOOT_ANIM_T_MAX 35     /* the top of the climb            */
+#define BOOT_ANIM_T_MAX 70     /* the top of the climb            */
+
+/* The top of phase 1's climb specifically - see boot_anim_pen()'s "TWO
+ * PHASES" comment - kept apart from BOOT_ANIM_T_MAX because boot_anim.c's
+ * draw_axes() sizes the SHORT, LABELLED t axis from it: that axis is drawn
+ * before the finale unbounds it, back when phase 1 was the whole climb, and
+ * doubling BOOT_ANIM_T_MAX must not double a length that is drawn - and
+ * already fit the panel - before the letters ever arrive. Must match
+ * tools/gen_zeta_curve.py's PHASE1_T_MAX. */
+#define BOOT_ANIM_T_MAX_PHASE1 35
 
 /* The floor grid has no edge: its lines run until they leave the panel, and
  * what bounds it is a fade rather than a boundary.
@@ -493,7 +502,8 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 
 _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
                BOOT_ANIM_FADE_START_MS,
-               "the curve must be finished before the picture starts fading");
+               "phase 1 of the curve must finish - handing off to phase 2, "
+               "see boot_anim_pen() - before the picture starts fading");
 
 /*---------------------------------------------------------------------------
  * The title
@@ -698,46 +708,94 @@ static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
     return (int)turn + ring * BOOT_ANIM_GRID_HUE_SPREAD;
 }
 
-/* How much of the curve has been drawn, as a Q12 fraction of its length.
+/* How far through the camera's ORBIT the picture is, as a Q12 fraction -
+ * 0 at BOOT_ANIM_PEN_START_MS, BOOT_ANIM_ONE at BOOT_ANIM_PEN_START_MS +
+ * BOOT_ANIM_PEN_MS and forever after.
  *
- * A fraction of LENGTH, not of t: the samples are spaced at a constant
- * distance ON SCREEN (see tools/gen_zeta_curve.py), so walking them at a
- * constant rate moves the pen at a constant speed. Pacing by t instead would
- * crawl round the wide loops and race up the straight stretches between
- * them. */
-static inline int32_t boot_anim_pen(uint32_t now_ms)
+ * This is what boot_anim_pen() itself used to be, in full, before the climb
+ * was extended past BOOT_ANIM_CURVE_PHASE1_POINTS - see that function's own
+ * "TWO PHASES" comment. boot_anim_view() reads THIS for how far the camera
+ * has turned and the origin has mirrored, not boot_anim_pen(): the orbit and
+ * the mirror-drift are already-tuned, already-approved motion (see this
+ * file's own top comment on the camera), and letting them keep pacing off
+ * however long the curve now takes to finish drawing would have quietly
+ * stretched them out to BOOT_ANIM_FADE_START_MS too - four times longer
+ * than they were designed to take, and no longer the motion that was
+ * signed off on. */
+static inline int32_t boot_anim_orbit_progress(uint32_t now_ms)
 {
     const uint8_t linear = boot_anim_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
                                           BOOT_ANIM_PEN_MS);
     return ((int32_t)linear * BOOT_ANIM_ONE) / 255;
 }
 
-/* Where the LEADING pen would be if it never stopped at BOOT_ANIM_ONE - used
- * to colour the trailing pens (see boot_anim.c's draw_curve()/draw_heads())
- * instead of boot_anim_pen() once the curve is fully drawn, so they keep
- * chasing round it through the finale rather than freezing in place the
- * instant the reveal ends.
+/* How much of the curve has been drawn, as a Q12 fraction of its length.
  *
- * Identical to boot_anim_pen() for as long as that stays below
- * BOOT_ANIM_ONE - same ramp, same rounding - so nothing before the reveal
- * finishes changes by a single pixel; only past that point does this keep
- * counting up instead of clamping. The five pens' positions
- * (boot_anim_trail_pos()) and the colour each piece of curve picks up
- * (boot_anim_stroke()) are both already periodic in this value with period
- * BOOT_ANIM_ONE - a fixed piece of curve comes back under a trailing pen
- * every time the leading one gains another whole lap - so letting it run
- * past BOOT_ANIM_ONE is enough on its own; nothing downstream needs an
- * explicit wrap except the one place a raw sample INDEX is taken from it
- * (draw_heads() in boot_anim.c, which does its own wrap for exactly that
- * reason). */
-static inline int32_t boot_anim_glow_pen(uint32_t now_ms)
+ * A fraction of LENGTH, not of t: the samples are spaced at a constant
+ * distance ON SCREEN (see tools/gen_zeta_curve.py), so walking them at a
+ * constant rate moves the pen at a constant speed. Pacing by t instead would
+ * crawl round the wide loops and race up the straight stretches between
+ * them.
+ *
+ * TWO PHASES, ONE PEN
+ *
+ * Phase 1 is exactly what this used to be, in full: a linear climb from
+ * nothing to BOOT_ANIM_CURVE_PHASE1_POINTS - the point the climb reached
+ * back when BOOT_ANIM_T_MAX stopped at 35 - over BOOT_ANIM_PEN_MS starting
+ * at BOOT_ANIM_PEN_START_MS. Not a fraction of the WHOLE table, which is
+ * longer now: reaching only PHASE1_FRACTION of it in the same time, at the
+ * same wall-clock rate, is what makes phase 1 pixel-for-pixel (up to the
+ * odd sub-pixel a longer arc-length walk in tools/gen_zeta_curve.py can
+ * shift a sample by) what this always drew, so nothing before the letters
+ * arrive changes.
+ *
+ * Phase 2 picks up from there and keeps climbing - the curve given
+ * something to keep doing for the rest of the picture, rather than sitting
+ * finished while the camera and the letters are still moving - reaching the
+ * table's true end exactly at BOOT_ANIM_FADE_START_MS, so the dissolve
+ * never catches an unfinished curve. */
+#define BOOT_ANIM_CURVE_PHASE1_FRACTION \
+    ((int32_t)(((int64_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1) * BOOT_ANIM_ONE) / \
+               (BOOT_ANIM_CURVE_POINTS - 1)))
+
+static inline int32_t boot_anim_pen(uint32_t now_ms)
 {
-    const int32_t capped = boot_anim_pen(now_ms);
-    if (capped < BOOT_ANIM_ONE) {
-        return capped;
+    const uint32_t phase1_end_ms = BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
+
+    if (now_ms <= phase1_end_ms) {
+        const uint8_t linear = boot_anim_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
+                                              BOOT_ANIM_PEN_MS);
+        return ((int32_t)linear * BOOT_ANIM_CURVE_PHASE1_FRACTION) / 255;
     }
-    const uint32_t elapsed = now_ms - BOOT_ANIM_PEN_START_MS;
-    return (int32_t)(((int64_t)elapsed * BOOT_ANIM_ONE) / BOOT_ANIM_PEN_MS);
+
+    const uint8_t linear2 = boot_anim_ramp(
+        now_ms, phase1_end_ms, BOOT_ANIM_FADE_START_MS - phase1_end_ms);
+    const int32_t remaining = BOOT_ANIM_ONE - BOOT_ANIM_CURVE_PHASE1_FRACTION;
+    return BOOT_ANIM_CURVE_PHASE1_FRACTION +
+           (((int32_t)linear2 * remaining) / 255);
+}
+
+/* Where the leading edge is for COLOURING purposes - the trail positions
+ * (boot_anim_trail_pos()) and the height-to-hue sweep (BOOT_ANIM_HUE_SWEEP)
+ * both read a curve position as a Q12 fraction "of one climb", and that
+ * climb was always phase 1's - BOOT_ANIM_CURVE_PHASE1_POINTS - even before
+ * there was a phase 2. boot_anim_pen() itself cannot serve this directly
+ * any more: it is a fraction of the WHOLE (now longer) table, so at the
+ * old halfway point in wall-clock time it would read as barely a third of
+ * the way round the hue wheel instead of half. Rescaling by
+ * (table length) / (phase 1's length) undoes exactly that: it reproduces
+ * boot_anim_pen()'s old, pre-extension values while phase 1 is running
+ * (reaching BOOT_ANIM_ONE exactly when that used to), and then keeps
+ * counting up through phase 2 as the climb genuinely continues into table
+ * positions that were never reachable at all before - not a wrap or a
+ * loop, real new ground, until the table runs out at
+ * BOOT_ANIM_FADE_START_MS and this holds its final value through the
+ * dissolve. */
+static inline int32_t boot_anim_colour_progress(uint32_t now_ms)
+{
+    const int32_t span        = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
+    const int32_t phase1_span = (int32_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1);
+    return (int32_t)(((int64_t)boot_anim_pen(now_ms) * span) / phase1_span);
 }
 
 /* Everything drawn is mixed up from the background by this, so the last
@@ -828,8 +886,19 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
 {
     boot_anim_stroke_t s;
 
-    const int32_t base_glow  = 132 + ((along_q12 * 60) >> BOOT_ANIM_Q);
-    const int32_t base_bloom = (along_q12 * 24) >> BOOT_ANIM_Q;
+    /* along_q12 can run past BOOT_ANIM_ONE now that the climb has a second
+     * phase (see boot_anim_colour_progress()'s own comment) - fine for the
+     * hue sweep just below, which is a wheel and wraps on its own, but
+     * base_glow/base_bloom are a 0..BOOT_ANIM_ONE lerp toward a fixed
+     * ceiling, not a wheel, and would overshoot that ceiling and wrap
+     * their own uint8_t on the way back down without this clamp. Past the
+     * original top of the climb the base picture simply stays at the
+     * brightness/bloom it reached there; only the trail highlighting below
+     * still reads the real, unclamped position. */
+    const int32_t base_along = along_q12 > BOOT_ANIM_ONE ?
+                               BOOT_ANIM_ONE : along_q12;
+    const int32_t base_glow  = 132 + ((base_along * 60) >> BOOT_ANIM_Q);
+    const int32_t base_bloom = (base_along * 24) >> BOOT_ANIM_Q;
     const int base_hue = BOOT_ANIM_HUE_START +
                          (int)((along_q12 * BOOT_ANIM_HUE_SWEEP) >> BOOT_ANIM_Q);
 
@@ -927,20 +996,22 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 #define BOOT_ANIM_AXIS_FAR_UNITS 24
 
 /* The view for `now_ms`. Constructed here rather than in "The camera" above
- * because it depends on both boot_anim_pen() (the curve's own progress) and
+ * because it depends on both boot_anim_orbit_progress() and
  * boot_anim_finale_reach() (just above) - the boot_anim_view_t TYPE had to
  * exist early, for boot_anim_screen_x()/screen_y() to compile against it,
  * but the constructor did not.
  *
  * oy reaches its mirror position - see boot_anim_origin_y()'s own comment -
- * by the time the curve finishes, and both ox and oy hold there unchanged
- * until the finale starts; only once it does do they move again, together
- * this time, toward BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y - see that constant's
- * own comment for why a VIEW coordinate turns into two panel ones the way
- * it does below. */
+ * by the time the ORBIT finishes (boot_anim_orbit_progress(), not
+ * boot_anim_pen() - see that function's own comment for why they are no
+ * longer the same clock), and both ox and oy hold there unchanged until the
+ * finale starts; only once it does do they move again, together this time,
+ * toward BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y - see that constant's own comment
+ * for why a VIEW coordinate turns into two panel ones the way it does
+ * below. */
 static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 {
-    const int32_t curve_progress = boot_anim_pen(now_ms);   /* 0..ONE */
+    const int32_t curve_progress = boot_anim_orbit_progress(now_ms); /* 0..ONE */
     const uint8_t finale = boot_anim_finale_reach(now_ms);  /* 0..255 */
 
     const int32_t phase32 =
