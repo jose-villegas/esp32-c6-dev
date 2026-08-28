@@ -143,15 +143,26 @@ static int32_t units(int n)
  * boundary is what removes the floor's edge. */
 #define FLOOR_REACH 24
 
-/* Never shrunk - the floor is the background the motif shrinks INTO, not
- * one more thing shrinking along with it. Filling the panel edge to edge
- * for the whole five seconds is the one property it cannot give up: a
- * grid that shrank away with the curve would read as the whole world
- * shrinking, not as a spiral collapsing into a small icon sitting on a
- * plane that was always there. It still moves - centred on the origin,
- * whose PANEL position drifts throughout, same as ever - just never
- * scales. */
-static void draw_floor(uint32_t now_ms, uint8_t ink,
+/* Shrinks with the motif, same as the axes and curve - see
+ * boot_anim_motif_shrink_q8()'s own comment. A dense mesh, not an empty
+ * panel, is the point once it is small: with BOOT_ANIM_GRID_RINGS rings
+ * packed into a fraction of their normal spacing, the covered pixels
+ * thicken up rather than thin out, and that filled-in look - the plane
+ * still visibly there, just close in on itself - is what "the origin
+ * settles small" is supposed to read as, not a grid shrinking away to
+ * nothing in a corner.
+ *
+ * NOT via csx()/csy(). Those shrink a whole projected point toward
+ * view->ox/oy, endpoints included - fine for the curve and axes, which are
+ * finite shapes meant to visibly shrink, but wrong here: it would pull each
+ * line's far end in along with its near one, so at a small shrink the
+ * lines stop reaching the panel edge at all and the floor collapses into a
+ * short cross near the origin instead of staying a mesh that covers the
+ * panel. What is supposed to shrink is only the SPACING between rings, not
+ * how far any one line reaches - so shrink is applied to `d` (the ring's
+ * distance from the origin, in world units, before projection) while `far`
+ * is projected unshrunk, same as it always was. */
+static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
                        const boot_anim_view_t *view)
 {
     const int32_t far = units(FLOOR_REACH);
@@ -168,7 +179,7 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
          * and competes with nothing. */
         const gfx_color_t c =
             lit(boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)), alpha);
-        const int32_t d = units(ring);
+        const int32_t d = (units(ring) * shrink_q8) >> 8;
 
         /* Four lines per ring: two either side of the real axis, two either
          * side of the imaginary one, each run past the edge of the panel. */
@@ -552,7 +563,7 @@ static void draw_frame(uint32_t now_ms)
 
     gfx_clear(COL_BG);
     const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
-    draw_floor(now_ms, ink, &view);
+    draw_floor(now_ms, ink, shrink_q8, &view);
     draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them

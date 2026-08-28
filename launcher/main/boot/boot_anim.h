@@ -416,7 +416,22 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
  * transfer plus however much curve there is to draw by then.
  *-------------------------------------------------------------------------*/
 
-#define BOOT_ANIM_MS 5000
+/* How long the finale's own collapse takes - the camera's extra turn, the
+ * origin's drift to its resting spot, the motif settling down from its
+ * grown size, and the picture fading out - ALL of it, together, packed
+ * into the same stretch at the very end rather than spread across the
+ * whole letter-arrival window. See boot_anim_finale_reach() and
+ * boot_anim_motif_shrink_q8()'s own comments for why: turning and
+ * drifting early was what left no room for the motif to grow at all while
+ * letters were still arriving, so both moved here, timed to start the
+ * instant the last letter lands (BOOT_ANIM_FINALE_END_MS) and run out
+ * exactly as the picture finishes fading (BOOT_ANIM_MS). */
+#define BOOT_ANIM_COLLAPSE_MS 1500
+
+/* BOOT_ANIM_MS is derived below, once BOOT_ANIM_FADE_START_MS is - see that
+ * constant's own comment for why this file computes it by hand instead of
+ * writing `BOOT_ANIM_FADE_START_MS + BOOT_ANIM_COLLAPSE_MS` directly. */
+#define BOOT_ANIM_MS 5800
 
 #define BOOT_ANIM_AXES_MS        450   /* the axes grow out of the origin */
 
@@ -431,7 +446,16 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
  * with 200ms of held breath between the two. */
 #define BOOT_ANIM_TITLE_START_MS 2700
 
-#define BOOT_ANIM_FADE_START_MS 4600   /* dissolve into the launcher */
+/* Exactly BOOT_ANIM_FINALE_END_MS - the instant the last letter lands - so
+ * the collapse (see BOOT_ANIM_COLLAPSE_MS's own comment) starts the moment
+ * there is nothing left arriving to interrupt. Not written as
+ * `BOOT_ANIM_FINALE_END_MS` directly: that constant is computed further
+ * down, from title timing this section is not allowed to depend on without
+ * reordering the whole file, so this is instead a literal that has to keep
+ * agreeing with it - see the _Static_assert next to FINALE_END_MS's own
+ * definition, which is what actually enforces that rather than a comment's
+ * say-so. */
+#define BOOT_ANIM_FADE_START_MS 4300   /* dissolve into the launcher */
 
 /* The ramp/ease-out/lerp vocabulary itself now lives in util/tween.h, shared
  * rather than private to this file - see that header's own top comment for
@@ -454,7 +478,7 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * The two fades multiply. The first is the animation arriving; the second is
  * the plane receding, and it is what the eye reads as depth on a projection
  * that has no perspective in it at all. */
-/* The brightest the floor is ever allowed to get.
+/* The brightest the floor is ever allowed to get, most of the animation.
  *
  * Low, and the number that mattered most here. The floor is backdrop: it says
  * where the plane is and then gets out of the way. Drawn at anything like
@@ -462,6 +486,28 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * there is a great deal more of it - which is exactly what the first version
  * of this did, and the curve disappeared into a plaid tablecloth. */
 #define BOOT_ANIM_GRID_MAX 56
+
+/* ...except during the collapse (see BOOT_ANIM_COLLAPSE_MS's own comment),
+ * when the ceiling ramps up toward BOOT_ANIM_GRID_BOOST_MAX instead - the
+ * backdrop reasoning above stops applying once the grid IS what is left:
+ * by then it has shrunk in together with the motif and is not competing
+ * with a full-size curve for attention any more, so it can afford to light
+ * up rather than stay dim, which is also what keeps its now much tighter
+ * spacing (see draw_floor()'s own comment on why it shrinks at all)
+ * reading as a dense, deliberately packed grid instead of fading into the
+ * same low brightness that worked when it covered the whole panel.
+ * BOOT_ANIM_FADE_START_MS, not BOOT_ANIM_FINALE_END_MS, only because the
+ * latter is not computable this early in the file - the two are asserted
+ * equal where FINALE_END_MS is actually defined. */
+#define BOOT_ANIM_GRID_BOOST_MAX 230
+
+static inline uint8_t boot_anim_grid_ceiling(uint32_t now_ms)
+{
+    const uint8_t u8 = tween_ease_out(tween_ramp(
+        now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_COLLAPSE_MS));
+    return (uint8_t)tween_lerp_i32(BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_BOOST_MAX,
+                                   u8);
+}
 
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
@@ -478,7 +524,8 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
      * different place. Squared, the outer rings are already almost gone by
      * the time they run out. */
     const uint32_t left = (uint32_t)(BOOT_ANIM_GRID_FADE - ring);
-    const uint32_t near = left * left * BOOT_ANIM_GRID_MAX /
+    const uint32_t ceiling = boot_anim_grid_ceiling(now_ms);
+    const uint32_t near = left * left * ceiling /
                           ((uint32_t)BOOT_ANIM_GRID_FADE * BOOT_ANIM_GRID_FADE);
 
     return (uint8_t)((arrived * near) / 255u);
@@ -634,16 +681,17 @@ typedef struct {
  * is at rest. Without something to replace it the word goes completely
  * still the moment the last letter lands; this gives it a little life back
  * without competing with the arrival for attention, since its amplitude
- * (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX) is a fraction of the wobble's own and
- * is the one knob to turn if it ever reads as hurting legibility rather
- * than helping the word feel alive.
+ * (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX) is still well under the wobble's own
+ * 22 and is the one knob to turn if it ever reads as hurting legibility
+ * rather than helping the word feel alive. Raised from 3 once - 3 read as
+ * barely there against this font's 8px cell.
  *
  * "In sequence": each letter's phase is offset from the last by
  * BOOT_ANIM_TITLE_WAVE_STAGGER_MS worth of the cycle, so the six letters
  * do not bob in lockstep - the eye reads a wave travelling left to right
  * along the word, the same left-to-right sense the letters themselves flew
  * in on, rather than the whole word pulsing as one block. */
-#define BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX 3
+#define BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX 11
 #define BOOT_ANIM_TITLE_WAVE_PERIOD_MS    1600
 #define BOOT_ANIM_TITLE_WAVE_STAGGER_MS   90
 
@@ -1001,11 +1049,23 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
     (BOOT_ANIM_TITLE_LEN - 1) * BOOT_ANIM_TITLE_STAGGER_MS +              \
     BOOT_ANIM_TITLE_FLIGHT_MS)
 
+/* BOOT_ANIM_FADE_START_MS has to equal this exactly - see its own comment,
+ * back where it is actually defined, for why it is a literal rather than
+ * a reference to this constant. This is what actually enforces the two
+ * stay in agreement, rather than leaving that to the comment there. */
+_Static_assert(BOOT_ANIM_FADE_START_MS == BOOT_ANIM_FINALE_END_MS,
+               "the collapse must start exactly when the last letter lands");
+
+/* Reads from BOOT_ANIM_FINALE_END_MS, not BOOT_ANIM_TITLE_START_MS: the
+ * camera's extra turn and the origin's drift - what this fraction actually
+ * paces, in boot_anim_view() - now happen entirely within the collapse
+ * (see BOOT_ANIM_COLLAPSE_MS's own comment), after every letter has
+ * already landed, not spread out across the whole time they were still
+ * arriving. */
 static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 {
     return tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_TITLE_START_MS,
-        BOOT_ANIM_FINALE_END_MS - BOOT_ANIM_TITLE_START_MS));
+        now_ms, BOOT_ANIM_FINALE_END_MS, BOOT_ANIM_COLLAPSE_MS));
 }
 
 /* The extra turn: on top of BOOT_ANIM_PHI_END_PHASE (58 degrees, reached
@@ -1121,32 +1181,71 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  * difference does not read) rather than linear throughout, so the motif
  * visibly settles into its final size instead of stopping short.
  *
- * The number: continuing the turn to BOOT_ANIM_PHI_EXTRA_PHASE regrows the
- * t axis's screen weight back toward its starting size (see that constant's
- * own comment), which - with the origin settling well short of the panel's
- * own centre, room only ever reserved on ONE side of it, for the climb the
- * curve made getting there - would run the tall end of an unshrunk curve
- * off the panel; more so now that the climb itself reaches nearly twice as
- * high as it did when this floor was first tuned (BOOT_ANIM_T_MAX 126, not
- * 70). Shrinking it back down as the turn resumes is what keeps the same
- * curve inside the same room - and the axes shrinking with it were never at
- * risk of overflowing to begin with: shrinking can only pull a point closer
- * to the origin, never push it further out, so whatever already fit at full
- * scale still fits smaller. BOOT_ANIM_SHRINK_MS and BOOT_ANIM_SHRINK_FLOOR_Q8
- * were both chosen by sweeping the actual projection at a 5ms step across
- * the whole finale and shrinking until nothing overflowed, with headroom to
- * spare - not derived from geometry, because the origin's position and the
- * panel edge closest to the curve's reach both move when either is
- * retuned, which is exactly the kind of thing worth measuring rather than
- * re-deriving by hand. */
-#define BOOT_ANIM_SHRINK_MS        900
+ * THREE PHASES: GROW, HOLD, SETTLE
+ *
+ * The motif grows FIRST - a swell past its own full size while the letters
+ * are still arriving - HOLDS at that grown size for as long as they keep
+ * arriving, and only SETTLES down to BOOT_ANIM_SHRINK_FLOOR_Q8 once every
+ * letter has landed, together with the camera's own extra turn and the
+ * origin's drift (see BOOT_ANIM_COLLAPSE_MS's own comment for why those
+ * moved here too) and the fade. "In and out": grow, then shrink, not a
+ * one-way lerp.
+ *
+ * GROW and HOLD both run while the camera is still at BOOT_ANIM_PHI_END_PHASE
+ * and the origin at its CURVE-PHASE mirror position - neither has started
+ * moving toward the finale's own target yet, which is exactly what makes
+ * growing safe: nothing else is simultaneously eating into the room the
+ * unshrunk projection already fits in (see the panel-fit test's own
+ * comment on this - it is what would have caught the earlier attempt at a
+ * grow phase overflowing by over 100px the moment the turn and the drift
+ * started at the same time). SETTLE is the one phase sharing a clock with
+ * motion that moves the room itself: it uses BOOT_ANIM_COLLAPSE_MS,
+ * exactly boot_anim_finale_reach()'s own duration, and BOOT_ANIM_SHRINK_FLOOR_Q8
+ * still only has to fit the panel at the END of that shared window, the
+ * one point both the turn and the drift finish at.
+ *
+ * BOOT_ANIM_SHRINK_PEAK_Q8 - how far past full size (256) it swells - and
+ * BOOT_ANIM_SHRINK_FLOOR_Q8 were both swept the same way: the actual
+ * projection, a 5ms step across the whole animation, grown or shrunk until
+ * something first ran off the panel and backed off from there. PEAK is a
+ * real overflow risk in a way FLOOR never was (settling can only pull a
+ * point closer to the origin, never push it further out, so whatever fits
+ * at PEAK still fits smaller after) - PEAK is the one number in this file
+ * that has to stay under that ceiling rather than only ever fitting more
+ * easily by construction. */
+#define BOOT_ANIM_SHRINK_GROW_MS   400
+#define BOOT_ANIM_SHRINK_SETTLE_MS 400   /* well under BOOT_ANIM_COLLAPSE_MS -
+                                           * see boot_anim_motif_shrink_q8()'s
+                                           * own comment on why it has to
+                                           * outrun the turn and the drift */
+#define BOOT_ANIM_SHRINK_PEAK_Q8   380
 #define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* floor is held once reached */
 
 static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
 {
+    const uint32_t grow_end_ms =
+        BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
+
+    if (now_ms <= grow_end_ms) {
+        const uint8_t u8 = tween_ease_out(tween_ramp(
+            now_ms, BOOT_ANIM_TITLE_START_MS, BOOT_ANIM_SHRINK_GROW_MS));
+        return tween_lerp_i32(256, BOOT_ANIM_SHRINK_PEAK_Q8, u8);
+    }
+    if (now_ms <= BOOT_ANIM_FINALE_END_MS) {
+        return BOOT_ANIM_SHRINK_PEAK_Q8;         /* HOLD */
+    }
+
+    /* SETTLE_MS, not BOOT_ANIM_COLLAPSE_MS: reaching the floor QUICKLY once
+     * the collapse starts, well before the turn and the drift are done
+     * eating into the room, is what keeps this safe through the rest of
+     * their shared window - see this function's own top comment on why
+     * pacing the settle at the same rate as the turn (the first thing
+     * tried here) was not fast enough to stay ahead of it. Once at the
+     * floor this holds there for whatever is left of the collapse. */
     const uint8_t u8 = tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_TITLE_START_MS, BOOT_ANIM_SHRINK_MS));
-    return tween_lerp_i32(256, BOOT_ANIM_SHRINK_FLOOR_Q8, u8);
+        now_ms, BOOT_ANIM_FINALE_END_MS, BOOT_ANIM_SHRINK_SETTLE_MS));
+    return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, BOOT_ANIM_SHRINK_FLOOR_Q8,
+                          u8);
 }
 
 /*---------------------------------------------------------------------------
