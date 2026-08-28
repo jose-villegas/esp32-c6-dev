@@ -708,16 +708,13 @@ static void test_the_floor_opacity_climbs_alongside_its_colour(void)
 }
 
 /* Starts at 0 the moment the floor itself appears, climbs steadily, never
- * doubles back, and reaches its cap - not full white - by the time
- * everything else has faded away. */
+ * doubles back, and reaches its cap by the time everything else has faded
+ * away. */
 static void test_the_floor_whitens_steadily_from_its_own_start_to_a_cap(void)
 {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_whiten(BOOT_ANIM_GRID_START_MS));
     TEST_ASSERT_EQUAL_UINT8(BOOT_ANIM_GRID_WHITEN_MAX,
                             boot_anim_grid_whiten(BOOT_ANIM_MS));
-    TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_GRID_WHITEN_MAX < 255,
-        "the rings should keep a last trace of their own hue, not become "
-        "indistinguishable from the flat-white axes");
 
     uint8_t last = 0;
     for (uint32_t t = BOOT_ANIM_GRID_START_MS; t <= BOOT_ANIM_MS; t += 25) {
