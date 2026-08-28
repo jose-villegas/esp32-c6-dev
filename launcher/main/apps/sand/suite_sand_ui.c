@@ -293,14 +293,13 @@ static void test_selecting_a_tile_while_detonating_resets_to_paint(void)
     ui.brush = 0;
     ui.mode = SAND_MODE_DETONATE;
 
-    int cx, cy;
-    tile_center(2, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-
-    const unsigned actions = sand_ui_step(&ui, &tap);
+    /* microui has already done its own hit-test by the time anything calls
+     * this - see sand_ui.h's "WHO HIT-TESTS AND WHO DECIDES" comment, and
+     * test_opening_with_no_finger_down_then_tapping_a_tile_selects_that_tile
+     * above for the same pattern - so this drives the entry point a real
+     * tap would resolve to directly, by tile index, rather than synthesizing
+     * a touch release at some tile's own pixel centre. */
+    const unsigned actions = sand_ui_tile_clicked(&ui, 2);
 
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_INT(2, ui.brush);
@@ -343,14 +342,10 @@ static void test_tapping_the_selected_tile_is_untouched_by_detonate(void)
     ui.mode = SAND_MODE_DETONATE;
     ui.modes[0] = BRUSH_POUR;
 
-    int cx, cy;
-    tile_center(0, &cx, &cy);
-    input_t tap = no_input();
-    tap.released = true;
-    tap.x = cx;
-    tap.y = cy;
-
-    const unsigned actions = sand_ui_step(&ui, &tap);
+    /* Same reasoning as test_selecting_a_tile_while_detonating_resets_to_
+     * paint just above - the tile index goes straight to sand_ui_tile_
+     * clicked(), not through a synthesized touch release. */
+    const unsigned actions = sand_ui_tile_clicked(&ui, 0);
 
     TEST_ASSERT_TRUE(actions & SAND_UI_REDRAW_PALETTE);
     TEST_ASSERT_EQUAL_UINT8(BRUSH_SPAWN, ui.modes[0]);
