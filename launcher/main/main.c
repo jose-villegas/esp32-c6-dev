@@ -276,7 +276,11 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
         return;
     }
 
-    if (gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
+    /* Opt-in per app - see app_t's own comment on home_gesture. An app that
+     * leaves it unset gets no swipe detection and no hint strip; it must
+     * provide its own way back to the launcher. */
+    if ((*current)->home_gesture &&
+        gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
         ESP_LOGI(TAG, "Leaving %s", (*current)->name);
         (*current)->exit();
         *current = NULL;
@@ -290,7 +294,9 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
     }
 
     (*current)->frame(dt_ms, input);
-    draw_home_hint(exit_edge);
+    if ((*current)->home_gesture) {
+        draw_home_hint(exit_edge);
+    }
 }
 
 /* Report throughput on a TIMER, not every N frames: an idle launcher repaints

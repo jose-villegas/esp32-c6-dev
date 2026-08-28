@@ -246,11 +246,12 @@ static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
 static void diagnostics_exit(void) { }
 
 const app_t app_diagnostics = {
-    .name    = "Diagnostics",
-    .summary = "Hardware self-test report",
-    .enter   = diagnostics_enter,
-    .frame   = diagnostics_frame,
-    .exit    = diagnostics_exit,
+    .name         = "Diagnostics",
+    .summary      = "Hardware self-test report",
+    .enter        = diagnostics_enter,
+    .frame        = diagnostics_frame,
+    .exit         = diagnostics_exit,
+    .home_gesture = true,
 };
 
 APP_REGISTER(app_diagnostics);

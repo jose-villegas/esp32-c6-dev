@@ -2090,6 +2090,11 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 }
 
+/* .home_gesture deliberately left unset (false) - see app_t's own comment.
+ * A touch drag starting near a screen edge to steer or pour sand is easy to
+ * mistake for the shell's swipe-home gesture, so this app needs that
+ * detection off entirely rather than merely hiding its hint strip, and
+ * provides its own way back to the launcher instead. */
 const app_t app_sand = {
     .name    = "Falling Sand",
     .summary = "Tilt to steer, touch to pour",

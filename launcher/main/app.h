@@ -51,6 +51,17 @@ typedef struct {
 
     /* Called once as the app stops. Release anything enter() acquired. */
     void (*exit)(void);
+
+    /* Opt-in, not opt-out: false unless an app sets it. main.c only tracks
+     * the edge-swipe-home gesture and draws its hint strip while an app with
+     * this true is running - an app that leaves it unset gets neither, and
+     * is responsible for its own way back to the launcher. The falling-sand
+     * app is the reason this exists: a touch drag that starts near a screen
+     * edge to pour or steer sand is easy to mistake for the swipe-home
+     * gesture, so it needs the generic one off and a deliberate control of
+     * its own instead, not just a hidden hint on top of a gesture that would
+     * still fire underneath it. */
+    bool home_gesture;
 } app_t;
 
 /*---------------------------------------------------------------------------
