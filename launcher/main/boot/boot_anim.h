@@ -1181,78 +1181,71 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  * difference does not read) rather than linear throughout, so the motif
  * visibly settles into its final size instead of stopping short.
  *
- * THREE PHASES: GROW, HOLD, SETTLE
+ * TWO PHASES: GROW, THEN SETTLE - NO HOLD
  *
  * The motif grows FIRST - a swell past its own full size while the letters
- * are still arriving - HOLDS at that grown size for as long as they keep
- * arriving, and only SETTLES down to BOOT_ANIM_SHRINK_FLOOR_Q8 once every
- * letter has landed, together with the camera's own extra turn and the
- * origin's drift (see BOOT_ANIM_COLLAPSE_MS's own comment for why those
- * moved here too) and the fade. "In and out": grow, then shrink, not a
- * one-way lerp.
+ * are still arriving - and the moment it peaks, SETTLES straight back down
+ * to BOOT_ANIM_SHRINK_FLOOR_Q8. No flat plateau at PEAK in between: an
+ * earlier version held there until every letter had landed, and a held
+ * value reads as the animation having stopped, not as one continuous
+ * motion, no matter how smoothly it eases in and out of the hold itself.
+ * "In and out": grow, then shrink, not a stop at the top between them
+ * either. GROW eases OUT into the peak and SETTLE eases IN away from it
+ * (tween_ease_in(), the mirror of tween_ease_out() - see its own comment)
+ * so both sides are moving slowly right at the peak, which is what makes
+ * it read as one smooth apex rather than two ramps meeting at a corner.
  *
- * GROW and HOLD both run while the camera is still at BOOT_ANIM_PHI_END_PHASE
- * and the origin at its CURVE-PHASE mirror position - neither has started
- * moving toward the finale's own target yet, which is exactly what makes
- * growing safe: nothing else is simultaneously eating into the room the
- * unshrunk projection already fits in (see the panel-fit test's own
- * comment on this - it is what would have caught the earlier attempt at a
- * grow phase overflowing by over 100px the moment the turn and the drift
- * started at the same time). SETTLE is the one phase sharing a clock with
- * motion that moves the room itself: it uses BOOT_ANIM_COLLAPSE_MS,
- * exactly boot_anim_finale_reach()'s own duration, and BOOT_ANIM_SHRINK_FLOOR_Q8
- * still only has to fit the panel at the END of that shared window, the
- * one point both the turn and the drift finish at.
+ * Both phases finish comfortably before BOOT_ANIM_FINALE_END_MS, when the
+ * collapse starts turning the camera and drifting the origin (see
+ * BOOT_ANIM_COLLAPSE_MS's own comment) - the _Static_assert below is what
+ * actually guarantees that, not just this comment. Which is what makes
+ * growing (and settling) safe: nothing is simultaneously eating into the
+ * room the unshrunk projection already fits in (see the panel-fit test's
+ * own comment on this - it is what would have caught an earlier attempt at
+ * a grow phase overflowing by over 100px the moment the turn and the drift
+ * started at the same time). By BOOT_ANIM_FINALE_END_MS the motif is
+ * already sitting at BOOT_ANIM_SHRINK_FLOOR_Q8 and simply holds there
+ * through the collapse - which was never a real overflow risk the way PEAK
+ * is (settling can only pull a point closer to the origin, never push it
+ * further out, so whatever fits at PEAK still fits smaller after).
  *
- * BOOT_ANIM_SHRINK_PEAK_Q8 - how far past full size (256) it swells - and
- * BOOT_ANIM_SHRINK_FLOOR_Q8 were both swept the same way: the actual
- * projection, a 5ms step across the whole animation, grown or shrunk until
- * something first ran off the panel and backed off from there. PEAK is a
- * real overflow risk in a way FLOOR never was (settling can only pull a
- * point closer to the origin, never push it further out, so whatever fits
- * at PEAK still fits smaller after) - PEAK is the one number in this file
- * that has to stay under that ceiling rather than only ever fitting more
- * easily by construction. */
-/* 400 read as a pop, not a grow: tween_ease_out() front-loads most of a
- * ramp's motion into its first third, so at 400ms - 20 frames at 50fps -
- * nearly all of the size change lands in the first half-dozen frames and
- * the rest is HOLD, indistinguishable from the swell simply having already
- * finished. Stretched out instead, over most of the room GROW and HOLD
- * share (BOOT_ANIM_FINALE_END_MS - BOOT_ANIM_TITLE_START_MS, 1600ms here) -
- * safe to do because the overflow risk PEAK was swept against (see this
- * function's own top comment) depends only on the value 380 itself, never
- * on how many frames it takes to get there. */
+ * BOOT_ANIM_SHRINK_PEAK_Q8 - how far past full size (256) it swells - is
+ * the one number here that IS a real overflow risk, and was swept for it:
+ * the actual projection, a 5ms step across the whole animation, grown
+ * until something first ran off the panel and backed off from there. */
 #define BOOT_ANIM_SHRINK_GROW_MS   900
-#define BOOT_ANIM_SHRINK_SETTLE_MS 400   /* well under BOOT_ANIM_COLLAPSE_MS -
-                                           * see boot_anim_motif_shrink_q8()'s
-                                           * own comment on why it has to
-                                           * outrun the turn and the drift */
+#define BOOT_ANIM_SHRINK_SETTLE_MS 600
 #define BOOT_ANIM_SHRINK_PEAK_Q8   380
-#define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* floor is held once reached */
+#define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* held from here through the collapse */
+
+/* The guarantee "THE TWO PHASES" above depends on: grow+settle finish
+ * before the collapse starts moving the camera and origin, so neither
+ * phase ever has to share a clock with something that moves the room
+ * itself. If this ever trips, SETTLE needs to go back to racing to outrun
+ * the turn and the drift the way an earlier version of it did, rather than
+ * assuming it already has the room to itself. */
+_Static_assert(BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS +
+                   BOOT_ANIM_SHRINK_SETTLE_MS <= BOOT_ANIM_FINALE_END_MS,
+               "grow+settle must finish before the collapse starts moving "
+               "the room");
 
 static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
 {
     const uint32_t grow_end_ms =
         BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
+    const uint32_t settle_end_ms = grow_end_ms + BOOT_ANIM_SHRINK_SETTLE_MS;
 
     if (now_ms <= grow_end_ms) {
         const uint8_t u8 = tween_ease_out(tween_ramp(
             now_ms, BOOT_ANIM_TITLE_START_MS, BOOT_ANIM_SHRINK_GROW_MS));
         return tween_lerp_i32(256, BOOT_ANIM_SHRINK_PEAK_Q8, u8);
     }
-    if (now_ms <= BOOT_ANIM_FINALE_END_MS) {
-        return BOOT_ANIM_SHRINK_PEAK_Q8;         /* HOLD */
+    if (now_ms >= settle_end_ms) {
+        return BOOT_ANIM_SHRINK_FLOOR_Q8;
     }
 
-    /* SETTLE_MS, not BOOT_ANIM_COLLAPSE_MS: reaching the floor QUICKLY once
-     * the collapse starts, well before the turn and the drift are done
-     * eating into the room, is what keeps this safe through the rest of
-     * their shared window - see this function's own top comment on why
-     * pacing the settle at the same rate as the turn (the first thing
-     * tried here) was not fast enough to stay ahead of it. Once at the
-     * floor this holds there for whatever is left of the collapse. */
-    const uint8_t u8 = tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_FINALE_END_MS, BOOT_ANIM_SHRINK_SETTLE_MS));
+    const uint8_t u8 = tween_ease_in(tween_ramp(
+        now_ms, grow_end_ms, BOOT_ANIM_SHRINK_SETTLE_MS));
     return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, BOOT_ANIM_SHRINK_FLOOR_Q8,
                           u8);
 }

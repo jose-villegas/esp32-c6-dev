@@ -57,6 +57,21 @@ static inline uint8_t tween_ease_out(uint8_t linear)
     return (uint8_t)(255u - (left * left) / 255u);
 }
 
+/* Slow off the mark, fast by the end - the mirror image of tween_ease_out()
+ * above. Where that one belongs on a motion arriving somewhere (it should
+ * slow down as it gets there), this one belongs on a motion LEAVING
+ * somewhere it was sitting still - a swell easing back down off its own
+ * peak, say. Composed back to back (ease_out into a value, ease_in away
+ * from it) the two curves meet at that value with a matching, near-zero
+ * rate of change on both sides, so the value reads as a single smooth
+ * apex rather than a flat hold with a corner at each end - which is the
+ * whole reason this exists rather than reusing tween_ease_out() for both
+ * halves. Endpoints are exact, same as tween_ease_out(). */
+static inline uint8_t tween_ease_in(uint8_t linear)
+{
+    return (uint8_t)(((uint32_t)linear * linear) / 255u);
+}
+
 /* a, at u8 = 0; b, at u8 = 255; linear between. The one shape "interpolate
  * toward a target by this much of the way there" keeps taking in this tree -
  * a position lerping toward where a letter settles, an angle turning toward

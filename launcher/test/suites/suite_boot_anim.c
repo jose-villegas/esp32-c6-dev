@@ -397,8 +397,8 @@ static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
  * derivation had during development - see boot_anim.h's derivation comment
  * on how thoroughly this was cross-checked before being trusted.
  *
- * GROW/HOLD/the fast part of SETTLE are deliberately NOT held to zero
- * overflow here, the same way the floor and the unbounded axes never were -
+ * GROW and SETTLE are deliberately NOT held to zero overflow here, the
+ * same way the floor and the unbounded axes never were -
  * see boot_anim_motif_shrink_q8()'s own top comment and draw_floor()'s: a
  * motif big enough to swell past its own full size for a moment is going to
  * run off the panel a little at its peak, on purpose, the same "let clipping
@@ -410,7 +410,8 @@ static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
  * look tidy. */
 #define BOOT_ANIM_TEST_GROW_START_MS  BOOT_ANIM_TITLE_START_MS
 #define BOOT_ANIM_TEST_SETTLED_MS \
-    (BOOT_ANIM_FINALE_END_MS + BOOT_ANIM_SHRINK_SETTLE_MS)
+    (BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS + \
+     BOOT_ANIM_SHRINK_SETTLE_MS)
 #define BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX 260
 
 static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
