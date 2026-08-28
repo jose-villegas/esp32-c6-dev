@@ -14614,8 +14614,22 @@ static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_b
      * against a 5-second dump cadence, and deterministically so).
      * Same uniform rule, measured * 0.9 rounded -> 371500, back to a
      * deliberately failing reduction target rather than the accidental
-     * pass the inflated peg produced. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(371500, (int)elapsed,
+     * pass the inflated peg produced.
+     *
+     * AND THEN IT WAS EARNED. The seventeenth attempt's gas sight-scan
+     * change brought this to 331,654 us - inside 371500, the first
+     * budget this project has closed since the tenth attempt. So the
+     * same rule applies again rather than leaving the win as slack:
+     * measured * 0.9 rounded -> 298000, failing by design once more.
+     * That is deliberate and it is not moving the goalposts. The gas
+     * pass had been written off as exhausted five rounds earlier, and
+     * then gave up 13.9% to three integers on the stack once someone
+     * noticed the cost was sequential rather than spatial - which is
+     * the opposite of evidence that this scene has nothing left. When
+     * a row genuinely reaches its floor, say so with a measurement the
+     * way the thermal-shock present row does, and make it a guard
+     * instead. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(298000, (int)elapsed,
         "a full-screen cascade must stay in the same ballpark as measured "
         "- a jump here means something got much more expensive, not that "
         "this specific number is a real-time requirement");
@@ -14681,8 +14695,19 @@ static void test_a_full_screen_of_fire_fits_in_the_frame_budget(void)
      * Re-based 2026-08-26 (see FULL_STEP_BUDGET_US's comment): measured
      * 295533 after the materials wave -> target 266000 (measured * 0.9,
      * rounded; was 250000). A reduction target now, like the rest of the
-     * file. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(266000, (int)per_step,
+     * file.
+     *
+     * CLOSED, then re-pegged, 2026-08-28. The seventeenth attempt's gas
+     * sight-scan change brought this to 255,130 - inside 266000, and the
+     * host had predicted 255,400, which is 0.1% out on a change that
+     * alters how much work happens rather than merely where the code
+     * sits. That is the class of change the eleventh and fourteenth
+     * attempts both mispredicted badly, so the accuracy is worth
+     * recording rather than assuming next time. Same rule as every
+     * other row: measured * 0.9 rounded -> 229500. See the cascade
+     * test above for why a closed budget gets re-pegged rather than
+     * banked. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(229500, (int)per_step,
         "steady-state cost of a full screen of fire must stay in the "
         "same ballpark as measured - not a real-time promise, but a "
         "real regression guard");
