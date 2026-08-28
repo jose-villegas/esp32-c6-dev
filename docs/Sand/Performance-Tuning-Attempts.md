@@ -3395,6 +3395,326 @@ time, and the record of the second sweep is the thing that stops a third.
 
 ---
 
+## The seventeenth attempt: three named suspects, all innocent, and a scan that pays
+
+This round was convened with three suspects already named and evidence
+already gathered against them, and it cleared all three. The win came from
+somewhere else entirely - a target the twelfth attempt measured, priced,
+and left explicitly as "the next round's target, with the number
+attached." It has been five rounds. This is that round.
+
+### Step 0: pricing the explosion feature, and finding nothing
+
+Since the sixteenth attempt shipped, an explosion/DETONATE feature landed
+across roughly twenty commits - blast dislodging walls scaled by density,
+impulse buffers, entry-budget and heap work, and a rebase casualty fix.
+Nobody had priced it. That mattered more than usual: an accidental
+un-inline caused by an unrelated feature commit is now a **known
+recurring failure mode in this codebase**, found four times, most recently
+by the sixteenth attempt.
+
+Host, best of seven, interleaved, `dc9e7d2` (the sixteenth attempt's
+endpoint) against `8c848a3` (the tip of the explosion work):
+
+| scene | dc9e7d2 | 8c848a3 | |
+|---|---:|---:|---:|
+| full-size step (control) | 239 | 239 | **0.0%** |
+| settled screen (control) | 52 | 52 | **0.0%** |
+| settled-pile flip (control) | 476 | 481 | +1.1% |
+| mixed scene flip | 1,918 | 1,853 | -3.4% |
+| screen of water | 2,678 | 2,556 | -4.6% |
+| every material at once | 29,804 | 29,698 | -0.4% |
+| fire cascade through gas | 1,987 | 1,899 | -4.4% |
+| full screen of fire | 14,522 | 14,153 | -2.5% |
+| four liquids | 17,853 | 17,672 | -1.0% |
+| lava stress | 20,962 | 20,693 | -1.3% |
+| smoke + steam | 7,380 | 7,354 | -0.4% |
+| thermal shock | 13,180 | 13,252 | +0.5% |
+| boiler | 7,084 | 7,096 | +0.2% |
+
+Nothing regressed, and two of the three controls are **byte-identical to
+the microsecond** - the cleanest control state this campaign has recorded.
+The symbol tables at the two ends match exactly: no function appeared, and
+none vanished. **No regression found, and this is what the evidence for
+that looks like.** The explosion feature is not free in absolute terms -
+it added code - but it costs the thirteen benchmark scenes nothing.
+
+The device agreed. `performance_20260828_034750` against
+`performance_20260828_044320` (taken after the feature landed) has every
+one of the thirteen rows inside ±3%.
+
+### The layout lottery is quantised, and this round is the fifth and sixth ticket
+
+The sixteenth attempt observed that across four device captures of three
+builds, the two liquid-free controls took exactly one of **two value
+pairs** - (6,005, 6,100) or (6,263, 6,356) - and never anything between,
+and suggested that if it held, "which state did the control land in" is a
+far sharper instrument than "is the delta inside the floor."
+
+Two more captures, unplanned, both landing on a known ticket:
+
+| capture | step control | pile-flip control | ticket |
+|---|---:|---:|---|
+| `20260828_034750` | 6,262 | 6,357 | the **high** pair, to within 1 µs |
+| `20260828_044320` | 6,015 | 6,110 | the **low** pair, to within 10 µs |
+
+Six observations, six landings, zero in between. That is no longer an
+observation with four data points; it is close to a working instrument.
+It also explains the whole of the two captures' apparent -3.9% on both
+controls: the build did not get faster, it drew the other ticket.
+
+The experiment that would settle it properly - five captures of five
+builds differing only in a comment - is still not run, and is still worth
+running. But the practical rule is already usable: **read which pair the
+controls landed in before reading anything else in a capture.**
+
+### The three named suspects, priced mid-flight, and all three innocent
+
+The round's brief named three suspects on the simulation side. Counters
+were spliced into `sand_reactions.c` and read across the **timed window
+only** - the sixteenth attempt's rule, mechanised: the harness snapshots
+every counter at every `esp_timer_get_time()` call and reports the
+difference across the widest gap between consecutive reads, which is the
+benchmark's own timed loop by construction. A material a reaction creates
+is counted; a material only painted at setup is not.
+
+| scene | cells entering dispatch | reach the tail | fall through ALL of it | `anchored()` | `find_water()` |
+|---|---:|---:|---:|---:|---:|
+| screen of water | 10,528 | 10,528 | 10,528 | **0** | 0 |
+| every material | 471,822 | 95,126 | 95,126 | **0** | 2,498 |
+| four liquids | 691,575 | 342,294 | 342,294 | **0** | 0 |
+| lava stress | 622,252 | 334,989 | 334,989 | **0** | 1,368 |
+| smoke + steam | 412,160 | 412,150 | 412,150 | **0** | 0 |
+| thermal shock | 270,216 | 18,692 | 18,692 | **0** | 633 |
+| boiler | 248,655 | 130,165 | 130,165 | **0** | 0 |
+| full screen of fire | 412,160 | 0 | 0 | **0** | 0 |
+| fire cascade | 41,216 | 0 | 0 | **0** | 0 |
+
+**`anchored()` is called zero times. On every one of the thirteen
+benchmarks.** The suspect with the most damning-looking code in the file -
+a bounded flood fill, `SUPPORT_MAX` 48, membership by linear scan, O(n²)
+worst case, described in the brief as now safe to optimise against stable
+behaviour - never runs. It is reached only from `step_one_falling_cell()`,
+for a plant cell whose gravity-ward cell is empty, and no benchmark scene
+grows a plant. This is the **eighth attempt's lesson**, exactly and
+literally: three device rounds once went into a function the failing test
+never called, and a ten-second host counter is what settles it.
+
+**`find_water()` is 0.5% of cell visits at its worst** - 2,498 calls
+against 471,822 cells on the every-material flip, and zero on six of the
+nine scenes that reach the reactions pass at all.
+
+The third suspect was the interesting one, and it is the one worth
+recording carefully, because the counter appears to convict it and the
+measurement acquits it.
+
+### The dead tail: 412,150 cells doing nothing, worth 2%
+
+The brief's third suspect: four ordinary materials - water, oil, gas,
+wood - fall through the entire reaction dispatch chain every time the pass
+runs, paying `falls`, `withers`, `drinks`, `grows`, `sprouts` and `buds`
+in order and taking none of them.
+
+The counters say that is true, and understate it. In **every scene**, the
+"reach the tail" and "fall through all of it" columns above are the same
+number: not one cell in any benchmark takes any of the six tail branches.
+On the smoke and steam screen, 412,150 of 412,160 cells - 99.998% - walk
+the whole chain and do nothing. The materials are the brief's four plus
+steam, smoke, sand and dirt.
+
+Then it was deleted, and it is worth about two percent:
+
+| scene | six tail branches deleted outright | one branchless OR guard |
+|---|---:|---:|
+| smoke + steam | **-2.4%** | -1.9% |
+| every material | -1.9% | +0.0% |
+| thermal shock | -2.0% | -0.4% |
+| boiler | -1.5% | -0.3% |
+| four liquids | -0.7% | -0.3% |
+| screen of water | -1.4% | -1.1% |
+
+(The lava row measured -8.9% on the deletion and is excluded: sand and
+wood have real `falls` and `withers` values, so deleting the tail changes
+what that scene does. The or-guard, which is behaviourally identical by
+construction, measures -1.2% there.)
+
+This is the **twelfth attempt's lesson arriving again, from a different
+direction**: that round found 19.3% of cells provably skippable and
+measured -0.1% for skipping them. Here it is 99.998% of cells provably
+doing nothing, and the whole of it is worth 2%. Six byte loads from a
+struct the i-cache already holds, and six branches the predictor has
+never once seen taken, are very close to free. **Count what skipping
+saves, not what is skippable** - and note that the fraction skippable
+carries no information at all about the answer. Nothing shipped from
+this; the or-guard is a real 1-2% on two scenes and is not worth the
+drift risk of a hand-maintained list of six field names.
+
+### Where the time actually is: a map, by deleting each pass
+
+With three suspects gone, the honest next move was to stop guessing.
+Each of the four passes in `sand_step()` was stubbed out in turn. These
+change behaviour and are a **map, not a set of candidates** - a deleted
+pass takes its knock-on effects with it:
+
+| scene | no reactions | no cross-flow | no gas | no main sweep |
+|---|---:|---:|---:|---:|
+| screen of water | -2.2% | **-39.1%** | -0.7% | -98.7% |
+| mixed scene flip | +0.6% | **-32.5%** | +1.8% | -99.9% |
+| four liquids | -33.8% | -16.1% | -6.1% | -72.7% |
+| lava stress | -58.2% | -17.7% | -16.5% | -73.3% |
+| every material | -44.3% | -14.7% | -33.8% | -25.5% |
+| thermal shock | **-93.1%** | -11.6% | -21.0% | -41.1% |
+| boiler | **-88.7%** | -16.0% | -42.9% | -45.7% |
+| smoke + steam | -8.6% | -0.0% | **-88.0%** | -10.1% |
+| full screen of fire | -38.0% | +0.0% | **-62.7%** | -7.1% |
+| fire cascade | -45.0% | -0.6% | **-54.0%** | -6.3% |
+
+Three clean groups, and this table is the single most useful thing this
+round produced for the next one. **Water and the mixed flip are the
+cross-flow pass** and almost nothing else - the two rows with the largest
+percentage gaps after the every-material flip. **Thermal shock and the
+boiler are the reactions pass**, overwhelmingly. **The three gas-heavy
+scenes are the gas pass.**
+
+### The win: the gas sight scan, five rounds after it was priced
+
+The twelfth attempt stubbed `find_nearest_empty()` to return 0, measured
+it as "the single biggest item any round has found in the fire
+benchmarks", stated plainly that no cheap early-out was available, and
+left it "as the next round's target, with the number attached."
+
+Re-run at HEAD, the number is still there:
+
+| scene | sight scan deleted |
+|---|---:|
+| fire cascade | **-18.5%** |
+| every material | **-13.8%** |
+| full screen of fire | **-11.5%** |
+| smoke + steam | -8.7% |
+| lava stress | -6.7% |
+| thermal shock | -6.6% |
+| boiler | -5.0% |
+
+The mechanism, unchanged since the twelfth attempt described it: on a
+packed screen `has_room_above()` fails, `neighbour_is_open()` succeeds
+because the neighbour is more of the same gas, and `find_nearest_empty()`
+walks the material's full `sight` - 5 for fire, 20 for smoke, 24 for
+steam - through identical gas to return 0.
+
+The twelfth attempt looked for the early-out in the wrong place. It
+reasoned that knowing in advance the scan will fail means knowing whether
+an empty cell lies within sight, which is an occupancy question needing a
+per-block "this block holds an empty cell" bit and the tenth attempt's
+NEAR ring to make it sound - a design, not a guard. That is true of a
+*spatial* structure. But the cost is not spatial, it is **sequential**,
+and the structure needed is not a structure at all.
+
+`equalise_gas()` sweeps each row with `x_step = -px`: **the sweep always
+advances by exactly one cell opposite the ray direction.** So the cell
+processed right after x sits at x - px, and its ray revisits x, then
+x + px, then x + 2·px - exactly the cells x's own ray just walked, shifted
+out by one. Everything the scan at x established about that line is still
+true one cell later, plus one new cell at the near end that we are
+standing on and already know.
+
+So the pass carries three integers along the row: which material the
+verified run is made of, how long it is, and nothing else. A cell whose
+run already covers its own `sight` skips the scan entirely, having proved
+it returns 0. A `sight`-length walk per cell becomes one increment per
+cell, and the structure is a struct on the stack.
+
+Host, best of eleven, interleaved, against a fresh baseline:
+
+| scene | before | after | |
+|---|---:|---:|---:|
+| fire cascade | 1,884 | 1,622 | **-13.9%** |
+| full screen of fire | 13,426 | 12,445 | **-7.3%** |
+| smoke + steam | 6,950 | 6,882 | -1.0% |
+| four liquids | 16,745 | 16,633 | -0.7% |
+| screen of water | 2,472 | 2,454 | -0.7% |
+| lava stress | 19,895 | 19,796 | -0.5% |
+| thermal shock | 12,752 | 12,802 | +0.4% |
+| every material | 28,666 | 28,925 | +0.9% |
+| mixed scene flip | 1,761 | 1,786 | +1.4% |
+| boiler | 6,754 | 6,865 | +1.6% |
+| full-size step (control) | 217 | 216 | -0.5% |
+| settled screen (control) | 50 | 50 | +0.0% |
+| settled-pile flip (control) | 454 | 458 | +0.9% |
+
+The simulation is **byte-identical**, and that is measured rather than
+asserted: a probe hashes the whole grid after every one of forty steps of
+four gas scenes - packed, holey, walled, and two materials of different
+`sight` alternating - at four gravities including two tilts, and prints
+the running digest. It was **validated by failing first** against the
+known-behaviour-changing deletion above before being trusted on the
+candidate.
+
+### The sub-variant that cost 4.4%, and why it is named in the code
+
+The first implementation armed the run from *every* cell that did not
+move, at length one. That is the obvious spelling and it cost **+4.4% on
+the smoke and steam screen**, which alternates the two gases cell by cell:
+`run->id` never matches the next cell's material, the run restarts on
+literally every cell, and the skip never once fires. The scene paid the
+whole bookkeeping and collected nothing.
+
+The fix is to arm the run **only from a scan that actually paid the full
+`sight` walk**. A scan that breaks early - off the grid, or on a different
+material - stops within a cell or two and is not worth remembering. That
+one change took smoke from +4.4% to -1.0%, thermal from +1.1% to +0.4%,
+water and four liquids from +1.3% and +1.0% to negative, and left both
+wins intact.
+
+It also made the `shut` flag dead, which is how the round knows the
+reasoning is right rather than merely convenient: once only exhausted
+scans arm the run, there is no armed run whose far end is a blocker, and
+the field deleted itself.
+
+Both the rejected branch and its price are written into
+`equalise_gas_one_cell()`'s own comment, because a future reader looking
+at the surviving `else if` will see a missing `else` and reach for it.
+
+### What this attempt is worth carrying
+
+**A named suspect with damning code is still a hypothesis.** `anchored()`
+is a linear-scan flood fill that is O(n²) in the worst case and is called
+**zero times** by all thirteen benchmarks. Two rounds - the eighth and now
+this one - have been saved by a counter that asks "does this run at all"
+before anyone asks "how fast is it."
+
+**The skippable fraction predicts nothing about the win.** Twelve found
+19.3% skippable worth -0.1%; seventeen found 99.998% of cells falling
+through six dead branches worth 2%. The quantity that matters is what the
+skipped work *cost*, and the only way to learn it is to delete it.
+
+**When a pass resists, map it before designing.** Stubbing each of four
+passes in turn cost four builds and sorted thirteen scenes into three
+clean groups - cross-flow, reactions, gas. Every previous round in this
+campaign that went looking for a win without that map spent at least one
+experiment in the wrong pass.
+
+**A deferred finding with a number attached is worth re-running, not
+re-deriving.** The twelfth attempt's measurement was five rounds and one
+materials wave old and reproduced almost exactly. What had gone stale was
+not the number but the conclusion drawn from it.
+
+**Look for sequential structure before spatial structure.** The twelfth
+attempt correctly showed that answering "is there an empty cell within
+sight" *spatially* needs a maintained per-block bit and a soundness ring.
+It is the wrong question. The sweep already walks the ray one cell at a
+time, so the answer for this cell is last cell's answer plus one cell -
+three integers on the stack, no maintenance, no invariant to get wrong.
+**When a per-item query looks like it needs an index, check first whether
+the iteration order already gives you the answer incrementally.**
+
+**A memo must be armed by the expensive case only.** Arming it from every
+cheap case cost 4.4% on a scene where it could never pay off. The
+question to ask of any cache is not just "who reads it" (the ninth
+attempt's ledger) but "**what armed it, and was that arming expensive
+enough to be worth remembering**."
+
+---
+
 ## Related
 
 - [`Simulation-Lessons.md`](Simulation-Lessons.md) — the discovery

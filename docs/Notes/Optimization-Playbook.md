@@ -645,6 +645,61 @@ numbers exactly is allowed to make claims about numbers nobody has run.
 
 ---
 
+## Before optimising a query, check what the iteration already knows
+
+A per-item query that looks like it needs an index sometimes does not,
+because the loop asking it is already walking the very structure the index
+would describe.
+
+The shape to look for: a scan that runs from each item along some
+direction, and an outer loop that visits items along that same line. If
+the outer loop advances by exactly one step opposite the scan direction,
+then each item's scan covers the previous item's scan shifted by one — the
+answer for this item is the previous answer plus a single new element. A
+per-item walk of length *k* collapses to one increment per item, and the
+whole structure is a couple of integers on the stack: no allocation, no
+maintenance, no invalidation invariant to get subtly wrong.
+
+This is worth stating because the natural move is to reach for a spatial
+index — a per-block occupancy bit, a summary structure, a neighbourhood
+ring to make it sound. That is the correct answer to a question about
+*where things are*. It is the wrong answer to a question about *what the
+walk already covered*, and the two are easy to confuse: the first costs a
+design, an invariant, and a maintenance ledger; the second costs three
+integers.
+
+The prerequisite is a geometric argument, and it must be checked rather
+than assumed. Here the whole thing rested on the sweep advancing by
+exactly minus the scan direction, which held only when one component of
+the direction vector was zero. Off that axis the next item's scan is not a
+shifted copy of this one's and none of it holds, so the carry is switched
+off there rather than approximated.
+
+---
+
+## Arm a memo from the expensive case only
+
+The maintenance ledger question — who pays to keep this true, versus who
+reads it — has a second half that is easy to miss: **what armed the memo,
+and was that arming expensive enough to be worth remembering?**
+
+A memo that records every outcome, cheap ones included, bills every item
+for bookkeeping while only some of them can ever collect. The failure mode
+is quiet, because the memo is correct and the code that reads it is
+correct; it simply never fires on the workloads that are paying for it. In
+the case that produced this entry, arming a carried run from every
+non-moving cell — including cells whose own scan had stopped after one
+step — cost 4.4% on a workload that alternated two materials cell by cell,
+where the memo could not fire even once.
+
+The fix is to arm only from the outcome that was expensive to compute. A
+result that was cheap to obtain is cheap to obtain again, and remembering
+it is a pure loss. A useful side effect: restricting the arming often
+kills fields that only the cheap cases needed, and a memo that sheds state
+when you narrow it is a memo you have narrowed correctly.
+
+---
+
 ## Related
 
 - [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) — the falling-sand app's
