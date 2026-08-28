@@ -1347,9 +1347,15 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
  * this file gave the floor a shrink of its own - so there was never a
  * safety ceiling to sweep for here the way there was for
  * BOOT_ANIM_SHRINK_PEAK_Q8. This value is chosen for how big the ending
- * should look - "a big part of the grid clearly visible" - not for
- * anything it has to stay under. */
-#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 128
+ * should look - filling the WHOLE panel corner to corner, not merely a
+ * large patch in the middle of it - not for anything it has to stay
+ * under. A square grid, once rotated by the camera's own turn, is a
+ * diamond on screen: at 128 (half size) its sides reached the middle of
+ * each panel edge but its own diagonal still fell short of the panel's,
+ * so all four corners stayed empty no matter how dense or bright the
+ * grid inside that diamond got. Bigger, not denser or brighter, is what
+ * corners need. */
+#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 220
 
 static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 {
