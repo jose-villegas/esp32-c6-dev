@@ -543,6 +543,108 @@ worse kind of wrong than a visible collision.
 
 ---
 
+## Ask what a benchmark contains, not what it was built from
+
+A counter that answers "does this code even run" is the cheapest tool in
+this file, and it has a failure mode of its own: pointing it at the
+benchmark's *constructor* instead of at the benchmark. A scene, a fixture,
+a workload is usually described by the code that builds it, and for a
+static system that description is complete. For anything that evolves
+while it runs, it is not — the system under test can create the very
+inputs the setup code proves are absent.
+
+The instance that named this: a simulation benchmark builds its scene by
+enumerating an explicit list of materials, and a reasonable reading of
+that enumeration concluded a particular expensive material could not
+possibly be present, so its cost could not possibly be in the number. It
+was there — three hundred cells of it — because a *reaction* produced it
+from two materials that were on the list. The setup code was read
+correctly; it simply was not the question.
+
+The discipline is one line of instrumentation: dump the actual state at
+the moment the measurement is taken, not at the moment the fixture is
+built, and diff the two. It is the same ten-second host-side counter,
+moved to the right place in the timeline. **Enumerating a workload's
+inputs is not enumerating its contents.**
+
+---
+
+## Build the oracle before optimizing the heuristic
+
+Before tuning the parameters of an approximation, measure what a *perfect*
+version of it would achieve. Not a better heuristic — the unreachable one:
+the exact answer, computed however expensively, with every cap and budget
+removed. It is usually easy to write precisely because it is allowed to be
+slow, and it bounds the entire search.
+
+Where this pays: an approximation with three tunable caps was scheduled
+for a full re-sweep. The oracle — the exact set of changed items, uncapped
+— turned out to produce the *same* output as the shipped approximation on
+two of three workloads and 3% better on the third. The approximation was
+not nearly dead, as assumed; it was nearly maxed out. The sweep would have
+found the same thing in far more builds, and would have found it as a
+puzzling absence of effect rather than as a positive statement about the
+ceiling.
+
+The corollary is worth stating separately: **a cap that measures inert
+across its whole range is telling you about the workload, not about the
+cap.** Two of the three here were structurally incapable of mattering —
+one because real inputs are always far under or far over any value in the
+range and never in between, the other because a precondition upstream was
+never satisfied. Neither is a tuning problem, and no amount of sweeping
+would have said so.
+
+---
+
+## Deleting the work is not the same as deleting the cost
+
+Measure-by-deleting — stub the suspect, re-measure, revert — is the first
+tool in this file, and it has a blind spot: it removes a piece of code's
+*work* and its *presence* at the same time, and attributes everything to
+the work.
+
+When the two are separable, they can be measured separately, and the
+answer can invert. A branch added to a hot function was suspected of
+costing what it did; deleting it outright recovered 9.5%, which looked
+like a confirmed attribution and a finished investigation. Fixing the code
+*shape* the branch had caused — it had pushed its containing function past
+the compiler's inlining threshold — while keeping every line of the branch
+recovered 12.1%. The branch's work was never the cost. Measure-by-deleting
+alone would have concluded the feature was expensive, and left the real
+cost in place while removing a feature that was not to blame.
+
+**When a deletion recovers less than a structural fix does, the cost was
+structural.** Cheap to check, and only possible if the structural fix is
+one of the candidates rather than the conclusion.
+
+---
+
+## Compile the system under test; do not copy it into the harness
+
+A bisect harness, a benchmark driver, or a replay tool needs the system's
+own workloads. The tempting shortcut is to copy the workload definitions
+into the harness, where they are convenient. The copy then drifts, and it
+drifts silently in the one place drift is fatal: the harness attributes a
+regression using a workload that stopped matching the one the regression
+was reported against.
+
+The alternative is usually available and usually cheaper. Compile the
+project's actual test source — the same file, unmodified, at whatever
+revision is checked out — against a handful of shim headers that stub the
+platform it expects: an assertion framework whose macros are no-ops, a
+clock backed by the host's own, a logger that writes to stderr. Nothing is
+copied, so nothing can drift, and the harness automatically tracks changes
+to the workloads across the whole range being bisected.
+
+Two checks make it trustworthy. Diff the workload definitions between the
+ends of the range first, so you know whether the thing being measured
+changed underneath the measurement; and where the harness models a
+decision the real system makes, validate it against counters the real
+system already reports — a model that reproduces the hardware's own
+numbers exactly is allowed to make claims about numbers nobody has run.
+
+---
+
 ## Related
 
 - [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) — the falling-sand app's

@@ -619,6 +619,107 @@ own [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md) for the swe
 tooling bugs that surfaced building the first one (all equally relevant
 here, since it is the same script pattern).
 
+### The re-sweep, 2026-08-28: two of the three caps are inert
+
+Both sweeps above were run against synthetic device tests. Two years of
+app work later - fire flicker, an animated shine, plants, drifting
+smoke and steam, 480-ring thermal scenes - they were re-run against the
+three REAL sand scenes the present-cost tests measure, and the answer
+changed shape completely.
+
+The re-sweep did not need hardware. `gfx_dirty.h` is header-only and
+free of ESP-IDF by design, and `send_one_row()`'s choice is pure logic
+over its state, so the whole decision replays on a host: include the
+real header, reimplement only the twelve-line choice with the two
+`draw_bitmap()` calls replaced by counters, and drive it with
+`suite_sand.c`'s own scenes, its own `sand_step()` and its own
+`mirror_app_sand_marking()`. It reproduces the device's strip-send
+counters exactly - 76/13, 100/4, 70/0 - which is the only reason to
+trust anything it says about values nobody has flashed.
+
+**`ROW_MAX_RUNS` at 2, 3, 4, 6, 8 crossed with `LEAF_REFINE_MAX_RUNS`
+at 2, 3, 4 - fifteen builds - produced byte-identical counters on all
+three scenes.** Not close: identical. Both have a structural reason,
+not a "the value happens to be right" reason:
+
+- `ROW_MAX_RUNS` cannot matter because a checkerboard row needs 92 runs
+  (so every cap in that range falls back to the full-row span) and a
+  slab row needs one. Real scenes are not in between.
+- `LEAF_REFINE_MAX_RUNS` cannot matter because refinement first needs
+  `run_is_leaf_eligible()`, and a cell marked at its full column width
+  and full strip height is never eligible - which is every cell here.
+
+**`GATHER_MAX_PIXELS` was swept again and declined again, for a
+different reason than last time.** Pixels sent per frame:
+
+| Cap | `gather_buf` | falling sand | lava stress | thermal shock |
+|---:|---:|---:|---:|---:|
+| **8,192** (shipped) | 16 KB | 92,552 | 117,950 | 164,864 |
+| 11,776 | 23 KB | 89,240 | 117,361 | 164,864 |
+| 14,336 | 28 KB | 87,694 | 107,425 | 164,864 |
+| 16,384 | 32 KB | 86,112 | 107,425 | 164,864 |
+| 20,480 | 40 KB | 83,536 | 106,873 | 163,150 |
+| 23,552 (a band) | 46 KB | 83,168 | 105,769 | 161,041 |
+
+Raising it does buy pixels, and it is still the wrong trade: every
+pixel it saves is bought by *gathering* it - a `memcpy` out of the
+framebuffer into a DMA buffer the bus then waits on, where a full band
+is read in place - and `gather_buf` has to grow to match.
+`gfx_init()` logs 67,568 bytes of heap free after the framebuffer and
+the sand app then takes about 41.5 KB for its grid, so 12 KB more is a
+large fraction of what is left, to buy 5-9%. **Verdict: 8192 stays, for
+the second time.** The first sweep kept it because its tests never
+reached the boundary; this one kept it because something else gets more
+for nothing.
+
+### The tracker is at its ceiling, and the win was a missing path
+
+The sharper question is not what the caps buy but what is left to buy.
+An **oracle** - the exact set of cells whose byte changed this frame,
+diffed against a snapshot, marked with no cap of any kind, which no
+implementation can beat - sends 92,552 px/frame against the shipped
+marking's 92,552 on the falling-sand scene, 114,416 against 117,950 on
+lava (-3.0%), and 164,864 against 164,864 on the thermal lattice. The
+dirty-region tracking is **at its ceiling**, not failing: the thermal
+scene's seventy-out-of-seventy whole-band sends are the correct answer
+to a lattice that really does dirty every strip full width and full
+height, every frame.
+
+What was actually missing was a third send path. There were two -
+gather into the fixed buffer, or send the whole 64-row band - and a box
+that spans the **full panel width** needs neither: it is already
+contiguous in the framebuffer, row-major at `GFX_WIDTH` stride, so it
+goes straight out of `fb` at its own height. A full-width box 23 rows
+tall (368x23 is just past `GATHER_MAX_PIXELS`) was being sent as 64.
+`send_partial_band()` in `gfx.c`, and a third strip-send counter beside
+the other two so it is visible in a capture:
+
+| scene | before | after | |
+|---|---:|---:|---:|
+| falling sand | 92,552 px/frame | 83,168 | **-10.1%** |
+| lava stress | 117,950 px/frame | 105,769 | **-10.3%** |
+| thermal shock | 164,864 px/frame | 164,864 | 0.0% |
+
+Zero extra memory, nothing copied - and the same pixel totals the
+extreme row of the `GATHER_MAX_PIXELS` table reaches for 46 KB of DMA
+buffer and a full-frame `memcpy`. It works only because the box carries
+a real sub-strip Y extent, which comes from the per-cell
+`cell_y0`/`cell_y1` boxes `dirty_mark()` narrows through
+`union_cell_y()`, unioned across the run by `run_box()` - the cell
+layer, not the leaf layer, which only refines x.
+
+### A full band has two prices
+
+Worth knowing before comparing any two numbers in this file. Measured
+alone, one band costs **3,405 us**. Measured inside a real frame, seven
+bands come to **18,147 us**, not 7 x 3,405 = 23,835: `send_full_row()`
+queues its transfer without waiting and `gfx_present()` drains them all
+at the end, so in a real frame the bands pipeline and an isolated one
+has nothing to overlap with. `suite_gfx.c`'s ratio tests measure the
+un-pipelined price; `suite_sand.c`'s three present-cost tests measure
+the pipelined one. Both are right, and multiplying one by the band
+count does not produce the other.
+
 ---
 
 ## There is no graphics acceleration
