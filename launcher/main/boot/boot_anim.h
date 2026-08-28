@@ -712,6 +712,34 @@ static inline int32_t boot_anim_pen(uint32_t now_ms)
     return ((int32_t)linear * BOOT_ANIM_ONE) / 255;
 }
 
+/* Where the LEADING pen would be if it never stopped at BOOT_ANIM_ONE - used
+ * to colour the trailing pens (see boot_anim.c's draw_curve()/draw_heads())
+ * instead of boot_anim_pen() once the curve is fully drawn, so they keep
+ * chasing round it through the finale rather than freezing in place the
+ * instant the reveal ends.
+ *
+ * Identical to boot_anim_pen() for as long as that stays below
+ * BOOT_ANIM_ONE - same ramp, same rounding - so nothing before the reveal
+ * finishes changes by a single pixel; only past that point does this keep
+ * counting up instead of clamping. The five pens' positions
+ * (boot_anim_trail_pos()) and the colour each piece of curve picks up
+ * (boot_anim_stroke()) are both already periodic in this value with period
+ * BOOT_ANIM_ONE - a fixed piece of curve comes back under a trailing pen
+ * every time the leading one gains another whole lap - so letting it run
+ * past BOOT_ANIM_ONE is enough on its own; nothing downstream needs an
+ * explicit wrap except the one place a raw sample INDEX is taken from it
+ * (draw_heads() in boot_anim.c, which does its own wrap for exactly that
+ * reason). */
+static inline int32_t boot_anim_glow_pen(uint32_t now_ms)
+{
+    const int32_t capped = boot_anim_pen(now_ms);
+    if (capped < BOOT_ANIM_ONE) {
+        return capped;
+    }
+    const uint32_t elapsed = now_ms - BOOT_ANIM_PEN_START_MS;
+    return (int32_t)(((int64_t)elapsed * BOOT_ANIM_ONE) / BOOT_ANIM_PEN_MS);
+}
+
 /* Everything drawn is mixed up from the background by this, so the last
  * stretch dissolves the whole picture rather than cutting from a lit screen
  * straight to the menu. */
@@ -870,18 +898,28 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 }
 
 /* The extra turn: on top of BOOT_ANIM_PHI_END_PHASE (58 degrees, reached
- * when the curve finishes), the finale adds another 82 - a total of 140 -
- * which is where the t axis's own screen weight, having passed through zero
- * around 52 degrees (fully foreshortened - "pointing at the screen"), has
- * grown back to roughly its starting magnitude. See boot_anim_view()'s own
- * comment for the reasoning that led here, and the file's own top comment,
- * "THE CAMERA ORBITS", for what it looks like. */
-#define BOOT_ANIM_PHI_EXTRA_PHASE 14928   /* round(82 / 360 * 65536) */
+ * when the curve finishes), the finale adds another 57 - a total of 115 -
+ * continuing the same turn well past where the t axis's own screen weight
+ * passed through zero (around 52 degrees - fully foreshortened, "pointing
+ * at the screen") without running it all the way to where the floor goes
+ * edge-on: stopping at 115 leaves the floor plane visibly tilted rather
+ * than flattened to a line, so the motif keeps some depth rather than
+ * reading as flat. See boot_anim_view()'s own comment for the reasoning
+ * that led here, and the file's own top comment, "THE CAMERA ORBITS", for
+ * what it looks like. */
+#define BOOT_ANIM_PHI_EXTRA_PHASE 10377   /* round(57 / 360 * 65536) */
 
-/* How far left the origin slides during the finale. The title no longer
- * reads this - it rests at a fixed point in its own viewer's frame now, see
- * "The title" - so this is purely a camera-side number. */
-#define BOOT_ANIM_ORIGIN_SHIFT_PX 94
+/* How far the origin moves during the finale, and in which direction on
+ * screen - see boot_anim_view()'s own comment on v.ox for why this reads
+ * "toward the label" rather than "left": ox is a PANEL coordinate, and the
+ * panel is mounted a quarter turn from how it is held (see "The title"'s
+ * own top comment on DISPLAY_LANDSCAPE), so moving ox is what the VIEWER
+ * sees as moving the motif UP the screen, not sideways. Sized so the motif
+ * settles level with the bottom of the word beside it -
+ * BOOT_ANIM_TITLE_VIEW_Y plus one glyph cell, measured against a real
+ * render rather than derived, the same way BOOT_ANIM_TITLE_VIEW_X/Y
+ * themselves were. */
+#define BOOT_ANIM_ORIGIN_SHIFT_PX 60
 
 /* How far the two floor-plane axes reach once unbounded, matching the
  * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the
@@ -899,7 +937,9 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * position - see boot_anim_origin_y()'s own comment - by the time the curve
  * finished, and letting three things drift at once (turn, and two
  * directions of slide) was one degree of freedom more than the picture
- * needed. Only ox moves further. */
+ * needed. Only ox moves further - and moving ox is what raises the motif
+ * toward the label on screen, not what slides it sideways; see
+ * BOOT_ANIM_ORIGIN_SHIFT_PX's own comment. */
 static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 {
     const int32_t curve_progress = boot_anim_pen(now_ms);   /* 0..ONE */
@@ -925,7 +965,7 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
            (int)((((int64_t)(h - 2 * oy_start)) * curve_progress) >>
                  BOOT_ANIM_Q);
 
-    v.ox = boot_anim_origin_x(w) -
+    v.ox = boot_anim_origin_x(w) +
            ((int)finale * BOOT_ANIM_ORIGIN_SHIFT_PX) / 255;
 
     return v;

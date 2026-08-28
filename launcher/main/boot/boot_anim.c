@@ -353,23 +353,41 @@ static void draw_head(int x, int y, uint32_t rgb, uint8_t ink)
  * The leading pen is skipped once it reaches the end: a bright dot left
  * sitting on the finish of a static curve reads as a blemish rather than as
  * a pen. */
+/* `pen` is boot_anim_glow_pen(), not boot_anim_pen() - see its own comment
+ * in boot_anim.h - so it keeps growing past BOOT_ANIM_ONE once the curve is
+ * fully drawn instead of stopping there. boot_anim_trail_pos() and
+ * boot_anim_stroke() are both already periodic in it and need no help, but
+ * `at` here is about to become a raw sample INDEX (fx_mul_floor() below),
+ * so unlike them this is the one place that value has to be wrapped back
+ * into [0, BOOT_ANIM_ONE) before it is used, rather than left to grow. */
 static void draw_heads(int32_t pen, uint8_t ink, int shrink_q8,
                        const boot_anim_view_t *view)
 {
     const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
 
     for (int k = 0; k < BOOT_ANIM_TRAILS; k++) {
-        const int32_t at = boot_anim_trail_pos(pen, k);
-        if (at <= 0 || at >= BOOT_ANIM_ONE) {
-            continue;       /* not set off yet, or finished */
+        const int32_t raw = boot_anim_trail_pos(pen, k);
+        if (raw <= 0) {
+            continue;       /* not set off yet */
         }
+        const int32_t at = raw % BOOT_ANIM_ONE;
 
         const int i = fx_mul_floor(at, span, BOOT_ANIM_Q);
         const boot_anim_pt_t p = boot_anim_sample(i);
 
+        /* boot_anim_stroke() wants a pen_q12 whose OWN trail_pos(., k) is
+         * exactly `at`, so that trail k comes back as the closest one at
+         * its own head and this reads full brightness - the same thing
+         * `pen` itself guaranteed before it was allowed to keep growing
+         * past a lap. Reconstructed from the wrapped `at` rather than
+         * passed as the raw (possibly many-laps-large) `pen`, which would
+         * otherwise put every wrapped-around trail's own head far outside
+         * every trail's TRAIL_Q12 window, including its own. */
+        const int32_t as_pen = at + (int32_t)k * BOOT_ANIM_TRAIL_GAP;
+
         draw_head(csx(p.re, p.im, shrink_q8, view),
                   csy(p.re, p.im, p.t, shrink_q8, view),
-                  boot_anim_hue_rgb(boot_anim_stroke(at, pen).hue), ink);
+                  boot_anim_hue_rgb(boot_anim_stroke(at, as_pen).hue), ink);
     }
 }
 
@@ -402,6 +420,12 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     const int32_t part = at & (BOOT_ANIM_ONE - 1);
     const int shrink_q8 = boot_anim_curve_shrink_q8(now_ms);
 
+    /* Colours the trail, not how much of the curve is drawn - see
+     * boot_anim_glow_pen()'s own comment. `pen` (extent) still decides
+     * `last`/`part` above: the curve itself stops growing once fully
+     * drawn, only the light chasing round it keeps moving. */
+    const int32_t glow = boot_anim_glow_pen(now_ms);
+
     boot_anim_pt_t head = boot_anim_sample(0);
     int px = csx(head.re, head.im, shrink_q8, view);
     int py = csy(head.re, head.im, head.t, shrink_q8, view);
@@ -432,7 +456,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
             const int ny = csy(head.re, head.im, head.t, shrink_q8, view);
             const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
 
-            draw_stroke(px, py, nx, ny, boot_anim_stroke(along, pen), ink,
+            draw_stroke(px, py, nx, ny, boot_anim_stroke(along, glow), ink,
                         drawn);
             drawn = true;
             px = nx;
@@ -440,7 +464,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
         }
     }
 
-    draw_heads(pen, ink, shrink_q8, view);
+    draw_heads(glow, ink, shrink_q8, view);
     return head.t;
 }
 

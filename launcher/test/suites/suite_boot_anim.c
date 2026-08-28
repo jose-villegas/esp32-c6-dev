@@ -266,22 +266,26 @@ static void test_the_finale_turns_t_back_toward_vertical(void)
 /* The finale slides the origin left, and only left - oy stays exactly where
  * the curve phase left it, one fewer thing moving at once than the picture
  * needed (see boot_anim_view()'s own comment on why). */
-static void test_the_finale_slides_the_origin_left_only(void)
+/* "ox_only" rather than "toward the label": this test is pure panel-space
+ * arithmetic and has no opinion on which way that reads to a viewer holding
+ * the board turned - see BOOT_ANIM_ORIGIN_SHIFT_PX's own comment in
+ * boot_anim.h for that translation. */
+static void test_the_finale_moves_the_origins_ox_only(void)
 {
     const boot_anim_view_t before =
         boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
     const boot_anim_view_t after =
         boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_FINALE_END_MS);
 
-    TEST_ASSERT_TRUE_MESSAGE(after.ox < before.ox,
-        "the origin should have slid left during the finale");
+    TEST_ASSERT_TRUE_MESSAGE(after.ox > before.ox,
+        "the origin's ox should have increased during the finale");
     TEST_ASSERT_EQUAL_INT_MESSAGE(before.oy, after.oy,
         "the origin's height should not move during the finale - only ox "
         "does");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
-        boot_anim_origin_x(PANEL_W) - BOOT_ANIM_ORIGIN_SHIFT_PX, after.ox,
-        "the origin should have slid exactly BOOT_ANIM_ORIGIN_SHIFT_PX left "
-        "by the time the finale ends");
+        boot_anim_origin_x(PANEL_W) + BOOT_ANIM_ORIGIN_SHIFT_PX, after.ox,
+        "the origin should have moved exactly BOOT_ANIM_ORIGIN_SHIFT_PX by "
+        "the time the finale ends");
 }
 
 /* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends up
@@ -973,7 +977,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_view_starts_at_the_original_fixed_camera);
     RUN_TEST(test_the_view_foreshortens_t_by_the_end_of_the_curve);
     RUN_TEST(test_the_finale_turns_t_back_toward_vertical);
-    RUN_TEST(test_the_finale_slides_the_origin_left_only);
+    RUN_TEST(test_the_finale_moves_the_origins_ox_only);
     RUN_TEST(test_the_origin_ends_at_the_mirror_of_where_it_started);
     RUN_TEST(test_the_origin_drifts_upward_without_doubling_back);
 
