@@ -13270,16 +13270,16 @@ static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
  * freshly-seeded full-width "previous" state would otherwise produce.
  * Then times `measured_steps` more of the same, returning the mean
  * gfx_present() cost in us. gfx_reset_strip_send_counts() is called right
- * before the measured window starts, so `full_bands`/`gathered` come back
- * as the totals accumulated over exactly those steps, not the settle
- * ones. */
+ * before the measured window starts, so `full_bands`/`gathered`/
+ * `partial_bands` come back as the totals accumulated over exactly those
+ * steps, not the settle ones. */
 static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
                                           int w, int h, uint8_t *dirty_rows,
                                           uint16_t *row_x0, uint16_t *row_x1,
                                           uint8_t *row_n, int gx, int gy,
                                           int gz, int settle_steps,
                                           int measured_steps, int *full_bands,
-                                          int *gathered)
+                                          int *gathered, int *partial_bands)
 {
     for (int i = 0; i < settle_steps; i++) {
         sand_step(s, gx, gy, gz);
@@ -13301,7 +13301,7 @@ static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
         total_us += esp_timer_get_time() - start;
     }
 
-    gfx_get_strip_send_counts(full_bands, gathered);
+    gfx_get_strip_send_counts(full_bands, gathered, partial_bands);
 
     return total_us / measured_steps;
 }
@@ -13346,17 +13346,18 @@ static void test_present_cost_against_a_falling_sand_scene(void)
         }
     }
 
-    int full_bands = 0, gathered = 0;
+    int full_bands = 0, gathered = 0, partial_bands = 0;
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1, 0, 5, measured_steps,
-        &full_bands, &gathered);
+        &full_bands, &gathered, &partial_bands);
 
     ESP_LOGI("device_tests", "present cost, falling sand checkerboard, "
                              "%dx%d: mean %lld us/frame over %d frames "
-                             "(%d full-band, %d gathered strip-sends)",
+                             "(%d full-band, %d gathered, %d partial-band "
+                             "strip-sends)",
              REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
-             gathered);
+             gathered, partial_bands);
 
     free(big);
     free(dirty_rows);
@@ -13423,17 +13424,17 @@ static void test_present_cost_against_the_lava_stress_scene(void)
 
     build_lava_stress_scene(&real);
 
-    int full_bands = 0, gathered = 0;
+    int full_bands = 0, gathered = 0, partial_bands = 0;
     const int measured_steps = 20;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 30,
-        measured_steps, &full_bands, &gathered);
+        measured_steps, &full_bands, &gathered, &partial_bands);
 
     ESP_LOGI("device_tests", "present cost, lava stress scene, %dx%d: mean "
                              "%lld us/frame over %d frames (%d full-band, "
-                             "%d gathered strip-sends)",
+                             "%d gathered, %d partial-band strip-sends)",
              REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
-             gathered);
+             gathered, partial_bands);
 
     free(big);
     free(blocks);
@@ -13496,17 +13497,18 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
 
     build_thermal_shock_scene(&real);
 
-    int full_bands = 0, gathered = 0;
+    int full_bands = 0, gathered = 0, partial_bands = 0;
     const int measured_steps = 10;
     const int64_t mean_us = run_present_against_scene(&real, big, REAL_W,
         REAL_H, dirty_rows, row_x0, row_x1, row_n, 0, 1000, 0, 0,
-        measured_steps, &full_bands, &gathered);
+        measured_steps, &full_bands, &gathered, &partial_bands);
 
     ESP_LOGI("device_tests", "present cost, thermal shock lattice, %dx%d: "
                              "mean %lld us/frame over %d frames (%d "
-                             "full-band, %d gathered strip-sends)",
+                             "full-band, %d gathered, %d partial-band "
+                             "strip-sends)",
              REAL_W, REAL_H, (long long)mean_us, measured_steps, full_bands,
-             gathered);
+             gathered, partial_bands);
 
     free(big);
     free(blocks);
@@ -13520,10 +13522,18 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
      * 70 full-band and ZERO gathered strip-sends over 10 frames. Ten
      * frames x 7 strips is 70, so every strip of every frame went out as
      * a whole band - this scene costs a full-screen send every frame
-     * (a full present measures 18,147 us) and the dirty-region tracking
-     * buys it nothing at all. 480 small isolated glass rings is the
-     * pattern that defeats gathering completely. 19700 is ~10% over, a
-     * regression guard; the real number to move is the zero. */
+     * (a full present measures 18,147 us)
+     * and the dirty-region tracking has nothing left to give: an ORACLE
+     * that marks the exact set of cells whose byte changed this frame,
+     * with no cap of any kind, sends the identical 164,864 pixels per
+     * frame that the shipped marking does. The zero is not a target - 70
+     * of 70 is correct behaviour, because a 480-compartment lattice
+     * really does dirty every strip across its full width and full
+     * height, every frame. The tracker is at its ceiling here rather
+     * than failing. 19700 is ~10% over, a regression guard; the number
+     * worth watching in this scene is PIXELS SENT, not the gathered
+     * count, and only a change to what the scene itself draws could move
+     * it. */
     TEST_ASSERT_LESS_THAN_MESSAGE(19700, (int)mean_us,
         "present() against the thermal shock lattice got more expensive "
         "than a full-screen send every frame, which is already what it "

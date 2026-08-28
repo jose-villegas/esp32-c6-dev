@@ -271,13 +271,16 @@ bool gfx_debug_leaf_overlay(void);
 
 /* Per-strip counts of which send path the last stretch of gfx_present()
  * calls actually took - full-band send_full_row() versus a gathered send
- * of at least one run - for a device test to log alongside its own timing
+ * of at least one run versus a full-width send at less than the whole
+ * band's height (send_partial_band(), for a box that carries a real
+ * sub-strip Y extent) - for a device test to log alongside its own timing
  * rather than guessing the split from the number alone. Reset explicitly,
  * not by gfx_present() itself, so a caller can accumulate across exactly
  * the frames it is measuring. See gfx.c's send_one_row() for where these
  * are counted. */
 void gfx_reset_strip_send_counts(void);
-void gfx_get_strip_send_counts(int *full_bands, int *gathered);
+void gfx_get_strip_send_counts(int *full_bands, int *gathered,
+                               int *partial_bands);
 
 /* Test-only: one raw esp_lcd_panel_draw_bitmap() of the whole framebuffer,
  * bypassing every dirty-tracking decision gfx_present() makes - see gfx.c
