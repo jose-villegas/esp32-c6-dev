@@ -699,8 +699,9 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
  * at the pure golden-centred X the word's own right edge landed a couple
  * of pixels past BOOT_ANIM_TITLE_VIEW_W, failing
  * test_the_title_stays_on_the_panel_once_visible(). Nudged a little
- * further left than that strictly requires, for margin. */
-#define BOOT_ANIM_TITLE_VIEW_X 185
+ * further left than that strictly requires, for margin - and another
+ * 15px left again on top of that, on request. */
+#define BOOT_ANIM_TITLE_VIEW_X 170
 #define BOOT_ANIM_TITLE_VIEW_Y 50
 
 #define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
