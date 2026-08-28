@@ -194,36 +194,44 @@ static void test_the_quarter_points_are_exact(void)
     TEST_ASSERT_EQUAL_INT(32767, boot_anim_cos(0));
 }
 
-/* At progress 0 the view must reproduce the ORIGINAL fixed camera - the one
- * this whole file described before the orbit existed - to within a couple of
- * Q8 units. Not bit-exact: D+C reconstructs A (see boot_anim.h's derivation
+/* A moment safely after the curve finishes (pen saturates at 2500ms) but
+ * before the finale starts (2700ms) - the view here is what the old,
+ * pre-finale tests meant by "full progress". */
+#define CURVE_DONE_MS 2600
+
+/* At t=0 the view must reproduce the ORIGINAL fixed camera - the one this
+ * whole file described before the orbit existed - to within a couple of Q8
+ * units. Not bit-exact: D+C reconstructs A (see boot_anim.h's derivation
  * comment) through two independently-rounded compile-time constants rather
  * than the single rounding the old RE_Y/IM_Y had, so a unit or two of drift
  * is the honest cost of that, not a bug. */
 static void test_the_view_starts_at_the_original_fixed_camera(void)
 {
-    const boot_anim_view_t v = boot_anim_view(PANEL_H, 0);
+    const boot_anim_view_t v = boot_anim_view(PANEL_W, PANEL_H, 0);
 
     TEST_ASSERT_INT32_WITHIN_MESSAGE(2, 3064, v.re_y,
-        "at progress 0 the real axis' weight should match the original "
+        "at t=0 the real axis' weight should match the original "
         "sin(20) * Z_PX * 256");
     TEST_ASSERT_INT32_WITHIN_MESSAGE(2, 6336, v.im_y,
-        "at progress 0 the imaginary axis' weight should match the "
+        "at t=0 the imaginary axis' weight should match the "
         "original sin(45) * Z_PX * 256");
     TEST_ASSERT_INT32_WITHIN_MESSAGE(2, -(BOOT_ANIM_T_PX << 8), v.t_y,
-        "at progress 0 the t axis should still be at its full, unforeshortened "
+        "at t=0 the t axis should still be at its full, unforeshortened "
         "length - T_PX per unit, Q8");
     TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_origin_y(PANEL_H), v.oy,
-        "at progress 0 the origin should sit exactly where it always did");
+        "at t=0 the origin should sit exactly where it always did");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_origin_x(PANEL_W), v.ox,
+        "at t=0 the origin should not have slid sideways yet");
 }
 
-/* At full progress, t must have foreshortened a long way from where it
- * started - the whole point of the orbit - while staying short of collapsing
- * to nothing, which is the "with a tilt to be observable" half of the ask. */
-static void test_the_view_foreshortens_t_by_the_end_without_flattening_it(void)
+/* Once the curve finishes, t must have foreshortened a long way from where
+ * it started - the whole point of the first half of the orbit - while
+ * staying short of collapsing to nothing, which is the "with a tilt to be
+ * observable" half of the ask. */
+static void test_the_view_foreshortens_t_by_the_end_of_the_curve(void)
 {
-    const boot_anim_view_t v0 = boot_anim_view(PANEL_H, 0);
-    const boot_anim_view_t v1 = boot_anim_view(PANEL_H, BOOT_ANIM_ONE);
+    const boot_anim_view_t v0 = boot_anim_view(PANEL_W, PANEL_H, 0);
+    const boot_anim_view_t v1 = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
 
     const int32_t t0 = v0.t_y < 0 ? -v0.t_y : v0.t_y;
     const int32_t t1 = v1.t_y < 0 ? -v1.t_y : v1.t_y;
@@ -236,12 +244,53 @@ static void test_the_view_foreshortens_t_by_the_end_without_flattening_it(void)
         "must stay observable");
 }
 
-/* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends as
- * far below the top of the screen as it started above the bottom. */
+/* THE FINALE'S turn, past where the curve-drawing phase alone stops: by the
+ * time the last letter has landed, t must have grown back toward roughly
+ * its STARTING magnitude - "the spiral ends up pointing up as it was from
+ * start" - while its SIGN has flipped, since continuing past the point
+ * where it fully foreshortens necessarily means passing through zero. */
+static void test_the_finale_turns_t_back_toward_vertical(void)
+{
+    const boot_anim_view_t v0 = boot_anim_view(PANEL_W, PANEL_H, 0);
+    const boot_anim_view_t vf =
+        boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_FINALE_END_MS);
+
+    const int32_t t0 = v0.t_y < 0 ? -v0.t_y : v0.t_y;
+    const int32_t tf = vf.t_y < 0 ? -vf.t_y : vf.t_y;
+
+    TEST_ASSERT_TRUE_MESSAGE(tf > t0 / 2,
+        "by the end of the finale t should have grown back to at least half "
+        "its starting magnitude, not stayed foreshortened");
+}
+
+/* The finale slides the origin left, and only left - oy stays exactly where
+ * the curve phase left it, one fewer thing moving at once than the picture
+ * needed (see boot_anim_view()'s own comment on why). */
+static void test_the_finale_slides_the_origin_left_only(void)
+{
+    const boot_anim_view_t before =
+        boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
+    const boot_anim_view_t after =
+        boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_FINALE_END_MS);
+
+    TEST_ASSERT_TRUE_MESSAGE(after.ox < before.ox,
+        "the origin should have slid left during the finale");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before.oy, after.oy,
+        "the origin's height should not move during the finale - only ox "
+        "does");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        boot_anim_origin_x(PANEL_W) - BOOT_ANIM_ORIGIN_SHIFT_PX, after.ox,
+        "the origin should have slid exactly BOOT_ANIM_ORIGIN_SHIFT_PX left "
+        "by the time the finale ends");
+}
+
+/* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends up
+ * (once the CURVE finishes, before the finale's own further slide) as far
+ * below the top of the screen as it started above the bottom. */
 static void test_the_origin_ends_at_the_mirror_of_where_it_started(void)
 {
-    const int oy_start = boot_anim_view(PANEL_H, 0).oy;
-    const int oy_end   = boot_anim_view(PANEL_H, BOOT_ANIM_ONE).oy;
+    const int oy_start = boot_anim_view(PANEL_W, PANEL_H, 0).oy;
+    const int oy_end = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS).oy;
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_H - oy_start, oy_end,
         "the origin should finish exactly as far from the top as it began "
@@ -252,9 +301,9 @@ static void test_the_origin_ends_at_the_mirror_of_where_it_started(void)
 
 static void test_the_origin_drifts_upward_without_doubling_back(void)
 {
-    int last_oy = boot_anim_view(PANEL_H, 0).oy;
-    for (int32_t p = 0; p <= BOOT_ANIM_ONE; p += 64) {
-        const int oy = boot_anim_view(PANEL_H, p).oy;
+    int last_oy = boot_anim_view(PANEL_W, PANEL_H, 0).oy;
+    for (uint32_t t = 0; t <= CURVE_DONE_MS; t += 40) {
+        const int oy = boot_anim_view(PANEL_W, PANEL_H, t).oy;
         TEST_ASSERT_TRUE_MESSAGE(oy <= last_oy,
             "the origin should drift steadily upward, never back down");
         last_oy = oy;
@@ -267,10 +316,10 @@ static void test_the_origin_drifts_upward_without_doubling_back(void)
 
 static void test_the_origin_maps_to_the_origin(void)
 {
-    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
+    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
 
     TEST_ASSERT_EQUAL_INT(boot_anim_origin_x(PANEL_W),
-                          boot_anim_screen_x(PANEL_W, 0, 0));
+                          boot_anim_screen_x(0, 0, &view));
     TEST_ASSERT_EQUAL_INT(boot_anim_origin_y(PANEL_H),
                           boot_anim_screen_y(PANEL_H, 0, 0, 0, &view));
 }
@@ -279,28 +328,28 @@ static void test_the_origin_maps_to_the_origin(void)
  * six signs below is one that would silently mirror the picture if it were
  * wrong. t especially: screen y grows downward and height does not.
  *
- * Checked at progress 0, the camera's starting orientation - see the camera
+ * Checked at t=0, the camera's starting orientation - see the camera
  * section above for what changes as it orbits, and
- * test_the_view_foreshortens_t_by_the_end_without_flattening_it() for the
+ * test_the_view_foreshortens_t_by_the_end_of_the_curve() for the
  * corresponding claim once it has. */
 static void test_the_three_axes_point_the_way_they_are_supposed_to(void)
 {
     const int32_t one = BOOT_ANIM_ONE;
-    const int ox = boot_anim_origin_x(PANEL_W);
+    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
+    const int ox = view.ox;
     const int oy = boot_anim_origin_y(PANEL_H);
-    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
 
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(PANEL_W, one, 0) > ox,
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(one, 0, &view) > ox,
         "the real axis should run to the right");
     TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, one, 0, 0, &view) > oy,
         "the real axis should run downward, into the floor");
 
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(PANEL_W, 0, one) < ox,
+    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(0, one, &view) < ox,
         "the imaginary axis should run to the left");
     TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, 0, one, 0, &view) > oy,
         "the imaginary axis should run downward, into the floor");
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(ox, boot_anim_screen_x(PANEL_W, 0, 0),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(ox, boot_anim_screen_x(0, 0, &view),
         "t should not move a point sideways at all");
     TEST_ASSERT_TRUE_MESSAGE(
         boot_anim_screen_y(PANEL_H, 0, 0, 1 << BOOT_ANIM_TQ, &view) < oy,
@@ -308,43 +357,55 @@ static void test_the_three_axes_point_the_way_they_are_supposed_to(void)
 }
 
 /* The imaginary axis at 45 degrees, which is what makes the floor read as a
- * floor: equal steps left and down. Checked at progress 0, same reasoning as
- * the test above. */
+ * floor: equal steps left and down. Checked at t=0, same reasoning as the
+ * test above. */
 static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
 {
-    const int ox = boot_anim_origin_x(PANEL_W);
-    const int oy = boot_anim_origin_y(PANEL_H);
     const int32_t three = 3 * BOOT_ANIM_ONE;
-    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
+    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
+    const int ox = view.ox;
+    const int oy = boot_anim_origin_y(PANEL_H);
 
-    const int dx = ox - boot_anim_screen_x(PANEL_W, 0, three);
+    const int dx = ox - boot_anim_screen_x(0, three, &view);
     const int dy = boot_anim_screen_y(PANEL_H, 0, three, 0, &view) - oy;
 
     TEST_ASSERT_INT_WITHIN_MESSAGE(1, dx, dy,
         "the imaginary axis should go as far left as it goes down");
 }
 
-/* The layout guard: the whole scene has to land on the panel, at every
- * moment of the climb - not just at the start. Swept across progress AND,
- * at each progress, restricted to the part of the curve actually drawn by
- * then, matching what boot_anim.c really shows: the point at the far top of
- * the curve is not on screen yet while the camera is still side-on, so
+/* The layout guard: the whole CURVE has to land on the panel, at every
+ * moment from power-on to the moment the finale finishes turning - not just
+ * during the first, curve-drawing half of the orbit. Swept across time and,
+ * before the curve is fully drawn, restricted to the part actually drawn by
+ * then, matching what boot_anim.c really shows: a point at the far top of
+ * the curve is not on screen yet while the pen has not reached it, so
  * checking it there would be checking something the animation never shows.
+ * Once the curve IS fully drawn, every point of it stays checked for the
+ * rest of the sweep, because the finale keeps turning the camera around a
+ * curve that is now fully present.
  *
  * This is the test that would have caught the sign error the fixed-point
  * derivation had during development - see boot_anim.h's derivation comment
  * on how thoroughly this was cross-checked before being trusted. */
 static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
 {
-    for (int32_t progress = 0; progress <= BOOT_ANIM_ONE; progress += 96) {
-        const boot_anim_view_t view = boot_anim_view(PANEL_H, progress);
+    for (uint32_t t = 0; t <= BOOT_ANIM_FINALE_END_MS; t += 60) {
+        const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, t);
+        const int32_t progress = boot_anim_pen(t);
         const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
         const int last = (int)(((int64_t)progress * span) >> BOOT_ANIM_Q);
+        /* The finale shrinks the drawn curve toward the origin - see
+         * boot_anim_curve_shrink_q8()'s own comment - so what actually has
+         * to stay on panel is the SHRUNK picture boot_anim.c's csx()/csy()
+         * produce, not the raw projection alone. */
+        const int shrink_q8 = boot_anim_curve_shrink_q8(t);
 
         for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
             const boot_anim_pt_t p = boot_anim_sample(i);
-            const int x = boot_anim_screen_x(PANEL_W, p.re, p.im);
-            const int y = boot_anim_screen_y(PANEL_H, p.re, p.im, p.t, &view);
+            const int rawx = boot_anim_screen_x(p.re, p.im, &view);
+            const int rawy = boot_anim_screen_y(PANEL_H, p.re, p.im, p.t, &view);
+            const int x = view.ox + (((rawx - view.ox) * shrink_q8) >> 8);
+            const int y = view.oy + (((rawy - view.oy) * shrink_q8) >> 8);
 
             TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
                 "the drawn part of the curve ran off the side of the panel");
@@ -355,20 +416,17 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
     }
 }
 
-/* The floor and axis labels, checked only at progress 0: that is where the
- * axes are drawn full length (see boot_anim.c's draw_axes(), which only
- * labels them once the axis-growth animation - a separate, earlier ramp -
- * has finished), and it is also the widest the fixed axis arms ever are,
- * since the floor itself has no corners to check - its lines run off the
- * panel and are clipped, which is what makes it read as a plane rather than
- * a tile. */
+/* The axis labels, checked only at t=0: that is where the axes are drawn at
+ * their short, labelled length (see boot_anim.c's draw_axes(), which only
+ * labels them before the finale starts turning them into unbounded lines),
+ * and it is also the widest the short arms ever are. */
 static void test_the_axis_labels_fit_on_the_panel(void)
 {
-    const boot_anim_view_t view = boot_anim_view(PANEL_H, 0);
+    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
     const int32_t arm = 4 * BOOT_ANIM_ONE;
-    const int re_x = boot_anim_screen_x(PANEL_W, arm, 0);
+    const int re_x = boot_anim_screen_x(arm, 0, &view);
     const int re_y = boot_anim_screen_y(PANEL_H, arm, 0, 0, &view);
-    const int im_x = boot_anim_screen_x(PANEL_W, 0, arm);
+    const int im_x = boot_anim_screen_x(0, arm, &view);
     const int im_y = boot_anim_screen_y(PANEL_H, 0, arm, 0, &view);
 
     TEST_ASSERT_TRUE_MESSAGE(re_x >= 0 && re_x < PANEL_W &&
@@ -752,6 +810,146 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
         "a stroke between two pens should be thin again");
 }
 
+/*---------------------------------------------------------------------------
+ * The title
+ *-------------------------------------------------------------------------*/
+
+static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
+{
+    TEST_ASSERT_EQUAL_INT(0, boot_anim_title_wobble(0));
+    TEST_ASSERT_EQUAL_INT(0, boot_anim_title_wobble(-100));
+}
+
+/* THE test. Walk d from 1 (just setting off) down to 0 (arrived) and record
+ * where the wobble crosses zero; the gaps between successive crossings must
+ * strictly grow. A constant-frequency wobble whose AMPLITUDE merely shrinks
+ * - the mistake this is checking was not made - would pass every other test
+ * here and still be wrong: it would vibrate to a stop instead of settling. */
+static void test_the_wobbles_oscillation_slows_as_it_lands(void)
+{
+    int32_t crossings[8];
+    int n = 0;
+    int prev_sign = 0;
+
+    for (int32_t d = BOOT_ANIM_ONE; d >= 0 && n < 8; d -= 4) {
+        const int y = boot_anim_title_wobble(d);
+        const int sign = y > 0 ? 1 : (y < 0 ? -1 : 0);
+        if (sign != 0 && prev_sign != 0 && sign != prev_sign) {
+            crossings[n++] = d;
+        }
+        if (sign != 0) {
+            prev_sign = sign;
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(n >= 4,
+        "expected several oscillations early in the flight to compare");
+
+    /* crossings[] was recorded walking d DOWNWARD (1 toward 0), so a later
+     * entry is a smaller d - the gap between consecutive entries is the
+     * distance-in-d between crossings, and it must grow as d shrinks. */
+    for (int i = 0; i < n - 2; i++) {
+        const int32_t gap_earlier = crossings[i] - crossings[i + 1];
+        const int32_t gap_later   = crossings[i + 1] - crossings[i + 2];
+        TEST_ASSERT_TRUE_MESSAGE(gap_later > gap_earlier,
+            "the gap between oscillations should grow as the letter "
+            "approaches - a chirp, not a constant vibration fading out");
+    }
+}
+
+static void test_a_letter_lands_exactly_on_its_final_position(void)
+{
+    const uint32_t arrived = BOOT_ANIM_TITLE_START_MS +
+                             BOOT_ANIM_TITLE_FLIGHT_MS + 1000;
+
+    for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
+        const boot_anim_title_pos_t p =
+            boot_anim_title_letter(PANEL_W, PANEL_H, i, arrived);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_title_y(PANEL_H), p.y,
+            "a fully arrived letter should sit exactly on the baseline, "
+            "with no residual wobble");
+    }
+}
+
+/* Each letter starts later than the one before it - "one after another",
+ * not all six arriving as a block. */
+static void test_letters_are_staggered_left_to_right(void)
+{
+    const uint32_t never = 0;   /* well before any letter has set off */
+
+    /* Not -1: an off-panel starting position is legitimately a large
+     * negative number (BOOT_ANIM_TITLE_ENTRY_PX or so to the left of the
+     * panel), which a sentinel of -1 would already be greater than on the
+     * very first letter. */
+    int last_x = -100000;
+    for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
+        const boot_anim_title_pos_t here =
+            boot_anim_title_letter(PANEL_W, PANEL_H, i, never);
+        TEST_ASSERT_TRUE_MESSAGE(here.x > last_x,
+            "letters should be laid out left to right in their resting "
+            "row, whatever moment they are drawn at");
+        last_x = here.x;
+
+        if (i > 0) {
+            /* Halfway between letter (i-1)'s start and letter i's: (i-1)
+             * has been moving for half a stagger interval, i has not moved
+             * at all yet (boot_anim_ramp() is exactly 0 until STRICTLY past
+             * its own start, so checking AT i's start catches neither
+             * letter moving - checking here is what actually exercises "an
+             * earlier letter is further along"). */
+            const uint32_t mid = BOOT_ANIM_TITLE_START_MS +
+                                 (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS -
+                                 BOOT_ANIM_TITLE_STAGGER_MS / 2;
+            const boot_anim_title_pos_t at =
+                boot_anim_title_letter(PANEL_W, PANEL_H, i, mid);
+            const boot_anim_title_pos_t prev_at =
+                boot_anim_title_letter(PANEL_W, PANEL_H, i - 1, mid);
+            TEST_ASSERT_TRUE_MESSAGE(prev_at.x >= at.x,
+                "an earlier letter should be at least as far along as a "
+                "later one at the same moment");
+        }
+    }
+}
+
+static void test_a_letter_starts_off_panel_to_the_left(void)
+{
+    const boot_anim_title_pos_t p =
+        boot_anim_title_letter(PANEL_W, PANEL_H, 0, BOOT_ANIM_TITLE_START_MS);
+    TEST_ASSERT_TRUE_MESSAGE(p.x < 0,
+        "a letter should begin off the left edge of the panel, not merely "
+        "at it");
+}
+
+/* The layout guard, in the same spirit as
+ * test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(): every
+ * letter, at every moment of its own flight including the wildest part of
+ * the wobble, must land on the panel once it is actually visible. */
+static void test_the_title_stays_on_the_panel_once_visible(void)
+{
+    /* The full glyph cell, not just its anchor corner - (x, y) is where a
+     * glyph's cell BEGINS, so the cell's far edge is what actually has to
+     * stay on the panel. */
+    const int cell = 8 * BOOT_ANIM_TITLE_SCALE;
+
+    for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
+        const uint32_t start = BOOT_ANIM_TITLE_START_MS +
+                               (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
+        for (uint32_t t = start; t <= start + BOOT_ANIM_TITLE_FLIGHT_MS;
+             t += 15) {
+            const boot_anim_title_pos_t p =
+                boot_anim_title_letter(PANEL_W, PANEL_H, i, t);
+            if (p.x + cell < 0) {
+                continue;   /* still off-panel to the left - not visible yet */
+            }
+            TEST_ASSERT_TRUE_MESSAGE(p.x + cell <= PANEL_W,
+                "a letter drifted off the right edge of the panel");
+            TEST_ASSERT_TRUE_MESSAGE(p.y >= 0 && p.y + cell < PANEL_H,
+                "a letter's wobble carried it off the top or bottom of "
+                "the panel");
+        }
+    }
+}
+
 void run_boot_anim_suite(void)
 {
     RUN_TEST(test_the_curve_climbs_from_zero_to_the_top);
@@ -766,7 +964,9 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_sin_squared_plus_cos_squared_is_one);
     RUN_TEST(test_the_quarter_points_are_exact);
     RUN_TEST(test_the_view_starts_at_the_original_fixed_camera);
-    RUN_TEST(test_the_view_foreshortens_t_by_the_end_without_flattening_it);
+    RUN_TEST(test_the_view_foreshortens_t_by_the_end_of_the_curve);
+    RUN_TEST(test_the_finale_turns_t_back_toward_vertical);
+    RUN_TEST(test_the_finale_slides_the_origin_left_only);
     RUN_TEST(test_the_origin_ends_at_the_mirror_of_where_it_started);
     RUN_TEST(test_the_origin_drifts_upward_without_doubling_back);
 
@@ -804,6 +1004,13 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_settled_curve_keeps_its_colour);
     RUN_TEST(test_the_trail_never_washes_out_to_white);
     RUN_TEST(test_the_live_end_of_the_curve_is_drawn_thicker);
+
+    RUN_TEST(test_the_wobble_is_exactly_flat_once_a_letter_has_arrived);
+    RUN_TEST(test_the_wobbles_oscillation_slows_as_it_lands);
+    RUN_TEST(test_a_letter_lands_exactly_on_its_final_position);
+    RUN_TEST(test_letters_are_staggered_left_to_right);
+    RUN_TEST(test_a_letter_starts_off_panel_to_the_left);
+    RUN_TEST(test_the_title_stays_on_the_panel_once_visible);
 }
 
 SUITE_REGISTER(run_boot_anim_suite);
