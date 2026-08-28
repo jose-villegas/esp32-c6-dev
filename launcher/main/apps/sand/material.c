@@ -1766,8 +1766,18 @@ static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
  * Filled in ONCE PER FRAME by material_set_gravity(), not read per cell as
  * gravity - material_colours() runs per cell per painted row and is hot,
  * so all the trig below happens exactly once a frame and the per-cell cost
- * stays one array index, same as ever. */
-static int8_t liquid_spec[MATERIAL_VARIANTS];
+ * stays one array index, same as ever.
+ *
+ * Sized and indexed by MATERIAL_EDGE_MASK_COUNT - the number of values the
+ * CARDINAL mask alone can take - and NOT by MATERIAL_VARIANTS, even though
+ * both are 16 today. This table has never held a variant; it holds one
+ * entry per CARDINAL edge mask, and gravity has no opinion about the
+ * diagonal bits a water rim's foam reads, so there is nothing for this
+ * table to say about them. The two constants agreeing was a coincidence
+ * that used to double as the size, which is exactly the kind of thing that
+ * silently stops being true the day either one changes for an unrelated
+ * reason. */
+static int8_t liquid_spec[MATERIAL_EDGE_MASK_COUNT];
 
 /* How far liquid_spec's shift reaches, out of the sixteen levels a fill
  * ramp has. A look tuned by eye on the device, not derived from anything -
@@ -1792,8 +1802,9 @@ static int fx_round_div(int n, int d)
 /* Fills liquid_spec[] from this frame's gravity - see that table's own
  * comment for what it holds and why it exists at all.
  *
- * For each of the sixteen MATERIAL_EDGE_* masks, the outward normal `n` is
- * the sum of the unit vectors of whichever cardinal sides are empty.
+ * For each of the MATERIAL_EDGE_MASK_COUNT cardinal MATERIAL_EDGE_* masks,
+ * the outward normal `n` is the sum of the unit vectors of whichever
+ * cardinal sides are empty.
  * Because there are only two axes, `n`'s components collapse to the
  * three cases the caller was told to expect: no empty side at all, or an
  * opposite pair that cancels, gives (0, 0); exactly one empty side (or an
@@ -1817,7 +1828,7 @@ void material_set_gravity(int gx, int gy)
         /* Free fall, or the board laid flat with nothing driving it: no
          * "up" to catch the light from, so no rim gets a highlight rather
          * than dividing by a length of zero. */
-        for (unsigned m = 0; m < MATERIAL_VARIANTS; m++) {
+        for (unsigned m = 0; m < MATERIAL_EDGE_MASK_COUNT; m++) {
             liquid_spec[m] = 0;
         }
         return;
@@ -1828,7 +1839,7 @@ void material_set_gravity(int gx, int gy)
     const int ux_q8 = (-gx * 256) / len;
     const int uy_q8 = (-gy * 256) / len;
 
-    for (unsigned mask = 0; mask < MATERIAL_VARIANTS; mask++) {
+    for (unsigned mask = 0; mask < MATERIAL_EDGE_MASK_COUNT; mask++) {
         const int nx = ((mask & MATERIAL_EDGE_RIGHT) ? 1 : 0) -
                        ((mask & MATERIAL_EDGE_LEFT)  ? 1 : 0);
         const int ny = ((mask & MATERIAL_EDGE_DOWN)  ? 1 : 0) -
@@ -1855,6 +1866,97 @@ void material_set_gravity(int gx, int gy)
         liquid_spec[mask] =
             (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
     }
+}
+
+/*=============================================================================
+ * WATER'S FOAM: gathered at crevices, never on a flat run.
+ *
+ * A liquid rim already shades itself by which way its open side faces
+ * against gravity - liquid_spec[] above. Foam is a second, independent
+ * decoration on the same rim, and it answers a different question:
+ * gravity says which side of a straight surface is bright, foam says
+ * whether the surface is straight AT ALL.
+ *
+ * THE CURVATURE MEASURE. Count how many of a rim cell's EIGHT neighbours
+ * are empty - all eight bits of `mask`, cardinal and diagonal alike, off-
+ * grid counted as NOT empty exactly the way paint_row_n() already treats
+ * the board edge as solid wall. A perfectly straight edge - the top of a
+ * flat pool, say - has exactly 3 empty neighbours: the three cells on the
+ * open side. Fewer than 3 is a cell tucked into a CONCAVE notch; more than
+ * 3 is a cell sticking out of a CONVEX bump. Either way is curvature, so
+ * `curvature = abs(empty_count - 3)` is 0 on a straight run and grows in
+ * both directions away from it.
+ *
+ * NO MOTION FLAG, AND THIS IS THE WHOLE POINT. It would be easy to reach
+ * for "is the water moving" as a second gate, and it would be redundant:
+ * a calm pool's rim is smooth by construction, so curvature alone already
+ * reads as almost entirely flat, and a sloshing one is jagged along its
+ * whole length, so curvature alone already reads as almost entirely not.
+ * Measured on real sloshing water, 48x32, water only - the share of rim
+ * cells that are NOT flat (curvature > 0):
+ *
+ *     still, flat pool          4%
+ *     settled at 40 degrees    34%
+ *     8 steps into 40 degrees  66%
+ *     2 steps into 40 degrees  76%
+ *     2 steps into 75 degrees  94%
+ *
+ * 4% against 94% is curvature already doing the job a motion flag would
+ * have been added to do. Adding one anyway would be a second mechanism
+ * competing with the first to answer a question the first already
+ * answers - do not add it back in; if foam ever needs tuning, the
+ * threshold table below is where that tuning belongs. */
+
+/* FOAM's own colour - a side table, not a palette[] row, the same pattern
+ * glass_shine and stone_speckle already use above: there is no spare slot
+ * in palette[] for it, and a dither over an existing rim colour does not
+ * need an indexed row of its own the way a fill level does.
+ *
+ * Brighter and whiter than water's own palest ramp entry (0x77C4E8, the
+ * shallow end of the SHADES() run in palette[] above) - foam has to read
+ * as something sitting ON the water, not merely as the palest water there
+ * is. */
+static const gfx_color_t water_foam = GFX_RGB(0xE8F6FF);
+
+/* How far curvature is allowed to climb before it stops changing the
+ * foam density any further - see water_foam_threshold below. Curvature
+ * itself can reach 5 (an empty_count of 8, a cell exposed on every side),
+ * but a corner poking into open air should look exactly as heavily foamed
+ * as an ordinary jagged crevice one cell less exposed, not more so. */
+#define WATER_FOAM_CURVATURE_MAX 3
+
+/* Foam density at each curvature, expressed as a threshold against
+ * `hash & 7u`: a cell foams when its stable per-cell hash (already passed
+ * in, already material_grain_hash(), already the same value every frame -
+ * see that function's own comment) falls under the threshold for its
+ * curvature. So this is a DITHER, not a fill - a "heavy" cell still shows
+ * bare rim on 2 of its 8 hash values, and a "flat" one never foams at all,
+ * since hash & 7u can never be less than 0.
+ *
+ * A look tuned by eye, not measured - the first thing to move if foam
+ * ever reads too sparse (raise these) or too busy (lower them). Kept as a
+ * named table rather than a formula so tuning it is an edit to plain
+ * numbers, not to arithmetic. */
+static const uint8_t water_foam_threshold[WATER_FOAM_CURVATURE_MAX + 1] = {
+    0,  /* curvature 0, flat   - no foam at all */
+    2,  /* curvature 1, light  - foams on 2 of 8 hash values */
+    4,  /* curvature 2, medium - foams on 4 of 8 */
+    6,  /* curvature 3+, heavy - foams on 6 of 8 */
+};
+
+/* How many of `mask`'s bits are set - the same manual bit-count
+ * suite_icons.c's popcount16() uses, kept here rather than shared because
+ * the two operate on different widths for different reasons and a shared
+ * helper would need to justify its own generality. No floating point, and
+ * cheap enough for a path already gated to water rim cells only - see
+ * paint_row_n() in app_sand.c for where that gate actually lives. */
+static unsigned material_popcount8(unsigned mask)
+{
+    unsigned count = 0;
+    for (unsigned bit = 0; bit < 8u; bit++) {
+        count += (mask >> bit) & 1u;
+    }
+    return count;
 }
 
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
@@ -1892,18 +1994,40 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
      * lime survive on screen at all - flattening those the way an earlier
      * attempt at this fix did destroyed the very thing this pass exists to
      * keep. A rim cell keeps exactly the fill-indexed lookup every other
-     * material already gets, shifted by liquid_spec[mask] - see that
-     * table's own comment above for what the shift means and
-     * material_set_gravity() for where it comes from. */
+     * material already gets, shifted by liquid_spec[] indexed by the
+     * CARDINAL bits alone - see that table's own comment above for what
+     * the shift means and material_set_gravity() for where it comes from,
+     * and MATERIAL_EDGE_CARDINAL's own comment in material.h for why the
+     * index has to be masked down rather than used raw now that `mask`
+     * carries diagonal bits too.
+     *
+     * WATER'S rim then gets one thing no other liquid does: foam, gated
+     * purely by curvature - see this file's own comment on that above.
+     * Oil, lava and acid fall through this same block unchanged; only the
+     * id check below diverts water into the foam path. */
     if (material_of(c)->kind == KIND_LIQUID) {
         const uint8_t id = CELL_MATERIAL(c);
+        const unsigned cardinal = mask & MATERIAL_EDGE_CARDINAL;
 
-        if (mask == 0) {
+        if (cardinal == 0) {
             out[0] = palette[CELL_MAKE(id, MASS_MAX)];
         } else {
-            int idx = (int)v + liquid_spec[mask];
+            int idx = (int)v + liquid_spec[cardinal];
             idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
             out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
+
+            if (id == MAT_WATER) {
+                const unsigned empty_count = material_popcount8(mask);
+                unsigned curvature = (empty_count > 3)
+                                        ? (empty_count - 3)
+                                        : (3 - empty_count);
+                if (curvature > WATER_FOAM_CURVATURE_MAX) {
+                    curvature = WATER_FOAM_CURVATURE_MAX;
+                }
+                if ((hash & 7u) < water_foam_threshold[curvature]) {
+                    out[0] = water_foam;
+                }
+            }
         }
         out[1] = out[0];
         out[2] = out[0];
@@ -1937,7 +2061,12 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
         }
         break;
     case MAT_GLASS: {
-        const bool edge = mask != 0;
+        /* CARDINAL bits only - see MATERIAL_EDGE_CARDINAL's own comment in
+         * material.h. `mask != 0` would be wrong now that the mask can
+         * carry diagonal bits a water rim reads: a pane with every
+         * cardinal neighbour occupied but one diagonal empty must stay
+         * interior, not spring an edge. */
+        const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
         out[0] = edge ? glass_edge_body[v][hash & 3u]
                       : glass_body[v][hash & 3u];
         out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
@@ -1945,8 +2074,11 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
         return MATERIAL_HATCHED;
     }
     case MAT_STONE:
-        out[0] = (mask != 0) ? stone_edge_speckle[v][hash & 7u]
-                             : stone_speckle[v][hash & 7u];
+        /* Same CARDINAL-only test as glass above, and for the same reason -
+         * see MATERIAL_EDGE_CARDINAL's own comment in material.h. */
+        out[0] = ((mask & MATERIAL_EDGE_CARDINAL) != 0)
+                     ? stone_edge_speckle[v][hash & 7u]
+                     : stone_speckle[v][hash & 7u];
         out[1] = out[0];
         out[2] = out[0];
         return MATERIAL_SPECKLED;

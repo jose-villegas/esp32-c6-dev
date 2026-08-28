@@ -5343,7 +5343,15 @@ static void test_a_liquid_body_paints_flat_inside(void)
  * Checked under ZERO gravity, so the specular shift the next test covers
  * cannot be what is making shallow and deep differ here - this is purely
  * "does the ordinary fill ramp still work on a rim cell", which is what
- * stops part 1 (the interior fix) from quietly swallowing the rim too. */
+ * stops part 1 (the interior fix) from quietly swallowing the rim too.
+ *
+ * Uses OIL rather than water, deliberately: water's rim now also carries
+ * foam (see material_colours()'s own comment on curvature), which is a
+ * dither keyed off hash and mask and would make this test's single fixed
+ * mask/hash pair fragile to exactly the change this test predates. Oil's
+ * rim goes through the identical fill-ramp code path with none of that -
+ * see test_only_water_foams, which is what actually pins foam being
+ * water-only, so this test is free to stay about the fill ramp alone. */
 static void test_a_liquid_rim_still_shows_its_fill(void)
 {
     material_set_gravity(0, 0);   /* no specular term to confuse this with */
@@ -5354,15 +5362,15 @@ static void test_a_liquid_rim_still_shows_its_fill(void)
                                                * not about which side */
 
     gfx_color_t shallow[3], deep[3];
-    material_colours(CELL_MAKE(MAT_WATER, 1), 0u, mask, shallow);
-    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, mask, deep);
+    material_colours(CELL_MAKE(MAT_OIL, 1), 0u, mask, shallow);
+    material_colours(CELL_MAKE(MAT_OIL, MASS_MAX), 0u, mask, deep);
 
-    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, 1)], shallow[0],
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_OIL, 1)], shallow[0],
         "a rim cell must read its own fill level straight from the "
         "palette - flattening this is the mistake a previous attempt at "
         "hiding the comb made, and it erased the surface film the rim "
         "exists to show");
-    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, MASS_MAX)], deep[0],
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_OIL, MASS_MAX)], deep[0],
         "and a full rim cell must read as full, not as whatever the "
         "interior case would have painted it instead");
     TEST_ASSERT_TRUE_MESSAGE(shallow[0] != deep[0],
@@ -5387,7 +5395,14 @@ static void test_a_liquid_rim_still_shows_its_fill(void)
  * the device would necessarily catch, since a pool still looks LIT, just
  * from the wrong side. Comparing against gravity's own direction, twice,
  * at two different tilts, is what catches that rather than trusting the
- * arithmetic by eye. */
+ * arithmetic by eye.
+ *
+ * Uses OIL rather than water, for the same reason the previous test does -
+ * water's rim now dithers in foam keyed off hash and mask, and this test's
+ * fixed hash of 0u with a single cardinal bit set is exactly the kind of
+ * mask/hash pair that gate can catch. liquid_spec[] is shared by every
+ * liquid, so oil pins the same specular sign water relies on without
+ * foam anywhere near it. */
 static void test_a_liquid_rim_catches_the_light_from_above(void)
 {
     const uint8_t fill = 8;   /* mid-ramp, so a shift in either direction
@@ -5397,8 +5412,8 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
     material_set_gravity(0, 1000);   /* straight down */
 
     gfx_color_t up[3], down[3];
-    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_UP, up);
-    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_DOWN, down);
+    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_UP, up);
+    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_DOWN, down);
 
     TEST_ASSERT_TRUE_MESSAGE(
         panel_luminance(up[0]) > panel_luminance(down[0]),
@@ -5409,9 +5424,9 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
     material_set_gravity(1000, 0);   /* tilt: gravity now points right */
 
     gfx_color_t left[3], right[3];
-    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_LEFT,
+    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_LEFT,
                      left);
-    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_RIGHT,
+    material_colours(CELL_MAKE(MAT_OIL, fill), 0u, MATERIAL_EDGE_RIGHT,
                      right);
 
     TEST_ASSERT_TRUE_MESSAGE(
@@ -5420,6 +5435,230 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
         "was - once gravity points right, the side facing LEFT is the one "
         "facing away from it, so that is the side that should catch the "
         "light now");
+}
+
+/*=============================================================================
+ * WATER'S FOAM - gathered at crevices, never on a flat run.
+ *
+ * material_colours()'s own top comment (material.c) has the full account of
+ * why curvature - and only curvature - decides this: measured on real
+ * sloshing water, a flat pool's rim is non-flat in 4% of its cells and a
+ * pool two steps into a 75 degree tilt is non-flat in 94% of them, which is
+ * why no separate "is it moving" signal is wired in here or anywhere else.
+ *
+ * None of these four tests can reach into material.c's own `water_foam`
+ * constant - it is file-static, the same way glass_shine and stone_speckle
+ * already are, and these tests reach material_colours() only through
+ * material.h same as any other caller. Instead they lean on
+ * material_set_gravity(0, 0), which zeroes liquid_spec[] entirely (see that
+ * function's own free-fall branch), so that "did NOT foam" has an exact,
+ * checkable answer: the plain fill-indexed palette entry, with no shift
+ * applied at all. Foam is the one thing left that can make a rim cell
+ * disagree with that value once gravity contributes nothing. */
+
+/* Every test below reads this rim cell's own fill, at variant 12 - deep
+ * enough that the pale/dark ends of the ramp are not near either clamp,
+ * so a coincidental match with the foam colour is not a risk worth
+ * chasing down. */
+#define FOAM_TEST_FILL 12
+
+/* THE CURVATURE GATE ITSELF - the property every other foam test assumes
+ * without re-checking. A FLAT rim (exactly 3 of 8 neighbours empty, the
+ * shape of the top of an ordinary settled pool - one cardinal side plus
+ * the two diagonals that lean against it) must never foam, at ANY hash;
+ * sweeping all 8 values is what tells "never" apart from "not at this one
+ * hash I happened to try". A cell exposed on all 8 sides - as curved as a
+ * rim on this board can get - must foam for AT LEAST SOME hashes: foam is
+ * a dither (see water_foam_threshold's own comment in material.c), so it
+ * will not be every hash either, and asserting that would be asserting
+ * something the design never promised. */
+static void test_water_foams_where_its_rim_is_curved(void)
+{
+    material_set_gravity(0, 0);
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t plain = pal[CELL_MAKE(MAT_WATER, FOAM_TEST_FILL)];
+
+    const unsigned flat_mask = MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
+                               MATERIAL_EDGE_UP_RIGHT;
+    const unsigned spike_mask =
+        MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
+        MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+        MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
+
+    int spike_foamed = 0;
+    for (unsigned hash = 0; hash < 8u; hash++) {
+        gfx_color_t flat_col[3], spike_col[3];
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                         flat_mask, flat_col);
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                         spike_mask, spike_col);
+
+        char why[192];
+        snprintf(why, sizeof why,
+                 "a flat water rim (curvature 0) must never foam, at hash "
+                 "%u - foam appearing on a straight run means the gate is "
+                 "reading something other than curvature", hash);
+        TEST_ASSERT_EQUAL_MESSAGE(plain, flat_col[0], why);
+
+        if (spike_col[0] != plain) {
+            spike_foamed++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, spike_foamed,
+        "a rim cell exposed on all 8 sides is as curved as this board's "
+        "rims get, and must foam for at least some of the 8 hash values - "
+        "if none of them do, curvature is not reaching the foam gate at "
+        "all");
+}
+
+/* Oil, lava and acid share water's rim code path - the fill-indexed lookup
+ * shifted by liquid_spec[] - right up until the id check that hands water
+ * off into foam. This is the "water only" constraint, and the failure mode
+ * it exists to catch is specific: putting the id check one level too high
+ * (or leaving it out) would foam every liquid's rim alike, since curvature
+ * itself does not know or care which liquid it is measuring.
+ *
+ * Same high-curvature shape as the previous test's spike_mask, and the
+ * same hash sweep - if water can be made to foam by this shape, these
+ * three must be provably immune to it under the exact same inputs, not
+ * just "probably fine" under whatever the loop's default happened to be. */
+static void test_only_water_foams(void)
+{
+    material_set_gravity(0, 0);
+    const gfx_color_t *pal = material_palette();
+    const unsigned spike_mask =
+        MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |
+        MATERIAL_EDGE_DOWN | MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+        MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT;
+    static const uint8_t non_water[] = { MAT_OIL, MAT_LAVA, MAT_ACID };
+
+    for (unsigned k = 0; k < sizeof non_water / sizeof non_water[0]; k++) {
+        const uint8_t id = non_water[k];
+        const gfx_color_t plain = pal[CELL_MAKE(id, FOAM_TEST_FILL)];
+
+        for (unsigned hash = 0; hash < 8u; hash++) {
+            gfx_color_t col[3];
+            material_colours(CELL_MAKE(id, FOAM_TEST_FILL), hash, spike_mask,
+                             col);
+
+            char why[128];
+            snprintf(why, sizeof why,
+                     "%s at maximum rim curvature must paint exactly what "
+                     "it painted before foam existed, at hash %u - only "
+                     "water may foam",
+                     materials[id].name, hash);
+            TEST_ASSERT_EQUAL_MESSAGE(plain, col[0], why);
+        }
+    }
+}
+
+/* Guards the interior fix 6a05faa exists for: `mask == 0` (no cardinal
+ * side open) must keep painting the flat body colour regardless of what
+ * the diagonal bits say, because an interior cell is never a rim and
+ * foam is a rim-only decoration. Swept across masks that are pure
+ * diagonal - no cardinal bit at all - specifically because that is the
+ * shape a broken cardinal test would miss: a mistake that gated foam (or
+ * the rim split generally) on `mask != 0` instead of
+ * `mask & MATERIAL_EDGE_CARDINAL` would light these up as rim cells, and
+ * every one of them must still read as plain interior water instead. */
+static void test_a_liquid_interior_never_foams(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
+
+    static const unsigned interior_masks[] = {
+        0u,
+        MATERIAL_EDGE_UP_LEFT,
+        MATERIAL_EDGE_UP_RIGHT,
+        MATERIAL_EDGE_DOWN_LEFT,
+        MATERIAL_EDGE_DOWN_RIGHT,
+        MATERIAL_EDGE_UP_LEFT | MATERIAL_EDGE_UP_RIGHT |
+            MATERIAL_EDGE_DOWN_LEFT | MATERIAL_EDGE_DOWN_RIGHT,
+    };
+
+    for (unsigned k = 0;
+         k < sizeof interior_masks / sizeof interior_masks[0]; k++) {
+        for (unsigned hash = 0; hash < 8u; hash++) {
+            gfx_color_t col[3];
+            material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
+                             interior_masks[k], col);
+
+            char why[192];
+            snprintf(why, sizeof why,
+                     "an interior water cell (mask %#x, hash %u) must "
+                     "paint the flat body colour - diagonal bits with no "
+                     "cardinal side open do not make a cell a rim, and "
+                     "only a rim may foam", interior_masks[k], hash);
+            TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
+        }
+    }
+}
+
+/* THE REGRESSION GUARD for the trap the diagonal bits opened. Before this
+ * change, `mask != 0` was "is this cell an edge at all", and it was
+ * correct because the mask held nothing but the four cardinals. Adding
+ * bits 4-7 makes that test silently wrong: a cell with every cardinal
+ * neighbour occupied and exactly one diagonal empty would newly read as
+ * an edge, and glass and stone would start outlining cells they used to
+ * paint as solid interior - a change to two materials nobody asked to
+ * touch, from a mistake nowhere near either of their own code.
+ *
+ * Checked by comparing a diagonal-only mask directly against mask 0 for
+ * glass, stone, and a liquid: if MATERIAL_EDGE_CARDINAL is not what gates
+ * the edge test (or the mask ever changes shape again), this is the test
+ * that goes red, not some unrelated glass or stone test that merely
+ * happens to exercise an edge. */
+static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
+{
+    const unsigned diagonal_only = MATERIAL_EDGE_UP_LEFT;
+
+    {
+        gfx_color_t interior[3], diagonal[3];
+        const material_pattern_t pat_i =
+            material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, interior);
+        const material_pattern_t pat_d = material_colours(
+            CELL_MAKE(MAT_GLASS, 5), 1u, diagonal_only, diagonal);
+
+        TEST_ASSERT_EQUAL_MESSAGE(pat_i, pat_d,
+            "a lone diagonal neighbour must not change glass's pattern - "
+            "if this differs, glass just grew an outline nobody drew");
+        TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
+            "glass's body colour must be identical with a lone diagonal "
+            "neighbour empty - the cardinal test is what decides an edge, "
+            "not `mask != 0`");
+        TEST_ASSERT_EQUAL_MESSAGE(interior[1], diagonal[1],
+            "and its dither, which glass_edge_dither vs glass_dither would "
+            "otherwise silently swap in");
+        TEST_ASSERT_EQUAL_MESSAGE(interior[2], diagonal[2],
+            "and its shine, for the same reason");
+    }
+
+    {
+        gfx_color_t interior[3], diagonal[3];
+        material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, interior);
+        material_colours(CELL_MAKE(MAT_STONE, 5), 1u, diagonal_only,
+                         diagonal);
+
+        TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
+            "a lone diagonal neighbour must not switch stone onto its "
+            "edge speckle - stone_edge_speckle vs stone_speckle must both "
+            "still read as `mask & MATERIAL_EDGE_CARDINAL`, not `mask`");
+    }
+
+    {
+        gfx_color_t interior[3], diagonal[3];
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), 1u, 0u,
+                         interior);
+        material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), 1u,
+                         diagonal_only, diagonal);
+
+        TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
+            "a lone diagonal neighbour must not turn an interior water "
+            "cell into a rim - the interior/rim split reads "
+            "MATERIAL_EDGE_CARDINAL exactly like glass and stone do, and "
+            "a rim wrongly declared here could even start foaming");
+    }
 }
 
 
@@ -15882,6 +16121,10 @@ void run_sand_suite(void)
     RUN_TEST(test_a_liquid_body_paints_flat_inside);
     RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
+    RUN_TEST(test_water_foams_where_its_rim_is_curved);
+    RUN_TEST(test_only_water_foams);
+    RUN_TEST(test_a_liquid_interior_never_foams);
+    RUN_TEST(test_a_diagonal_neighbour_alone_is_not_an_edge);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);

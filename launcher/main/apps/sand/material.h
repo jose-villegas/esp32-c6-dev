@@ -1100,7 +1100,7 @@ typedef enum {
     MATERIAL_HATCHED,       /* diagonals both ways, bright where they cross */
 } material_pattern_t;
 
-/* Which CARDINAL neighbours of a cell are empty, as a 4-bit mask - what
+/* Which of a cell's eight neighbours are empty, as an 8-bit mask - what
  * `edge` used to collapse to a single bool before a liquid needed to know
  * WHICH side was open rather than merely whether one was.
  *
@@ -1108,11 +1108,50 @@ typedef enum {
  * agree on it: app_sand.c's paint_row_n(), which builds one per cell, and
  * material_set_gravity() below, which turns one into a specular shift.
  * Grid/screen coordinates throughout this app have y increasing DOWN the
- * screen, so "up" is the -y direction and "down" is +y. */
-#define MATERIAL_EDGE_LEFT  (1u << 0)
-#define MATERIAL_EDGE_RIGHT (1u << 1)
-#define MATERIAL_EDGE_UP    (1u << 2)
-#define MATERIAL_EDGE_DOWN  (1u << 3)
+ * screen, so "up" is the -y direction and "down" is +y.
+ *
+ * THE FOUR CARDINALS, bits 0-3, are the whole of the mask that existed
+ * before this comment did, and they alone decide whether a cell is an
+ * EDGE at all - see MATERIAL_EDGE_CARDINAL below. Glass and stone only
+ * ever ask that question; a liquid's interior/rim split asks it too,
+ * before asking anything finer.
+ *
+ * THE FOUR DIAGONALS, bits 4-7, were added later and refine a WATER rim's
+ * FOAM - see material_colours()'s own comment on curvature for what they
+ * are for. Nothing else reads them: a diagonal alone, with every cardinal
+ * neighbour occupied, must NOT read as an edge, which is exactly the trap
+ * MATERIAL_EDGE_CARDINAL exists to avoid (see its own comment, and
+ * test_a_diagonal_neighbour_alone_is_not_an_edge in suite_sand.c, which
+ * pins it). */
+#define MATERIAL_EDGE_LEFT       (1u << 0)
+#define MATERIAL_EDGE_RIGHT      (1u << 1)
+#define MATERIAL_EDGE_UP         (1u << 2)
+#define MATERIAL_EDGE_DOWN       (1u << 3)
+#define MATERIAL_EDGE_UP_LEFT    (1u << 4)
+#define MATERIAL_EDGE_UP_RIGHT   (1u << 5)
+#define MATERIAL_EDGE_DOWN_LEFT  (1u << 6)
+#define MATERIAL_EDGE_DOWN_RIGHT (1u << 7)
+
+/* THE "IS THIS CELL AN EDGE AT ALL" TEST, and ONLY the four cardinal bits.
+ *
+ * Before the diagonals existed, `mask != 0` was that test, because the
+ * mask held nothing else. Once bits 4-7 exist, `mask != 0` silently
+ * changes meaning: a cell with every cardinal neighbour occupied but ONE
+ * diagonal empty would newly read as an edge, and glass and stone would
+ * start outlining cells they used to paint as solid interior. Both of
+ * them, and the liquid interior/rim split, test `(mask &
+ * MATERIAL_EDGE_CARDINAL) != 0` instead - never `mask != 0` - so that
+ * adding the diagonals could not change what either of them draws. */
+#define MATERIAL_EDGE_CARDINAL                                           \
+    (MATERIAL_EDGE_LEFT | MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP |       \
+     MATERIAL_EDGE_DOWN)
+
+/* How many distinct values the CARDINAL mask alone can take - 16, one per
+ * combination of its four bits. `liquid_spec[]` in material.c is sized and
+ * indexed by this, not by MATERIAL_VARIANTS: the two happen to both be 16
+ * today, which is exactly the kind of coincidence that looks like a
+ * decision and is not one - see liquid_spec's own comment in material.c. */
+#define MATERIAL_EDGE_MASK_COUNT (MATERIAL_EDGE_CARDINAL + 1u)
 
 /* Fills in the colours this cell is painted with and says how to arrange
  * them: `out[0]` is the body, `out[1]` the diagonal lines, `out[2]` where
@@ -1120,11 +1159,14 @@ typedef enum {
  *
  * `hash` is any stable per-cell number - a speckled material uses it to
  * pick its shade, so the same cell keeps the same one frame to frame. */
-/* `mask` is which of this cell's four cardinal neighbours are empty - see
- * the MATERIAL_EDGE_* bits above. Anything that only cares WHETHER this
- * cell is an edge at all, rather than which side, tests `mask != 0`: that
- * is exactly what the old bool `edge` meant, and every existing reader
- * (glass, stone) keeps exactly its old behaviour under that test.
+/* `mask` is which of this cell's eight neighbours are empty - see the
+ * MATERIAL_EDGE_* bits above. Anything that only cares WHETHER this cell
+ * is an edge at all, rather than which side, tests
+ * `(mask & MATERIAL_EDGE_CARDINAL) != 0`: that is exactly what the old
+ * bool `edge` meant, back when the mask held only the four cardinals, and
+ * every existing reader (glass, stone) keeps exactly its old behaviour
+ * under that test. Testing `mask != 0` instead would be wrong now that
+ * diagonal bits exist - see MATERIAL_EDGE_CARDINAL's own comment.
  *
  * A material whose colour tracks a temperature moves much less on its
  * outline than in its body, so a wall keeps its shape as it heats instead
@@ -1135,17 +1177,20 @@ typedef enum {
  * A LIQUID reads the mask more finely still - see material_colours()'s own
  * comment in material.c for why its interior ignores fill level entirely
  * and its rim both keeps the fill ramp and shades by which way the empty
- * side faces against gravity. */
+ * side faces against gravity. WATER's rim reads the mask finer again, all
+ * eight bits of it, to decide where FOAM gathers - see that same comment's
+ * discussion of curvature. */
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     gfx_color_t out[3]);
 
 /* Called once per frame, before painting, with the same gravity vector
  * this frame's sand_step() was given.
  *
- * Fills a 16-entry table - one entry per possible MATERIAL_EDGE_* mask -
- * with how much a liquid rim cell at that mask should brighten (negative)
- * or darken (positive) relative to its own fill level. All the trig this
- * needs lives here, ONCE, so that material_colours() - called per cell per
- * painted row, and hot - pays for it with a single array index and nothing
- * else. See material.c for the derivation. */
+ * Fills a MATERIAL_EDGE_MASK_COUNT-entry table - one entry per possible
+ * CARDINAL MATERIAL_EDGE_* mask, diagonals excluded, since gravity has no
+ * opinion about foam - with how much a liquid rim cell at that mask should
+ * brighten (negative) or darken (positive) relative to its own fill level.
+ * All the trig this needs lives here, ONCE, so that material_colours() -
+ * called per cell per painted row, and hot - pays for it with a single
+ * array index and nothing else. See material.c for the derivation. */
 void material_set_gravity(int gx, int gy);

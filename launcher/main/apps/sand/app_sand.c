@@ -945,12 +945,39 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * know WHICH side is open, not merely that one is, so it can shade
          * itself by which way that side faces against gravity. See
          * MATERIAL_EDGE_* in material.h, which this has to agree with:
-         * "above" is row - grid_w, i.e. cy - 1, which is UP the screen. */
-        const unsigned mask =
+         * "above" is row - grid_w, i.e. cy - 1, which is UP the screen.
+         *
+         * UNCONDITIONAL, same as ever - every cell of every material pays
+         * these four tests, and that has to stay true: this is the
+         * hottest loop in the app, and nothing below may make the common
+         * case (a non-water cell, or an interior cell of anything) pay
+         * for more than this. */
+        unsigned mask =
             ((cx > 0          && CELL_IS_EMPTY(row[cx - 1])) ? MATERIAL_EDGE_LEFT  : 0u) |
             ((cx < grid_w - 1 && CELL_IS_EMPTY(row[cx + 1])) ? MATERIAL_EDGE_RIGHT : 0u) |
             ((above != NULL   && CELL_IS_EMPTY(above[cx]))   ? MATERIAL_EDGE_UP    : 0u) |
             ((below != NULL   && CELL_IS_EMPTY(below[cx]))   ? MATERIAL_EDGE_DOWN  : 0u);
+
+        /* The four DIAGONAL bits, which only a WATER RIM cell ever reads
+         * (material_colours()'s foam gate - see material.h's own comment
+         * on MATERIAL_EDGE_UP_LEFT and friends). Computed only when they
+         * can possibly matter: mask already came up non-zero on the
+         * cardinal test above (so this cell is a rim at all - an interior
+         * cell, water or otherwise, cannot be a rim and never reaches
+         * here), AND the cell is water (every other material ignores the
+         * diagonal bits entirely, so spending four more reads on a rim of
+         * oil, lava, acid, or anything else buys nothing). Every other
+         * cell - which is most of them, on a typical board - skips these
+         * four tests completely, so the per-cell cost of adding foam is
+         * paid only where foam can actually appear. */
+        if ((mask & MATERIAL_EDGE_CARDINAL) != 0 &&
+            CELL_MATERIAL(row[cx]) == MAT_WATER) {
+            mask |=
+                ((cx > 0          && above != NULL && CELL_IS_EMPTY(above[cx - 1])) ? MATERIAL_EDGE_UP_LEFT    : 0u) |
+                ((cx < grid_w - 1 && above != NULL && CELL_IS_EMPTY(above[cx + 1])) ? MATERIAL_EDGE_UP_RIGHT   : 0u) |
+                ((cx > 0          && below != NULL && CELL_IS_EMPTY(below[cx - 1])) ? MATERIAL_EDGE_DOWN_LEFT  : 0u) |
+                ((cx < grid_w - 1 && below != NULL && CELL_IS_EMPTY(below[cx + 1])) ? MATERIAL_EDGE_DOWN_RIGHT : 0u);
+        }
 
         gfx_color_t col[3];
         const material_pattern_t pat =
