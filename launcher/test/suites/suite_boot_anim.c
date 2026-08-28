@@ -404,10 +404,10 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
         const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
         const int last = (int)(((int64_t)progress * span) >> BOOT_ANIM_Q);
         /* The finale shrinks the drawn curve toward the origin - see
-         * boot_anim_space_shrink_q8()'s own comment - so what actually has
+         * boot_anim_motif_shrink_q8()'s own comment - so what actually has
          * to stay on panel is the SHRUNK picture boot_anim.c's csx()/csy()
          * produce, not the raw projection alone. */
-        const int shrink_q8 = boot_anim_space_shrink_q8(t);
+        const int shrink_q8 = boot_anim_motif_shrink_q8(t);
 
         for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
             const boot_anim_pt_t p = boot_anim_sample(i);
@@ -535,33 +535,13 @@ static void test_a_span_climbs_steadily_when_its_points_do(void)
 
 /*---------------------------------------------------------------------------
  * Pacing
+ *
+ * tween_ramp()/tween_ease_out() themselves are tested in suite_tween.c now -
+ * this file used to have its own copies under boot_anim_ramp()/
+ * boot_anim_ease_out(), with their own tests, before both moved to
+ * util/tween.h as shared vocabulary. What is left here is specific to how
+ * boot_anim.h USES them, not the primitives themselves.
  *-------------------------------------------------------------------------*/
-
-static void test_a_ramp_is_flat_before_and_after(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_ramp(0, 100, 200));
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_ramp(100, 100, 200));
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ramp(300, 100, 200));
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ramp(9999, 100, 200));
-}
-
-static void test_a_ramp_never_goes_backwards(void)
-{
-    uint8_t last = 0;
-    for (uint32_t t = 0; t <= 400; t++) {
-        const uint8_t v = boot_anim_ramp(t, 100, 200);
-        TEST_ASSERT_TRUE_MESSAGE(v >= last, "a ramp went backwards");
-        last = v;
-    }
-}
-
-static void test_the_ease_keeps_its_endpoints_and_leads_in_the_middle(void)
-{
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_ease_out(0));
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ease_out(255));
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_ease_out(128) > 128,
-        "an ease-out is ahead of linear part way through, not behind it");
-}
 
 /* Phase 1 only - see boot_anim_pen()'s own "TWO PHASES" comment. It reaches
  * BOOT_ANIM_CURVE_PHASE1_FRACTION, not BOOT_ANIM_ONE, at the end of
@@ -933,7 +913,7 @@ static void test_letters_are_staggered_left_to_right(void)
         if (i > 0) {
             /* Halfway between letter (i-1)'s start and letter i's: (i-1)
              * has been moving for half a stagger interval, i has not moved
-             * at all yet (boot_anim_ramp() is exactly 0 until STRICTLY past
+             * at all yet (tween_ramp() is exactly 0 until STRICTLY past
              * its own start, so checking AT i's start catches neither
              * letter moving - checking here is what actually exercises "an
              * earlier letter is further along"). */
@@ -1028,9 +1008,6 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_a_span_never_leaves_its_control_points_behind);
     RUN_TEST(test_a_span_climbs_steadily_when_its_points_do);
 
-    RUN_TEST(test_a_ramp_is_flat_before_and_after);
-    RUN_TEST(test_a_ramp_never_goes_backwards);
-    RUN_TEST(test_the_ease_keeps_its_endpoints_and_leads_in_the_middle);
     RUN_TEST(test_the_pen_runs_from_nothing_to_phase_ones_end);
     RUN_TEST(test_the_pen_keeps_climbing_through_phase_two);
     RUN_TEST(test_the_curve_is_finished_before_the_dissolve_starts);

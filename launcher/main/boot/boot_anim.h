@@ -61,6 +61,7 @@
 #include <stdint.h>
 
 #include "boot/boot_anim_curve.h"
+#include "util/tween.h"
 
 #define BOOT_ANIM_Q    12
 #define BOOT_ANIM_ONE  (1 << BOOT_ANIM_Q)   /* 4096 == 1.0 */
@@ -432,35 +433,18 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
 
 #define BOOT_ANIM_FADE_START_MS 4600   /* dissolve into the launcher */
 
-/* 0 before `start_ms`, 255 from `start_ms + dur_ms` on, linear between. */
-static inline uint8_t boot_anim_ramp(uint32_t now_ms, uint32_t start_ms,
-                                     uint32_t dur_ms)
-{
-    if (now_ms <= start_ms) {
-        return 0;
-    }
-    const uint32_t elapsed = now_ms - start_ms;
-    if (dur_ms == 0 || elapsed >= dur_ms) {
-        return 255;
-    }
-    return (uint8_t)((elapsed * 255u) / dur_ms);
-}
-
-/* Fast off the mark, settling as it arrives. Motion that starts and stops at
- * the same speed reads as mechanical; one squared term is enough to stop it
- * looking like a progress bar. */
-static inline uint8_t boot_anim_ease_out(uint8_t linear)
-{
-    const uint32_t left = 255u - linear;
-    return (uint8_t)(255u - (left * left) / 255u);
-}
+/* The ramp/ease-out/lerp vocabulary itself now lives in util/tween.h, shared
+ * rather than private to this file - see that header's own top comment for
+ * why. boot_anim_ramp() and boot_anim_ease_out() used to be defined here,
+ * doing exactly what tween_ramp()/tween_ease_out() do now; every call site
+ * below reads those directly instead. */
 
 /* How far along each axis the pen has reached, 0..255 of the way to its far
  * end. A FRACTION, not a pixel count: the three arms are three different
  * lengths on screen and still have to arrive together. */
 static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
 {
-    return boot_anim_ease_out(boot_anim_ramp(now_ms, 0, BOOT_ANIM_AXES_MS));
+    return tween_ease_out(tween_ramp(now_ms, 0, BOOT_ANIM_AXES_MS));
 }
 
 /* Floor grid lines fade in from the origin outward - `ring` is 1 for the
@@ -486,7 +470,7 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
     }
     const uint32_t start = BOOT_ANIM_GRID_START_MS +
                            (uint32_t)ring * BOOT_ANIM_GRID_RING_MS;
-    const uint32_t arrived = boot_anim_ramp(now_ms, start,
+    const uint32_t arrived = tween_ramp(now_ms, start,
                                             BOOT_ANIM_GRID_FADE_MS);
 
     /* Squared, not linear: a linear falloff still has visible lines most of
@@ -686,18 +670,17 @@ static inline boot_anim_title_pos_t boot_anim_title_letter(int i,
 {
     const uint32_t start = BOOT_ANIM_TITLE_START_MS +
                            (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
-    const uint8_t u8 = boot_anim_ease_out(
-        boot_anim_ramp(now_ms, start, BOOT_ANIM_TITLE_FLIGHT_MS));
+    const uint8_t u8 = tween_ease_out(
+        tween_ramp(now_ms, start, BOOT_ANIM_TITLE_FLIGHT_MS));
 
     const int cell = 8 * BOOT_ANIM_TITLE_SCALE + BOOT_ANIM_TITLE_GAP;
     const int final_x = BOOT_ANIM_TITLE_VIEW_X + i * cell;
     const int start_x = final_x - BOOT_ANIM_TITLE_ENTRY_PX;
 
     boot_anim_title_pos_t p;
-    p.x = start_x + (((final_x - start_x) * u8) / 255);
+    p.x = tween_lerp_i32(start_x, final_x, u8);
 
-    const int32_t d_q12 = BOOT_ANIM_ONE -
-                          (((int32_t)u8 * BOOT_ANIM_ONE) / 255);
+    const int32_t d_q12 = BOOT_ANIM_ONE - tween_lerp_i32(0, BOOT_ANIM_ONE, u8);
     p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12) +
           boot_anim_title_wave(i, now_ms);
     return p;
@@ -784,9 +767,9 @@ static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
  * signed off on. */
 static inline int32_t boot_anim_orbit_progress(uint32_t now_ms)
 {
-    const uint8_t linear = boot_anim_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
+    const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
                                           BOOT_ANIM_PEN_MS);
-    return ((int32_t)linear * BOOT_ANIM_ONE) / 255;
+    return tween_lerp_i32(0, BOOT_ANIM_ONE, linear);
 }
 
 /* How much of the curve has been drawn, as a Q12 fraction of its length.
@@ -823,16 +806,15 @@ static inline int32_t boot_anim_pen(uint32_t now_ms)
     const uint32_t phase1_end_ms = BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
 
     if (now_ms <= phase1_end_ms) {
-        const uint8_t linear = boot_anim_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
+        const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
                                               BOOT_ANIM_PEN_MS);
-        return ((int32_t)linear * BOOT_ANIM_CURVE_PHASE1_FRACTION) / 255;
+        return tween_lerp_i32(0, BOOT_ANIM_CURVE_PHASE1_FRACTION, linear);
     }
 
-    const uint8_t linear2 = boot_anim_ramp(
+    const uint8_t linear2 = tween_ramp(
         now_ms, phase1_end_ms, BOOT_ANIM_FADE_START_MS - phase1_end_ms);
-    const int32_t remaining = BOOT_ANIM_ONE - BOOT_ANIM_CURVE_PHASE1_FRACTION;
-    return BOOT_ANIM_CURVE_PHASE1_FRACTION +
-           (((int32_t)linear2 * remaining) / 255);
+    return tween_lerp_i32(BOOT_ANIM_CURVE_PHASE1_FRACTION, BOOT_ANIM_ONE,
+                          linear2);
 }
 
 /* Where the leading edge is for COLOURING purposes - the trail positions
@@ -863,7 +845,7 @@ static inline int32_t boot_anim_colour_progress(uint32_t now_ms)
  * straight to the menu. */
 static inline uint8_t boot_anim_ink(uint32_t now_ms)
 {
-    return (uint8_t)(255u - boot_anim_ramp(now_ms, BOOT_ANIM_FADE_START_MS,
+    return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_FADE_START_MS,
                                            BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
 }
 
@@ -1021,7 +1003,7 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
 
 static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 {
-    return boot_anim_ease_out(boot_anim_ramp(
+    return tween_ease_out(tween_ramp(
         now_ms, BOOT_ANIM_TITLE_START_MS,
         BOOT_ANIM_FINALE_END_MS - BOOT_ANIM_TITLE_START_MS));
 }
@@ -1109,30 +1091,35 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
      * (h - view_y, view_x) - see "The title"'s top comment - so the target
      * this interpolates toward is (w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y,
      * BOOT_ANIM_FINALE_ORIGIN_VIEW_X). */
-    v.oy = oy_mirror + ((int32_t)finale *
-           (BOOT_ANIM_FINALE_ORIGIN_VIEW_X - oy_mirror)) / 255;
-    v.ox = ox_mirror + ((int32_t)finale *
-           ((w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y) - ox_mirror)) / 255;
+    v.oy = tween_lerp_i32(oy_mirror, BOOT_ANIM_FINALE_ORIGIN_VIEW_X, finale);
+    v.ox = tween_lerp_i32(ox_mirror, w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y,
+                          finale);
 
     return v;
 }
 
-/* The WHOLE SPACE's shrink, toward the view's origin, as the finale turns
- * the camera the rest of the way and the letters arrive - floor, axes and
- * curve all scale down together rather than the curve alone shrinking
- * inside axes that stay unbounded. One coherent thing collapsing into the
- * small motif beside the word, not two independent-looking effects layered
- * on each other. Not part of boot_anim_view_t: it is a scale on the pixel
- * OFFSET from view->ox/oy, applied after projection, not on (re, im, t)
- * themselves - see boot_anim.c's csx()/csy() for where it is spent, now
- * shared by draw_floor(), draw_axes()/draw_arm() and draw_curve()/
- * draw_heads() alike.
+/* The MOTIF's shrink, toward the view's origin, as the finale turns the
+ * camera the rest of the way and the letters arrive - the axes shrink down
+ * together with the curve now, rather than the curve alone shrinking
+ * inside axes that stay unbounded around it, so the spiral-plus-axes reads
+ * as one coherent thing collapsing into a small icon, not two independent
+ * effects layered on each other.
  *
- * Eased at both ends (boot_anim_ease_out() gives the back half of that;
- * boot_anim_ramp() itself is linear, so the "in" half is not eased the
+ * The floor stays OUT of this on purpose - see draw_floor()'s own comment
+ * in boot_anim.c for why the grid plane is the backdrop the motif shrinks
+ * into rather than one more thing shrinking along with it. "Whole space"
+ * would be the wrong name for what this now scales.
+ *
+ * Not part of boot_anim_view_t: it is a scale on the pixel OFFSET from
+ * view->ox/oy, applied after projection, not on (re, im, t) themselves -
+ * see boot_anim.c's csx()/csy() for where it is spent, shared by
+ * draw_axes()/draw_arm() and draw_curve()/draw_heads().
+ *
+ * Eased at both ends (tween_ease_out() gives the back half of that;
+ * tween_ramp() itself is linear, so the "in" half is not eased the
  * same way a pure ease-in-out would be, close enough here that the
- * difference does not read) rather than linear throughout, so the whole
- * space visibly settles into its final size instead of stopping short.
+ * difference does not read) rather than linear throughout, so the motif
+ * visibly settles into its final size instead of stopping short.
  *
  * The number: continuing the turn to BOOT_ANIM_PHI_EXTRA_PHASE regrows the
  * t axis's screen weight back toward its starting size (see that constant's
@@ -1142,24 +1129,24 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  * off the panel; more so now that the climb itself reaches nearly twice as
  * high as it did when this floor was first tuned (BOOT_ANIM_T_MAX 126, not
  * 70). Shrinking it back down as the turn resumes is what keeps the same
- * curve inside the same room - and now that the floor and axes shrink with
- * it, there was never any risk of THEM overflowing to begin with: shrinking
- * can only pull a point closer to the origin, never push it further out,
- * so whatever already fit at full scale still fits smaller. BOOT_ANIM_SHRINK_MS
- * and BOOT_ANIM_SHRINK_FLOOR_Q8 were both chosen by sweeping the actual
- * projection at a 5ms step across the whole finale and shrinking until
- * nothing overflowed, with headroom to spare - not derived from geometry,
- * because the origin's position and the panel edge closest to the curve's
- * reach both move when either is retuned, which is exactly the kind of
- * thing worth measuring rather than re-deriving by hand. */
+ * curve inside the same room - and the axes shrinking with it were never at
+ * risk of overflowing to begin with: shrinking can only pull a point closer
+ * to the origin, never push it further out, so whatever already fit at full
+ * scale still fits smaller. BOOT_ANIM_SHRINK_MS and BOOT_ANIM_SHRINK_FLOOR_Q8
+ * were both chosen by sweeping the actual projection at a 5ms step across
+ * the whole finale and shrinking until nothing overflowed, with headroom to
+ * spare - not derived from geometry, because the origin's position and the
+ * panel edge closest to the curve's reach both move when either is
+ * retuned, which is exactly the kind of thing worth measuring rather than
+ * re-deriving by hand. */
 #define BOOT_ANIM_SHRINK_MS        900
 #define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* floor is held once reached */
 
-static inline int boot_anim_space_shrink_q8(uint32_t now_ms)
+static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
 {
-    const uint8_t u8 = boot_anim_ease_out(boot_anim_ramp(
+    const uint8_t u8 = tween_ease_out(tween_ramp(
         now_ms, BOOT_ANIM_TITLE_START_MS, BOOT_ANIM_SHRINK_MS));
-    return 256 - (((int)u8 * (256 - BOOT_ANIM_SHRINK_FLOOR_Q8)) / 255);
+    return tween_lerp_i32(256, BOOT_ANIM_SHRINK_FLOOR_Q8, u8);
 }
 
 /*---------------------------------------------------------------------------

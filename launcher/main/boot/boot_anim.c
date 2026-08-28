@@ -104,11 +104,12 @@ static int sy(int32_t re, int32_t im, int32_t t, const boot_anim_view_t *view)
 }
 
 /* sx/sy, shrunk toward the origin by shrink_q8/256 - see
- * boot_anim_space_shrink_q8() in boot_anim.h for why the whole space needs
- * this during the finale, not the curve alone. Applied to the already
- *-projected pixel, not to (re, im, t): the projection is linear, so scaling
- * the offset from the origin after projecting is the same picture as
- * scaling the point before, without needing a scaled copy of every sample. */
+ * boot_anim_motif_shrink_q8() in boot_anim.h for why the axes need this
+ * alongside the curve during the finale, and draw_floor()'s own comment
+ * for why the floor never does. Applied to the already-projected pixel,
+ * not to (re, im, t): the projection is linear, so scaling the offset from
+ * the origin after projecting is the same picture as scaling the point
+ * before, without needing a scaled copy of every sample. */
 static int csx(int32_t re, int32_t im, int shrink_q8, const boot_anim_view_t *view)
 {
     const int raw = sx(re, im, view);
@@ -142,7 +143,15 @@ static int32_t units(int n)
  * boundary is what removes the floor's edge. */
 #define FLOOR_REACH 24
 
-static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
+/* Never shrunk - the floor is the background the motif shrinks INTO, not
+ * one more thing shrinking along with it. Filling the panel edge to edge
+ * for the whole five seconds is the one property it cannot give up: a
+ * grid that shrank away with the curve would read as the whole world
+ * shrinking, not as a spiral collapsing into a small icon sitting on a
+ * plane that was always there. It still moves - centred on the origin,
+ * whose PANEL position drifts throughout, same as ever - just never
+ * scales. */
+static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
     const int32_t far = units(FLOOR_REACH);
@@ -166,14 +175,10 @@ static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
 
-            gfx_line_ex(csx(off, -far, shrink_q8, view),
-                        csy(off, -far, 0, shrink_q8, view),
-                        csx(off,  far, shrink_q8, view),
-                        csy(off,  far, 0, shrink_q8, view), c, 0u);
-            gfx_line_ex(csx(-far, off, shrink_q8, view),
-                        csy(-far, off, 0, shrink_q8, view),
-                        csx( far, off, shrink_q8, view),
-                        csy( far, off, 0, shrink_q8, view), c, 0u);
+            gfx_line_ex(sx(off, -far, view), sy(off, -far, 0, view),
+                        sx(off,  far, view), sy(off,  far, 0, view), c, 0u);
+            gfx_line_ex(sx(-far, off, view), sy(-far, off, 0, view),
+                        sx( far, off, view), sy( far, off, 0, view), c, 0u);
         }
     }
 }
@@ -189,9 +194,9 @@ static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
 static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
                      uint8_t ink, int shrink_q8, const boot_anim_view_t *view)
 {
-    const int32_t fre = (re * reach) / 255;
-    const int32_t fim = (im * reach) / 255;
-    const int32_t ft  = (t  * reach) / 255;
+    const int32_t fre = tween_lerp_i32(0, re, reach);
+    const int32_t fim = tween_lerp_i32(0, im, reach);
+    const int32_t ft  = tween_lerp_i32(0, t,  reach);
 
     gfx_line_ex(csx(0, 0, shrink_q8, view), csy(0, 0, 0, shrink_q8, view),
                 csx(fre, fim, shrink_q8, view),
@@ -227,8 +232,7 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
     const uint8_t finale = boot_anim_finale_reach(now_ms);
     const int32_t short_arm = units(4);
     const int32_t long_arm  = units(BOOT_ANIM_AXIS_FAR_UNITS);
-    const int32_t arm = short_arm +
-        (((long_arm - short_arm) * (int32_t)finale) / 255);
+    const int32_t arm = tween_lerp_i32(short_arm, long_arm, finale);
 
     /* T's own scale is Q8, not Q12 like re/im - units() (Q12) has no
      * business appearing here, which is exactly the mix-up the header's own
@@ -242,10 +246,9 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
      * itself now reaches twice as high. */
     const int32_t short_top = (BOOT_ANIM_T_MAX_PHASE1 + 1) << BOOT_ANIM_TQ;
     const int32_t long_top  = (BOOT_ANIM_T_MAX * 3) << BOOT_ANIM_TQ;
-    const int32_t top = short_top +
-        (((long_top - short_top) * (int32_t)finale) / 255);
+    const int32_t top = tween_lerp_i32(short_top, long_top, finale);
 
-    const int shrink_q8 = boot_anim_space_shrink_q8(now_ms);
+    const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
     draw_arm(arm, 0, 0, reach, ink, shrink_q8, view);      /* real      */
     draw_arm(0, arm, 0, reach, ink, shrink_q8, view);      /* imaginary */
     draw_arm(0, 0, top, reach, ink, shrink_q8, view);      /* t         */
@@ -422,7 +425,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     const int32_t at = pen * span;
     const int last = at >> BOOT_ANIM_Q;
     const int32_t part = at & (BOOT_ANIM_ONE - 1);
-    const int shrink_q8 = boot_anim_space_shrink_q8(now_ms);
+    const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
 
     /* Colours the trail, not how much of the curve is drawn - see
      * boot_anim_colour_progress()'s own comment. `pen` (extent) still
@@ -548,8 +551,8 @@ static void draw_frame(uint32_t now_ms)
                                                  now_ms);
 
     gfx_clear(COL_BG);
-    const int shrink_q8 = boot_anim_space_shrink_q8(now_ms);
-    draw_floor(now_ms, ink, shrink_q8, &view);
+    const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
+    draw_floor(now_ms, ink, &view);
     draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them
