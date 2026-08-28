@@ -238,19 +238,27 @@ typedef struct {
  * tools/gen_zeta_curve.py's PHASE1_T_MAX. */
 #define BOOT_ANIM_T_MAX_PHASE1 35
 
-/* The floor grid has no edge: its lines run until they leave the panel, and
- * what bounds it is a fade rather than a boundary.
+/* The floor's outer edge is a fade rather than a boundary: ring FADE is
+ * fully dark, so nothing past it is worth drawing at all, and what a
+ * viewer sees is rings thinning out with distance rather than a fixed
+ * square tile floating in the dark - which is a thing sitting in the
+ * scene, where a plane carrying on past what is drawn is what a
+ * coordinate plane actually is.
  *
- * A grid drawn to a fixed square reads as a square tile floating in the dark,
- * which is a thing sitting in the scene. A grid that thins out with distance
- * reads as a plane carrying on past the screen, which is what a coordinate
- * plane actually is. gfx_line() clips, so rings that fall off the edge cost
- * nothing to ask for.
- *
- * RINGS is therefore how far the fade reaches rather than how big the floor
- * is: ring FADE is fully dark, so nothing past it is worth drawing at all. */
-#define BOOT_ANIM_GRID_RINGS 7
-#define BOOT_ANIM_GRID_FADE  7
+ * RINGS is therefore how far the fade reaches, not how big the floor is -
+ * and half a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a whole
+ * one: at a whole unit per ring there were only ever six or seven rings
+ * actually lit at once, each one a visibly distinct step in brightness
+ * from its neighbours rather than something that reads as a continuous
+ * wave. Twice as many rings, half as far apart, covers the same physical
+ * reach with a much finer gradient between them. */
+#define BOOT_ANIM_GRID_RINGS 14
+#define BOOT_ANIM_GRID_FADE  14
+
+/* Half a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own comment.
+ * Q12, like every other plane coordinate here (see units() in boot_anim.c,
+ * which this is used in place of for the floor specifically). */
+#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 2)
 
 /* Where one unit along each axis lands, in Q8 pixels.
  *
@@ -436,7 +444,11 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
 #define BOOT_ANIM_AXES_MS        450   /* the axes grow out of the origin */
 
 #define BOOT_ANIM_GRID_START_MS  150
-#define BOOT_ANIM_GRID_RING_MS    45   /* each ring waits for the one inside */
+
+/* Halved alongside BOOT_ANIM_GRID_RINGS doubling (see its own comment) -
+ * twice as many rings at half the stagger covers the same total arrival
+ * time as before, rather than taking twice as long to sweep outward. */
+#define BOOT_ANIM_GRID_RING_MS    23   /* each ring waits for the one inside */
 #define BOOT_ANIM_GRID_FADE_MS   300
 
 #define BOOT_ANIM_PEN_START_MS   520
@@ -1288,7 +1300,10 @@ _Static_assert(BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS +
                "grow+settle must finish before the collapse starts moving "
                "the room");
 
-static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
+/* Shared by boot_anim_motif_shrink_q8() and boot_anim_grid_shrink_q8() just
+ * below - same GROW/SETTLE shape (see "TWO PHASES" above), different
+ * resting floor. */
+static inline int boot_anim_shrink_to_floor_q8(uint32_t now_ms, int floor_q8)
 {
     const uint32_t grow_end_ms =
         BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
@@ -1300,13 +1315,38 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
         return tween_lerp_i32(256, BOOT_ANIM_SHRINK_PEAK_Q8, u8);
     }
     if (now_ms >= settle_end_ms) {
-        return BOOT_ANIM_SHRINK_FLOOR_Q8;
+        return floor_q8;
     }
 
     const uint8_t u8 = tween_ease_in(tween_ramp(
         now_ms, grow_end_ms, BOOT_ANIM_SHRINK_SETTLE_MS));
-    return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, BOOT_ANIM_SHRINK_FLOOR_Q8,
-                          u8);
+    return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, floor_q8, u8);
+}
+
+static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
+{
+    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_SHRINK_FLOOR_Q8);
+}
+
+/* A much bigger floor than BOOT_ANIM_SHRINK_FLOOR_Q8 - deliberately: the
+ * panel-fit test below has never applied to the floor and still does not
+ * here. It exists because the CURVE clipping mid-shape looks broken - a
+ * loop with its tip cut off reads as a rendering error - but the floor has
+ * had no edge since before any of this shrinking existed (see
+ * BOOT_ANIM_GRID_RINGS's own comment): rings running past the panel and
+ * fading into nothing is the intended look, the same "let clipping do the
+ * work" reasoning the axes lean on too. Its outer rings ran off-panel at
+ * FULL, unshrunk size from the very start of the animation, long before
+ * this file gave the floor a shrink of its own - so there was never a
+ * safety ceiling to sweep for here the way there was for
+ * BOOT_ANIM_SHRINK_PEAK_Q8. This value is chosen for how big the ending
+ * should look - "a big part of the grid clearly visible" - not for
+ * anything it has to stay under. */
+#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 128
+
+static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
+{
+    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_GRID_SHRINK_FLOOR_Q8);
 }
 
 /*---------------------------------------------------------------------------

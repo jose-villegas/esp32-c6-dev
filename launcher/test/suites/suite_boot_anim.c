@@ -460,6 +460,29 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
     }
 }
 
+/* The grid's own shrink shares its shape with boot_anim_motif_shrink_q8()
+ * (same GROW/SETTLE timing - see boot_anim_shrink_to_floor_q8()) but
+ * rests at a much bigger floor - see BOOT_ANIM_GRID_SHRINK_FLOOR_Q8's own
+ * comment for why that floor has no panel-fit ceiling to check against
+ * the way BOOT_ANIM_SHRINK_PEAK_Q8 does. What is worth checking here is
+ * just the shape: full size before the grow starts, and settled at its
+ * own floor - not the curve/axes' smaller one - once SETTLE finishes. */
+static void test_the_grid_settles_at_its_own_bigger_floor(void)
+{
+    TEST_ASSERT_EQUAL_INT(256, boot_anim_grid_shrink_q8(0));
+    TEST_ASSERT_EQUAL_INT(256, boot_anim_grid_shrink_q8(BOOT_ANIM_TITLE_START_MS));
+
+    const uint32_t settled_ms = BOOT_ANIM_TITLE_START_MS +
+        BOOT_ANIM_SHRINK_GROW_MS + BOOT_ANIM_SHRINK_SETTLE_MS;
+    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_FLOOR_Q8,
+                          boot_anim_grid_shrink_q8(settled_ms));
+    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_FLOOR_Q8,
+                          boot_anim_grid_shrink_q8(BOOT_ANIM_MS));
+    TEST_ASSERT_TRUE_MESSAGE(
+        BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 > BOOT_ANIM_SHRINK_FLOOR_Q8,
+        "the grid should settle noticeably bigger than the curve and axes");
+}
+
 /* The axis labels, checked only at t=0: that is where the axes are drawn at
  * their short, labelled length (see boot_anim.c's draw_axes(), which only
  * labels them before the finale starts turning them into unbounded lines),
@@ -1096,6 +1119,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_three_axes_point_the_way_they_are_supposed_to);
     RUN_TEST(test_the_imaginary_axis_is_at_forty_five_degrees);
     RUN_TEST(test_the_whole_scene_fits_on_the_panel_throughout_the_orbit);
+    RUN_TEST(test_the_grid_settles_at_its_own_bigger_floor);
     RUN_TEST(test_the_axis_labels_fit_on_the_panel);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
