@@ -909,17 +909,16 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * what it looks like. */
 #define BOOT_ANIM_PHI_EXTRA_PHASE 10377   /* round(57 / 360 * 65536) */
 
-/* How far the origin moves during the finale, and in which direction on
- * screen - see boot_anim_view()'s own comment on v.ox for why this reads
- * "toward the label" rather than "left": ox is a PANEL coordinate, and the
- * panel is mounted a quarter turn from how it is held (see "The title"'s
- * own top comment on DISPLAY_LANDSCAPE), so moving ox is what the VIEWER
- * sees as moving the motif UP the screen, not sideways. Sized so the motif
- * settles a little below the word beside it rather than level with its
- * baseline - level put the two close enough to collide - measured against
- * a real render rather than derived, the same way BOOT_ANIM_TITLE_VIEW_X/Y
- * themselves were. */
-#define BOOT_ANIM_ORIGIN_SHIFT_PX 40
+/* Where the origin settles once the finale finishes, in the VIEWER's frame
+ * - see "The title"'s own top comment on why that frame, not the panel's:
+ * ox and oy are PANEL coordinates, and the panel is mounted a quarter turn
+ * from how it is held, so a target chosen by eye on an actual photo of the
+ * board (as these were, on top of an earlier render) is a point in the
+ * frame the person taking that photo sees, not in ox/oy directly. Below and
+ * left of the word rather than tucked under its baseline, which read as a
+ * collision. boot_anim_view() is what turns this back into ox/oy. */
+#define BOOT_ANIM_FINALE_ORIGIN_VIEW_X 65
+#define BOOT_ANIM_FINALE_ORIGIN_VIEW_Y 200
 
 /* How far the two floor-plane axes reach once unbounded, matching the
  * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the
@@ -933,13 +932,12 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * exist early, for boot_anim_screen_x()/screen_y() to compile against it,
  * but the constructor did not.
  *
- * oy is unaffected by the finale on purpose: it already reached its mirror
- * position - see boot_anim_origin_y()'s own comment - by the time the curve
- * finished, and letting three things drift at once (turn, and two
- * directions of slide) was one degree of freedom more than the picture
- * needed. Only ox moves further - and moving ox is what raises the motif
- * toward the label on screen, not what slides it sideways; see
- * BOOT_ANIM_ORIGIN_SHIFT_PX's own comment. */
+ * oy reaches its mirror position - see boot_anim_origin_y()'s own comment -
+ * by the time the curve finishes, and both ox and oy hold there unchanged
+ * until the finale starts; only once it does do they move again, together
+ * this time, toward BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y - see that constant's
+ * own comment for why a VIEW coordinate turns into two panel ones the way
+ * it does below. */
 static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 {
     const int32_t curve_progress = boot_anim_pen(now_ms);   /* 0..ONE */
@@ -961,12 +959,23 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
              BOOT_ANIM_C_T_Y;
 
     const int oy_start = boot_anim_origin_y(h);
-    v.oy = oy_start +
+    const int oy_mirror = oy_start +
            (int)((((int64_t)(h - 2 * oy_start)) * curve_progress) >>
                  BOOT_ANIM_Q);
+    const int ox_mirror = boot_anim_origin_x(w);
 
-    v.ox = boot_anim_origin_x(w) +
-           ((int)finale * BOOT_ANIM_ORIGIN_SHIFT_PX) / 255;
+    /* oy_mirror/ox_mirror are already exactly h-oy_start / boot_anim_origin_x(w)
+     * for the whole finale, since curve_progress has saturated at ONE by
+     * the time finale can be nonzero - see boot_anim_finale_reach() and
+     * BOOT_ANIM_TITLE_START_MS's own placement after BOOT_ANIM_PEN_START_MS
+     * + BOOT_ANIM_PEN_MS. A VIEW point (view_x, view_y) is a PANEL point
+     * (h - view_y, view_x) - see "The title"'s top comment - so the target
+     * this interpolates toward is (w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y,
+     * BOOT_ANIM_FINALE_ORIGIN_VIEW_X). */
+    v.oy = oy_mirror + ((int32_t)finale *
+           (BOOT_ANIM_FINALE_ORIGIN_VIEW_X - oy_mirror)) / 255;
+    v.ox = ox_mirror + ((int32_t)finale *
+           ((w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y) - ox_mirror)) / 255;
 
     return v;
 }

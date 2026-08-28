@@ -263,29 +263,29 @@ static void test_the_finale_turns_t_back_toward_vertical(void)
         "its starting magnitude, not stayed foreshortened");
 }
 
-/* The finale slides the origin left, and only left - oy stays exactly where
- * the curve phase left it, one fewer thing moving at once than the picture
- * needed (see boot_anim_view()'s own comment on why). */
-/* "ox_only" rather than "toward the label": this test is pure panel-space
- * arithmetic and has no opinion on which way that reads to a viewer holding
- * the board turned - see BOOT_ANIM_ORIGIN_SHIFT_PX's own comment in
- * boot_anim.h for that translation. */
-static void test_the_finale_moves_the_origins_ox_only(void)
+/* The finale settles the origin at BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y, a VIEW
+ * point - see that constant's own comment in boot_anim.h - which is why
+ * this checks ox/oy against PANEL_H - VIEW_X and PANEL_W - VIEW_Y rather
+ * than against VIEW_X/Y directly: that translation is the exact thing under
+ * test, the same reasoning test_a_letter_starts_off_panel_to_the_left() and
+ * the rest of "The title"'s tests apply on the other side of it. */
+static void test_the_finale_settles_the_origin_at_its_view_target(void)
 {
     const boot_anim_view_t before =
         boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
     const boot_anim_view_t after =
         boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_FINALE_END_MS);
 
-    TEST_ASSERT_TRUE_MESSAGE(after.ox > before.ox,
-        "the origin's ox should have increased during the finale");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(before.oy, after.oy,
-        "the origin's height should not move during the finale - only ox "
-        "does");
+    TEST_ASSERT_TRUE_MESSAGE(after.ox != before.ox || after.oy != before.oy,
+        "the origin should have moved during the finale");
     TEST_ASSERT_EQUAL_INT_MESSAGE(
-        boot_anim_origin_x(PANEL_W) + BOOT_ANIM_ORIGIN_SHIFT_PX, after.ox,
-        "the origin should have moved exactly BOOT_ANIM_ORIGIN_SHIFT_PX by "
-        "the time the finale ends");
+        BOOT_ANIM_FINALE_ORIGIN_VIEW_X, after.oy,
+        "oy should land exactly on the view target's x by the time the "
+        "finale ends");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        PANEL_W - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y, after.ox,
+        "ox should land exactly on the view target's y by the time the "
+        "finale ends");
 }
 
 /* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends up
@@ -977,7 +977,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_view_starts_at_the_original_fixed_camera);
     RUN_TEST(test_the_view_foreshortens_t_by_the_end_of_the_curve);
     RUN_TEST(test_the_finale_turns_t_back_toward_vertical);
-    RUN_TEST(test_the_finale_moves_the_origins_ox_only);
+    RUN_TEST(test_the_finale_settles_the_origin_at_its_view_target);
     RUN_TEST(test_the_origin_ends_at_the_mirror_of_where_it_started);
     RUN_TEST(test_the_origin_drifts_upward_without_doubling_back);
 
