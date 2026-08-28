@@ -501,10 +501,25 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * equal where FINALE_END_MS is actually defined. */
 #define BOOT_ANIM_GRID_BOOST_MAX 230
 
+/* Quickly, not over the whole collapse: everything drawn - grid included -
+ * is also multiplied by boot_anim_ink(), which fades linearly to 0 over
+ * that exact same BOOT_ANIM_FADE_START_MS..BOOT_ANIM_MS window. Ramping the
+ * ceiling up over the full window too meant the boost was always fighting
+ * the fade it shared a clock with - low ceiling early when ink was still
+ * high, high ceiling late when ink had already faded most of the way to
+ * black, and no point where both were high at once, so raising
+ * BOOT_ANIM_GRID_BOOST_MAX barely changed what was actually visible.
+ * Reaching the ceiling quickly instead means there genuinely is a moment -
+ * right as the collapse begins, before ink has faded much - where the grid
+ * is both dense and near the boosted brightness at once; from there it
+ * simply holds at the boosted ceiling and fades out with everything else,
+ * on ink's own clock, same as before. */
+#define BOOT_ANIM_GRID_BOOST_MS 350
+
 static inline uint8_t boot_anim_grid_ceiling(uint32_t now_ms)
 {
     const uint8_t u8 = tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_COLLAPSE_MS));
+        now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_GRID_BOOST_MS));
     return (uint8_t)tween_lerp_i32(BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_BOOST_MAX,
                                    u8);
 }
