@@ -168,15 +168,20 @@ static int32_t units(int n)
  * result read as a bare cross rather than a grid; bounded, dense and
  * bright, the same construction reads as intended.)
  *
- * Its OWN shrink, not the shared motif one the axes and curve use, and a
- * CONSTANT rather than something that grows or settles over time - see
- * boot_anim_grid_shrink_q8()'s own comment: the floor is sized to cover
- * every one of the panel's four corners for the WHOLE animation, from the
- * very first frame, which is not something a curve that starts small and
- * grows into place can do - there is always a window before it has grown.
- * Applied to `d`/`far` (world units, before projection) rather than via
- * csx()/csy() on the drawn endpoints, so the whole grid scales uniformly
- * rather than each endpoint sliding independently toward view->ox/oy. */
+ * Its OWN shrink, not boot_anim_motif_shrink_q8() directly - see
+ * boot_anim_grid_shrink_q8()'s own comment: the grid still rides that
+ * same GROW/HOLD/SETTLE pulse, because the grid IS the plane the curve
+ * and axes are drawn against and ought to read as the same scale
+ * changing, not a separate thing standing still - but clamped to never
+ * drop below a floor sized to cover every one of the panel's four
+ * corners for the WHOLE animation, from the very first frame, which
+ * boot_anim_motif_shrink_q8() alone cannot do: it starts small and grows
+ * into place, and there is always a window before it has grown, and it
+ * settles small again for the CURVE's own panel-fit safety, a completely
+ * different constraint from what the grid needs. Applied to `d`/`far`
+ * (world units, before projection) rather than via csx()/csy() on the
+ * drawn endpoints, so the whole grid scales uniformly rather than each
+ * endpoint sliding independently toward view->ox/oy. */
 static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {

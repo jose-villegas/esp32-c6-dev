@@ -460,24 +460,35 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
     }
 }
 
-/* The grid's own shrink is a CONSTANT, not a GROW/SETTLE curve like
- * boot_anim_motif_shrink_q8() - see BOOT_ANIM_GRID_SHRINK_Q8's own comment
- * for why: the floor is supposed to cover every panel corner for the
- * WHOLE animation, from the very first frame, and a pulse that starts
- * small necessarily has a window before it has grown into that. What is
- * worth checking here is just that it stays constant, and noticeably
- * bigger than the curve/axes' own much smaller floor. */
-static void test_the_grid_shrink_is_constant_and_bigger_than_the_motifs(void)
+/* The grid's own shrink rides boot_anim_motif_shrink_q8()'s own pulse on
+ * top of a floor - see boot_anim_grid_shrink_q8()'s own comment for why:
+ * the grid represents the very plane the curve and axes are drawn
+ * against, so when the motif swells it should read as the same swell,
+ * not a separate thing standing still next to it. What must never happen
+ * is the floor's own corner coverage breaking, so the pulse only ever
+ * multiplies UP from BOOT_ANIM_GRID_SHRINK_Q8, never down - checked here
+ * at the motif's baseline (still exactly the base value), at its grown
+ * PEAK (clearly bigger than the base), and at its settled, collapsed
+ * FLOOR (clamped back to the base, not following it all the way down). */
+static void test_the_grid_shrink_pulses_with_the_motif_above_a_floor(void)
 {
     TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8, boot_anim_grid_shrink_q8(0));
     TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8,
                           boot_anim_grid_shrink_q8(BOOT_ANIM_TITLE_START_MS));
+
+    const uint32_t grow_end_ms =
+        BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_grid_shrink_q8(grow_end_ms) > BOOT_ANIM_GRID_SHRINK_Q8,
+        "the grid should swell above its own base while the motif is at "
+        "its own grown PEAK, not sit still while everything else grows");
+
     TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8,
                           boot_anim_grid_shrink_q8(BOOT_ANIM_MS));
     TEST_ASSERT_TRUE_MESSAGE(
         BOOT_ANIM_GRID_SHRINK_Q8 > BOOT_ANIM_SHRINK_PEAK_Q8,
-        "the grid should be noticeably bigger than even the motif's own "
-        "grown PEAK, let alone its much smaller settled floor");
+        "the grid's own base should be noticeably bigger than even the "
+        "motif's own grown PEAK, let alone its much smaller settled floor");
 }
 
 /* The axis labels, checked only at t=0: that is where the axes are drawn at
@@ -1116,7 +1127,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_three_axes_point_the_way_they_are_supposed_to);
     RUN_TEST(test_the_imaginary_axis_is_at_forty_five_degrees);
     RUN_TEST(test_the_whole_scene_fits_on_the_panel_throughout_the_orbit);
-    RUN_TEST(test_the_grid_shrink_is_constant_and_bigger_than_the_motifs);
+    RUN_TEST(test_the_grid_shrink_pulses_with_the_motif_above_a_floor);
     RUN_TEST(test_the_axis_labels_fit_on_the_panel);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
