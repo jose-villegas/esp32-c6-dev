@@ -1998,42 +1998,6 @@ void material_set_gravity(int gx, int gy)
  * is. */
 static const gfx_color_t water_foam = GFX_RGB(0xE8F6FF);
 
-/* The colour deep, turbulent water scatters light into - pale and
- * desaturated next to the clear, saturated blue near the surface. A side
- * table, not a palette[] row, the exact same pattern water_foam above (and
- * glass_shine and stone_speckle further up the file) already use: there is
- * no spare slot in palette[] for it, and a haze blended over the body
- * colour does not need an indexed row of its own the way a fill level
- * does.
- *
- * This is WATER'S INTERIOR ALONE turning into ONE merged effect instead of
- * two stacked ones. Before this constant existed, a settled interior's
- * `depth` term and `wave` term were both "show depth" cues aimed at the
- * same ramp - shifting which of water's own SHADES() entries got painted -
- * which read as doubled machinery for one thing already inside a
- * water-heavy scene. `lighten_q` (material_colours() below) is already ONE
- * merged number by the time it is computed, so the fix is not to add a
- * third accumulator or delete either of the first two - it is to stop
- * re-splitting that merged number back into a shade-index nudge and use it
- * to drive a single blend instead: shallow, still water stays clear and
- * saturated, and the deeper or more turbulent it reads, the more it fogs
- * toward this colour.
- *
- * Two colour directions were mocked up against water's real palette (body
- * colour 0x14406F, luminance 56) and this is the one that was picked -
- * deep water turns PALE AND HAZY, not darker or more saturated:
- *
- *     frac   0/256 (shallow, no fog): #14406F  lum  56  (body, exact)
- *     frac 128/256 (mid):             #517393  lum 108
- *     frac 256/256 (deep, full fog):  #8FA6B8  lum 161  (this colour, exact)
- *
- * OIL, LAVA AND ACID DO NOT GET THIS. Nothing was asked for on a lava pool
- * or an oil slick, and a haze invented for them would look wrong where
- * nobody asked to see one - see material_colours()'s own comment on the
- * liquid interior branch for where the id check keeps this confined to
- * water alone. */
-static const gfx_color_t water_fog = GFX_RGB(0x8FA6B8);
-
 /* How far curvature is allowed to climb before it stops changing the
  * foam density any further - see water_foam_threshold below. Curvature
  * itself can reach 5 (an empty_count of 8, a cell exposed on every side),
@@ -2112,149 +2076,50 @@ static unsigned material_popcount8(unsigned mask)
  * specular) untouched by this constant entirely. */
 #define DEPTH_RANGE 4
 
-/*=============================================================================
- * A liquid interior's WAVE BANDS - a second cue stacked on the depth
- * gradient above, so a settled pool's interior carries drifting bands of
- * light instead of one smooth ramp from body colour to shallow-and-pale.
+/* HOW MANY CELLS OF LOCAL DEPTH IT TAKES A LIQUID INTERIOR TO REACH FULL
+ * DARKENING - the material's own body colour, with none of DEPTH_RANGE's
+ * lightening left - clamped there for anything deeper, rather than needing
+ * to approach local depth's own 255 clamp the way this divide used to.
  *
- * `wave` is derived from the SAME local depth `depth` is - see
- * MATERIAL_WAVE_STEP_Q8's own comment in material.h, and paint_row_n() in
- * app_sand.c for where the derivation actually happens, once per cell,
- * right next to `depth` itself - but is not `depth` passed straight
- * through: `depth` is capped at 255 with no further structure, while `wave`
- * is scaled so that MATERIAL_WAVE_PERIOD_CELLS steps of local depth make
- * one full pass through this table, and then wrapped back into 0-255 -
- * see water_wave[]'s own declaration further below for that scaling.
- * Reading a BAKED wave table by a measure of DEPTH at all, rather than by
- * (cx, cy) or anything screen-relative, is what makes the bands run
- * perpendicular to the local surface and follow the puddle's own shape as
- * it moves: the bands are shells around however deep each cell actually
- * is into its own body of liquid, not shells around a direction in space.
+ * WATER USED TO GET SOMETHING DIFFERENT HERE: an animated sum-of-sines wave
+ * table riding on top of this same local depth, and a haze BLEND toward a
+ * pale fog colour in place of the plain shade-index shift every other
+ * liquid used. Both are gone. The fog blend's own arithmetic (`depth_q`,
+ * dividing by 255) was tuned for the OLD screen-position depth, which
+ * legitimately spanned the full 0-255 range across the whole grid - local
+ * depth resets to 0 at every puddle's own surface and rarely exceeds a few
+ * dozen cells for any real pool in this app, so the fog blend sat pinned
+ * near its palest end for essentially every visible pool, and water read as
+ * a flat pale wash instead of depth-through-water: a genuine bug, not a
+ * taste call. The wave bands had their own, separate problem: local depth
+ * commits to a single dominant axis (see LOCAL DEPTH below) with a hard,
+ * unsmoothed switch between vertical and horizontal, and the bands rode
+ * straight over that seam with no blending between an axis-aligned reading
+ * and a diagonal one, reading as rigid columns (or rows) of matching colour
+ * rather than an organic gradient. Both mechanisms still exist, untouched,
+ * on the water-wave-fog-depth-banked branch, for anyone who wants to
+ * revisit that approach or reuse a piece of it - the wave-table technique,
+ * the fog-blend arithmetic - for a different effect later.
  *
- * THE FORMULA. Three sine components, evaluated at 256 equally spaced
- * points around one full period (so the table wraps cleanly - entry 255
- * sits one 256th of a cycle before entry 0 comes back around):
+ * Water's interior now uses EXACTLY the mechanism oil, lava and acid always
+ * did: a plain shade-index shift into the material's own ramp, darker with
+ * depth, fed by local depth alone. The SAME `/255` divide that produced
+ * water's fog bug also fed this plain shift for every liquid, just less
+ * visibly - a shade-index nudge saturating late is a smaller, less
+ * noticeable effect than an entire colour failing to darken - which is why
+ * this constant fixes the scale for all four liquids at once, not water
+ * alone.
  *
- *     frequency   2, 5 and 9 cycles over the 256 entries
- *     amplitude   1.0, 0.6 and 0.35 (relative)
- *     phase       0.0, 2.1 and 4.0 radians
- *
- *     raw(i)  = 1.00 * sin(2*pi*2*i/256 + 0.0)
- *             + 0.60 * sin(2*pi*5*i/256 + 2.1)
- *             + 0.35 * sin(2*pi*9*i/256 + 4.0)
- *
- * HOW FAR ONE PASS THROUGH THAT TABLE SPANS is MATERIAL_WAVE_PERIOD_CELLS
- * (material.h, alongside MATERIAL_WAVE_STEP_Q8, the Q8 scaling derived from
- * it - see that constant's own comment for the full argument): 24 cells of
- * local depth, giving the three components above periods of 12, 4.8 and
- * 2.7 cells. That is a property of the SCALING from depth to table index,
- * not of this table - the table is just 256 numbers, and knows nothing
- * about cells at all.
- *
- * NORMALISED by the sum of the absolute amplitudes (1.95), not by measuring
- * the actual peak - which keeps raw(i)/1.95 inside [-1, 1] for every phase
- * combination by the plain triangle inequality (|a+b+c| <= |a|+|b|+|c|),
- * with no search over the table needed to prove it.
- *
- * Three components were chosen over two after trying both on the device:
- * two components alone (just the first two rows above) put a single
- * dominant period across the whole pool and read as a slow, plain ripple;
- * a third, higher-frequency component broke that up into the "drifting
- * bands" look this exists for. A FOURTH was tried too and went the other
- * way - busy enough to look like static rather than water, sixteen or more
- * distinct bands in the same sweep that three components hold to about
- * six. Three is the number that reads as water and not as a texture in
- * either direction.
- *
- * FIXED POINT, AND WHY IT IS FINER THAN A SHADE STEP. `+-1.5 shade steps`
- * is the target span, but a "shade step" is the coarsest unit this ramp
- * has - sixteen possible values, full stop - and rounding the wave to whole
- * shade steps before combining it with depth throws away almost all of the
- * signal: three sines quantised straight to {-1, 0, 1} (or worse, {-2, -1,
- * 0, 1} unevenly) collapses toward two or three values immediately, which
- * is a flat stripe, not drifting bands. So the table is baked in Q4 - WAVE_
- * FRAC_BITS fractional bits, sixteen sub-steps to one shade step - and
- * DEPTH_RANGE's own contribution below is promoted to the same Q4 scale
- * before the two are added. Quantising back down to a whole shade step
- * happens exactly ONCE, in material_colours(), after the add - never
- * before it - which is the one rule that keeps the wave's shape intact
- * instead of losing it to two rounding passes.
- *
- * WAVE_AMP is 40, which is 40/16 = 2.5 shade steps at that scale - RAISED
- * from 24 (1.5 shade steps) now that the bands are sized in cells rather
- * than in grid-fractions: a band that is actually narrow enough to read as
- * a band carries less weight per band than the wide, near-invisible ones
- * MATERIAL_WAVE_PERIOD_CELLS replaces, so the swing needs to be bigger for
- * the bands to still read at a glance. Since the normalised sum is bounded to
- * [-1, 1] (see above), no table entry can ever exceed +-WAVE_AMP; int8_t
- * holds it with enormous headroom to spare either way.
- *
- * BAKED, not computed at startup or per frame. material.c may not use
- * floating point or trig at all - see this file's own budget comments on
- * material_colours() being the hottest path in the app - so this table is a
- * literal array of 256 signed bytes, landing in .rodata (flash) exactly
- * like palette[] above, and costs zero RAM and zero CPU to have around.
- *
- * GENERATED, not hand-typed - see launcher/main/apps/sand/tools/
- * gen_wave_table.c, run through report_wave_table.sh in the same folder,
- * which implements the exact formula above and prints this array. Kept
- * honest by test_the_wave_table_matches_its_formula (suite_sand.c), which
- * re-derives the same 256 numbers independently, in a host test, and
- * asserts they match this table entry for entry - a baked table with
- * nothing checking it against the formula it claims to follow is a table
- * that can drift the moment either one is next edited without the other. */
-#define WAVE_FRAC_BITS 4
-#define WAVE_AMP       40   /* 40 / 16 = 2.5 shade steps, in Q4 - see the
-                             * comment above for the fixed-point scale this
-                             * is measured in, and for why 2.5 rather than
-                             * the original 1.5 */
-
-/* GENERATED by launcher/main/apps/sand/tools/gen_wave_table.c via
- * launcher/main/apps/sand/tools/report_wave_table.sh - do not edit by hand.
- * Edit the formula there (and in this file's own comment above), and
- * regenerate; test_the_wave_table_matches_its_formula (suite_sand.c) is
- * what actually keeps this honest on every test run. */
-static const int8_t water_wave[256] = {
-       5,    4,    4,    4,    3,    3,    4,    4,    5,    6,    7,    8,    9,   10,   11,   11,
-      12,   12,   12,   11,   11,   10,   10,    9,    8,    8,    7,    7,    7,    7,    8,    9,
-      10,   12,   14,   16,   19,   21,   24,   27,   29,   31,   33,   34,   35,   35,   35,   34,
-      33,   31,   29,   26,   23,   20,   16,   12,    9,    5,    2,   -1,   -4,   -6,   -8,  -10,
-     -11,  -12,  -13,  -13,  -13,  -13,  -14,  -14,  -14,  -14,  -15,  -15,  -16,  -17,  -18,  -19,
-     -20,  -21,  -22,  -22,  -23,  -23,  -23,  -23,  -22,  -21,  -20,  -18,  -16,  -14,  -12,  -10,
-      -8,   -6,   -5,   -3,   -2,   -2,   -2,   -2,   -3,   -4,   -6,   -8,  -10,  -12,  -15,  -17,
-     -19,  -21,  -23,  -25,  -26,  -26,  -26,  -26,  -25,  -23,  -21,  -19,  -16,  -14,  -11,   -8,
-      -5,   -2,    0,    3,    5,    7,    8,   10,   11,   12,   12,   13,   14,   15,   16,   16,
-      17,   19,   20,   22,   23,   25,   27,   28,   30,   31,   32,   33,   33,   33,   33,   32,
-      31,   29,   27,   24,   21,   18,   15,   12,    9,    6,    3,    1,   -1,   -3,   -4,   -4,
-      -4,   -4,   -3,   -2,    0,    2,    3,    5,    7,    8,   10,   11,   12,   12,   12,   12,
-      11,   10,    9,    7,    5,    3,    2,    0,   -2,   -3,   -5,   -6,   -7,   -8,   -8,   -9,
-      -9,  -10,  -10,  -11,  -11,  -12,  -13,  -14,  -16,  -18,  -20,  -22,  -24,  -26,  -29,  -31,
-     -33,  -35,  -36,  -37,  -38,  -38,  -38,  -37,  -35,  -33,  -30,  -28,  -24,  -21,  -17,  -13,
-     -10,   -6,   -3,    0,    3,    5,    7,    8,    9,    9,    9,    9,    8,    8,    7,    6,
-};
-
-/* THIS FRAME'S WAVE PHASE - set once a frame by material_set_wave_phase(),
- * exactly the shape of foam_phase below but a SEPARATE variable: see that
- * function's own comment in material.h for why the interior's wave and
- * water's foam must not share a clock. Zero until the first frame sets it,
- * which paints the table starting at its own entry 0 rather than some
- * mid-cycle offset - a reasonable default for anything that reads
- * material_colours() before a frame ever runs (tests included). */
-static unsigned wave_phase;
-
-void material_set_wave_phase(unsigned phase)
-{
-    wave_phase = phase;
-}
-
-const int8_t *material_wave_table(void)
-{
-    return water_wave;
-}
+ * 24 was modelled against water's own ramp: it gives idx 11 (lum 85,
+ * lightened) at the very surface, exactly as DEPTH_RANGE's own comment
+ * above describes, and reaches idx 15 (lum 54, the full body colour) once
+ * local depth hits this constant - comfortably inside the range any real
+ * pool in this app actually reaches, rather than needing depth in the
+ * hundreds the way the old /255 divide did. */
+#define DEPTH_SATURATE_CELLS 24
 
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
-                                    unsigned depth, unsigned wave,
-                                    gfx_color_t out[3])
+                                    unsigned depth, gfx_color_t out[3])
 {
     const uint8_t v = CELL_VARIANT(c);
 
@@ -2294,31 +2159,16 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
      * of the ramp (see DEPTH_RANGE below) by up to DEPTH_RANGE steps as the
      * cell gets shallower, from the body colour at the very deepest point.
      *
-     * WAVE BANDS ride on top of that same gradient - see water_wave[]'s own
-     * comment above for the formula and the fixed-point reasoning. `wave`
-     * is DERIVED FROM `depth` - see material.h's own comment on this
-     * function's `wave` parameter, and MATERIAL_WAVE_STEP_Q8's own comment,
-     * for the scaling - rather than being a second local-depth walk of its
-     * own: both start from the identical per-cell walk in app_sand.c, `wave`
-     * just rescaled so a fixed MATERIAL_WAVE_PERIOD_CELLS steps of depth
-     * make one full pass through the table, instead of depth's own 0-255
-     * range doing so. Reading the table by a measure of DEPTH at all is
-     * what makes the bands run as shells around however deep a cell is into
-     * its own body of liquid, and follow the puddle's own shape as it moves
-     * or the board tilts, for nothing extra - the same shape-following
-     * property `depth` itself already has (see LOCAL DEPTH below).
-     * `wave_phase` - material_set_wave_phase(), its own setter, deliberately
-     * not shared with foam's - is added to `wave` before the table read, so
-     * the bands DRIFT over time along the same axis, rather than merely
-     * flickering in place. See material.h's own comment on
-     * material_set_wave_phase() for why it cannot be folded into foam's
-     * clock, and app_sand.c's WAVE_PHASE_RATE_Q8 for the drift rate.
-     *
-     * Same dirty-row caveat draw_dirty_rows() already imposes on foam (see
-     * that comment in this file, above) applies here without repeating it:
-     * a settled interior repaints only when something else marks its row
-     * dirty, so the drift shows where the water is actually moving and nothing
-     * here tries to force a row awake just to animate it.
+     * THIS USED TO ALSO CARRY WAVE BANDS AND, FOR WATER SPECIFICALLY, A HAZE
+     * BLEND in place of the plain shift below - both removed. See
+     * DEPTH_SATURATE_CELLS's own comment just above this function for why:
+     * the fog blend's range mismatch was a genuine bug (pinned near-pale for
+     * any depth a real pool here reaches), and the wave bands rode straight
+     * over local depth's own axis seam with no blending between an
+     * axis-aligned reading and a diagonal one, reading as rigid columns
+     * rather than an organic gradient. Water's interior now runs the exact
+     * same shift every other liquid always has - no more "water is
+     * special" fork in this branch.
      *
      * LOCAL DEPTH, NOT SCREEN POSITION. `depth` is 0 at this material's own
      * boundary - the neighbour one step toward the surface is not the same
@@ -2347,7 +2197,7 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
      * column's stored depth for a row that has not repainted in a while can
      * lag the puddle's current shape - see col_local_depth[]'s own comment
      * in app_sand.c for why that costs nothing extra to accept and matches
-     * the precedent already established for foam and the wave drift.
+     * the precedent already established for foam's own drift.
      *
      * INTERIOR ONLY, DELIBERATELY NOT THE RIM. A rim cell already carries
      * two terms - its own fill level, and liquid_spec[]'s specular shift -
@@ -2403,130 +2253,30 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
         const unsigned cardinal = mask & MATERIAL_EDGE_CARDINAL;
 
         if (cardinal == 0) {
-            /* DEPTH TERM, promoted to water_wave[]'s own Q4 scale - the
-             * exact same multiply and divide this line has always cost
-             * (just against a constant scaled up by WAVE_FRAC_BITS
-             * instead of DEPTH_RANGE itself), so the wave's finer
-             * resolution survives all the way to the one place it gets
-             * quantised, instead of being thrown away a step early. See
-             * water_wave[]'s own comment above for why quantising twice
-             * collapses the wave to two or three values. */
-            const unsigned depth_q =
-                (((unsigned)DEPTH_RANGE << WAVE_FRAC_BITS) *
-                 (255u - depth)) / 255u;
+            /* THE SAME SHIFT FOR EVERY LIQUID, WATER INCLUDED - no more id
+             * check here at all. `depth` is clamped to DEPTH_SATURATE_CELLS
+             * before it ever reaches the divide, rather than trusting the
+             * divide itself to fall to zero cleanly past that point: depth
+             * is unsigned and can run all the way to 255 (paint_row_n()'s
+             * own clamp in app_sand.c), and DEPTH_SATURATE_CELLS - depth
+             * would wrap to a huge unsigned value the moment depth exceeds
+             * it if this cap were not applied first. */
+            const unsigned depth_capped = depth < DEPTH_SATURATE_CELLS
+                                              ? depth : DEPTH_SATURATE_CELLS;
 
-            /* THE PER-CELL COST OF THE WAVE, IN FULL: one table index and
-             * one add on top of what depth already cost above - the
-             * multiply-and-shift that produces `wave` itself from that same
-             * local depth (paint_row_n(), app_sand.c) is charged separately,
-             * see MATERIAL_WAVE_STEP_Q8's comment in material.h for that
-             * budget. `& 0xFFu` keeps the index inside the table's 256
-             * entries as `wave` and phase
-             * both climb past it - the table is exactly one period long,
-             * so wrapping is wrapping the wave around itself, not an
-             * error case. */
-            const int lighten_q =
-                (int)depth_q + water_wave[(wave + wave_phase) & 0xFFu];
-
-            /* THE FORK: `lighten_q` is one merged number either way - depth
-             * and wave are combined above regardless of which material this
-             * is - but what happens to it next now splits by id, and ONLY
-             * here. WATER turns it into a single haze BLEND (water_fog's
-             * own comment above has the full reasoning and the chosen
-             * swatch table); everything else keeps the ORIGINAL mechanism,
-             * byte for byte: quantise once, shift the fill index, look up
-             * that material's own ramp. Nothing was asked for on oil, lava
-             * or acid, and this is the one place that has to stay true. */
-            if (id == MAT_WATER) {
-                /* GENERIC FRACTION FROM lighten_q, NOT A HARDCODED SHIFT.
-                 * `lighten_q`'s own span, before the wave's excursion can
-                 * push it further, runs 0..(DEPTH_RANGE << WAVE_FRAC_BITS) -
-                 * the same quantity the old code shifted down by
-                 * WAVE_FRAC_BITS to get a whole shade step. Naming that
-                 * span here and dividing by it, rather than hardcoding
-                 * today's WAVE_FRAC_BITS as a shift the way the old index
-                 * path did, is what keeps this from silently breaking the
-                 * day DEPTH_RANGE or WAVE_FRAC_BITS is next retuned - a
-                 * shift tied to today's exact values is exactly the sort of
-                 * thing nobody remembers to update alongside them.
-                 *
-                 * THE DIVIDE THIS COSTS is one, and it runs ONCE PER WATER
-                 * INTERIOR CELL - not per cell of every material, not on
-                 * the rim path either liquid branch shares. Measured on a
-                 * host proxy benchmark, material_colours() with depth and
-                 * wave both already folded in (the shift-based path just
-                 * replaced) costs about 1ns/call more than a bare palette
-                 * lookup - roughly 2x, but 2x of a number too small for any
-                 * budget this repo's tests measure to notice. One more
-                 * divide, confined to this one material's interior path, is
-                 * nowhere near that budget either - which is exactly why it
-                 * is safe to reach for a divide here, in a file that
-                 * otherwise goes out of its way to avoid one. */
-                const int max_lighten_q = (int)DEPTH_RANGE << WAVE_FRAC_BITS;
-                int frac256 = (lighten_q * 256) / max_lighten_q;
-                frac256 = frac256 < 0 ? 0 : (frac256 > 256 ? 256 : frac256);
-
-                /* BLEND IN 24-BIT RGB - the same space every other entry in
-                 * palette[] is built in (see LERP()/LERP_CH() and GFX_RGB()
-                 * above), not the panel's packed RGB565 and not some fresh
-                 * bit-twiddle invented for this one spot. `body` and
-                 * `water_fog` are both already-packed gfx_color_t values -
-                 * the former looked up from palette[] same as any other
-                 * fill-indexed lookup, the latter the file-static constant
-                 * above - so getting back to 0xRRGGBB to blend in means
-                 * gfx_color_rgb888() (gfx_color.h), this codebase's own
-                 * existing inverse of GFX_RGB(), not a new one. That round
-                 * trip is EXACT for any gfx_color_t - see
-                 * gfx_color_rgb888()'s own comment on why bit replication
-                 * makes GFX_RGB(gfx_color_rgb888(c)) == c for every c -
-                 * which is what makes the two boundaries below land
-                 * exactly on `body` and exactly on `water_fog`, not merely
-                 * close to them. */
-                const gfx_color_t body =
-                    palette[CELL_MAKE(MAT_WATER, MASS_MAX)];
-                const uint32_t body_rgb = gfx_color_rgb888(body);
-                const uint32_t fog_rgb  = gfx_color_rgb888(water_fog);
-
-                const int br = (int)((body_rgb >> 16) & 0xFFu);
-                const int bg = (int)((body_rgb >>  8) & 0xFFu);
-                const int bb = (int)( body_rgb         & 0xFFu);
-                const int fr = (int)((fog_rgb  >> 16) & 0xFFu);
-                const int fg = (int)((fog_rgb  >>  8) & 0xFFu);
-                const int fb = (int)( fog_rgb          & 0xFFu);
-
-                /* frac256 == 0 leaves every channel at body's own value -
-                 * the (fX - bX) * 0 / 256 term vanishes - and frac256 ==
-                 * 256 leaves every channel at fog's: bX + (fX - bX) * 256 /
-                 * 256 == bX + (fX - bX) == fX exactly, since 256 / 256 is a
-                 * clean 1 with no truncation to lose a channel over. Those
-                 * are the two boundaries this change is required to hit
-                 * bit for bit - deepest water with no wave contribution
-                 * must still be the plain full-cell colour existing tests
-                 * depend on, and full fog must be water_fog itself, not an
-                 * approximation of it. */
-                const int rr = br + ((fr - br) * frac256) / 256;
-                const int rg = bg + ((fg - bg) * frac256) / 256;
-                const int rb = bb + ((fb - bb) * frac256) / 256;
-
-                out[0] = GFX_RGB(((uint32_t)rr << 16) |
-                                  ((uint32_t)rg <<  8) |
-                                   (uint32_t)rb);
-            } else {
-                /* QUANTISE ONCE, HERE - shifting a combined, still-fine-
-                 * grained value down to a whole shade step. Clamped after,
-                 * not trusted blind: the wave's own excursion can push the total
-                 * beyond DEPTH_RANGE's original 0..4 span in either
-                 * direction (that is the point - see water_wave[]'s own
-                 * comment on the measured band count this produces), so
-                 * `idx` needs the same defensive clamp the rim branch below
-                 * already carries. UNCHANGED by water's fog above - oil,
-                 * lava and acid never reach the branch that constant
-                 * feeds. */
-                int bright = lighten_q >> WAVE_FRAC_BITS;
-                int idx = (int)MASS_MAX - bright;
-                idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
-                out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
-            }
+            /* Distance-to-saturation, out of DEPTH_RANGE whole shade steps -
+             * see DEPTH_SATURATE_CELLS's own comment above for the constant
+             * this divides by and why 255 was wrong. Plain integer
+             * arithmetic throughout, no intermediate fixed-point scale to
+             * promote to and shift back down again: that machinery existed
+             * only to keep a wave residual's fractional resolution alive
+             * through the merge, and there is no wave left to preserve. */
+            const int bright =
+                ((int)DEPTH_RANGE * (int)(DEPTH_SATURATE_CELLS - depth_capped))
+                    / (int)DEPTH_SATURATE_CELLS;
+            int idx = (int)MASS_MAX - bright;
+            idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
+            out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
         } else {
             int idx = (int)v + liquid_spec[cardinal];
             idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);

@@ -10,16 +10,8 @@
  *   '.' empty, 'o' a grain.
  *===========================================================================*/
 
-#include <math.h>
 #include <stdlib.h>
 #include <string.h>
-
-/* Not every libm's math.h defines this (it is not standard C, only common
- * practice) - test_the_wave_table_matches_its_formula is the one test here
- * that needs it, to recompute water_wave[]'s own sum-of-sines formula. */
-#ifndef M_PI
-#define M_PI 3.14159265358979323846
-#endif
 
 #include "unity.h"
 #include "suites.h"
@@ -5060,14 +5052,13 @@ static void test_an_edge_shows_less_temperature_than_the_body(void)
         const uint8_t m = tempered[k];
         gfx_color_t body[3], ed[3], hot[3], hot_ed[3];
 
-        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, 0u, 255u, 255u,
-                         body);
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, 0u, 255u, body);
         material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u,
-                         MATERIAL_EDGE_LEFT, 255u, 255u, ed);
+                         MATERIAL_EDGE_LEFT, 255u, ed);
         material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, 0u, 255u,
-                         255u, hot);
+                         hot);
         material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u,
-                         MATERIAL_EDGE_LEFT, 255u, 255u, hot_ed);
+                         MATERIAL_EDGE_LEFT, 255u, hot_ed);
 
         const gfx_color_t rest_body = body[0], rest_edge = ed[0];
         const gfx_color_t hot_body = hot[0], hot_edge = hot_ed[0];
@@ -5087,14 +5078,6 @@ static void test_an_edge_shows_less_temperature_than_the_body(void)
     }
 }
 
-/* zero_wave_index() is defined further down this file, beside the liquid
- * interior tests it was written for - forward-declared here for the same
- * reason panel_luminance() is (see that forward declaration's own comment,
- * further down still): this test needs a wave contribution of exactly
- * zero for water same as those do, and duplicating the table scan would
- * be stranger than declaring the function ahead of its definition. */
-static unsigned zero_wave_index(void);
-
 /* Every material is painted the way it is meant to be, and no other.
  *
  * material_colours() is consulted for every cell the renderer paints, so a
@@ -5108,20 +5091,18 @@ static unsigned zero_wave_index(void);
 static void test_each_material_is_painted_the_way_it_should_be(void)
 {
     const gfx_color_t *pal = material_palette();
-    /* Deepest depth AND a wave contribution of exactly zero (not 255,
-     * which is the table's last entry but not itself 0) - every KIND_LIQUID
-     * material below is asserted to paint EXACTLY its own body colour at
-     * this point, and water's interior now hazes continuously by the
-     * merged depth-plus-wave total, so that boundary needs a genuinely
-     * zero wave term - see zero_wave_index()'s own comment. */
-    const unsigned zero_wave = zero_wave_index();
+    /* Deepest depth - every KIND_LIQUID material below is asserted to
+     * paint EXACTLY its own body colour at this point, now that every
+     * liquid's interior (water included) uses the same plain shade-index
+     * shift into its own ramp - see material_colours()'s own comment on
+     * the liquid interior branch. */
 
     for (int m = 1; m < MAT_COUNT; m++) {
         for (int v = 0; v < MATERIAL_VARIANTS; v++) {
             const cell_t c = CELL_MAKE(m, v);
             gfx_color_t col[3] = { 0, 0, 0 };
             const material_pattern_t pat =
-                material_colours(c, 0u, 0u, 255u, zero_wave, col);
+                material_colours(c, 0u, 0u, 255u, col);
 
             char why[128];
             snprintf(why, sizeof why, "%s variant %d", materials[m].name, v);
@@ -5178,10 +5159,10 @@ static void test_glass_grain_is_quieter_than_stone(void)
 
     for (int v = 0; v < MATERIAL_VARIANTS; v++) {
         gfx_color_t g0[3], g1[3], s0[3], s1[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, 255u, g0);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, 0u, 255u, 255u, g1);
-        material_colours(CELL_MAKE(MAT_STONE, v), 0u, 0u, 255u, 255u, s0);
-        material_colours(CELL_MAKE(MAT_STONE, v), 7u, 0u, 255u, 255u, s1);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, g0);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, 0u, 255u, g1);
+        material_colours(CELL_MAKE(MAT_STONE, v), 0u, 0u, 255u, s0);
+        material_colours(CELL_MAKE(MAT_STONE, v), 7u, 0u, 255u, s1);
 
         glass_spread += colour_gap(g0[0], g1[0]);
         stone_spread += colour_gap(s0[0], s1[0]);
@@ -5204,8 +5185,8 @@ static void test_the_shine_does_not_vary_between_cells(void)
 {
     for (int v = 0; v < MATERIAL_VARIANTS; v++) {
         gfx_color_t a[3], b[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, 255u, a);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, 0u, 255u, 255u, b);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, 255u, a);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, 0u, 255u, b);
 
         char why[128];
         snprintf(why, sizeof why,
@@ -5235,7 +5216,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
 
         for (unsigned h = 0; h < 8u; h++) {
             gfx_color_t col[3] = { 0, 0, 0 };
-            material_colours(c, h, 0u, 255u, 255u, col);
+            material_colours(c, h, 0u, 255u, col);
             const gfx_color_t a = col[0];
             TEST_ASSERT_EQUAL_MESSAGE(col[0], col[1],
                 "a speckled cell is one flat colour - the variation is "
@@ -5261,8 +5242,8 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
     /* Stable: the same cell asked twice gets the same answer. */
     gfx_color_t one[3], two[3];
     const cell_t c = CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT);
-    material_colours(c, 12345u, 0u, 255u, 255u, one);
-    material_colours(c, 12345u, 0u, 255u, 255u, two);
+    material_colours(c, 12345u, 0u, 255u, one);
+    material_colours(c, 12345u, 0u, 255u, two);
     TEST_ASSERT_EQUAL_MESSAGE(one[0], two[0],
         "the same cell must speckle the same way every time it is asked, "
         "or a stone wall shimmers");
@@ -5275,37 +5256,6 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
  * declaration - it would be a stranger thing to duplicate luminance math
  * than to declare a static function ahead of its definition. */
 static int panel_luminance(gfx_color_t c);
-
-/* The first water_wave[] table index whose baked entry is exactly 0,
- * scanned from material_wave_table() rather than guessed or hand-typed -
- * the same accessor test_the_wave_table_matches_its_formula (further down
- * this file) already reads to check the table against its own formula, so
- * this stays deterministic and tied to the real baked table rather than to
- * an index somebody once counted off by eye and never rechecked.
- *
- * Several tests below need a WAVE contribution of precisely zero: with
- * water's interior now hazing continuously by `lighten_q` (material.c's
- * own comment on the liquid interior has the full account of why),
- * `depth == 255` alone no longer guarantees "no shift at all" the way it
- * did when a small residual wave value got quantised away - the residual
- * has to be genuinely zero, not merely small, for `frac256` to land
- * exactly on its own 0 boundary. Declared `static` at file scope (rather
- * than a local inside the first caller) because more than one test below
- * needs it, and re-scanning the table each time is nothing this suite's
- * budget notices. */
-static unsigned zero_wave_index(void)
-{
-    const int8_t *table = material_wave_table();
-    for (int i = 0; i < 256; i++) {
-        if (table[i] == 0) {
-            return (unsigned)i;
-        }
-    }
-    TEST_FAIL_MESSAGE("water_wave[] has no exact zero entry - every test "
-        "below that isolates depth alone, or pins the fog blend's own 0 "
-        "boundary, assumes one exists");
-    return 0;
-}
 
 /* A liquid's interior paints flat, whatever the comb underneath is doing.
  *
@@ -5356,14 +5306,6 @@ static void test_a_liquid_body_paints_flat_inside(void)
                                     * and every material_colours() call below
                                     * passes an explicit depth of its own */
 
-    /* A wave contribution of exactly 0, not merely 255 (the table's last
-     * entry, but not itself 0 - see zero_wave_index()'s own comment) - the
-     * comb assertion below is that this cell paints EXACTLY the body
-     * colour, and under water's new fog blend that boundary needs the
-     * wave term to be genuinely zero, not just small enough for the old
-     * shift-based quantising to discard. */
-    const unsigned zero_wave = zero_wave_index();
-
     gfx_color_t seen = 0;
     bool have_seen = false;
     for (int x = 1; x < COMB_W - 1; x++) {
@@ -5379,7 +5321,7 @@ static void test_a_liquid_body_paints_flat_inside(void)
             "it claims to");
 
         gfx_color_t col[3];
-        material_colours(c, 0u, mask, 255u, zero_wave, col);
+        material_colours(c, 0u, mask, 255u, col);
 
         char why[96];
         snprintf(why, sizeof why,
@@ -5420,21 +5362,19 @@ static void test_a_liquid_body_paints_flat_inside(void)
  * colour, it never darkens a deep one past it, or a pool would read darker
  * than its own resting colour simply for being deep.
  *
- * The deep call pins `wave` at zero_wave_index() rather than 255: this is
- * the depth boundary specifically, and water's interior now hazes
- * continuously by the MERGED depth-plus-wave total (see material.c's own
- * comment on the liquid interior), so isolating depth alone means the
- * wave term genuinely has to contribute nothing - not merely something
- * small enough for the old shift-based quantising to have discarded. */
+ * `depth` 255 is well past DEPTH_SATURATE_CELLS (material.c's own constant
+ * for how many cells of local depth it takes to reach the body colour) -
+ * this is deliberately deeper than the clamp, not merely equal to it, so
+ * this test also pins that anything past the clamp reads exactly as the
+ * clamp does, not as something further darkened past it. */
 static void test_a_liquid_interior_is_shaded_by_depth(void)
 {
     const gfx_color_t *pal = material_palette();
     const cell_t c = CELL_MAKE(MAT_WATER, MASS_MAX);
-    const unsigned zero_wave = zero_wave_index();
 
     gfx_color_t shallow[3], deep[3];
-    material_colours(c, 0u, 0u, 0u, 0u, shallow);
-    material_colours(c, 0u, 0u, 255u, zero_wave, deep);
+    material_colours(c, 0u, 0u, 0u, shallow);
+    material_colours(c, 0u, 0u, 255u, deep);
 
     TEST_ASSERT_TRUE_MESSAGE(
         panel_luminance(shallow[0]) > panel_luminance(deep[0]),
@@ -5481,9 +5421,9 @@ static void test_only_a_liquid_interior_reads_depth(void)
                                             * rim comparison with */
 
     gfx_color_t rim_shallow[3], rim_deep[3];
-    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 0u, 0u,
+    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 0u,
                      rim_shallow);
-    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u, 255u,
+    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u,
                      rim_deep);
     TEST_ASSERT_EQUAL_MESSAGE(rim_shallow[0], rim_deep[0],
         "a RIM liquid cell must paint identically at depth 0 and depth "
@@ -5492,80 +5432,19 @@ static void test_only_a_liquid_interior_reads_depth(void)
         "shift to show instead");
 
     gfx_color_t glass_shallow[3], glass_deep[3];
-    material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 0u, 0u, glass_shallow);
-    material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 255u, 255u, glass_deep);
+    material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 0u, glass_shallow);
+    material_colours(CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 255u, glass_deep);
     TEST_ASSERT_EQUAL_MESSAGE(glass_shallow[0], glass_deep[0],
         "glass must ignore depth entirely - it is not a liquid, and depth "
         "must not leak into a code path that has nothing to do with it");
 
     gfx_color_t stone_shallow[3], stone_deep[3];
-    material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 0u, 0u, stone_shallow);
-    material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 255u, 255u, stone_deep);
+    material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 0u, stone_shallow);
+    material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 255u, stone_deep);
     TEST_ASSERT_EQUAL_MESSAGE(stone_shallow[0], stone_deep[0],
         "and neither must stone - the same guarantee, on the other "
         "non-liquid material whose variant could plausibly be confused "
         "for depth");
-}
-
-/* MIRRORS test_only_a_liquid_interior_reads_depth just above, for the wave
- * bands rather than depth - they ride on `depth` inside the exact same
- * `cardinal == 0` branch depth itself is confined to (see
- * material_colours()'s own comment on the interior), so whatever confines
- * depth to the interior confines the wave there too. That shared boundary
- * is exactly the kind of thing a change to one side could quietly move
- * without touching the other, which is why this gets its own test rather
- * than trusting the depth test's coverage to carry over.
- *
- * Same OIL cell, same reasoning as the test above for using it: a water
- * rim's foam dither could overwrite `out[0]` regardless of phase and hide
- * a real leak behind it, where oil shares the fill-indexed-plus-specular
- * path but never foams - so oil is the material a leak has nowhere to
- * hide behind. */
-static void test_the_wave_bands_do_not_reach_the_rim_either(void)
-{
-    material_set_gravity(0, 0);   /* no specular term to confuse the
-                                            * rim comparison with */
-
-    /* DIRECTLY, first: a rim cell must paint identically at `wave` 0 and
-     * 255, exactly the depth-0-versus-255 check
-     * test_only_a_liquid_interior_reads_depth makes for `depth` - now that
-     * `wave` is its OWN parameter rather than a reuse of `depth`, this is
-     * the check that actually pins the boundary on the wave side; the
-     * phase sweep below is a second, independent way the wave mechanism
-     * could leak in, not a substitute for this one. */
-    gfx_color_t rim_wave_0[3], rim_wave_255[3];
-    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u, 0u,
-                     rim_wave_0);
-    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u, 255u,
-                     rim_wave_255);
-    TEST_ASSERT_EQUAL_MESSAGE(rim_wave_0[0], rim_wave_255[0],
-        "a RIM liquid cell must paint identically at wave 0 and wave 255 - "
-        "the wave bands are the interior's cue, same as depth, and must "
-        "not leak into the rim's own fill-plus-specular arithmetic");
-
-    material_set_wave_phase(0);
-    gfx_color_t rim_at_phase_0[3];
-    material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u, 255u,
-                     rim_at_phase_0);
-
-    for (unsigned phase = 0; phase < 256u; phase += 16u) {
-        material_set_wave_phase(phase);
-        gfx_color_t rim_col[3];
-        material_colours(CELL_MAKE(MAT_OIL, 8), 0u, MATERIAL_EDGE_UP, 255u,
-                         255u, rim_col);
-
-        char why[224];
-        snprintf(why, sizeof why,
-                 "a RIM liquid cell must paint identically at wave phase "
-                 "%u as at phase 0 - the wave bands are the interior's "
-                 "cue, same as depth, and must not leak into the rim's "
-                 "own fill-plus-specular arithmetic", phase);
-        TEST_ASSERT_EQUAL_MESSAGE(rim_at_phase_0[0], rim_col[0], why);
-    }
-
-    material_set_wave_phase(0);   /* leave global state as later tests
-                                   * assume it, the same convention foam's
-                                   * own tests already follow */
 }
 
 /* A rim cell still shows its own fill level - the other half of the same
@@ -5607,8 +5486,8 @@ static void test_a_liquid_rim_still_shows_its_fill(void)
                           MATERIAL_EDGE_UP_RIGHT;
 
     gfx_color_t shallow[3], deep[3];
-    material_colours(CELL_MAKE(MAT_WATER, 1), 0u, mask, 255u, 255u, shallow);
-    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, mask, 255u, 255u,
+    material_colours(CELL_MAKE(MAT_WATER, 1), 0u, mask, 255u, shallow);
+    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, mask, 255u,
                      deep);
 
     TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, 1)], shallow[0],
@@ -5666,12 +5545,12 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
     material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
                      MATERIAL_EDGE_UP | MATERIAL_EDGE_UP_LEFT |
                          MATERIAL_EDGE_UP_RIGHT,
-                     255u, 255u,
+                     255u,
                      up);
     material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
                      MATERIAL_EDGE_DOWN | MATERIAL_EDGE_DOWN_LEFT |
                          MATERIAL_EDGE_DOWN_RIGHT,
-                     255u, 255u,
+                     255u,
                      down);
 
     TEST_ASSERT_TRUE_MESSAGE(
@@ -5686,12 +5565,12 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
     material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
                      MATERIAL_EDGE_LEFT | MATERIAL_EDGE_UP_LEFT |
                          MATERIAL_EDGE_DOWN_LEFT,
-                     255u, 255u,
+                     255u,
                      left);
     material_colours(CELL_MAKE(MAT_WATER, fill), 0u,
                      MATERIAL_EDGE_RIGHT | MATERIAL_EDGE_UP_RIGHT |
                          MATERIAL_EDGE_DOWN_RIGHT,
-                     255u, 255u,
+                     255u,
                      right);
 
     TEST_ASSERT_TRUE_MESSAGE(
@@ -5703,175 +5582,6 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
 }
 
 /*=============================================================================
- * A LIQUID INTERIOR'S WAVE BANDS - a baked sum of sines riding on the depth
- * gradient above, so a settled pool's interior carries drifting bands of
- * light instead of one smooth ramp. See water_wave[]'s own comment in
- * material.c for the formula, the Q4 fixed-point scale, and why the table
- * is baked and generated rather than hand-typed
- * (launcher/main/apps/sand/tools/gen_wave_table.c).
- *===========================================================================*/
-
-/* THE SAFETY NET a baked table needs: recompute the same formula
- * independently, here, in a host test where floating point and math.h are
- * both allowed (material.c itself may use neither - see this file's own
- * budget comments on why material_colours() cannot afford trig per cell),
- * and assert it matches material_wave_table()'s 256 baked entries one for
- * one. Without this, the table and the prose describing it can drift apart
- * the moment either is next hand-edited, and nothing would notice until
- * someone compared them by eye - which is exactly how the reaction tables
- * this project already generates (see dump_reactions.c's own top comment)
- * went stale before anything read them back out of material.c.
- *
- * The formula is restated here rather than shared with gen_wave_table.c on
- * purpose: two independently-written implementations agreeing on all 256
- * entries is a real check; one implementation compared against a second
- * call to itself is not. Both this test and the generator are read against
- * the SAME prose - water_wave[]'s own comment in material.c - and that
- * prose is the thing that actually has to stay correct. */
-static void test_the_wave_table_matches_its_formula(void)
-{
-    static const double freq[3]  = { 2.0, 5.0, 9.0 };
-    static const double amp[3]   = { 1.0, 0.6, 0.35 };
-    static const double phase[3] = { 0.0, 2.1, 4.0 };
-    const double amp_sum = amp[0] + amp[1] + amp[2];
-    const int wave_amp = 40;   /* WAVE_AMP in material.c - 2.5 shade steps
-                                * at the Q4 scale water_wave[] is stored in */
-
-    const int8_t *baked = material_wave_table();
-
-    for (int i = 0; i < 256; i++) {
-        double v = 0.0;
-        for (int k = 0; k < 3; k++) {
-            v += amp[k] * sin(2.0 * M_PI * freq[k] * (double)i / 256.0 +
-                              phase[k]);
-        }
-        const double scaled = (v / amp_sum) * (double)wave_amp;
-        const int8_t expected = (int8_t)lround(scaled);
-
-        char why[160];
-        snprintf(why, sizeof why,
-                 "water_wave[%d] is %d but the documented formula gives "
-                 "%d - the baked table has drifted from the formula it "
-                 "claims to follow", i, baked[i], expected);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(expected, baked[i], why);
-    }
-}
-
-/* THE WAVE ACTUALLY CONTRIBUTES, on top of depth - not merely present in
- * the table but reaching the panel. Sweeping `wave` in lockstep with
- * `depth`, 0..255 at a FIXED phase, for an interior cell (mask 0, so there
- * is no rim shift or foam anywhere near this) isolates exactly the
- * interior branch's own arithmetic - and is a faithful stand-in for
- * paint_row_n()'s real walk, where `wave` and `depth` are two accumulators
- * both derived from the same gravity projection and so climb together as a
- * row is painted, just at different rates (see material_set_gravity()'s
- * own comment on why they cannot share one derivation).
- *
- * A pure depth ramp - what this cell painted before the wave existed - is
- * MONOTONIC: luminance falls steadily as depth climbs from 0 (brightest) to
- * 255 (body colour), five steps of DEPTH_RANGE and nothing else. So the
- * two things that prove the wave is doing anything at all are: more than
- * DEPTH_RANGE's own five possible luminance values turn up across the
- * sweep, and the sequence is NOT monotonic - somewhere in the sweep,
- * luminance must go back UP as depth increases, which a plain depth ramp
- * can never do. Either failing on its own means the wave term is not
- * reaching material_colours()'s output, whatever water_wave[] itself
- * contains. */
-static void test_wave_bands_vary_across_depth(void)
-{
-    material_set_wave_phase(0);
-
-    bool seen[256] = { false };
-    int distinct = 0;
-    int prev_lum = -1;
-    bool went_up = false;
-
-    for (unsigned depth = 0; depth <= 255; depth++) {
-        gfx_color_t col[3];
-        material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, depth,
-                         depth, col);
-        const int lum = panel_luminance(col[0]);
-
-        if (!seen[lum]) {
-            seen[lum] = true;
-            distinct++;
-        }
-        if (prev_lum >= 0 && lum > prev_lum) {
-            went_up = true;
-        }
-        prev_lum = lum;
-    }
-
-    TEST_ASSERT_TRUE_MESSAGE(distinct >= 5,
-        "sweeping depth 0..255 at a fixed phase must paint at least 5 "
-        "distinct luminance values - DEPTH_RANGE alone can only ever "
-        "produce 5, so this many or more means the wave is contributing "
-        "bands of its own rather than depth painting exactly what it "
-        "always did");
-    TEST_ASSERT_TRUE_MESSAGE(went_up,
-        "the luminance sweep must NOT be monotonic - a plain depth ramp "
-        "only ever gets darker as depth increases, so at least one point "
-        "where it gets BRIGHTER again as depth climbs is what proves a "
-        "wave is riding on top of the ramp rather than the ramp painting "
-        "alone");
-}
-
-/* THE BANDS DRIFT - the whole point of giving them their own phase. The
- * same cell at the same depth must paint DIFFERENTLY at some other phase,
- * and sweeping a range of phases must change the SET of luminances a fixed
- * depth can produce - pinning the animation the way test_foam_moves_
- * between_frames (above) pins foam's, and for the same reason: a
- * material_set_wave_phase() that is wired up but never actually read would
- * still pass every other test in this section, since none of them vary
- * phase at all. */
-static void test_wave_bands_drift_with_phase(void)
-{
-    const unsigned fixed_depth = 40;   /* arbitrary interior depth - not 0 or
-                                        * 255, which sit at either end of
-                                        * the ramp and could clamp away a
-                                        * real difference */
-
-    material_set_wave_phase(0);
-    gfx_color_t at_phase_0[3];
-    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, fixed_depth,
-                     fixed_depth, at_phase_0);
-
-    bool ever_different = false;
-    bool seen[256] = { false };
-    int distinct = 0;
-
-    for (unsigned phase = 0; phase < 256u; phase += 8u) {
-        material_set_wave_phase(phase);
-        gfx_color_t col[3];
-        material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, fixed_depth,
-                         fixed_depth, col);
-
-        if (col[0] != at_phase_0[0]) {
-            ever_different = true;
-        }
-        const int lum = panel_luminance(col[0]);
-        if (!seen[lum]) {
-            seen[lum] = true;
-            distinct++;
-        }
-    }
-
-    material_set_wave_phase(0);   /* leave global state as later tests
-                                   * assume it, the same convention foam's
-                                   * own tests already follow */
-
-    TEST_ASSERT_TRUE_MESSAGE(ever_different,
-        "the same interior cell, same depth, must paint DIFFERENTLY at "
-        "some other phase - if it never does, material_set_wave_phase() "
-        "is not reaching the wave lookup at all");
-    TEST_ASSERT_TRUE_MESSAGE(distinct >= 2,
-        "sweeping phase at a fixed depth must change the SET of "
-        "luminances produced, not just this one depth's own value - "
-        "otherwise the bands are not actually drifting across the pool, "
-        "only this single test cell happens to have moved");
-}
-
-/*=============================================================================
  * LOCAL DEPTH - the depth signal now follows each puddle's own shape
  * rather than a fixed screen-position gradient. See LOCAL DEPTH's own long
  * comment in app_sand.c for the full mechanism and the two device reports
@@ -5880,11 +5590,10 @@ static void test_wave_bands_drift_with_phase(void)
  *
  * paint_row_n() itself cannot be linked into this host suite - it lives in
  * app_sand.c, which check_app_sources.sh only compile-checks, the same
- * position FOAM_PHASE_MS's and WAVE_PHASE_RATE_Q8's own accumulators have
- * always been in (see WAVE_PHASE_RATE_Q8's own comment in app_sand.c) - so
- * each test below mirrors the algorithm it pins with a small test-local
- * helper, built to match app_sand.c's real logic exactly, rather than
- * calling into it.
+ * position FOAM_PHASE_MS's own accumulator has always been in - so each
+ * test below mirrors the algorithm it pins with a small test-local helper,
+ * built to match app_sand.c's real logic exactly, rather than calling into
+ * it.
  *===========================================================================*/
 
 /* Mirrors paint_row_n()'s vertical-dominant local-depth walk (app_sand.c)
@@ -6037,11 +5746,10 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
         "would mean the walk stopped working after the first obstacle, "
         "not merely reset at it");
 
-    /* That material_colours() itself turns a `depth`/`wave` pair into a
-     * visibly different colour is already pinned directly, at controlled
-     * values, by test_a_liquid_interior_is_shaded_by_depth and
-     * test_wave_bands_vary_across_depth above - not repeated here with
-     * these particular (quite shallow) pool depths, which is the wrong
+    /* That material_colours() itself turns a `depth` value into a visibly
+     * different colour is already pinned directly, at controlled values, by
+     * test_a_liquid_interior_is_shaded_by_depth above - not repeated here
+     * with these particular (quite shallow) pool depths, which is the wrong
      * place to prove it: DEPTH_RANGE's brightening is already close to
      * maxed out within the first handful of cells of any pool, so two
      * local depths this close together are not guaranteed to land on
@@ -6169,162 +5877,156 @@ static void test_local_depth_resets_when_gravitys_axis_flips(void)
  * stronger claim: not just "grid-size-independent" but "follows the actual
  * shape of the puddle, obstacles included". */
 
-/*=============================================================================
- * WATER'S FOG - depth and wave merge into ONE haze BLEND for water alone,
- * rather than each nudging a shade index the way every other liquid still
- * does. See water_fog's own comment in material.c for the chosen swatch
- * table and the user-facing reasoning (deep, turbulent water reads pale
- * and hazy, not merely a darker or more saturated entry of its own ramp),
- * and material_colours()'s own comment on the liquid interior branch for
- * where the id check forks the two mechanisms apart.
- *===========================================================================*/
-
-/* DEPTH_RANGE and WAVE_FRAC_BITS, restated. Both are #defines private to
- * material.c - not exposed through material.h, the same as WAVE_AMP isn't
- * - so a test that wants to predict the merged formula's own arithmetic
- * has to know their values directly, exactly the way
- * test_the_wave_table_matches_its_formula (above) restates WAVE_AMP rather
- * than reaching for a shared header. If either is ever retuned in
- * material.c without a matching edit here, THIS constant - not some
- * unrelated test - is what goes stale, and the tests below will say so. */
-#define TEST_DEPTH_RANGE    4
-#define TEST_WAVE_FRAC_BITS 4
-
-/* THE GENERIC BLEND FORMULA, reproduced independently here rather than a
- * hand-typed expected colour, so this test tracks material_colours()'s own
- * arithmetic rather than one frozen snapshot of it - the same principle
- * test_the_wave_table_matches_its_formula already applies to the baked
- * wave table itself.
+/* test_water_interior_hazes_toward_fog_colour, test_only_water_hazes_its_
+ * interior, test_the_wave_table_matches_its_formula, test_wave_bands_vary_
+ * across_depth and test_wave_bands_drift_with_phase, plus TEST_DEPTH_RANGE
+ * and TEST_WAVE_FRAC_BITS, used to live here - the whole "WATER'S FOG"
+ * section, covering the haze blend and the wave-table bands stacked on top
+ * of local depth for water alone.
  *
- * `depth == 0` (the shallowest an interior cell can read) paired with
- * zero_wave_index() (a wave contribution of exactly 0, see that function's
- * own comment) isolates `lighten_q` to depth's own term alone -
- * DEPTH_RANGE << WAVE_FRAC_BITS, the formula's own maximum - which lands
- * `frac256` at exactly 256 without the clamp doing any actual clamping:
- * proof the general divide-by-span arithmetic reaches the full-fog end on
- * its own, not because a defensive clamp happened to paper over a wrong
- * answer.
+ * REMOVED, not merely updated: on the device the fog blend's own arithmetic
+ * (tuned for the OLD screen-position depth, which legitimately spanned the
+ * full 0-255 range) turned out to be pinned near-maximum haze across every
+ * local depth a real pool in this app ever reaches, so water lost its
+ * saturated blue almost entirely - a genuine bug, not a taste call. The wave
+ * bands had their own, separate problem: local depth commits to a single
+ * dominant axis with a hard, unsmoothed switch between vertical and
+ * horizontal, and the bands rode straight over that seam, reading as rigid
+ * columns rather than an organic gradient. Water's interior now uses
+ * EXACTLY the same plain shade-index shift oil, lava and acid always have -
+ * see material_colours()'s own comment on the liquid interior branch, and
+ * DEPTH_SATURATE_CELLS's comment just above it for the scale fix that came
+ * out of the same round. The wave-table technique and the fog-blend
+ * arithmetic both still exist, untouched, on the water-wave-fog-depth-
+ * banked branch, for anyone who wants to revisit that approach or reuse a
+ * piece of it for a different effect later.
  *
- * 0x8FA6B8 is water_fog in material.c, restated for the same reason
- * DEPTH_RANGE and WAVE_FRAC_BITS are above: it is a file-static constant
- * with no formula to derive it from (it is a chosen swatch, not a baked
- * table), so the only way this test can predict the blend
- * material_colours() produces is to know the same colour it blends
- * toward. Passed through GFX_RGB() then gfx_color_rgb888() here, exactly
- * as material.c does internally, so this test's fog channels are the same
- * already-quantised values material.c actually blends against - not the
- * raw 24-bit literal before RGB565 rounds it. */
-static void test_water_interior_hazes_toward_fog_colour(void)
+ * test_deepest_water_interior_is_exactly_the_body_colour was broadened
+ * rather than deleted outright - see test_every_liquid_interior_is_
+ * exactly_the_body_colour_when_saturated below, next to test_a_liquid_
+ * interior_is_shaded_by_depth, which is now the shared mechanism it
+ * belongs beside rather than a water-only fog boundary. */
+
+/* THE SATURATION BOUNDARY, and now a claim about EVERY liquid rather than
+ * a water-only fog boundary: since water dropped its own fog/wave mechanism
+ * and rejoined the plain shade-index shift oil, lava and acid already used
+ * (see material_colours()'s own comment on the liquid interior branch),
+ * "the deepest interior cell is exactly the body colour" is a structural
+ * property of the one mechanism every liquid now shares, not a boundary
+ * water alone needs pinned. Depth 255 is comfortably past
+ * DEPTH_SATURATE_CELLS (material.c), so every one of these must paint
+ * EXACTLY palette[CELL_MAKE(id, MASS_MAX)], with no shift left at all. */
+static void test_every_liquid_interior_is_exactly_the_body_colour_when_saturated(void)
 {
-    const unsigned zero_wave = zero_wave_index();
-    const unsigned depth = 0u;
-
-    const int max_lighten_q = TEST_DEPTH_RANGE << TEST_WAVE_FRAC_BITS;
-    const int depth_q = (max_lighten_q * (int)(255u - depth)) / 255;
-    const int lighten_q = depth_q + 0;   /* + water_wave[...], which
-                                          * zero_wave_index() guarantees is
-                                          * exactly 0 */
-    int frac256 = (lighten_q * 256) / max_lighten_q;
-    frac256 = frac256 < 0 ? 0 : (frac256 > 256 ? 256 : frac256);
-
+    static const uint8_t liquids[] = { MAT_WATER, MAT_OIL, MAT_LAVA,
+                                       MAT_ACID };
     const gfx_color_t *pal = material_palette();
-    const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
-    const uint32_t body_rgb = gfx_color_rgb888(body);
-    const uint32_t fog_rgb  = gfx_color_rgb888(GFX_RGB(0x8FA6B8u));
 
-    const int br = (int)((body_rgb >> 16) & 0xFFu);
-    const int bg = (int)((body_rgb >>  8) & 0xFFu);
-    const int bb = (int)( body_rgb        & 0xFFu);
-    const int fr = (int)((fog_rgb  >> 16) & 0xFFu);
-    const int fg = (int)((fog_rgb  >>  8) & 0xFFu);
-    const int fb = (int)( fog_rgb         & 0xFFu);
+    for (unsigned k = 0; k < sizeof liquids / sizeof liquids[0]; k++) {
+        const uint8_t id = liquids[k];
+        const gfx_color_t body = pal[CELL_MAKE(id, MASS_MAX)];
 
-    const int rr = br + ((fr - br) * frac256) / 256;
-    const int rg = bg + ((fg - bg) * frac256) / 256;
-    const int rb = bb + ((fb - bb) * frac256) / 256;
-    const gfx_color_t expected =
-        GFX_RGB(((uint32_t)rr << 16) | ((uint32_t)rg << 8) | (uint32_t)rb);
+        gfx_color_t col[3];
+        material_colours(CELL_MAKE(id, MASS_MAX), 0u, 0u, 255u, col);
 
-    gfx_color_t col[3];
-    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, depth,
-                     zero_wave, col);
-
-    TEST_ASSERT_EQUAL_MESSAGE(expected, col[0],
-        "water's interior at the shallowest depth, with the wave "
-        "contributing exactly zero, must paint EXACTLY the blend this "
-        "test's own independent copy of the merged formula predicts - a "
-        "mismatch means material_colours() has drifted from the "
-        "documented haze-blend arithmetic, not merely from one frozen "
-        "colour");
+        char why[192];
+        snprintf(why, sizeof why,
+                 "%s's deepest interior cell must paint EXACTLY the plain "
+                 "body colour, with no shift left at all, now that every "
+                 "liquid shares the same saturating shade-index mechanism",
+                 materials[id].name);
+        TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
+    }
 }
 
-/* THE DEEP BOUNDARY, and the one several other liquid-interior tests
- * above (test_a_liquid_body_paints_flat_inside,
- * test_a_liquid_interior_is_shaded_by_depth,
- * test_each_material_is_painted_the_way_it_should_be,
- * test_a_liquid_interior_never_foams) already assume still holds for
- * water: depth 255 (deepest) with the wave contributing exactly zero
- * (zero_wave_index() again) must paint EXACTLY palette[CELL_MAKE(MAT_
- * WATER, MASS_MAX)] - the plain, unfogged body colour - with no blend
- * applied at all. This is frac256 == 0: body + (fog - body) * 0 / 256
- * leaves every channel at body's own value, so the two ends of the fog
- * blend (this test, and test_water_interior_hazes_toward_fog_colour just
- * above) are the two boundaries the brief for this change is required to
- * hit bit for bit, not merely approximately. */
-static void test_deepest_water_interior_is_exactly_the_body_colour(void)
+/* THE REGRESSION THIS WHOLE ROUND EXISTS FOR: a REALISTIC shallow pool -
+ * 10 to 20 cells deep, which is what nearly every visible pool in this app
+ * actually reaches - must still show a MEANINGFUL luminance difference
+ * between a cell near its own surface and one near its own bottom. This is
+ * a stronger claim than test_a_liquid_interior_is_shaded_by_depth above,
+ * which only proves depth 0 differs from depth 255 in the abstract - the
+ * old `/255` divide agreed with that in principle (it does eventually
+ * reach the deepest possible shade), it just took on the order of sixty
+ * cells of local depth to cross even a single shade step, which pinned any
+ * pool this app can actually build dead flat. This test builds a pool of
+ * exactly that realistic depth and checks the difference is a real
+ * fraction of the ramp's own full span, not merely present in the abstract.
+ *
+ * A plain pool via sand_set(), no obstacle and no stepping needed - this is
+ * a claim about material_colours() given a realistic depth value, not
+ * about the solver settling anything - and mirror_local_depth_column()
+ * (defined above, for test_local_depth_follows_the_puddles_own_shape)
+ * reads the REAL local depth back off the live grid, the same way
+ * paint_row_n() would, rather than asserting anything about a hand-picked
+ * depth number in isolation.
+ *
+ * The "meaningful" bar is a quarter of the ramp's own full span (depth 0
+ * versus depth 255, computed here rather than hand-typed), not a
+ * hand-picked luminance number: robust to the ramp ever being retuned,
+ * and still clearly nonzero enough that the old, pinned-flat bug cannot
+ * pass it by accident.
+ *
+ * PROVEN LOAD-BEARING, not merely written and trusted to catch anything:
+ * temporarily restoring the old `(...) / 255` divide in material.c's
+ * depth_q calculation turns this test RED - the surface and bottom rows
+ * land on the identical quantised shade (verified: both idx 12 at depths 1
+ * and 17), reproducing the reported bug exactly. Putting back the
+ * `/ DEPTH_SATURATE_CELLS` divide turns it GREEN again (idx 12 versus idx
+ * 14, a real two-step gap). */
+enum { SHALLOW_POOL_W = 4, SHALLOW_POOL_H = 20 };
+static uint8_t shallow_pool_cells[SHALLOW_POOL_W * SHALLOW_POOL_H];
+static sand_t  shallow_pool;
+
+static void test_a_shallow_puddle_still_shows_real_darkening(void)
 {
-    const unsigned zero_wave = zero_wave_index();
-    const gfx_color_t *pal = material_palette();
-    const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
+    enum { PW = SHALLOW_POOL_W, PH = SHALLOW_POOL_H };
+    sand_init(&shallow_pool, shallow_pool_cells, PW, PH, 777u);
 
-    gfx_color_t col[3];
-    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 255u,
-                     zero_wave, col);
+    /* Rows 0-1 stay empty (the surface); rows 2..PH-1 are water - 18 rows,
+     * squarely inside the 10-20 cell range measured as broken. */
+    for (int y = 2; y < PH; y++) {
+        for (int x = 0; x < PW; x++) {
+            sand_set(&shallow_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
 
-    TEST_ASSERT_EQUAL_MESSAGE(body, col[0],
-        "the deepest water interior cell, with the wave contributing "
-        "exactly zero, must paint EXACTLY the plain body colour - no fog "
-        "at all - or a settled pool would read hazy even at its own "
-        "resting colour, and every other liquid-interior test that "
-        "assumes this boundary still holds for water would be resting on "
-        "a lie");
-}
+    enum { NEAR_SURFACE_Y = 3, NEAR_BOTTOM_Y = PH - 1 };
+    unsigned depth[PH];
+    mirror_local_depth_column(&shallow_pool, 0, PH, depth);
 
-/* THE WATER-ONLY BOUNDARY, and the whole reason this change is scoped by
- * an id check rather than applied to every KIND_LIQUID material alike.
- * Oil, at the EXACT same depth/wave pair that fogs water completely (see
- * test_water_interior_hazes_toward_fog_colour above), must still paint
- * the plain idx-shift-and-lookup against its OWN ramp - reproduced here
- * independently, the same way the water test above reproduces the fog
- * blend, so this tracks oil's formula rather than a hand-typed index.
- * Nothing was asked for on a lava pool or an oil slick, and if oil ever
- * matches water's fog blend instead of its own ramp, the id check that is
- * supposed to confine fog to water alone has silently spread. */
-static void test_only_water_hazes_its_interior(void)
-{
-    const unsigned zero_wave = zero_wave_index();
-    const unsigned depth = 0u;
+    const unsigned near_surface_depth = depth[NEAR_SURFACE_Y];
+    const unsigned near_bottom_depth  = depth[NEAR_BOTTOM_Y];
+    TEST_ASSERT_TRUE_MESSAGE(
+        near_bottom_depth >= near_surface_depth + 10 &&
+            near_bottom_depth <= near_surface_depth + 20,
+        "setup: these two rows must actually be 10-20 cells of local depth "
+        "apart, or this test is not exercising the range that was measured "
+        "as broken");
 
-    const int max_lighten_q = TEST_DEPTH_RANGE << TEST_WAVE_FRAC_BITS;
-    const int depth_q = (max_lighten_q * (int)(255u - depth)) / 255;
-    const int lighten_q = depth_q + 0;
-    const int bright = lighten_q >> TEST_WAVE_FRAC_BITS;
-    int idx = (int)MASS_MAX - bright;
-    idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
+    const cell_t c = CELL_MAKE(MAT_WATER, MASS_MAX);
+    gfx_color_t near_surface_col[3], near_bottom_col[3];
+    gfx_color_t shallowest[3], deepest[3];
+    material_colours(c, 0u, 0u, near_surface_depth, near_surface_col);
+    material_colours(c, 0u, 0u, near_bottom_depth, near_bottom_col);
+    material_colours(c, 0u, 0u, 0u, shallowest);
+    material_colours(c, 0u, 0u, 255u, deepest);
 
-    const gfx_color_t *pal = material_palette();
-    const gfx_color_t expected = pal[CELL_MAKE(MAT_OIL, (uint8_t)idx)];
+    const int near_surface_lum = panel_luminance(near_surface_col[0]);
+    const int near_bottom_lum  = panel_luminance(near_bottom_col[0]);
+    const int full_span =
+        panel_luminance(shallowest[0]) - panel_luminance(deepest[0]);
 
-    gfx_color_t col[3];
-    material_colours(CELL_MAKE(MAT_OIL, MASS_MAX), 0u, 0u, depth, zero_wave,
-                     col);
-
-    TEST_ASSERT_EQUAL_MESSAGE(expected, col[0],
-        "oil's interior, at the same depth and wave that fog water "
-        "completely, must still paint the plain idx-shifted lookup "
-        "against its own ramp, unchanged by water's fog blend existing "
-        "at all - only water may haze, and this is the test that would "
-        "catch it leaking into any other liquid");
+    char why[384];
+    snprintf(why, sizeof why,
+             "a realistic shallow pool (local depth %u near the surface, "
+             "%u near the bottom) must show a MEANINGFUL luminance "
+             "difference between the two (%d vs %d, against a full ramp "
+             "span of only %d) - the old /255 divide left exactly this "
+             "range pinned flat, which is the bug this whole round exists "
+             "to fix", near_surface_depth, near_bottom_depth,
+             near_surface_lum, near_bottom_lum, full_span);
+    TEST_ASSERT_TRUE_MESSAGE(
+        (near_surface_lum - near_bottom_lum) * 4 >= full_span, why);
 }
 
 /*=============================================================================
@@ -6379,9 +6081,9 @@ static void test_water_foams_where_its_rim_is_curved(void)
     for (unsigned hash = 0; hash < 8u; hash++) {
         gfx_color_t flat_col[3], spike_col[3];
         material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
-                         flat_mask, 255u, 255u, flat_col);
+                         flat_mask, 255u, flat_col);
         material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
-                         spike_mask, 255u, 255u, spike_col);
+                         spike_mask, 255u, spike_col);
 
         char why[192];
         snprintf(why, sizeof why,
@@ -6439,7 +6141,7 @@ static void test_a_flat_rim_still_never_foams(void)
         for (unsigned hash = 0; hash < 8u; hash++) {
             gfx_color_t col[3];
             material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
-                             flat_mask, 255u, 255u, col);
+                             flat_mask, 255u, col);
 
             char why[192];
             snprintf(why, sizeof why,
@@ -6483,7 +6185,7 @@ static void test_only_water_foams(void)
         for (unsigned hash = 0; hash < 8u; hash++) {
             gfx_color_t col[3];
             material_colours(CELL_MAKE(id, FOAM_TEST_FILL), hash, spike_mask,
-                             255u, 255u,
+                             255u,
                              col);
 
             char why[128];
@@ -6510,11 +6212,6 @@ static void test_a_liquid_interior_never_foams(void)
 {
     const gfx_color_t *pal = material_palette();
     const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
-    /* Deepest depth AND a genuinely zero wave contribution - see
-     * zero_wave_index()'s own comment for why 255 (the table's last entry,
-     * but not itself 0) no longer pins this boundary under water's fog
-     * blend the way it used to under the old shift-based quantising. */
-    const unsigned zero_wave = zero_wave_index();
 
     static const unsigned interior_masks[] = {
         0u,
@@ -6531,7 +6228,7 @@ static void test_a_liquid_interior_never_foams(void)
         for (unsigned hash = 0; hash < 8u; hash++) {
             gfx_color_t col[3];
             material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
-                             interior_masks[k], 255u, zero_wave, col);
+                             interior_masks[k], 255u, col);
 
             char why[192];
             snprintf(why, sizeof why,
@@ -6565,9 +6262,9 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
     {
         gfx_color_t interior[3], diagonal[3];
         const material_pattern_t pat_i = material_colours(
-            CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 255u, 255u, interior);
+            CELL_MAKE(MAT_GLASS, 5), 1u, 0u, 255u, interior);
         const material_pattern_t pat_d = material_colours(
-            CELL_MAKE(MAT_GLASS, 5), 1u, diagonal_only, 255u, 255u, diagonal);
+            CELL_MAKE(MAT_GLASS, 5), 1u, diagonal_only, 255u, diagonal);
 
         TEST_ASSERT_EQUAL_MESSAGE(pat_i, pat_d,
             "a lone diagonal neighbour must not change glass's pattern - "
@@ -6585,10 +6282,10 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
 
     {
         gfx_color_t interior[3], diagonal[3];
-        material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 255u, 255u,
+        material_colours(CELL_MAKE(MAT_STONE, 5), 1u, 0u, 255u,
                          interior);
         material_colours(CELL_MAKE(MAT_STONE, 5), 1u, diagonal_only,
-                         255u, 255u,
+                         255u,
                          diagonal);
 
         TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
@@ -6600,10 +6297,10 @@ static void test_a_diagonal_neighbour_alone_is_not_an_edge(void)
     {
         gfx_color_t interior[3], diagonal[3];
         material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), 1u, 0u,
-                         255u, 255u,
+                         255u,
                          interior);
         material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), 1u,
-                         diagonal_only, 255u, 255u, diagonal);
+                         diagonal_only, 255u, diagonal);
 
         TEST_ASSERT_EQUAL_MESSAGE(interior[0], diagonal[0],
             "a lone diagonal neighbour must not turn an interior water "
@@ -6663,7 +6360,7 @@ static void test_foam_moves_between_frames(void)
 
         gfx_color_t col[3];
         material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), fixed_hash,
-                         foam_spike_mask, 255u, 255u, col);
+                         foam_spike_mask, 255u, col);
 
         if (col[0] != plain) {
             ever_foamed = true;
@@ -6750,7 +6447,7 @@ static void test_foam_never_stalls_between_frames(void)
             for (unsigned hash = 0; hash < 8u; hash++) {
                 gfx_color_t col[3];
                 material_colours(CELL_MAKE(MAT_WATER, FOAM_TEST_FILL), hash,
-                                 masks[m], 255u, 255u, col);
+                                 masks[m], 255u, col);
                 foamed[phase][hash] = (col[0] != plain);
             }
         }
@@ -9421,7 +9118,7 @@ static void test_the_right_extended_materials_are_speckled(void)
         gfx_color_t seen[8];
         for (unsigned hash = 0; hash < 8u; hash++) {
             const material_pattern_t pat = material_colours(c, hash, 0u,
-                                                            255u, 255u,
+                                                            255u,
                                                             col);
             char why[96];
             snprintf(why, sizeof why, "extended material %d", k);
@@ -17428,17 +17125,12 @@ void run_sand_suite(void)
     RUN_TEST(test_a_liquid_body_paints_flat_inside);
     RUN_TEST(test_a_liquid_interior_is_shaded_by_depth);
     RUN_TEST(test_only_a_liquid_interior_reads_depth);
-    RUN_TEST(test_the_wave_bands_do_not_reach_the_rim_either);
     RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
-    RUN_TEST(test_the_wave_table_matches_its_formula);
-    RUN_TEST(test_wave_bands_vary_across_depth);
-    RUN_TEST(test_wave_bands_drift_with_phase);
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
     RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
-    RUN_TEST(test_water_interior_hazes_toward_fog_colour);
-    RUN_TEST(test_deepest_water_interior_is_exactly_the_body_colour);
-    RUN_TEST(test_only_water_hazes_its_interior);
+    RUN_TEST(test_every_liquid_interior_is_exactly_the_body_colour_when_saturated);
+    RUN_TEST(test_a_shallow_puddle_still_shows_real_darkening);
     RUN_TEST(test_water_foams_where_its_rim_is_curved);
     RUN_TEST(test_a_flat_rim_still_never_foams);
     RUN_TEST(test_only_water_foams);

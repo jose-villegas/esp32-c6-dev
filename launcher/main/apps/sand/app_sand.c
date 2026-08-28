@@ -960,55 +960,6 @@ static uint8_t row_has_shine[GRID_H_MAX];
  * stalled. */
 static uint32_t foam_elapsed_ms;
 
-/* How fast the interior's wave bands advance, in Q8 phase units per
- * millisecond - see material_set_wave_phase() in material.h for what the
- * phase is for and why it is its own setter rather than sharing
- * foam_elapsed_ms above.
- *
- * This replaces what used to be a plain `wave_elapsed_ms / 200` integer
- * divide: `wave_phase` held the exact same value for up to 200 ms, then
- * jumped by exactly 1. Modeled at a realistic ~30 fps (dt=33 ms) over a
- * 2-second window, sampling material_colours() at a fixed depth the whole
- * time, that produced ZERO visible change on 95% of consecutive frames,
- * then a sudden pop to the next band - "barely moving" plus an "artifact"
- * on exactly the rows that are actively redrawing, rather than a smooth
- * colour crawl. Coarse steps, not the spatial band width (WAVE_PERIOD_CELLS)
- * or the table itself, were the actual bug.
- *
- * The fix is a continuously-advancing Q8 fixed-point accumulator instead of
- * a millisecond counter fed through integer division: wave_phase_q8 below
- * gains WAVE_PHASE_RATE_Q8 * dt_ms every frame, so the low bits move every
- * frame and `(wave_phase_q8 >> 8) & 0xFF` changes gradually instead of
- * holding-then-jumping. 26 was picked by choosing a target full-cycle
- * duration and dividing it back out to a rate: a full 256-phase cycle at
- * this rate takes 256 * 256 / 26 ~= 2520 ms, i.e. about 2.5 seconds,
- * against the old mechanism's effective ~51 seconds (200 ms * 256) - still
- * a slow drift, not a shimmer, but one that actually reads as motion.
- * Modeled the same way as above (~30 fps, 2-second window), this rate holds
- * only about 15% of consecutive frames unchanged, i.e. visible movement on
- * roughly 85% of frames instead of 5%. Retuning this for a different target
- * duration should go through the same division (256 * 256 / target_ms)
- * rather than guessing at the raw constant.
- *
- * Still deliberately NOT shared with foam's clock even though both are now
- * Q8 accumulators - foam shimmers and the interior drifts, and those two
- * motions want independent rates for the accumulation itself now, not just
- * independent offsets: tying them to one counter would mean retuning
- * foam's shimmer rate drags the wave drift rate along with it, and vice
- * versa. See material_set_wave_phase()'s own comment in material.h for the
- * fuller argument. */
-#define WAVE_PHASE_RATE_Q8 26
-
-/* Q8 fixed-point accumulator toward the next wave phase step - the same
- * carried-across-frames pattern foam_elapsed_ms above follows, but advanced
- * by a rate rather than counted in whole milliseconds (see
- * WAVE_PHASE_RATE_Q8's own comment for why). Left as a plain uint32_t that
- * wraps silently on overflow after a very long uptime - the same thing
- * foam_elapsed_ms above already does, and accepted here for the same
- * reason: only `(wave_phase_q8 >> 8) & 0xFFu` is ever read back, so a wrap
- * of the underlying counter is invisible in the one place that matters. */
-static uint32_t wave_phase_q8;
-
 /*=============================================================================
  * A LIQUID INTERIOR'S LOCAL DEPTH - replaces a screen-position gradient with
  * one that follows each puddle's own shape.
@@ -1079,9 +1030,9 @@ static uint32_t wave_phase_q8;
  * whatever the puddle looked like the last time that row WAS painted, not
  * necessarily its current shape. This costs nothing extra to accept - no new
  * full-grid pass, which is the entire reason this stays cheap - and it
- * matches the precedent already established and accepted for foam and the
- * wave drift: only dirty rows repaint, so the animation (or, here, the
- * depth reading) shows where the water is actually moving, which is nearly
+ * matches the precedent already established and accepted for foam's own
+ * drift: only dirty rows repaint, so the animation (or, here, the depth
+ * reading) shows where the water is actually moving, which is nearly
  * everywhere it is worth seeing. Do not "fix" this into a full-grid pass
  * without re-deciding that trade-off on purpose.
  *
@@ -1262,12 +1213,11 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * (horizontal) - a little more than the old affine walk's plain add
          * and shift, and still nowhere near a per-cell divide or trig. See
          * col_local_depth[]'s own comment above this function for the full
-         * mechanism and why this replaces BOTH the old depth walk and the
-         * old wave walk at once. Computed for every cell, liquid or not -
-         * the same as the old depth_acc was - because material_colours()
-         * is the only consumer that ever reads it (only for a liquid's
-         * interior), and a branch to skip this for non-liquids would cost
-         * more than the comparison it would save. */
+         * mechanism. Computed for every cell, liquid or not - the same as
+         * the old depth_acc was - because material_colours() is the only
+         * consumer that ever reads it (only for a liquid's interior), and a
+         * branch to skip this for non-liquids would cost more than the
+         * comparison it would save. */
         unsigned local_depth;
         if (local_depth_axis_vertical) {
             const bool same_material = (v_toward_surface != NULL) &&
@@ -1289,21 +1239,9 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         }
         const unsigned depth = local_depth;
 
-        /* THE WAVE INDEX, from the SAME local depth - see
-         * MATERIAL_WAVE_STEP_Q8's own comment in material.h for the Q8
-         * derivation and why MATERIAL_WAVE_PERIOD_CELLS steps of depth make
-         * one full pass through water_wave[]'s 256 entries. One multiply
-         * and one shift, both against a compile-time constant - no per-cell
-         * divide, matching the same budget the old wave_acc walk had. This
-         * REPLACES that walk entirely (wave_acc/wave_col_step/
-         * wave_row_start and their material.c-side accessors are gone) -
-         * one walked quantity doing the work two used to. */
-        const unsigned wave =
-            (uint8_t)((local_depth * MATERIAL_WAVE_STEP_Q8) >> 8);
-
         gfx_color_t col[3];
         const material_pattern_t pat =
-            material_colours(row[cx], hash, mask, depth, wave, col);
+            material_colours(row[cx], hash, mask, depth, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
@@ -2743,7 +2681,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * belongs to THIS file, which owns the row-by-row paint call sequence
      * that array is carried across (see col_local_depth[]'s own comment in
      * paint_row_n() below for the full mechanism, and why material.c has
-     * nothing left to do with depth or wave at all). */
+     * nothing left to do with depth at all). */
     update_local_depth_axis(gx, gy);
 
     /* Water's foam gets its own per-frame fact, deliberately a separate
@@ -2755,14 +2693,6 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * buys and why a frame count would not. */
     foam_elapsed_ms += dt_ms;
     material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
-
-    /* And the interior's wave bands get their own per-frame fact, on their
-     * own clock - see WAVE_PHASE_RATE_Q8's own comment above for why this
-     * drifts slower than foam's shimmer, and material_set_wave_phase()'s own
-     * comment in material.h for why this cannot be folded into the call
-     * just above even though both run at exactly this point every frame. */
-    wave_phase_q8 += dt_ms * WAVE_PHASE_RATE_Q8;
-    material_set_wave_phase((wave_phase_q8 >> 8) & 0xFFu);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();
