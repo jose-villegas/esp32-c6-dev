@@ -2,6 +2,9 @@
                       * whether anything else does is a property of
                       * the toolchain rather than of this file */
 #include "material.h"
+#include "util/intmath.h"   /* im_len() - see material_set_gravity() below,
+                             * which measures gravity the same way
+                             * build_xflow() in sand.c does */
 
 /*=============================================================================
  * The table.
@@ -1741,10 +1744,171 @@ static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(15),
 };
 
-material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
+/*=============================================================================
+ * A liquid rim's specular highlight.
+ *
+ * A liquid's own variant is a FILL LEVEL, and palette[] is indexed by the
+ * whole cell byte, so fill level IS the shade - pale and thin, dark and
+ * deep. That is right at a SURFACE, which is the only place fill level
+ * means anything (see material_colours()'s own comment below for the
+ * interior half of this story). But a flat fill ramp paints the top of a
+ * pool and the underside of an overhang identically whenever they happen
+ * to sit at the same fill level, and a real surface does not: the side
+ * facing away from gravity catches the light, the side facing into it
+ * does not.
+ *
+ * `liquid_spec[mask]` is that difference, as a shade SHIFT added to a rim
+ * cell's own fill index before it is looked up in the palette - positive
+ * darkens, negative brightens (liquid's ramp runs pale-to-dark as fill
+ * rises, so brightening means moving DOWN the index - see
+ * material_set_gravity() and material_colours() below, and mind the sign).
+ *
+ * Filled in ONCE PER FRAME by material_set_gravity(), not read per cell as
+ * gravity - material_colours() runs per cell per painted row and is hot,
+ * so all the trig below happens exactly once a frame and the per-cell cost
+ * stays one array index, same as ever. */
+static int8_t liquid_spec[MATERIAL_VARIANTS];
+
+/* How far liquid_spec's shift reaches, out of the sixteen levels a fill
+ * ramp has. A look tuned by eye on the device, not derived from anything -
+ * if the rim's highlight ever reads too strong or too faint, this is the
+ * first number to move. */
+#define SPEC_STRENGTH 6
+
+/* Rounds n/d to the nearest integer, for n of either sign and d > 0.
+ *
+ * Plain integer division truncates towards zero, which is fine for the
+ * rest of this file's ramps (they only ever walk forward through a table)
+ * but wrong here: a specular term that rounds -0.5 to 0 every time is a
+ * highlight that is quietly weaker on one side than the other. */
+static int fx_round_div(int n, int d)
+{
+    if (n >= 0) {
+        return (n + d / 2) / d;
+    }
+    return -((-n + d / 2) / d);
+}
+
+/* Fills liquid_spec[] from this frame's gravity - see that table's own
+ * comment for what it holds and why it exists at all.
+ *
+ * For each of the sixteen MATERIAL_EDGE_* masks, the outward normal `n` is
+ * the sum of the unit vectors of whichever cardinal sides are empty.
+ * Because there are only two axes, `n`'s components collapse to the
+ * three cases the caller was told to expect: no empty side at all, or an
+ * opposite pair that cancels, gives (0, 0); exactly one empty side (or an
+ * opposite pair plus one more) gives a single unit axis; two ADJACENT
+ * empty sides give a diagonal of length sqrt(2). Nothing here needs a
+ * general vector length for that reason - `norm_q8` below just picks
+ * between "already unit length" and "divide by sqrt(2)" from how many of
+ * n's two components are nonzero.
+ *
+ * The specular value is the normalised dot product of `n` with MINUS
+ * gravity: +1 when the empty side faces straight against gravity (the top
+ * of a pool), -1 when it faces straight along it (the underside of a
+ * drip). Fixed point throughout, scaled by 256 the same way build_xflow()
+ * in sand.c measures its own bias from gravity - see that function's own
+ * comment for why im_len()'s ~4% approximation is fine for a quantity
+ * nothing reads to better precision than "which way, roughly how much". */
+void material_set_gravity(int gx, int gy)
+{
+    const int len = im_len(gx, gy);
+    if (len == 0) {
+        /* Free fall, or the board laid flat with nothing driving it: no
+         * "up" to catch the light from, so no rim gets a highlight rather
+         * than dividing by a length of zero. */
+        for (unsigned m = 0; m < MATERIAL_VARIANTS; m++) {
+            liquid_spec[m] = 0;
+        }
+        return;
+    }
+
+    /* Unit vector of MINUS gravity, scaled by 256 - the direction a rim's
+     * empty side has to face to catch the brightest highlight. */
+    const int ux_q8 = (-gx * 256) / len;
+    const int uy_q8 = (-gy * 256) / len;
+
+    for (unsigned mask = 0; mask < MATERIAL_VARIANTS; mask++) {
+        const int nx = ((mask & MATERIAL_EDGE_RIGHT) ? 1 : 0) -
+                       ((mask & MATERIAL_EDGE_LEFT)  ? 1 : 0);
+        const int ny = ((mask & MATERIAL_EDGE_DOWN)  ? 1 : 0) -
+                       ((mask & MATERIAL_EDGE_UP)    ? 1 : 0);
+
+        if (nx == 0 && ny == 0) {
+            liquid_spec[mask] = 0;
+            continue;
+        }
+
+        const int raw_q8 = nx * ux_q8 + ny * uy_q8;
+        /* 181/256 is 1/sqrt(2), for the diagonal case; the axis-only case
+         * is already unit length and needs no scaling at all. */
+        const int norm_q8 = (nx != 0 && ny != 0) ? 181 : 256;
+        const int spec_q8 = (raw_q8 * norm_q8) / 256;   /* now in [-256,256] */
+
+        /* NEGATED: the ramp runs bright-to-dark as fill rises, so a
+         * positive specular term (facing away from gravity, wants to be
+         * BRIGHTER) has to SUBTRACT from the index rather than add to it.
+         * Getting this backwards inverts the whole effect - see
+         * test_a_liquid_rim_catches_the_light_from_above in suite_sand.c,
+         * which exists specifically to catch that mistake rather than
+         * trust the arithmetic by eye. */
+        liquid_spec[mask] =
+            (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
+    }
+}
+
+material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     gfx_color_t out[3])
 {
     const uint8_t v = CELL_VARIANT(c);
+
+    /* A LIQUID paints one of two ways depending on whether this cell is a
+     * rim, and the split is not a cheat - it is what the variant actually
+     * MEANS. A liquid cell is only ever partially filled at a surface or
+     * in transit: mid-body, every cell wants to be full, and the only
+     * reason one dips below MASS_MAX is the levelling rule redistributing
+     * mass one step at a time (see material.h's own top comment on why the
+     * fill level exists at all). That is a transient of the SOLVER, not a
+     * claim that there is less water there - so painting an interior cell
+     * at anything but the full body colour shows the player an artefact of
+     * how the simulation works rather than anything true about the pool.
+     *
+     * It is also what fixes the comb. build_xflow()'s two-ray dither
+     * (sand.c) settles neighbouring interior columns to different fills
+     * while a pool is moving under tilt, one cell full and the next at
+     * mid-ramp, over and over - measured two steps into a strong tilt as
+     * alternating fills a whole 81 luminance apart, which reads on the
+     * panel as hard lines through the water. The dither cannot be turned
+     * off; it is what keeps a settled pool's surface reading the same
+     * slope at every angle rather than one fixed shape (see build_xflow()'s
+     * own comment for what THAT bug looked like). But the comb only ever
+     * shows up mid-body, so an interior cell that always paints full water
+     * makes it invisible without touching the simulation or the palette at
+     * all.
+     *
+     * The RIM is the opposite case: it is the one place a liquid's fill
+     * level is actually true, and it is what lets the pale film at a
+     * shallow edge, lava's bright skim, oil's murky olive and acid's vivid
+     * lime survive on screen at all - flattening those the way an earlier
+     * attempt at this fix did destroyed the very thing this pass exists to
+     * keep. A rim cell keeps exactly the fill-indexed lookup every other
+     * material already gets, shifted by liquid_spec[mask] - see that
+     * table's own comment above for what the shift means and
+     * material_set_gravity() for where it comes from. */
+    if (material_of(c)->kind == KIND_LIQUID) {
+        const uint8_t id = CELL_MATERIAL(c);
+
+        if (mask == 0) {
+            out[0] = palette[CELL_MAKE(id, MASS_MAX)];
+        } else {
+            int idx = (int)v + liquid_spec[mask];
+            idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
+            out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
+        }
+        out[1] = out[0];
+        out[2] = out[0];
+        return MATERIAL_FLAT;
+    }
 
     switch (CELL_MATERIAL(c)) {
     case MAT_EXTENDED:
@@ -1772,15 +1936,17 @@ material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
             return MATERIAL_SPECKLED;
         }
         break;
-    case MAT_GLASS:
+    case MAT_GLASS: {
+        const bool edge = mask != 0;
         out[0] = edge ? glass_edge_body[v][hash & 3u]
                       : glass_body[v][hash & 3u];
         out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
         out[2] = edge ? glass_edge_shine[v]  : glass_shine[v];
         return MATERIAL_HATCHED;
+    }
     case MAT_STONE:
-        out[0] = edge ? stone_edge_speckle[v][hash & 7u]
-                      : stone_speckle[v][hash & 7u];
+        out[0] = (mask != 0) ? stone_edge_speckle[v][hash & 7u]
+                             : stone_speckle[v][hash & 7u];
         out[1] = out[0];
         out[2] = out[0];
         return MATERIAL_SPECKLED;

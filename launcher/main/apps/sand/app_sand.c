@@ -677,15 +677,21 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
 
     for (int cx = 0; cx < grid_w; cx++) {
-        const bool edge =
-            (cx > 0            && CELL_IS_EMPTY(row[cx - 1])) ||
-            (cx < grid_w - 1   && CELL_IS_EMPTY(row[cx + 1])) ||
-            (above != NULL     && CELL_IS_EMPTY(above[cx]))   ||
-            (below != NULL     && CELL_IS_EMPTY(below[cx]));
+        /* Which cardinal neighbours are empty, kept as separate bits
+         * rather than folded straight into a bool - a liquid rim needs to
+         * know WHICH side is open, not merely that one is, so it can shade
+         * itself by which way that side faces against gravity. See
+         * MATERIAL_EDGE_* in material.h, which this has to agree with:
+         * "above" is row - grid_w, i.e. cy - 1, which is UP the screen. */
+        const unsigned mask =
+            ((cx > 0          && CELL_IS_EMPTY(row[cx - 1])) ? MATERIAL_EDGE_LEFT  : 0u) |
+            ((cx < grid_w - 1 && CELL_IS_EMPTY(row[cx + 1])) ? MATERIAL_EDGE_RIGHT : 0u) |
+            ((above != NULL   && CELL_IS_EMPTY(above[cx]))   ? MATERIAL_EDGE_UP    : 0u) |
+            ((below != NULL   && CELL_IS_EMPTY(below[cx]))   ? MATERIAL_EDGE_DOWN  : 0u);
 
         gfx_color_t col[3];
         const material_pattern_t pat =
-            material_colours(row[cx], material_grain_hash(cx, cy), edge, col);
+            material_colours(row[cx], material_grain_hash(cx, cy), mask, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
@@ -2063,6 +2069,12 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 
     run_sim_steps(gx, gy, jostle, flow, rotation, dt_ms);
+
+    /* Same gravity sand_step() above was just given, so a liquid rim's
+     * highlight tracks the same tilt the sand itself is responding to.
+     * Once per frame, not once per cell - see material_set_gravity()'s own
+     * comment for why that split is what keeps the paint loop cheap. */
+    material_set_gravity(gx, gy);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();

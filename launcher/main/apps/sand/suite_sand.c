@@ -5052,10 +5052,12 @@ static void test_an_edge_shows_less_temperature_than_the_body(void)
         const uint8_t m = tempered[k];
         gfx_color_t body[3], ed[3], hot[3], hot_ed[3];
 
-        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, false, body);
-        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, true,  ed);
-        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, false, hot);
-        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, true, hot_ed);
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u, 0u, body);
+        material_colours(CELL_MAKE(m, SAND_AMBIENT_HEAT), 0u,
+                         MATERIAL_EDGE_LEFT, ed);
+        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u, 0u, hot);
+        material_colours(CELL_MAKE(m, MATERIAL_VARIANTS - 1), 0u,
+                         MATERIAL_EDGE_LEFT, hot_ed);
 
         const gfx_color_t rest_body = body[0], rest_edge = ed[0];
         const gfx_color_t hot_body = hot[0], hot_edge = hot_ed[0];
@@ -5093,7 +5095,7 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
         for (int v = 0; v < MATERIAL_VARIANTS; v++) {
             const cell_t c = CELL_MAKE(m, v);
             gfx_color_t col[3] = { 0, 0, 0 };
-            const material_pattern_t pat = material_colours(c, 0u, false, col);
+            const material_pattern_t pat = material_colours(c, 0u, 0u, col);
 
             char why[128];
             snprintf(why, sizeof why, "%s variant %d", materials[m].name, v);
@@ -5112,6 +5114,19 @@ static void test_each_material_is_painted_the_way_it_should_be(void)
                  * than as fire. */
                 TEST_ASSERT_EQUAL_MESSAGE(
                     v == 0 ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
+            } else if (materials[m].kind == KIND_LIQUID) {
+                /* mask 0 here (this loop never passes anything else), so
+                 * this is the INTERIOR case - see material_colours()'s own
+                 * comment on why that paints the full body colour rather
+                 * than the fill-indexed one, whatever variant this cell
+                 * happens to carry. The rim half of the same split gets
+                 * its own tests (test_a_liquid_body_paints_flat_inside and
+                 * friends, near the palette tests below) precisely because
+                 * this loop cannot exercise it without a mask to vary. */
+                TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat, why);
+                TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(m, MASS_MAX)],
+                                          col[0], why);
+                TEST_ASSERT_EQUAL_MESSAGE(col[0], col[2], why);
             } else {
                 TEST_ASSERT_EQUAL_MESSAGE(MATERIAL_FLAT, pat, why);
                 TEST_ASSERT_EQUAL_MESSAGE(pal[c], col[0], why);
@@ -5137,10 +5152,10 @@ static void test_glass_grain_is_quieter_than_stone(void)
 
     for (int v = 0; v < MATERIAL_VARIANTS; v++) {
         gfx_color_t g0[3], g1[3], s0[3], s1[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, false, g0);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, false, g1);
-        material_colours(CELL_MAKE(MAT_STONE, v), 0u, false, s0);
-        material_colours(CELL_MAKE(MAT_STONE, v), 7u, false, s1);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, g0);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 3u, 0u, g1);
+        material_colours(CELL_MAKE(MAT_STONE, v), 0u, 0u, s0);
+        material_colours(CELL_MAKE(MAT_STONE, v), 7u, 0u, s1);
 
         glass_spread += colour_gap(g0[0], g1[0]);
         stone_spread += colour_gap(s0[0], s1[0]);
@@ -5163,8 +5178,8 @@ static void test_the_shine_does_not_vary_between_cells(void)
 {
     for (int v = 0; v < MATERIAL_VARIANTS; v++) {
         gfx_color_t a[3], b[3];
-        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, false, a);
-        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, false, b);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 0u, 0u, a);
+        material_colours(CELL_MAKE(MAT_GLASS, v), 2u, 0u, b);
 
         char why[128];
         snprintf(why, sizeof why,
@@ -5194,7 +5209,7 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
 
         for (unsigned h = 0; h < 8u; h++) {
             gfx_color_t col[3] = { 0, 0, 0 };
-            material_colours(c, h, false, col);
+            material_colours(c, h, 0u, col);
             const gfx_color_t a = col[0];
             TEST_ASSERT_EQUAL_MESSAGE(col[0], col[1],
                 "a speckled cell is one flat colour - the variation is "
@@ -5220,11 +5235,190 @@ static void test_stone_speckles_by_position_at_every_temperature(void)
     /* Stable: the same cell asked twice gets the same answer. */
     gfx_color_t one[3], two[3];
     const cell_t c = CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT);
-    material_colours(c, 12345u, false, one);
-    material_colours(c, 12345u, false, two);
+    material_colours(c, 12345u, 0u, one);
+    material_colours(c, 12345u, 0u, two);
     TEST_ASSERT_EQUAL_MESSAGE(one[0], two[0],
         "the same cell must speckle the same way every time it is asked, "
         "or a stone wall shimmers");
+}
+
+
+/* panel_luminance() is defined further down this file, beside the soil-tone
+ * test it was written for. The rim/gravity test below needs the same
+ * helper rather than a second hand-rolled one, hence the forward
+ * declaration - it would be a stranger thing to duplicate luminance math
+ * than to declare a static function ahead of its definition. */
+static int panel_luminance(gfx_color_t c);
+
+/* A liquid's interior paints flat, whatever the comb underneath is doing.
+ *
+ * build_xflow()'s two-ray dither (sand.c) is what keeps a settled pool
+ * reading the same slope at ten degrees of tilt as at forty five, and that
+ * is worth keeping - the alternative, measured, is a pool that reads one
+ * fixed slope at every angle, which is the bug the dither exists to fix.
+ * Its price is that neighbouring INTERIOR columns of a moving pool settle
+ * to different fill levels one cell apart while it works - the comb.
+ * Measured two steps into a strong tilt: alternating fills a whole 81
+ * luminance apart, cell to cell, which on the panel is a hard line through
+ * the water.
+ *
+ * The fix does not reach into the simulation - it cannot, and this is
+ * exactly why: the dither is doing its job and the comb is a side effect
+ * of that job, not a mistake in it. It touches only what an INTERIOR cell
+ * is PAINTED as: always the body colour, whatever its own fill level says,
+ * because a fill below MASS_MAX in the middle of a body is not a true
+ * amount of water - it is the levelling rule's own bookkeeping, caught
+ * mid-step (see material_colours()'s own comment for the long version).
+ *
+ * This test builds exactly the shape the report measured - alternating
+ * MASS_MAX and a low fill across a row - inside a full border of water so
+ * every varied cell is genuinely interior (mask 0, checked explicitly
+ * rather than assumed), and asserts the comb is invisible: every interior
+ * cell paints the SAME colour, and that colour is the body's. */
+static void test_a_liquid_body_paints_flat_inside(void)
+{
+    const gfx_color_t *pal = material_palette();
+    const gfx_color_t body = pal[CELL_MAKE(MAT_WATER, MASS_MAX)];
+
+    enum { COMB_W = 8, COMB_H = 3 };
+    cell_t grid[COMB_H][COMB_W];
+
+    for (int y = 0; y < COMB_H; y++) {
+        for (int x = 0; x < COMB_W; x++) {
+            grid[y][x] = CELL_MAKE(MAT_WATER, MASS_MAX);
+        }
+    }
+    /* The comb itself, dropped into the middle row's interior columns -
+     * everything around it stays a solid full-water border. */
+    for (int x = 1; x < COMB_W - 1; x++) {
+        grid[1][x] = CELL_MAKE(MAT_WATER, (x % 2) ? 7 : MASS_MAX);
+    }
+
+    material_set_gravity(0, 0);   /* interior painting must not care either
+                                   * way - there is no rim here to shade */
+
+    gfx_color_t seen = 0;
+    bool have_seen = false;
+    for (int x = 1; x < COMB_W - 1; x++) {
+        const cell_t c = grid[1][x];
+        const unsigned mask =
+            (CELL_IS_EMPTY(grid[1][x - 1]) ? MATERIAL_EDGE_LEFT  : 0u) |
+            (CELL_IS_EMPTY(grid[1][x + 1]) ? MATERIAL_EDGE_RIGHT : 0u) |
+            (CELL_IS_EMPTY(grid[0][x])     ? MATERIAL_EDGE_UP    : 0u) |
+            (CELL_IS_EMPTY(grid[2][x])     ? MATERIAL_EDGE_DOWN  : 0u);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, (int)mask,
+            "the border around the comb must make every varied cell "
+            "genuinely interior, or this test is not exercising the case "
+            "it claims to");
+
+        gfx_color_t col[3];
+        material_colours(c, 0u, mask, col);
+
+        char why[96];
+        snprintf(why, sizeof why,
+                 "comb column %d (fill %d) must paint the body colour, not "
+                 "its own fill level", x, CELL_VARIANT(c));
+        TEST_ASSERT_EQUAL_MESSAGE(body, col[0], why);
+
+        if (have_seen) {
+            TEST_ASSERT_EQUAL_MESSAGE(seen, col[0],
+                "every interior cell of the comb must paint IDENTICALLY - "
+                "that is what makes the comb disappear rather than merely "
+                "change colour, and is the whole point of this change");
+        }
+        seen = col[0];
+        have_seen = true;
+    }
+}
+
+/* A rim cell still shows its own fill level - the other half of the same
+ * split, and the half a previous attempt at this fix broke. That attempt
+ * composited the WHOLE liquid palette against the background, which
+ * flattened the rim along with the interior and erased the thing a
+ * shallow edge is FOR: the pale film at water's thin end, lava's bright
+ * skim, oil's murky olive and acid's vivid lime all come from the rim
+ * reading its own fill level, not some fixed edge tint.
+ *
+ * Checked under ZERO gravity, so the specular shift the next test covers
+ * cannot be what is making shallow and deep differ here - this is purely
+ * "does the ordinary fill ramp still work on a rim cell", which is what
+ * stops part 1 (the interior fix) from quietly swallowing the rim too. */
+static void test_a_liquid_rim_still_shows_its_fill(void)
+{
+    material_set_gravity(0, 0);   /* no specular term to confuse this with */
+
+    const gfx_color_t *pal = material_palette();
+    const unsigned mask = MATERIAL_EDGE_UP;   /* any one side does - this
+                                               * is about the fill ramp,
+                                               * not about which side */
+
+    gfx_color_t shallow[3], deep[3];
+    material_colours(CELL_MAKE(MAT_WATER, 1), 0u, mask, shallow);
+    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, mask, deep);
+
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, 1)], shallow[0],
+        "a rim cell must read its own fill level straight from the "
+        "palette - flattening this is the mistake a previous attempt at "
+        "hiding the comb made, and it erased the surface film the rim "
+        "exists to show");
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_WATER, MASS_MAX)], deep[0],
+        "and a full rim cell must read as full, not as whatever the "
+        "interior case would have painted it instead");
+    TEST_ASSERT_TRUE_MESSAGE(shallow[0] != deep[0],
+        "a shallow rim and a deep one must be visibly different colours, "
+        "or the fill ramp is dead on the one cell where it is supposed to "
+        "matter most");
+}
+
+/* The rim's highlight follows gravity, the way specularity should.
+ *
+ * A rim cell's brightness is not fixed by its fill level alone any more -
+ * it is shifted by how much its empty side faces AGAINST gravity, the same
+ * way light catches the top of a real pool and leaves the underside of a
+ * drip or an overhang dark. material_set_gravity() computes that shift
+ * once a frame into liquid_spec[]; this is the test that pins its SIGN.
+ *
+ * The sign is not a subtle miscalibration to get wrong. Liquid ramps run
+ * pale-to-dark as fill rises (material.h's own top comment), so brightening
+ * means moving DOWN the index - flip that and every pool on the board
+ * lights up along its underside and goes dark across its top, which is the
+ * exact opposite of what a real surface does and not something a glance at
+ * the device would necessarily catch, since a pool still looks LIT, just
+ * from the wrong side. Comparing against gravity's own direction, twice,
+ * at two different tilts, is what catches that rather than trusting the
+ * arithmetic by eye. */
+static void test_a_liquid_rim_catches_the_light_from_above(void)
+{
+    const uint8_t fill = 8;   /* mid-ramp, so a shift in either direction
+                               * has somewhere to go without clamping at
+                               * either end and hiding the difference */
+
+    material_set_gravity(0, 1000);   /* straight down */
+
+    gfx_color_t up[3], down[3];
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_UP, up);
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_DOWN, down);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        panel_luminance(up[0]) > panel_luminance(down[0]),
+        "with gravity pulling straight down, the empty side facing UP - "
+        "the top of a pool - must be the bright one; a sign flipped here "
+        "would light the underside of every overhang instead of its top");
+
+    material_set_gravity(1000, 0);   /* tilt: gravity now points right */
+
+    gfx_color_t left[3], right[3];
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_LEFT,
+                     left);
+    material_colours(CELL_MAKE(MAT_WATER, fill), 0u, MATERIAL_EDGE_RIGHT,
+                     right);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        panel_luminance(left[0]) > panel_luminance(right[0]),
+        "and the highlight must follow the tilt rather than stay where it "
+        "was - once gravity points right, the side facing LEFT is the one "
+        "facing away from it, so that is the side that should catch the "
+        "light now");
 }
 
 
@@ -7781,7 +7975,7 @@ static void test_the_right_extended_materials_are_speckled(void)
         int distinct = 0;
         gfx_color_t seen[8];
         for (unsigned hash = 0; hash < 8u; hash++) {
-            const material_pattern_t pat = material_colours(c, hash, false,
+            const material_pattern_t pat = material_colours(c, hash, 0u,
                                                             col);
             char why[96];
             snprintf(why, sizeof why, "extended material %d", k);
@@ -13744,6 +13938,9 @@ void run_sand_suite(void)
     RUN_TEST(test_glass_grain_is_quieter_than_stone);
     RUN_TEST(test_the_shine_does_not_vary_between_cells);
     RUN_TEST(test_stone_speckles_by_position_at_every_temperature);
+    RUN_TEST(test_a_liquid_body_paints_flat_inside);
+    RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
+    RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);

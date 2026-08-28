@@ -1100,17 +1100,52 @@ typedef enum {
     MATERIAL_HATCHED,       /* diagonals both ways, bright where they cross */
 } material_pattern_t;
 
+/* Which CARDINAL neighbours of a cell are empty, as a 4-bit mask - what
+ * `edge` used to collapse to a single bool before a liquid needed to know
+ * WHICH side was open rather than merely whether one was.
+ *
+ * The order is arbitrary but fixed, and every reader of a mask has to
+ * agree on it: app_sand.c's paint_row_n(), which builds one per cell, and
+ * material_set_gravity() below, which turns one into a specular shift.
+ * Grid/screen coordinates throughout this app have y increasing DOWN the
+ * screen, so "up" is the -y direction and "down" is +y. */
+#define MATERIAL_EDGE_LEFT  (1u << 0)
+#define MATERIAL_EDGE_RIGHT (1u << 1)
+#define MATERIAL_EDGE_UP    (1u << 2)
+#define MATERIAL_EDGE_DOWN  (1u << 3)
+
 /* Fills in the colours this cell is painted with and says how to arrange
  * them: `out[0]` is the body, `out[1]` the diagonal lines, `out[2]` where
  * two lines cross. A flat or speckled material sets all three the same.
  *
  * `hash` is any stable per-cell number - a speckled material uses it to
  * pick its shade, so the same cell keeps the same one frame to frame. */
-/* `edge` marks a cell with empty space cardinally beside it - the outline
- * of whatever it is part of. A material whose colour tracks a temperature
- * moves much less on its outline than in its body, so a wall keeps its
- * shape as it heats instead of the silhouette itself changing colour. The
- * heat is still perfectly visible; it is just shown by the inside of the
- * wall rather than by its edge against the background. */
-material_pattern_t material_colours(cell_t c, unsigned hash, bool edge,
+/* `mask` is which of this cell's four cardinal neighbours are empty - see
+ * the MATERIAL_EDGE_* bits above. Anything that only cares WHETHER this
+ * cell is an edge at all, rather than which side, tests `mask != 0`: that
+ * is exactly what the old bool `edge` meant, and every existing reader
+ * (glass, stone) keeps exactly its old behaviour under that test.
+ *
+ * A material whose colour tracks a temperature moves much less on its
+ * outline than in its body, so a wall keeps its shape as it heats instead
+ * of the silhouette itself changing colour. The heat is still perfectly
+ * visible; it is just shown by the inside of the wall rather than by its
+ * edge against the background.
+ *
+ * A LIQUID reads the mask more finely still - see material_colours()'s own
+ * comment in material.c for why its interior ignores fill level entirely
+ * and its rim both keeps the fill ramp and shades by which way the empty
+ * side faces against gravity. */
+material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     gfx_color_t out[3]);
+
+/* Called once per frame, before painting, with the same gravity vector
+ * this frame's sand_step() was given.
+ *
+ * Fills a 16-entry table - one entry per possible MATERIAL_EDGE_* mask -
+ * with how much a liquid rim cell at that mask should brighten (negative)
+ * or darken (positive) relative to its own fill level. All the trig this
+ * needs lives here, ONCE, so that material_colours() - called per cell per
+ * painted row, and hot - pays for it with a single array index and nothing
+ * else. See material.c for the derivation. */
+void material_set_gravity(int gx, int gy);
