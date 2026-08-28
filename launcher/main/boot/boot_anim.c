@@ -28,6 +28,7 @@
 
 #include "boot/boot_anim.h"
 
+#include "display/display.h"
 #include "gfx/gfx.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
@@ -447,6 +448,32 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
  * The title
  *-------------------------------------------------------------------------*/
 
+/* boot_anim_title_letter() lays the word out in the VIEWER's frame - see its
+ * own comment in boot_anim.h - because this board is held a quarter turn
+ * from its native upright (DISPLAY_LANDSCAPE, the same fact display.h and
+ * main.c use to turn the rest of the shell once touch is running). Nothing
+ * else this file draws needs correcting for that: a spiral and a floor grid
+ * have no reading direction, so they look right on the raw panel either way,
+ * but a WORD does, which is the only reason this is the one thing here that
+ * has to be turned before it is drawn.
+ *
+ * A point in that frame is not simply a point on the panel, though - the
+ * glyph itself has to rotate too, and rotating a box (the glyph's cell)
+ * is not the same as rotating its corner - see ui.c's own comment on
+ * MU_COMMAND_TEXT for the exact trap that is (a rotated glyph drawn at a
+ * merely-rotated corner drifts off by its own height). This mirrors that:
+ * the physical origin is the rotated box's own top-left, not the rotated
+ * point. */
+static void title_glyph_origin(int view_x, int view_y, int glyph_w,
+                               int glyph_h, int *panel_x, int *panel_y)
+{
+    (void)glyph_w;   /* DISPLAY_LANDSCAPE only needs the box's height to
+                      * correct the origin - see the two mapped corners in
+                      * this function's own derivation above. */
+    *panel_x = GFX_WIDTH - view_y - glyph_h;
+    *panel_y = view_x;
+}
+
 /* "Autana", flying in - see boot_anim_title_letter() in boot_anim.h for the
  * choreography; this is only gfx calls. White rather than a hue-wheel
  * colour, deliberately: the word is the one thing on screen that is not
@@ -455,15 +482,19 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
 static void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
+    const gfx_font_t *font = gfx_default_font();
+    const int glyph_w = gfx_font_width(font, "A", -1, BOOT_ANIM_TITLE_SCALE);
+    const int glyph_h = gfx_font_height(font, BOOT_ANIM_TITLE_SCALE);
     char one[2] = { 0, 0 };
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
-        const boot_anim_title_pos_t p =
-            boot_anim_title_letter(GFX_WIDTH, GFX_HEIGHT, i, now_ms);
+        const boot_anim_title_pos_t p = boot_anim_title_letter(i, now_ms);
+        int px, py;
+        title_glyph_origin(p.x, p.y, glyph_w, glyph_h, &px, &py);
 
         one[0] = BOOT_ANIM_TITLE[i];
-        gfx_text_font(p.x, p.y, one, c, BOOT_ANIM_TITLE_SCALE, 0,
-                     gfx_default_font());
+        gfx_text_font(px, py, one, c, BOOT_ANIM_TITLE_SCALE,
+                     DISPLAY_LANDSCAPE, font);
     }
 }
 

@@ -499,9 +499,22 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
  * The title
  *
  * "Autana", in ordinary horizontal type - wide and short, the way any word
- * reads, not turned to be read with the device on its side. It settles just
- * above where the origin ends up, once the camera has finished its orbit and
- * the curve its climb.
+ * reads. Positioned and laid out in the VIEWER'S frame, not the panel's own:
+ * this board is held turned a quarter from its native upright (see
+ * display.h's DISPLAY_LANDSCAPE and its own measured-not-derived comment),
+ * so "wide and short" and "left to right" mean wide, short and
+ * left-to-right to someone holding the board that way, not to the raw
+ * framebuffer. BOOT_ANIM_TITLE_VIEW_W/H below are that viewer's frame -
+ * GFX_HEIGHT x GFX_WIDTH, the panel's own dimensions turned a quarter - and
+ * every position in this section is a coordinate in it. boot_anim.c's
+ * draw_title() is the one place that turns a point in this frame into the
+ * panel coordinate + glyph rotation gfx_text_font() actually wants; nothing
+ * above it needs to know the panel is mounted portrait.
+ *
+ * Everything else in this file - the floor, the axes, the curve, the
+ * finale's turn and shift - stays in the panel's own raw coordinates,
+ * untouched by this: only the word has a reading direction that makes the
+ * mismatch visible, so only the word needed fixing.
  *
  * Each letter flies in from the left on its own clock, staggered so they
  * arrive one after another rather than as one block. What makes it more than
@@ -518,29 +531,20 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
 #define BOOT_ANIM_TITLE_SCALE 3    /* glyph scale - see gfx_text_font()   */
 #define BOOT_ANIM_TITLE_GAP   3    /* extra px of tracking between glyphs */
 
-/* How far left the origin slides during the finale - see "The finale"
- * further down for the effect this drives on the camera side. Defined this
- * early because the title's own resting position, right below, needs to
- * know where the origin ends up beside it; "The finale" references this
- * same constant rather than a second copy of it. */
-#define BOOT_ANIM_ORIGIN_SHIFT_PX 94
+/* The viewer's frame this whole section lays out in - see this section's
+ * own top comment. GFX_HEIGHT x GFX_WIDTH (448 x 368) turned a quarter, not
+ * GFX_WIDTH x GFX_HEIGHT: boot_anim.h stays BSP-free (no GFX_ include), so
+ * these are spelled out as their own numbers rather than pulled from gfx.h,
+ * the same choice suite_ui_transform.c's own top comment makes for the same
+ * reason. */
+#define BOOT_ANIM_TITLE_VIEW_W 448
+#define BOOT_ANIM_TITLE_VIEW_H 368
 
-/* How far to the right of the settled origin the word begins. */
-#define BOOT_ANIM_TITLE_GAP_RIGHT_OF_ORIGIN 34
-
-/* Where the baseline sits, vertically: the mirror position
- * boot_anim_view() drifts the origin to (see its own comment - h minus
- * where it started), nudged up a little so the word's vertical CENTRE
- * lines up with the axis crossing beside it rather than its top edge doing
- * so. Derived from boot_anim_origin_y() rather than a second hardcoded
- * fraction of h, for the same reason the view's own mirror is: so the two
- * cannot drift apart if that fraction ever changes. */
-#define BOOT_ANIM_TITLE_RISE_ABOVE_AXIS 12
-
-static inline int boot_anim_title_y(int h)
-{
-    return h - boot_anim_origin_y(h) - BOOT_ANIM_TITLE_RISE_ABOVE_AXIS;
-}
+/* Where the word rests, in the viewer's frame - approximately a third of
+ * the way across and a little over a quarter down, measured against a real
+ * render rather than derived from anything else on screen. */
+#define BOOT_ANIM_TITLE_VIEW_X 170
+#define BOOT_ANIM_TITLE_VIEW_Y 100
 
 #define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
                                             * after the one before it       */
@@ -599,18 +603,16 @@ typedef struct {
     int x, y;   /* pixels */
 } boot_anim_title_pos_t;
 
-/* Where letter `i` of BOOT_ANIM_TITLE sits on screen at `now_ms`. Letters
- * are laid out left to right in their FINAL row first - see final_x below -
- * and each one's flight is just a horizontal lerp toward its own final_x,
- * with the wobble added to a fixed baseline.
+/* Where letter `i` of BOOT_ANIM_TITLE sits, in the viewer's frame (see this
+ * section's own top comment), at `now_ms`. Letters are laid out left to
+ * right in their FINAL row first - see final_x below - and each one's
+ * flight is just a horizontal lerp toward its own final_x, with the wobble
+ * added to a fixed baseline.
  *
- * final_x starts beside where the origin SETTLES - boot_anim_origin_x(w)
- * minus the full BOOT_ANIM_ORIGIN_SHIFT_PX, the same slide "The finale"
- * drives on the camera side, computed directly here rather than read from a
- * live view: the row a letter is flying TOWARD has to be a fixed target for
- * the whole flight, not one that moves while the letter is chasing it. */
-static inline boot_anim_title_pos_t boot_anim_title_letter(int w, int h,
-                                                            int i,
+ * The row starts at BOOT_ANIM_TITLE_VIEW_X/Y, a fixed target rather than one
+ * read from a live view: the row a letter is flying TOWARD has to stay put
+ * for the whole flight, not move while the letter is chasing it. */
+static inline boot_anim_title_pos_t boot_anim_title_letter(int i,
                                                             uint32_t now_ms)
 {
     const uint32_t start = BOOT_ANIM_TITLE_START_MS +
@@ -619,9 +621,7 @@ static inline boot_anim_title_pos_t boot_anim_title_letter(int w, int h,
         boot_anim_ramp(now_ms, start, BOOT_ANIM_TITLE_FLIGHT_MS));
 
     const int cell = 8 * BOOT_ANIM_TITLE_SCALE + BOOT_ANIM_TITLE_GAP;
-    const int row_x = boot_anim_origin_x(w) - BOOT_ANIM_ORIGIN_SHIFT_PX +
-                      BOOT_ANIM_TITLE_GAP_RIGHT_OF_ORIGIN;
-    const int final_x = row_x + i * cell;
+    const int final_x = BOOT_ANIM_TITLE_VIEW_X + i * cell;
     const int start_x = final_x - BOOT_ANIM_TITLE_ENTRY_PX;
 
     boot_anim_title_pos_t p;
@@ -629,7 +629,7 @@ static inline boot_anim_title_pos_t boot_anim_title_letter(int w, int h,
 
     const int32_t d_q12 = BOOT_ANIM_ONE -
                           (((int32_t)u8 * BOOT_ANIM_ONE) / 255);
-    p.y = boot_anim_title_y(h) + boot_anim_title_wobble(d_q12);
+    p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12);
     return p;
 }
 
@@ -878,10 +878,10 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * "THE CAMERA ORBITS", for what it looks like. */
 #define BOOT_ANIM_PHI_EXTRA_PHASE 14928   /* round(82 / 360 * 65536) */
 
-/* BOOT_ANIM_ORIGIN_SHIFT_PX - how far left the origin slides - is defined
- * back in "The title", not here: the title's own resting position needs it
- * too, to know where the origin will be beside it, so it is the one place
- * both sides read from rather than two copies drifting apart. */
+/* How far left the origin slides during the finale. The title no longer
+ * reads this - it rests at a fixed point in its own viewer's frame now, see
+ * "The title" - so this is purely a camera-side number. */
+#define BOOT_ANIM_ORIGIN_SHIFT_PX 94
 
 /* How far the two floor-plane axes reach once unbounded, matching the
  * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the

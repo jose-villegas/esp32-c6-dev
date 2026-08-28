@@ -864,8 +864,8 @@ static void test_a_letter_lands_exactly_on_its_final_position(void)
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const boot_anim_title_pos_t p =
-            boot_anim_title_letter(PANEL_W, PANEL_H, i, arrived);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_title_y(PANEL_H), p.y,
+            boot_anim_title_letter(i, arrived);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_TITLE_VIEW_Y, p.y,
             "a fully arrived letter should sit exactly on the baseline, "
             "with no residual wobble");
     }
@@ -884,7 +884,7 @@ static void test_letters_are_staggered_left_to_right(void)
     int last_x = -100000;
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const boot_anim_title_pos_t here =
-            boot_anim_title_letter(PANEL_W, PANEL_H, i, never);
+            boot_anim_title_letter(i, never);
         TEST_ASSERT_TRUE_MESSAGE(here.x > last_x,
             "letters should be laid out left to right in their resting "
             "row, whatever moment they are drawn at");
@@ -901,9 +901,9 @@ static void test_letters_are_staggered_left_to_right(void)
                                  (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS -
                                  BOOT_ANIM_TITLE_STAGGER_MS / 2;
             const boot_anim_title_pos_t at =
-                boot_anim_title_letter(PANEL_W, PANEL_H, i, mid);
+                boot_anim_title_letter(i, mid);
             const boot_anim_title_pos_t prev_at =
-                boot_anim_title_letter(PANEL_W, PANEL_H, i - 1, mid);
+                boot_anim_title_letter(i - 1, mid);
             TEST_ASSERT_TRUE_MESSAGE(prev_at.x >= at.x,
                 "an earlier letter should be at least as far along as a "
                 "later one at the same moment");
@@ -914,7 +914,7 @@ static void test_letters_are_staggered_left_to_right(void)
 static void test_a_letter_starts_off_panel_to_the_left(void)
 {
     const boot_anim_title_pos_t p =
-        boot_anim_title_letter(PANEL_W, PANEL_H, 0, BOOT_ANIM_TITLE_START_MS);
+        boot_anim_title_letter(0, BOOT_ANIM_TITLE_START_MS);
     TEST_ASSERT_TRUE_MESSAGE(p.x < 0,
         "a letter should begin off the left edge of the panel, not merely "
         "at it");
@@ -923,7 +923,13 @@ static void test_a_letter_starts_off_panel_to_the_left(void)
 /* The layout guard, in the same spirit as
  * test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(): every
  * letter, at every moment of its own flight including the wildest part of
- * the wobble, must land on the panel once it is actually visible. */
+ * the wobble, must land within the VIEWER's frame once it is actually
+ * visible - BOOT_ANIM_TITLE_VIEW_W/H, not PANEL_W/PANEL_H, because
+ * boot_anim_title_letter() lays the word out in that frame now (see its own
+ * comment in boot_anim.h) and boot_anim.c's draw_title() is what turns it
+ * into a panel coordinate afterward - a step this test does not need to
+ * repeat, since a letter kept inside its own frame here stays on the panel
+ * there by construction. */
 static void test_the_title_stays_on_the_panel_once_visible(void)
 {
     /* The full glyph cell, not just its anchor corner - (x, y) is where a
@@ -937,15 +943,16 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
         for (uint32_t t = start; t <= start + BOOT_ANIM_TITLE_FLIGHT_MS;
              t += 15) {
             const boot_anim_title_pos_t p =
-                boot_anim_title_letter(PANEL_W, PANEL_H, i, t);
+                boot_anim_title_letter(i, t);
             if (p.x + cell < 0) {
                 continue;   /* still off-panel to the left - not visible yet */
             }
-            TEST_ASSERT_TRUE_MESSAGE(p.x + cell <= PANEL_W,
-                "a letter drifted off the right edge of the panel");
-            TEST_ASSERT_TRUE_MESSAGE(p.y >= 0 && p.y + cell < PANEL_H,
+            TEST_ASSERT_TRUE_MESSAGE(p.x + cell <= BOOT_ANIM_TITLE_VIEW_W,
+                "a letter drifted off the right edge of the viewer's frame");
+            TEST_ASSERT_TRUE_MESSAGE(
+                p.y >= 0 && p.y + cell < BOOT_ANIM_TITLE_VIEW_H,
                 "a letter's wobble carried it off the top or bottom of "
-                "the panel");
+                "the viewer's frame");
         }
     }
 }
