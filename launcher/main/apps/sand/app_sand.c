@@ -926,11 +926,18 @@ static uint8_t row_has_shine[GRID_H_MAX];
 
 /* How much a WATER cell's grain hash is coarsened before it reaches
  * material_colours() - see the comment inside paint_row_n() where that
- * coarsening actually happens for the full account of why. 1 means a 2x2
+ * coarsening actually happens for the full account of why. 3 means an 8x8
  * block of cells shares one hash value; the knob to turn if foam's blobs
  * ever need to read bigger (raise this) or finer (lower it, back towards
- * 0 - one cell per hash, the speckle every other material still gets). */
-#define FOAM_BLOB_SHIFT 1
+ * 0 - one cell per hash, the speckle every other material still gets).
+ *
+ * RAISED from 2 (4x4): asked for blobs MUCH bigger than that, not another
+ * small nudge - so this doubles the linear size again exactly the way the
+ * previous bump (from 1's 2x2) did, landing on 8x8, 4x the area of the 4x4
+ * puffs it replaces. Blobs that size read as proper drifting patches of
+ * foam rather than the puffs 4x4 gave, which is the point: bigger still,
+ * by the same doubling, not a differently-shaped change. */
+#define FOAM_BLOB_SHIFT 3
 
 /* How often the foam dither's phase advances - see material_set_foam_phase()
  * in material.h for what the phase is for. 90 ms is roughly 11 changes a
@@ -949,6 +956,26 @@ static uint8_t row_has_shine[GRID_H_MAX];
  * stalled. */
 static uint32_t foam_elapsed_ms;
 
+/* How often the interior's wave bands advance - see
+ * material_set_wave_phase() in material.h for what the phase is for and why
+ * it is its own setter rather than sharing foam_elapsed_ms above.
+ *
+ * 200 ms is a SLOW drift, deliberately much slower than foam's 90 - foam is
+ * meant to shimmer, the interior's bands are meant to drift the way light
+ * moves across the bottom of a real pool, and a look knob tuned by eye on
+ * the device is the first thing to move if that drift ever reads too lazy
+ * (lower it) or too busy (raise it). */
+#define WAVE_PHASE_MS 200
+
+/* Real time accumulated toward the next wave phase step - the same pattern
+ * foam_elapsed_ms above follows, and for the same reason: driven by dt_ms
+ * rather than a frame count, so the bands drift at the same real-world rate
+ * whatever the frame rate happens to be. A separate accumulator, not a
+ * second read of foam_elapsed_ms, because the two advance at different
+ * rates (see WAVE_PHASE_MS's own comment) and sharing one would tie them
+ * together the moment either rate changed. */
+static uint32_t wave_elapsed_ms;
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
@@ -963,6 +990,24 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * screen edge is not outlined there. */
     const uint8_t *above = (cy > 0) ? row - grid_w : NULL;
     const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
+
+    /* This row's depth walk - see material_set_gravity()'s own comment for
+     * how the two are derived once a frame, and MATERIAL_DEPTH_FRAC_BITS's
+     * comment in material.h for the cost budget this exists to meet. Both
+     * calls happen once per ROW, not once per cell: the per-cell cost is
+     * just the accumulate-and-shift inside the loop below. */
+    int depth_acc = material_depth_row_start(cy);
+    const int depth_col_step = material_depth_col_step();
+
+    /* This row's WAVE walk - the same shape as the depth walk just above,
+     * but its OWN accumulator: see water_wave[]'s own comment in
+     * material.c (WAVE_PERIOD_CELLS in particular) for why the wave bands
+     * cannot simply reuse `depth` - their period has to stay a fixed
+     * number of CELLS regardless of the grid's own size, where depth's
+     * whole point is normalising across that size. Once per ROW, exactly
+     * like depth's own calls. */
+    int wave_acc = material_wave_row_start(cy);
+    const int wave_col_step = material_wave_col_step();
 
     for (int cx = 0; cx < grid_w; cx++) {
         /* Which cardinal neighbours are empty, kept as separate bits
@@ -1005,8 +1050,8 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         }
 
         /* WATER samples the grain hash at a COARSER grid than every other
-         * material - shifted right by FOAM_BLOB_SHIFT on both axes, so a
-         * 2x2 block of cells shares one hash value instead of each cell
+         * material - shifted right by FOAM_BLOB_SHIFT on both axes, so an
+         * 8x8 block of cells shares one hash value instead of each cell
          * rolling its own. The user wanted foam speckled in patches rather
          * than single cells, "so it sort of resembles mist near the foam",
          * and that is exactly what asking neighbouring cells the same
@@ -1031,9 +1076,37 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
             : material_grain_hash(cx, cy);
 
+        /* THE PER-CELL COST OF DEPTH, in full: one add to walk the
+         * accumulator forward a column, and one shift to read it back out
+         * as 0-255 - see MATERIAL_DEPTH_FRAC_BITS's own comment in
+         * material.h for why that budget is exactly what it looks like.
+         * Clamped rather than trusted blind: the accumulator is built from
+         * per-frame fixed-point steps that are each individually rounded
+         * (see material_set_gravity()), and while the maths keeps every
+         * true value inside 0-255, a defensive clamp is far cheaper than
+         * finding out it does not some day. */
+        int depth_i = depth_acc >> MATERIAL_DEPTH_FRAC_BITS;
+        depth_i = depth_i < 0 ? 0 : (depth_i > 255 ? 255 : depth_i);
+        const unsigned depth = (unsigned)depth_i;
+        depth_acc += depth_col_step;
+
+        /* THE PER-CELL COST OF THE WAVE WALK, IN FULL: one add to walk
+         * this accumulator forward a column, and one shift to read it back
+         * out - see MATERIAL_WAVE_FRAC_BITS's own comment in material.h
+         * for the same budget argument depth's own comment makes just
+         * above. No clamp needed here the way depth's has one: the cast to
+         * uint8_t IS the wrap water_wave[]'s 256 entries need, well
+         * defined by the standard for any int however far the accumulator
+         * has climbed, and wrapping is exactly what a position along a
+         * one-period-long table is supposed to do as it passes 255 - not
+         * an error case to defend against, the way an out-of-range depth
+         * would be. */
+        const unsigned wave = (uint8_t)(wave_acc >> MATERIAL_WAVE_FRAC_BITS);
+        wave_acc += wave_col_step;
+
         gfx_color_t col[3];
         const material_pattern_t pat =
-            material_colours(row[cx], hash, mask, col);
+            material_colours(row[cx], hash, mask, depth, wave, col);
         gfx_color_t *p = out + cx * n;
 
         /* n is a compile-time constant at each of paint_row()'s call sites,
@@ -2448,8 +2521,13 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     /* Same gravity sand_step() above was just given, so a liquid rim's
      * highlight tracks the same tilt the sand itself is responding to.
      * Once per frame, not once per cell - see material_set_gravity()'s own
-     * comment for why that split is what keeps the paint loop cheap. */
-    material_set_gravity(gx, gy);
+     * comment for why that split is what keeps the paint loop cheap.
+     *
+     * grid_w/grid_h go along with it now too - see that same comment for
+     * why a liquid interior's depth gradient needs the grid's own extent as
+     * well as gravity's direction, and why once a frame is exactly as
+     * affordable for that as it already was for the specular table. */
+    material_set_gravity(gx, gy, grid_w, grid_h);
 
     /* Water's foam gets its own per-frame fact, deliberately a separate
      * call from the one above rather than folded into it - see
@@ -2460,6 +2538,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * buys and why a frame count would not. */
     foam_elapsed_ms += dt_ms;
     material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
+
+    /* And the interior's wave bands get their own per-frame fact, on their
+     * own clock - see WAVE_PHASE_MS's own comment above for why 200 ms is a
+     * slower drift than foam's 90, and material_set_wave_phase()'s own
+     * comment in material.h for why this cannot be folded into the call
+     * just above even though both run at exactly this point every frame. */
+    wave_elapsed_ms += dt_ms;
+    material_set_wave_phase(wave_elapsed_ms / WAVE_PHASE_MS);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t1 = esp_timer_get_time();

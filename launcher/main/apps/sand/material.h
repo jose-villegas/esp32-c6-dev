@@ -1179,12 +1179,33 @@ typedef enum {
  * and its rim both keeps the fill ramp and shades by which way the empty
  * side faces against gravity. WATER's rim reads the mask finer again, all
  * eight bits of it, to decide where FOAM gathers - see that same comment's
- * discussion of curvature. */
+ * discussion of curvature.
+ *
+ * `depth` is this cell's position along gravity, 0 (shallowest) to 255
+ * (deepest) - see material_set_gravity()'s own comment for how it is
+ * derived once a frame and material_colours()'s own comment on the liquid
+ * branch in material.c for what it does with it. Only a liquid's INTERIOR
+ * reads it; everything else - the rim included - ignores the value
+ * entirely, so any depth may be passed where it does not apply.
+ *
+ * `wave` is a SEPARATE position along gravity, in water_wave[]'s own
+ * table-index units, already wrapped to 0-255 - see
+ * material_wave_row_start()/material_wave_col_step() below for how
+ * paint_row_n() derives it, and water_wave[]'s own comment in material.c
+ * (WAVE_PERIOD_CELLS in particular) for why it cannot simply be `depth`
+ * again. `depth` is normalised across the WHOLE GRID's projected span, so
+ * its period is however many cells the grid happens to be; `wave` instead
+ * advances a fixed amount per cell, so a band stays the same size on
+ * screen whatever the grid's dimensions are. Like `depth`, only a
+ * liquid's INTERIOR reads it. */
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
+                                    unsigned depth, unsigned wave,
                                     gfx_color_t out[3]);
 
 /* Called once per frame, before painting, with the same gravity vector
- * this frame's sand_step() was given.
+ * this frame's sand_step() was given, and the grid's own dimensions in
+ * cells - not a per-cell figure, just the extent depth is normalised
+ * across (see below).
  *
  * Fills a MATERIAL_EDGE_MASK_COUNT-entry table - one entry per possible
  * CARDINAL MATERIAL_EDGE_* mask, diagonals excluded, since gravity has no
@@ -1192,8 +1213,88 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
  * brighten (negative) or darken (positive) relative to its own fill level.
  * All the trig this needs lives here, ONCE, so that material_colours() -
  * called per cell per painted row, and hot - pays for it with a single
- * array index and nothing else. See material.c for the derivation. */
-void material_set_gravity(int gx, int gy);
+ * array index and nothing else. See material.c for the derivation.
+ *
+ * ALSO derives the DEPTH walk material_depth_row_start() and
+ * material_depth_col_step() below hand back: a cell's position projected
+ * onto gravity, normalised across the grid's own projected span so the
+ * shallowest cell in play reads 0 and the deepest reads 255. All of that -
+ * the projection, and the min/max search over the grid's four corners that
+ * the normalisation needs - happens here, once a frame, for the same
+ * reason the specular table does: material_colours() cannot afford it, and
+ * does not know (x, y) besides.
+ *
+ * ALSO derives the WAVE walk material_wave_row_start() and
+ * material_wave_col_step() below hand back - the same projection onto
+ * gravity depth uses, but stepped by a FIXED amount per cell rather than
+ * normalised across the grid's span, so its period stays a constant number
+ * of cells whatever grid_w/grid_h happen to be. See water_wave[]'s own
+ * comment in material.c (WAVE_PERIOD_CELLS in particular) for why depth's
+ * own normalisation is exactly the wrong thing for a wave's period. */
+void material_set_gravity(int gx, int gy, int grid_w, int grid_h);
+
+/* Fixed-point fractional bits behind material_depth_row_start()'s and
+ * material_depth_col_step()'s return values below.
+ *
+ * Exposed here, rather than kept private to material.c, because
+ * paint_row_n() (app_sand.c) does the final `>> MATERIAL_DEPTH_FRAC_BITS`
+ * itself, inline, once per CELL - the one piece of this that really is hot.
+ * That is the whole cost budget depth is allowed: one add to walk the
+ * accumulator forward a column, and this one shift to read it - no
+ * multiply, no divide, no per-cell function call. Everything that WOULD
+ * need one - the projection, the corner search, the per-frame division
+ * that turns a span into a step - happens once a frame in
+ * material_set_gravity() instead, and is amortised across the whole grid. */
+#define MATERIAL_DEPTH_FRAC_BITS 12
+
+/* This row's starting depth accumulator, fixed-point with
+ * MATERIAL_DEPTH_FRAC_BITS fractional bits - called ONCE per painted row,
+ * not per cell, by paint_row_n() before its column loop starts. Depth at
+ * column cx of that row is this value plus cx * material_depth_col_step(),
+ * and the final 0-255 depth paint_row_n() hands material_colours() is that
+ * running total shifted right by MATERIAL_DEPTH_FRAC_BITS. See
+ * material_set_gravity() for how row starts and the column step are
+ * derived. */
+int material_depth_row_start(int cy);
+
+/* The fixed-point amount to add to the depth accumulator for each further
+ * column. Constant for the whole frame - gravity does not change from one
+ * column to the next - so paint_row_n() reads it once per row rather than
+ * once per cell, exactly like material_depth_row_start() above. */
+int material_depth_col_step(void);
+
+/* Fixed-point fractional bits behind material_wave_row_start()'s and
+ * material_wave_col_step()'s return values below - the wave's own version
+ * of MATERIAL_DEPTH_FRAC_BITS above, and exposed for the same reason:
+ * paint_row_n() (app_sand.c) does the final `>> MATERIAL_WAVE_FRAC_BITS`
+ * itself, inline, once per cell. Same budget as depth: one add to walk the
+ * accumulator forward a column, and this one shift (which, read back as a
+ * `uint8_t`, doubles as the wrap water_wave[]'s 256 entries need) - no
+ * multiply, no divide, no per-cell function call. A DIFFERENT value from
+ * MATERIAL_DEPTH_FRAC_BITS on purpose: the two accumulators are stepped by
+ * unrelated quantities (a grid-wide span versus a fixed WAVE_PERIOD_CELLS),
+ * so there is no reason to expect the same fractional precision suits
+ * both, and tying them together would make moving one risk silently
+ * moving the other's precision too. */
+#define MATERIAL_WAVE_FRAC_BITS 8
+
+/* This row's starting wave accumulator, fixed-point with
+ * MATERIAL_WAVE_FRAC_BITS fractional bits - called ONCE per painted row,
+ * exactly like material_depth_row_start() above, and for the same reason.
+ * Wave index at column cx of that row is this value plus
+ * cx * material_wave_col_step(), and the final wrapped table index
+ * paint_row_n() hands material_colours() is that running total shifted
+ * right by MATERIAL_WAVE_FRAC_BITS and read back as a uint8_t. See
+ * material_set_gravity() for how the row start and column step are
+ * derived. */
+int material_wave_row_start(int cy);
+
+/* The fixed-point amount to add to the wave accumulator for each further
+ * column. Constant for the whole frame, exactly like
+ * material_depth_col_step() above - gravity, and therefore
+ * WAVE_PERIOD_CELLS's own direction, does not change from one column to
+ * the next. */
+int material_wave_col_step(void);
 
 /* Called once per frame, before painting, with a value that climbs steadily
  * over real time - see app_sand.c's own FOAM_PHASE_MS for how it derives one
@@ -1213,3 +1314,34 @@ void material_set_gravity(int gx, int gy);
  * for and how it is mixed into the foam dither - it is not simply added to
  * the hash, and the reason why is written there. */
 void material_set_foam_phase(unsigned phase);
+
+/* Called once per frame, before painting, with a value that climbs steadily
+ * over real time - the same shape of call as material_set_foam_phase()
+ * above, and driven the same way (see app_sand.c's own WAVE_PHASE_MS), but
+ * NOT a shared counter with it. Foam shimmers and the interior's wave bands
+ * drift, and those are different motions that want different rates - foam's
+ * FOAM_PHASE_MS is tuned to shimmer briskly without strobing, the interior
+ * wave's WAVE_PHASE_MS is tuned to drift slowly, and folding one clock
+ * reading into both would take away the ability to tune either without
+ * moving the other. See material_set_foam_phase()'s own comment for the
+ * fuller argument (a per-frame FACT about the clock, kept separate from
+ * gravity, a per-frame fact about the board) - the same argument applies a
+ * second time here, between two clock readings that both exist but tick at
+ * different rates.
+ *
+ * See material_colours()'s own comment on the liquid interior's wave bands
+ * for what the phase is for and how it is combined with depth. */
+void material_set_wave_phase(unsigned phase);
+
+/* The baked wave table itself - see water_wave[]'s own comment in
+ * material.c for the formula, the normalisation and the Q4 fixed-point
+ * scale it is stored in. Exposed the same way material_palette() exposes
+ * palette[] above: a pointer to the whole flash-resident array, rather
+ * than an index-one-entry accessor, because the one thing outside
+ * material.c that needs this is test_the_wave_table_matches_its_formula
+ * (suite_sand.c), which walks all 256 entries comparing them against an
+ * independently recomputed table. Nothing on the render path calls this -
+ * material_colours() reads water_wave[] directly, as the file-local table
+ * it has always been; this exists purely so a test can hold the baked
+ * table and the formula it claims to follow to the same standard. */
+const int8_t *material_wave_table(void);
