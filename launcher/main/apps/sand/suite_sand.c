@@ -13272,7 +13272,20 @@ static void seed_row_runs_full_width_for_gfx_test(uint16_t *row_x0,
  * gfx_present() cost in us. gfx_reset_strip_send_counts() is called right
  * before the measured window starts, so `full_bands`/`gathered`/
  * `partial_bands` come back as the totals accumulated over exactly those
- * steps, not the settle ones. */
+ * steps, not the settle ones.
+ *
+ * Because each measured gfx_present() here can carry several full bands
+ * at once, this function measures the PIPELINED price: send_full_row()
+ * (gfx.c) queues its draw_bitmap without waiting, and gfx_present()
+ * drains every queued band together at the end, so later bands' DMA
+ * overlaps earlier bands' CPU-side setup. That is why seven bands sent
+ * in a real frame come to 18,147 us, not 7 x 3,405 = 23,835 - the sum of
+ * seven un-pipelined sends. The un-pipelined price, 3,405 us for one
+ * band presented alone with nothing else queued, is what the ratio tests
+ * in suite_gfx.c measure instead - test_a_narrow_change_costs_less_than_
+ * a_full_band and its neighbors, through test_two_far_corners_cost_less_
+ * than_a_full_band. The two numbers are not interchangeable: do not
+ * sanity-check one against the other by multiplying by the band count. */
 static int64_t run_present_against_scene(sand_t *s, const uint8_t *cells,
                                           int w, int h, uint8_t *dirty_rows,
                                           uint16_t *row_x0, uint16_t *row_x1,

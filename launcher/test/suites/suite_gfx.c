@@ -544,6 +544,23 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
         "but it must still actually send something");
 }
 
+/* Every ratio test from here through test_two_far_corners_cost_less_than_
+ * a_full_band measures a full band - one gfx_fill_rect() over the whole
+ * 368x64 strip, presented alone via time_present() with nothing else
+ * queued - as its reference cost. Because nothing else is in flight, that
+ * reference is the UN-PIPELINED price: measured in isolation, a band
+ * costs 3,405 us.
+ *
+ * That is not what a band costs inside a real frame. send_full_row()
+ * (gfx.c) queues its draw_bitmap without waiting, and gfx_present()
+ * drains every queued band together at the end, so later bands' DMA
+ * overlaps earlier bands' CPU-side setup. Seven bands sent in a real
+ * frame come to 18,147 us, not 7 x 3,405 = 23,835 - that pipelined price
+ * is what run_present_against_scene() in suite_sand.c measures, with its
+ * three present-cost tests. Sanity-checking one of those numbers against
+ * the other by multiplying is not valid; the two measure different
+ * things, and both are correct for what they measure. */
+
 /* PROTOTYPE: measures the gather-copy path in gfx_present() - a strip whose
  * real dirty width is only a fraction of the band, written directly (not
  * through gfx_fill_rect(), which always claims the whole band via

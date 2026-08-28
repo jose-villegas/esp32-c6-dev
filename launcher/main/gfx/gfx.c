@@ -860,7 +860,18 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
 /* Sends row's whole band, full width - too many cells dirty to be worth
  * gathering them independently. Queues without waiting, batched with
  * whichever other rows do the same; gfx_present() drains them all together
- * at the end. */
+ * at the end.
+ *
+ * That queue-without-waiting is what makes a band's cost depend on what
+ * else is in flight with it. Measured alone - one band presented with
+ * nothing else queued, as every ratio test in suite_gfx.c does - it
+ * costs 3,405 us. Measured inside a real frame, where later bands' DMA
+ * overlaps earlier bands' CPU-side setup here, seven bands come to
+ * 18,147 us, not 7 x 3,405 = 23,835 - the price
+ * run_present_against_scene() in suite_sand.c measures with its three
+ * present-cost tests. Both numbers are correct; they answer different
+ * questions, and multiplying the isolated price by the band count does
+ * not recover the pipelined one. */
 static void send_full_row(int row, int *queued)
 {
     const int y = row * STRIP_HEIGHT;
