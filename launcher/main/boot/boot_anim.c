@@ -118,11 +118,14 @@ static int sy(int32_t re, int32_t im, int32_t t, const boot_anim_view_t *view)
 
 /* sx/sy, shrunk toward the origin by shrink_q8/256 - see
  * boot_anim_motif_shrink_q8() in boot_anim.h for why the axes need this
- * alongside the curve during the finale, and draw_floor()'s own comment
- * for why the floor never does. Applied to the already-projected pixel,
- * not to (re, im, t): the projection is linear, so scaling the offset from
- * the origin after projecting is the same picture as scaling the point
- * before, without needing a scaled copy of every sample. */
+ * alongside the curve during the finale. draw_floor() shrinks too, but
+ * rides its own boot_anim_grid_shrink_q8() instead of going through this -
+ * see that function's own comment for why the floor's shrink is worked
+ * out on `d` before projection rather than on the drawn pixel the way
+ * this is. Applied to the already-projected pixel, not to (re, im, t): the
+ * projection is linear, so scaling the offset from the origin after
+ * projecting is the same picture as scaling the point before, without
+ * needing a scaled copy of every sample. */
 static int csx(int32_t re, int32_t im, int shrink_q8, const boot_anim_view_t *view)
 {
     const int raw = sx(re, im, view);
@@ -160,20 +163,27 @@ static int32_t units(int n)
  * and every ring's pair overlapping near the origin is what read as a
  * cross rather than a set of waves.
  *
- * Shrinks with the motif, same as the axes and curve - see
- * boot_anim_motif_shrink_q8()'s own comment. A dense mesh, not an empty
- * panel, is the point once it is small: with BOOT_ANIM_GRID_RINGS rings
- * packed into a fraction of their normal spacing, the covered pixels
- * thicken up rather than thin out, and that filled-in look - the plane
- * still visibly there, just close in on itself - is what "the origin
- * settles small" is supposed to read as, not a grid shrinking away to
- * nothing in a corner. Applied to `d` (the ring's half-width, in world
+ * Its OWN shrink, not the shared motif one the axes and curve use - see
+ * boot_anim_grid_shrink_q8()'s own comment for why: the floor's natural
+ * reach is far smaller than the curve's, so it never needed to settle
+ * nearly as small to stay on panel through the collapse, and settling it
+ * that far anyway is what left "still dark" complaints partly unsolved -
+ * a big, densely-ringed floor reads; a small one, no matter how bright,
+ * does not cover enough of the panel to. A dense mesh, not an empty
+ * panel, is still the point once it does settle: with BOOT_ANIM_GRID_RINGS
+ * rings packed into a fraction of their normal spacing, the covered
+ * pixels thicken up rather than thin out, and that filled-in look - the
+ * plane still visibly there, just close in on itself - is what "the
+ * origin settles small" is supposed to read as, not a grid shrinking away
+ * to nothing in a corner. Applied to `d` (the ring's half-width, in world
  * units, before projection) rather than via csx()/csy() on the drawn
  * corners, so a ring's whole shape scales uniformly rather than its
  * corners sliding independently toward view->ox/oy. */
-static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
+static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
+    const int shrink_q8 = boot_anim_grid_shrink_q8(now_ms);
+
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
         if (alpha == 0) {
@@ -190,7 +200,10 @@ static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
         const gfx_color_t c = lit_whitened(
             boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)),
             boot_anim_grid_whiten(now_ms), alpha);
-        const int32_t d = (units(ring) * shrink_q8) >> 8;
+        /* BOOT_ANIM_GRID_STEP_Q12, not units() (a whole unit) - see
+         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are half a
+         * unit apart now. */
+        const int32_t d = ((int32_t)ring * BOOT_ANIM_GRID_STEP_Q12 * shrink_q8) >> 8;
 
         const int x0 = sx(-d, -d, view), y0 = sy(-d, -d, 0, view);
         const int x1 = sx( d, -d, view), y1 = sy( d, -d, 0, view);
@@ -573,7 +586,7 @@ static void draw_frame(uint32_t now_ms)
 
     gfx_clear(COL_BG);
     const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
-    draw_floor(now_ms, ink, shrink_q8, &view);
+    draw_floor(now_ms, ink, &view);
     draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them

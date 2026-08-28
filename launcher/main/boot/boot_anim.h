@@ -238,19 +238,27 @@ typedef struct {
  * tools/gen_zeta_curve.py's PHASE1_T_MAX. */
 #define BOOT_ANIM_T_MAX_PHASE1 35
 
-/* The floor grid has no edge: its lines run until they leave the panel, and
- * what bounds it is a fade rather than a boundary.
+/* The floor's outer edge is a fade rather than a boundary: ring FADE is
+ * fully dark, so nothing past it is worth drawing at all, and what a
+ * viewer sees is rings thinning out with distance rather than a fixed
+ * square tile floating in the dark - which is a thing sitting in the
+ * scene, where a plane carrying on past what is drawn is what a
+ * coordinate plane actually is.
  *
- * A grid drawn to a fixed square reads as a square tile floating in the dark,
- * which is a thing sitting in the scene. A grid that thins out with distance
- * reads as a plane carrying on past the screen, which is what a coordinate
- * plane actually is. gfx_line() clips, so rings that fall off the edge cost
- * nothing to ask for.
- *
- * RINGS is therefore how far the fade reaches rather than how big the floor
- * is: ring FADE is fully dark, so nothing past it is worth drawing at all. */
-#define BOOT_ANIM_GRID_RINGS 7
-#define BOOT_ANIM_GRID_FADE  7
+ * RINGS is therefore how far the fade reaches, not how big the floor is -
+ * and half a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a whole
+ * one: at a whole unit per ring there were only ever six or seven rings
+ * actually lit at once, each one a visibly distinct step in brightness
+ * from its neighbours rather than something that reads as a continuous
+ * wave. Twice as many rings, half as far apart, covers the same physical
+ * reach with a much finer gradient between them. */
+#define BOOT_ANIM_GRID_RINGS 14
+#define BOOT_ANIM_GRID_FADE  14
+
+/* Half a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own comment.
+ * Q12, like every other plane coordinate here (see units() in boot_anim.c,
+ * which this is used in place of for the floor specifically). */
+#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 2)
 
 /* Where one unit along each axis lands, in Q8 pixels.
  *
@@ -436,7 +444,11 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
 #define BOOT_ANIM_AXES_MS        450   /* the axes grow out of the origin */
 
 #define BOOT_ANIM_GRID_START_MS  150
-#define BOOT_ANIM_GRID_RING_MS    45   /* each ring waits for the one inside */
+
+/* Halved alongside BOOT_ANIM_GRID_RINGS doubling (see its own comment) -
+ * twice as many rings at half the stagger covers the same total arrival
+ * time as before, rather than taking twice as long to sweep outward. */
+#define BOOT_ANIM_GRID_RING_MS    23   /* each ring waits for the one inside */
 #define BOOT_ANIM_GRID_FADE_MS   300
 
 #define BOOT_ANIM_PEN_START_MS   520
@@ -478,19 +490,23 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * The two fades multiply. The first is the animation arriving; the second is
  * the plane receding, and it is what the eye reads as depth on a projection
  * that has no perspective in it at all. */
-/* The brightest the floor is allowed to get at the very start - low, and
- * the number that mattered most when this was the ONLY ceiling. The floor
+/* The brightest the floor is allowed to get at the very start. The floor
  * is backdrop: it says where the plane is and then gets out of the way.
  * Drawn at anything like full strength it competes with the curve for
  * attention and wins, because there is a great deal more of it - which is
  * exactly what the first version of this did, and the curve disappeared
- * into a plaid tablecloth.
+ * into a plaid tablecloth. Higher than that first version landed on,
+ * though (was 56): even the STARTING point turned out to read as too dark
+ * once the squared falloff in boot_anim_grid_alpha() below and a shared
+ * hue-mixed-with-alpha ceiling are both eating into it too - see that
+ * function's own comment.
  *
- * It does not stay this low, though - see boot_anim_grid_climb() and
- * BOOT_ANIM_GRID_CEILING_MAX just below: that reasoning only holds while
- * the floor is still competing with a full-size curve for attention, and
- * stops applying once the picture is mostly the grid itself. */
-#define BOOT_ANIM_GRID_MAX 56
+ * It does not stay here, though - see boot_anim_grid_climb() and
+ * BOOT_ANIM_GRID_CEILING_MAX just below: that backdrop reasoning only
+ * holds while the floor is still competing with a full-size curve for
+ * attention, and stops applying once the picture is mostly the grid
+ * itself. */
+#define BOOT_ANIM_GRID_MAX 110
 
 /* How far along the grid's slow climb toward full visibility things are,
  * right now - the single clock both boot_anim_grid_alpha()'s own ceiling
@@ -523,10 +539,16 @@ static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
                       BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
 }
 
-/* Capped short of the axes' own full 255 so even at its brightest the
- * floor still reads as backdrop rather than becoming a second set of
- * axes. */
-#define BOOT_ANIM_GRID_CEILING_MAX 235
+/* All the way up to what the axes themselves get, at the far end of the
+ * climb - no longer held back from it. An earlier version capped this
+ * short of 255 to keep the floor reading as backdrop even at its
+ * brightest; in practice that cap was still landing on a picture read as
+ * "still dark", so the backdrop distinction is left to happen through
+ * everything else about the floor (its low starting point, the squared
+ * falloff below, competing with a lit curve early on) rather than through
+ * an artificial ceiling below what a fully-lit pixel on this panel can
+ * actually do. */
+#define BOOT_ANIM_GRID_CEILING_MAX 255
 
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
@@ -538,16 +560,22 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
     const uint32_t arrived = tween_ramp(now_ms, start,
                                             BOOT_ANIM_GRID_FADE_MS);
 
-    /* Squared, not linear: a linear falloff still has visible lines most of
-     * the way out and then stops, which puts an edge back on the floor in a
-     * different place. Squared, the outer rings are already almost gone by
-     * the time they run out. */
+    /* left/FADE, not (left/FADE) squared any more: squared was tuned back
+     * when this was an infinite Cartesian grid and the worry was a hard
+     * edge appearing partway across the panel (see the old comment this
+     * replaced). Now that each ring is a closed, bounded shape (see
+     * draw_floor()'s own comment), the falloff's job is just to make
+     * outer rings read as further away, not to hide a seam - and squared
+     * was quietly crushing every ring past the first one or two down
+     * toward black, which was a real part of "still dark": the rings
+     * large enough to actually read as a wave on screen were exactly the
+     * ones this was dimming the most. Linear keeps the depth cue (outer
+     * rings still dimmer than inner ones) without also erasing them. */
     const uint32_t left = (uint32_t)(BOOT_ANIM_GRID_FADE - ring);
     const uint32_t ceiling = (uint32_t)tween_lerp_i32(
         BOOT_ANIM_GRID_MAX, BOOT_ANIM_GRID_CEILING_MAX,
         boot_anim_grid_climb(now_ms));
-    const uint32_t near = left * left * ceiling /
-                          ((uint32_t)BOOT_ANIM_GRID_FADE * BOOT_ANIM_GRID_FADE);
+    const uint32_t near = left * ceiling / (uint32_t)BOOT_ANIM_GRID_FADE;
 
     return (uint8_t)((arrived * near) / 255u);
 }
@@ -558,10 +586,15 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
  * off black still reads as colour-muddy at any opacity unless it is also
  * moving toward white.
  *
- * Capped short of full white (255) so even at the very end the rings keep
- * a last trace of their own hue instead of becoming indistinguishable
- * from the axes. */
-#define BOOT_ANIM_GRID_WHITEN_MAX 235
+ * All the way to full white by the end, same as BOOT_ANIM_GRID_CEILING_MAX
+ * above - an earlier version held this a little short so the rings would
+ * keep a last trace of their own hue, but that hedge was part of the same
+ * "still dark" problem: colour and alpha both a little short of what the
+ * axes get compounds into a floor that never quite gets there. Nothing
+ * stops the CURVE reading distinctly even fully bloomed to white (see
+ * boot_anim.c's own use of gfx_color_mix(..., COL_WHITE, s.bloom)); the
+ * grid does not need the hedge here either. */
+#define BOOT_ANIM_GRID_WHITEN_MAX 255
 
 static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 {
@@ -1267,7 +1300,10 @@ _Static_assert(BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS +
                "grow+settle must finish before the collapse starts moving "
                "the room");
 
-static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
+/* Shared by boot_anim_motif_shrink_q8() and boot_anim_grid_shrink_q8() just
+ * below - same GROW/SETTLE shape (see "TWO PHASES" above), different
+ * resting floor. */
+static inline int boot_anim_shrink_to_floor_q8(uint32_t now_ms, int floor_q8)
 {
     const uint32_t grow_end_ms =
         BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
@@ -1279,13 +1315,38 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
         return tween_lerp_i32(256, BOOT_ANIM_SHRINK_PEAK_Q8, u8);
     }
     if (now_ms >= settle_end_ms) {
-        return BOOT_ANIM_SHRINK_FLOOR_Q8;
+        return floor_q8;
     }
 
     const uint8_t u8 = tween_ease_in(tween_ramp(
         now_ms, grow_end_ms, BOOT_ANIM_SHRINK_SETTLE_MS));
-    return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, BOOT_ANIM_SHRINK_FLOOR_Q8,
-                          u8);
+    return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, floor_q8, u8);
+}
+
+static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
+{
+    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_SHRINK_FLOOR_Q8);
+}
+
+/* A much bigger floor than BOOT_ANIM_SHRINK_FLOOR_Q8 - deliberately: the
+ * panel-fit test below has never applied to the floor and still does not
+ * here. It exists because the CURVE clipping mid-shape looks broken - a
+ * loop with its tip cut off reads as a rendering error - but the floor has
+ * had no edge since before any of this shrinking existed (see
+ * BOOT_ANIM_GRID_RINGS's own comment): rings running past the panel and
+ * fading into nothing is the intended look, the same "let clipping do the
+ * work" reasoning the axes lean on too. Its outer rings ran off-panel at
+ * FULL, unshrunk size from the very start of the animation, long before
+ * this file gave the floor a shrink of its own - so there was never a
+ * safety ceiling to sweep for here the way there was for
+ * BOOT_ANIM_SHRINK_PEAK_Q8. This value is chosen for how big the ending
+ * should look - "a big part of the grid clearly visible" - not for
+ * anything it has to stay under. */
+#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 128
+
+static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
+{
+    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_GRID_SHRINK_FLOOR_Q8);
 }
 
 /*---------------------------------------------------------------------------
