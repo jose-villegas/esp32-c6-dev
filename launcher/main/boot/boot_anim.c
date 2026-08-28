@@ -104,8 +104,8 @@ static int sy(int32_t re, int32_t im, int32_t t, const boot_anim_view_t *view)
 }
 
 /* sx/sy, shrunk toward the origin by shrink_q8/256 - see
- * boot_anim_curve_shrink_q8() in boot_anim.h for why the curve alone needs
- * this during the finale and the axes never do. Applied to the already
+ * boot_anim_space_shrink_q8() in boot_anim.h for why the whole space needs
+ * this during the finale, not the curve alone. Applied to the already
  *-projected pixel, not to (re, im, t): the projection is linear, so scaling
  * the offset from the origin after projecting is the same picture as
  * scaling the point before, without needing a scaled copy of every sample. */
@@ -142,7 +142,7 @@ static int32_t units(int n)
  * boundary is what removes the floor's edge. */
 #define FLOOR_REACH 24
 
-static void draw_floor(uint32_t now_ms, uint8_t ink,
+static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
                        const boot_anim_view_t *view)
 {
     const int32_t far = units(FLOOR_REACH);
@@ -166,10 +166,14 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
 
-            gfx_line_ex(sx(off, -far, view), sy(off, -far, 0, view),
-                        sx(off,  far, view), sy(off,  far, 0, view), c, 0u);
-            gfx_line_ex(sx(-far, off, view), sy(-far, off, 0, view),
-                        sx( far, off, view), sy( far, off, 0, view), c, 0u);
+            gfx_line_ex(csx(off, -far, shrink_q8, view),
+                        csy(off, -far, 0, shrink_q8, view),
+                        csx(off,  far, shrink_q8, view),
+                        csy(off,  far, 0, shrink_q8, view), c, 0u);
+            gfx_line_ex(csx(-far, off, shrink_q8, view),
+                        csy(-far, off, 0, shrink_q8, view),
+                        csx( far, off, shrink_q8, view),
+                        csy( far, off, 0, shrink_q8, view), c, 0u);
         }
     }
 }
@@ -183,14 +187,15 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
  * A fraction rather than a pixel count, so the three arms - which are three
  * different lengths on screen - still arrive at their ends together. */
 static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
-                     uint8_t ink, const boot_anim_view_t *view)
+                     uint8_t ink, int shrink_q8, const boot_anim_view_t *view)
 {
     const int32_t fre = (re * reach) / 255;
     const int32_t fim = (im * reach) / 255;
     const int32_t ft  = (t  * reach) / 255;
 
-    gfx_line_ex(sx(0, 0, view), sy(0, 0, 0, view),
-                sx(fre, fim, view), sy(fre, fim, ft, view),
+    gfx_line_ex(csx(0, 0, shrink_q8, view), csy(0, 0, 0, shrink_q8, view),
+                csx(fre, fim, shrink_q8, view),
+                csy(fre, fim, ft, shrink_q8, view),
                 lit(COL_AXIS, ink), 0u);
 }
 
@@ -240,9 +245,10 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
     const int32_t top = short_top +
         (((long_top - short_top) * (int32_t)finale) / 255);
 
-    draw_arm(arm, 0, 0, reach, ink, view);      /* real      */
-    draw_arm(0, arm, 0, reach, ink, view);      /* imaginary */
-    draw_arm(0, 0, top, reach, ink, view);      /* t         */
+    const int shrink_q8 = boot_anim_space_shrink_q8(now_ms);
+    draw_arm(arm, 0, 0, reach, ink, shrink_q8, view);      /* real      */
+    draw_arm(0, arm, 0, reach, ink, shrink_q8, view);      /* imaginary */
+    draw_arm(0, 0, top, reach, ink, shrink_q8, view);      /* t         */
 
     /* Named rather than tick-marked. Which axis is which is the one thing a
      * reader cannot work out from the picture, and three short labels say it
@@ -416,7 +422,7 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     const int32_t at = pen * span;
     const int last = at >> BOOT_ANIM_Q;
     const int32_t part = at & (BOOT_ANIM_ONE - 1);
-    const int shrink_q8 = boot_anim_curve_shrink_q8(now_ms);
+    const int shrink_q8 = boot_anim_space_shrink_q8(now_ms);
 
     /* Colours the trail, not how much of the curve is drawn - see
      * boot_anim_colour_progress()'s own comment. `pen` (extent) still
@@ -542,13 +548,14 @@ static void draw_frame(uint32_t now_ms)
                                                  now_ms);
 
     gfx_clear(COL_BG);
-    draw_floor(now_ms, ink, &view);
+    const int shrink_q8 = boot_anim_space_shrink_q8(now_ms);
+    draw_floor(now_ms, ink, shrink_q8, &view);
     draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them
      * rather than the dots punching holes in it. */
     const int32_t reached = draw_curve(now_ms, ink, &view);
-    draw_zeros(reached, ink, boot_anim_curve_shrink_q8(now_ms), &view);
+    draw_zeros(reached, ink, shrink_q8, &view);
 
     /* Gated rather than always called: every letter's own ramp is already
      * zero before BOOT_ANIM_TITLE_START_MS, so skipping the six gfx calls

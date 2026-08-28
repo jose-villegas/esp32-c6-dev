@@ -404,10 +404,10 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
         const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
         const int last = (int)(((int64_t)progress * span) >> BOOT_ANIM_Q);
         /* The finale shrinks the drawn curve toward the origin - see
-         * boot_anim_curve_shrink_q8()'s own comment - so what actually has
+         * boot_anim_space_shrink_q8()'s own comment - so what actually has
          * to stay on panel is the SHRUNK picture boot_anim.c's csx()/csy()
          * produce, not the raw projection alone. */
-        const int shrink_q8 = boot_anim_curve_shrink_q8(t);
+        const int shrink_q8 = boot_anim_space_shrink_q8(t);
 
         for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
             const boot_anim_pt_t p = boot_anim_sample(i);
@@ -889,6 +889,11 @@ static void test_the_wobbles_oscillation_slows_as_it_lands(void)
     }
 }
 
+/* "on its final position" now means the ARRIVAL wobble (see
+ * boot_anim_title_wobble()) has fully decayed, not that the letter sits
+ * dead still - boot_anim_title_wave() keeps a small idle motion going
+ * forever, by design, so a landed letter's y is BOOT_ANIM_TITLE_VIEW_Y plus
+ * whatever that wave says at this instant, not VIEW_Y alone. */
 static void test_a_letter_lands_exactly_on_its_final_position(void)
 {
     const uint32_t arrived = BOOT_ANIM_TITLE_START_MS +
@@ -897,9 +902,12 @@ static void test_a_letter_lands_exactly_on_its_final_position(void)
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const boot_anim_title_pos_t p =
             boot_anim_title_letter(i, arrived);
-        TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_TITLE_VIEW_Y, p.y,
-            "a fully arrived letter should sit exactly on the baseline, "
-            "with no residual wobble");
+        const int expected_y = BOOT_ANIM_TITLE_VIEW_Y +
+                               boot_anim_title_wave(i, arrived);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_y, p.y,
+            "a fully arrived letter should sit on the baseline plus "
+            "whatever the idle wave says, with no residual ARRIVAL wobble "
+            "left over");
     }
 }
 

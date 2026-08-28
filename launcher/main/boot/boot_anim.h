@@ -644,6 +644,34 @@ typedef struct {
     int x, y;   /* pixels */
 } boot_anim_title_pos_t;
 
+/* A small, continuous up-and-down wave riding under the letter, once it has
+ * landed - distinct from boot_anim_title_wobble() above, which is the
+ * ARRIVAL's own motion and has fully decayed to zero by the time a letter
+ * is at rest. Without something to replace it the word goes completely
+ * still the moment the last letter lands; this gives it a little life back
+ * without competing with the arrival for attention, since its amplitude
+ * (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX) is a fraction of the wobble's own and
+ * is the one knob to turn if it ever reads as hurting legibility rather
+ * than helping the word feel alive.
+ *
+ * "In sequence": each letter's phase is offset from the last by
+ * BOOT_ANIM_TITLE_WAVE_STAGGER_MS worth of the cycle, so the six letters
+ * do not bob in lockstep - the eye reads a wave travelling left to right
+ * along the word, the same left-to-right sense the letters themselves flew
+ * in on, rather than the whole word pulsing as one block. */
+#define BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX 3
+#define BOOT_ANIM_TITLE_WAVE_PERIOD_MS    1600
+#define BOOT_ANIM_TITLE_WAVE_STAGGER_MS   90
+
+static inline int boot_anim_title_wave(int i, uint32_t now_ms)
+{
+    const uint32_t t = (now_ms + (uint32_t)i * BOOT_ANIM_TITLE_WAVE_STAGGER_MS)
+                       % BOOT_ANIM_TITLE_WAVE_PERIOD_MS;
+    const uint16_t phase =
+        (uint16_t)((t * 65536u) / BOOT_ANIM_TITLE_WAVE_PERIOD_MS);
+    return (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX * boot_anim_sin(phase)) >> 15;
+}
+
 /* Where letter `i` of BOOT_ANIM_TITLE sits, in the viewer's frame (see this
  * section's own top comment), at `now_ms`. Letters are laid out left to
  * right in their FINAL row first - see final_x below - and each one's
@@ -670,7 +698,8 @@ static inline boot_anim_title_pos_t boot_anim_title_letter(int i,
 
     const int32_t d_q12 = BOOT_ANIM_ONE -
                           (((int32_t)u8 * BOOT_ANIM_ONE) / 255);
-    p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12);
+    p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12) +
+          boot_anim_title_wave(i, now_ms);
     return p;
 }
 
@@ -1088,13 +1117,22 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
     return v;
 }
 
-/* The curve's own shrink, toward the view's origin, as the finale turns the
- * camera the rest of the way. Not part of boot_anim_view_t: it applies to
- * the drawn curve alone, never to the axes, which stay unbounded lines
- * reaching for the panel edge exactly as they did before this existed - see
- * boot_anim.c's draw_curve()/draw_heads() for where this is spent (a scale
- * on the pixel offset from view->ox/oy, applied after projection) versus
- * draw_axes(), which never calls this at all.
+/* The WHOLE SPACE's shrink, toward the view's origin, as the finale turns
+ * the camera the rest of the way and the letters arrive - floor, axes and
+ * curve all scale down together rather than the curve alone shrinking
+ * inside axes that stay unbounded. One coherent thing collapsing into the
+ * small motif beside the word, not two independent-looking effects layered
+ * on each other. Not part of boot_anim_view_t: it is a scale on the pixel
+ * OFFSET from view->ox/oy, applied after projection, not on (re, im, t)
+ * themselves - see boot_anim.c's csx()/csy() for where it is spent, now
+ * shared by draw_floor(), draw_axes()/draw_arm() and draw_curve()/
+ * draw_heads() alike.
+ *
+ * Eased at both ends (boot_anim_ease_out() gives the back half of that;
+ * boot_anim_ramp() itself is linear, so the "in" half is not eased the
+ * same way a pure ease-in-out would be, close enough here that the
+ * difference does not read) rather than linear throughout, so the whole
+ * space visibly settles into its final size instead of stopping short.
  *
  * The number: continuing the turn to BOOT_ANIM_PHI_EXTRA_PHASE regrows the
  * t axis's screen weight back toward its starting size (see that constant's
@@ -1104,8 +1142,11 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  * off the panel; more so now that the climb itself reaches nearly twice as
  * high as it did when this floor was first tuned (BOOT_ANIM_T_MAX 126, not
  * 70). Shrinking it back down as the turn resumes is what keeps the same
- * curve inside the same room. BOOT_ANIM_SHRINK_MS and
- * BOOT_ANIM_SHRINK_FLOOR_Q8 were both chosen by sweeping the actual
+ * curve inside the same room - and now that the floor and axes shrink with
+ * it, there was never any risk of THEM overflowing to begin with: shrinking
+ * can only pull a point closer to the origin, never push it further out,
+ * so whatever already fit at full scale still fits smaller. BOOT_ANIM_SHRINK_MS
+ * and BOOT_ANIM_SHRINK_FLOOR_Q8 were both chosen by sweeping the actual
  * projection at a 5ms step across the whole finale and shrinking until
  * nothing overflowed, with headroom to spare - not derived from geometry,
  * because the origin's position and the panel edge closest to the curve's
@@ -1114,7 +1155,7 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 #define BOOT_ANIM_SHRINK_MS        900
 #define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* floor is held once reached */
 
-static inline int boot_anim_curve_shrink_q8(uint32_t now_ms)
+static inline int boot_anim_space_shrink_q8(uint32_t now_ms)
 {
     const uint8_t u8 = boot_anim_ease_out(boot_anim_ramp(
         now_ms, BOOT_ANIM_TITLE_START_MS, BOOT_ANIM_SHRINK_MS));
