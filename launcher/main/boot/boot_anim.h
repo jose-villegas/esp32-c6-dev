@@ -915,11 +915,11 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * panel is mounted a quarter turn from how it is held (see "The title"'s
  * own top comment on DISPLAY_LANDSCAPE), so moving ox is what the VIEWER
  * sees as moving the motif UP the screen, not sideways. Sized so the motif
- * settles level with the bottom of the word beside it -
- * BOOT_ANIM_TITLE_VIEW_Y plus one glyph cell, measured against a real
- * render rather than derived, the same way BOOT_ANIM_TITLE_VIEW_X/Y
+ * settles a little below the word beside it rather than level with its
+ * baseline - level put the two close enough to collide - measured against
+ * a real render rather than derived, the same way BOOT_ANIM_TITLE_VIEW_X/Y
  * themselves were. */
-#define BOOT_ANIM_ORIGIN_SHIFT_PX 60
+#define BOOT_ANIM_ORIGIN_SHIFT_PX 40
 
 /* How far the two floor-plane axes reach once unbounded, matching the
  * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the
