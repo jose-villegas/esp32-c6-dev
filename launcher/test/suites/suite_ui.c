@@ -268,6 +268,44 @@ static void test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation(
         "of a rotated screen uncleared");
 }
 
+/*---------------------------------------------------------------------------
+ * repaint_marked_canvases() under an odd quarter
+ *
+ * A second, independent bug in the same neighbourhood as the stale-rect one
+ * above, and easy to mistake for the same fix having missed a spot: even
+ * with cnt->rect correctly tracking ui_width()/ui_height() every frame (see
+ * ui_begin_screen() above), the background clear in repaint_marked_canvases()
+ * used to pass that LOGICAL rect straight to gfx_fill_rect() with no
+ * transform - unlike every command draw_command() paints, which all go
+ * through ui_transform_rect() first. Under an odd quarter (Landscape or
+ * Landscape upside down, where GFX_WIDTH != GFX_HEIGHT makes the logical and
+ * physical canvases different shapes, not just different orientations) an
+ * unrotated (0, 0, 448, 368) clipped onto a 368x448 physical framebuffer
+ * covers only its first 368 of 448 rows. The remaining 80 physical rows
+ * never got cleared - reported on hardware as pieces of the previous screen
+ * stuck in place after rotating from Portrait to Landscape. */
+static void test_repaint_clears_every_physical_row_under_an_odd_quarter(void)
+{
+    fixture();
+
+    ui_set_transform(ui_transform_quarter_turn(1, GFX_WIDTH, GFX_HEIGHT));
+    ui_begin(&no_touch);
+    mu_Context *ctx = ui_context();
+    if (ui_begin_screen(ctx, "Landscape Screen", MU_OPT_NOTITLE |
+                                    MU_OPT_NORESIZE | MU_OPT_NOCLOSE |
+                                    MU_OPT_NOFRAME)) {
+        mu_end_window(ctx);
+    }
+    ui_end(0x000000);
+
+    TEST_ASSERT_TRUE_MESSAGE(
+        gfx_region_dirty(0, GFX_HEIGHT - 1, GFX_WIDTH, 1),
+        "a full-screen window's background clear must reach the physical "
+        "panel's last row too - clearing the untransformed logical rect "
+        "instead silently stops 80 rows short of it under Landscape, "
+        "leaving whatever the previous screen left there on screen");
+}
+
 void run_ui_suite(void)
 {
     RUN_TEST(test_an_unchanged_ui_is_not_repainted);
@@ -278,6 +316,7 @@ void run_ui_suite(void)
     RUN_TEST(test_layout_generation_increments_by_one_per_genuine_change);
     RUN_TEST(test_layout_generation_counts_a_sequence_of_genuine_changes);
     RUN_TEST(test_ui_begin_screen_corrects_a_stale_rect_from_a_prior_orientation);
+    RUN_TEST(test_repaint_clears_every_physical_row_under_an_odd_quarter);
 }
 
 SUITE_REGISTER(run_ui_suite);

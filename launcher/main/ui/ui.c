@@ -635,6 +635,27 @@ static bool rects_overlap(mu_Rect a, mu_Rect b)
            a.y < b.y + b.h && b.y < a.y + a.h;
 }
 
+/* cnt->rect is LOGICAL - ui_begin_screen() always seeds it from
+ * ui_width()/ui_height() (see that function's own comment) - but every use
+ * below (the dirty-band check, the overlap check, and the background clear)
+ * needs the PHYSICAL footprint on the actual framebuffer, the same as every
+ * command draw_command() paints already gets by going through
+ * ui_transform_rect() before it ever reaches gfx. Under an odd quarter
+ * (Landscape or Landscape upside down, where GFX_WIDTH != GFX_HEIGHT means
+ * logical and physical dimensions differ) the two rects are not even the
+ * same shape: an unrotated (0, 0, 448, 368) clipped straight onto a
+ * 368x448 physical framebuffer covers only its first 368 of 448 rows,
+ * silently leaving the bottom 80 physical rows out of the background clear
+ * below - whatever was there before stays on screen. Reported on hardware as
+ * pieces of the previous frame stuck in place after rotating from Portrait
+ * to Landscape - it is not particular to the rotation itself, only to
+ * anything that repaints a canvas while an odd quarter is in force, rotation
+ * being the most common way to land there. */
+static mu_Rect canvas_physical_rect(const mu_Container *cnt)
+{
+    return ui_transform_rect(effective_transform(), cnt->rect);
+}
+
 /* Which canvases changed. Also repaint one whose bands are already dirty:
  * something has drawn underneath it this frame, so its pixels are gone
  * however unchanged its own description is. */
@@ -644,12 +665,12 @@ static void mark_changed_canvases(int n, bool *repaint)
         const mu_Container *cnt = ctx.root_list.items[i];
         const int slot = (int)(cnt - ctx.containers);
         const uint64_t h = hash_canvas(cnt);
+        const mu_Rect phys = canvas_physical_rect(cnt);
 
         if (invalidated ||
             slot < 0 || slot >= MU_CONTAINERPOOL_SIZE ||
             h != canvas_hash[slot] ||
-            gfx_region_dirty(cnt->rect.x, cnt->rect.y,
-                             cnt->rect.w, cnt->rect.h)) {
+            gfx_region_dirty(phys.x, phys.y, phys.w, phys.h)) {
             repaint[i] = true;
         }
     }
@@ -666,8 +687,8 @@ static void propagate_repaint_over_overlaps(int n, bool *repaint)
         }
         for (int j = i + 1; j < n && j < MU_ROOTLIST_SIZE; j++) {
             if (!repaint[j] &&
-                rects_overlap(ctx.root_list.items[i]->rect,
-                              ctx.root_list.items[j]->rect)) {
+                rects_overlap(canvas_physical_rect(ctx.root_list.items[i]),
+                              canvas_physical_rect(ctx.root_list.items[j]))) {
                 repaint[j] = true;
             }
         }
@@ -688,7 +709,8 @@ static bool repaint_marked_canvases(int n, const bool *repaint,
         /* Clear only this canvas's rect, not the screen. Everything gfx draws
          * marks its own bands, so nothing else needs marking here. */
         if (background_rgb != UI_NO_BACKGROUND) {
-            gfx_fill_rect(cnt->rect.x, cnt->rect.y, cnt->rect.w, cnt->rect.h,
+            const mu_Rect phys = canvas_physical_rect(cnt);
+            gfx_fill_rect(phys.x, phys.y, phys.w, phys.h,
                           gfx_rgb(background_rgb));
         }
 
