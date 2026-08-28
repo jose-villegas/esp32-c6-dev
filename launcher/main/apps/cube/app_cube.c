@@ -91,6 +91,11 @@ static uint32_t fps_frame_count;
 static uint32_t fps_window_elapsed_ms;
 static double   fps_value;
 
+/* Last ui_layout_generation() seen, so cube_frame() can tell a shell
+ * orientation change happened since last frame - see its own comment for
+ * why that forces a full clear rather than a partial one. */
+static uint32_t last_layout_generation;
+
 static inline uint8_t clamp_to_byte(S3L_Unit v)
 {
     if (v < 0)   return 0;
@@ -171,6 +176,44 @@ static void cube_enter(void)
     fps_frame_count = 0;
     fps_window_elapsed_ms = 0;
     fps_value = 0.0;
+
+    /* Baseline for the orientation check in cube_frame() - without this, a
+     * rotation that happened while some OTHER app was showing would read as
+     * "changed since last frame" on the very first frame back in the cube,
+     * forcing a clear that bbox_valid's own false above already forces. Not
+     * wrong, just redundant with a clearer reason already stated. */
+    last_layout_generation = ui_layout_generation();
+}
+
+/* mu_Color from a 0xRRGGBB value, opaque - same reason and same shape as
+ * app_sand.c's own mu_color_hex(): every colour handed to a microui drawing
+ * call crosses from this file's plain hex constants into mu's 8-bit form
+ * exactly once, here. Kept as its own copy rather than shared - see
+ * ORIENTATION_GRAVITY_X/Y's comment in app_diagnostics.c for why a small,
+ * independent copy like this is not worth a shared header of its own. */
+static mu_Color mu_color_hex(uint32_t rgb)
+{
+    return mu_color((int)((rgb >> 16) & 0xFF), (int)((rgb >> 8) & 0xFF),
+                    (int)(rgb & 0xFF), 255);
+}
+
+/* Lays out one full-width row `height` tall, paints it BACKGROUND_RGB, and
+ * hands the same rect back to whichever mu_checkbox()/mu_text() call comes
+ * next via mu_layout_set_next() - see draw_toggle()'s own comment for why a
+ * row that changes needs an opaque backing of its own the UI_NO_BACKGROUND
+ * window it sits in does not provide. mu_layout_set_next()'s `relative`
+ * argument is 0 (ABSOLUTE): `row` already came from a real mu_layout_next()
+ * call just above, in the same coordinate space that function's normal
+ * row-advance path would hand back, so re-issuing it verbatim is correct -
+ * the same trick app_sand.c's own palette tiles and ui_launcher.c's menu
+ * buttons already use to place a widget at a rect they computed themselves. */
+static mu_Rect draw_overlay_row(mu_Context *ctx, int height)
+{
+    mu_layout_row(ctx, 1, (int[]){ -1 }, height);
+    mu_Rect row = mu_layout_next(ctx);
+    mu_draw_rect(ctx, row, mu_color_hex(BACKGROUND_RGB));
+    mu_layout_set_next(ctx, row, 0);
+    return row;
 }
 
 /* Draws the small "partial updates" checkbox and the fps readout over
@@ -187,9 +230,26 @@ static void cube_enter(void)
  * screen", so the checkbox stays correctly composited over a background
  * that never stops changing, with no special handling needed here for that.
  *
+ * BUT: mu_text() and mu_checkbox()'s own label draw only their ink, no
+ * background of their own (mu_checkbox()'s box icon is the one exception -
+ * see mu_draw_control_frame() inside it). Under a full gfx_clear() every
+ * frame that is invisible, because the whole screen is blank before either
+ * one ever draws. Under partial_updates it is not: cube_frame() only erases
+ * the CUBE's own last bounding box, never this row's, so when the fps line
+ * below repaints - it changes shape every FPS_WINDOW_MS as the digits do -
+ * whatever of the old digits the new ones do not happen to overdraw was
+ * left on screen. draw_overlay_row() is the fix: an opaque box behind each
+ * row, painted through the same mu command list this whole module already
+ * hashes to skip unneeded repaints, so it costs nothing on the (large
+ * majority of) frames where neither row's content actually changed.
+ *
  * UI_TEXT_OUTLINED is app_sand.c's palette-label fix for the same reason it
  * was built for: a label with no halo of its own would wash out against
- * whichever of the cube's shifting corner colours happens to sit behind it. */
+ * whichever of the cube's shifting corner colours happens to sit behind it.
+ * Left in place even now that both rows carry their own backing - a
+ * NO_BACKGROUND window is still one BOOT tap away whenever partial_updates
+ * is off, and the halo costs nothing extra when the backing is already
+ * opaque. */
 static void draw_toggle(const input_t *input)
 {
     mu_Context *ctx = ui_context();
@@ -199,14 +259,14 @@ static void draw_toggle(const input_t *input)
     if (ui_begin_screen(ctx, "Cube Settings",
                         MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                         MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
-        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        draw_overlay_row(ctx, UI_ROW_HEIGHT);
         int on = partial_updates;
         mu_checkbox(ctx, "partial updates (or BOOT)", &on);
         partial_updates = on;
 
+        draw_overlay_row(ctx, gfx_text_height() + 4);
         char fps_line[16];
         snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
-        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
         mu_text(ctx, fps_line);
 
         mu_end_window(ctx);
@@ -253,6 +313,23 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
      * way. */
     if (input->boot.pressed) {
         partial_updates = !partial_updates;
+        bbox_valid = false;
+    }
+
+    /* A shell orientation change moves draw_toggle()'s overlay to a
+     * different physical region - ui_end() repaints it at its new spot, but
+     * nothing tells THIS app that the OLD spot, wherever it was, still has
+     * checkbox/fps pixels sitting in it outside whatever the cube's own
+     * bbox_x0..y1 happens to cover. Tracking that region too would mean
+     * this file learning the overlay's geometry, which is ui.c's job, not
+     * this app's. Forcing a full clear instead - exactly what bbox_valid
+     * false already gives the partial-mode branch below - is simpler and
+     * correct: a rotation is a rare, discrete event, not a per-frame cost,
+     * so paying for one full clear on exactly that frame is not something
+     * a user could ever see as a hitch. */
+    const uint32_t layout_generation = ui_layout_generation();
+    if (layout_generation != last_layout_generation) {
+        last_layout_generation = layout_generation;
         bbox_valid = false;
     }
 
