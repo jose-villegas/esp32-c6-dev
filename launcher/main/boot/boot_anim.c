@@ -1,5 +1,5 @@
 /*=============================================================================
- * boot_anim - drawing the startup animation, and the three seconds it owns.
+ * boot_anim - drawing the startup animation, and the five seconds it owns.
  *
  * The projection, the smoothing, the colour and the timeline are all in
  * boot_anim.h, where they are host-testable, and the curve is a generated
@@ -28,6 +28,7 @@
 
 #include "boot/boot_anim.h"
 
+#include "display/display.h"
 #include "gfx/gfx.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
@@ -88,9 +89,9 @@ static gfx_color_t lit(uint32_t rgb, uint8_t alpha)
  * world coordinates and never repeats GFX_WIDTH/GFX_HEIGHT.
  *-------------------------------------------------------------------------*/
 
-static int sx(int32_t re, int32_t im)
+static int sx(int32_t re, int32_t im, const boot_anim_view_t *view)
 {
-    return boot_anim_screen_x(GFX_WIDTH, re, im);
+    return boot_anim_screen_x(re, im, view);
 }
 
 /* `view` carries the frame's camera state - see boot_anim_view() in
@@ -100,6 +101,26 @@ static int sx(int32_t re, int32_t im)
 static int sy(int32_t re, int32_t im, int32_t t, const boot_anim_view_t *view)
 {
     return boot_anim_screen_y(GFX_HEIGHT, re, im, t, view);
+}
+
+/* sx/sy, shrunk toward the origin by shrink_q8/256 - see
+ * boot_anim_motif_shrink_q8() in boot_anim.h for why the axes need this
+ * alongside the curve during the finale, and draw_floor()'s own comment
+ * for why the floor never does. Applied to the already-projected pixel,
+ * not to (re, im, t): the projection is linear, so scaling the offset from
+ * the origin after projecting is the same picture as scaling the point
+ * before, without needing a scaled copy of every sample. */
+static int csx(int32_t re, int32_t im, int shrink_q8, const boot_anim_view_t *view)
+{
+    const int raw = sx(re, im, view);
+    return view->ox + (((raw - view->ox) * shrink_q8) >> 8);
+}
+
+static int csy(int32_t re, int32_t im, int32_t t, int shrink_q8,
+              const boot_anim_view_t *view)
+{
+    const int raw = sy(re, im, t, view);
+    return view->oy + (((raw - view->oy) * shrink_q8) >> 8);
 }
 
 /* A whole number of grid units, as a Q12 value. */
@@ -122,6 +143,14 @@ static int32_t units(int n)
  * boundary is what removes the floor's edge. */
 #define FLOOR_REACH 24
 
+/* Never shrunk - the floor is the background the motif shrinks INTO, not
+ * one more thing shrinking along with it. Filling the panel edge to edge
+ * for the whole five seconds is the one property it cannot give up: a
+ * grid that shrank away with the curve would read as the whole world
+ * shrinking, not as a spiral collapsing into a small icon sitting on a
+ * plane that was always there. It still moves - centred on the origin,
+ * whose PANEL position drifts throughout, same as ever - just never
+ * scales. */
 static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
@@ -146,10 +175,10 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
 
-            gfx_line_ex(sx(off, -far), sy(off, -far, 0, view),
-                        sx(off,  far), sy(off,  far, 0, view), c, 0u);
-            gfx_line_ex(sx(-far, off), sy(-far, off, 0, view),
-                        sx( far, off), sy( far, off, 0, view), c, 0u);
+            gfx_line_ex(sx(off, -far, view), sy(off, -far, 0, view),
+                        sx(off,  far, view), sy(off,  far, 0, view), c, 0u);
+            gfx_line_ex(sx(-far, off, view), sy(-far, off, 0, view),
+                        sx( far, off, view), sy( far, off, 0, view), c, 0u);
         }
     }
 }
@@ -163,14 +192,15 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
  * A fraction rather than a pixel count, so the three arms - which are three
  * different lengths on screen - still arrive at their ends together. */
 static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
-                     uint8_t ink, const boot_anim_view_t *view)
+                     uint8_t ink, int shrink_q8, const boot_anim_view_t *view)
 {
-    const int32_t fre = (re * reach) / 255;
-    const int32_t fim = (im * reach) / 255;
-    const int32_t ft  = (t  * reach) / 255;
+    const int32_t fre = tween_lerp_i32(0, re, reach);
+    const int32_t fim = tween_lerp_i32(0, im, reach);
+    const int32_t ft  = tween_lerp_i32(0, t,  reach);
 
-    gfx_line_ex(sx(0, 0), sy(0, 0, 0, view),
-                sx(fre, fim), sy(fre, fim, ft, view),
+    gfx_line_ex(csx(0, 0, shrink_q8, view), csy(0, 0, 0, shrink_q8, view),
+                csx(fre, fim, shrink_q8, view),
+                csy(fre, fim, ft, shrink_q8, view),
                 lit(COL_AXIS, ink), 0u);
 }
 
@@ -194,26 +224,49 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
         return;
     }
 
-    /* The axes stop where a reader can still see them end, rather than
-     * running out with the floor: an unbounded axis has nowhere to put its
-     * label. */
-    const int32_t arm = units(4);
-    const int32_t top = (BOOT_ANIM_T_MAX << BOOT_ANIM_TQ) +
-                        (1 << BOOT_ANIM_TQ);
+    /* Short at first - the axes stop where a reader can still see them end,
+     * so there is somewhere to put a label - then unbounded once the finale
+     * starts, the same "run it well past the panel and let clipping do the
+     * work" treatment the floor already gets. `finale` interpolates the arm
+     * length between the two; see BOOT_ANIM_AXIS_FAR_UNITS in boot_anim.h. */
+    const uint8_t finale = boot_anim_finale_reach(now_ms);
+    const int32_t short_arm = units(4);
+    const int32_t long_arm  = units(BOOT_ANIM_AXIS_FAR_UNITS);
+    const int32_t arm = tween_lerp_i32(short_arm, long_arm, finale);
 
-    draw_arm(arm, 0, 0, reach, ink, view);      /* real      */
-    draw_arm(0, arm, 0, reach, ink, view);      /* imaginary */
-    draw_arm(0, 0, top, reach, ink, view);      /* t         */
+    /* T's own scale is Q8, not Q12 like re/im - units() (Q12) has no
+     * business appearing here, which is exactly the mix-up the header's own
+     * "FIXED POINT, AND FOUR SCALES OF IT" warns about. Both ends are a
+     * plain unit count shifted into Q8 directly.
+     *
+     * short_top is sized from BOOT_ANIM_T_MAX_PHASE1, not BOOT_ANIM_T_MAX -
+     * see that constant's own comment in boot_anim.h: this is the SHORT,
+     * labelled arm drawn before the finale unbounds it, and it must stay
+     * the length it was tuned to fit the panel at even though the climb
+     * itself now reaches twice as high. */
+    const int32_t short_top = (BOOT_ANIM_T_MAX_PHASE1 + 1) << BOOT_ANIM_TQ;
+    const int32_t long_top  = (BOOT_ANIM_T_MAX * 3) << BOOT_ANIM_TQ;
+    const int32_t top = tween_lerp_i32(short_top, long_top, finale);
+
+    const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
+    draw_arm(arm, 0, 0, reach, ink, shrink_q8, view);      /* real      */
+    draw_arm(0, arm, 0, reach, ink, shrink_q8, view);      /* imaginary */
+    draw_arm(0, 0, top, reach, ink, shrink_q8, view);      /* t         */
 
     /* Named rather than tick-marked. Which axis is which is the one thing a
      * reader cannot work out from the picture, and three short labels say it
-     * where a ladder of numbers up a 315px axis would just be clutter. */
-    if (reach == 255) {
-        draw_label(sx(arm, 0) + LABEL_GAP * 2,
+     * where a ladder of numbers up a 315px axis would just be clutter.
+     *
+     * Only before the finale starts: an unbounded axis has nowhere left to
+     * anchor a label to, so rather than have one drift or clip, it is
+     * simplest to let the labels belong to the short-arm phase only and
+     * drop away once the arms start growing past it. */
+    if (reach == 255 && finale == 0) {
+        draw_label(sx(arm, 0, view) + LABEL_GAP * 2,
                    sy(arm, 0, 0, view) + LABEL_GAP, "Re", ink);
-        draw_label(sx(0, arm) - LABEL_GAP * 2,
+        draw_label(sx(0, arm, view) - LABEL_GAP * 2,
                    sy(0, arm, 0, view) + LABEL_GAP, "Im", ink);
-        draw_label(sx(0, 0) + LABEL_GAP * 2,
+        draw_label(sx(0, 0, view) + LABEL_GAP * 2,
                    sy(0, 0, top, view) - LABEL_GAP, "t", ink);
     }
 }
@@ -229,7 +282,7 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
  * happens at is one of the numbers the Riemann hypothesis is about. Drawn
  * white and flat rather than blended, so they stay legible through whatever
  * the curve is doing around them. */
-static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
+static void draw_zeros(int32_t pen_t_q8, uint8_t ink, int shrink_q8,
                        const boot_anim_view_t *view)
 {
     for (int i = 0; i < BOOT_ANIM_ZEROS; i++) {
@@ -237,8 +290,8 @@ static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
         if (t > pen_t_q8) {
             break;      /* the table is in order, so nothing after it either */
         }
-        gfx_fill_rect(sx(0, 0) - ZERO_DOT / 2,
-                      sy(0, 0, t, view) - ZERO_DOT / 2,
+        gfx_fill_rect(csx(0, 0, shrink_q8, view) - ZERO_DOT / 2,
+                      csy(0, 0, t, shrink_q8, view) - ZERO_DOT / 2,
                       ZERO_DOT, ZERO_DOT, lit(COL_ZERO, ink));
     }
 }
@@ -315,22 +368,33 @@ static void draw_head(int x, int y, uint32_t rgb, uint8_t ink)
  * The leading pen is skipped once it reaches the end: a bright dot left
  * sitting on the finish of a static curve reads as a blemish rather than as
  * a pen. */
-static void draw_heads(int32_t pen, uint8_t ink,
+/* `colour_pen` is boot_anim_colour_progress(), not boot_anim_pen() - see
+ * its own comment in boot_anim.h. It is a Q12 fraction of PHASE1's length,
+ * not the whole (now longer) table, so a trail's raw position in it has to
+ * be converted back into an actual table index - `* phase1_span` undoes
+ * the `/ phase1_span` boot_anim_colour_progress() applied - before it can
+ * be used to sample the curve; boot_anim_stroke() and boot_anim_trail_pos()
+ * want the un-converted, colour-scale value instead, exactly as before. */
+static void draw_heads(int32_t colour_pen, uint8_t ink, int shrink_q8,
                        const boot_anim_view_t *view)
 {
-    const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
+    const int32_t phase1_span = (int32_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1);
 
     for (int k = 0; k < BOOT_ANIM_TRAILS; k++) {
-        const int32_t at = boot_anim_trail_pos(pen, k);
-        if (at <= 0 || at >= BOOT_ANIM_ONE) {
-            continue;       /* not set off yet, or finished */
+        const int32_t at = boot_anim_trail_pos(colour_pen, k);
+        if (at <= 0) {
+            continue;       /* not set off yet */
         }
 
-        const int i = fx_mul_floor(at, span, BOOT_ANIM_Q);
+        int i = fx_mul_floor(at, phase1_span, BOOT_ANIM_Q);
+        if (i >= BOOT_ANIM_CURVE_POINTS) {
+            i = BOOT_ANIM_CURVE_POINTS - 1;   /* the table ran out first */
+        }
         const boot_anim_pt_t p = boot_anim_sample(i);
 
-        draw_head(sx(p.re, p.im), sy(p.re, p.im, p.t, view),
-                  boot_anim_hue_rgb(boot_anim_stroke(at, pen).hue), ink);
+        draw_head(csx(p.re, p.im, shrink_q8, view),
+                  csy(p.re, p.im, p.t, shrink_q8, view),
+                  boot_anim_hue_rgb(boot_anim_stroke(at, colour_pen).hue), ink);
     }
 }
 
@@ -361,10 +425,21 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     const int32_t at = pen * span;
     const int last = at >> BOOT_ANIM_Q;
     const int32_t part = at & (BOOT_ANIM_ONE - 1);
+    const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
+
+    /* Colours the trail, not how much of the curve is drawn - see
+     * boot_anim_colour_progress()'s own comment. `pen` (extent) still
+     * decides `last`/`part` above: the curve itself stops growing once
+     * fully drawn, only the light chasing round it keeps moving. Also what
+     * `along` below is measured against, in place of `span` - see the same
+     * comment for why a colour position is phase-1-relative rather than a
+     * fraction of the whole table. */
+    const int32_t colour = boot_anim_colour_progress(now_ms);
+    const int32_t phase1_span = (int32_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1);
 
     boot_anim_pt_t head = boot_anim_sample(0);
-    int px = sx(head.re, head.im);
-    int py = sy(head.re, head.im, head.t, view);
+    int px = csx(head.re, head.im, shrink_q8, view);
+    int py = csy(head.re, head.im, head.t, shrink_q8, view);
     bool drawn = false;      /* has any segment been laid down yet? */
 
     for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
@@ -377,8 +452,8 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
         /* How far into the whole curve this span sits, and how far the next
          * one does, so the colour can be interpolated across it rather than
          * stepping once per sample. */
-        const int32_t a0 = fx_div_round(i, span, BOOT_ANIM_Q);
-        const int32_t a1 = fx_div_round(i + 1, span, BOOT_ANIM_Q);
+        const int32_t a0 = fx_div_round(i, phase1_span, BOOT_ANIM_Q);
+        const int32_t a1 = fx_div_round(i + 1, phase1_span, BOOT_ANIM_Q);
 
         /* A partial span for the one the pen is inside: without it the head
          * would jump from sample to sample, and a sample is six pixels. */
@@ -388,11 +463,11 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
             const int32_t t = (limit * step) / BOOT_ANIM_SPLINE_STEPS;
 
             head = boot_anim_spline(c0, c1, c2, t);
-            const int nx = sx(head.re, head.im);
-            const int ny = sy(head.re, head.im, head.t, view);
+            const int nx = csx(head.re, head.im, shrink_q8, view);
+            const int ny = csy(head.re, head.im, head.t, shrink_q8, view);
             const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
 
-            draw_stroke(px, py, nx, ny, boot_anim_stroke(along, pen), ink,
+            draw_stroke(px, py, nx, ny, boot_anim_stroke(along, colour), ink,
                         drawn);
             drawn = true;
             px = nx;
@@ -400,8 +475,62 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
         }
     }
 
-    draw_heads(pen, ink, view);
+    draw_heads(colour, ink, shrink_q8, view);
     return head.t;
+}
+
+/*---------------------------------------------------------------------------
+ * The title
+ *-------------------------------------------------------------------------*/
+
+/* boot_anim_title_letter() lays the word out in the VIEWER's frame - see its
+ * own comment in boot_anim.h - because this board is held a quarter turn
+ * from its native upright (DISPLAY_LANDSCAPE, the same fact display.h and
+ * main.c use to turn the rest of the shell once touch is running). Nothing
+ * else this file draws needs correcting for that: a spiral and a floor grid
+ * have no reading direction, so they look right on the raw panel either way,
+ * but a WORD does, which is the only reason this is the one thing here that
+ * has to be turned before it is drawn.
+ *
+ * A point in that frame is not simply a point on the panel, though - the
+ * glyph itself has to rotate too, and rotating a box (the glyph's cell)
+ * is not the same as rotating its corner - see ui.c's own comment on
+ * MU_COMMAND_TEXT for the exact trap that is (a rotated glyph drawn at a
+ * merely-rotated corner drifts off by its own height). This mirrors that:
+ * the physical origin is the rotated box's own top-left, not the rotated
+ * point. */
+static void title_glyph_origin(int view_x, int view_y, int glyph_w,
+                               int glyph_h, int *panel_x, int *panel_y)
+{
+    (void)glyph_w;   /* DISPLAY_LANDSCAPE only needs the box's height to
+                      * correct the origin - see the two mapped corners in
+                      * this function's own derivation above. */
+    *panel_x = GFX_WIDTH - view_y - glyph_h;
+    *panel_y = view_x;
+}
+
+/* "Autana", flying in - see boot_anim_title_letter() in boot_anim.h for the
+ * choreography; this is only gfx calls. White rather than a hue-wheel
+ * colour, deliberately: the word is the one thing on screen that is not
+ * part of the curve, and it stays legible against whatever the spiral is
+ * doing behind it precisely because it does not compete on colour. */
+static void draw_title(uint32_t now_ms, uint8_t ink)
+{
+    const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
+    const gfx_font_t *font = gfx_default_font();
+    const int glyph_w = gfx_font_width(font, "A", -1, BOOT_ANIM_TITLE_SCALE);
+    const int glyph_h = gfx_font_height(font, BOOT_ANIM_TITLE_SCALE);
+    char one[2] = { 0, 0 };
+
+    for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
+        const boot_anim_title_pos_t p = boot_anim_title_letter(i, now_ms);
+        int px, py;
+        title_glyph_origin(p.x, p.y, glyph_w, glyph_h, &px, &py);
+
+        one[0] = BOOT_ANIM_TITLE[i];
+        gfx_text_font(px, py, one, c, BOOT_ANIM_TITLE_SCALE,
+                     DISPLAY_LANDSCAPE, font);
+    }
 }
 
 /*---------------------------------------------------------------------------
@@ -412,23 +541,31 @@ static void draw_frame(uint32_t now_ms)
 {
     const uint8_t ink = boot_anim_ink(now_ms);
 
-    /* Built from boot_anim_pen(now_ms) - the SAME progress that paces the
-     * curve, not an independent clock - so the camera finishes its orbit
-     * exactly when the curve finishes drawing. See boot_anim_view()'s own
-     * comment in boot_anim.h for why that coupling is deliberate. Built once
-     * here and threaded to every draw_* call below rather than reconstructed
-     * per point: the trig it costs is worth paying for once a frame. */
-    const boot_anim_view_t view = boot_anim_view(GFX_HEIGHT,
-                                                 boot_anim_pen(now_ms));
+    /* Reads now_ms directly and derives everything from it internally - see
+     * boot_anim_view()'s own comment in boot_anim.h for why the curve's
+     * progress and the finale's each drive their own piece of it. Built
+     * once here and threaded to every draw_* call below rather than
+     * reconstructed per point: the trig it costs is worth paying for once
+     * a frame. */
+    const boot_anim_view_t view = boot_anim_view(GFX_WIDTH, GFX_HEIGHT,
+                                                 now_ms);
 
     gfx_clear(COL_BG);
+    const int shrink_q8 = boot_anim_motif_shrink_q8(now_ms);
     draw_floor(now_ms, ink, &view);
     draw_axes(now_ms, ink, &view);
 
     /* Zeros before the curve, so the curve's own glow lands on top of them
      * rather than the dots punching holes in it. */
     const int32_t reached = draw_curve(now_ms, ink, &view);
-    draw_zeros(reached, ink, &view);
+    draw_zeros(reached, ink, shrink_q8, &view);
+
+    /* Gated rather than always called: every letter's own ramp is already
+     * zero before BOOT_ANIM_TITLE_START_MS, so skipping the six gfx calls
+     * entirely for the 2.7s before that is a real saving, not just tidiness. */
+    if (now_ms >= BOOT_ANIM_TITLE_START_MS) {
+        draw_title(now_ms, ink);
+    }
 }
 
 void boot_anim_run(void)
