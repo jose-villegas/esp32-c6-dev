@@ -82,6 +82,19 @@ static gfx_color_t lit(uint32_t rgb, uint8_t alpha)
     return gfx_color_mix(COL_BG, gfx_rgb(rgb), alpha);
 }
 
+/* `rgb`, first mixed `whiten` of the way toward white, then lifted `alpha`
+ * of the way off the background - see boot_anim_grid_whiten()'s own
+ * comment for why the floor needs the extra mix and lit() alone does not:
+ * a saturated hue only ever gets more OPAQUE through lit() on its own,
+ * never any less colour-muddy, and it is the colour itself moving toward
+ * white that is supposed to be doing most of the work of making the grid
+ * read here. */
+static gfx_color_t lit_whitened(uint32_t rgb, uint8_t whiten, uint8_t alpha)
+{
+    const gfx_color_t whitened = gfx_color_mix(gfx_rgb(rgb), COL_WHITE, whiten);
+    return gfx_color_mix(COL_BG, whitened, alpha);
+}
+
 /*---------------------------------------------------------------------------
  * Projection helpers
  *
@@ -170,9 +183,13 @@ static void draw_floor(uint32_t now_ms, uint8_t ink, int shrink_q8,
 
         /* The floor is the one thing on screen the whole time that is not
          * doing anything, so it is where a slow colour drift costs nothing
-         * and competes with nothing. */
-        const gfx_color_t c =
-            lit(boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)), alpha);
+         * and competes with nothing. Whitened, not just lit(): see
+         * boot_anim_grid_whiten()'s own comment for why the hue itself
+         * climbs toward white over the whole animation rather than only
+         * getting more opaque. */
+        const gfx_color_t c = lit_whitened(
+            boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)),
+            boot_anim_grid_whiten(now_ms), alpha);
         const int32_t d = (units(ring) * shrink_q8) >> 8;
 
         const int x0 = sx(-d, -d, view), y0 = sy(-d, -d, 0, view);
