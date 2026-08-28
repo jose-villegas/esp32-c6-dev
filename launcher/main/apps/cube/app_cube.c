@@ -362,6 +362,27 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
     if (input->boot.pressed) {
         menu_open = !menu_open;
         bbox_valid = false;
+
+        /* Opening the menu is exactly the case app_diagnostics.c's own
+         * page-switch comment describes: draw_menu() is not called every
+         * frame the way draw_fps() is, so if the menu happens to look
+         * identical to the last time it was shown - the button's own label
+         * unchanged since the last visit - ui_end() sees a matching command
+         * hash AND nothing else having dirtied the screen THIS frame (there
+         * is nothing else this frame; the early return below skips the
+         * cube entirely) and silently skips painting. The panel then keeps
+         * showing whatever the cube last actually sent it, which is not
+         * the menu - it is however many partial-mode frames of cube view
+         * ran in between, each sending only its own small bbox, none of it
+         * anywhere near where the menu's pixels used to be. Forcing an
+         * invalidate here is the general fix, not a partial_updates-only
+         * one: draw_fps() never needs this because the cube's own
+         * unconditional gfx_clear()/gfx_fill_rect() on the return trip
+         * already dirties its rect every single time that path runs -
+         * draw_menu() has no such guaranteed neighbour to lean on. */
+        if (menu_open) {
+            ui_invalidate();
+        }
     }
 
     /* A shell orientation change moves draw_fps()'s overlay to a different
