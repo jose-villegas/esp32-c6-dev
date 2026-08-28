@@ -246,19 +246,25 @@ typedef struct {
  * coordinate plane actually is.
  *
  * RINGS is therefore how far the fade reaches, not how big the floor is -
- * and half a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a whole
- * one: at a whole unit per ring there were only ever six or seven rings
- * actually lit at once, each one a visibly distinct step in brightness
- * from its neighbours rather than something that reads as a continuous
- * wave. Twice as many rings, half as far apart, covers the same physical
- * reach with a much finer gradient between them. */
-#define BOOT_ANIM_GRID_RINGS 14
-#define BOOT_ANIM_GRID_FADE  14
+ * and a quarter of a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a
+ * whole one: at a whole unit per ring there were only ever six or seven
+ * rings actually lit at once, each one a visibly distinct step in
+ * brightness from its neighbours rather than something that reads as a
+ * continuous wave, and even the first cut of that (twice as many, half as
+ * far apart) still read as individually countable bands rather than a
+ * dense ripple once the floor itself was also allowed to grow this much
+ * bigger on screen (see boot_anim_grid_shrink_q8()) - the bigger the
+ * drawn area, the higher a frequency it takes for the same ring count to
+ * still look dense rather than sparse. Four times as many rings, a
+ * quarter as far apart, covers the same physical reach as the original
+ * whole-unit spacing. */
+#define BOOT_ANIM_GRID_RINGS 28
+#define BOOT_ANIM_GRID_FADE  28
 
-/* Half a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own comment.
- * Q12, like every other plane coordinate here (see units() in boot_anim.c,
- * which this is used in place of for the floor specifically). */
-#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 2)
+/* A quarter of a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own
+ * comment. Q12, like every other plane coordinate here (see units() in
+ * boot_anim.c, which this is used in place of for the floor specifically). */
+#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 4)
 
 /* Where one unit along each axis lands, in Q8 pixels.
  *
@@ -445,10 +451,11 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
 
 #define BOOT_ANIM_GRID_START_MS  150
 
-/* Halved alongside BOOT_ANIM_GRID_RINGS doubling (see its own comment) -
- * twice as many rings at half the stagger covers the same total arrival
- * time as before, rather than taking twice as long to sweep outward. */
-#define BOOT_ANIM_GRID_RING_MS    23   /* each ring waits for the one inside */
+/* Halved again alongside BOOT_ANIM_GRID_RINGS doubling again (see its own
+ * comment) - four times as many rings at a quarter the stagger covers the
+ * same total arrival time as the original whole-unit spacing, rather than
+ * taking four times as long to sweep outward. */
+#define BOOT_ANIM_GRID_RING_MS    12   /* each ring waits for the one inside */
 #define BOOT_ANIM_GRID_FADE_MS   300
 
 #define BOOT_ANIM_PEN_START_MS   520
