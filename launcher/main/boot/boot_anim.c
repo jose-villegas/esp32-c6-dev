@@ -153,15 +153,20 @@ static int32_t units(int n)
  * axis read as height instead of as a third line through the same point.
  *-------------------------------------------------------------------------*/
 
-/* Each ring is a closed square around the origin, not two unbounded lines -
- * so a ring actually reads as a RING: a wave expanding outward from the
- * origin, the way boot_anim_grid_alpha()'s own per-ring arrival stagger and
- * boot_anim_grid_hue()'s own per-ring colour drift already implied one
- * should. A Cartesian grid of crossing lines never delivers that, no matter
- * how far out it runs - offsetting a pair of infinite lines by a ring's
- * distance is not the same shape as a ring, it is still just two lines,
- * and every ring's pair overlapping near the origin is what read as a
- * cross rather than a set of waves.
+/* Each ring is a pair of crossing lines - one horizontal, one vertical, on
+ * each side of the origin - bounded to `far`, the outermost ring's own
+ * reach, rather than a closed square outline. A closed square only ever
+ * draws a ring's own PERIMETER; it never crosses another ring's lines, so
+ * no matter how many of them nest together the result is concentric
+ * outlines, not a grid with cells - a direction was missing. Crossing
+ * lines are what an actual square grid is made of: every ring's pair
+ * crosses every OTHER ring's pair too, and it is that lattice of
+ * intersections, not just the outermost boundary, that reads as a mesh of
+ * cells. (An earlier version of this drew crossing lines that ran
+ * unbounded past the panel - the same idea, but with too few, too dim
+ * rings and a broken shrink collapsing them all toward the origin, the
+ * result read as a bare cross rather than a grid; bounded, dense and
+ * bright, the same construction reads as intended.)
  *
  * Its OWN shrink, not the shared motif one the axes and curve use - see
  * boot_anim_grid_shrink_q8()'s own comment for why: the floor's natural
@@ -175,14 +180,16 @@ static int32_t units(int n)
  * pixels thicken up rather than thin out, and that filled-in look - the
  * plane still visibly there, just close in on itself - is what "the
  * origin settles small" is supposed to read as, not a grid shrinking away
- * to nothing in a corner. Applied to `d` (the ring's half-width, in world
- * units, before projection) rather than via csx()/csy() on the drawn
- * corners, so a ring's whole shape scales uniformly rather than its
- * corners sliding independently toward view->ox/oy. */
+ * to nothing in a corner. Applied to `d`/`far` (world units, before
+ * projection) rather than via csx()/csy() on the drawn endpoints, so the
+ * whole grid scales uniformly rather than each endpoint sliding
+ * independently toward view->ox/oy. */
 static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
     const int shrink_q8 = boot_anim_grid_shrink_q8(now_ms);
+    const int32_t far = ((int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12 *
+                         shrink_q8) >> 8;
 
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
@@ -201,19 +208,18 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
             boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)),
             boot_anim_grid_whiten(now_ms), alpha);
         /* BOOT_ANIM_GRID_STEP_Q12, not units() (a whole unit) - see
-         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are half a
-         * unit apart now. */
+         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are a
+         * quarter of a unit apart now. */
         const int32_t d = ((int32_t)ring * BOOT_ANIM_GRID_STEP_Q12 * shrink_q8) >> 8;
 
-        const int x0 = sx(-d, -d, view), y0 = sy(-d, -d, 0, view);
-        const int x1 = sx( d, -d, view), y1 = sy( d, -d, 0, view);
-        const int x2 = sx( d,  d, view), y2 = sy( d,  d, 0, view);
-        const int x3 = sx(-d,  d, view), y3 = sy(-d,  d, 0, view);
+        for (int sign = -1; sign <= 1; sign += 2) {
+            const int32_t off = sign * d;
 
-        gfx_line_ex(x0, y0, x1, y1, c, 0u);
-        gfx_line_ex(x1, y1, x2, y2, c, 0u);
-        gfx_line_ex(x2, y2, x3, y3, c, 0u);
-        gfx_line_ex(x3, y3, x0, y0, c, 0u);
+            gfx_line_ex(sx(off, -far, view), sy(off, -far, 0, view),
+                        sx(off,  far, view), sy(off,  far, 0, view), c, 0u);
+            gfx_line_ex(sx(-far, off, view), sy(-far, off, 0, view),
+                        sx( far, off, view), sy( far, off, 0, view), c, 0u);
+        }
     }
 }
 
