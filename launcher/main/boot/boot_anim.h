@@ -1344,46 +1344,38 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
     return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_SHRINK_FLOOR_Q8);
 }
 
-/* A much bigger floor than BOOT_ANIM_SHRINK_FLOOR_Q8 - deliberately: the
- * panel-fit test below has never applied to the floor and still does not
- * here. It exists because the CURVE clipping mid-shape looks broken - a
- * loop with its tip cut off reads as a rendering error - but the floor has
- * had no edge since before any of this shrinking existed (see
- * BOOT_ANIM_GRID_RINGS's own comment): rings running past the panel and
- * fading into nothing is the intended look, the same "let clipping do the
- * work" reasoning the axes lean on too. Its outer rings ran off-panel at
- * FULL, unshrunk size from the very start of the animation, long before
- * this file gave the floor a shrink of its own - so there was never a
- * safety ceiling to sweep for here the way there was for
- * BOOT_ANIM_SHRINK_PEAK_Q8. This value is chosen for how big the ending
- * should look - filling the WHOLE panel corner to corner, not merely a
- * large patch in the middle of it - not for anything it has to stay
- * under.
+/* A CONSTANT, not a GROW/SETTLE curve like boot_anim_motif_shrink_q8() -
+ * the floor is supposed to fill every corner of the panel for the WHOLE
+ * animation, from the very first frame, not just once something has
+ * grown into place. A pulse that starts small necessarily has a window
+ * where it has not grown yet, and "first frames still have corners" was
+ * exactly that window showing.
  *
- * A square grid, once rotated by the camera's own turn, is a diamond on
- * screen: at 128 (half size) its sides reached the middle of each panel
- * edge but its own diagonal still fell short of the panel's, so all four
- * corners stayed empty no matter how dense or bright the grid inside that
- * diamond got, and 220 (86%) still left the corner farthest from the
- * drifted-off-centre origin uncovered too - both found by inverting the
- * projection for each of the four corners directly rather than guessing.
- * 512 (2x "full size") pushed that check out to cover every corner
- * through nearly the whole collapse, not just its opening instant: the
- * camera keeps turning the whole time, so the reach a corner needs keeps
- * growing right alongside it, and by the time even 512 stopped covering
- * the worst corner (around BOOT_ANIM_MS itself) ink had already faded the
- * picture to almost nothing anyway - so 1024 (4x "full size") is no
- * longer chasing corner coverage for its own sake, just going bigger
- * because bigger is what was asked for next. Past BOOT_ANIM_SHRINK_PEAK_Q8
- * on purpose too - SETTLE grows into this floor rather than shrinking
- * toward it, same math (boot_anim_shrink_to_floor_q8() does not care
- * which direction floor_q8 sits relative to PEAK), just the opposite of
- * every other use of "settle" in this file. */
-#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 1024
+ * The panel-fit test below has never applied to the floor and still does
+ * not here - it exists because the CURVE clipping mid-shape looks broken,
+ * but the floor has had no edge since before any of this shrinking
+ * existed (see BOOT_ANIM_GRID_RINGS's own comment): rings running past
+ * the panel and fading into nothing is the intended look. So this value
+ * is not a safety ceiling either - it is sized to a real requirement,
+ * worked out numerically rather than by eye: for every one of the four
+ * panel corners, at every moment of the whole animation (BOOT_ANIM_MS,
+ * stepped finely), invert the floor's own projection (linear at t=0, so
+ * exactly invertible) to find how many world units of reach that corner
+ * needs, and take the largest value found anywhere. That maximum was
+ * 14.17 units, at t=5720 - not, as it happens, at the very start (t=0
+ * itself needs 11.93, its own local peak, from the camera's ORIGINAL
+ * fixed position before the orbit's drift begins) - so the true worst
+ * moment is late in the collapse, where the camera's own extra turn (see
+ * BOOT_ANIM_PHI_EXTRA_PHASE) has pushed the projection closest to edge-on.
+ * 600/256 gives a reach of BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12
+ * * 600 >> 8 = 16.4 units - comfortable margin over 14.17, everywhere,
+ * always. */
+#define BOOT_ANIM_GRID_SHRINK_Q8 600
 
 static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 {
-    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_GRID_SHRINK_FLOOR_Q8);
+    (void)now_ms;
+    return BOOT_ANIM_GRID_SHRINK_Q8;
 }
 
 /*---------------------------------------------------------------------------
