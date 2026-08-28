@@ -647,7 +647,7 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
 #define BOOT_ANIM_TITLE     "Autana"
 #define BOOT_ANIM_TITLE_LEN 6
 
-#define BOOT_ANIM_TITLE_SCALE 3    /* glyph scale - see gfx_text_font()   */
+#define BOOT_ANIM_TITLE_SCALE 5    /* glyph scale - see gfx_text_font()   */
 #define BOOT_ANIM_TITLE_GAP   3    /* extra px of tracking between glyphs */
 
 /* The viewer's frame this whole section lays out in - see this section's
@@ -688,9 +688,18 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
  * (BOOT_ANIM_TITLE_LEN cells of 8*SCALE+GAP, less one trailing GAP, by
  * 8*SCALE) - gfx_text_font()'s (x, y) is a corner, not a centre - and
  * nudged down by half that box's own height again so the word's CENTRE,
- * not its top edge, sits on the line. */
-#define BOOT_ANIM_TITLE_VIEW_X 243
-#define BOOT_ANIM_TITLE_VIEW_Y 58
+ * not its top edge, sits on the line.
+ *
+ * SCALE went up (3 -> 5, on request - the word wanted to read bigger)
+ * without moving the golden point itself: (322.5, 70) is that point,
+ * unchanged, and X/Y below are still centred on it. What DID move is how
+ * far back from R1's own centre X sits, because the box is bigger now -
+ * at the pure golden-centred X the word's own right edge landed a couple
+ * of pixels past BOOT_ANIM_TITLE_VIEW_W, failing
+ * test_the_title_stays_on_the_panel_once_visible(). Nudged a little
+ * further left than that strictly requires, for margin. */
+#define BOOT_ANIM_TITLE_VIEW_X 185
+#define BOOT_ANIM_TITLE_VIEW_Y 50
 
 #define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
                                             * after the one before it       */
