@@ -427,6 +427,24 @@ void test_present_completes(void)
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1000, (int)elapsed_us,
         "present returned implausibly fast - did it actually wait for the DMA?");
     TEST_ASSERT_LESS_THAN_INT(500000, (int)elapsed_us);
+
+    /* The 500,000 us bound above is a sanity check, not a budget - loose
+     * enough to only catch a hang or a near-hang. A real full-frame present
+     * has a far tighter, measured price: two readings logged per capture
+     * (this test and test_full_present_cost_splits_into_bus_time_and_-
+     * overhead's own present_us both send the whole seven-band frame) come
+     * to 18,180/18,444, 18,363/18,094, 18,364/18,094 and 18,363/18,095 us
+     * across four captures - everything between 18,094 and 18,444 us, under
+     * 2% apart. 19,500 us leaves about 5.7% over the observed maximum:
+     * enough that ordinary scheduling jitter on a seven-band send does not
+     * trip this, while still catching the bus clock regressing, or the
+     * seven bands drifting back towards the un-pipelined per-band price -
+     * see the block comment further down this file, above
+     * test_an_unchanged_frame_costs_almost_nothing, for the two prices a
+     * band can have. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(19500, (int)elapsed_us,
+        "a full-frame present cost more than its observed price - the bus "
+        "clock may have regressed, or the seven bands stopped pipelining");
 }
 
 void test_repeated_presents_stay_in_sync(void)
@@ -446,7 +464,30 @@ void test_repeated_presents_stay_in_sync(void)
 
 /* The panel refreshes from its own GRAM, so a band that is not sent keeps
  * showing what it last received. These verify the saving is real and measured
- * on the bus, not merely assumed from the flag bookkeeping. */
+ * on the bus, not merely assumed from the flag bookkeeping.
+ *
+ * Every timing assertion below is a RATIO against a reference measured in
+ * the same run - "under a tenth of a full frame", "cheaper than a whole
+ * band" - which is what makes them immune to the flash-layout lottery
+ * suite_sand.c's simulation tests ride (measured there at ~4%, and now
+ * suspected to be quantised into two states rather than continuous - see
+ * docs/Sand/Performance-Tuning-Attempts.md's "the layout lottery is
+ * quantised"). But a ratio is structurally blind to a uniform slowdown: if
+ * the panel clock dropped or the bus degraded, every figure here would
+ * shrink or grow together and every one of these ratios would still pass.
+ * An absolute budget catches exactly that, so most of the tests below carry
+ * BOTH - the ratio asserts the mechanism (gathering beats a band, a partial
+ * band beats a whole one), the absolute asserts the cost has not drifted.
+ *
+ * Absolute budgets are affordable here in a way they are not for
+ * suite_sand.c: these tests are BUS-BOUND, not layout-bound. Four device
+ * captures of four different builds put the full-band reference at 3,405 /
+ * 3,405 / 3,404 / 3,406 us - a 0.06% spread - so a number pegged here is
+ * pegged to the QSPI clock, not to wherever the linker happened to put a
+ * function this build. Each budget below is set above its OWN test's
+ * observed maximum across those four captures, with a margin sized to that
+ * test's own spread rather than one blanket percentage - see each
+ * assertion's comment for its own captures and margin. */
 
 static int64_t time_present(void)
 {
@@ -470,6 +511,18 @@ static void test_an_unchanged_frame_costs_almost_nothing(void)
     TEST_ASSERT_LESS_THAN_MESSAGE((int)(full / 10), (int)unchanged,
         "a frame in which nothing changed must skip the bus entirely, not "
         "resend 322 KiB of identical pixels");
+
+    /* Measures 3-4 us across four device captures - checking dirty_row_-
+     * is_dirty() for seven rows and finding all seven clean. A ratio
+     * against `full` cannot usefully tighten past that: the interesting
+     * regression here is not "10% slower" but "an unchanged frame started
+     * sending pixels again", which would jump this into the thousands, not
+     * nudge it. 50 us is generous on purpose - it is still two orders of
+     * magnitude below a single band - because the point of this assertion
+     * is that gap, not a tight peg on a number too small to peg tightly. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(50, (int)unchanged,
+        "an unchanged frame's cost grew past what a clean dirty-check should "
+        "ever take - did it start touching the bus?");
 }
 
 /* Decomposes a full-screen gfx_present() into raw QSPI bus time versus
@@ -542,6 +595,16 @@ static void test_a_partial_change_costs_less_than_a_full_frame(void)
         "them - this is the whole point of dirty tracking");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, (int)one_band,
         "but it must still actually send something");
+
+    /* One band, un-pipelined - the same reference every ratio test below
+     * this one measures, and the tightest of the lot: 3,400 / 3,398 / 3,398
+     * / 3,399 us across four captures, a 0.06% spread. 3,550 us leaves
+     * about 4.4% over the observed maximum, tight because the reference
+     * itself is this stable - a looser margin here would just be slack that
+     * a real regression could hide in. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(3550, (int)one_band,
+        "one band alone cost more than its stable observed price - the bus "
+        "clock or the QSPI setup may have regressed");
 }
 
 /* Every ratio test from here through test_two_far_corners_cost_less_than_
@@ -597,6 +660,16 @@ static void test_a_narrow_change_costs_less_than_a_full_band(void)
         "a strip a fraction of the band's width must cost less than "
         "claiming the whole band, or the gather-copy path is not paying "
         "for itself");
+
+    /* 757 / 750 / 766 / 743 us across four captures - a 3% spread, wider
+     * than the full-band reference because this path does a memcpy into
+     * gather_buf on top of the same DMA wait, and that copy is what varies.
+     * 850 us leaves about 11% over the observed maximum: room for that
+     * spread plus some, without being loose enough to miss the gather path
+     * regressing back towards full-band cost. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(850, (int)narrow,
+        "the gathered narrow strip cost more than its observed price - the "
+        "gather-copy path may have regressed");
 }
 
 /* The box is bounded by area, not width alone, specifically so a
@@ -635,6 +708,17 @@ static void test_a_short_wide_change_costs_less_than_a_full_band(void)
         "a box short enough in height must cost less than claiming the "
         "whole band, even at most of its width - orientation must not "
         "matter to whether gathering pays off");
+
+    /* 562 / 605 / 576 / 591 us across four captures - the widest spread of
+     * any gathered-piece test here, about 7.6%, from the same memcpy-plus-
+     * DMA-wait shape as the narrow strip above but at a different aspect
+     * ratio. 700 us leaves about 16% over the observed maximum, wider than
+     * the narrow strip's margin because this test's own captures already
+     * moved twice as much - the margin tracks the spread it is guarding,
+     * not a fixed percentage. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(700, (int)wide,
+        "the gathered wide-short box cost more than its observed price - "
+        "the gather-copy path may have regressed");
 }
 
 /* Full width, most of a band's height: 368x48 is many times
@@ -742,6 +826,16 @@ static void test_two_far_corners_cost_less_than_a_full_band(void)
     TEST_ASSERT_LESS_THAN_MESSAGE((int)full_band, (int)two_corners,
         "two small, far-apart clusters sent independently together must "
         "still cost less than the whole band");
+
+    /* 1,914 / 1,917 / 1,916 / 1,914 us across four captures - a 0.16%
+     * spread, nearly as tight as the full-band reference itself, because
+     * two independent gather-and-waits dominated by DMA time leave little
+     * room for the copy-side jitter the single-piece gathers above show.
+     * 2,000 us leaves about 4.3% over the observed maximum - tight, to
+     * match how tight the reference is. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(2000, (int)two_corners,
+        "two far corners cost more than their observed price - one of the "
+        "two independent gathers may have regressed");
 }
 
 /* Three separated marks, not two - one more than ROW_MAX_RUNS/
@@ -803,6 +897,19 @@ static void test_three_far_apart_marks_falls_back_at_the_current_cap(void)
 
     ESP_LOGI(TAG, "present: full band %lld us, three %dx%d marks %lld us",
              (long long)full_band, size, size, (long long)three_marks);
+
+    /* No ratio assertion against full_band, on purpose - see the comment
+     * above this test: at the shipped cap this falls back to run_box()'s
+     * coarse union, and whether that fallback beats the full band is an
+     * open question this test exists to measure, not assume. But an
+     * absolute budget is still safe to peg: 869 / 882 / 875 / 877 us across
+     * four captures, a 1.5% spread. 980 us leaves about 11% over the
+     * observed maximum, wide enough that a future cap change landing on a
+     * different, still-cheaper fallback shape does not trip it, while still
+     * catching the bus itself slowing down. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(980, (int)three_marks,
+        "three far-apart marks' fallback send cost more than its observed "
+        "price");
 }
 
 /* A small mark plus a wide one, in the same coarse run, sized to put the
@@ -861,6 +968,18 @@ static void test_a_near_budget_split_crosses_the_gather_threshold(void)
 
     ESP_LOGI(TAG, "present: full band %lld us, near-budget split %lld us",
              (long long)full_band, (long long)near_budget);
+
+    /* No ratio assertion, on purpose - see the comment above this test:
+     * whether gathering at this size actually helps is exactly the open
+     * question a sweep of GATHER_MAX_PIXELS is for, so nothing here should
+     * assume the answer. An absolute budget is still safe: 1,671 / 1,800 /
+     * 1,715 / 1,754 us across four captures, a 7.7% spread - wider than the
+     * single-piece gathers above because this is two independent sends (the
+     * small mark plus the wide one) whose relative timing depends on which
+     * side of GATHER_MAX_PIXELS the wide piece lands on. 2,050 us leaves
+     * about 14% over the observed maximum, sized to that wider spread. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(2050, (int)near_budget,
+        "the near-budget split cost more than its observed price");
 }
 
 /* Two small marks inside the SAME 92px cell, far enough apart to leave a
@@ -904,6 +1023,15 @@ static void test_two_marks_in_one_cell_cost_less_than_the_coarse_box(void)
     TEST_ASSERT_LESS_THAN_MESSAGE((int)full_band, (int)two_marks,
         "two small marks separated by a real gap inside one cell must cost "
         "less than sending the coarse box spanning both");
+
+    /* 1,958 / 1,960 / 1,959 / 1,959 us across four captures - a 0.1%
+     * spread, the same shape as two-far-corners above and for the same
+     * reason: two independent gather-and-waits, DMA-dominated, with little
+     * room for copy-side jitter. 2,050 us leaves about 4.6% over the
+     * observed maximum, tight to match. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(2050, (int)two_marks,
+        "two marks in one cell cost more than their observed price - the "
+        "leaf-refined split may have regressed");
 }
 
 static void test_drawing_marks_what_it_touched(void)
