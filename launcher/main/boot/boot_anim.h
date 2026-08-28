@@ -1372,13 +1372,40 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
  * BOOT_ANIM_PHI_EXTRA_PHASE) has pushed the projection closest to edge-on.
  * 600/256 gives a reach of BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12
  * * 600 >> 8 = 16.4 units - comfortable margin over 14.17, everywhere,
- * always. */
+ * always. This is the FLOOR the grid never goes under, not the whole
+ * story - see boot_anim_grid_shrink_q8() just below for how
+ * boot_anim_motif_shrink_q8()'s own pulse still rides on top of it. */
 #define BOOT_ANIM_GRID_SHRINK_Q8 600
 
+/* The grid IS the plane - the coordinate system the curve's values and the
+ * axes are drawn against - not a separate decoration next to it. A grid
+ * that ignored boot_anim_motif_shrink_q8() entirely, the way a flat
+ * BOOT_ANIM_GRID_SHRINK_Q8 constant did, was drawing "1 unit" at a
+ * different pixel size than the curve and axes were using for their own
+ * "1 unit" at that same instant, any time the motif was mid-pulse - a
+ * grid that does not track the domain it represents is not really
+ * representing it. So the motif's own GROW/HOLD/SETTLE shape still
+ * multiplies in here: at boot_anim_motif_shrink_q8()'s baseline (256,
+ * i.e. before anything has grown) this reduces to exactly
+ * BOOT_ANIM_GRID_SHRINK_Q8, and while the motif swells past that toward
+ * BOOT_ANIM_SHRINK_PEAK_Q8 the grid swells right along with it - both
+ * readings of "scale" moving together, the way they should.
+ *
+ * What it does NOT do is follow the motif all the way down to
+ * BOOT_ANIM_SHRINK_FLOOR_Q8 during the collapse: that floor was tuned
+ * for the CURVE's own panel-fit safety once the camera has turned, a
+ * completely different constraint from what the grid's own corner
+ * coverage needs (see BOOT_ANIM_GRID_SHRINK_Q8's own comment) - so this
+ * is clamped to never go BELOW that base value, only ever above it. The
+ * grid reacts to the same scale the curve and axes do; it just is not
+ * allowed to react itself into leaving the panel's corners uncovered
+ * again. */
 static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 {
-    (void)now_ms;
-    return BOOT_ANIM_GRID_SHRINK_Q8;
+    const int32_t pulsed = ((int32_t)BOOT_ANIM_GRID_SHRINK_Q8 *
+                            boot_anim_motif_shrink_q8(now_ms)) >> 8;
+    return pulsed > BOOT_ANIM_GRID_SHRINK_Q8 ? (int)pulsed
+                                              : BOOT_ANIM_GRID_SHRINK_Q8;
 }
 
 /*---------------------------------------------------------------------------
