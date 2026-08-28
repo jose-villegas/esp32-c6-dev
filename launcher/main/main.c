@@ -253,21 +253,28 @@ static void show_post_failures(void)
  * home to leave one. */
 static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
 {
+    /* Which edge the gesture lives on tracks the board's current
+     * orientation - see exit_edge_for_quarter()'s own comment - so it is
+     * recomputed each call rather than cached, the same as display_shell_quarter()
+     * itself is cheap enough to call freely (it only reads a struct field).
+     * Needed by both branches below: the strip is chrome the shell shows
+     * wherever it's drawing, not a hint that only exists once there is an
+     * app open to swipe away from - a board sitting on the launcher should
+     * still show the same edge, so the affordance reads consistently no
+     * matter what's on screen. */
+    const gesture_edge_t exit_edge = exit_edge_for_quarter(display_shell_quarter());
+
     if (*current == NULL) {
         const int chosen = ui_launcher_frame(input);
         if (chosen >= 0 && chosen < apps_registered) {
             *current = apps[chosen];
             ESP_LOGI(TAG, "Starting %s", (*current)->name);
             (*current)->enter();
+        } else {
+            draw_home_hint(exit_edge);
         }
         return;
     }
-
-    /* Which edge the gesture lives on tracks the board's current
-     * orientation - see exit_edge_for_quarter()'s own comment - so it is
-     * recomputed each call rather than cached, the same as display_shell_quarter()
-     * itself is cheap enough to call freely (it only reads a struct field). */
-    const gesture_edge_t exit_edge = exit_edge_for_quarter(display_shell_quarter());
 
     if (gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
         ESP_LOGI(TAG, "Leaving %s", (*current)->name);
