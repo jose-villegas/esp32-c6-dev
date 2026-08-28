@@ -248,6 +248,22 @@ static void show_post_failures(void)
 
 /* --- main --------------------------------------------------------------- */
 
+/* Common tail of leaving whichever app is running, however the decision to
+ * leave was made - the swipe gesture below, or an opted-out app's own PWR
+ * fallback. */
+static void leave_app(const app_t **current, input_t *input)
+{
+    ESP_LOGI(TAG, "Leaving %s", (*current)->name);
+    (*current)->exit();
+    *current = NULL;
+    /* The app's output is still in the framebuffer, so the launcher must
+     * repaint even though its own description has not changed. */
+    ui_invalidate();
+    /* Draw it immediately, so the frame presented below is the home screen
+     * rather than the app's last one. */
+    ui_launcher_frame(input);
+}
+
 /* Whichever of the launcher or the current app owns this frame, and the
  * transitions between them: choosing an app from the launcher, or swiping
  * home to leave one. */
@@ -281,15 +297,20 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
      * provide its own way back to the launcher. */
     if ((*current)->home_gesture &&
         gesture_is_home_swipe(input, exit_edge, GFX_WIDTH, GFX_HEIGHT)) {
-        ESP_LOGI(TAG, "Leaving %s", (*current)->name);
-        (*current)->exit();
-        *current = NULL;
-        /* The app's output is still in the framebuffer, so the launcher must
-         * repaint even though its own description has not changed. */
-        ui_invalidate();
-        /* Draw it immediately, so the frame presented below is the home
-         * screen rather than the app's last one. */
-        ui_launcher_frame(input);
+        leave_app(current, input);
+        return;
+    }
+
+    /* A plain PWR press is a temporary, shell-level fallback for an app that
+     * opted out of the swipe gesture - today, only app_sand.c, whose own
+     * comment on home_gesture promises "a deliberate control of its own"
+     * still to come. Checked before frame() runs, the same as the swipe
+     * check above, so an app that also reads input->power.pressed for
+     * something else - app_sand.c's own handle_brush_input(), which toggles
+     * erase on it - never sees the press that just exited it: that frame's
+     * frame() call is skipped entirely, not merely overridden. */
+    if (!(*current)->home_gesture && input->power.pressed) {
+        leave_app(current, input);
         return;
     }
 
