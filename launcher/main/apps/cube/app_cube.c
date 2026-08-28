@@ -13,6 +13,7 @@
  *===========================================================================*/
 
 #include <stdint.h>
+#include <stdio.h>
 
 #include "../../app.h"
 #include "../../gfx/gfx.h"
@@ -78,6 +79,17 @@ static int frame_x0, frame_y0, frame_x1, frame_y1;
  * of it. Only meaningful while bbox_valid; see cube_frame(). */
 static int bbox_x0, bbox_y0, bbox_x1, bbox_y1;
 static bool bbox_valid;
+
+/* On-screen framerate readout - the other half of what makes the toggle
+ * above worth having: main.c's own report_fps() only ever reaches a serial
+ * console, so seeing partial_updates actually change anything used to mean
+ * a laptop plugged in next to the board. Windowed on dt_ms rather than
+ * esp_timer_get_time() like report_fps() does, so this needs nothing beyond
+ * what cube_frame() is already handed. */
+#define FPS_WINDOW_MS 500
+static uint32_t fps_frame_count;
+static uint32_t fps_window_elapsed_ms;
+static double   fps_value;
 
 static inline uint8_t clamp_to_byte(S3L_Unit v)
 {
@@ -152,12 +164,20 @@ static void cube_enter(void)
      * would defeat the point of it, same as show_orientation in
      * app_diagnostics.c. */
     bbox_valid = false;
+
+    /* Unlike partial_updates, the readout itself starts over every visit -
+     * a stale fps_value left over from a previous run would show a number
+     * with nothing behind it for up to FPS_WINDOW_MS. */
+    fps_frame_count = 0;
+    fps_window_elapsed_ms = 0;
+    fps_value = 0.0;
 }
 
-/* Draws the small "partial updates" checkbox over whatever the cube just
- * drew, via ui.c/microui exactly as app_diagnostics.c's own toggle page
- * does - the point of this app is proving that pairing ports unchanged to a
- * renderer that has nothing else in common with a settings screen.
+/* Draws the small "partial updates" checkbox and the fps readout over
+ * whatever the cube just drew, via ui.c/microui exactly as
+ * app_diagnostics.c's own toggle page does - the point of this app is
+ * proving that pairing ports unchanged to a renderer that has nothing else
+ * in common with a settings screen.
  *
  * UI_NO_BACKGROUND is what lets the spinning cube show through everywhere
  * this window doesn't itself paint - see app_sand.c's draw_palette() for
@@ -184,6 +204,11 @@ static void draw_toggle(const input_t *input)
         mu_checkbox(ctx, "partial updates (or BOOT)", &on);
         partial_updates = on;
 
+        char fps_line[16];
+        snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
+        mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 4);
+        mu_text(ctx, fps_line);
+
         mu_end_window(ctx);
     }
 
@@ -192,6 +217,23 @@ static void draw_toggle(const input_t *input)
 
 static void cube_frame(uint32_t dt_ms, const input_t *input)
 {
+    /* fps_value only actually changes once a window closes, so it reads as
+     * a settled average rather than jittering with every frame's own dt_ms -
+     * the same reason report_fps() in main.c windows instead of reporting
+     * per frame. An occasional dt_ms of 0 (two frames landing in the same
+     * millisecond) is harmless: fps_frame_count keeps counting them and the
+     * window still closes once the rest add up. Only every single frame
+     * landing under 1 ms, sustained, would stall it - not a real risk for a
+     * scene this heavy to rasterize. */
+    fps_frame_count++;
+    fps_window_elapsed_ms += dt_ms;
+    if (fps_window_elapsed_ms >= FPS_WINDOW_MS) {
+        fps_value = (double)fps_frame_count * 1000.0 /
+                    (double)fps_window_elapsed_ms;
+        fps_frame_count = 0;
+        fps_window_elapsed_ms = 0;
+    }
+
     elapsed_ms += dt_ms;
 
     cube.transform.rotation.y =
