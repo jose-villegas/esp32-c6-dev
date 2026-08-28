@@ -567,15 +567,20 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
  *
  * R1 is the first rectangle the spiral sets aside, on the side opposite
  * the biggest square - the natural home for something that reads as
- * separate from the motif growing in that square. The word centres on R1
- * horizontally, but sits near its TOP rather than centred on it - square
- * 2's own top edge, which is R1's top edge too, both cut from the frame's
- * shared top at once. BOOT_ANIM_TITLE_VIEW_X/Y is that point, minus half
- * the word's own box (BOOT_ANIM_TITLE_LEN cells of 8*SCALE+GAP, less one
- * trailing GAP, by 8*SCALE) - gfx_text_font()'s (x, y) is a corner, not a
- * centre - and nudged down by half that box's own height again so the
- * word's CENTRE, not its top edge, sits on the line. */
-#define BOOT_ANIM_TITLE_VIEW_X 283
+ * separate from the motif growing in that square. The word's height comes
+ * from R1: near its TOP rather than centred on it - square 2's own top
+ * edge, which is R1's top edge too, both cut from the frame's shared top
+ * at once. Its X is pulled back from R1's own centre toward the frame's,
+ * by eye against a render, rather than left sitting as far right as R1's
+ * centre put it - both the word and the motif read as too far off to one
+ * side there; see BOOT_ANIM_FINALE_ORIGIN_VIEW_X's own comment for the
+ * same correction on the motif's side, a considerably bigger one.
+ * BOOT_ANIM_TITLE_VIEW_X/Y is that point, minus half the word's own box
+ * (BOOT_ANIM_TITLE_LEN cells of 8*SCALE+GAP, less one trailing GAP, by
+ * 8*SCALE) - gfx_text_font()'s (x, y) is a corner, not a centre - and
+ * nudged down by half that box's own height again so the word's CENTRE,
+ * not its top edge, sits on the line. */
+#define BOOT_ANIM_TITLE_VIEW_X 243
 #define BOOT_ANIM_TITLE_VIEW_Y 58
 
 #define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
@@ -1009,14 +1014,16 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * and BOOT_ANIM_TITLE_VIEW_X's for the golden rectangle spiral this and the
  * word are both now placed from.
  *
- * The corner square 1 and square 2 share: square 1 is the whole big square
- * the motif spirals inward through, and square 2's own top edge - the
- * first cut back into it - lands exactly on this point where it meets the
- * dividing line square 1 sits behind. Not the innermost (4th-division)
- * vertex an earlier attempt anchored to: that one wound up close enough to
- * the word above it to collide with it. boot_anim_view() is what turns
- * this VIEW point back into ox/oy. */
-#define BOOT_ANIM_FINALE_ORIGIN_VIEW_X 277
+ * X is square 1's own centre - square 1 being the whole big square the
+ * motif spirals inward through - not the divider where square 1 meets
+ * square 2 an earlier attempt anchored to: that put the motif at 62% of
+ * the frame's own width, which read as pinned to the divider rather than
+ * settled in the square it names, on a render pointing at the difference
+ * directly. Y is unchanged: square 2's own top edge, the corner it shares
+ * with square 1 along that divider - only X moved, toward square 1's own
+ * middle. boot_anim_view() is what turns this VIEW point back into
+ * ox/oy. */
+#define BOOT_ANIM_FINALE_ORIGIN_VIEW_X 138
 #define BOOT_ANIM_FINALE_ORIGIN_VIEW_Y 217
 
 /* How far the two floor-plane axes reach once unbounded, matching the
