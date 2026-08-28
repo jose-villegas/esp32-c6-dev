@@ -65,9 +65,17 @@ static uint32_t    elapsed_ms;
  * the whole framebuffer every frame (like every other app) or only the
  * pixels the cube actually touches, using gfx_mark_dirty() instead of
  * relying on gfx_clear()'s implicit "everything changed". Off by default -
- * same behaviour as before this existed - and flipped by a BOOT tap or the
- * checkbox draw_toggle() overlays; see cube_frame() and draw_toggle(). */
+ * same behaviour as before this existed. Flipped from inside draw_menu(),
+ * not directly by BOOT any more - see menu_open below and cube_frame(). */
 static bool partial_updates;
+
+/* Whether the BOOT-opened menu (draw_menu()) is showing instead of the
+ * cube. The normal view renders only the cube and the fps counter - see
+ * cube_frame()'s own comment - and everything else, right now just the
+ * partial_updates toggle, lives behind BOOT in here, the same
+ * one-physical-button-one-screen-level-concern split app_diagnostics.c's
+ * page cycling and app_sand.c's SAND_UI_MENU/RUNNING split already use. */
+static bool menu_open;
 
 /* This frame's drawn-pixel bounds, accumulated by shade_pixel() while
  * partial_updates is on - reset to an empty range at the top of
@@ -177,6 +185,11 @@ static void cube_enter(void)
     fps_window_elapsed_ms = 0;
     fps_value = 0.0;
 
+    /* Always re-enter on the cube view, never with the menu left open from
+     * a previous visit - the same reason app_diagnostics.c resets `page` to
+     * 0 here instead of leaving it wherever a past visit left it. */
+    menu_open = false;
+
     /* Baseline for the orientation check in cube_frame() - without this, a
      * rotation that happened while some OTHER app was showing would read as
      * "changed since last frame" on the very first frame back in the cube,
@@ -198,15 +211,15 @@ static mu_Color mu_color_hex(uint32_t rgb)
 }
 
 /* Lays out one full-width row `height` tall, paints it BACKGROUND_RGB, and
- * hands the same rect back to whichever mu_checkbox()/mu_text() call comes
- * next via mu_layout_set_next() - see draw_toggle()'s own comment for why a
- * row that changes needs an opaque backing of its own the UI_NO_BACKGROUND
- * window it sits in does not provide. mu_layout_set_next()'s `relative`
- * argument is 0 (ABSOLUTE): `row` already came from a real mu_layout_next()
- * call just above, in the same coordinate space that function's normal
- * row-advance path would hand back, so re-issuing it verbatim is correct -
- * the same trick app_sand.c's own palette tiles and ui_launcher.c's menu
- * buttons already use to place a widget at a rect they computed themselves. */
+ * hands the same rect back to whichever mu_text() call comes next via
+ * mu_layout_set_next() - see draw_fps()'s own comment for why the fps row
+ * needs an opaque backing of its own the UI_NO_BACKGROUND window it sits in
+ * does not provide. mu_layout_set_next()'s `relative` argument is 0
+ * (ABSOLUTE): `row` already came from a real mu_layout_next() call just
+ * above, in the same coordinate space that function's normal row-advance
+ * path would hand back, so re-issuing it verbatim is correct - the same
+ * trick app_sand.c's own palette tiles and ui_launcher.c's menu buttons
+ * already use to place a widget at a rect they computed themselves. */
 static mu_Rect draw_overlay_row(mu_Context *ctx, int height)
 {
     mu_layout_row(ctx, 1, (int[]){ -1 }, height);
@@ -216,54 +229,47 @@ static mu_Rect draw_overlay_row(mu_Context *ctx, int height)
     return row;
 }
 
-/* Draws the small "partial updates" checkbox and the fps readout over
- * whatever the cube just drew, via ui.c/microui exactly as
- * app_diagnostics.c's own toggle page does - the point of this app is
- * proving that pairing ports unchanged to a renderer that has nothing else
- * in common with a settings screen.
+/* The persistent HUD: the cube and, over it, the fps line - nothing else
+ * renders while the menu is closed (see cube_frame()). Drawn via
+ * ui.c/microui exactly as app_diagnostics.c's own toggle page is - the
+ * point of this app is proving that pairing ports unchanged to a renderer
+ * that has nothing else in common with a settings screen.
  *
  * UI_NO_BACKGROUND is what lets the spinning cube show through everywhere
  * this window doesn't itself paint - see app_sand.c's draw_palette() for
  * the precedent. Unlike that panel's frozen sand, the cube keeps moving
  * underneath every frame, which is exactly the case ui_end()'s own comment
  * calls out: it repaints whenever "something else has already dirtied the
- * screen", so the checkbox stays correctly composited over a background
+ * screen", so the fps line stays correctly composited over a background
  * that never stops changing, with no special handling needed here for that.
  *
- * BUT: mu_text() and mu_checkbox()'s own label draw only their ink, no
- * background of their own (mu_checkbox()'s box icon is the one exception -
- * see mu_draw_control_frame() inside it). Under a full gfx_clear() every
- * frame that is invisible, because the whole screen is blank before either
- * one ever draws. Under partial_updates it is not: cube_frame() only erases
- * the CUBE's own last bounding box, never this row's, so when the fps line
- * below repaints - it changes shape every FPS_WINDOW_MS as the digits do -
- * whatever of the old digits the new ones do not happen to overdraw was
- * left on screen. draw_overlay_row() is the fix: an opaque box behind each
- * row, painted through the same mu command list this whole module already
- * hashes to skip unneeded repaints, so it costs nothing on the (large
- * majority of) frames where neither row's content actually changed.
+ * BUT: mu_text() draws only its own ink, no background of its own. Under a
+ * full gfx_clear() every frame that is invisible, because the whole screen
+ * is blank before it ever draws. Under partial_updates it is not:
+ * cube_frame() only erases the CUBE's own last bounding box, never this
+ * row's, so when the fps line repaints - it changes shape every
+ * FPS_WINDOW_MS as the digits do - whatever of the old digits the new ones
+ * do not happen to overdraw was left on screen. draw_overlay_row() is the
+ * fix: an opaque box behind the row, painted through the same mu command
+ * list this whole module already hashes to skip unneeded repaints, so it
+ * costs nothing on the (large majority of) frames where the fps value did
+ * not actually change.
  *
  * UI_TEXT_OUTLINED is app_sand.c's palette-label fix for the same reason it
  * was built for: a label with no halo of its own would wash out against
  * whichever of the cube's shifting corner colours happens to sit behind it.
- * Left in place even now that both rows carry their own backing - a
- * NO_BACKGROUND window is still one BOOT tap away whenever partial_updates
- * is off, and the halo costs nothing extra when the backing is already
- * opaque. */
-static void draw_toggle(const input_t *input)
+ * Left in place even with the row's own opaque backing - a NO_BACKGROUND
+ * window is still one BOOT tap away whenever partial_updates is off, and
+ * the halo costs nothing extra when the backing is already opaque. */
+static void draw_fps(const input_t *input)
 {
     mu_Context *ctx = ui_context();
     ui_begin(input);
     ui_set_text_style(UI_TEXT_OUTLINED);
 
-    if (ui_begin_screen(ctx, "Cube Settings",
+    if (ui_begin_screen(ctx, "Cube HUD",
                         MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                         MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
-        draw_overlay_row(ctx, UI_ROW_HEIGHT);
-        int on = partial_updates;
-        mu_checkbox(ctx, "partial updates (or BOOT)", &on);
-        partial_updates = on;
-
         draw_overlay_row(ctx, gfx_text_height() + 4);
         char fps_line[16];
         snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
@@ -275,8 +281,116 @@ static void draw_toggle(const input_t *input)
     ui_end(UI_NO_BACKGROUND);
 }
 
+#define MENU_BTN_W 300
+#define MENU_BTN_H UI_ROW_HEIGHT
+#define MENU_BTN_GAP 20
+
+/* The BOOT-opened menu - currently just the partial_updates toggle, as one
+ * centered bezel button, but the place any future option belongs rather
+ * than growing the persistent HUD in draw_fps(). See cube_frame() for why
+ * BOOT opens this instead of flipping the toggle directly, and menu_open's
+ * own comment for the one-button-one-screen-level-concern precedent this
+ * follows.
+ *
+ * Modeled on app_sand.c's own draw_menu(): one full-screen OPAQUE window
+ * (ui_end(BACKGROUND_RGB), not UI_NO_BACKGROUND), because cube_frame() does
+ * not draw the cube at all while menu_open is true - see there. That is
+ * what makes this simpler than draw_fps(): no spinning cube underneath to
+ * stay composited over, so none of that function's ghosting/ordering
+ * concerns apply here.
+ *
+ * ui_set_button_style(UI_BUTTON_BEZEL) is required, not automatic - ui_begin()
+ * resets the button style to UI_BUTTON_FLAT every frame (see ui.h), so a
+ * bezelled button needs asking for on every frame that draws one, the same
+ * as ui_launcher.c's own menu does. Both the button and the hint below it
+ * are placed via mu_layout_set_next() at an absolute rect rather than
+ * through mu_layout_row()'s normal top-down flow, the same reason and the
+ * same trick app_sand.c's own two-button boot menu uses: a single small
+ * control centered mid-screen has no natural row to sit in. */
+static void draw_menu(const input_t *input)
+{
+    mu_Context *ctx = ui_context();
+    ui_begin(input);
+    ui_set_button_style(UI_BUTTON_BEZEL);
+
+    if (ui_begin_screen(ctx, "Cube Menu",
+                        MU_OPT_NOTITLE | MU_OPT_NORESIZE |
+                        MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
+        const int hint_h = gfx_text_height() + 4;
+        const int total_h = MENU_BTN_H + MENU_BTN_GAP + hint_h;
+        const int top = (ui_height() - total_h) / 2;
+
+        char label[24];
+        snprintf(label, sizeof label, "PARTIAL UPDATES: %s",
+                 partial_updates ? "ON" : "OFF");
+
+        mu_layout_set_next(ctx,
+                           ui_centered_rect(ui_width(), MENU_BTN_W, MENU_BTN_H, top),
+                           0);
+        if (mu_button(ctx, label)) {
+            partial_updates = !partial_updates;
+
+            /* Same reason cube_frame()'s BOOT handling forces this on every
+             * open/close of this menu: flipping the toggle mid-visit is
+             * just as much a "the last bbox no longer means anything"
+             * event as opening or closing the menu is. */
+            bbox_valid = false;
+        }
+
+        mu_layout_set_next(ctx,
+                           ui_centered_rect(ui_width(), MENU_BTN_W, hint_h,
+                                            top + MENU_BTN_H + MENU_BTN_GAP),
+                           0);
+        mu_label(ctx, "BOOT to close");
+
+        mu_end_window(ctx);
+    }
+
+    ui_end(BACKGROUND_RGB);
+}
+
 static void cube_frame(uint32_t dt_ms, const input_t *input)
 {
+    /* BOOT opens/closes the menu now, rather than flipping partial_updates
+     * directly - the toggle moved onto its own bezel button inside
+     * draw_menu(). Forcing bbox_valid false on every open AND close matters
+     * for two different reasons: opening replaces the framebuffer with the
+     * menu's own opaque screen (see the early return below), so whatever
+     * the cube's bbox described is no longer even on screen; closing
+     * repaints the cube from scratch into whatever the menu left behind,
+     * which the OLD bbox says nothing about either. */
+    if (input->boot.pressed) {
+        menu_open = !menu_open;
+        bbox_valid = false;
+    }
+
+    /* A shell orientation change moves draw_fps()'s overlay to a different
+     * physical region - ui_end() repaints it at its new spot, but nothing
+     * tells THIS app that the OLD spot, wherever it was, still has fps
+     * pixels sitting in it outside whatever the cube's own bbox_x0..y1
+     * happens to cover. Tracking that region too would mean this file
+     * learning the overlay's geometry, which is ui.c's job, not this app's.
+     * Forcing a full clear instead - exactly what bbox_valid false already
+     * gives the partial-mode branch below - is simpler and correct: a
+     * rotation is a rare, discrete event, not a per-frame cost, so paying
+     * for one full clear on exactly that frame is not something a user
+     * could ever see as a hitch. Runs even while the menu is open: cheap,
+     * and it means whichever frame closes the menu never has to wonder
+     * whether a rotation happened while it was up. */
+    const uint32_t layout_generation = ui_layout_generation();
+    if (layout_generation != last_layout_generation) {
+        last_layout_generation = layout_generation;
+        bbox_valid = false;
+    }
+
+    /* Everything below is the cube view: the fps counter measures ITS
+     * throughput specifically, so counting a frame that only ever drew the
+     * menu would blend two unrelated numbers into one misleading reading. */
+    if (menu_open) {
+        draw_menu(input);
+        return;
+    }
+
     /* fps_value only actually changes once a window closes, so it reads as
      * a settled average rather than jittering with every frame's own dt_ms -
      * the same reason report_fps() in main.c windows instead of reporting
@@ -300,38 +414,6 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
         (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
     cube.transform.rotation.x =
         (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
-
-    /* The BOOT edge, read here rather than left to the checkbox alone, is
-     * the other half of what this app exists to test: the same physical
-     * button app_diagnostics.c pages its two screens with and app_sand.c
-     * opens its palette with, driving a plain on/off instead. Forcing
-     * bbox_valid false on every flip - not just cube_enter()'s first frame -
-     * matters for the same reason: switching INTO partial mode has no
-     * bounds from a partial-mode frame that never ran to erase by, and
-     * switching OUT of it leaves gfx_clear() below to repaint everything
-     * regardless, so there is nothing to lose by clearing the flag either
-     * way. */
-    if (input->boot.pressed) {
-        partial_updates = !partial_updates;
-        bbox_valid = false;
-    }
-
-    /* A shell orientation change moves draw_toggle()'s overlay to a
-     * different physical region - ui_end() repaints it at its new spot, but
-     * nothing tells THIS app that the OLD spot, wherever it was, still has
-     * checkbox/fps pixels sitting in it outside whatever the cube's own
-     * bbox_x0..y1 happens to cover. Tracking that region too would mean
-     * this file learning the overlay's geometry, which is ui.c's job, not
-     * this app's. Forcing a full clear instead - exactly what bbox_valid
-     * false already gives the partial-mode branch below - is simpler and
-     * correct: a rotation is a rare, discrete event, not a per-frame cost,
-     * so paying for one full clear on exactly that frame is not something
-     * a user could ever see as a hitch. */
-    const uint32_t layout_generation = ui_layout_generation();
-    if (layout_generation != last_layout_generation) {
-        last_layout_generation = layout_generation;
-        bbox_valid = false;
-    }
 
     if (partial_updates) {
         /* Erase only what the LAST frame actually drew - not the whole
@@ -375,7 +457,7 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
         bbox_valid = (frame_x1 > frame_x0 && frame_y1 > frame_y0);
     }
 
-    draw_toggle(input);
+    draw_fps(input);
 }
 
 static void cube_exit(void)
