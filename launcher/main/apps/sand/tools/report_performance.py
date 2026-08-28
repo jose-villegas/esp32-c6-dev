@@ -44,7 +44,17 @@ RESULT_RE = re.compile(r"^\S+:\d+:(?P<name>\w+):(?P<status>PASS|FAIL)(?::\s*(?P<
 # tagged "device_tests", always some number of microseconds. Phrasing
 # after the number varies per test ("us per step", "us for the one
 # step", or just "us"), so only the tag and the number are required.
-MEASURE_RE = re.compile(r"device_tests.*?(\d+)\s*us\b")
+#
+# The LAST number on the line is the measurement, not the first. Every
+# sand test logs exactly one, so for those the two rules agree. The gfx
+# tests log a REFERENCE first and their own subject last ("present: full
+# 18444 us, unchanged 3 us") - taking the first there would table the
+# full-frame baseline as though it were the result, which is how these
+# tests stayed out of the report until now. Checked against every
+# device_tests line of capture performance_20260828_014644: nine lines
+# carry more than one figure, all nine are gfx tests, and in all nine the
+# subject is last.
+MEASURE_RE = re.compile(r"device_tests.*(?<![\d.])(\d+)\s*us\b")
 
 
 def parse_budgets(source_path: str) -> dict:
@@ -107,13 +117,19 @@ def main() -> int:
     # knowledge to make an app the "default" caller. Its one caller
     # (main/apps/sand/tools/report_performance.sh) always passes --source
     # explicitly, so requiring it here breaks nothing.
+    # Repeatable: the draw side of a frame is measured in a different suite
+    # from the simulation side (suite_gfx.c vs an app's own suite_*.c), and
+    # a report that shows only one of them hides half the frame. Pass
+    # --source once per suite; budgets from all of them land in one table.
     parser.add_argument(
-        "--source", required=True,
-        help="Path to the file the frame-budget tests live in",
+        "--source", required=True, action="append",
+        help="Path to a file frame-budget tests live in (repeatable)",
     )
     args = parser.parse_args()
 
-    budgets = parse_budgets(args.source)
+    budgets = {}
+    for source in args.source:
+        budgets.update(parse_budgets(source))
     capture = parse_capture(args.capture_path)
 
     # Only tests that both declare a budget AND actually ran this capture -
@@ -152,10 +168,25 @@ def main() -> int:
                      "(not run, or renamed): " + ", ".join(f"`{n}`" for n in only_in_source))
         lines.append("")
     if only_in_capture:
-        lines.append("> Printed a measurement in this capture but declared no budget in "
-                     f"`{args.source}` - likely a perf test that lives in a different "
-                     "source file (pass `--source` to point at it), not necessarily a "
-                     "problem: " + ", ".join(f"`{n}`" for n in only_in_capture))
+        # Listed WITH their measurements, not just by name. Most of these are
+        # suite_gfx.c's draw-path tests, which deliberately assert a RATIO
+        # against a reference measured in the same run ("under a tenth of a
+        # full frame", "cheaper than a whole band") rather than an absolute
+        # microsecond budget - that is what makes them immune to the flash
+        # layout lottery, and it is why they have no budget column to fill.
+        # Their numbers still matter: a present costs as much as a step.
+        lines.append("> Measured in this capture with no fixed budget declared in "
+                     f"{', '.join(f'`{s}`' for s in args.source)}. The draw-path "
+                     "tests in `suite_gfx.c` are here by design - they assert a "
+                     "ratio against a reference measured in the same run, not an "
+                     "absolute number - so read these as measurements, not as "
+                     "passes or failures:")
+        lines.append("")
+        lines.append("| Test | Measured (us) |")
+        lines.append("|---|---:|")
+        for name in only_in_capture:
+            m = capture[name]["measured"]
+            lines.append(f"| `{name}` | {m if m is not None else '?'} |")
         lines.append("")
 
     with open(args.out_path, "w", encoding="utf-8") as f:
