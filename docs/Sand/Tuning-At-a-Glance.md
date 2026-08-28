@@ -1,7 +1,7 @@
 # Tuning at a Glance
 
 The visual map of [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) —
-sixteen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
+seventeen numbered attempts to make a 41,216-cell falling-sand simulation fit its frame
 budgets on a 160 MHz single-core chip with no data cache. The tenth ended at **every
 budget met, none ever raised**; a wave of new materials then put four back over, and
 the eleventh sorted the accident from the feature. The twelfth found a gate that could
@@ -17,7 +17,11 @@ it was meant to be guarding. The sixteenth bisected a drift nobody had attribute
 and found the inlining cliff for the fourth time — one commit had grown a heat
 function past GCC's size heuristic and knocked it out of four callers at once —
 then went looking for the gather heuristic's remaining slack and found there was
-none, only a send path nobody had written. The prose file holds the full
+none, only a send path nobody had written. The seventeenth cleared all three of
+the suspects it was convened to convict — one of them called zero times by every
+benchmark on the board — mapped where the time actually sits by deleting each
+pass in turn, and then collected a finding the twelfth attempt had priced and
+parked five rounds earlier. The prose file holds the full
 derivations and is the authority when the two disagree; this page is for a first
 read, a refresher, or finding which attempt taught the lesson you half-remember.
 
@@ -84,10 +88,24 @@ and this is between a third and a half of it on four rows. The every-material
 flip did not move (89,635), which was the prediction, and its remaining gap is
 the largest on the board.
 
+**The explosion feature cost the board nothing, and the seventeenth attempt has
+one device-unverified win waiting.** Roughly twenty commits of DETONATE work
+landed after the sixteenth attempt and were priced on the host against its
+endpoint: nothing regressed, and two of the three controls came back
+**byte-identical to the microsecond**. The device capture agreed — every one of
+the thirteen rows inside ±3%. What is pending a capture is the gas sight-scan
+carry, host-measured at **fire cascade −13.9%** and **full screen of fire
+−7.3%**, byte-identical simulation, controls flat. If the device honours those,
+they are the two largest absolute budgets on the board and both would land
+inside their targets — the first budgets closed since the tenth attempt. Read
+that as a prediction, not a result, until a capture says otherwise.
+
 Fixed RNG seeds make identical builds reproduce these numbers to the microsecond.
 What moves them *between* builds is flash layout, not chance — see
 [the layout lottery](#the-layout-lottery) below, and the sixteenth attempt's
-evidence that the lottery may have only **two tickets** rather than a continuum.
+evidence that the lottery may have only **two tickets** rather than a continuum —
+now six observations and six landings, with the seventeenth attempt's two
+captures hitting the high pair to within 1 µs and the low pair to within 10 µs.
 
 **The fourteenth attempt has no device data behind it and spent host time rather
 than saving it.** Host-relative, best of 5, interleaved, landed build against HEAD:
@@ -111,6 +129,39 @@ by "the water and mixed rows now carry the fourteenth attempt's real device
 cost". Six captures since read water at 18,476-18,898 and mixed at
 14,029-14,398: flat, inside the relink floor, nothing further pending. The
 fourteenth attempt's bill was paid at the re-base and has not moved since.
+
+---
+
+## Which pass owns which scene
+
+Four builds, each with one of `sand_step()`'s passes stubbed out, host,
+best of five interleaved. Deleting a pass changes behaviour and takes its
+knock-on effects with it, so **these are a map, not candidates** — but as
+a map they sort thirteen scenes into three clean groups, and every round
+before the seventeenth that went hunting without one spent at least one
+experiment in the wrong pass.
+
+| scene | no reactions | no cross-flow | no gas | no main sweep |
+|---|---:|---:|---:|---:|
+| Screen of water collapsing | −2.2% | **−39.1%** | −0.7% | −98.7% |
+| Mixed scene flip | +0.6% | **−32.5%** | +1.8% | −99.9% |
+| Four liquids reacting | −33.8% | −16.1% | −6.1% | −72.7% |
+| Lava stress scene | −58.2% | −17.7% | −16.5% | −73.3% |
+| Every material at once | −44.3% | −14.7% | −33.8% | −25.5% |
+| Thermal shock lattice | **−93.1%** | −11.6% | −21.0% | −41.1% |
+| Boiler, sustained boil | **−88.7%** | −16.0% | −42.9% | −45.7% |
+| Smoke + steam screen | −8.6% | −0.0% | **−88.0%** | −10.1% |
+| Full screen of fire | −38.0% | +0.0% | **−62.7%** | −7.1% |
+| Fire cascade through gas | −45.0% | −0.6% | **−54.0%** | −6.3% |
+
+**Water and the mixed flip are the cross-flow pass** — the two largest
+percentage gaps on the board after the every-material flip, and the
+reactions pass is worth nothing on either. **Thermal shock and the boiler
+are the reactions pass**, almost entirely. **The three gas-heavy scenes
+are the gas pass**, which is where the seventeenth attempt's win came
+from. The every-material flip is the one row that is genuinely diffuse:
+no pass owns more than 44% of it, which is consistent with it being the
+scene that contains everything.
 
 ---
 
@@ -195,6 +246,7 @@ the next person from re-running them.
 | 14 | 🟠 | Two rays, dithered in space instead of time | Cross-flow's nearest-axis fix (30335ae) was correct but unpriced: a settled surface could only ever be perpendicular to one of eight directions, so it quantised to 0/45/90 — measured as two values across the whole tilt range, ≈0.00 below 22.5° and ≈0.94 above. The near-vertical octant couldn't tilt at all: its ray is horizontal, and a horizontal ray moves mass only within a row. The fix moves the dither from TIME into SPACE — a fixed per-column pattern choosing between two rays — and compares gravitational potential rather than raw mass. Cost: **+8%** on host water at the axis gravity every benchmark uses, **+29-37%** off-axis, which no budget measures. Slow alternation was rejected on a measurement: switching axis on a settled pool costs **1,582** units of churn against the flicker guard's own ceiling of 60. |
 | 15 | 🟠 | Two loose ends closed, and a watchdog counting itself in | An attribution round — no code shipped. Pinned the stale 2026-08-25 capture to `4b5168c` by matching its 272 self-test names against `RUN_TEST()` declarations at each candidate, then validated the method by rebuilding that commit fresh a day later: four rows exact, one off by **1 µs**. The liquid-free controls' **+9.6%**: byte-identical simulation and unchanged instruction count end to end, then isolated by device bisect to one commit, `e03aabd` — a line that **never executes** in either control, costing **~5%** purely from how GCC rescheduled `sand_step` around it once it existed. Round five's 28% host win: real on device too, confirmed by `objdump` moving exactly the blocks it should — but only **20%** of the gate's cost there, because the device's real water regression was `move_liquid_grain` **nearly tripling** across four separate commits, not the gate. Underneath both: a task watchdog silently charging its own console dump to the benchmark loop it shares a UART with, **up to 2.6×**, deterministically — two of the current thirteen budgets were pegged from contaminated rows and are too loose by an unknown amount. |
 | 16 | 🟢 | A function that fell out of its callers, and a heuristic at its ceiling | An unattributed drift, bisected over 45 commits on the host by compiling the repo's **own** `suite_sand.c` with `-DDEVICE_BUILD` against Unity/timer shims — no hand-copied scenes to drift. One step, controls flat across it: `723fac6` grew `try_heat_transform()` past GCC's size heuristic and knocked it **out of four call sites at once**. Forcing it back in: device **fire −10.4%, lava −6.5%, thermal −4.9%, four liquids −3.6%**, two captures agreeing to 4 µs, and the host predicted every one including the null. Attempts 07/08's i-cache trap did not fire because the object got *smaller* — the compiler had been paying more to keep the call. Also retired this page's own metal hypothesis (`conducts` 248→220 measures **−0.0%**) after a mid-flight counter found **311 cells of metal** in a scene that paints none. Second half: `ROW_MAX_RUNS` × `LEAF_REFINE_MAX_RUNS`, fifteen builds, **byte-identical counters** — both inert; and an **oracle** marking the exact changed cells, uncapped, sends the same pixels as the shipped marking, so the gather path is at its ceiling, not failing. The win was a **third send path** nobody had written: a full-width box is contiguous in the framebuffer, so it goes out at its own height — **−10% pixels a frame**, no memory, no copy. |
+| 17 | 🟢 | Three named suspects, all innocent, and a scan that pays | Convened against three simulation suspects with evidence already gathered. Mid-flight counters cleared all three: `anchored()` — a linear-scan flood fill, O(n²) worst case — is called **zero times by all thirteen benchmarks**; `find_water()` is 0.5% of cell visits at worst; and the dead reaction tail, which **99.998% of cells on the smoke screen walk without taking a single branch of**, is worth **2%** when deleted outright. Then stubbed each of the four passes in turn, which sorted the board into three clean groups — water and the mixed flip are **cross-flow**, thermal and boiler are **reactions**, the three gas scenes are **gas**. The win was the twelfth attempt's parked finding, re-run and still there: its "no cheap early-out exists" was right about a *spatial* index and wrong about the problem. The sweep advances by exactly `-px`, so the next cell's ray is this cell's ray shifted by one — three integers on the stack replace a `sight`-length walk per cell. **Cascade −13.9%, fire −7.3%**, simulation byte-identical (probe validated by failing first). A first spelling that armed the memo from every cell cost **+4.4%** on the alternating smoke/steam screen and is named in the code so nobody re-adds it. |
 
 ---
 
@@ -396,6 +448,11 @@ names the attempt that paid for it.
 | **Build the oracle before optimising the heuristic.** The uncapped, exact-changed-cell ideal sent the same pixels as the shipped code on two of three scenes — turning a three-way cap sweep into two negative results and a search elsewhere. | 16 |
 | **Deleting a feature's work can under-state its cost.** Removing the branch measured −9.5% where fixing its code shape measured −12.1%: measure-by-deleting alone would have blamed the feature and left the real cost in place. | 16 |
 | **Compile the suite, do not copy its scenes.** A hand-copied benchmark is a bisect that can attribute the wrong commit; three shim headers are cheaper and cannot drift. | 16 |
+| **The skippable fraction predicts nothing about the win.** 19.3% skippable was worth −0.1%; 99.998% of cells walking six dead branches was worth 2%. Only deleting the work prices it. | 12 · 17 |
+| **Map the passes before designing anything.** Four builds, one pass stubbed each, sorts the whole board into which pass owns which scene. Cheaper than one wrong experiment. | 17 |
+| **Check whether the iteration order already answers the per-item query.** A spatial index for "is there an empty cell within sight" needs a maintained bit and a soundness ring; the sweep walks the ray one cell at a time, so the answer is the last one plus a cell. | 17 |
+| **A memo must be armed by the expensive case only.** Arming from every cheap case cost 4.4% on a scene where the memo could never pay. Ask what armed it, not just who reads it. | 09 · 17 |
+| **A deferred finding with a number attached is worth re-running, not re-deriving.** Five rounds and a materials wave later it reproduced almost exactly; what had gone stale was the conclusion, not the measurement. | 17 |
 
 ---
 

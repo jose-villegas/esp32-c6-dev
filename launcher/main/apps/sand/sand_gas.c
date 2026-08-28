@@ -298,52 +298,170 @@ static inline bool neighbour_is_open(const sand_t *s, int x, int y, int px,
  * `sight` cells, or 0 if none. Passes through other gas cells the same way
  * find_shallowest() passes through the same liquid - flow stops at
  * anything else (a wall, a different material), same as water's own
- * search does. */
+ * search does.
+ *
+ * On a screen already saturated with one gas this walk is the single
+ * biggest cost in the whole gas step: every cell drags its material's
+ * whole `sight` through identical neighbours before giving up.
+ * equalise_gas_one_cell() avoids re-walking the same cells on the very
+ * next cell processed - see gas_run_t's own comment for the geometry that
+ * makes that safe - but only when THIS scan was the expensive kind:
+ * `*run_len_out` is written - always to `sight` - only when the loop runs
+ * every one of `sight` cells without finding an empty or a blocker. It is
+ * left untouched otherwise: when an empty was found (the caller resets its
+ * run to nothing regardless, so the value is moot), and when the loop
+ * instead breaks off the edge of the grid or on a wall/different material.
+ * Those two breaks are cheap by construction - they stop within a cell or
+ * two - so they are not worth reporting; see equalise_gas_one_cell's own
+ * comment for what it cost the one time this file tried remembering them
+ * anyway. */
 static inline int find_nearest_empty(const sand_t *s, int x, int y, int px,
-                                     int py, int sight, uint8_t gas_id)
+                                     int py, int sight, uint8_t gas_id,
+                                     int *run_len_out)
 {
     for (int k = 1; k <= sight; k++) {
         const int sx = x + px * k;
         const int sy = y + py * k;
         if ((unsigned)sx >= (unsigned)s->w || (unsigned)sy >= (unsigned)s->h) {
-            break;
+            return 0;
         }
         const cell_t o = s->cells[(size_t)sy * (size_t)s->w + (size_t)sx];
         if (CELL_IS_EMPTY(o)) {
             return k;
         }
         if (CELL_MATERIAL(o) != gas_id) {
-            break;      /* blocked by a wall or something denser */
+            return 0;      /* blocked by a wall or something denser */
         }
     }
+    *run_len_out = sight;
     return 0;
 }
+
+/* equalise_gas_one_row() sweeps each row with x_step = -px (see
+ * equalise_gas() below: x_step is -1 when px > 0, +1 when px < 0) - the
+ * sweep always advances by exactly one cell OPPOSITE the ray direction.
+ * That means the cell processed right after x, which sits at x - px,
+ * casts a ray along (px, py) that starts by revisiting x, then x + px,
+ * x + 2*px, ... - exactly the same cells x's own ray just walked, shifted
+ * out by one. So whatever find_nearest_empty() just established about x's
+ * ray - "the next N cells are all this same gas, with no empty among
+ * them" - is ALSO true of x - px's ray, once cell x itself (known, right
+ * here, to hold that gas and not have moved) is counted at the near end.
+ * Reusing that fact is what lets the row sweep skip a full `sight`-length
+ * re-walk of a packed gas pocket on almost every cell: only the newest
+ * cell needs to be looked at, not the whole tail again.
+ *
+ * `id` is the material the verified run is made of, or -1 if nothing is
+ * currently verified - the reset value whenever an empty/non-gas cell was
+ * just crossed, a grain just moved and changed what lies ahead, or the
+ * last real scan found an empty and so proved nothing about a longer run.
+ * `len` is how many cells starting one ray-step from the CURRENT cell are
+ * already confirmed to hold `id` with no empty among them - always at
+ * least `sight` once `id` is valid, since a run is only ever armed from a
+ * scan that walked the whole of `sight` (see find_nearest_empty's own
+ * comment) and only ever grows from there.
+ *
+ * The whole argument rests on the sweep advancing by exactly -px, which is
+ * only guaranteed when py == 0: with a tilted perpendicular (py != 0,
+ * diagonal gravity) the next cell's ray is a diagonal step away, not a
+ * copy of this cell's ray shifted by one, and none of the above holds.
+ * equalise_gas_one_cell() only ever writes a real id/len when carry_ok is
+ * true, so `id` simply stays -1 for the whole pass and the skip check
+ * below never fires when it is not - cheaper than adding a branch to strip
+ * valid state back out on every cell. */
+typedef struct {
+    int id;
+    int len;
+} gas_run_t;
 
 /* One cell's share of spread: hops the whole grain to the nearest open
  * cell along (px, py), if sub-pass 1 could not already move it and a real
  * gap exists. No mass to split - a grain either moves the whole way, or
- * not at all. */
+ * not at all.
+ *
+ * `run` carries gas_run_t's verified-run state between cells of the same
+ * row sweep (see that struct's own comment for the geometry) and
+ * `carry_ok` is that carry's on/off switch, true only when py == 0. Two
+ * things can happen to `run` here:
+ *   - the grain moved: the cells ahead just changed, so nothing about them
+ *     can be trusted any more - `run->id` resets to -1;
+ *   - the grain did not move: if `run` already described this same
+ *     material, it is folded forward by one to also cover this cell, seen
+ *     from the next one down the sweep. If it described something else (or
+ *     nothing), it is left exactly as it stood - NOT restarted against
+ *     this cell.
+ *
+ * That last case used to restart the run here too: any cell that did not
+ * move and did not already match got armed at length one against whatever
+ * material it held - even a cell that never scanned at all, blocked before
+ * it got the chance. Measured against a smoke/steam screen that alternates
+ * the two gases cell by cell - a scene that never holds a long run of one
+ * gas, so the memo above never once pays off - that arm-from-nothing cost
+ * +4.4% all by itself: every cell paid to write a length-one run that the
+ * very next cell, almost always the other gas, would throw away unread
+ * without ever reaching the `len >= sight` the skip check needs. Leaving
+ * `run` alone here instead is still safe with no fresh arm to replace it: a
+ * gas cell of a different material is never empty, so it always blocks a
+ * same-ray scan cast from any earlier cell in the sweep, regardless of
+ * which stale material `run` still names - which is exactly the answer
+ * the skip check below gives when it fires on stale data. Do not re-add
+ * that branch - it was tried, it cost real time, and it bought nothing. */
 static inline bool equalise_gas_one_cell(sand_t *s, uint8_t *row, int x,
                                          int y, int px, int py, int rdx,
                                          int rdy, int sight, uint8_t gas_id,
                                          cell_t grain, bool *stayed_in_row,
-                                         int *touched_x)
+                                         int *touched_x, bool carry_ok,
+                                         gas_run_t *run)
 {
-    if (has_room_above(s, x, y, rdx, rdy)) {
-        return false;
+    bool moved = false;
+    int  tx = 0, ty = 0;
+
+    if (!has_room_above(s, x, y, rdx, rdy) &&
+        neighbour_is_open(s, x, y, px, py, gas_id)) {
+        int at;
+
+        /* Known, without looking, to return 0: `run` already covers every
+         * cell this scan would walk, courtesy of the previous cell in the
+         * sweep having walked - or itself skipped - the very same ray.
+         * Re-walking it would only confirm what carrying the run forward
+         * already guarantees. */
+        if (carry_ok && run->id == (int)gas_id && run->len >= sight) {
+            at = 0;
+        } else {
+            int scan_len = 0;
+
+            at = find_nearest_empty(s, x, y, px, py, sight, gas_id,
+                                    &scan_len);
+            if (carry_ok && at == 0 && scan_len == sight) {
+                /* Only a scan that paid the full `sight` walk is worth
+                 * remembering - see find_nearest_empty's own comment for
+                 * why the two early-break cases (the edge of the grid, a
+                 * wall or a different material) are left alone instead:
+                 * they are already cheap, so caching them would cost more
+                 * than just repeating them next time. */
+                run->id  = (int)gas_id;
+                run->len = scan_len;
+            }
+        }
+
+        if (at != 0) {
+            tx = x + px * at;
+            ty = y + py * at;
+            moved = true;
+        }
     }
-    if (!neighbour_is_open(s, x, y, px, py, gas_id)) {
+
+    if (moved) {
+        run->id = -1;
+    } else if (run->id == (int)gas_id) {
+        run->len += 1;
+    }
+
+    if (!moved) {
         return false;
     }
 
-    const int at = find_nearest_empty(s, x, y, px, py, sight, gas_id);
-    if (at == 0) {
-        return false;
-    }
-
-    const int tx = x + px * at;
-    const int ty = y + py * at;
-    const int w  = s->w;
+    const int w = s->w;
 
     s->cells[(size_t)ty * (size_t)w + (size_t)tx] = grain;
     row[x] = CELL_EMPTY;
@@ -376,14 +494,22 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
                                              int y, int px, int py, int rdx,
                                              int rdy, uint16_t is_gas,
                                              bool *touched, int *touched_x0,
-                                             int *touched_x1)
+                                             int *touched_x1, bool carry_ok,
+                                             gas_run_t *run)
 {
     const cell_t c = row[x];
     if (CELL_IS_EMPTY(c)) {
+        /* Nothing here for a future ray to pass through as "the same gas"
+         * - see gas_run_t's own comment. Invalidating is always safe, it
+         * just costs a real scan next time instead of a free skip. */
+        run->id = -1;
         return false;
     }
     const uint8_t id = CELL_MATERIAL(c);
     if (((is_gas >> id) & 1u) == 0) {
+        /* Same reasoning as the empty case just above: whatever this cell
+         * holds, it is not gas, so it cannot extend a gas run either. */
+        run->id = -1;
         return false;
     }
 
@@ -395,7 +521,7 @@ static inline bool equalise_gas_one_row_cell(sand_t *s, uint8_t *row, int x,
     bool stayed_in_row = false;
     int  tx = 0;
     if (equalise_gas_one_cell(s, row, x, y, px, py, rdx, rdy, sight, id, c,
-                              &stayed_in_row, &tx) &&
+                              &stayed_in_row, &tx, carry_ok, run) &&
         stayed_in_row) {
         gas_union_touched_x(touched, touched_x0, touched_x1,
                             x < tx ? x : tx, x > tx ? x : tx);
@@ -416,10 +542,22 @@ static bool equalise_gas_one_row(sand_t *s, int y, int w, int x_from,
     bool touched = false;
     int  touched_x0 = 0, touched_x1 = 0;
 
+    /* carry_ok gates the whole run-skipping scheme off the moment gravity
+     * is not axis-aligned - see gas_run_t's own comment for why the sweep
+     * geometry it relies on only holds when py == 0. Computed once per row
+     * (it is really constant for the whole equalise_gas() call, since px
+     * and py do not change mid-pass) rather than re-checked per cell. */
+    const bool carry_ok = (py == 0);
+
+    /* Reset at the start of every row: a run only ever describes cells
+     * within the same row, and the sweep has not looked at any of them
+     * yet. */
+    gas_run_t run = { .id = -1, .len = 0 };
+
     for (int x = x_from; x != x_to; x += x_step) {
         if (equalise_gas_one_row_cell(s, row, x, y, px, py, rdx, rdy,
                                       is_gas, &touched, &touched_x0,
-                                      &touched_x1)) {
+                                      &touched_x1, carry_ok, &run)) {
             any_gas = true;
         }
     }
