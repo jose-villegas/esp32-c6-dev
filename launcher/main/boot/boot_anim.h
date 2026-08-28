@@ -1213,7 +1213,16 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  * at PEAK still fits smaller after) - PEAK is the one number in this file
  * that has to stay under that ceiling rather than only ever fitting more
  * easily by construction. */
-#define BOOT_ANIM_SHRINK_GROW_MS   400
+/* 400 read as a pop, not a grow: tween_ease_out() front-loads most of a
+ * ramp's motion into its first third, so at 400ms - 20 frames at 50fps -
+ * nearly all of the size change lands in the first half-dozen frames and
+ * the rest is HOLD, indistinguishable from the swell simply having already
+ * finished. Stretched out instead, over most of the room GROW and HOLD
+ * share (BOOT_ANIM_FINALE_END_MS - BOOT_ANIM_TITLE_START_MS, 1600ms here) -
+ * safe to do because the overflow risk PEAK was swept against (see this
+ * function's own top comment) depends only on the value 380 itself, never
+ * on how many frames it takes to get there. */
+#define BOOT_ANIM_SHRINK_GROW_MS   900
 #define BOOT_ANIM_SHRINK_SETTLE_MS 400   /* well under BOOT_ANIM_COLLAPSE_MS -
                                            * see boot_anim_motif_shrink_q8()'s
                                            * own comment on why it has to
