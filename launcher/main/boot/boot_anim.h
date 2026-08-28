@@ -1361,14 +1361,16 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
  * 512 (2x "full size") pushed that check out to cover every corner
  * through nearly the whole collapse, not just its opening instant: the
  * camera keeps turning the whole time, so the reach a corner needs keeps
- * growing right alongside it, and by the time even THIS floor stops
- * covering the worst corner (around BOOT_ANIM_MS itself) ink has already
- * faded the picture to almost nothing anyway. Past BOOT_ANIM_SHRINK_PEAK_Q8
+ * growing right alongside it, and by the time even 512 stopped covering
+ * the worst corner (around BOOT_ANIM_MS itself) ink had already faded the
+ * picture to almost nothing anyway - so 1024 (4x "full size") is no
+ * longer chasing corner coverage for its own sake, just going bigger
+ * because bigger is what was asked for next. Past BOOT_ANIM_SHRINK_PEAK_Q8
  * on purpose too - SETTLE grows into this floor rather than shrinking
  * toward it, same math (boot_anim_shrink_to_floor_q8() does not care
  * which direction floor_q8 sits relative to PEAK), just the opposite of
  * every other use of "settle" in this file. */
-#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 512
+#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 1024
 
 static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 {
