@@ -596,11 +596,7 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
         }
     }
 
-    /* Previously called mark_band(y0, y1) which dirtied the whole band.
-     * Calling gfx_mark_dirty() instead allows for spatial optimization:
-     * now text rendering and other rect drawing operations only dirty
-     * their own small bounding box, not the entire 64-row strip. */
-    gfx_mark_dirty(x0, y0, x1 - x0, y1 - y0);
+    mark_band(y0, y1);   /* already clipped above */
 }
 
 /*---------------------------------------------------------------------------
