@@ -255,6 +255,8 @@ gfx_color_t *gfx_framebuffer(void)
  * drawn_bbox_* accumulates the union of all dirty regions marked by
  * gfx_mark_dirty() during this frame after gfx_clear(). */
 static bool partial_clear_on;
+static bool interlace_on;
+static int frame_parity;
 static bool prev_bbox_valid;
 static int prev_bbox_x0, prev_bbox_y0, prev_bbox_x1, prev_bbox_y1;
 static bool drawn_bbox_valid;
@@ -271,6 +273,16 @@ void gfx_set_partial_clear(bool on)
 bool gfx_partial_clear_enabled(void)
 {
     return partial_clear_on;
+}
+
+void gfx_set_interlace(bool on)
+{
+    interlace_on = on;
+}
+
+bool gfx_interlace_enabled(void)
+{
+    return interlace_on;
 }
 
 void gfx_invalidate(void)
@@ -1134,17 +1146,38 @@ static void send_one_row(int row, int *queued)
 void gfx_present(void)
 {
     int queued = 0;
+    if (interlace_on) {
+        frame_parity = !frame_parity;
+    }
+
+    uint32_t remaining_cell_dirty = 0;
 
     for (int row = 0; row < STRIP_COUNT; row++) {
         if (!dirty_row_is_dirty(row)) {
             continue;   /* unchanged - the panel is still showing it */
         }
 
+        if (interlace_on && (row % 2) != frame_parity) {
+            remaining_cell_dirty |= ((1u << GRID_COLS) - 1u) << (row * GRID_COLS);
+            continue;
+        }
+
         send_one_row(row, &queued);
         dirty_row_sent(row);
     }
 
+    if (interlace_on && all_dirty) {
+        for (int row = 0; row < STRIP_COUNT; row++) {
+            if ((row % 2) != frame_parity) {
+                remaining_cell_dirty |= ((1u << GRID_COLS) - 1u) << (row * GRID_COLS);
+            }
+        }
+    }
+
     dirty_frame_sent();
+    if (interlace_on) {
+        cell_dirty = remaining_cell_dirty;
+    }
 
     if (partial_clear_on && drawn_bbox_valid) {
         prev_bbox_x0 = drawn_bbox_x0;

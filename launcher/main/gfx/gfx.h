@@ -90,6 +90,12 @@ void gfx_clear(gfx_color_t color);
 void gfx_set_partial_clear(bool enabled);
 bool gfx_partial_clear_enabled(void);
 
+/* Enable or disable interlace mode. When enabled, gfx_present() updates
+ * only even-numbered strips on even frames and odd-numbered strips on odd
+ * frames. Off by default. */
+void gfx_set_interlace(bool enabled);
+bool gfx_interlace_enabled(void);
+
 /* Forces the next gfx_clear() to wipe the entire screen in full, resetting
  * partial clear tracking. Needed when an app opens, closes, or rotates. */
 void gfx_invalidate(void);
