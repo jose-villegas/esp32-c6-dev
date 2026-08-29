@@ -443,10 +443,22 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
          * screen - since that is the only region that might now show a
          * stale pixel the cube's new pose does not redraw itself. Falls
          * back to a full clear exactly once, on the frame nothing valid is
-         * known yet (see cube_enter() and the BOOT handling above). */
+         * known yet (see cube_enter() and the BOOT handling above).
+         *
+         * Writes straight to gfx_framebuffer() and marks dirty via
+         * gfx_mark_dirty() rather than calling gfx_fill_rect(): gfx_fill_rect()
+         * uses mark_band() which claims the full-width strip, destroying
+         * horizontal dirty bounds and leaf-grid refinement. */
         if (bbox_valid) {
-            gfx_fill_rect(bbox_x0, bbox_y0, bbox_x1 - bbox_x0,
-                         bbox_y1 - bbox_y0, gfx_rgb(BACKGROUND_RGB));
+            const gfx_color_t bg = gfx_rgb(BACKGROUND_RGB);
+            for (int y = bbox_y0; y < bbox_y1; y++) {
+                gfx_color_t *dst = gfx_framebuffer() + (size_t)y * GFX_WIDTH + bbox_x0;
+                for (int x = bbox_x0; x < bbox_x1; x++) {
+                    *dst++ = bg;
+                }
+            }
+            gfx_mark_dirty(bbox_x0, bbox_y0, bbox_x1 - bbox_x0,
+                           bbox_y1 - bbox_y0);
         } else {
             gfx_clear(gfx_rgb(BACKGROUND_RGB));
         }
@@ -464,11 +476,9 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
     if (partial_updates) {
         /* shade_pixel() wrote straight into gfx_framebuffer(), which gfx
          * cannot see - this is the one gfx_mark_dirty() call that tells it
-         * what actually changed this frame. The erase above already marked
-         * bbox_x0..y1 dirty on its own (gfx_fill_rect() does that
-         * internally), so only THIS frame's own bounds need marking here;
-         * the two calls between them cover exactly the same region a single
-         * union of both would have. */
+         * what actually changed this frame. Both the erase above and this
+         * draw marked their bounds with gfx_mark_dirty(), unioning into the
+         * tight per-cell and leaf tracking for the frame. */
         if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
             gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0,
                            frame_y1 - frame_y0);
