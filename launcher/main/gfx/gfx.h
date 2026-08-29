@@ -82,6 +82,18 @@ gfx_color_t gfx_rgb(uint32_t rgb);
 gfx_color_t *gfx_framebuffer(void);
 
 void gfx_clear(gfx_color_t color);
+
+/* Enable or disable partial clear mode. When enabled, gfx_clear() erases only
+ * the bounding box of what was marked dirty on the previous frame instead of
+ * wiping the entire 322 KiB framebuffer, and automatically marks that erased
+ * region dirty for presentation. Off by default. */
+void gfx_set_partial_clear(bool enabled);
+bool gfx_partial_clear_enabled(void);
+
+/* Forces the next gfx_clear() to wipe the entire screen in full, resetting
+ * partial clear tracking. Needed when an app opens, closes, or rotates. */
+void gfx_invalidate(void);
+
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 
 /* Both clip to the framebuffer, so callers need not bounds-check. */
