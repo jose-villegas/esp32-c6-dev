@@ -270,9 +270,11 @@ static void draw_fps(const input_t *input)
     if (ui_begin_screen(ctx, "Cube HUD",
                         MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                         MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
-        draw_overlay_row(ctx, gfx_text_height() + 4);
+        mu_Rect row = draw_overlay_row(ctx, gfx_text_height() + 4);
         char fps_line[16];
         snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
+        const int tw = gfx_text_width(fps_line, -1);
+        mu_layout_set_next(ctx, ui_centered_rect(ui_width(), tw, row.h, row.y), 0);
         mu_text(ctx, fps_line);
 
         mu_end_window(ctx);
