@@ -67,7 +67,7 @@ static uint32_t    elapsed_ms;
  * relying on gfx_clear()'s implicit "everything changed". Off by default -
  * same behaviour as before this existed. Flipped from inside draw_menu(),
  * not directly by BOOT any more - see menu_open below and cube_frame(). */
-static bool partial_updates;
+static bool partial_updates = true;
 
 /* Whether the BOOT-opened menu (draw_menu()) is showing instead of the
  * cube. The normal view renders only the cube and the fps counter - see
@@ -204,23 +204,11 @@ static mu_Color mu_color_hex(uint32_t rgb)
                     (int)(rgb & 0xFF), 255);
 }
 
-/* Lays out one full-width row `height` tall, paints it BACKGROUND_RGB, and
- * hands the same rect back to whichever mu_text() call comes next via
- * mu_layout_set_next() - see draw_fps()'s own comment for why the fps row
- * needs an opaque backing of its own the UI_NO_BACKGROUND window it sits in
- * does not provide. mu_layout_set_next()'s `relative` argument is 0
- * (ABSOLUTE): `row` already came from a real mu_layout_next() call just
- * above, in the same coordinate space that function's normal row-advance
- * path would hand back, so re-issuing it verbatim is correct - the same
- * trick app_sand.c's own palette tiles and ui_launcher.c's menu buttons
- * already use to place a widget at a rect they computed themselves. */
-static mu_Rect draw_overlay_row(mu_Context *ctx, int height)
+static mu_Rect draw_overlay_box(mu_Context *ctx, int w, int h)
 {
-    mu_layout_row(ctx, 1, (int[]){ -1 }, height);
-    mu_Rect row = mu_layout_next(ctx);
-    mu_draw_rect(ctx, row, mu_color_hex(BACKGROUND_RGB));
-    mu_layout_set_next(ctx, row, 0);
-    return row;
+    const mu_Rect box = ui_centered_rect(ui_width(), w, h, 2);
+    mu_draw_rect(ctx, box, mu_color_hex(BACKGROUND_RGB));
+    return box;
 }
 
 /* The persistent HUD: the cube and, over it, the fps line - nothing else
@@ -241,10 +229,10 @@ static mu_Rect draw_overlay_row(mu_Context *ctx, int height)
  * full gfx_clear() every frame that is invisible, because the whole screen
  * is blank before it ever draws. Under partial_updates it is not:
  * cube_frame() only erases the CUBE's own last bounding box, never this
- * row's, so when the fps line repaints - it changes shape every
+ * box's, so when the fps line repaints - it changes shape every
  * FPS_WINDOW_MS as the digits do - whatever of the old digits the new ones
- * do not happen to overdraw was left on screen. draw_overlay_row() is the
- * fix: an opaque box behind the row, painted through the same mu command
+ * do not happen to overdraw was left on screen. draw_overlay_box() is the
+ * fix: an opaque box behind the text, painted through the same mu command
  * list this whole module already hashes to skip unneeded repaints, so it
  * costs nothing on the (large majority of) frames where the fps value did
  * not actually change.
@@ -252,7 +240,7 @@ static mu_Rect draw_overlay_row(mu_Context *ctx, int height)
  * UI_TEXT_OUTLINED is app_sand.c's palette-label fix for the same reason it
  * was built for: a label with no halo of its own would wash out against
  * whichever of the cube's shifting corner colours happens to sit behind it.
- * Left in place even with the row's own opaque backing - a NO_BACKGROUND
+ * Left in place even with the box's own opaque backing - a NO_BACKGROUND
  * window is still one BOOT tap away whenever partial_updates is off, and
  * the halo costs nothing extra when the backing is already opaque. */
 static void draw_fps(const input_t *input)
@@ -264,11 +252,13 @@ static void draw_fps(const input_t *input)
     if (ui_begin_screen(ctx, "Cube HUD",
                         MU_OPT_NOTITLE | MU_OPT_NORESIZE |
                         MU_OPT_NOCLOSE | MU_OPT_NOFRAME)) {
-        mu_Rect row = draw_overlay_row(ctx, gfx_text_height() + 4);
         char fps_line[16];
         snprintf(fps_line, sizeof fps_line, "%.1f fps", fps_value);
         const int tw = gfx_text_width(fps_line, -1);
-        mu_layout_set_next(ctx, ui_centered_rect(ui_width(), tw, row.h, row.y), 0);
+        const int th = gfx_text_height() + 4;
+        
+        mu_Rect box = draw_overlay_box(ctx, tw + 8, th);
+        mu_layout_set_next(ctx, box, 0);
         mu_text(ctx, fps_line);
 
         mu_end_window(ctx);
