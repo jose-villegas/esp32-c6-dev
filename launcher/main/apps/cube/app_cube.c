@@ -44,22 +44,10 @@
 static const S3L_Unit cube_vertices[]  = { S3L_CUBE_VERTICES(S3L_F) };
 static const S3L_Index cube_triangles[] = { S3L_CUBE_TRIANGLES };
 
-/* Each corner is coloured by the sign of its position: +x adds red, +y green,
- * +z blue. Interpolating those across each face gives the gradients. */
-static const uint8_t cube_corner_colors[S3L_CUBE_VERTEX_COUNT][3] = {
-    { 255,   0,   0 },  /* 0  right, bottom, front */
-    {   0,   0,   0 },  /* 1  left,  bottom, front */
-    { 255, 255,   0 },  /* 2  right, top,    front */
-    {   0, 255,   0 },  /* 3  left,  top,    front */
-    { 255,   0, 255 },  /* 4  right, bottom, back  */
-    {   0,   0, 255 },  /* 5  left,  bottom, back  */
-    { 255, 255, 255 },  /* 6  right, top,    back  */
-    {   0, 255, 255 },  /* 7  left,  top,    back  */
-};
-
-static S3L_Model3D cube;
-static S3L_Scene   scene;
-static uint32_t    elapsed_ms;
+/* Exposed for performance testing (suite_cube_perf.c). */
+S3L_Model3D cube;
+S3L_Scene   scene;
+uint32_t    elapsed_ms;
 
 /* The toggle this file exists to demonstrate: whether cube_frame() clears
  * the whole framebuffer every frame (like every other app) or only the
@@ -67,7 +55,7 @@ static uint32_t    elapsed_ms;
  * relying on gfx_clear()'s implicit "everything changed". Off by default -
  * same behaviour as before this existed. Flipped from inside draw_menu(),
  * not directly by BOOT any more - see menu_open below and cube_frame(). */
-static bool partial_updates = true;
+bool partial_updates = true;
 
 /* Whether the BOOT-opened menu (draw_menu()) is showing instead of the
  * cube. The normal view renders only the cube and the fps counter - see
@@ -75,12 +63,12 @@ static bool partial_updates = true;
  * partial_updates toggle, lives behind BOOT in here, the same
  * one-physical-button-one-screen-level-concern split app_diagnostics.c's
  * page cycling and app_sand.c's SAND_UI_MENU/RUNNING split already use. */
-static bool menu_open;
+bool menu_open;
 
 /* This frame's drawn-pixel bounds, accumulated by shade_pixel() while
  * partial_updates is on - reset to an empty range at the top of
  * cube_frame(), widened by every covered pixel small3dlib reports. */
-static int frame_x0, frame_y0, frame_x1, frame_y1;
+int frame_x0, frame_y0, frame_x1, frame_y1;
 
 /* On-screen framerate readout - the other half of what makes the toggle
  * above worth having: main.c's own report_fps() only ever reaches a serial
@@ -89,14 +77,14 @@ static int frame_x0, frame_y0, frame_x1, frame_y1;
  * esp_timer_get_time() like report_fps() does, so this needs nothing beyond
  * what cube_frame() is already handed. */
 #define FPS_WINDOW_MS 500
-static uint32_t fps_frame_count;
-static uint32_t fps_window_elapsed_ms;
-static double   fps_value;
+uint32_t fps_frame_count;
+uint32_t fps_window_elapsed_ms;
+double   fps_value;
 
 /* Last ui_layout_generation() seen, so cube_frame() can tell a shell
  * orientation change happened since last frame - see its own comment for
  * why that forces a full clear rather than a partial one. */
-static uint32_t last_layout_generation;
+uint32_t last_layout_generation;
 
 static inline uint8_t clamp_to_byte(S3L_Unit v)
 {
@@ -146,7 +134,7 @@ static inline void shade_pixel(S3L_PixelInfo *pixel)
     }
 }
 
-static void cube_enter(void)
+void cube_enter(void)
 {
     S3L_model3DInit(cube_vertices, S3L_CUBE_VERTEX_COUNT,
                     cube_triangles, S3L_CUBE_TRIANGLE_COUNT, &cube);
@@ -334,7 +322,7 @@ static void draw_menu(const input_t *input)
     ui_end(BACKGROUND_RGB);
 }
 
-static void cube_frame(uint32_t dt_ms, const input_t *input)
+void cube_frame(uint32_t dt_ms, const input_t *input)
 {
     /* BOOT opens/closes the menu now, rather than flipping partial_updates
      * directly - the toggle moved onto its own bezel button inside
@@ -420,7 +408,7 @@ static void cube_frame(uint32_t dt_ms, const input_t *input)
     draw_fps(input);
 }
 
-static void cube_exit(void)
+void cube_exit(void)
 {
     gfx_set_partial_clear(false);
     gfx_invalidate();
