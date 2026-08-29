@@ -113,6 +113,11 @@ static void draw_toggles_page(const input_t *input)
         gfx_set_leaf_overlay(leaf_on);
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
+        int interlace_on = gfx_interlace_enabled();
+        mu_checkbox(ctx, "gfx interlace mode", &interlace_on);
+        gfx_set_interlace(interlace_on);
+
+        mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
         mu_checkbox(ctx, "show orientation", &show_orientation);
 
         /* Read once per frame, only while the toggle is on - imu_read() is
