@@ -221,14 +221,18 @@ if [ -n "$REVIEW_MODEL" ]; then
     cat "$PATCHES"
   } > "$REVIEW_PROMPT"
 
-  if ! omniroute --output json chat -m "$REVIEW_MODEL" --max-tokens 4000 \
+  REVIEW_OK=1
+  if ! omniroute --output json chat -m "$REVIEW_MODEL" --reasoning-effort low --max-tokens 4000 \
         --file "$REVIEW_PROMPT" --no-history > "$REVIEW_RESPONSE" 2>&1; then
-    echo "Review call failed:" >&2
+    echo "Review call failed (keeping all patches unreviewed):" >&2
     cat "$REVIEW_RESPONSE" >&2
-    exit 1
+    REVIEW_OK=0
   fi
 
-  REVIEW_CONTENT=$(node -e "$extract_content_js" "$REVIEW_RESPONSE") || { echo "no response envelope found, keeping all patches unreviewed" >&2; REVIEW_CONTENT="[]"; }
+  REVIEW_CONTENT="[]"
+  if [ "$REVIEW_OK" -eq 1 ]; then
+    REVIEW_CONTENT=$(node -e "$extract_content_js" "$REVIEW_RESPONSE") || { echo "no response envelope found, keeping all patches unreviewed" >&2; REVIEW_CONTENT="[]"; }
+  fi
   echo "$REVIEW_CONTENT" > "$TMPDIR/review_content.txt"
 
   node -e '
