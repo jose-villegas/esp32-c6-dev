@@ -460,6 +460,70 @@ clean every time it's built for the machine checking it in.
 test on an over-budget target — it can leak everything the fixture already
 allocated and take every later test down with it.**
 
+**This has recurred.** The instance above (cube_perf's static ring buffers,
+selftest-only) was not a one-off — the same class of bug hit `--dev` builds
+too, from two entirely different files (`screenshot.c`'s row buffers,
+`gfx.c`'s debug-overlay save buffer), neither one anywhere near cube_perf or
+that earlier fix. Two occurrences from two unrelated code paths, same root
+mechanism, is what makes this systemic rather than a one-off mistake: **any**
+static/global added anywhere in `main/` taxes the same shared pool, and
+nothing in the build catches it — a clean compile and a clean host-test run
+both say nothing about whether the largest contiguous heap block some
+device-only allocation needs (a sand-app grid, a big test fixture, a scratch
+buffer) still exists after the addition.
+
+What actually causes it structurally on this chip: DIRAM is one unified
+region backing `.text`, `.bss`, `.data` *and* the heap together (not
+separate IRAM/DRAM pools), so more code — not just more data — taxes the
+same budget an allocation draws from. And a build variant that compiles in
+extra debug/test code (`--dev`, `--diag`) is not "the same image plus some
+logging" from a memory-budget point of view — it is a smaller-margin image
+that happens to look like the same one. Checking `idf.py -B build.release
+size` before/after a change and calling it done misses every regression
+that only exists in `--dev` or `--diag`, because that code does not even
+compile into release.
+
+**The checklist that would have caught both incidents before a device
+flash:**
+
+- Before adding any file-scope `static` array/struct anywhere under `main/`
+  (test suites included — anything that links into a diag image counts),
+  ask: does this need to exist for the whole process lifetime, or only
+  while one specific, optional feature is actively in use? If the latter,
+  `malloc()` it when the feature turns on and `free()` it when the feature
+  turns off or finishes — the fixture/teardown pattern both incidents were
+  ultimately fixed with, not a permanent reservation.
+- Run `idf.py -B build.dev size` and `idf.py -B build.diag size`, not just
+  `build.release`, and diff `.bss`/`.data`/`.text` (DIRAM) against the
+  previous commit. A few hundred bytes matters here — the margin that broke
+  was 256 bytes once and effectively zero the second time.
+- When a device-only OOM shows up and the failing allocation logs
+  `heap_caps_get_largest_free_block()` (see `app_sand.c`'s grid allocation
+  for the pattern), trust that number over "total free heap" — both
+  incidents were invisible in total-free terms and obvious in
+  largest-contiguous terms.
+- If you cannot tell which new symbol is responsible, diff
+  `nm --print-size` output between the two ELFs (old build vs. new) filtered
+  to `.bss`/`.data` types (`b`/`B`/`d`/`D`) and match by exact symbol name —
+  faster than guessing from a source diff, and what found both offenders in
+  the second incident.
+
+**The ownership convention this project now follows for anything sizeable —
+call it app exclusivity:** the app actually running gets first claim on the
+one large contiguous block it needs, allocated once and kept for the
+process's life (this project deliberately does *not* free and re-malloc an
+app's own grid/framebuffer-sized buffers on every entry — see
+`app_sand.c`'s `if (grid == NULL) grid = malloc(...)` pattern — because
+churning a 40+ KB allocation on every app switch is its own fragmentation
+risk). Everything else — dev tooling, diagnostics, anything optional that
+is not the app the user is actually using — must be scoped tightly to its
+own moment of use instead of holding a standing reservation, so it can
+never be the thing standing between a running app and the contiguous space
+it needs. A permanent static for an occasional feature is exactly
+backwards: it pays its cost on every boot whether or not the feature ever
+runs, at the exact moment — boot, before any app has opened — an app's own
+allocation needs the heap at its least fragmented.
+
 ---
 
 ## A host-validated win is a hypothesis until the target measures it

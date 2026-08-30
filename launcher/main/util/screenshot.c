@@ -46,10 +46,12 @@
 #include "util/screenshot.h"
 
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
 #include "driver/usb_serial_jtag_vfs.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -166,14 +168,24 @@ bool screenshot_take_request(void)
     return true;
 }
 
-/* Static, not stack-local: screenshot_dump() runs on main.c's shell task,
- * which has a 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) shared with
- * everything else that task does. A 1104-byte row plus its 1472-byte
- * base64 encoding would be most of that budget on top of whatever printf
- * and ESP_LOG already use internally - see gfx.h's own top comment on why
- * this board's RAM is counted this closely everywhere else in the shell. */
-static uint8_t row[GFX_WIDTH * 3];
-static char    row_b64[GFX_WIDTH * 4 + 1];   /* +1: NUL, for printf("%s") */
+/* Not stack-local: screenshot_dump() runs on main.c's shell task, which has
+ * a 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) shared with everything
+ * else that task does. A 1104-byte row plus its 1472-byte base64 encoding
+ * would be most of that budget on top of whatever printf and ESP_LOG
+ * already use internally - see gfx.h's own top comment on why this board's
+ * RAM is counted this closely everywhere else in the shell.
+ *
+ * Not permanently static either, as they were before: malloc'd in
+ * screenshot_dump() and freed before it returns, so these 2,577 bytes are
+ * only ever reserved for the duration of an actual capture instead of for
+ * the whole life of the process. A CONFIG_LAUNCHER_DEVELOPMENT build (this
+ * file is compiled into nothing else) carries them at every boot whether or
+ * not a screenshot is ever taken - static here competed directly with
+ * app_sand.c's grid for the single largest contiguous heap block it needs
+ * (see that allocation's own comment), which is exactly the failure a --dev
+ * build hit opening the sand app. */
+static uint8_t *row;
+static char    *row_b64;   /* +1: NUL, for printf("%s") */
 
 /* Prints one SCREENSHOT_STATE: line of plain-text JSON (no base64 - it is
  * already printable ASCII, and small enough next to the image that the
@@ -199,6 +211,27 @@ void screenshot_dump(const input_t *input)
     const int32_t  stride      = screenshot_bmp_row_stride(GFX_WIDTH);
     const uint32_t pixel_bytes = (uint32_t)(stride * GFX_HEIGHT);
     const uint32_t total_bytes = SCREENSHOT_BMP_HEADER_SIZE + pixel_bytes;
+
+    /* sizes named rather than re-derived from sizeof(row)/sizeof(row_b64)
+     * below: row/row_b64 are pointers now (see their own declaration
+     * comment), so sizeof on them would give the pointer's own size, not
+     * the buffer's. */
+    const size_t row_bytes     = (size_t)GFX_WIDTH * 3;
+    const size_t row_b64_bytes = (size_t)GFX_WIDTH * 4 + 1;
+
+    row = malloc(row_bytes);
+    row_b64 = malloc(row_b64_bytes);
+    if (row == NULL || row_b64 == NULL) {
+        ESP_LOGE(TAG, "could not allocate %u+%u-byte row buffers - "
+                      "screenshot skipped; largest free block is %u",
+                 (unsigned)row_bytes, (unsigned)row_b64_bytes,
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+        free(row);
+        free(row_b64);
+        row = NULL;
+        row_b64 = NULL;
+        return;
+    }
 
     ESP_LOGI(TAG, "streaming %lu bytes to the console", (unsigned long)total_bytes);
 
@@ -236,8 +269,8 @@ void screenshot_dump(const input_t *input)
             row[x * 3 + 1] = (uint8_t)(rgb >> 8);
             row[x * 3 + 2] = (uint8_t)(rgb >> 16);
         }
-        screenshot_base64_encode(row, sizeof row, row_b64);
-        row_b64[sizeof(row_b64) - 1] = '\0';
+        screenshot_base64_encode(row, row_bytes, row_b64);
+        row_b64[row_b64_bytes - 1] = '\0';
         printf("SCREENSHOT_DATA:%s\n", row_b64);
     }
 
@@ -245,4 +278,9 @@ void screenshot_dump(const input_t *input)
 
     printf("SCREENSHOT_END\n");
     fflush(stdout);
+
+    free(row);
+    free(row_b64);
+    row = NULL;
+    row_b64 = NULL;
 }
