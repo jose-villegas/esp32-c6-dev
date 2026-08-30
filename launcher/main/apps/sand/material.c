@@ -428,10 +428,12 @@ const material_t materials[MATERIAL_MAX] = {
                               * was noticed on device. The field arrived
                               * for gases and only grew a liquid reader
                               * later, and an unset byte is zero. That did
-                              * not freeze lava outright - the
-                              * wall-rebound splash moves liquid without
-                              * consulting the gate - but it made it
-                              * twelve times slower than intended,
+                              * not freeze lava outright - the wall-
+                              * rebound splash moved liquid without
+                              * consulting the gate, back when that
+                              * mechanism still existed (removed
+                              * 2026-08-30, see git history) - but it
+                              * made it twelve times slower than intended,
                               * measured at 249 steps to cross what takes
                               * 20 here. Slow enough to look deliberate,
                               * which is why it lasted. Zero now reads as

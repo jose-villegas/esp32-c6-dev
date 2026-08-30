@@ -291,8 +291,8 @@ static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
 /* Marks block (bx,by) - the one containing (x,y) - and its up to 8
  * neighbours unsettled, unconditionally. Used only by touches that
  * happen OUTSIDE the gravity sweep (sand_set(), sand_erase(),
- * try_spawn_one(), and liquid's cross-flow/rebound passes in
- * sand_liquid.c), where there is no `moved_here`-style bookkeeping for
+ * try_spawn_one(), and liquid's cross-flow pass in sand_liquid.c), where
+ * there is no `moved_here`-style bookkeeping for
  * the pull-based any_neighbor_active() check above to observe on its
  * own next step.
  *
@@ -478,7 +478,7 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
 /* The row-shaped bookkeeping mark_rows() always did, plus waking the
  * touched blocks - see wake_block_and_neighbors() above for why this is
  * only used outside the sweep (sand_set()/sand_erase()/try_spawn_one(),
- * and liquid's equalise_one_cell()/rebound_one_cell()). The sweep's own
+ * and liquid's equalise_one_cell()). The sweep's own
  * move-reporting call sites (sand.c's try_scatter()/try_fall_or_scatter()/
  * try_slide()/try_slide_pair(), and move_liquid_grain() in
  * sand_liquid.c) call mark_rows() directly instead - they need no block
@@ -654,10 +654,10 @@ typedef struct {
 } xflow_t;
 
 /* Defined in sand_liquid.c: the whole of a step's liquid work that does NOT
- * belong inside the main sweep - cross-flow levelling and the wall-rebound
- * splash. Called once from sand_step(), after that sweep finishes. `flow`
- * describes how this liquid levels - see xflow_t; `dx`/`dy` is gravity's own
- * dithered direction this step. */
+ * belong inside the main sweep - cross-flow levelling. Called once from
+ * sand_step(), after that sweep finishes. `flow` describes how this liquid
+ * levels - see xflow_t; `dx`/`dy` is gravity's own dithered direction this
+ * step. */
 void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy);
 
 /* Defined in sand_gas.c: a gas grain's whole step - rising (reusing

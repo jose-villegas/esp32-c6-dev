@@ -160,7 +160,6 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->impulse_max   = 0;
     s->impulse_count = 0;
     s->splash_chance = SAND_SPLASH_CHANCE_START;
-    s->rebound_splash_chance = SAND_SPLASH_CHANCE_START;
     s->acid_splashes_this_step = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
@@ -180,12 +179,6 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
-    s->mom_x_q8 = 0;
-    s->mom_y_q8 = 0;
-    s->dir_x_q8 = 0;
-    s->dir_y_q8 = 0;
-    s->mom_primed = false;
-    s->flick = 0;
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1240,61 +1233,6 @@ void sand_set_conduction(sand_t *s, int chance)
  * own movement never splits a grain, so nothing here needed them once
  * the liquid branch did. */
 
-/* How hard gravity's direction turned since last step, decayed so a single
- * flick fades over a few frames rather than lingering or accumulating
- * without bound under sustained shaking. Based on the RAW direction, not
- * the dithered or nearest one - both are quantised for the grid's benefit
- * and neither is a fair measure of how fast the input itself is actually
- * moving. Called once a step, not once a cell, so this carries none of the
- * inlining concerns the per-grain helpers below do. */
-static void update_momentum(sand_t *s, int gx, int gy)
-{
-    s->mom_x_q8 = fx_mul_floor(s->mom_x_q8, SAND_MOMENTUM_DECAY, 8);
-    s->mom_y_q8 = fx_mul_floor(s->mom_y_q8, SAND_MOMENTUM_DECAY, 8);
-
-    const int len = im_len(gx, gy);
-    if (len > 0) {
-        const int32_t ux = (int32_t)(((int64_t)gx * 256) / len);
-        const int32_t uy = (int32_t)(((int64_t)gy * 256) / len);
-
-        if (s->mom_primed && s->flick > 0) {
-            /* Which way it turned, from the smoothed direction - a step or
-             * two late, but the right way eventually. Renormalised to a
-             * unit vector so a turn too small for the smoothing to have
-             * caught up on yet still points somewhere definite, rather than
-             * contributing almost nothing just because the filter has not
-             * finished moving.
-             *
-             * HOW FAR comes from the gyroscope, not from how big this
-             * renormalised step is - see the comment above
-             * SAND_REBOUND_GAIN for why the delta itself is the wrong thing
-             * to scale by. */
-            const int32_t tx = ux - s->dir_x_q8;
-            const int32_t ty = uy - s->dir_y_q8;
-            const int tlen = im_len((int)tx, (int)ty);
-
-            if (tlen > 0) {
-                /* The inner division truncates toward zero - a different
-                 * operation from the outer multiply-shift, and left exactly
-                 * as it was; only the outer step moves onto fx_mul_floor(). */
-                s->mom_x_q8 += fx_mul_floor(
-                    (int32_t)(((int64_t)tx * 256) / tlen), s->flick, 8);
-                s->mom_y_q8 += fx_mul_floor(
-                    (int32_t)(((int64_t)ty * 256) / tlen), s->flick, 8);
-            }
-        }
-        s->mom_primed = true;
-        s->dir_x_q8 = ux;
-        s->dir_y_q8 = uy;
-    }
-
-    /* Capped so a long spell of shaking cannot ratchet this past what any
-     * single flick could ever produce. */
-    if (s->mom_x_q8 >  1024) { s->mom_x_q8 =  1024; }
-    if (s->mom_x_q8 < -1024) { s->mom_x_q8 = -1024; }
-    if (s->mom_y_q8 >  1024) { s->mom_y_q8 =  1024; }
-    if (s->mom_y_q8 < -1024) { s->mom_y_q8 = -1024; }
-}
 
 /* Whether each slide is driven at this tilt, for each material - depends
  * only on the direction and the material's angle of repose, so it is worked
@@ -2033,8 +1971,6 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * than a decaying budget like water's splash_chance. */
     s->acid_splashes_this_step = 0;
 
-    update_momentum(s, gx, gy);
-
     /* Dithered rather than nearest, so a tilt between two of the eight
      * directions flows at its true angle instead of snapping. Costs one random
      * number per STEP - not per grain - so it is free at this scale. */
@@ -2118,12 +2054,11 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
                     load_dx, load_dy, jostle, settled_bit, is_liquid, driven);
     }
 
-    /* Everything about a liquid that is NOT gravity-ward: cross-flow, and
-     * the wall-rebound splash on top of it. See sand_step_liquids() in
-     * sand_liquid.c. Run before finalising which blocks get to sleep below,
-     * since a cross-flow or rebound move can still touch a block the main
-     * sweep left quiet - BLOCK_ACTIVE has to reflect the WHOLE step, not
-     * just the sweep's share of it. */
+    /* Everything about a liquid that is NOT gravity-ward: cross-flow. See
+     * sand_step_liquids() in sand_liquid.c. Run before finalising which
+     * blocks get to sleep below, since a cross-flow move can still touch a
+     * block the main sweep left quiet - BLOCK_ACTIVE has to reflect the
+     * WHOLE step, not just the sweep's share of it. */
     sand_step_liquids(s, &flow, dx, dy);
 
     /* Same reasoning, same slot, for gas: rising is not gravity-ward, so it

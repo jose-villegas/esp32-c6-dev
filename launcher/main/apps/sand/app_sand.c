@@ -2367,12 +2367,9 @@ static void draw_palette(const input_t *input)
  *-------------------------------------------------------------------------*/
 
 /* Where is down, and how hard? The GYROSCOPE says how fast the board is
- * turning. It sets how quickly the tilt filter tracks a genuine
- * reorientation, and - raw, unlike everything that filter smooths - it is
- * also what tells the sand how hard it is currently being flicked; see
- * sand_set_flick() and the comment above SAND_REBOUND_GAIN in sand.h. It is
- * deliberately not what shaking is read from - see tilt.h, and the note on
- * rotating not being shaking.
+ * turning, which sets how quickly the tilt filter tracks a genuine
+ * reorientation. It is deliberately not what shaking is read from - see
+ * tilt.h, and the note on rotating not being shaking.
  *
  * Falls back to straight down at full speed when there is no sensor. */
 static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
@@ -2539,7 +2536,7 @@ static void log_direction_change(int gx, int gy, int jostle,
  * a stop over a moment rather than freezing between one frame and the next.
  * It is also the real behaviour, since a grain on a tray tilted by theta is
  * driven by g*sin(theta). */
-static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
+static void run_sim_steps(int gx, int gy, int jostle, int flow,
                           uint32_t dt_ms)
 {
     sim_accumulator_q8 += dt_ms * (uint32_t)flow;
@@ -2551,7 +2548,6 @@ static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
         sim_accumulator_q8 -= (uint32_t)steps * SIM_STEP_MS * 256;
     }
 
-    sand_set_flick(&sim, rotation);
     for (int i = 0; i < steps; i++) {
         sand_step(&sim, gx, gy, jostle);
     }
@@ -2974,7 +2970,7 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     const int64_t t0 = esp_timer_get_time();
 #endif
 
-    run_sim_steps(gx, gy, jostle, flow, rotation, dt_ms);
+    run_sim_steps(gx, gy, jostle, flow, dt_ms);
 
     /* Same gravity sand_step() above was just given, so a liquid rim's
      * highlight tracks the same tilt the sand itself is responding to.

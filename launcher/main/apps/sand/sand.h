@@ -277,15 +277,6 @@ typedef struct {
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 
-    /* Bulk momentum: how hard gravity's DIRECTION is currently swinging, not
-     * where it currently points. See the comment above SAND_REBOUND_GAIN. Q8
-     * fixed point; (dir_x_q8, dir_y_q8) is the previous step's normalised
-     * gravity direction, kept only to measure the turn against. */
-    int32_t  mom_x_q8, mom_y_q8;
-    int32_t  dir_x_q8, dir_y_q8;
-    bool     mom_primed;
-    int      flick;      /* 0-255, see sand_set_flick() */
-
     /* Optional, caller-owned, h bytes: which rows changed since it was last
      * cleared. NULL disables tracking entirely. See sand_track_dirty_rows(). */
     uint8_t *dirty_rows;
@@ -311,22 +302,11 @@ typedef struct {
     /* Decaying trigger chance for splash_displace() (sand_liquid.c) - see
      * SAND_SPLASH_RADIUS_WATER's own comment above for why this lives
      * per-instance. WATER only - see acid_splashes_this_step below for
-     * why acid needs a different kind of throttle.
-     *
-     * ONE OF TWO SEPARATE WATER BUDGETS, not shared with rebound_splash_
-     * chance below - splash_displace()'s own comment (sand_liquid.c)
-     * explains why one budget for both trigger contexts let whichever ran
-     * first in a step (always the ordinary per-grain trigger this field
-     * serves) starve the other of its own guaranteed-first roll. This one
-     * covers a grain landing on already-occupied liquid, and a grain's
-     * ordinary gravity-ward fall being blocked by a wall or the grid
-     * edge - both in move_liquid_grain(). */
+     * why acid needs a different kind of throttle. Covers both of
+     * splash_displace()'s water call sites in move_liquid_grain(): a
+     * grain landing on already-occupied liquid, and a grain's ordinary
+     * gravity-ward fall being blocked by a wall or the grid edge. */
     uint8_t    splash_chance;
-
-    /* The SECOND of the two water budgets - rebound_wall()'s own
-     * flick-driven wall-kick trigger only (rebound_one_cell(),
-     * sand_liquid.c), never touched by splash_chance above. */
-    uint8_t    rebound_splash_chance;
 
     /* How many ACID splashes splash_displace() has already fired THIS
      * STEP, reset to 0 at the top of every sand_step() - caps how many of
@@ -1161,87 +1141,17 @@ void sand_explode(sand_t *s, int cx, int cy, int radius);
  * fire's own rows in material.c for the tuned figures and their
  * reasoning. */
 
-/* THE WALL-REBOUND SPLASH
- *
- * Everything above reacts to where gravity POINTS. Nothing reacts to how fast
- * it is CHANGING - so flicking the board hard and a slow tilt to the same
- * angle look identical once settled, and a wave that has just piled against a
- * wall has no reason to do anything but sit there.
- *
- * A real wave hitting a wall bounces some of itself back. The cheap stand-in:
- * track a bulk momentum vector from how much gravity's direction has turned,
- * step over step - not from where it points, which is already fully handled
- * above. When that turn is large and pointed into a wall, cells touching that
- * wall kick a little mass back into the grid; the kick fades as the turn
- * fades, over a few steps.
- *
- * Deliberately not a per-cell velocity: that would be another byte per cell,
- * 41 KB against the ~90 KB actually free once the grid and its row state are
- * allocated. One shared vector costs nothing measurable and produces the
- * same visible effect, since the whole board is being shaken together, not
- * grain by grain.
- *
- * THE DIRECTION AND THE SPEED COME FROM DIFFERENT PLACES, ON PURPOSE
- *
- * (gx, gy) is already smoothed before it ever reaches here - it has to be, or
- * every grain would jitter with the sensor's noise. That smoothing is exactly
- * what makes it the wrong thing to measure SPEED from: an exponential filter
- * can only close a fraction of the gap to a new reading each step, so its own
- * frame-to-frame delta is capped by the filter's time constant rather than by
- * how fast the device actually moved. Turning that up just makes ordinary
- * tilting cross the threshold too.
- *
- * So direction still comes from (gx, gy) - which way it turned is a question
- * the smoothed signal answers just fine, a step or two late. HOW FAR to push
- * comes from sand_set_flick() instead: the caller's own gyroscope reading,
- * which was never run through that filter and exists for exactly this. See
- * sand_set_flick().
- */
-
-/* How much of a step's turn survives to the next one, out of 256. Higher
- * lingers longer. */
-#define SAND_MOMENTUM_DECAY     220
-
-/* Below this much accumulated turn (Q8 units - 256 is a full quarter-turn in
- * one step) no wall reacts at all. Ordinary tilting, even briskly, stays under
- * this; it takes an actual flick to cross it. */
-#define SAND_REBOUND_THRESHOLD  160
-
-/* Mass kicked off a wall per cell per step, per unit of turn past the
- * threshold. Zero disables the whole effect with no other change needed -
- * the momentum is still tracked, but nothing ever reads it.
- *
- * Calibrated against a real capture, not guessed: a genuine flick on this
- * board measured 162-737 past the threshold, but MOST of that range sits at
- * the low end (162-350) - so the previous value of 3 gave a typical flick a
- * kick of only 1-2 out of 15, barely visible. 8 puts a typical flick's kick
- * in the 4-6 range instead; only the hardest flicks in the sample now reach
- * SAND_REBOUND_MAX on their own. */
-#define SAND_REBOUND_GAIN         8
-
-/* However hard the flick, no more than this much mass moves per cell per
- * step - it is a splash, not a teleport. Raised alongside the gain above so
- * the hardest flicks in the same capture (up to 737 past the threshold)
- * still read as visibly stronger than a merely brisk one, rather than both
- * capping out at the same number. */
-#define SAND_REBOUND_MAX         10
-
-/* How hard the device is being turned RIGHT NOW, 0-255 - not jostle (linear
- * shake) and not derived from (gx, gy) (smoothed, and rate-limited by that
- * smoothing - see the comment above). Meant to be read straight from a
- * gyroscope once a frame and handed in here unchanged; sand_step() uses it to
- * scale the wall-rebound kick, and nothing else. Not sticky: whatever was set
- * last is what the next sand_step() sees, so a caller with nothing to report
- * should pass 0 rather than assume it decays on its own. Defaults to 0, so a
- * caller that never calls this sees no rebound at all, ever. */
-void sand_set_flick(sand_t *s, int flick);
-
-/* The momentum vector as it stands after the last sand_step(), Q8 fixed
- * point. Read-only, and not needed for the simulation itself - it exists so
- * a caller can watch what real handling actually does to it, which is the
- * only honest way to calibrate SAND_REBOUND_THRESHOLD against a device
- * rather than a synthetic test. */
-void sand_momentum(const sand_t *s, int32_t *mx_q8, int32_t *my_q8);
+/* THE WALL-REBOUND SPLASH, REMOVED 2026-08-30 - a bulk-momentum-driven
+ * mass kick off a wall on a hard flick (sand_set_flick(), sand_momentum(),
+ * SAND_MOMENTUM_DECAY/SAND_REBOUND_THRESHOLD/SAND_REBOUND_GAIN/SAND_
+ * REBOUND_MAX, rebound_wall()/rebound_one_cell() in sand_liquid.c). Set
+ * SAND_REBOUND_GAIN to 0 first as a reversible on-device test; confirmed
+ * imperceptible at this display size and cell resolution, so removed
+ * outright rather than left as a permanently-disabled mechanism still
+ * paying for momentum tracking every step. Search git history for
+ * "SAND_REBOUND_GAIN" if this is ever worth revisiting - a real per-grain
+ * splash on a genuine wall hit exists instead, see splash_displace()'s
+ * own comment in sand_liquid.c. */
 
 /* How many cells are stacked directly against gravity above the one at (x, y),
  * capped at SAND_LOAD_CAP. (dx, dy) is a unit gravity direction.

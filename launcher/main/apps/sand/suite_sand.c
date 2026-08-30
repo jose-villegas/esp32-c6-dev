@@ -2445,109 +2445,6 @@ static void test_a_pool_settles_at_the_angle_it_is_tilted_to(void)
     }
 }
 
-/* --- momentum: the wall-rebound splash ----------------------------------- */
-
-#define REB_W 6
-#define REB_H 4
-static uint8_t reb_cells_a[REB_W * REB_H];
-static uint8_t reb_cells_b[REB_W * REB_H];
-static sand_t  reb_a, reb_b;
-
-static long mass_in_column(const sand_t *g, int x, material_id_t m)
-{
-    long total = 0;
-    for (int y = 0; y < REB_H; y++) {
-        const cell_t c = sand_at(g, x, y);
-        if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == (uint8_t)m) {
-            total += CELL_VARIANT(c);
-        }
-    }
-    return total;
-}
-
-/* Only the wall column, so the interior one stays empty - room the rebound
- * needs somewhere to deposit into. */
-static void fill_left_wall_column(sand_t *g)
-{
-    for (int y = 0; y < REB_H; y++) {
-        sand_set(g, 0, y, CELL_MAKE(MAT_WATER, MASS_MAX));
-    }
-}
-
-static void test_a_hard_flick_kicks_water_off_the_wall_it_just_hit(void)
-{
-    /* The reported wish: a wave that has just piled against a wall should
-     * bounce off it a little, rather than simply sitting there the way a
-     * steady tilt to the same angle leaves it.
-     *
-     * Both pools are primed pointing a different way, THEN filled with water
-     * against the left wall, THEN stepped once more with gravity pointing
-     * left - so the water itself never experiences its priming direction at
-     * all, and the two setups differ in exactly one thing: which way
-     * momentum was already pointing when that final step landed.
-     *
-     * Gravity is kept exactly horizontal throughout, which matters beyond
-     * tidiness: it is what makes the comparison exact rather than merely
-     * probable. Off-axis gravity dithers between two of the eight directions
-     * at random (see sand_gravity_direction_dithered), and horizontal
-     * gravity's own perpendicular is vertical, so ordinary cross-flow cannot
-     * reach a neighbouring COLUMN either. With no randomness and no ordinary
-     * path into column 1 at all, water arriving there can only be the
-     * rebound - there is nothing else it could be.
-     *
-     * Both leave sand_set_flick() at its default of zero except on the one
-     * step meant to be a flick: the gyroscope has nothing to say about a
-     * turn that never happened, and the momentum arithmetic must not invent
-     * one on its own just because the smoothed direction eventually moved -
-     * see the comment above SAND_REBOUND_GAIN. */
-    sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
-    sand_init(&reb_b, reb_cells_b, REB_W, REB_H, 1u);
-
-    sand_step(&reb_a, -1000, 0, 0);   /* primed pointing left, same as below */
-    sand_step(&reb_b,  1000, 0, 0);   /* primed pointing right - away from it */
-
-    fill_left_wall_column(&reb_a);
-    fill_left_wall_column(&reb_b);
-
-    sand_step(&reb_a, -1000, 0, 0);   /* gradual: already pointed this way */
-
-    sand_set_flick(&reb_b, 255);      /* the gyroscope says: a hard flick */
-    sand_step(&reb_b, -1000, 0, 0);   /* flicked: a full reversal onto the wall */
-
-    const long gradual_col1 = mass_in_column(&reb_a, 1, MAT_WATER);
-    const long flicked_col1 = mass_in_column(&reb_b, 1, MAT_WATER);
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, gradual_col1,
-        "sanity check on the test itself: gravity that was already pointing "
-        "into the wall must produce no momentum and therefore no rebound");
-    TEST_ASSERT_GREATER_THAN_MESSAGE(gradual_col1, flicked_col1,
-        "a hard flick onto a wall the water is already resting against must "
-        "kick some of it back into the grid");
-}
-
-static void test_a_wall_splash_also_queues_a_small_displacement(void)
-{
-    /* Same reversal-onto-a-wall scene as the test above, checking
-     * sand_displace()'s own side effect instead of where the mass ends up -
-     * rebound_one_cell() (sand_liquid.c) fires it on every successful
-     * kick. */
-    impulse_t splash_impulse_buf[REB_W * REB_H];
-    sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
-    sand_enable_impulses(&reb_a, splash_impulse_buf, REB_W * REB_H);
-
-    sand_step(&reb_a, 1000, 0, 0);
-    fill_left_wall_column(&reb_a);
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, reb_a.impulse_count,
-        "setup: nothing should be queued before the flick itself");
-
-    sand_set_flick(&reb_a, 255);
-    sand_step(&reb_a, -1000, 0, 0);
-
-    TEST_ASSERT_GREATER_THAN_MESSAGE(0, reb_a.impulse_count,
-        "a wall splash hard enough to kick mass back into the grid must "
-        "also queue a small sand_displace() at the impact point");
-}
-
 #define SPLASH_W 3
 #define SPLASH_H 10
 static uint8_t splash_cells[SPLASH_W * SPLASH_H];
@@ -2659,29 +2556,6 @@ static void test_water_falling_onto_the_bare_grid_edge_also_queues_a_small_displ
         "a drop that fell through open space and hit the bare grid edge, "
         "with no wall cell drawn there at all, must still queue a small "
         "directed impulse");
-}
-
-static void test_a_reversal_without_a_flick_signal_still_does_not_rebound(void)
-{
-    /* The whole reason sand_set_flick() exists: (gx, gy) is smoothed, so a
-     * caller could always manufacture a large frame-to-frame turn just by
-     * reporting a sudden change of mind about where gravity points, with no
-     * device motion behind it at all. If the turn's own size were what
-     * triggered the rebound, this would be indistinguishable from a real
-     * flick and the effect would fire on command rather than on speed.
-     *
-     * Same full reversal as the test above, but with nothing set into
-     * sand_set_flick() - the caller reporting no motion. It must produce
-     * exactly the same nothing that a steady gravity does. */
-    sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
-
-    sand_step(&reb_a, 1000, 0, 0);     /* primed pointing right */
-    fill_left_wall_column(&reb_a);
-    sand_step(&reb_a, -1000, 0, 0);    /* the same reversal - but no flick set */
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, mass_in_column(&reb_a, 1, MAT_WATER),
-        "a direction change with no reported flick must not rebound, however "
-        "large the change - only sand_set_flick() may trigger this");
 }
 
 /* --- gas ------------------------------------------------------------------ */
@@ -3863,9 +3737,10 @@ static void test_water_still_puts_fire_out(void)
  *
  * The obvious test is behavioural: place a column and assert it spreads.
  * That was written first and it does not work, which is worth recording.
- * A mobility of zero does not actually freeze a liquid, because the
- * wall-rebound splash moves liquid without consulting the gate - lava at
- * zero still crossed the same distance, in 249 steps against 20. Any
+ * A mobility of zero does not actually freeze a liquid, because (at the
+ * time this was measured) the wall-rebound splash moved liquid without
+ * consulting the gate, since removed (2026-08-30, see git history) - lava
+ * at zero still crossed the same distance, in 249 steps against 20. Any
  * budget loose enough not to be flaky is loose enough to let that pass,
  * and any budget tight enough to catch it is pinning a performance figure
  * rather than an invariant.
@@ -6429,7 +6304,7 @@ static void test_the_debounce_survives_open_air_above_the_pool(void)
  * top of the reservoir, where mass actually moved, marked anything at all.
  * pour_into() (sand_liquid.c) now reports whether the cell it just filled
  * was previously empty - the only event that can move where a puddle's
- * surface sits - and equalise_one_cell()/rebound_one_cell() use that to
+ * surface sits - and equalise_one_cell() uses that to call
  * mark_depth_band() a bounded run of rows around the new surface, so the
  * render catches up without repainting the whole reservoir. give_mass()
  * (move_liquid_grain()'s per-grain fall, the hottest path in the
@@ -17681,12 +17556,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_large_body_of_water_levels);
     RUN_TEST(test_a_settled_pool_does_not_flicker);
     RUN_TEST(test_a_pool_settles_at_the_angle_it_is_tilted_to);
-    RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
-    RUN_TEST(test_a_wall_splash_also_queues_a_small_displacement);
     RUN_TEST(test_water_falling_onto_water_also_queues_a_small_displacement);
     RUN_TEST(test_water_falling_onto_a_solid_floor_also_queues_a_small_displacement);
     RUN_TEST(test_water_falling_onto_the_bare_grid_edge_also_queues_a_small_displacement);
-    RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
 
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
     RUN_TEST(test_gas_falls_when_the_board_is_inverted);

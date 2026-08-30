@@ -10,8 +10,7 @@
  * Everything else in a liquid's behaviour is NOT gravity-ward, and so cannot
  * safely live in that sweep at all - see the comment above equalise_liquids()
  * for why. sand_step_liquids() is the one thing sand_step() calls after its
- * sweep finishes: cross-flow levelling, and the wall-rebound splash on top of
- * it.
+ * sweep finishes: cross-flow levelling.
  *===========================================================================*/
 
 #include "sand_priv.h"
@@ -24,29 +23,21 @@
 
 /* A liquid splash: sand_displace_material() at a per-material radius,
  * called whenever a WATER or ACID grain lands hard - falling onto an
- * already-occupied surface, or rebounding off a wall (both call sites
- * below). Water and acid only, for now - oil and lava are not gated in
- * here, see SAND_SPLASH_RADIUS_WATER's own comment in sand.h.
+ * already-occupied surface, or its ordinary gravity-ward fall being
+ * blocked by a wall or the grid edge (both call sites in
+ * move_liquid_grain() below). Water and acid only, for now - oil and lava
+ * are not gated in here, see SAND_SPLASH_RADIUS_WATER's own comment in
+ * sand.h.
  *
  * MASKED TO `mat_id`, not a plain sand_displace() - an unmasked
  * displacement throws whatever it finds within the radius, which meant
  * pouring water over water sitting on dirt flung the dirt around too.
  * This is meant to be water/acid splashing itself, nothing else.
  *
- * WATER is gated by a chance-in-256 roll against a decaying budget the
- * CALLER passes in (`water_chance`, pointing at either sand_t::splash_
- * chance or sand_t::rebound_splash_chance, sand.h) - two SEPARATE budgets,
- * not one shared between every water trigger. A resting wall column and a
- * flick-driven rebound can both qualify in the very same step (a flick
- * changes gravity, so grains already against that wall immediately find
- * their new gravity-ward direction blocked by it too, on top of rebound_
- * wall()'s own momentum-based kick) - sharing one budget meant whichever
- * of the two ran first (always the ordinary per-grain trigger, earlier in
- * the sweep) could burn the guaranteed-first roll and leave the other
- * rolling against an already-decayed chance, on the very step it was
- * supposed to be guaranteed. Two budgets, gated by a displaced grain
- * landing again within the SAME trigger context, so a bounce chain still
- * dies out quickly without one context starving the other.
+ * WATER is gated by a chance-in-256 roll against this sand_t's own
+ * decaying budget (sand_t::splash_chance, sand.h), so a displaced grain
+ * landing again does not just re-splash itself indefinitely - a real
+ * splash does not keep re-triggering off its own spray.
  *
  * ACID DOES NOT DECAY OVER TIME - it always splashes at its own full
  * radius, at full intensity, and never touches `splash_chance` at all (so
@@ -64,8 +55,7 @@
  * splash. The cap forgets itself every step (sand_step(), sand.c), so it
  * throttles simultaneous triggers without making acid's splash depend on
  * history the way a decaying chance would. */
-static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id,
-                                   uint8_t *water_chance)
+static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id == MAT_ACID) {
         if (s->acid_splashes_this_step >= SAND_SPLASH_ACID_PER_STEP_CAP) {
@@ -78,13 +68,13 @@ static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id,
     if (mat_id != MAT_WATER) {
         return;
     }
-    if ((rng_next(&s->rng) & 0xFF) > *water_chance) {
+    if ((rng_next(&s->rng) & 0xFF) > s->splash_chance) {
         return;   /* this echo lost the roll - let the bounce die here */
     }
     sand_displace_material(s, x, y, SAND_SPLASH_RADIUS_WATER, mat_id);
-    *water_chance =
-        *water_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
-            ? (uint8_t)(*water_chance - SAND_SPLASH_CHANCE_STEP)
+    s->splash_chance =
+        s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
+            ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
             : SAND_SPLASH_CHANCE_FLOOR;
 }
 
@@ -152,14 +142,14 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
     const int give = mass < room ? mass : room;
     if (give > 0) {
         /* pour_into()'s was_empty is deliberately IGNORED here, unlike at
-         * equalise_one_cell()'s and rebound_one_cell()'s call sites - this
-         * is move_liquid_grain()'s per-grain fall, the hottest path in the
-         * simulation (11,130 of 11,142 mark_rows() calls on a screen of
-         * water, per this function's own comment above), and a grain
-         * falling into empty space below it is the ORDINARY case, not the
-         * rare one equalise/rebound's mark_depth_band() calls exist to
-         * catch. Gating on was_empty here would fire on nearly every one of
-         * those calls, reintroducing the same shape of per-transfer cost
+         * equalise_one_cell()'s call site - this is move_liquid_grain()'s
+         * per-grain fall, the hottest path in the simulation (11,130 of
+         * 11,142 mark_rows() calls on a screen of water, per this
+         * function's own comment above), and a grain falling into empty
+         * space below it is the ORDINARY case, not the rare one equalise's
+         * mark_depth_band() call exists to catch. Gating on was_empty here
+         * would fire on nearly every one of those calls, reintroducing the
+         * same shape of per-transfer cost
          * this function's own history (mark_rows() cut to two byte writes)
          * exists to avoid. A settled reservoir's surface only actually
          * moves once mass reaches it and levels out sideways, which is
@@ -482,7 +472,7 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
             const bool exposed = arow == NULL || (unsigned)ax >= (unsigned)w
                                   || CELL_IS_EMPTY(arow[ax]);
             if (exposed) {
-                splash_displace(s, tx0, ty0, mat_id, &s->splash_chance);
+                splash_displace(s, tx0, ty0, mat_id);
             }
         }
     } else if ((unsigned)tx0 >= (unsigned)w || prow == NULL ||
@@ -559,7 +549,7 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * impulses() finds there later, instead of a byte this grain's own
      * diagonal slides have since changed underneath it. */
     if (wall_splash) {
-        splash_displace(s, x, y, mat_id, &s->splash_chance);
+        splash_displace(s, x, y, mat_id);
     }
 
     return moved;
@@ -1048,105 +1038,6 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
     }
 }
 
-/* One wall's share of the rebound splash - see SAND_REBOUND_GAIN.
- *
- * `edge` is the column (for a left/right wall) or row (top/bottom) that
- * touches the wall; `count` is how many cells run along it; `to` is the
- * one-cell step into the grid, away from the wall. `push_q8` is how hard
- * momentum is currently driving INTO this particular wall - already resolved
- * to a single non-negative number by the caller, since each wall only cares
- * about one sign of one axis.
- *
- * Every source cell here is unique to this wall and every destination is one
- * fixed step inward, so no two transfers this call can ever touch the same
- * cell - unlike equalise_liquids, this needs no sweep order at all. */
-/* How much mass one cell's share of the splash moves, or 0 if the push is
- * not hard enough to count as a flick at all. */
-static inline int rebound_kick(int push_q8)
-{
-    if (push_q8 <= SAND_REBOUND_THRESHOLD) {
-        return 0;
-    }
-    /* push_q8 > SAND_REBOUND_THRESHOLD is already established above, so this
-     * operand is non-negative and fx_mul_floor()'s floor agrees with a plain
-     * truncation here - migrated for consistency with the rest of the
-     * simulation's fixed-point math, not because the rounding choice
-     * matters at this particular call site. */
-    const int raw = fx_mul_floor(push_q8 - SAND_REBOUND_THRESHOLD,
-                                  SAND_REBOUND_GAIN, 8);
-    return raw < SAND_REBOUND_MAX ? raw : SAND_REBOUND_MAX;
-}
-
-/* One cell's share of the splash: kick up to `kick` mass from (x, y) into
- * the cell `to` steps away from the wall, if (x, y) holds a liquid and that
- * destination exists. */
-static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
-                                    bool vertical, int kick,
-                                    uint16_t is_liquid)
-{
-    const int w = s->w;
-    const size_t at = (size_t)y * (size_t)w + (size_t)x;
-    const cell_t c = s->cells[at];
-    if (CELL_IS_EMPTY(c)) {
-        return;
-    }
-    const uint8_t id = CELL_MATERIAL(c);
-    if (((is_liquid >> id) & 1u) == 0) {
-        return;
-    }
-
-    const int nx = vertical ? x + to : x;
-    const int ny = vertical ? y      : y + to;
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)s->h) {
-        return;
-    }
-
-    const int mass = CELL_VARIANT(c);
-    const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-    const int room = room_in(s->cells[nat], id);
-    const int give = kick < mass ? kick : mass;
-    const int moved = give < room ? give : room;
-    if (moved <= 0) {
-        return;
-    }
-
-    /* See equalise_one_cell()'s own comment on the same pattern just above
-     * in this file: only a splash landing on a previously-empty cell can
-     * move a puddle's surface, so only that case pays mark_depth_band()'s
-     * wider mark. */
-    const bool was_empty = pour_into(&s->cells[nat], id, moved);
-    s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
-                                      : CELL_EMPTY;
-    if (was_empty) {
-        mark_depth_band(s, ny);
-    }
-    mark_move(s, x, y, nx, ny);
-
-    /* A wall splash also throws a little displacement out from the
-     * impact point - see splash_displace()'s own comment above. Its own
-     * rebound_splash_chance budget (sand.h), separate from the ordinary
-     * per-grain wall/landing trigger's splash_chance - see that comment
-     * for why sharing one caused this flick-driven kick to sometimes lose
-     * its own guaranteed-first roll to a wall column's grains claiming it
-     * first, earlier in the very same step. */
-    splash_displace(s, x, y, id, &s->rebound_splash_chance);
-}
-
-static void rebound_wall(sand_t *s, int edge, int count, int to,
-                         bool vertical, int push_q8, uint16_t is_liquid)
-{
-    const int kick = rebound_kick(push_q8);
-    if (kick <= 0) {
-        return;
-    }
-
-    for (int i = 0; i < count; i++) {
-        const int x = vertical ? edge : i;
-        const int y = vertical ? i : edge;
-        rebound_one_cell(s, x, y, to, vertical, kick, is_liquid);
-    }
-}
-
 void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
 {
     if (!s->may_have_liquid) {
@@ -1175,36 +1066,4 @@ void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
      * equalise_liquids(). */
     equalise_liquids(s, &run, SAND_LIQUID_SIGHT, dx, dy);
     s->liquid_flip = !s->liquid_flip;
-
-    /* And let a hard flick splash liquid back off whichever wall it just
-     * turned into. Four walls, but each is a no-op below its own threshold,
-     * so this costs nothing on the vastly more common calm step - see
-     * SAND_REBOUND_GAIN. */
-    if (SAND_REBOUND_GAIN != 0) {
-        const uint16_t is_liquid = liquid_mask();
-
-        rebound_wall(s, 0,        s->h, 1,  true,
-                    (int)-s->mom_x_q8, is_liquid);   /* left wall   */
-        rebound_wall(s, s->w - 1, s->h, -1, true,
-                    (int) s->mom_x_q8, is_liquid);   /* right wall  */
-        rebound_wall(s, 0,        s->w, 1,  false,
-                    (int)-s->mom_y_q8, is_liquid);   /* top wall    */
-        rebound_wall(s, s->h - 1, s->w, -1, false,
-                    (int) s->mom_y_q8, is_liquid);   /* bottom wall */
-    }
-}
-
-/*---------------------------------------------------------------------------
- * Momentum accessors - see SAND_REBOUND_GAIN.
- *-------------------------------------------------------------------------*/
-
-void sand_momentum(const sand_t *s, int32_t *mx_q8, int32_t *my_q8)
-{
-    *mx_q8 = s->mom_x_q8;
-    *my_q8 = s->mom_y_q8;
-}
-
-void sand_set_flick(sand_t *s, int flick)
-{
-    s->flick = flick < 0 ? 0 : (flick > 255 ? 255 : flick);
 }
