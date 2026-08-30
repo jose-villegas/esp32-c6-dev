@@ -208,9 +208,17 @@ bool screenshot_take_request(void);
  * describe the exact frame the image does, not whatever the console
  * listener task happened to see arrive a frame or more later.
  *
+ * `current_app` is whichever app_t is running this frame (NULL if the
+ * launcher is showing, same as main.c's own `current`) - passed through
+ * purely so its OPTIONAL diagnostic_json callback (see app_t's own comment
+ * in app.h) can be spliced into the dump as an "app" key, if it set one.
+ * Nothing here needs to know what that app is or what its diagnostic state
+ * means; a NULL app or a NULL diagnostic_json just leaves the "app" key out
+ * entirely.
+ *
  * Meant to be called from main.c's frame loop right after a frame is drawn
  * and before it is presented, so what is captured is exactly what is about
  * to appear on screen (see gfx.h's own dirty-tracking comment: gfx_present()
  * only sends what changed, but the full framebuffer this reads from is
  * always complete regardless). */
-void screenshot_dump(const input_t *input);
+void screenshot_dump(const input_t *input, const app_t *current_app);

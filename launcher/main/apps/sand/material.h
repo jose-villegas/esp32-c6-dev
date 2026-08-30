@@ -189,6 +189,17 @@ typedef uint8_t cell_t;
  * leaves an occupied cell holding nothing. */
 #define MASS_MAX 15
 
+/* How many cells of LOCAL DEPTH (app_sand.c's per-puddle depth walk) it
+ * takes a liquid interior's shading to reach full saturation - see
+ * material.c's DEPTH_SATURATE_CELLS, which is this value, for the shading
+ * side of the story. Shared here, rather than left private to material.c,
+ * because sand_liquid.c's pour-staleness fix needs the SAME distance to
+ * decide how far a newly-claimed surface cell can possibly change any
+ * cell's rendered depth - the two have to agree by construction, not by
+ * coincidence, the way MATERIAL_EDGE_MASK_COUNT's own comment in material.c
+ * warns two same-valued constants can quietly stop agreeing. */
+#define MATERIAL_LIQUID_DEPTH_BAND 24
+
 /*---------------------------------------------------------------------------
  * Materials
  *-------------------------------------------------------------------------*/

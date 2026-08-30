@@ -19,6 +19,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <string.h>
 
 #include "sand.h"
 
@@ -58,6 +59,45 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
         s->dirty_rows[y0] = 1;
         s->dirty_rows[y1] = 1;
     }
+}
+
+/* A liquid cell at row `y` just turned from EMPTY into occupied - see
+ * pour_into()'s `was_empty` return, its only caller - which is the only
+ * event that can move where a puddle's surface is, and therefore the only
+ * event that can make app_sand.c's LOCAL DEPTH render stale below it (see
+ * that mechanism's own long comment in app_sand.c, "STALE READINGS UNDER
+ * THE DIRTY-ROW OPTIMISATION ARE ACCEPTED"). Ordinary mass moving between
+ * two ALREADY-liquid cells - the common case, every step a pool is settling
+ * or sloshing - never calls this: it cannot change the depth topology, only
+ * redistribute mass within it, so marking dirty for it would repaint a
+ * settled reservoir on every step something merely levels out, exactly the
+ * "updating all water just because of a pour" cost this exists to avoid.
+ *
+ * Marks a band of rows, not two points the way mark_rows() does - a settled
+ * column's stored local depth for anything within MATERIAL_LIQUID_DEPTH_BAND
+ * cells of the new surface can now read differently once repainted, and
+ * anything further than that already saturates to the same flat body colour
+ * whether the true depth is one cell more or a hundred, so there is nothing
+ * further out worth invalidating. Direction-agnostic (both above and below
+ * `y`) rather than reasoning about which way is "toward depth" this frame -
+ * that answer lives in app_sand.c's own gravity-axis bookkeeping
+ * (local_depth_axis_vertical/local_depth_reverse), and coupling the
+ * simulation to it here would be a layering mistake for a mark that is
+ * already cheap enough to just cover both directions. */
+static inline void mark_depth_band(sand_t *s, int y)
+{
+    if (s->dirty_rows == NULL) {
+        return;
+    }
+    int y0 = y - MATERIAL_LIQUID_DEPTH_BAND;
+    int y1 = y + MATERIAL_LIQUID_DEPTH_BAND;
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (y1 >= s->h) {
+        y1 = s->h - 1;
+    }
+    memset(&s->dirty_rows[y0], 1, (size_t)(y1 - y0 + 1));
 }
 
 /* Settled-block bits, in block_state - the finer-grained sibling of

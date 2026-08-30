@@ -24,12 +24,23 @@
 
 /* Add `amount` of `id` to a cell that is either empty or already that same
  * material. Mass is only ever moved, never made: every caller subtracts the
- * same figure from somewhere else in the same breath. */
-static inline void pour_into(cell_t *dst, uint8_t id, int amount)
+ * same figure from somewhere else in the same breath.
+ *
+ * Returns whether `dst` was empty beforehand - true exactly when this pour
+ * just turned a non-liquid cell into a liquid one, which is the only case
+ * that can move where a puddle's surface sits. Every caller already computed
+ * this internally before the change that added the return value; callers
+ * that care feed it straight to mark_depth_band() (sand_priv.h) to catch
+ * app_sand.c's LOCAL DEPTH render up on the newly-claimed cell without
+ * re-marking anything for the far more common case of mass moving between
+ * two cells that were already liquid. */
+static inline bool pour_into(cell_t *dst, uint8_t id, int amount)
 {
-    const int had = CELL_IS_EMPTY(*dst) ? 0 : CELL_VARIANT(*dst);
+    const bool was_empty = CELL_IS_EMPTY(*dst);
+    const int had = was_empty ? 0 : CELL_VARIANT(*dst);
 
     *dst = CELL_MAKE(id, had + amount);
+    return was_empty;
 }
 
 /* How much of `id` a cell will accept, 0 if it holds something else. */
@@ -74,6 +85,20 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
     const int room = room_in(to_row[tx], mat_id);
     const int give = mass < room ? mass : room;
     if (give > 0) {
+        /* pour_into()'s was_empty is deliberately IGNORED here, unlike at
+         * equalise_one_cell()'s and rebound_one_cell()'s call sites - this
+         * is move_liquid_grain()'s per-grain fall, the hottest path in the
+         * simulation (11,130 of 11,142 mark_rows() calls on a screen of
+         * water, per this function's own comment above), and a grain
+         * falling into empty space below it is the ORDINARY case, not the
+         * rare one equalise/rebound's mark_depth_band() calls exist to
+         * catch. Gating on was_empty here would fire on nearly every one of
+         * those calls, reintroducing the same shape of per-transfer cost
+         * this function's own history (mark_rows() cut to two byte writes)
+         * exists to avoid. A settled reservoir's surface only actually
+         * moves once mass reaches it and levels out sideways, which is
+         * equalise_one_cell()'s job, not this one's - see that call site's
+         * own comment for where the real invalidation happens. */
         pour_into(&to_row[tx], mat_id, give);
         mark_rows(s, y, ty);
     }
@@ -596,8 +621,19 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     const int ty = y + py * at;
     const int w  = s->w;
 
-    pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
+    /* was_empty gates mark_depth_band() below: this transfer just moved
+     * mass ONTO a cell that had none, which is the only case that can shift
+     * a puddle's surface - see mark_depth_band()'s own comment
+     * (sand_priv.h). The far commoner case here, topping up a neighbour
+     * that already held some of the same liquid, leaves the depth topology
+     * untouched, so it stays exactly as cheap as it always was: only
+     * mark_rows()'s ordinary two-row mark. */
+    const bool was_empty =
+        pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
     row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give) : CELL_EMPTY;
+    if (was_empty) {
+        mark_depth_band(s, ty);
+    }
 
     *stayed_in_row = (ty == y);
     if (*stayed_in_row) {
@@ -931,9 +967,16 @@ static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
         return;
     }
 
-    pour_into(&s->cells[nat], id, moved);
+    /* See equalise_one_cell()'s own comment on the same pattern just above
+     * in this file: only a splash landing on a previously-empty cell can
+     * move a puddle's surface, so only that case pays mark_depth_band()'s
+     * wider mark. */
+    const bool was_empty = pour_into(&s->cells[nat], id, moved);
     s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
                                       : CELL_EMPTY;
+    if (was_empty) {
+        mark_depth_band(s, ny);
+    }
     mark_move(s, x, y, nx, ny);
 }
 

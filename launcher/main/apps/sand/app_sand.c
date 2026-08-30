@@ -1058,6 +1058,88 @@ static uint32_t foam_elapsed_ms;
  * update_local_depth_axis() below for where this gets caught and reset. */
 static uint8_t col_local_depth[GRID_W_MAX];
 
+/* THE DEBOUNCED PARALLEL WALK - what material_colours() is actually fed.
+ *
+ * A first attempt gated the ENTIRE depth gradient behind
+ * sand_block_settled() (a block only settles once NOTHING in the whole
+ * SAND_BLOCK_W x SAND_BLOCK_H block moved for a step). Verified on device
+ * and reverted: a real hand never holds the board perfectly still, so that
+ * bit rarely latches at all under real handling, and the gradient was gone
+ * almost everywhere rather than merely steadied - "we lost the bands" was
+ * the report, not "the flicker is gone."
+ *
+ * A SECOND attempt tried a plain per-column accumulator that ran in
+ * parallel with col_local_depth[] (same shape, same row-to-row chaining
+ * within one frame's walk), committing a reset only after two consecutive
+ * frames asked for it. That shipped, was verified against a synthetic
+ * scripted sequence, and STILL FAILED ON DEVICE - the whole gradient went
+ * flat again, this time for a different reason: the synthetic test drove
+ * the debounce function in isolation, one persistent state, exactly the
+ * way a SINGLE row's history across frames would behave. The real
+ * per-column array is not that - it is read and written once per ROW,
+ * chained within a single frame's walk, and two EMPTY cells compare as
+ * "same material" (CELL_MATERIAL(empty) == CELL_MATERIAL(empty)) the same
+ * way col_local_depth[] already tolerates for the raw walk, harmlessly
+ * there because nothing ever reads a raw depth computed over empty space.
+ * This array's value at the moment of a reset IS read, though - so any run
+ * of empty (or otherwise non-liquid) cells above a pool's true boundary
+ * climbed the accumulator through open air before the walk ever reached
+ * real water, and because that climbed accumulator never resets between
+ * frames either, it saturated to 255 within a couple of frames for every
+ * column with any open air above it - which is most of them. Confirmed by
+ * comparing device screenshots: the vertical-dominant case (the one this
+ * mechanism gated) went flat; the horizontal-dominant case (still the
+ * untouched raw walk, see h_running_depth below) kept its bands.
+ *
+ * THIS THIRD VERSION fixes both root causes at once:
+ *
+ *  1. col_stable_depth[] only ever accumulates through LIQUID cells - see
+ *     the `material_of(row[cx])->kind == KIND_LIQUID` gate in
+ *     paint_row_n() below. Any non-liquid cell (empty space, sand, stone,
+ *     anything) resets it to a clean 0 and leaves col_top_row[] alone, so
+ *     a run of open air above a pool can no longer pollute the value the
+ *     real boundary inherits.
+ *
+ *  2. THE COMMIT DECISION IS KEYED BY ROW, not by column-chain position.
+ *     col_top_row[] holds the ROW INDEX of the most recently
+ *     confirmed-or-candidate boundary for this column. A reset request at
+ *     row `cy` only commits (stable depth 0) if `col_top_row[cx] == cy` -
+ *     i.e. this EXACT row asked for the same thing last time it was
+ *     painted - and otherwise it is held (keeps climbing as if nothing
+ *     happened) while col_top_row[cx] is updated to `cy`, so the SAME row
+ *     asking again next time will match and commit. A settled pool's
+ *     topmost cell blinking empty/full for exactly one frame at a time -
+ *     the reported flicker's actual shape - never gets its neighbour row
+ *     to ask twice from the SAME row index, so it is absorbed; a genuine,
+ *     lasting change - the pool actually draining by one row, an obstacle
+ *     really appearing - keeps asking from the same new row and commits
+ *     within one extra frame, not something a human eye can tell from
+ *     immediate.
+ *
+ * KNOWN LIMITATION, ACCEPTED RATHER THAN CHASED FURTHER: a column with
+ * TWO reset points - an obstacle sitting inside an otherwise open pool -
+ * has both points competing for the single col_top_row[cx] slot, and
+ * whichever is walked LAST each frame (the deeper one, in the normal
+ * ascending scan) wins it, so the shallower (true surface) point can be
+ * perpetually one frame behind its own commit. Cosmetically minor (the
+ * surface reads very slightly brighter than ideal, never wrong-shaped) and
+ * confined to the rarer case of an obstacle actually sitting inside a
+ * pool's own body - true per-row memory would fix it and costs exactly
+ * the unaffordable 41KB explained above, so this is where the trade lands.
+ *
+ * VERTICAL-DOMINANT ONLY, same as col_local_depth[] itself - the
+ * horizontal-dominant case has no cross-call state to extend today
+ * (h_running_depth below is call-local), so debouncing it would need a
+ * genuinely new mechanism, not a reuse of this one. Left for a follow-up;
+ * see h_running_depth's own comment for where that gap is. */
+static uint8_t col_stable_depth[GRID_W_MAX];
+
+/* The row index of column cx's most recent boundary request, confirmed or
+ * still just a one-frame candidate - see col_stable_depth[]'s own comment
+ * above for the full mechanism. 255 means "nothing tracked yet" (GRID_H_MAX
+ * is 224, comfortably under 255, so that value can never be a real row). */
+static uint8_t col_top_row[GRID_W_MAX];
+
 /* This frame's dominant gravity axis (true: vertical, |gy| >= |gx|) and
  * whether the "toward the surface" scan has to run backwards (descending
  * row for vertical, descending column for horizontal) - see LOCAL DEPTH's
@@ -1101,8 +1183,73 @@ static bool local_depth_prev_axis_vertical;
  * still switches axis correctly, just a few degrees late, not stuck. This
  * is the first number to move if a corner still chatters (raise it) or the
  * axis feels sluggish to follow a real, deliberate tilt change (lower
- * it). */
-#define AXIS_HYSTERESIS_PCT 15
+ * it).
+ *
+ * DECLARED IN sand.h, not here - see that macro's own comment there for
+ * why: suite_sand.c's host tests need the real value, not a hand-copied
+ * duplicate. */
+
+/* THE DIAGONAL DEAD ZONE - a second, wider band around the 45 degree tie
+ * point where LOCAL DEPTH FREEZES instead of updating, rather than a band
+ * count that is TECHNICALLY stable (AXIS_HYSTERESIS_PCT above already
+ * stops it chattering) but visibly WRONG: the single-dominant-axis
+ * approximation (see LOCAL DEPTH's own top comment, "The one
+ * simplification this DOES still make") paints bands running horizontally
+ * or vertically, and a pool tilted anywhere near 45 degrees has a genuinely
+ * DIAGONAL surface - so the bands visibly cut across it at the wrong angle,
+ * confirmed on device (a triangular pool near 45 degrees, horizontal bands
+ * running straight through its diagonal edge). Fixing the approximation
+ * itself (bracketing gravity with two rays the way build_xflow() does for
+ * the simulation's own movement) was considered and rejected as separate,
+ * more invasive work - touching the walk's geometry rather than gating its
+ * output.
+ *
+ * FREEZES, DOES NOT FLATTEN - deliberately not the same "force depth 255"
+ * fallback col_stable_depth[]'s own comment describes the reverted
+ * sand_block_settled() gate using. Forcing flat loses the gradient
+ * entirely for as long as gravity sits near the diagonal, which is exactly
+ * the regression the FIRST attempt at this fix made and was corrected for
+ * before it shipped: the pool should keep showing whatever gradient it had
+ * right before gravity swung this close to 45 degrees, not go flat.
+ * col_stable_depth[cx] simply stops being written while in the dead zone -
+ * see paint_row_n()'s own vertical branch below for where that happens -
+ * so it keeps reading out whatever it last held. update_local_depth_axis()
+ * below also freezes local_depth_axis_vertical/_reverse themselves (an
+ * axis flip while frozen would wipe col_stable_depth[] out from under the
+ * freeze via the reset a few lines below - the exact failure this dead
+ * zone exists to avoid, just reached a different way).
+ *
+ * NOT the horizontal-dominant case: h_running_depth has no cross-call state
+ * to freeze (see its own comment), so a column that entered the dead zone
+ * horizontal-dominant just keeps computing the ordinary, undebounced raw
+ * walk throughout - no worse than it already was outside the dead zone,
+ * and no gradient lost either, just not specially protected here.
+ *
+ * WIDER than AXIS_HYSTERESIS_PCT on purpose: hysteresis only has to stop
+ * two WRONG-LOOKING regimes from alternating with each other, which is a
+ * near-instant win at any margin past the wobble that caused it. This has
+ * a different job - hiding a regime that reads visibly wrong to a human
+ * eye - and a first guess doubling the hysteresis band is deliberately
+ * generous rather than tight, on the assumption that a dead zone slightly
+ * too narrow (bands still occasionally look wrong) is worse than one
+ * slightly too wide (a slightly larger span where the gradient just holds
+ * still, which reads as normal water rather than as a bug). Move this
+ * first if the diagonal artifact still shows on device (raise it) or the
+ * freeze reads as lasting too long across ordinary handling (lower it) -
+ * not measured against a wobble model the way AXIS_HYSTERESIS_PCT's 15
+ * was, because the failure mode here is "looks wrong to a human", not
+ * "flips N% of frames", which a synthetic wobble model cannot judge.
+ *
+ * DECLARED IN sand.h, not here - same reason as AXIS_HYSTERESIS_PCT just
+ * above: suite_sand.c's host tests need the real value. */
+
+/* This frame's own answer to "is gravity close enough to a diagonal that
+ * LOCAL DEPTH's single-axis approximation would look wrong" - set once by
+ * update_local_depth_axis() below, read by paint_row_n()'s vertical branch
+ * to freeze col_stable_depth[cx] instead of updating it - see
+ * DEPTH_DIAGONAL_DEADZONE_PCT's own comment just above for the full
+ * mechanism and why it freezes rather than flattening. */
+static bool local_depth_in_deadzone;
 
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
@@ -1113,6 +1260,36 @@ static bool local_depth_prev_axis_vertical;
 static void update_local_depth_axis(int gx, int gy)
 {
     const int ax = im_abs(gx), ay = im_abs(gy);
+
+    /* THE DEAD ZONE CHECK - symmetric, unlike the Schmitt trigger below:
+     * it does not care which axis is CURRENTLY dominant, only whether ax
+     * and ay are close enough to each other that EITHER single-axis
+     * approximation would paint the wrong-looking bands. `lo`/`hi` sorts
+     * the two so the comparison reads the same regardless of which one is
+     * momentarily larger. `hi == 0` (flat, or free fall) is deliberately
+     * left OUTSIDE the dead zone - see local_depth_in_deadzone's own
+     * comment for why that case is not this fix's target. */
+    const int lo = (ax < ay) ? ax : ay;
+    const int hi = (ax < ay) ? ay : ax;
+    local_depth_in_deadzone =
+        (hi != 0) && (lo * 100 >= hi * (100 - DEPTH_DIAGONAL_DEADZONE_PCT));
+
+    if (local_depth_in_deadzone) {
+        /* FROZEN - local_depth_axis_vertical, local_depth_reverse and
+         * local_depth_prev_axis_vertical all stay exactly as they were,
+         * and the Schmitt trigger and its reset below do not run at all
+         * this frame. Skipping the reset is the point, not a side effect:
+         * DEPTH_DIAGONAL_DEADZONE_PCT is wider than AXIS_HYSTERESIS_PCT on
+         * purpose, so some angles inside this dead zone would still cross
+         * the (narrower) hysteresis threshold and flip the axis if the
+         * Schmitt trigger below ran here - which would memset
+         * col_stable_depth[] via the reset it guards, wiping out exactly
+         * the frozen gradient this dead zone exists to preserve. Leaving
+         * local_depth_prev_axis_vertical untouched means the Schmitt
+         * trigger picks up exactly where it left off the instant gravity
+         * exits the dead zone again, with no lost state either. */
+        return;
+    }
 
     /* Schmitt trigger against LAST frame's own choice, not a plain
      * `ay >= ax` comparison - see AXIS_HYSTERESIS_PCT's own comment just
@@ -1132,8 +1309,16 @@ static void update_local_depth_axis(int gx, int gy)
          * frame, and only on the rare frame the axis actually changes) and
          * necessary (see "THE AXIS CAN FLIP BETWEEN FRAMES" above for why a
          * stale per-column reading from the OTHER regime is not merely out
-         * of date the ordinary dirty-row way, but meaningless outright). */
+         * of date the ordinary dirty-row way, but meaningless outright).
+         * col_stable_depth[]/col_top_row[] are exactly as meaningless
+         * across the same flip, for the same reason - see
+         * col_stable_depth[]'s own comment. col_top_row[] resets to 255
+         * ("nothing tracked"), not 0 - 0 is a real row index, and a stale 0
+         * left over from the other axis would falsely "confirm" whatever
+         * row 0 asks for on the very first frame back. */
         memset(col_local_depth, 0, sizeof col_local_depth);
+        memset(col_stable_depth, 0, sizeof col_stable_depth);
+        memset(col_top_row, 255, sizeof col_top_row);
     }
     local_depth_prev_axis_vertical = vertical;
     local_depth_axis_vertical = vertical;
@@ -1192,7 +1377,16 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * at all, unlike col_local_depth[]: reset once per ROW, right here, not
      * persisted across paint_row_n() calls, because the horizontal case's
      * "toward the surface" neighbour always sits inside the SAME row this
-     * function is already walking start to finish. */
+     * function is already walking start to finish.
+     *
+     * NOT DEBOUNCED - see col_stable_depth[]'s own comment above for why
+     * the vertical case's debounce cannot simply be copied here: it rides
+     * on a per-column array that already exists for an unrelated reason
+     * (cross-ROW persistence), and this case has nothing equivalent to
+     * ride on. A horizontal-dominant frame (device held mostly on its
+     * side) can still show the flicker this file's LOCAL DEPTH section
+     * otherwise kills; fixing that needs a genuinely new per-row array,
+     * left for a follow-up rather than folded into this change. */
     unsigned h_running_depth = 0u;
 
     for (int cx_i = 0; cx_i < grid_w; cx_i++) {
@@ -1276,6 +1470,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * branch to skip this for non-liquids would cost more than the
          * comparison it would save. */
         unsigned local_depth;
+        unsigned stable_depth;
         if (local_depth_axis_vertical) {
             const bool same_material = (v_toward_surface != NULL) &&
                 (CELL_MATERIAL(v_toward_surface[cx]) == CELL_MATERIAL(row[cx]));
@@ -1283,6 +1478,53 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                 ? (col_local_depth[cx] < 255u ? col_local_depth[cx] + 1u : 255u)
                 : 0u;
             col_local_depth[cx] = (uint8_t)local_depth;
+
+            /* THE DEBOUNCE ITSELF - see col_stable_depth[]'s own comment
+             * above this function for the full mechanism (and the two bugs
+             * an earlier version of this block had, found from exactly
+             * this kind of trace).
+             *
+             * NOT a liquid cell: depth is irrelevant here - material_
+             * colours() never reads it for anything but a liquid interior
+             * - and must not be allowed to accumulate through this cell,
+             * or a run of open air (or any other non-liquid material)
+             * above a real boundary corrupts the value that boundary
+             * inherits. Clean reset, and col_top_row[cx] is left alone -
+             * this cell is not a boundary request of any kind. */
+            if (local_depth_in_deadzone) {
+                /* FROZEN - see local_depth_in_deadzone's own comment
+                 * (above this function) for the full mechanism. Read
+                 * whatever col_stable_depth[cx] already holds, from the
+                 * last frame this column was painted OUTSIDE the dead
+                 * zone, and change nothing else - col_top_row[cx] stays
+                 * exactly as it was too. The write below re-stores this
+                 * same value, a harmless no-op, rather than needing its
+                 * own guard. */
+                stable_depth = col_stable_depth[cx];
+            } else if (material_of(row[cx])->kind != KIND_LIQUID) {
+                stable_depth = 0u;
+            } else if (same_material) {
+                /* Confirmed continuation of a liquid body - climb exactly
+                 * like the raw walk. Not a boundary request either, so
+                 * col_top_row[cx] is left alone here too. */
+                stable_depth = col_stable_depth[cx] < 255u
+                    ? col_stable_depth[cx] + 1u : 255u;
+            } else if (col_top_row[cx] == (uint8_t)cy) {
+                /* THIS EXACT ROW asked for a reset the last time it was
+                 * painted too - a real, lasting boundary, not a blink.
+                 * Commit. */
+                stable_depth = 0u;
+            } else {
+                /* A reset is being asked for at a row that was NOT the
+                 * tracked boundary - either nothing was tracked yet, or
+                 * the boundary moved. HOLD: keep climbing as if nothing
+                 * happened, and start tracking THIS row, so it asking
+                 * again next time it is painted will match and commit. */
+                stable_depth = col_stable_depth[cx] < 255u
+                    ? col_stable_depth[cx] + 1u : 255u;
+                col_top_row[cx] = (uint8_t)cy;
+            }
+            col_stable_depth[cx] = (uint8_t)stable_depth;
         } else {
             const bool has_h_neighbour =
                 local_depth_reverse ? (cx < grid_w - 1) : (cx > 0);
@@ -1293,8 +1535,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                 ? (h_running_depth < 255u ? h_running_depth + 1u : 255u)
                 : 0u;
             h_running_depth = local_depth;
+            stable_depth = local_depth;   /* not debounced - see
+                                            * h_running_depth's own comment */
         }
-        const unsigned depth = local_depth;
+
+        /* The dead zone freeze already happened above, inside the vertical
+         * branch (see local_depth_in_deadzone's own comment) - nothing left
+         * to apply here. stable_depth is either this frame's real climb, or
+         * (frozen) whatever col_stable_depth[cx] already held. */
+        const unsigned depth = stable_depth;
 
         gfx_color_t col[3];
         const material_pattern_t pat =
@@ -2785,17 +3034,44 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 }
 
+/* Diagnostic only - see app_t's own comment in app.h for the contract
+ * (a JSON object fragment, starting `{`, ending `}`, no trailing comma)
+ * and screenshot.c's dump_state() for where this actually gets spliced in.
+ *
+ * Exposes exactly the two facts a screenshot capture cannot otherwise tell,
+ * raised while chasing a report that the diagonal dead zone's freeze
+ * (col_stable_depth[]'s own comment) was grabbing a column mid-resettle
+ * rather than on a genuinely stable gradient:
+ *
+ *  - tilt_x()/tilt_y() - the SMOOTHED gravity the sim actually acts on,
+ *    not the raw IMU counts device_state.h already reports. tilt.c's own
+ *    filter can differ substantially from the raw reading during a fast
+ *    rotation (see tilt.h's own top comment on TILT_TAU_MOVING_MS), so a
+ *    raw ax/ay reading nowhere near the diagonal does not prove the
+ *    SIMULATION's own gravity was not near it a moment before.
+ *  - local_depth_in_deadzone - whether the freeze was actually active on
+ *    the exact frame this capture was taken, rather than inferred (and
+ *    possibly wrongly) from either gravity reading. */
+static void sand_diagnostic_json(char *out, size_t len)
+{
+    snprintf(out, len,
+             "{\"tilt_x\":%d,\"tilt_y\":%d,\"local_depth_in_deadzone\":%s}",
+             tilt_x(&tilt), tilt_y(&tilt),
+             local_depth_in_deadzone ? "true" : "false");
+}
+
 /* .home_gesture deliberately left unset (false) - see app_t's own comment.
  * A touch drag starting near a screen edge to steer or pour sand is easy to
  * mistake for the shell's swipe-home gesture, so this app needs that
  * detection off entirely rather than merely hiding its hint strip, and
  * provides its own way back to the launcher instead. */
 const app_t app_sand = {
-    .name    = "Falling Sand",
-    .summary = "Tilt to steer, touch to pour",
-    .enter   = sand_enter,
-    .frame   = sand_frame,
-    .exit    = sand_exit,
+    .name           = "Falling Sand",
+    .summary        = "Tilt to steer, touch to pour",
+    .enter          = sand_enter,
+    .frame          = sand_frame,
+    .exit           = sand_exit,
+    .diagnostic_json = sand_diagnostic_json,
 };
 
 APP_REGISTER(app_sand);

@@ -514,7 +514,7 @@ void app_main(void)
          * on screen, regardless of which app (or the launcher) just drew
          * it. */
         if (screenshot_take_request()) {
-            screenshot_dump(&input);
+            screenshot_dump(&input, current);
         }
 #endif
 

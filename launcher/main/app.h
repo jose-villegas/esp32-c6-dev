@@ -62,6 +62,19 @@ typedef struct {
      * its own instead, not just a hidden hint on top of a gesture that would
      * still fire underneath it. */
     bool home_gesture;
+
+    /* Opt-in, like home_gesture above: NULL unless an app sets it. If set,
+     * called only from screenshot_dump() (util/screenshot.c,
+     * CONFIG_LAUNCHER_DEVELOPMENT builds only) to let the currently running
+     * app attach its own internal state to a screenshot capture - a JSON
+     * OBJECT fragment (starting with `{`, ending with `}`, no trailing
+     * comma), written into `out` (at most `len` bytes, NUL-terminated).
+     * Spliced into the capture's existing device-state JSON as a new "app"
+     * key, so this never needs to know the surrounding shape or duplicate
+     * anything device_state.h already reports. Diagnostic only - nothing
+     * about the app's own behaviour depends on this ever being called, and
+     * most apps will never set it. */
+    void (*diagnostic_json)(char *out, size_t len);
 } app_t;
 
 /*---------------------------------------------------------------------------

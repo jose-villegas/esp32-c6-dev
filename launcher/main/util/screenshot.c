@@ -187,6 +187,13 @@ bool screenshot_take_request(void)
 static uint8_t *row;
 static char    *row_b64;   /* +1: NUL, for printf("%s") */
 
+/* How much room an app's diagnostic_json() fragment is given - see app_t's
+ * own comment in app.h for what it may contain. Generous relative to what
+ * either existing implementation (app_sand.c's) actually uses, on the same
+ * reasoning DEVICE_STATE_JSON_MAX budgets headroom rather than a tight fit -
+ * this is a diagnostic path, not one worth re-deriving an exact bound for. */
+#define APP_DIAGNOSTIC_JSON_MAX 256
+
 /* Prints one SCREENSHOT_STATE: line of plain-text JSON (no base64 - it is
  * already printable ASCII, and small enough next to the image that the
  * base64 encoding's whole reason to exist - staying inside a UART-safe
@@ -194,8 +201,15 @@ static char    *row_b64;   /* +1: NUL, for printf("%s") */
  * one line) describing device state at this same frame. The reading and
  * the formatting both live in util/device_state.h/.c - see that module's
  * own comment for the field list and why it is split out rather than
- * living here. */
-static void dump_state(const input_t *input)
+ * living here.
+ *
+ * `current_app`'s OPTIONAL diagnostic_json() (app_t, app.h) is spliced in
+ * as an "app" key AFTER device_state_format_json() has already produced a
+ * complete, valid JSON object - by overwriting that object's closing `}`
+ * with `,"app":<fragment>}` rather than teaching device_state.h anything
+ * about apps at all. device_state.h stays exactly what its own top comment
+ * says it is: board state, nothing else. */
+static void dump_state(const input_t *input, const app_t *current_app)
 {
     device_state_t state;
     device_state_read(&state);
@@ -203,10 +217,31 @@ static void dump_state(const input_t *input)
     char json[DEVICE_STATE_JSON_MAX];
     device_state_format_json(&state, input, json);
 
+    if (current_app != NULL && current_app->diagnostic_json != NULL) {
+        char app_json[APP_DIAGNOSTIC_JSON_MAX];
+        current_app->diagnostic_json(app_json, sizeof app_json);
+
+        const size_t len = strlen(json);
+        /* json[len-1] is device_state_format_json()'s own closing `}` -
+         * always present, since that function always emits a complete
+         * object. Only splice if there is genuinely room for the fragment
+         * plus the `,"app":` wrapper plus the new closing `}` - a
+         * truncated app fragment would rather be dropped than emitted as
+         * broken JSON the host script's json.loads() then rejects
+         * outright, losing the WHOLE line (device state included, not
+         * just the app part) rather than only the addition. */
+        if (len > 0 && json[len - 1] == '}' &&
+            len - 1 + strlen(",\"app\":") + strlen(app_json) + 1
+                < sizeof json) {
+            snprintf(json + len - 1, sizeof(json) - (len - 1),
+                     ",\"app\":%s}", app_json);
+        }
+    }
+
     printf("SCREENSHOT_STATE:%s\n", json);
 }
 
-void screenshot_dump(const input_t *input)
+void screenshot_dump(const input_t *input, const app_t *current_app)
 {
     const int32_t  stride      = screenshot_bmp_row_stride(GFX_WIDTH);
     const uint32_t pixel_bytes = (uint32_t)(stride * GFX_HEIGHT);
@@ -274,7 +309,7 @@ void screenshot_dump(const input_t *input)
         printf("SCREENSHOT_DATA:%s\n", row_b64);
     }
 
-    dump_state(input);
+    dump_state(input, current_app);
 
     printf("SCREENSHOT_END\n");
     fflush(stdout);

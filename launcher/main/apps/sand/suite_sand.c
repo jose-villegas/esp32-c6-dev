@@ -5857,6 +5857,532 @@ static void test_local_depth_resets_when_gravitys_axis_flips(void)
     }
 }
 
+/* PAINT_ROW_N()'S DEBOUNCED WALK - the flicker half of the pour/flicker fix.
+ *
+ * A first attempt gated the ENTIRE depth gradient behind
+ * sand_block_settled() - a block only settles once nothing in the whole
+ * SAND_BLOCK_W x SAND_BLOCK_H block moved for a step. Verified on device and
+ * reverted: a real hand never holds the board perfectly still, so that bit
+ * rarely latches at all under real handling, and the gradient was gone
+ * almost everywhere rather than merely steadied - "we lost the bands" was
+ * the report, not "the flicker is gone." A literal per-CELL debounce history
+ * was considered next and is not affordable either: one byte per cell over
+ * the finest-quality grid is 41,216 bytes, the exact size of the grid buffer
+ * itself, on a device whose free heap has been observed as low as 2,364
+ * bytes mid-session.
+ *
+ * A SECOND attempt shipped col_stable_depth[]/col_pending_reset[] - a plain
+ * per-column accumulator running in parallel with col_local_depth[], same
+ * row-to-row chaining within a frame's walk, committing a reset only after
+ * two consecutive frames asked for it. It was pinned with a unit test
+ * exactly as deterministic as the one below - and STILL failed on device,
+ * for a reason that single-state unit test could not see: real per-column
+ * state is read and written ONCE PER ROW, chained across rows within one
+ * frame, and two EMPTY cells compare as "same material" the way
+ * col_local_depth[] already harmlessly tolerates - harmless there because
+ * nothing reads a raw depth computed over empty space, but this array's
+ * value at a reset IS read, so any run of open air above a pool's real
+ * boundary climbed the accumulator through that air before the walk ever
+ * reached real water, and it never got a chance to reset between frames
+ * either - saturating to 255 within a couple of frames for every column
+ * with open air above it, which is most of them. Confirmed by comparing
+ * device screenshots: the vertical-dominant case (the one this mechanism
+ * gated) went flat; the horizontal-dominant case (still the untouched raw
+ * walk) kept its bands.
+ *
+ * THIS THIRD VERSION - col_stable_depth[]/col_top_row[] (app_sand.c) - only
+ * ever accumulates through LIQUID cells (a non-liquid cell resets it to a
+ * clean 0, so a run of open air can no longer pollute anything), and keys
+ * the commit decision by ROW INDEX rather than column-chain position:
+ * col_top_row[cx] holds which row most recently asked for a reset, and a
+ * NEW request only commits if it comes from that SAME row again. See
+ * col_stable_depth[]'s own comment in app_sand.c for the full mechanism and
+ * its one accepted limitation (a column with two reset points - an
+ * obstacle inside an open pool - has them compete for the single tracking
+ * slot).
+ *
+ * TWO TESTS below, not one - deliberately, after what the single-state test
+ * above already proved is not enough on its own:
+ *
+ *   - test_a_same_row_reset_commits_but_a_different_row_does_not pins the
+ *     row-keyed DECISION in isolation, the same idiom
+ *     test_local_depth_resets_when_gravitys_axis_flips uses for the
+ *     axis-reset half of this file's LOCAL DEPTH story.
+ *
+ *   - test_the_debounce_survives_open_air_above_the_pool is the regression
+ *     guard for the SPECIFIC integration bug that shipped: it walks a real
+ *     column, top to bottom, through real open air, exactly the way
+ *     paint_row_n() actually calls this logic - one call per frame, state
+ *     persisting across calls the way the real arrays persist across
+ *     frames - because that is precisely the shape of call the previous
+ *     unit test did not exercise. */
+
+/* Mirrors app_sand.c's col_stable_depth[]/col_top_row[] decision in
+ * isolation, one already-known same_material/row pair per call - `stable`/
+ * `top_row` are IN/OUT, the same way the real arrays persist across
+ * frames. Does not touch the grid at all; test_the_debounce_survives_
+ * open_air_above_the_pool below is what mirrors the FULL per-row walk,
+ * including the kind gate this function does not need to know about. */
+static unsigned mirror_debounce_decide(unsigned char *stable,
+                                       unsigned char *top_row,
+                                       bool same_material, int cy)
+{
+    unsigned stable_depth;
+    if (same_material) {
+        stable_depth = *stable < 255u ? *stable + 1u : 255u;
+    } else if (*top_row == (unsigned char)cy) {
+        stable_depth = 0u;
+    } else {
+        stable_depth = *stable < 255u ? *stable + 1u : 255u;
+        *top_row = (unsigned char)cy;
+    }
+    *stable = (unsigned char)stable_depth;
+    return stable_depth;
+}
+
+static void test_a_same_row_reset_commits_but_a_different_row_does_not(void)
+{
+    unsigned char stable = 0, top_row = 255;
+
+    unsigned last = 0;
+    for (int i = 0; i < 10; i++) {
+        last = mirror_debounce_decide(&stable, &top_row, true, 0);
+    }
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(10u, last,
+        "setup: ten consecutive same_material steps must climb to depth "
+        "10, or this test is not starting from a real climbed state");
+
+    /* Row 7 asks for a reset for the first time - held, not committed,
+     * and now tracked. */
+    const unsigned first_ask = mirror_debounce_decide(&stable, &top_row,
+                                                       false, 7);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(11u, first_ask,
+        "a row asking for a reset for the FIRST time must be held, keeping "
+        "the old climbed value, not committed immediately");
+
+    /* A DIFFERENT row (8) asks next - this must ALSO be held, not treated
+     * as confirming row 7's request; row 7 and row 8 are different rows,
+     * and conflating them is exactly the bug the row-keyed design exists
+     * to avoid (the previous, column-chained design could not tell them
+     * apart). */
+    const unsigned different_row = mirror_debounce_decide(&stable, &top_row,
+                                                           false, 8);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(12u, different_row,
+        "a DIFFERENT row asking for a reset must be held too, not treated "
+        "as confirmation of the previous row's own pending request");
+
+    /* Row 8 asks AGAIN - now it matches what is tracked, and commits. */
+    const unsigned second_ask = mirror_debounce_decide(&stable, &top_row,
+                                                        false, 8);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, second_ask,
+        "the SAME row asking for a reset a second time must commit - a "
+        "real, lasting boundary must still show up");
+
+    const unsigned after_commit = mirror_debounce_decide(&stable, &top_row,
+                                                          true, 9);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(1u, after_commit,
+        "the walk must resume climbing normally after a committed reset");
+}
+
+/* THE DIAGONAL DEAD ZONE (app_sand.c's DEPTH_DIAGONAL_DEADZONE_PCT /
+ * local_depth_in_deadzone / update_local_depth_axis()'s early return) -
+ * mirrored here rather than called into, for the same reason as everything
+ * else in this section: update_local_depth_axis() cannot link into this
+ * host suite.
+ *
+ * Pins the ONE property the freeze depends on: an axis flip must not be
+ * ABLE to happen while inside the (wider) dead zone, even at a ratio that
+ * would clear AXIS_HYSTERESIS_PCT's OWN (narrower) threshold - because
+ * DEPTH_DIAGONAL_DEADZONE_PCT is deliberately wider than
+ * AXIS_HYSTERESIS_PCT, there is a real band of angles where the two
+ * disagree, and getting the deadzone check ahead of (rather than after)
+ * the Schmitt trigger backwards would silently let a flip through right
+ * where the freeze most needs to hold. */
+static bool mirror_in_deadzone(int ax, int ay)
+{
+    const int lo = (ax < ay) ? ax : ay;
+    const int hi = (ax < ay) ? ay : ax;
+    return (hi != 0) && (lo * 100 >= hi * (100 - DEPTH_DIAGONAL_DEADZONE_PCT));
+}
+
+/* Mirrors update_local_depth_axis()'s early return: the Schmitt trigger
+ * only runs, and only then can `vertical`/`prev_vertical` change, when
+ * mirror_in_deadzone() is false. Matches that function's own signature
+ * shape (in/out prev_vertical) rather than returning a struct, the same
+ * pattern mirror_local_depth_frame() above already uses for the sibling
+ * axis-reset mechanism. */
+static void mirror_axis_step(int gx, int gy, bool *prev_vertical,
+                             bool *in_deadzone)
+{
+    const int ax = (gx < 0) ? -gx : gx;
+    const int ay = (gy < 0) ? -gy : gy;
+    *in_deadzone = mirror_in_deadzone(ax, ay);
+    if (*in_deadzone) {
+        return;
+    }
+    const bool vertical = *prev_vertical
+        ? !(ax * 100 > ay * (100 + AXIS_HYSTERESIS_PCT))
+        : (ay * 100 > ax * (100 + AXIS_HYSTERESIS_PCT));
+    *prev_vertical = vertical;
+}
+
+static void test_the_axis_cannot_flip_while_inside_the_diagonal_deadzone(void)
+{
+    /* Settle on vertical first, comfortably outside both bands - ordinary
+     * near-straight-down gravity. */
+    bool vertical = false, in_deadzone = true;
+    mirror_axis_step(0, 1000, &vertical, &in_deadzone);
+    TEST_ASSERT_TRUE_MESSAGE(vertical,
+        "setup: near-straight-down gravity must settle on the vertical "
+        "axis, or this test is not starting from a real locked-in state");
+    TEST_ASSERT_FALSE_MESSAGE(in_deadzone,
+        "setup: near-straight-down gravity must read outside the dead "
+        "zone, or this test's baseline is already wrong");
+
+    /* A gravity reading that WOULD clear AXIS_HYSTERESIS_PCT's own 15%
+     * threshold on its own (ax exceeds ay by exactly 20%, comfortably past
+     * 15) - if the dead zone check were not gating the Schmitt trigger, or
+     * were applied in the wrong order, this would flip the axis to
+     * horizontal. It must NOT: at a 20% margin this is also still inside
+     * DEPTH_DIAGONAL_DEADZONE_PCT's wider 30% band. */
+    mirror_axis_step(1200, 1000, &vertical, &in_deadzone);
+    TEST_ASSERT_TRUE_MESSAGE(in_deadzone,
+        "setup: a 20%% margin must read INSIDE the wider 30%% dead zone, "
+        "or this test is not exercising the disagreement between the two "
+        "bands it exists to check");
+    TEST_ASSERT_TRUE_MESSAGE(vertical,
+        "the axis must NOT flip while inside the diagonal dead zone, even "
+        "at a margin that would clear AXIS_HYSTERESIS_PCT's own threshold "
+        "on its own - an axis flip here would memset col_stable_depth[] "
+        "via the reset it guards, destroying the frozen gradient the dead "
+        "zone exists to preserve");
+
+    /* A genuine, clearly non-diagonal sweep - ax exceeding ay by 50%,
+     * outside BOTH bands - must still flip correctly once actually clear
+     * of the dead zone, or the freeze would trap the axis forever instead
+     * of just protecting it near 45 degrees. */
+    mirror_axis_step(1500, 1000, &vertical, &in_deadzone);
+    TEST_ASSERT_FALSE_MESSAGE(in_deadzone,
+        "setup: a 50%% margin must read outside the dead zone, or this "
+        "test cannot tell a real recovery from a stuck freeze");
+    TEST_ASSERT_FALSE_MESSAGE(vertical,
+        "a genuine, clearly non-diagonal tilt must still flip the axis "
+        "once it is actually outside the dead zone - the freeze must "
+        "release, not stick");
+}
+
+/* Mirrors app_sand.c's col_stable_depth[]/col_top_row[] debounce ON TOP OF
+ * mirror_local_depth_column()'s raw walk above - one call per FRAME, state
+ * persisting across calls, exactly the shape paint_row_n() actually drives
+ * this logic in. col_local_depth[]'s own raw walk is untouched by any of
+ * this and is not reproduced here - test_local_depth_follows_the_puddles_
+ * own_shape above already covers it; this is purely the debounce layered
+ * on top. */
+static void mirror_debounced_depth_column(sand_t *g, int cx, int h,
+                                          unsigned char *stable,
+                                          unsigned char *top_row,
+                                          unsigned depth_out[])
+{
+    for (int cy = 0; cy < h; cy++) {
+        const cell_t here  = sand_at(g, cx, cy);
+        const cell_t above = sand_at(g, cx, cy - 1);
+        const bool same = CELL_MATERIAL(above) == CELL_MATERIAL(here);
+        unsigned stable_depth;
+
+        if (material_of(here)->kind != KIND_LIQUID) {
+            stable_depth = 0u;
+        } else if (same) {
+            stable_depth = *stable < 255u ? *stable + 1u : 255u;
+        } else if (*top_row == (unsigned char)cy) {
+            stable_depth = 0u;
+        } else {
+            stable_depth = *stable < 255u ? *stable + 1u : 255u;
+            *top_row = (unsigned char)cy;
+        }
+        *stable = (unsigned char)stable_depth;
+        depth_out[cy] = stable_depth;
+    }
+}
+
+#define DEBOUNCE_TEST_W 4
+#define DEBOUNCE_TEST_H 20
+static uint8_t debounce_test_cells[DEBOUNCE_TEST_W * DEBOUNCE_TEST_H];
+static sand_t  debounce_test;
+
+/* DIAGNOSTIC PROBE, NOT YET A CLAIM OF CORRECT BEHAVIOUR - checking a
+ * hypothesis raised from a device report: unlike a one-frame BLINK (the
+ * sibling test below), a boundary that genuinely moves to a NEW row on
+ * several CONSECUTIVE frames - exactly what a real pool does while still
+ * resettling after a tilt change, which is when the diagonal dead zone's
+ * freeze can grab it - never lets col_top_row[cx] match twice in a row, so
+ * it never COMMITS. If the HOLD branch's climb compounds across those
+ * frames instead of tracking close to the raw walk each time, the column
+ * would read increasingly deep (and therefore increasingly flat/saturated)
+ * throughout the resettling, not just for the one frame HOLD is meant to
+ * cover - and if the dead zone's freeze then grabs the column mid-drain,
+ * it would freeze on that already-wrong, saturated value rather than a
+ * clean one. Reproduced directly, without gravity or sand_step() - the
+ * boundary is walked down the column by hand, one row per frame, several
+ * frames running, exactly the shape a receding waterline produces. */
+static void test_a_continuously_moving_boundary_does_not_run_away(void)
+{
+    enum { CX = 1, START_TOP = 5, DRAIN_ROWS = 8 };
+    sand_init(&debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
+             DEBOUNCE_TEST_H, 2u);
+    for (int y = START_TOP; y < DEBOUNCE_TEST_H; y++) {
+        sand_set(&debounce_test, CX, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    unsigned char stable = 0, top_row = 255;
+    unsigned depth[DEBOUNCE_TEST_H];
+
+    /* Settle once, exactly like the sibling test below, before the drain
+     * begins. */
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+
+    /* The drain: the boundary recedes by exactly one row every frame, for
+     * several frames running - never landing on the same row twice, so
+     * col_top_row[] can never confirm a commit for any of them. */
+    for (int i = 0; i < DRAIN_ROWS; i++) {
+        sand_erase(&debounce_test, CX, START_TOP + i, 0);
+        mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                      &stable, &top_row, depth);
+
+        const int new_top = START_TOP + i + 1;
+        char why[384];
+        snprintf(why, sizeof why,
+            "after %d frame(s) of a boundary receding one row per frame "
+            "(never settling long enough to commit), the new boundary "
+            "(row %d) reads depth %u - if this climbs unbounded rather "
+            "than staying small, HOLD is compounding across frames "
+            "instead of tracking the true raw depth, and a dead-zone "
+            "freeze grabbing this column mid-drain would lock in that "
+            "wrong, saturated value", i + 1, new_top, depth[new_top]);
+        TEST_ASSERT_LESS_OR_EQUAL_UINT_MESSAGE(3u, depth[new_top], why);
+    }
+}
+
+/* THE ACTUAL REGRESSION: a pool with real open air above it (every real
+ * pool has this - the whole grid above the waterline), walked frame by
+ * frame, exactly the shape that broke the previous version. */
+static void test_the_debounce_survives_open_air_above_the_pool(void)
+{
+    enum { CX = 1, WATER_TOP = 5 };
+    sand_init(&debounce_test, debounce_test_cells, DEBOUNCE_TEST_W,
+             DEBOUNCE_TEST_H, 1u);
+    for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
+        sand_set(&debounce_test, CX, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    unsigned char stable = 0, top_row = 255;
+    unsigned depth[DEBOUNCE_TEST_H];
+
+    /* FRAME 1: first-ever paint. The boundary gets at most a one-frame
+     * cold-start grace, not a value climbed through the five empty rows
+     * above it - THE EXACT BUG the previous version shipped with. */
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+    TEST_ASSERT_LESS_OR_EQUAL_UINT_MESSAGE(1u, depth[WATER_TOP],
+        "the boundary's first-ever reading must be at most 1 (the accepted "
+        "cold-start grace), not a value saturated by climbing through the "
+        "open air above it");
+
+    /* FRAME 2: nothing changed. The boundary must now be fully committed -
+     * exactly 0 - and every row below it must show a small, correctly
+     * climbed depth, not something still recovering from a saturated
+     * start. */
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+    for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
+        char why[144];
+        snprintf(why, sizeof why,
+            "row %d must read exactly %d once settled - not a value still "
+            "recovering from a run through open air above the pool", y,
+            y - WATER_TOP);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE((unsigned)(y - WATER_TOP), depth[y],
+            why);
+    }
+
+    /* THE BLINK: the topmost cell vanishes for exactly one frame, then
+     * comes back - the reported flicker's own shape. Every row below it
+     * must be unaffected. */
+    unsigned settled[DEBOUNCE_TEST_H];
+    memcpy(settled, depth, sizeof depth);
+
+    sand_erase(&debounce_test, CX, WATER_TOP, 0);
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+    for (int y = WATER_TOP + 1; y < DEBOUNCE_TEST_H; y++) {
+        char why[160];
+        snprintf(why, sizeof why,
+            "row %d changed during a ONE-FRAME blink of the cell above it "
+            "- the debounce must absorb this, not let it cascade", y);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(settled[y], depth[y], why);
+    }
+
+    sand_set(&debounce_test, CX, WATER_TOP, CELL_MAKE(MAT_WATER, MASS_MAX));
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);   /* revert */
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);   /* settle */
+    for (int y = WATER_TOP; y < DEBOUNCE_TEST_H; y++) {
+        char why[160];
+        snprintf(why, sizeof why,
+            "row %d must be back to its settled depth once the blink "
+            "reverts and one further frame has confirmed it", y);
+        TEST_ASSERT_EQUAL_UINT_MESSAGE(settled[y], depth[y], why);
+    }
+
+    /* A REAL, LASTING change - the topmost cell empties and STAYS empty -
+     * must still commit within a couple of frames, or genuine changes
+     * would be hidden forever, not just one-frame blinks. */
+    sand_erase(&debounce_test, CX, WATER_TOP, 0);
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+    mirror_debounced_depth_column(&debounce_test, CX, DEBOUNCE_TEST_H,
+                                  &stable, &top_row, depth);
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, depth[WATER_TOP + 1],
+        "a boundary that genuinely moved - the old top cell erased and not "
+        "coming back - must commit to its new position within a couple of "
+        "frames, not be absorbed the way a one-frame blink is");
+}
+
+/*=============================================================================
+ * mark_depth_band() (sand_priv.h) - the pour-staleness half of the same fix.
+ *
+ * The reported bug: water that looked settled kept showing its OLD,
+ * shallower depth shading after more water was poured on top of it,
+ * because nothing below the pour ever touched dirty_rows - only the very
+ * top of the reservoir, where mass actually moved, marked anything at all.
+ * pour_into() (sand_liquid.c) now reports whether the cell it just filled
+ * was previously empty - the only event that can move where a puddle's
+ * surface sits - and equalise_one_cell()/rebound_one_cell() use that to
+ * mark_depth_band() a bounded run of rows around the new surface, so the
+ * render catches up without repainting the whole reservoir. give_mass()
+ * (move_liquid_grain()'s per-grain fall, the hottest path in the
+ * simulation) deliberately does NOT call it - see that call site's own
+ * comment in sand_liquid.c for why.
+ *===========================================================================*/
+#define DEPTH_TEST_W 4
+#define DEPTH_TEST_H 80
+static uint8_t depth_test_cells[DEPTH_TEST_W * DEPTH_TEST_H];
+static sand_t  depth_test;
+static uint8_t depth_test_dirty[DEPTH_TEST_H];
+
+static void test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below(void)
+{
+    sand_init(&depth_test, depth_test_cells, DEPTH_TEST_W, DEPTH_TEST_H, 99u);
+
+    /* A deep reservoir, full width, so it starts already level and settles
+     * in essentially one step - nothing here needs the settling itself to
+     * be interesting, only what happens once it is poured onto. */
+    const int fill_top = 10;
+    for (int y = fill_top; y < DEPTH_TEST_H; y++) {
+        for (int x = 0; x < DEPTH_TEST_W; x++) {
+            sand_set(&depth_test, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    for (int i = 0; i < 300; i++) {
+        sand_step(&depth_test, 0, 1000, 0);
+    }
+
+    uint8_t settled_snapshot[DEPTH_TEST_W * DEPTH_TEST_H];
+    memcpy(settled_snapshot, depth_test_cells, sizeof settled_snapshot);
+
+    sand_track_dirty_rows(&depth_test, depth_test_dirty);
+    memset(depth_test_dirty, 0, sizeof depth_test_dirty);
+
+    /* The pour: new water dropped at the very top, well above the
+     * reservoir's current surface. */
+    for (int i = 0; i < 60; i++) {
+        sand_spawn(&depth_test, DEPTH_TEST_W / 2, 1, 1, MAT_WATER);
+        sand_step(&depth_test, 0, 1000, 0);
+    }
+    for (int i = 0; i < 200; i++) {
+        sand_step(&depth_test, 0, 1000, 0);
+    }
+
+    /* The reservoir's NEW surface: the shallowest row that is now water in
+     * EVERY column - the new top of the fully-flooded body, not a single
+     * splashed cell still finding its way down. */
+    int new_surface = -1;
+    for (int y = 0; y < DEPTH_TEST_H; y++) {
+        bool full_row = true;
+        for (int x = 0; x < DEPTH_TEST_W; x++) {
+            if (CELL_MATERIAL(sand_at(&depth_test, x, y)) != MAT_WATER) {
+                full_row = false;
+                break;
+            }
+        }
+        if (full_row) {
+            new_surface = y;
+            break;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(new_surface >= 0,
+        "setup: the pour must actually produce a fully-flooded row, or "
+        "this test is not exercising the case it claims to");
+    TEST_ASSERT_TRUE_MESSAGE(new_surface < fill_top,
+        "setup: the pour must raise the surface above where it started, "
+        "or there is nothing here for mark_depth_band() to catch");
+
+    /* near_row sits inside the band below the new surface, AND inside the
+     * ORIGINAL reservoir - exactly the case the bug report was about: an
+     * already-settled cell whose render went stale.
+     *
+     * far_row is the control, and its distance is measured from fill_top
+     * (the ORIGINAL surface), not new_surface: mark_depth_band() fires on
+     * every intermediate empty-to-liquid transition while the pour is
+     * still falling and levelling, not only at the FINAL settled surface,
+     * and the deepest any such transition can ever land is fill_top - 1 -
+     * a cell at or below fill_top was already water at MASS_MAX before the
+     * pour and (per the mass-conservation check below) never changes
+     * content, so it can never BE an empty-to-liquid transition. Measuring
+     * from new_surface instead - the first version of this test did - lets
+     * far_row sit inside the true reach whenever the pour raises the
+     * surface by more than a few rows, which is exactly what happened. */
+    const int near_row = new_surface + MATERIAL_LIQUID_DEPTH_BAND - 2;
+    const int far_row  = fill_top + MATERIAL_LIQUID_DEPTH_BAND + 8;
+    TEST_ASSERT_TRUE_MESSAGE(far_row < DEPTH_TEST_H,
+        "setup: the fixture must be tall enough to hold a row outside the "
+        "band too, or the 'bounded' half of this test proves nothing");
+    TEST_ASSERT_TRUE_MESSAGE(near_row >= fill_top,
+        "setup: near_row must fall inside the ORIGINAL, already-settled "
+        "reservoir, or this is not the case the bug report was about");
+
+    /* Mass conservation: a cell already at MASS_MAX has no room for more,
+     * so nothing at or below the ORIGINAL settled surface can have
+     * changed CONTENT at all - confirming any dirty mark down there is
+     * mark_depth_band()'s doing, not the pour actually having reached
+     * that deep. */
+    for (int x = 0; x < DEPTH_TEST_W; x++) {
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+            settled_snapshot[near_row * DEPTH_TEST_W + x],
+            depth_test_cells[near_row * DEPTH_TEST_W + x],
+            "setup: a cell already at MASS_MAX before the pour cannot "
+            "have changed content - if it did, this is not isolating "
+            "mark_depth_band()'s own effect");
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(
+            settled_snapshot[far_row * DEPTH_TEST_W + x],
+            depth_test_cells[far_row * DEPTH_TEST_W + x],
+            "setup: same, for the control row outside the band");
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(depth_test_dirty[near_row] != 0,
+        "a row within MATERIAL_LIQUID_DEPTH_BAND of the new surface, "
+        "whose own content never changed, must still be marked dirty "
+        "after a pour raised the surface above it - otherwise its "
+        "rendered depth shading is left stale, exactly the reported bug");
+    TEST_ASSERT_TRUE_MESSAGE(depth_test_dirty[far_row] == 0,
+        "a row well outside MATERIAL_LIQUID_DEPTH_BAND must NOT be "
+        "marked dirty just because a pour happened above it - bounding "
+        "the mark is what keeps a pour from repainting a reservoir far "
+        "deeper than any shading could possibly need to change");
+}
+
 /* test_wave_bands_are_sized_in_cells_not_in_grid_fractions and its
  * wave_band_transitions() helper used to live here - a regression guard for
  * the "wave bands are sized in cells, not in grid fractions" fix, walking
@@ -17129,6 +17655,11 @@ void run_sand_suite(void)
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
     RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
+    RUN_TEST(test_a_same_row_reset_commits_but_a_different_row_does_not);
+    RUN_TEST(test_the_axis_cannot_flip_while_inside_the_diagonal_deadzone);
+    RUN_TEST(test_a_continuously_moving_boundary_does_not_run_away);
+    RUN_TEST(test_the_debounce_survives_open_air_above_the_pool);
+    RUN_TEST(test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below);
     RUN_TEST(test_every_liquid_interior_is_exactly_the_body_colour_when_saturated);
     RUN_TEST(test_a_shallow_puddle_still_shows_real_darkening);
     RUN_TEST(test_water_foams_where_its_rim_is_curved);

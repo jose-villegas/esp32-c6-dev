@@ -68,6 +68,17 @@
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
+/* AXIS_HYSTERESIS_PCT and DEPTH_DIAGONAL_DEADZONE_PCT are OWNED by
+ * app_sand.c's LOCAL DEPTH mechanism (update_local_depth_axis(), see that
+ * function's and DEPTH_DIAGONAL_DEADZONE_PCT's own comments there for what
+ * each actually does) - declared here, not there, purely so suite_sand.c's
+ * host tests can reference the real values instead of hand-copying a second
+ * "15" and "30" that would silently stop matching the day either constant
+ * is retuned on the device side. The same reason MATERIAL_LIQUID_DEPTH_BAND
+ * lives in material.h rather than staying private to material.c. */
+#define AXIS_HYSTERESIS_PCT 15
+#define DEPTH_DIAGONAL_DEADZONE_PCT 30
+
 /* How many persistent emitters sand_t can carry at once - see
  * sand_add_emitter() below.
  *

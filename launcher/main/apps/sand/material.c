@@ -2115,8 +2115,14 @@ static unsigned material_popcount8(unsigned mask)
  * above describes, and reaches idx 15 (lum 54, the full body colour) once
  * local depth hits this constant - comfortably inside the range any real
  * pool in this app actually reaches, rather than needing depth in the
- * hundreds the way the old /255 divide did. */
-#define DEPTH_SATURATE_CELLS 24
+ * hundreds the way the old /255 divide did.
+ *
+ * SHARED with sand_liquid.c as MATERIAL_LIQUID_DEPTH_BAND (material.h) -
+ * that is the same 24, not a coincidence: sand_liquid.c uses it to bound how
+ * far a newly-claimed surface cell can possibly move any cell's rendered
+ * depth, and that has to be exactly this constant, or the two will silently
+ * drift apart the day only one of them gets retuned. */
+#define DEPTH_SATURATE_CELLS MATERIAL_LIQUID_DEPTH_BAND
 
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     unsigned depth, gfx_color_t out[3])
