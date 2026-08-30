@@ -59,9 +59,13 @@ their own `tools/results/`:
 ~90s environment-activation cost on every call.
 
 `./launcher/tools/screenshot.sh` captures whatever the device currently has
-on screen to an uncompressed `.bmp`, over that same serial connection - no
-SD card, no button on the device, just the running firmware and a cable
-already plugged in. Needs neither `idf.py` nor PowerShell.
+on screen to an uncompressed `.bmp`, plus a same-named `.json` snapshot of
+device state at that exact frame (sensors, memory, clock), over that same
+serial connection - no SD card, no button on the device, just the running
+firmware and a cable already plugged in. Needs neither `idf.py` nor
+PowerShell. Development-only (`build_flash_dev.sh` / `build_flash.sh --diag`)
+- a release build carries none of it, see
+[`docs/Testing-Guide.md`](docs/Testing-Guide.md).
 
 ## Documentation
 

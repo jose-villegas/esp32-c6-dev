@@ -15,6 +15,7 @@ set(app_srcs
     "input/imu.c"
     "ui/ui.c"
     "ui/ui_launcher.c"
+    "util/device_state.c"
     "util/screenshot.c"
 )
 
@@ -120,6 +121,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_ui_centered_rect.c"
         "../test/suites/suite_display.c"
         "../test/suites/suite_screenshot.c"
+        "../test/suites/suite_device_state.c"
         ${app_suites}
     )
 endif()

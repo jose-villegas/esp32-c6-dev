@@ -55,6 +55,7 @@
 #include "freertos/task.h"
 
 #include "gfx/gfx.h"
+#include "util/device_state.h"
 
 static const char *TAG = "screenshot";
 
@@ -174,7 +175,26 @@ bool screenshot_take_request(void)
 static uint8_t row[GFX_WIDTH * 3];
 static char    row_b64[GFX_WIDTH * 4 + 1];   /* +1: NUL, for printf("%s") */
 
-void screenshot_dump(void)
+/* Prints one SCREENSHOT_STATE: line of plain-text JSON (no base64 - it is
+ * already printable ASCII, and small enough next to the image that the
+ * base64 encoding's whole reason to exist - staying inside a UART-safe
+ * byte range - is not worth the extra decode step on the host for this
+ * one line) describing device state at this same frame. The reading and
+ * the formatting both live in util/device_state.h/.c - see that module's
+ * own comment for the field list and why it is split out rather than
+ * living here. */
+static void dump_state(const input_t *input)
+{
+    device_state_t state;
+    device_state_read(&state);
+
+    char json[DEVICE_STATE_JSON_MAX];
+    device_state_format_json(&state, input, json);
+
+    printf("SCREENSHOT_STATE:%s\n", json);
+}
+
+void screenshot_dump(const input_t *input)
 {
     const int32_t  stride      = screenshot_bmp_row_stride(GFX_WIDTH);
     const uint32_t pixel_bytes = (uint32_t)(stride * GFX_HEIGHT);
@@ -220,6 +240,8 @@ void screenshot_dump(void)
         row_b64[sizeof(row_b64) - 1] = '\0';
         printf("SCREENSHOT_DATA:%s\n", row_b64);
     }
+
+    dump_state(input);
 
     printf("SCREENSHOT_END\n");
     fflush(stdout);
