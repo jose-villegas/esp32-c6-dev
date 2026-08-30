@@ -72,6 +72,20 @@ fi
 
 MAX_DOC_CHARS=80000
 
+# Pulls choices[0].message.content out of an `omniroute --output json chat`
+# response. Finding the first "{" / last "}" is safe here because the only
+# other thing on that line (the "Loaded env" banner) is plain text plus
+# ANSI color codes, and ANSI codes use square brackets, never braces.
+extract_content_js='
+  const fs = require("fs");
+  const text = fs.readFileSync(process.argv[1], "utf8");
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end === -1) { process.exit(1); }
+  const envelope = JSON.parse(text.slice(start, end + 1));
+  process.stdout.write(envelope.choices[0].message.content);
+'
+
 for doc in "${FILES_WITH_FINDINGS[@]}"; do
   [ -f "$doc" ] || continue
   echo ""
@@ -116,20 +130,20 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
     head -c "$MAX_DOC_CHARS" "$doc"
   } > "$FIX_PROMPT"
 
-  if ! omniroute chat -m "$COMBO" --reasoning-effort low --max-tokens 2000 \
+  if ! omniroute --output json chat -m "$COMBO" --reasoning-effort low --max-tokens 2000 \
         --file "$FIX_PROMPT" --no-history > "$FIX_RESPONSE" 2>&1; then
     echo "  omniroute call failed:" >&2
     cat "$FIX_RESPONSE" >&2
     continue
   fi
 
+  CONTENT=$(node -e "$extract_content_js" "$FIX_RESPONSE") || { echo "  no response envelope found" >&2; continue; }
+  echo "$CONTENT" > "$TMPDIR/fix_content.txt"
+
   node -e '
     const fs = require("fs");
-    const [, , respFile, docPath, patchesFile] = process.argv;
-    let text = fs.readFileSync(respFile, "utf8");
-    // omniroute chat appends a "[model · Nms · N tok]" footer line; strip it
-    // before hunting for the JSON array brackets.
-    text = text.replace(/\n\[[^\[\]]*·[^\[\]]*\]\s*$/, "");
+    const [, , contentFile, docPath, patchesFile] = process.argv;
+    const text = fs.readFileSync(contentFile, "utf8");
     const start = text.indexOf("[");
     const end = text.lastIndexOf("]");
     if (start === -1 || end === -1) { console.error("  no JSON array found in response"); process.exit(0); }
@@ -149,7 +163,7 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
       all.push({ file: docPath, find: p.find, replace: p.replace });
     }
     fs.writeFileSync(patchesFile, JSON.stringify(all));
-  ' "$FIX_RESPONSE" "$doc" "$PATCHES"
+  ' "$TMPDIR/fix_content.txt" "$doc" "$PATCHES"
 done
 
 PATCH_COUNT=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).length)' "$PATCHES")
@@ -176,18 +190,20 @@ if [ -n "$REVIEW_MODEL" ]; then
     cat "$PATCHES"
   } > "$REVIEW_PROMPT"
 
-  if ! omniroute chat -m "$REVIEW_MODEL" --max-tokens 4000 \
+  if ! omniroute --output json chat -m "$REVIEW_MODEL" --max-tokens 4000 \
         --file "$REVIEW_PROMPT" --no-history > "$REVIEW_RESPONSE" 2>&1; then
     echo "Review call failed:" >&2
     cat "$REVIEW_RESPONSE" >&2
     exit 1
   fi
 
+  REVIEW_CONTENT=$(node -e "$extract_content_js" "$REVIEW_RESPONSE") || { echo "no response envelope found, keeping all patches unreviewed" >&2; REVIEW_CONTENT="[]"; }
+  echo "$REVIEW_CONTENT" > "$TMPDIR/review_content.txt"
+
   node -e '
     const fs = require("fs");
-    const [, , respFile, patchesFile] = process.argv;
-    let text = fs.readFileSync(respFile, "utf8");
-    text = text.replace(/\n\[[^\[\]]*·[^\[\]]*\]\s*$/, "");
+    const [, , contentFile, patchesFile] = process.argv;
+    const text = fs.readFileSync(contentFile, "utf8");
     const s = text.indexOf("["), e = text.lastIndexOf("]");
     const all = JSON.parse(fs.readFileSync(patchesFile, "utf8"));
     if (s === -1 || e === -1) { console.error("no JSON verdicts found, keeping all patches unreviewed"); process.exit(0); }
@@ -206,7 +222,7 @@ if [ -n "$REVIEW_MODEL" ]; then
     });
     fs.writeFileSync(patchesFile, JSON.stringify(kept));
     console.error(`${kept.length}/${all.length} patch(es) passed review.`);
-  ' "$REVIEW_RESPONSE" "$PATCHES"
+  ' "$TMPDIR/review_content.txt" "$PATCHES"
 
   PATCH_COUNT=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).length)' "$PATCHES")
   if [ "$PATCH_COUNT" -eq 0 ]; then
