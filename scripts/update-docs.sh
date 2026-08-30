@@ -73,7 +73,7 @@ done <<< "$DOC_FILES"
 } > "$SELECT_PROMPT"
 
 echo "Pass 1/2: asking $COMBO which of $(wc -l < "$DOC_INDEX") doc file(s) look affected..."
-if ! omniroute chat -m "$COMBO" --file "$SELECT_PROMPT" --no-history > "$SELECT_RESPONSE" 2>&1; then
+if ! omniroute chat -m "$COMBO" --reasoning-effort low --max-tokens 500 --file "$SELECT_PROMPT" --no-history > "$SELECT_RESPONSE" 2>&1; then
   echo "omniroute call failed:" >&2
   cat "$SELECT_RESPONSE" >&2
   exit 1
@@ -86,7 +86,7 @@ fi
 
 # Keep only lines that exactly match a known doc path -- ignore any
 # hallucinated or malformed paths rather than trying to write them.
-mapfile -t SELECTED < <(grep -Fxf <(echo "$DOC_FILES") "$SELECT_RESPONSE" | sort -u | head -5)
+mapfile -t SELECTED < <(grep -Fxf <(echo "$DOC_FILES") "$SELECT_RESPONSE" | sort -u | head -3)
 
 if [ "${#SELECTED[@]}" -eq 0 ]; then
   echo "Model didn't name any known doc file. Raw response:" >&2
@@ -124,7 +124,7 @@ echo "Pass 2/2: requesting rewrites for: ${SELECTED[*]}"
   done
 } > "$UPDATE_PROMPT"
 
-if ! omniroute chat -m "$COMBO" --file "$UPDATE_PROMPT" --no-history > "$UPDATE_RESPONSE" 2>&1; then
+if ! omniroute chat -m "$COMBO" --reasoning-effort low --max-tokens 16000 --file "$UPDATE_PROMPT" --no-history > "$UPDATE_RESPONSE" 2>&1; then
   echo "omniroute call failed:" >&2
   cat "$UPDATE_RESPONSE" >&2
   exit 1
