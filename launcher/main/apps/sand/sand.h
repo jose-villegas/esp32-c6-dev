@@ -302,11 +302,14 @@ typedef struct {
     /* Decaying trigger chance for splash_displace() (sand_liquid.c) - see
      * SAND_SPLASH_RADIUS_WATER's own comment above for why this lives
      * per-instance. WATER only - see acid_splashes_this_step below for
-     * why acid needs a different kind of throttle. Covers both of
-     * splash_displace()'s water call sites in move_liquid_grain(): a
-     * grain landing on already-occupied liquid, and a grain's ordinary
-     * gravity-ward fall being blocked by a wall or the grid edge. */
+     * why acid needs a different kind of throttle. */
     uint8_t    splash_chance;
+
+    /* Decaying splash RADIUS, water only, alongside splash_chance above -
+     * see SAND_SPLASH_RADIUS_WATER's own comment for why these are two
+     * independent decays (whether a bounce splashes at all, versus how
+     * big the ones that do are) rather than one. */
+    uint8_t    splash_radius_water;
 
     /* How many ACID splashes splash_displace() has already fired THIS
      * STEP, reset to 0 at the top of every sand_step() - caps how many of
@@ -717,12 +720,24 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * drops by STEP on every successful trigger, so a bounce chain's own
  * echoes are suppressed almost immediately rather than rattling on.
  * Per-sand_t (sand_t::splash_chance below), not a shared global, so one
- * simulation's splash history never bleeds into another's. */
-#define SAND_SPLASH_RADIUS_WATER 3
-#define SAND_SPLASH_RADIUS_ACID  5
-#define SAND_SPLASH_CHANCE_START 255
-#define SAND_SPLASH_CHANCE_FLOOR 24
-#define SAND_SPLASH_CHANCE_STEP  140
+ * simulation's splash history never bleeds into another's.
+ *
+ * WATER'S RADIUS ALSO STEPS DOWN on every successful trigger (sand_t::
+ * splash_radius_water below), independently of the chance above - the
+ * chance decides WHETHER a bounce chain's echo still gets to splash at
+ * all, this decides how BIG the ones that do get to are, so a chain that
+ * does keep landing hits reads as a bounce settling down rather than a
+ * string of identically-sized pops. RADIUS_WATER is both the starting
+ * value (fresh from sand_init()) and the ceiling; floors at
+ * RADIUS_WATER_FLOOR, stepping by RADIUS_WATER_STEP each time - never
+ * recovers on its own, matching splash_chance's own one-way decay. */
+#define SAND_SPLASH_RADIUS_WATER       5
+#define SAND_SPLASH_RADIUS_WATER_FLOOR 1
+#define SAND_SPLASH_RADIUS_WATER_STEP  2
+#define SAND_SPLASH_RADIUS_ACID        5
+#define SAND_SPLASH_CHANCE_START       255
+#define SAND_SPLASH_CHANCE_FLOOR       24
+#define SAND_SPLASH_CHANCE_STEP        140
 
 /* How many ACID splashes splash_displace() (sand_liquid.c) will fire in a
  * single sand_step() - see sand_t::acid_splashes_this_step's own comment

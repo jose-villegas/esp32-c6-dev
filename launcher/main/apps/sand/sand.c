@@ -160,6 +160,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->impulse_max   = 0;
     s->impulse_count = 0;
     s->splash_chance = SAND_SPLASH_CHANCE_START;
+    s->splash_radius_water = SAND_SPLASH_RADIUS_WATER;
     s->acid_splashes_this_step = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see

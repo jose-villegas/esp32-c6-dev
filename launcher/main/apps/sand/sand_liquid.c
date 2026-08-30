@@ -22,22 +22,31 @@
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
 /* A liquid splash: sand_displace_material() at a per-material radius,
- * called whenever a WATER or ACID grain lands hard - falling onto an
- * already-occupied surface, or its ordinary gravity-ward fall being
- * blocked by a wall or the grid edge (both call sites in
- * move_liquid_grain() below). Water and acid only, for now - oil and lava
- * are not gated in here, see SAND_SPLASH_RADIUS_WATER's own comment in
- * sand.h.
+ * called whenever a WATER or ACID grain lands hard, falling onto an
+ * already-occupied surface (move_liquid_grain() below). Water and acid
+ * only, for now - oil and lava are not gated in here, see
+ * SAND_SPLASH_RADIUS_WATER's own comment in sand.h.
+ *
+ * A per-grain trigger for hitting a wall or the grid edge directly (not
+ * landing on other liquid) existed too, briefly - removed 2026-08-30
+ * alongside the separate flick-driven wall-momentum mechanism, after
+ * on-device testing found neither one perceptible (see git history for
+ * "wall_splash" if this is ever worth revisiting).
  *
  * MASKED TO `mat_id`, not a plain sand_displace() - an unmasked
  * displacement throws whatever it finds within the radius, which meant
  * pouring water over water sitting on dirt flung the dirt around too.
  * This is meant to be water/acid splashing itself, nothing else.
  *
- * WATER is gated by a chance-in-256 roll against this sand_t's own
- * decaying budget (sand_t::splash_chance, sand.h), so a displaced grain
- * landing again does not just re-splash itself indefinitely - a real
- * splash does not keep re-triggering off its own spray.
+ * WATER DECAYS TWO WAYS, INDEPENDENTLY - see SAND_SPLASH_RADIUS_WATER's
+ * own comment in sand.h for the full account. Gated by a chance-in-256
+ * roll against this sand_t's own decaying budget (sand_t::splash_chance),
+ * so a displaced grain landing again does not just re-splash itself
+ * indefinitely - a real splash does not keep re-triggering off its own
+ * spray. And, separately, whichever echoes DO still land shrink their own
+ * radius each time (sand_t::splash_radius_water) rather than all landing
+ * at the same fixed size, so a chain that keeps bouncing reads as
+ * genuinely settling down, not as a string of identical pops.
  *
  * ACID DOES NOT DECAY OVER TIME - it always splashes at its own full
  * radius, at full intensity, and never touches `splash_chance` at all (so
@@ -54,8 +63,33 @@
  * column - dozens at once, reading as one chaotic explosion instead of a
  * splash. The cap forgets itself every step (sand_step(), sand.c), so it
  * throttles simultaneous triggers without making acid's splash depend on
- * history the way a decaying chance would. */
-static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
+ * history the way a decaying chance would.
+ *
+ * WATER ALSO GETS A DIRECTED KICK, `away` from gravity - not just the
+ * radial sand_displace_material() spray above. Measured on a settled
+ * pool: a radial disc mostly throws water AT OTHER WATER, which is
+ * invisible (two identical, fully-packed cells swapping positions changes
+ * nothing on screen), so a bigger radius bought more wasted interior
+ * churn, not a bigger-looking splash - and the one cell that actually
+ * took the hit (the centre) is skipped by design (see queue_outward_
+ * impulse()'s own comment in sand.c). `away` is known-good: it is exactly
+ * the direction the "exposed" check at this call's own site used to
+ * confirm was open, one step back the way the falling drop came from - a
+ * guaranteed push that way has a real chance of actually breaching the
+ * surface and reading as a droplet, instead of leaving the point of
+ * contact visibly untouched.
+ *
+ * A shape-adaptive version - scan all 8 neighbours, kick toward whichever
+ * are actually open, no gravity vector needed - was tried in its place
+ * (2026-08-31) and reverted the same day, UNTESTED on device: cheaper to
+ * keep this fixed-direction version, already known to work, than ship an
+ * unverified alternative that also costs more (up to 8 neighbour checks
+ * and 8 sand_impulse() calls, against this version's 1 direction lookup
+ * and a fixed 3-way fan). Worth retrying if the fixed direction turns out
+ * to read wrong on a sloped or curved surface - see git history for
+ * "ring_dir(dir)" in this file if so. */
+static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id,
+                                   int away_dx, int away_dy)
 {
     if (mat_id == MAT_ACID) {
         if (s->acid_splashes_this_step >= SAND_SPLASH_ACID_PER_STEP_CAP) {
@@ -71,11 +105,24 @@ static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
     if ((rng_next(&s->rng) & 0xFF) > s->splash_chance) {
         return;   /* this echo lost the roll - let the bounce die here */
     }
-    sand_displace_material(s, x, y, SAND_SPLASH_RADIUS_WATER, mat_id);
+    sand_displace_material(s, x, y, s->splash_radius_water, mat_id);
+    int qdx, qdy;
+    sand_gravity_direction(away_dx, away_dy, &qdx, &qdy);
+    if (qdx != 0 || qdy != 0) {
+        const int dir = ring_of(qdx, qdy);
+        sand_impulse(s, x, y, dir, SAND_EXPLODE_INITIAL_SPEED);
+        sand_impulse(s, x, y, (dir + 7) & 7, SAND_EXPLODE_INITIAL_SPEED);
+        sand_impulse(s, x, y, (dir + 1) & 7, SAND_EXPLODE_INITIAL_SPEED);
+    }
     s->splash_chance =
         s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
             ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
             : SAND_SPLASH_CHANCE_FLOOR;
+    s->splash_radius_water =
+        s->splash_radius_water
+                > SAND_SPLASH_RADIUS_WATER_FLOOR + SAND_SPLASH_RADIUS_WATER_STEP
+            ? (uint8_t)(s->splash_radius_water - SAND_SPLASH_RADIUS_WATER_STEP)
+            : SAND_SPLASH_RADIUS_WATER_FLOOR;
 }
 
 /* Add `amount` of `id` to a cell that is either empty or already that same
@@ -450,73 +497,34 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     const bool target_occupied = (unsigned)tx0 < (unsigned)w && prow != NULL
         && !CELL_IS_EMPTY(prow[tx0]);
 
-    /* Set below, in the wall/edge branch, and consulted only after row[x]
-     * has its final byte written - see that branch's own comment for why
-     * firing splash_displace() immediately, at decision time, queued an
-     * impulse this grain's own later diagonal slides could still
-     * invalidate before it ever got a turn to move. */
-    bool wall_splash = false;
-
     const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
     mass -= down;
     if (down > 0) {
         moved = true;
 
-        /* A drop that was exposed to open space one step away from
-         * gravity (not buried inside the body) landing on an already-
-         * occupied liquid surface throws a small splash - see
-         * splash_displace()'s own comment above. */
+        /* Mass landing on an already-occupied liquid surface throws a
+         * small splash - see splash_displace()'s own comment above.
+         *
+         * NO LONGER GATED ON "exposed to open space one step above" -
+         * that check was meant to tell a genuine fall apart from ordinary
+         * internal levelling, but it reads the SOURCE grain's own
+         * neighbour, and a sustained pour is a continuous column of
+         * falling water: every grain in the stream except (maybe) the
+         * very first has more incoming water above it, not open air, so
+         * the gate was false for the entire rest of the pour and the
+         * splash only ever fired once, right at the start - easy to
+         * mistake for "no splash at all", which is exactly what got
+         * reported. A fully-settled, level pool does not need this gate
+         * either: give_mass()'s own room_in() check already returns 0
+         * once a column has nowhere left to give, so down stays 0 and
+         * this branch is never reached - the only remaining risk is
+         * ordinary re-settling after a tilt genuinely triggering more
+         * often, which splash_chance's own decay (guaranteed first, sharp
+         * falloff after) already keeps rare and self-limiting, the same
+         * safety net a pour's own repeated triggers rely on. */
         if (target_occupied) {
-            const uint8_t *arow = dest_row(s, y - dy);
-            const int ax = x - dx;
-            const bool exposed = arow == NULL || (unsigned)ax >= (unsigned)w
-                                  || CELL_IS_EMPTY(arow[ax]);
-            if (exposed) {
-                splash_displace(s, tx0, ty0, mat_id);
-            }
+            splash_displace(s, tx0, ty0, mat_id, -dx, -dy);
         }
-    } else if ((unsigned)tx0 >= (unsigned)w || prow == NULL ||
-               (target_occupied &&
-                material_of(prow[tx0])->kind == KIND_STATIC)) {
-        /* down == 0 with an occupied target is ambiguous by itself - a
-         * DIFFERENT liquid blocks the same way a wall does (room_in()
-         * returns 0 for a material mismatch either way) - so KIND_STATIC
-         * narrows the IN-BOUNDS case to an actual wall or floor, which
-         * give_mass()'s own room-based check can never distinguish from
-         * "blocked by more liquid" on its own.
-         *
-         * THE GRID EDGE HAS NO CELL TO CHECK THE MATERIAL OF - `tx0`
-         * out of bounds, or `prow` NULL (dest_row() off the grid), is the
-         * ordinary way this simulation's own outer boundary blocks a
-         * move, with no explicit wall cell there at all (see sand_at()'s
-         * own comment on reading out-of-bounds as solid). Without this
-         * half of the check, a real device board - which has no drawn
-         * border, only the grid's own edge - never satisfied
-         * `target_occupied` at all (prow == NULL short-circuits it),
-         * so nothing here ever fired outside of a test fixture that
-         * happened to paint an explicit STONE floor.
-         *
-         * QUEUED HERE, FIRED AFTER row[x] IS WRITTEN, below - not called
-         * immediately the way the target_occupied branch's splash is.
-         * This grain's own diagonal slides (the "DOWN THE SLOPE" loop
-         * right after this whole if/else) can still shrink `mass` at
-         * THIS exact cell before the function returns; row[x] does not
-         * get its final byte until the very end. Queuing immediately
-         * here captured the PRE-slide byte, which step_impulses() later
-         * found did not match what was actually still sitting at (x, y)
-         * once the slide had run - the entry failed re-acquisition (see
-         * that check's own comment in step_impulses(), sand.c) and was
-         * silently dropped every time, never once surviving to move.
-         * Splashes at (x, y), the grain's OWN position - it did not
-         * move, unlike the target_occupied branch above where the splash
-         * originates from where mass actually landed. Same exposed-to-
-         * open-space gate as the liquid-landing case, for the same
-         * reason: without it, a settled pool resting on the floor would
-         * splash every single step forever. */
-        const uint8_t *arow = dest_row(s, y - dy);
-        const int ax = x - dx;
-        wall_splash = arow == NULL || (unsigned)ax >= (unsigned)w
-                      || CELL_IS_EMPTY(arow[ax]);
     }
 
     /* Then DOWN THE SLOPE, both ways.
@@ -542,15 +550,6 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
      * zero variant, which would leave the material nibble claiming an
      * occupied cell holding nothing. */
     row[x] = (mass > 0) ? CELL_MAKE(mat_id, mass) : CELL_EMPTY;
-
-    /* Fired here, not at the wall/edge branch above that set the flag -
-     * see wall_splash's own comment for why: row[x] just got its final
-     * byte, so the impulse this queues will still match what step_
-     * impulses() finds there later, instead of a byte this grain's own
-     * diagonal slides have since changed underneath it. */
-    if (wall_splash) {
-        splash_displace(s, x, y, mat_id);
-    }
 
     return moved;
 }
