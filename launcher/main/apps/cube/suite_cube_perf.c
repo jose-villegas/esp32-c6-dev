@@ -26,26 +26,27 @@
 
 #include "gfx/gfx.h"
 #include "app.h"
+#include "ui/ui.h"
 
-/* The cube app's internal state - these are static in app_cube.c so we need
- * to declare them as extern to access from the test. In a real test you'd
- * typically put these in a shared header, but for this performance profiling
- * tool we just declare them here. */
-extern S3L_Model3D cube;
-extern S3L_Scene   scene;
-extern uint32_t    elapsed_ms;
-extern int         frame_x0, frame_y0, frame_x1, frame_y1;
-extern bool        partial_updates;
-extern bool        menu_open;
-extern uint32_t    fps_frame_count;
-extern uint32_t    fps_window_elapsed_ms;
-extern double      fps_value;
-extern uint32_t    last_layout_generation;
+/* app_cube.c's own toggle - forced true in the fixture below so a stray
+ * BOOT-menu setting left over from manual testing can never silently skew
+ * a perf run. */
+extern bool partial_updates;
 
-/* Functions from app_cube.c */
+/* app_cube.c's three per-frame phases plus its enter/exit, all exposed
+ * specifically for this suite. Deliberately NOT S3L_newFrame()/
+ * S3L_drawScene() or the cube/scene state directly: small3dlib.h defines
+ * real, non-static functions once configured and included, so only the
+ * translation unit that already includes it (app_cube.c) can touch them -
+ * a second #include here would redefine those same symbols and fail to
+ * link. Going through cube_update_rotation()/cube_clear_frame()/
+ * cube_rasterize_frame() instead means this suite exercises the exact
+ * code cube_frame() runs, not a hand-copy of it that could drift. */
 extern void cube_enter(void);
 extern void cube_exit(void);
-extern void cube_frame(uint32_t dt_ms, const input_t *input);
+extern void cube_update_rotation(uint32_t dt_ms);
+extern void cube_clear_frame(void);
+extern void cube_rasterize_frame(void);
 extern void draw_fps(const input_t *input);
 
 static const char *TAG = "cube_perf";
@@ -53,53 +54,150 @@ static const char *TAG = "cube_perf";
 #define SAMPLE_SECONDS  10
 #define SAMPLE_MS       (SAMPLE_SECONDS * 1000)
 
-/* Frame timing breakdown. */
+/* Frame timing breakdown. int32_t, not int64_t: these are one frame's worth
+ * of microseconds, always well under a few hundred thousand, and halving
+ * their size matters here - MAX_SAMPLES of these plus stat_scratch below
+ * are static, and the diag image's free heap was already close enough to
+ * POST's 40 KiB floor that the int64_t version of this file tripped it. */
 typedef struct {
-    int64_t frame_total_us;    /* wall clock per frame */
-    int64_t logic_us;          /* cube logic + scene setup */
-    int64_t rasterize_us;      /* small3dlib S3L_drawScene() */
-    int64_t hud_us;            /* draw_fps() - zero when with_hud is false */
-    int64_t present_us;        /* gfx_present() */
+    int32_t frame_total_us;    /* wall clock per frame */
+    int32_t logic_us;          /* cube logic + scene setup */
+    int32_t rasterize_us;      /* small3dlib S3L_drawScene() */
+    int32_t hud_us;            /* draw_fps() - zero when with_hud is false */
+    int32_t present_us;        /* gfx_present() */
 } frame_sample_t;
 
-/* Fixed-size circular buffer for samples. */
-#define MAX_SAMPLES  600   /* 10s @ 60fps = 600 frames max */
+/* A genuine ring buffer, not a 10s-at-60fps-sized capture: run_perf_capture()
+ * runs for the full SAMPLE_SECONDS regardless of how many frames that turns
+ * out to be, wrapping sample_count % MAX_SAMPLES back to the start once the
+ * ring fills, so stats are always taken over the most recent MAX_SAMPLES
+ * frames rather than whichever frames happened to land first. That is a
+ * feature, not just a memory saving: a fixed capture cap would silently
+ * truncate the window's tail on a device rendering faster than expected,
+ * biasing every stat toward the run's startup transient instead of its
+ * settled frame rate. sample_count itself is never wrapped - it is the
+ * total frame count used for the reported average fps - only the index
+ * into samples[]/stat_scratch[] is.
+ *
+ * 128 is deliberately smaller than a 10s capture would ever need: it is
+ * still enough for a meaningful P95 (128 * 5% = 6 samples in the tail), and
+ * every sample here costs five int32_t fields, four of them duplicated a
+ * second time in stat_scratch while compute_stats() sorts one field at a
+ * time - see its own comment. If a future run ever wants closer to the
+ * full window's true distribution instead of its recent tail, blending two
+ * such rings - e.g. an exponential moving average of each ring's own
+ * min/max/median as one drains into the other - would buy that back
+ * without ever paying for the whole 10s of raw samples at once; nothing
+ * here needs that precision yet. */
+#define MAX_SAMPLES  128
 static frame_sample_t samples[MAX_SAMPLES];
 static int sample_count = 0;
 
-static int cmp_i64(const void *a, const void *b)
+static int cmp_i32(const void *a, const void *b)
 {
-    int64_t va = *(const int64_t *)a;
-    int64_t vb = *(const int64_t *)b;
+    int32_t va = *(const int32_t *)a;
+    int32_t vb = *(const int32_t *)b;
     return (va > vb) - (va < vb);
 }
 
-/* Median helper: sorts `arr` in place and returns its middle element - the
- * p95 lookups below run against the same array right after calling this,
- * relying on it having already been sorted here rather than sorting again
- * themselves. */
-static int64_t median_of(int64_t *arr, int n)
+/* Median helper: sorts `arr` in place and returns its middle element -
+ * compute_stats() below relies on it having already been sorted here to
+ * read p95 out of the same array right after, rather than sorting again
+ * itself. */
+static int32_t median_of(int32_t *arr, int n)
 {
     if (n == 0) return 0;
-    qsort(arr, n, sizeof(int64_t), cmp_i64);
+    qsort(arr, n, sizeof(int32_t), cmp_i32);
     return arr[n / 2];
+}
+
+typedef enum {
+    FIELD_TOTAL,
+    FIELD_LOGIC,
+    FIELD_RASTERIZE,
+    FIELD_HUD,
+    FIELD_PRESENT,
+} sample_field_t;
+
+static int32_t field_of(const frame_sample_t *s, sample_field_t field)
+{
+    switch (field) {
+        case FIELD_TOTAL:     return s->frame_total_us;
+        case FIELD_LOGIC:     return s->logic_us;
+        case FIELD_RASTERIZE: return s->rasterize_us;
+        case FIELD_HUD:       return s->hud_us;
+        case FIELD_PRESENT:   return s->present_us;
+    }
+    return 0;
+}
+
+typedef struct {
+    int64_t min, max, avg, med, p95;
+} phase_stats_t;
+
+/* Scratch space for whichever field compute_stats() is sorting right now -
+ * shared and reused across all five calls rather than one MAX_SAMPLES
+ * array per field, which is what overflowed the main task's stack when it
+ * was five stack-local arrays, and starved gfx's own allocations when
+ * moved to five static ones instead. One reused buffer costs a fifth of
+ * either. */
+static int32_t stat_scratch[MAX_SAMPLES];
+
+static phase_stats_t compute_stats(sample_field_t field, int n)
+{
+    phase_stats_t s = { .min = INT64_MAX, .max = 0, .avg = 0, .med = 0, .p95 = 0 };
+    int64_t sum = 0;
+
+    for (int i = 0; i < n; i++) {
+        int32_t v = field_of(&samples[i], field);
+        stat_scratch[i] = v;
+        if (v < s.min) s.min = v;
+        if (v > s.max) s.max = v;
+        sum += v;
+    }
+
+    s.avg = sum / n;
+    s.med = median_of(stat_scratch, n);        /* sorts stat_scratch in place */
+    s.p95 = stat_scratch[(n * 95) / 100];       /* stat_scratch is now sorted */
+    return s;
 }
 
 static void cube_perf_fixture(void)
 {
+    /* draw_fps() needs ctx->text_width/text_height, which only ui_init()
+     * sets - normally done once by the shell's own startup, which the
+     * selftest runs before (see main.c's app_main(): selftest_run() runs
+     * ahead of ui_launcher_init()). Without this, draw_fps() trips
+     * microui's own assertion the first time it tries to lay out text.
+     * suite_ui.c's fixture does the same for the same reason. */
+    ui_init();
+
     /* Use the app's own enter to set up cube, scene, etc. */
     cube_enter();
-    
-    /* Enable partial updates for realistic measurement. */
-    gfx_set_partial_clear(true);
+
+    /* Force partial updates on regardless of whatever the BOOT menu was
+     * last left at - cube_clear_frame() reads this flag itself, so this is
+     * the one place that has to guarantee it rather than trusting ambient
+     * state. */
+    partial_updates = true;
     gfx_set_interlace(false);
-    
+
     sample_count = 0;
 }
 
 static void cube_perf_teardown(void)
 {
     cube_exit();
+
+    /* gfx_set_interlace() is gfx.c-global state, not app-scoped like
+     * partial_clear (cube_exit() already turns that off) - left on here,
+     * it would leak into every suite that runs after this one in the same
+     * boot, since suites are registered and run alphabetically and
+     * "cube_perf" sorts right before "display"/"gfx_*". That is exactly
+     * what broke their own dirty-tracking budget assertions the first time
+     * this suite ran on device: interlace's carried-over dirty bits made
+     * an otherwise-unchanged frame look like it still had pixels to send. */
+    gfx_set_interlace(false);
 }
 
 /* Nothing pressed, no touch - draw_fps() feeds this straight into
@@ -118,12 +216,12 @@ static void run_perf_capture(const char *label, bool with_hud)
     
     int64_t test_start = esp_timer_get_time();
     int64_t next_frame_due = test_start;
-    int frame_idx = 0;
-    
-    /* Run at natural frame rate (no vTaskDelay) for SAMPLE_SECONDS. */
+
+    /* Run at natural frame rate (no vTaskDelay) for the full SAMPLE_SECONDS -
+     * no frame-count cap here, since samples[] is a ring buffer (see its own
+     * comment) rather than a fixed capture, so there is nothing left that
+     * needs one. */
     while (esp_timer_get_time() - test_start < SAMPLE_MS * 1000) {
-        if (frame_idx >= MAX_SAMPLES) break;
-        
         int64_t frame_start = esp_timer_get_time();
         int64_t dt_ms = (frame_start - next_frame_due) / 1000;
         if (dt_ms < 0) dt_ms = 1;
@@ -132,35 +230,14 @@ static void run_perf_capture(const char *label, bool with_hud)
         
         /* --- LOGIC PHASE --- */
         int64_t logic_start = esp_timer_get_time();
-        
-        /* Manually do what cube_frame does, but timed: */
-        elapsed_ms += dt_ms;
-        cube.transform.rotation.y =
-            (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
-        cube.transform.rotation.x =
-            (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
-        
-        gfx_set_partial_clear(true);
-        gfx_clear(gfx_rgb(BACKGROUND_RGB));
-        
+        cube_update_rotation((uint32_t)dt_ms);
+        cube_clear_frame();
         int64_t logic_end = esp_timer_get_time();
-        
+
         /* --- RASTERIZE PHASE --- */
         int64_t raster_start = esp_timer_get_time();
-        
-        frame_x0 = GFX_WIDTH;
-        frame_y0 = GFX_HEIGHT;
-        frame_x1 = 0;
-        frame_y1 = 0;
-        
-        S3L_newFrame();
-        S3L_drawScene(scene);  /* calls shade_pixel for every covered pixel */
-        
+        cube_rasterize_frame();
         int64_t raster_end = esp_timer_get_time();
-        
-        if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
-            gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0, frame_y1 - frame_y0);
-        }
 
         /* --- HUD PHASE --- */
         /* Same position in the frame real cube_frame() calls it from - after
@@ -180,16 +257,19 @@ static void run_perf_capture(const char *label, bool with_hud)
 
         int64_t frame_end = present_end;
 
-        /* Store sample */
-        samples[sample_count].frame_total_us = frame_end - frame_start;
-        samples[sample_count].logic_us = logic_end - logic_start;
-        samples[sample_count].rasterize_us = raster_end - raster_start;
-        samples[sample_count].hud_us = with_hud ? (hud_end - hud_start) : 0;
-        samples[sample_count].present_us = present_end - present_start;
+        /* Store sample - wraps into the ring rather than growing forever;
+         * sample_count itself keeps counting every frame, ring wrap or not,
+         * since it also doubles as the true total for the average-fps math
+         * below. */
+        int idx = sample_count % MAX_SAMPLES;
+        samples[idx].frame_total_us = (int32_t)(frame_end - frame_start);
+        samples[idx].logic_us = (int32_t)(logic_end - logic_start);
+        samples[idx].rasterize_us = (int32_t)(raster_end - raster_start);
+        samples[idx].hud_us = with_hud ? (int32_t)(hud_end - hud_start) : 0;
+        samples[idx].present_us = (int32_t)(present_end - present_start);
         sample_count++;
-        frame_idx++;
     }
-    
+
     /* --- COMPUTE STATISTICS --- */
     if (sample_count == 0) {
         ESP_LOGE(TAG, "No frames captured!");
@@ -197,71 +277,16 @@ static void run_perf_capture(const char *label, bool with_hud)
         TEST_FAIL();
         return;
     }
-    
-    int64_t total_min = INT64_MAX, total_max = 0, total_sum = 0;
-    int64_t logic_min = INT64_MAX, logic_max = 0, logic_sum = 0;
-    int64_t rast_min = INT64_MAX, rast_max = 0, rast_sum = 0;
-    int64_t hud_min = INT64_MAX, hud_max = 0, hud_sum = 0;
-    int64_t pres_min = INT64_MAX, pres_max = 0, pres_sum = 0;
 
-    int64_t totals[MAX_SAMPLES];
-    int64_t logics[MAX_SAMPLES];
-    int64_t rasts[MAX_SAMPLES];
-    int64_t huds[MAX_SAMPLES];
-    int64_t press[MAX_SAMPLES];
+    /* The ring only ever holds this many valid entries even once
+     * sample_count (the true total) has grown past it. */
+    const int valid = (sample_count < MAX_SAMPLES) ? sample_count : MAX_SAMPLES;
 
-    for (int i = 0; i < sample_count; i++) {
-        int64_t t = samples[i].frame_total_us;
-        int64_t l = samples[i].logic_us;
-        int64_t r = samples[i].rasterize_us;
-        int64_t h = samples[i].hud_us;
-        int64_t p = samples[i].present_us;
-
-        totals[i] = t;
-        logics[i] = l;
-        rasts[i] = r;
-        huds[i] = h;
-        press[i] = p;
-
-        if (t < total_min) total_min = t;
-        if (t > total_max) total_max = t;
-        total_sum += t;
-
-        if (l < logic_min) logic_min = l;
-        if (l > logic_max) logic_max = l;
-        logic_sum += l;
-
-        if (r < rast_min) rast_min = r;
-        if (r > rast_max) rast_max = r;
-        rast_sum += r;
-
-        if (h < hud_min) hud_min = h;
-        if (h > hud_max) hud_max = h;
-        hud_sum += h;
-
-        if (p < pres_min) pres_min = p;
-        if (p > pres_max) pres_max = p;
-        pres_sum += p;
-    }
-
-    int64_t total_avg = total_sum / sample_count;
-    int64_t logic_avg = logic_sum / sample_count;
-    int64_t rast_avg = rast_sum / sample_count;
-    int64_t hud_avg = hud_sum / sample_count;
-    int64_t pres_avg = pres_sum / sample_count;
-
-    int64_t total_med = median_of(totals, sample_count);
-    int64_t logic_med = median_of(logics, sample_count);
-    int64_t rast_med = median_of(rasts, sample_count);
-    int64_t hud_med = median_of(huds, sample_count);
-    int64_t pres_med = median_of(press, sample_count);
-
-    /* P95 = 95th percentile */
-    int64_t total_p95 = totals[(sample_count * 95) / 100];
-    int64_t logic_p95 = logics[(sample_count * 95) / 100];
-    int64_t rast_p95 = rasts[(sample_count * 95) / 100];
-    int64_t hud_p95 = huds[(sample_count * 95) / 100];
-    int64_t pres_p95 = press[(sample_count * 95) / 100];
+    phase_stats_t total = compute_stats(FIELD_TOTAL, valid);
+    phase_stats_t logic = compute_stats(FIELD_LOGIC, valid);
+    phase_stats_t rast  = compute_stats(FIELD_RASTERIZE, valid);
+    phase_stats_t hud   = compute_stats(FIELD_HUD, valid);
+    phase_stats_t pres  = compute_stats(FIELD_PRESENT, valid);
 
     /* --- OUTPUT MARKDOWN REPORT --- */
     char report_path[128];
@@ -277,59 +302,59 @@ static void run_perf_capture(const char *label, bool with_hud)
         fprintf(f, "## Frame Total (wall clock)\n");
         fprintf(f, "| Stat | us | fps |\n");
         fprintf(f, "|---|---:|---:|\n");
-        fprintf(f, "| Min | %lld | %.1f |\n", (long long)total_min, 1000000.0 / total_min);
-        fprintf(f, "| Max | %lld | %.1f |\n", (long long)total_max, 1000000.0 / total_max);
-        fprintf(f, "| Average | %lld | %.1f |\n", (long long)total_avg, 1000000.0 / total_avg);
-        fprintf(f, "| Median | %lld | %.1f |\n", (long long)total_med, 1000000.0 / total_med);
-        fprintf(f, "| P95 | %lld | %.1f |\n\n", (long long)total_p95, 1000000.0 / total_p95);
+        fprintf(f, "| Min | %lld | %.1f |\n", (long long)total.min, 1000000.0 / total.min);
+        fprintf(f, "| Max | %lld | %.1f |\n", (long long)total.max, 1000000.0 / total.max);
+        fprintf(f, "| Average | %lld | %.1f |\n", (long long)total.avg, 1000000.0 / total.avg);
+        fprintf(f, "| Median | %lld | %.1f |\n", (long long)total.med, 1000000.0 / total.med);
+        fprintf(f, "| P95 | %lld | %.1f |\n\n", (long long)total.p95, 1000000.0 / total.p95);
 
         fprintf(f, "## Breakdown\n");
         fprintf(f, "| Phase | Min | Max | Avg | Median | P95 |\n");
         fprintf(f, "|---|---:|---:|---:|---:|---:|\n");
         fprintf(f, "| Logic | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)logic_min, (long long)logic_max, (long long)logic_avg,
-                (long long)logic_med, (long long)logic_p95);
+                (long long)logic.min, (long long)logic.max, (long long)logic.avg,
+                (long long)logic.med, (long long)logic.p95);
         fprintf(f, "| Rasterize | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)rast_min, (long long)rast_max, (long long)rast_avg,
-                (long long)rast_med, (long long)rast_p95);
+                (long long)rast.min, (long long)rast.max, (long long)rast.avg,
+                (long long)rast.med, (long long)rast.p95);
         fprintf(f, "| HUD (draw_fps) | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)hud_min, (long long)hud_max, (long long)hud_avg,
-                (long long)hud_med, (long long)hud_p95);
+                (long long)hud.min, (long long)hud.max, (long long)hud.avg,
+                (long long)hud.med, (long long)hud.p95);
         fprintf(f, "| Present | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)pres_min, (long long)pres_max, (long long)pres_avg,
-                (long long)pres_med, (long long)pres_p95);
+                (long long)pres.min, (long long)pres.max, (long long)pres.avg,
+                (long long)pres.med, (long long)pres.p95);
         fprintf(f, "| **Total** | %lld | %lld | %lld | %lld | %lld |\n\n",
-                (long long)total_min, (long long)total_max, (long long)total_avg,
-                (long long)total_med, (long long)total_p95);
+                (long long)total.min, (long long)total.max, (long long)total.avg,
+                (long long)total.med, (long long)total.p95);
 
         fprintf(f, "## Frame Budget vs Target (60 fps = 16667 us)\n");
         fprintf(f, "| Phase | Budget %% (avg) |\n");
         fprintf(f, "|---|---:|\n");
-        fprintf(f, "| Logic | %.1f%% |\n", (double)logic_avg / 16667.0 * 100.0);
-        fprintf(f, "| Rasterize | %.1f%% |\n", (double)rast_avg / 16667.0 * 100.0);
-        fprintf(f, "| HUD (draw_fps) | %.1f%% |\n", (double)hud_avg / 16667.0 * 100.0);
-        fprintf(f, "| Present | %.1f%% |\n", (double)pres_avg / 16667.0 * 100.0);
-        fprintf(f, "| **Total** | %.1f%% |\n\n", (double)total_avg / 16667.0 * 100.0);
+        fprintf(f, "| Logic | %.1f%% |\n", (double)logic.avg / 16667.0 * 100.0);
+        fprintf(f, "| Rasterize | %.1f%% |\n", (double)rast.avg / 16667.0 * 100.0);
+        fprintf(f, "| HUD (draw_fps) | %.1f%% |\n", (double)hud.avg / 16667.0 * 100.0);
+        fprintf(f, "| Present | %.1f%% |\n", (double)pres.avg / 16667.0 * 100.0);
+        fprintf(f, "| **Total** | %.1f%% |\n\n", (double)total.avg / 16667.0 * 100.0);
 
         fclose(f);
         ESP_LOGI(TAG, "Report written to %s", report_path);
     } else {
         ESP_LOGW(TAG, "Could not open %s for writing (SPIFFS not mounted?)", report_path);
     }
-    
+
     /* Also log to console for immediate visibility. */
     ESP_LOGI(TAG, "=== CUBE PERF %s (%d frames) ===", label, sample_count);
     ESP_LOGI(TAG, "Total:   avg=%lldus med=%lldus p95=%lldus  (%.1f/%.1f/%.1f fps)",
-             (long long)total_avg, (long long)total_med, (long long)total_p95,
-             1000000.0/total_avg, 1000000.0/total_med, 1000000.0/total_p95);
+             (long long)total.avg, (long long)total.med, (long long)total.p95,
+             1000000.0/total.avg, 1000000.0/total.med, 1000000.0/total.p95);
     ESP_LOGI(TAG, "Logic:   avg=%lldus med=%lldus (%.1f%%)",
-             (long long)logic_avg, (long long)logic_med, (double)logic_avg/total_avg*100);
+             (long long)logic.avg, (long long)logic.med, (double)logic.avg/total.avg*100);
     ESP_LOGI(TAG, "Raster:  avg=%lldus med=%lldus (%.1f%%)",
-             (long long)rast_avg, (long long)rast_med, (double)rast_avg/total_avg*100);
+             (long long)rast.avg, (long long)rast.med, (double)rast.avg/total.avg*100);
     ESP_LOGI(TAG, "HUD:     avg=%lldus med=%lldus (%.1f%%)",
-             (long long)hud_avg, (long long)hud_med, (double)hud_avg/total_avg*100);
+             (long long)hud.avg, (long long)hud.med, (double)hud.avg/total.avg*100);
     ESP_LOGI(TAG, "Present: avg=%lldus med=%lldus (%.1f%%)",
-             (long long)pres_avg, (long long)pres_med, (double)pres_avg/total_avg*100);
+             (long long)pres.avg, (long long)pres.med, (double)pres.avg/total.avg*100);
 
     cube_perf_teardown();
 }
@@ -354,28 +379,16 @@ void test_cube_performance_interlaced(void)
     
     /* Quick 100-frame sample instead of 10s. */
     sample_count = 0;
-    int64_t start = esp_timer_get_time();
-    
+
     for (int i = 0; i < 100 && sample_count < MAX_SAMPLES; i++) {
         int64_t frame_start = esp_timer_get_time();
-        
-        int64_t dt_ms = 16;  /* ~60fps target */
-        elapsed_ms += dt_ms;
-        cube.transform.rotation.y = (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
-        cube.transform.rotation.x = (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
-        
-        gfx_set_partial_clear(true);
-        gfx_clear(gfx_rgb(BACKGROUND_RGB));
-        
-        frame_x0 = GFX_WIDTH; frame_y0 = GFX_HEIGHT; frame_x1 = 0; frame_y1 = 0;
-        S3L_newFrame();
-        S3L_drawScene(scene);
-        if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
-            gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0, frame_y1 - frame_y0);
-        }
+
+        cube_update_rotation(16);  /* ~60fps target */
+        cube_clear_frame();
+        cube_rasterize_frame();
         gfx_present();
-        
-        samples[sample_count].frame_total_us = esp_timer_get_time() - frame_start;
+
+        samples[sample_count].frame_total_us = (int32_t)(esp_timer_get_time() - frame_start);
         sample_count++;
     }
     
