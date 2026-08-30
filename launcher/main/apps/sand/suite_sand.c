@@ -6056,35 +6056,30 @@ static void test_the_axis_freezes_only_after_the_diagonal_deadzones_entry_frame(
     TEST_ASSERT_FALSE_MESSAGE(freeze_active,
         "setup: nothing should ever be frozen outside the dead zone");
 
-    /* THE ENTRY FRAME: a 5%% margin - comfortably inside
-     * DEPTH_DIAGONAL_DEADZONE_PCT's 10%% band (ratio >= 0.90) and the
-     * FIRST such frame. NOTE this is deliberately well UNDER
-     * AXIS_HYSTERESIS_PCT's 15%% flip threshold - unlike an earlier
-     * version of this test, the two bands no longer overlap at all now
-     * that the dead zone shrank to 10%% (see sand.h's own comment on why
-     * they never needed to relate in the first place), so there is no
-     * margin left that is simultaneously "inside the dead zone" and
-     * "would clear the Schmitt trigger on its own" to exercise - this
-     * frame's own vertical reading would come out the same whether the
-     * trigger ran or was skipped. What IS still independently observable,
-     * and what this test actually pins, is freeze_active's own timing. */
-    mirror_axis_step(950, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+    /* THE ENTRY FRAME: a 1%% margin - inside DEPTH_DIAGONAL_DEADZONE_PCT's
+     * 4%% band (ratio >= 0.96), well under AXIS_HYSTERESIS_PCT's 15%% flip
+     * threshold (the two bands do not overlap - sand.h's own comment on
+     * why they need not relate), so this frame's own vertical reading
+     * would come out the same whether the Schmitt trigger ran or was
+     * skipped. What IS independently observable, and what this test
+     * actually pins, is freeze_active's own timing. */
+    mirror_axis_step(990, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
                      &freeze_active);
     TEST_ASSERT_TRUE_MESSAGE(in_deadzone,
-        "setup: a 5%% margin must read INSIDE the 10%% dead zone, or this "
+        "setup: a 1%% margin must read INSIDE the 4%% dead zone, or this "
         "test is not exercising the entry transition it claims to");
     TEST_ASSERT_FALSE_MESSAGE(freeze_active,
         "the ENTRY frame must not freeze yet - it exists specifically to "
         "let one fresh, synchronised snapshot happen first");
     TEST_ASSERT_TRUE_MESSAGE(vertical,
-        "setup: 950 does not clear AXIS_HYSTERESIS_PCT's 15%% threshold "
+        "setup: 990 does not clear AXIS_HYSTERESIS_PCT's 15%% threshold "
         "against 1000, so this stays vertical regardless of whether the "
         "entry frame's Schmitt trigger ran or was skipped - not what this "
         "assertion is about, see freeze_active just above for that");
 
     /* THE FRAME AFTER ENTRY: same gravity again, still inside the dead
      * zone, but no longer the entry frame - freezing starts here. */
-    mirror_axis_step(950, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+    mirror_axis_step(990, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
                      &freeze_active);
     TEST_ASSERT_TRUE_MESSAGE(in_deadzone, "setup: still inside the dead zone");
     TEST_ASSERT_TRUE_MESSAGE(freeze_active,

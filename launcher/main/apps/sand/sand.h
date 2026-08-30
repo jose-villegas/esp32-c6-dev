@@ -69,24 +69,20 @@
 #define SAND_BLOCK_H 64
 
 /* AXIS_HYSTERESIS_PCT and DEPTH_DIAGONAL_DEADZONE_PCT are OWNED by
- * app_sand.c's LOCAL DEPTH mechanism (update_local_depth_axis(), see that
- * function's and DEPTH_DIAGONAL_DEADZONE_PCT's own comments there for what
- * each actually does) - declared here, not there, purely so suite_sand.c's
- * host tests can reference the real values instead of hand-copying a second
- * copy that would silently stop matching the day either constant is retuned
- * on the device side. The same reason MATERIAL_LIQUID_DEPTH_BAND lives in
- * material.h rather than staying private to material.c.
+ * app_sand.c's LOCAL DEPTH mechanism (update_local_depth_axis() and
+ * DEPTH_DIAGONAL_DEADZONE_PCT's own comment there) - declared here, not
+ * there, purely so suite_sand.c's host tests can reference the real values
+ * instead of a hand-copied duplicate that could silently drift. The same
+ * reason MATERIAL_LIQUID_DEPTH_BAND lives in material.h rather than
+ * staying private to material.c.
  *
- * NOT required to relate to each other in any particular way - an earlier
- * version of this comment claimed the dead zone had to stay wider than the
- * hysteresis band, which was true only for a mechanism (freezing the axis
- * mid-hold) this pair no longer needs: AXIS_HYSTERESIS_PCT already prevents
- * its own chatter independently of whatever the dead zone's width is. */
+ * The two are independent - AXIS_HYSTERESIS_PCT prevents its own chatter
+ * regardless of the dead zone's width, they do not need to relate. */
 #define AXIS_HYSTERESIS_PCT 15
 
-/* 10, down from 30 - see DEPTH_DIAGONAL_DEADZONE_PCT's own comment in
- * app_sand.c for the device evidence this shrink is responding to. */
-#define DEPTH_DIAGONAL_DEADZONE_PCT 10
+/* +/-1.2 degrees, ~2.3 degrees total - see DEPTH_DIAGONAL_DEADZONE_PCT's
+ * own comment in app_sand.c. */
+#define DEPTH_DIAGONAL_DEADZONE_PCT 4
 
 /* How many persistent emitters sand_t can carry at once - see
  * sand_add_emitter() below.

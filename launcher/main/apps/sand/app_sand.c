@@ -1060,78 +1060,35 @@ static uint8_t col_local_depth[GRID_W_MAX];
 
 /* THE DEBOUNCED PARALLEL WALK - what material_colours() is actually fed.
  *
- * A first attempt gated the ENTIRE depth gradient behind
- * sand_block_settled() (a block only settles once NOTHING in the whole
- * SAND_BLOCK_W x SAND_BLOCK_H block moved for a step). Verified on device
- * and reverted: a real hand never holds the board perfectly still, so that
- * bit rarely latches at all under real handling, and the gradient was gone
- * almost everywhere rather than merely steadied - "we lost the bands" was
- * the report, not "the flicker is gone."
+ * col_local_depth[] above stays the RAW, instantaneous walk - it has to,
+ * or an obstacle breaking a pool's surface would take extra frames to
+ * reveal (test_local_depth_follows_the_puddles_own_shape). This array runs
+ * the same incremental walk in parallel, but only ever accumulates through
+ * LIQUID cells (`material_of(row[cx])->kind == KIND_LIQUID` gates it, see
+ * paint_row_n() below) - any non-liquid cell resets it to a clean 0 rather
+ * than letting a run of open air pollute the value a real boundary
+ * inherits - and a RESET only commits once the SAME ROW has asked for it
+ * on two consecutive painted frames, tracked by row index in
+ * col_top_row[cx], not by column-chain position.
  *
- * A SECOND attempt tried a plain per-column accumulator that ran in
- * parallel with col_local_depth[] (same shape, same row-to-row chaining
- * within one frame's walk), committing a reset only after two consecutive
- * frames asked for it. That shipped, was verified against a synthetic
- * scripted sequence, and STILL FAILED ON DEVICE - the whole gradient went
- * flat again, this time for a different reason: the synthetic test drove
- * the debounce function in isolation, one persistent state, exactly the
- * way a SINGLE row's history across frames would behave. The real
- * per-column array is not that - it is read and written once per ROW,
- * chained within a single frame's walk, and two EMPTY cells compare as
- * "same material" (CELL_MATERIAL(empty) == CELL_MATERIAL(empty)) the same
- * way col_local_depth[] already tolerates for the raw walk, harmlessly
- * there because nothing ever reads a raw depth computed over empty space.
- * This array's value at the moment of a reset IS read, though - so any run
- * of empty (or otherwise non-liquid) cells above a pool's true boundary
- * climbed the accumulator through open air before the walk ever reached
- * real water, and because that climbed accumulator never resets between
- * frames either, it saturated to 255 within a couple of frames for every
- * column with any open air above it - which is most of them. Confirmed by
- * comparing device screenshots: the vertical-dominant case (the one this
- * mechanism gated) went flat; the horizontal-dominant case (still the
- * untouched raw walk, see h_running_depth below) kept its bands.
+ * Row-keyed on purpose: a settled pool's topmost cell blinking empty/full
+ * for one frame never gets its neighbour row to ask twice from the SAME
+ * row index, so it is absorbed; a genuine, lasting change (the pool
+ * draining, an obstacle appearing) keeps asking from the same new row and
+ * commits within one extra frame - not something a human eye can tell
+ * from immediate.
  *
- * THIS THIRD VERSION fixes both root causes at once:
+ * KNOWN LIMITATION, ACCEPTED: a column with TWO reset points (an obstacle
+ * inside an otherwise open pool) has both competing for the single
+ * col_top_row[cx] slot, so the shallower (true surface) one can lag its
+ * own commit by a frame. True per-row memory would fix it, at the cost of
+ * one byte per CELL rather than per column - unaffordable on this
+ * device's heap (grid itself already costs 41,216 bytes, see start_sim()'s
+ * own comment on that allocation), so this is where the trade lands.
  *
- *  1. col_stable_depth[] only ever accumulates through LIQUID cells - see
- *     the `material_of(row[cx])->kind == KIND_LIQUID` gate in
- *     paint_row_n() below. Any non-liquid cell (empty space, sand, stone,
- *     anything) resets it to a clean 0 and leaves col_top_row[] alone, so
- *     a run of open air above a pool can no longer pollute the value the
- *     real boundary inherits.
- *
- *  2. THE COMMIT DECISION IS KEYED BY ROW, not by column-chain position.
- *     col_top_row[] holds the ROW INDEX of the most recently
- *     confirmed-or-candidate boundary for this column. A reset request at
- *     row `cy` only commits (stable depth 0) if `col_top_row[cx] == cy` -
- *     i.e. this EXACT row asked for the same thing last time it was
- *     painted - and otherwise it is held (keeps climbing as if nothing
- *     happened) while col_top_row[cx] is updated to `cy`, so the SAME row
- *     asking again next time will match and commit. A settled pool's
- *     topmost cell blinking empty/full for exactly one frame at a time -
- *     the reported flicker's actual shape - never gets its neighbour row
- *     to ask twice from the SAME row index, so it is absorbed; a genuine,
- *     lasting change - the pool actually draining by one row, an obstacle
- *     really appearing - keeps asking from the same new row and commits
- *     within one extra frame, not something a human eye can tell from
- *     immediate.
- *
- * KNOWN LIMITATION, ACCEPTED RATHER THAN CHASED FURTHER: a column with
- * TWO reset points - an obstacle sitting inside an otherwise open pool -
- * has both points competing for the single col_top_row[cx] slot, and
- * whichever is walked LAST each frame (the deeper one, in the normal
- * ascending scan) wins it, so the shallower (true surface) point can be
- * perpetually one frame behind its own commit. Cosmetically minor (the
- * surface reads very slightly brighter than ideal, never wrong-shaped) and
- * confined to the rarer case of an obstacle actually sitting inside a
- * pool's own body - true per-row memory would fix it and costs exactly
- * the unaffordable 41KB explained above, so this is where the trade lands.
- *
- * VERTICAL-DOMINANT ONLY, same as col_local_depth[] itself - the
- * horizontal-dominant case has no cross-call state to extend today
- * (h_running_depth below is call-local), so debouncing it would need a
- * genuinely new mechanism, not a reuse of this one. Left for a follow-up;
- * see h_running_depth's own comment for where that gap is. */
+ * VERTICAL-DOMINANT ONLY - the horizontal-dominant case has no cross-call
+ * state to extend (h_running_depth below is call-local), so debouncing it
+ * would need a genuinely new mechanism. Left for a follow-up. */
 static uint8_t col_stable_depth[GRID_W_MAX];
 
 /* The row index of column cx's most recent boundary request, confirmed or
@@ -1189,76 +1146,42 @@ static bool local_depth_prev_axis_vertical;
  * why: suite_sand.c's host tests need the real value, not a hand-copied
  * duplicate. */
 
-/* THE DIAGONAL DEAD ZONE - a band around the 45 degree tie point where
- * LOCAL DEPTH FREEZES instead of updating, rather than a band that is
- * TECHNICALLY stable (AXIS_HYSTERESIS_PCT above already stops it
- * chattering) but visibly WRONG: the single-dominant-axis approximation
- * (see LOCAL DEPTH's own top comment, "The one simplification this DOES
- * still make") paints bands running horizontally or vertically, and a pool
- * tilted anywhere near 45 degrees has a genuinely DIAGONAL surface - so the
- * bands visibly cut across it at the wrong angle, confirmed on device (a
- * triangular pool near 45 degrees, horizontal bands running straight
- * through its diagonal edge). Fixing the approximation itself (bracketing
- * gravity with two rays the way build_xflow() does for the simulation's
- * own movement) was considered and rejected as separate, more invasive
- * work - touching the walk's geometry rather than gating its output.
+/* THE DIAGONAL DEAD ZONE - a narrow band around the 45 degree tie point
+ * where LOCAL DEPTH FREEZES col_stable_depth[] at its last value instead
+ * of updating it. Exists because the single-dominant-axis approximation
+ * (LOCAL DEPTH's own top comment) paints bands the wrong way across a
+ * genuinely diagonal pool surface near 45 degrees, confirmed on device.
+ * The real fix - bracket gravity with two rays, like build_xflow() does
+ * for the simulation's own movement - is separate, more invasive work,
+ * not done here.
  *
- * FREEZES, DOES NOT FLATTEN - deliberately not the same "force depth 255"
- * fallback col_stable_depth[]'s own comment describes the reverted
- * sand_block_settled() gate using. Forcing flat loses the gradient
- * entirely for as long as gravity sits near the diagonal, which is exactly
- * the regression the FIRST attempt at this fix made and was corrected for
- * before it shipped: the pool should keep showing whatever gradient it had
- * right before gravity swung this close to 45 degrees, not go flat.
- * col_stable_depth[cx] simply stops being written while in the dead zone -
- * see paint_row_n()'s own vertical branch below for where that happens -
- * so it keeps reading out whatever it last held. update_local_depth_axis()
- * below also freezes local_depth_axis_vertical/_reverse themselves once
- * local_depth_freeze_active is true (an axis flip while frozen would wipe
- * col_stable_depth[] out from under the freeze via the reset a few lines
- * below - the exact failure this dead zone exists to avoid, just reached a
- * different way).
+ * FREEZES, DOES NOT FLATTEN - forcing flat (depth 255) loses the gradient
+ * outright rather than holding it; tried and reverted. col_stable_depth[cx]
+ * simply stops being written while frozen (paint_row_n()'s vertical
+ * branch), so it keeps reading whatever it last held.
+ * update_local_depth_axis() also freezes the axis choice once
+ * local_depth_freeze_active is true, so a flip can't wipe the frozen state
+ * via its own reset.
  *
- * NOT the horizontal-dominant case: h_running_depth has no cross-call state
- * to freeze (see its own comment), so a column that entered the dead zone
- * horizontal-dominant just keeps computing the ordinary, undebounced raw
- * walk throughout - no worse than it already was outside the dead zone,
- * and no gradient lost either, just not specially protected here.
+ * NOT the horizontal-dominant case - h_running_depth has no cross-call
+ * state to freeze.
  *
- * SHRUNK TO 10%% (+/-3 degrees, ~6 degrees total - was 30%%, +/-10 degrees)
- * after device evidence showed freezing alone, even with the synchronised-
- * snapshot fix (local_depth_freeze_active's own comment), was not enough:
- * captures around a sudden tilt (screenshot_20260830_18533x-18534x, all
- * with the new diagnostic JSON attached) showed the interior ALREADY
- * reading flat on frames immediately BEFORE the dead zone was even
- * entered (local_depth_in_deadzone still false) - not a freeze bug at all,
- * but col_stable_depth[]'s own debounce doing exactly what it is designed
- * to do: a cell needs the SAME row to ask for a reset on two consecutive
- * painted frames before committing (col_top_row[]'s own comment), so
- * during active, fast resettling - most of a sudden tilt's own duration -
- * most cells are legitimately still HELD, not yet committed, and read
- * under-developed almost everywhere. The dead zone's freeze does not
- * cause that; it just LOCKS IN whichever half-developed moment gravity
- * happened to cross the threshold on, for as long as gravity stays near
- * the diagonal.
+ * A PARTIAL MITIGATION, NOT A FIX. A sudden tilt fragments the water's
+ * surface into scattered air pockets that never sit still long enough to
+ * COMMIT (col_top_row[]'s two-consecutive-frames rule) - a held row climbs
+ * exactly like a confirmed one (`col_stable_depth[cx] + 1`), so instead of
+ * resetting at each pocket, depth just keeps accumulating through all of
+ * them, converging the whole column toward saturation (uniformly flat,
+ * not merely noisy). A wider dead zone catches more of that; shrinking it
+ * only reduces how often a sweep lands there and how long a bad snapshot
+ * stays visible - it does not fix the debounce's own startup lag, which
+ * would need the freeze to wait for genuine settling before snapshotting.
+ * Too small and the ORIGINAL wrong-axis-band artifact this exists to hide
+ * becomes visible again; move this value with a real device test either
+ * way, not by guessing.
  *
- * A narrower dead zone does NOT fix the debounce's own startup lag - the
- * real fix would need the freeze to wait for the walk to actually settle
- * before locking anything in, not just take one snapshot on entry, and
- * that is a genuinely different (and bigger) piece of work, not done
- * here. What shrinking DOES buy: less often does a sweep happen to land
- * in the affected window at all, and less long does any bad snapshot it
- * does catch stay visible before gravity clears the (now much narrower)
- * band on its own. A probabilistic mitigation, not a fix for the
- * debounce's own lag - reduces the SYMPTOM's frequency and duration, the
- * same "hardcoding around a precision error rather than fixing the
- * precision" trade already named for this whole mechanism. Move this
- * first if the flat freeze still shows often enough to bother (lower it
- * further) or the wrong-axis-band artifact this dead zone exists to hide
- * becomes noticeable again at the new, narrower width (raise it).
- *
- * DECLARED IN sand.h, not here - same reason as AXIS_HYSTERESIS_PCT just
- * above: suite_sand.c's host tests need the real value. */
+ * DECLARED IN sand.h, not here - suite_sand.c's host tests need the real
+ * value. */
 
 /* This frame's own answer to "is gravity close enough to a diagonal that
  * LOCAL DEPTH's single-axis approximation would look wrong" - set once by
@@ -1276,34 +1199,19 @@ static bool local_depth_in_deadzone;
  * local_depth_in_deadzone directly.
  *
  * DELIBERATELY FALSE ON THE ENTRY FRAME - the frame local_depth_in_
- * deadzone first becomes true. Device screenshots showed the interior
- * going visibly FLATTER right at that transition, even though the pool's
- * surface shape barely changed between the "before" and "after" capture -
- * ruling out "froze on a genuinely undeveloped gradient" (the "before"
- * capture already had one) and pointing at STAGGERED PER-COLUMN FREEZE
- * TIMING instead: col_stable_depth[cx] only gets written when column cx is
- * actually dirty, so entering the dead zone during an extended, real,
- * multi-second gravity change (a genuine device rotation, not an instant
- * step) lets different columns freeze at different SUB-MOMENTS of an
- * still-ongoing resettle - a patchwork of individually-plausible but
- * mutually inconsistent partial states, not the one consistent gradient
- * either endpoint alone would show.
+ * deadzone first becomes true. col_stable_depth[cx] only gets written when
+ * column cx is dirty, so freezing on the very first frame would let
+ * different columns freeze at different sub-moments of a still-ongoing
+ * resettle - a patchwork of mutually inconsistent partial states, not one
+ * consistent gradient. Instead, the entry frame calls
+ * mark_sand_fully_dirty() (update_local_depth_axis() below) and leaves
+ * this false, so every column computes FRESH from the SAME live grid on
+ * that one frame - a single synchronised snapshot - and only the frame
+ * after that actually freezes it.
  *
- * The fix: on the entry frame specifically, update_local_depth_axis() below
- * calls mark_sand_fully_dirty() and leaves this false, so paint_row_n()
- * still computes every column FRESH, from the SAME live grid, on that one
- * frame - a single consistent snapshot, not a staggered one - and this
- * only becomes true starting the NEXT frame, freezing THAT snapshot rather
- * than whatever staggered mess was already sitting in col_stable_depth[]
- * from before the dead zone was ever entered.
- *
- * FIXES THE STAGGERING, NOT THE OTHER ROOT CAUSE - a single fresh snapshot
- * is still only as good as what the walk itself has managed to settle by
- * that one frame, and during a sudden tilt most cells are still legitimately
- * HELD (col_top_row[]'s own two-consecutive-frames rule), not committed, so
- * a synchronised snapshot taken mid-resettle can still be a synchronised
- * FLAT one. See DEPTH_DIAGONAL_DEADZONE_PCT's own comment (sand.h /
- * app_sand.c) for that second finding and the width shrink it led to. */
+ * This fixes the staggering, not the debounce's own startup lag during a
+ * genuinely fast, active resettle - see DEPTH_DIAGONAL_DEADZONE_PCT's own
+ * comment (sand.h / app_sand.c) for that second, separate finding. */
 static bool local_depth_freeze_active;
 
 /* Last frame's local_depth_in_deadzone, kept only to detect the entry
