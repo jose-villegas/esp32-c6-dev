@@ -1,13 +1,19 @@
 #!/usr/bin/env bash
 # On-demand doc audit: for each doc file, pull out the source paths it
-# actually names (`main/post.c`, `launcher/main/apps/sand/tilt.c`, etc.) and
-# challenge them in two tiers:
+# actually names -- both prose references (`main/post.c`) and #include
+# lines inside its own fenced code examples -- and challenge them in two
+# tiers:
 #   1. Deterministic: does that path still exist? If not, is a same-named
 #      file findable elsewhere (i.e. it moved)? No model call needed here.
+#      Relative #include paths (`../gfx.h`) cannot be checked this way --
+#      there is no fixed root to resolve them against -- so instead their
+#      real-file match is surfaced to tier 2 as something to reason about.
 #   2. OmniRoute's free "docs-update-free" combo cross-checks the doc's own
 #      text against the current content of whatever paths DID resolve --
 #      function/macro names, register addresses, magic numbers, described
-#      behavior -- and flags concrete contradictions.
+#      behavior, and whether a code example's relative #include depth is
+#      consistent with the file location the doc says to create -- and
+#      flags concrete contradictions.
 # This is a report, not an editor: unlike update-docs.sh it makes no commits
 # and picks no diff window -- it catches doc rot that accumulated over time,
 # not just drift from the latest change.
@@ -44,8 +50,30 @@ for doc in $DOC_FILES; do
       | tr -d '`' | sort -u
   )
 
+  # #include "..." inside the doc's own fenced code examples. These are
+  # relative to wherever the tutorial says to create the file, which this
+  # script has no reliable way to know -- so they are never treated as a
+  # deterministic path claim. Instead, resolve the real file by basename
+  # and hand the model both the as-written include and the real location,
+  # so it can judge whether the relative depth is actually consistent with
+  # where the doc says the new file goes.
+  mapfile -t CODE_INCLUDES < <(
+    grep -ohE '#include[[:space:]]+"[^"]+"' "$doc" \
+      | sed -E 's/#include[[:space:]]+"([^"]+)"/\1/' | sort -u
+  )
+
   FOUND=()
   PATH_ISSUES=()
+  CODE_INCLUDE_NOTES=()
+  for inc in ${CODE_INCLUDES[@]+"${CODE_INCLUDES[@]}"}; do
+    base=$(basename "$inc")
+    hit=$(find "$SRC_ROOT" -name "$base" 2>/dev/null | head -1)
+    if [ -n "$hit" ]; then
+      FOUND+=("$hit")
+      CODE_INCLUDE_NOTES+=("- Code example has \`#include \"$inc\"\`; the real file named \`$base\` is at \`$hit\`. Check whether the \`../\` depth in the include is consistent with where the doc says to create the new file.")
+    fi
+  done
+
   for ref in ${RAW_REFS[@]+"${RAW_REFS[@]}"}; do
     if [ -f "$SRC_ROOT/$ref" ]; then
       FOUND+=("$SRC_ROOT/$ref")
@@ -111,6 +139,17 @@ for doc in $DOC_FILES; do
     echo "actually contradicts -- do not flag missing coverage, style, or claims you"
     echo "can't verify from what's given."
     echo ""
+    if [ "${#CODE_INCLUDE_NOTES[@]}" -gt 0 ]; then
+      echo "The doc's own code examples contain #include lines naming files by a"
+      echo "relative path. For each one below, work out how many directory levels"
+      echo "separate it from the file location the doc instructs the reader to"
+      echo "create (often stated just before the code block), and check whether"
+      echo "that matches the number of \`../\` segments actually written -- flag it"
+      echo "as an inaccuracy if the include would not actually resolve to the real"
+      echo "file from that location."
+      printf '%s\n' "${CODE_INCLUDE_NOTES[@]}"
+      echo ""
+    fi
     echo "Output one bullet per inaccuracy, each exactly:"
     echo "- CLAIM: <what the doc says, quoted or paraphrased briefly>"
     echo "  SOURCE: <what the source actually shows, with file:line if you can tell>"
