@@ -64,8 +64,18 @@
 # --exclude <prefix> drops any finding whose main/-relative path starts with
 # it (repeatable) -- e.g. --exclude main/apps/ to scan everything under
 # main/ except the apps. Matched before misra_check.sh's own --file-filter
-# ever runs, so it composes with a broad file_filter like "*" (or "*/main/*")
-# to express exclusions cppcheck's single-glob --file-filter can't.
+# ever runs, so it composes with a file_filter of "*/main/*" to express
+# exclusions cppcheck's single-glob --file-filter can't (main minus apps).
+#
+# Use "*/main/*", never a bare "*", for a whole-project file_filter:
+# cppcheck's --file-filter controls what gets ANALYZED, not just what gets
+# reported -- "*" makes literally everything in compile_commands.json match,
+# which on this repo means cppcheck (and its MISRA addon) fully parses all
+# ~1800 translation units, ~1785 of them vendored (788 alone are LVGL) and
+# none of them ever produced a usable finding, since main/-only filtering
+# happens downstream anyway. That cost one stuck run over 12GB of RAM before
+# being killed by hand. "*/main/*" scopes cppcheck's own analysis to the ~28
+# real translation units instead, which is what was actually wanted.
 #
 # Usage:
 #   scripts/fix-audited-code.sh --review <model-id>
@@ -240,8 +250,13 @@ mkdir -p "$TMPDIR/findings" "$TMPDIR/work"
 # "main/apps/" -- repeatable). Writes one findings file per qualifying
 # source file, and prints "key<TAB>file<TAB>count" per file for the bash
 # loop below to mapfile.
-mapfile -t FILE_ENTRIES < <(
-  node -e '
+#
+# Piped through a temp file rather than `mapfile < <(node -e ...)`: bash's
+# set -e does not reliably propagate a failure from inside a process
+# substitution, so a node crash here (e.g. EISDIR if $REPORT is somehow a
+# directory) would otherwise be silently swallowed as "zero entries found"
+# instead of aborting the script -- exactly what happened once already.
+if ! node -e '
     const fs = require("fs");
     const [, , reportPath, tmpDir, maxPerFile, ...excludes] = process.argv;
     const lineRe = /^(.+?):(\d+):(\d+):\s+(error|warning|style|performance|portability):\s+(.+?)\s+\[([\w.-]+)\]$/;
@@ -266,8 +281,11 @@ mapfile -t FILE_ENTRIES < <(
       fs.writeFileSync(`${tmpDir}/findings/${key}.txt`, arr.join("\n") + "\n");
       console.log(`${key}\t${file}\t${bullets.size}`);
     }
-  ' "$REPORT" "$TMPDIR" "$MAX_FINDINGS_PER_FILE" ${EXCLUDES[@]+"${EXCLUDES[@]}"}
-)
+  ' "$REPORT" "$TMPDIR" "$MAX_FINDINGS_PER_FILE" ${EXCLUDES[@]+"${EXCLUDES[@]}"} > "$TMPDIR/report_entries.txt"; then
+  echo "Report parsing failed (see node error above) -- aborting." >&2
+  exit 1
+fi
+mapfile -t FILE_ENTRIES < "$TMPDIR/report_entries.txt"
 
 if [ "${#FILE_ENTRIES[@]}" -eq 0 ]; then
   echo "No fixable findings under main/ in $REPORT. Nothing to do."

@@ -18,7 +18,18 @@
 #   build_dir     defaults to build.dev - must have compile_commands.json
 #                 (run `idf.py build` first if it doesn't)
 #   file_filter   cppcheck --file-filter glob, defaults to the sand app
-#                 (pass "*" for the whole project - slow, see below)
+#                 (pass "*/main/*" for the whole project, minus vendored
+#                 dependencies)
+#
+# NEVER pass a bare "*". --file-filter controls what cppcheck actually
+# ANALYZES, not just what gets reported -- "*" matches every translation
+# unit in compile_commands.json, and on this repo that's ~1800 of them,
+# ~1785 vendored (788 alone are LVGL) and none of them main/ code worth a
+# finding. That ran cppcheck's MISRA addon over the whole ESP-IDF SDK and
+# LVGL for nothing, cost over 12GB of RAM, and had to be killed by hand
+# after running for a long time with no end in sight. "*/main/*" scopes
+# analysis to the ~28 real translation units under main/ instead -- use
+# that for a whole-project scan, not "*".
 #
 # Output goes to tools/results/misra_<file_filter-ish>.txt (gitignored).
 
