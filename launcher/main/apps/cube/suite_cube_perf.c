@@ -10,6 +10,8 @@
  *
  * Runs under DEVICE_BUILD only - needs real panel, DMA, and framebuffer.
  *===========================================================================*/
+#include "suites.h"   /* portable - needed by SUITE_REGISTER() even on host */
+
 #ifdef DEVICE_BUILD
 
 #include <stdint.h>
@@ -17,7 +19,6 @@
 #include <stdlib.h>
 
 #include "unity.h"
-#include "suites.h"
 
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -64,17 +65,21 @@ typedef struct {
 static frame_sample_t samples[MAX_SAMPLES];
 static int sample_count = 0;
 
-/* Median helper: copies and sorts. */
+static int cmp_i64(const void *a, const void *b)
+{
+    int64_t va = *(const int64_t *)a;
+    int64_t vb = *(const int64_t *)b;
+    return (va > vb) - (va < vb);
+}
+
+/* Median helper: sorts `arr` in place and returns its middle element - the
+ * p95 lookups below run against the same array right after calling this,
+ * relying on it having already been sorted here rather than sorting again
+ * themselves. */
 static int64_t median_of(int64_t *arr, int n)
 {
     if (n == 0) return 0;
-    qsort(arr, n, sizeof(int64_t), (int (*)(const void*, const void*)) 
-          (int (*)(const int64_t*, const int64_t*)) 
-          [](const void *a, const void *b) {
-              int64_t va = *(const int64_t*)a;
-              int64_t vb = *(const int64_t*)b;
-              return (va > vb) - (va < vb);
-          });
+    qsort(arr, n, sizeof(int64_t), cmp_i64);
     return arr[n / 2];
 }
 
@@ -358,3 +363,5 @@ void run_cube_perf_suite(void)
 void run_cube_perf_suite(void) { }
 
 #endif  /* DEVICE_BUILD */
+
+SUITE_REGISTER(run_cube_perf_suite);

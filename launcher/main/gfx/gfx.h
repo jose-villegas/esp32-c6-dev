@@ -58,7 +58,7 @@
  * divider, not a real intermediate rate, because 60 is on the low side of
  * that 60 MHz boundary. Every value in this range resolves to one of
  * exactly two clocks. */
-#define GFX_QSPI_HZ (80 * 1000 * 1000)
+#define GFX_QSPI_HZ (40 * 1000 * 1000)
 
 /* Glyphs are 8x8 in the font data, drawn at 2x so they are legible on a
  * 368-wide panel. Text metrics elsewhere must agree with these. */

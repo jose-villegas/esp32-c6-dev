@@ -44,6 +44,19 @@
 static const S3L_Unit cube_vertices[]  = { S3L_CUBE_VERTICES(S3L_F) };
 static const S3L_Index cube_triangles[] = { S3L_CUBE_TRIANGLES };
 
+/* Each corner is coloured by the sign of its position: +x adds red, +y green,
+ * +z blue. Interpolating those across each face gives the gradients. */
+static const uint8_t cube_corner_colors[S3L_CUBE_VERTEX_COUNT][3] = {
+    { 255,   0,   0 },  /* 0  right, bottom, front */
+    {   0,   0,   0 },  /* 1  left,  bottom, front */
+    { 255, 255,   0 },  /* 2  right, top,    front */
+    {   0, 255,   0 },  /* 3  left,  top,    front */
+    { 255,   0, 255 },  /* 4  right, bottom, back  */
+    {   0,   0, 255 },  /* 5  left,  bottom, back  */
+    { 255, 255, 255 },  /* 6  right, top,    back  */
+    {   0, 255, 255 },  /* 7  left,  top,    back  */
+};
+
 /* Exposed for performance testing (suite_cube_perf.c). */
 S3L_Model3D cube;
 S3L_Scene   scene;
@@ -52,9 +65,10 @@ uint32_t    elapsed_ms;
 /* The toggle this file exists to demonstrate: whether cube_frame() clears
  * the whole framebuffer every frame (like every other app) or only the
  * pixels the cube actually touches, using gfx_mark_dirty() instead of
- * relying on gfx_clear()'s implicit "everything changed". Off by default -
- * same behaviour as before this existed. Flipped from inside draw_menu(),
- * not directly by BOOT any more - see menu_open below and cube_frame(). */
+ * relying on gfx_clear()'s implicit "everything changed". On by default -
+ * the partial-clear path this enables is what the cube app is meant to
+ * showcase. Flipped from inside draw_menu(), not directly by BOOT any
+ * more - see menu_open below and cube_frame(). */
 bool partial_updates = true;
 
 /* Whether the BOOT-opened menu (draw_menu()) is showing instead of the

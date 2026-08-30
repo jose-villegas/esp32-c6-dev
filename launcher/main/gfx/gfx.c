@@ -1154,20 +1154,18 @@ void gfx_present(void)
         }
 
         if (interlace_on && (row % 2) != frame_parity) {
-            remaining_cell_dirty |= ((1u << GRID_COLS) - 1u) << (row * GRID_COLS);
+            /* Carry over exactly the bits already set for this row, not
+             * every column in it - forcing the whole row dirty would widen
+             * every gathered send on this row to full width once its turn
+             * comes back around, throwing away the per-cell gather this
+             * grid exists for. */
+            remaining_cell_dirty |= cell_dirty &
+                (((1u << GRID_COLS) - 1u) << (row * GRID_COLS));
             continue;
         }
 
         send_one_row(row, &queued);
         dirty_row_sent(row);
-    }
-
-    if (interlace_on && all_dirty) {
-        for (int row = 0; row < STRIP_COUNT; row++) {
-            if ((row % 2) != frame_parity) {
-                remaining_cell_dirty |= ((1u << GRID_COLS) - 1u) << (row * GRID_COLS);
-            }
-        }
     }
 
     dirty_frame_sent();
