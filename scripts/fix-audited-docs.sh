@@ -12,7 +12,17 @@
 # against the file) is applied directly. Pushes a branch for you either way
 # -- never touches main.
 #
-# Usage: scripts/fix-audited-docs.sh [--review <model-id>] [doc-file ...]
+# --worktree runs the whole thing in a fresh `git worktree` (sibling
+# directory) instead of checking out the new branch in place, so your
+# current checkout's HEAD and any uncommitted work never move -- useful if
+# you want to keep working while this runs, or don't want the "working tree
+# isn't clean" gate to apply at all (it's skipped in this mode: nothing here
+# touches your real checkout, so there's nothing to protect it from). If
+# nothing ends up changing, the worktree and its branch are removed
+# automatically; if something does, both are left behind for you to inspect
+# before opening the PR.
+#
+# Usage: scripts/fix-audited-docs.sh [--review <model-id>] [--worktree] [doc-file ...]
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -20,6 +30,7 @@ cd "$REPO_ROOT"
 
 COMBO="docs-update-free"
 REVIEW_MODEL=""
+USE_WORKTREE=0
 DOC_ARGS=()
 
 while [ "$#" -gt 0 ]; do
@@ -28,6 +39,10 @@ while [ "$#" -gt 0 ]; do
       REVIEW_MODEL="$2"
       shift 2
       ;;
+    --worktree)
+      USE_WORKTREE=1
+      shift
+      ;;
     *)
       DOC_ARGS+=("$1")
       shift
@@ -35,13 +50,34 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-if [ -n "$(git status --porcelain)" ]; then
-  echo "Working tree isn't clean. Commit or stash first." >&2
-  exit 1
-fi
-
+BRANCH="docs-audit-fix-$(date +%Y%m%d-%H%M%S)"
+WORKTREE_DIR=""
+HAS_CHANGES=0
 TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+
+cleanup() {
+  rm -rf "$TMPDIR"
+  # Only torn down if nothing was ever approved to commit -- see HAS_CHANGES
+  # below. A worktree that made it to real changes is left for inspection
+  # even if a later step (add/commit/push) fails.
+  if [ -n "$WORKTREE_DIR" ] && [ "$HAS_CHANGES" != "1" ]; then
+    git -C "$REPO_ROOT" worktree remove "$WORKTREE_DIR" --force 2>/dev/null || true
+    git -C "$REPO_ROOT" branch -D "$BRANCH" 2>/dev/null || true
+  fi
+}
+trap cleanup EXIT
+
+if [ "$USE_WORKTREE" = "1" ]; then
+  WORKTREE_DIR="$(dirname "$REPO_ROOT")/$(basename "$REPO_ROOT")-$BRANCH"
+  echo "Creating worktree at $WORKTREE_DIR..."
+  git worktree add -b "$BRANCH" "$WORKTREE_DIR" >&2
+  cd "$WORKTREE_DIR"
+else
+  if [ -n "$(git status --porcelain)" ]; then
+    echo "Working tree isn't clean. Commit or stash first." >&2
+    exit 1
+  fi
+fi
 
 AUDIT_OUT="$TMPDIR/audit_out.txt"
 PATCHES="$TMPDIR/patches.json"
@@ -294,8 +330,10 @@ if [ -z "$CHANGED_FILES" ]; then
   exit 0
 fi
 
-BRANCH="docs-audit-fix-$(date +%Y%m%d-%H%M%S)"
-git checkout -b "$BRANCH"
+HAS_CHANGES=1
+if [ "$USE_WORKTREE" != "1" ]; then
+  git checkout -b "$BRANCH"
+fi
 git add $CHANGED_FILES
 REVIEW_NOTE=""
 [ -n "$REVIEW_MODEL" ] && REVIEW_NOTE=", reviewed by $REVIEW_MODEL"
@@ -306,3 +344,8 @@ REMOTE_URL=$(git remote get-url origin | sed -E 's#git@github.com:#https://githu
 echo ""
 echo "Pushed $BRANCH. Open a PR here:"
 echo "$REMOTE_URL/compare/main...$BRANCH?expand=1"
+if [ -n "$WORKTREE_DIR" ]; then
+  echo ""
+  echo "Worktree left at $WORKTREE_DIR for inspection -- remove when done:"
+  echo "  git worktree remove \"$WORKTREE_DIR\""
+fi
