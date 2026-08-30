@@ -7,7 +7,7 @@ logs and `esp_timer` measurements taken in this repo.
 
 Living document: correct it when the hardware disagrees with it.
 
-Split into five files, grown out of what was originally one - a sixth,
+Split into six files, grown out of what was originally one - a seventh,
 the falling-sand app's own discovery narrative, moved out to
 [`../Sand/`](../Sand/) once that folder existed to hold it properly:
 
@@ -30,6 +30,11 @@ the falling-sand app's own discovery narrative, moved out to
   measuring by deleting code instead of reasoning about it, verifying
   `static inline` actually inlined with `objdump`, register-spilling call
   boundaries, and more.
+- **[Diagnostics-and-Debugging.md](Diagnostics-and-Debugging.md)** — which
+  tool to reach for depending on the symptom: the host and on-device test
+  suites, `screenshot.sh`'s image-plus-device-state capture, `monitor.sh`,
+  the gfx debug overlays, and the USB-Serial-JTAG console quirk that breaks
+  typing into idf_monitor if you don't know to look for it.
 
 ## Related
 
