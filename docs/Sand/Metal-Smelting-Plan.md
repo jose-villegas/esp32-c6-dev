@@ -170,7 +170,7 @@ smelt - lava against a dirt bed - rather than drawing a bar.
 | field | value | why |
 |---|---|---|
 | `conducts` | 248 | see below |
-| `dissolvable` | 110 | stone 60, sand 200. Acid is metal's counter and the reason to still build in stone |
+| `dissolvable` | 1 | balance revision 2026-08-30: metal now resists acid instead of being its counter (was 110, deliberately above stone's 60); stone 60, sand 200 unchanged. 1 rather than 0 (immune) so metal stays in the generated reaction docs |
 | dirt `heat_chance` | 10 | slower than sand into glass (16). Smelting should be a project |
 | everything else | 0 | never catches, never a heat source, never melts |
 
@@ -202,10 +202,12 @@ three walls read:
 |---|---|---|---|
 | stone | survives | slow (60) | 220 |
 | glass | melts | immune | 220 |
-| metal | survives | fast (110) | 248 |
+| metal | survives | resists (1) | 248 |
 
 One axis of difference each, which is the standard this codebase already
-holds stone and glass to.
+holds stone and glass to - though metal's acid column is a balance
+revision (2026-08-30, was "fast (110)") rather than the original design,
+see the `dissolvable` numbers table above.
 
 ---
 
@@ -236,7 +238,9 @@ the cost is zero.
 - heat crosses a metal run far further than a stone one (the pair above)
 - **the rod terminates**: lava at one end of a long dirt bed grows a metal
   run that stops at `CONDUCT_REACH`, not at the far wall
-- acid eats metal faster than stone and slower than sand
+- acid eats metal slower than stone and much slower than sand (balance
+  revision 2026-08-30 - metal now resists acid rather than being its
+  counter, see the `dissolvable` row above)
 - add `MATX_METAL` to the grained set in
   `test_the_right_extended_materials_are_speckled` - it asserts the
   negative half too, so it fails loudly if the grain table and the palette

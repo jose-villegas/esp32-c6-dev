@@ -2578,13 +2578,20 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(0, splash_sim.impulse_count,
         "setup: nothing should be queued before the drop has even fallen");
 
-    for (int i = 0; i < 15; i++) {
+    /* Checked EVERY step, not just after all 15 - the queued impulse is a
+     * single directed grain (sand_impulse(), not a sand_displace() spray),
+     * and step_impulses() can resolve a single grain's flight within just
+     * a step or two of the landing that queued it, well before the loop
+     * ends. */
+    bool queued = false;
+    for (int i = 0; i < 15 && !queued; i++) {
         sand_step(&splash_sim, 0, 1000, 0);
+        queued = splash_sim.impulse_count > 0;
     }
 
-    TEST_ASSERT_GREATER_THAN_MESSAGE(0, splash_sim.impulse_count,
+    TEST_ASSERT_TRUE_MESSAGE(queued,
         "a drop that fell through open space and landed on an existing "
-        "puddle's surface must queue a small sand_displace()");
+        "puddle's surface must queue a small directed impulse");
 }
 
 static void test_a_reversal_without_a_flick_signal_still_does_not_rebound(void)
@@ -11968,15 +11975,16 @@ static int steps_for_acid_to_clear(uint8_t counted_id, cell_t floor_cell,
     return budget;
 }
 
-/* Metal's whole point on the acid axis: it is what a stone tank is not -
- * not immune - and it is slower than sand, which stays the obvious
- * thing to point acid at. dissolvable 110 sits deliberately between
- * stone's 60 and sand's 200 - see Metal-Smelting-Plan.md's own
- * three-material table (stone/glass/metal, one axis of difference
- * each). */
+/* Balance revision, 2026-08-30: metal now RESISTS acid (dissolvable 1,
+ * not immune at 0 - see that field's own comment in material.c) instead
+ * of being acid's intended counter (previously 110, deliberately above
+ * stone's 60) - see Metal-Smelting-Plan.md's own numbers table for the
+ * full account. This test's name is now backwards from what it checks;
+ * left as-is pending a rename in a future balance pass rather than
+ * touched here alongside the value itself. */
 static void test_acid_eats_metal_between_stone_and_sand(void)
 {
-    const int budget = 2000;
+    const int budget = 5000;
     const int stone = steps_for_acid_to_clear(MAT_STONE, STONE, budget);
     const int metal = steps_for_acid_to_clear(MAT_EXTENDED,
                                               MATX(MATX_METAL), budget);
@@ -11993,13 +12001,13 @@ static void test_acid_eats_metal_between_stone_and_sand(void)
         "fixture check: acid must fully clear a floor of stone within "
         "the same budget too");
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(stone, metal,
-        "acid must eat metal FASTER than stone - dissolvable 110 against "
-        "stone's 60. Metal is acid's intended counter; stone is merely "
-        "what the vat holding it is built from");
-    TEST_ASSERT_LESS_THAN_MESSAGE(metal, sand,
-        "and SLOWER than sand - dissolvable 200, the obviously softest "
-        "target on the board. Metal sits deliberately between the two");
+    TEST_ASSERT_LESS_THAN_MESSAGE(metal, stone,
+        "acid must eat metal SLOWER than stone - dissolvable 1 against "
+        "stone's 60. Metal now resists acid rather than being its "
+        "counter (balance revision 2026-08-30)");
+    TEST_ASSERT_LESS_THAN_MESSAGE(stone, sand,
+        "and stone slower than sand - dissolvable 60 against 200, the "
+        "obviously softest target on the board");
 }
 
 static void test_wood_and_steam_grain_count_is_conserved(void)

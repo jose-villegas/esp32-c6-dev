@@ -22,11 +22,48 @@
  * moved to sand_priv.h (still static inline) now that sand.c's own sweep needs
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
-/* Radius for the water-on-water and wall-splash sand_displace() test
- * hooks below - deliberately exaggerated (a real splash would be 1) so
- * the effect is obvious while testing displacement; dial it back down
- * once it looks right. */
-#define SAND_TEST_SPLASH_RADIUS 5
+/* A liquid splash: sand_displace_material() at SAND_SPLASH_RADIUS, called
+ * whenever a WATER or ACID grain lands hard - falling onto an already-
+ * occupied surface, or rebounding off a wall (both call sites below).
+ * Water and acid only, for now - oil and lava are not gated in here, see
+ * SAND_SPLASH_RADIUS's own comment in sand.h. Same RADIUS for both
+ * materials - only whether the trigger decays differs, below.
+ *
+ * MASKED TO `mat_id`, not a plain sand_displace() - an unmasked
+ * displacement throws whatever it finds within the radius, which meant
+ * pouring water over water sitting on dirt flung the dirt around too.
+ * This is meant to be water/acid splashing itself, nothing else.
+ *
+ * WATER is gated by a chance-in-256 roll against this sand_t's own
+ * decaying budget (sand_t::splash_chance, sand.h), so a displaced grain
+ * landing again does not just re-splash itself indefinitely - a real
+ * splash does not keep re-triggering off its own spray.
+ *
+ * ACID DOES NOT DECAY - it always splashes at full RADIUS on every
+ * qualifying landing, and never touches `splash_chance` at all (so it
+ * cannot spend down water's own budget either). A balance choice, not a
+ * bounce-suppression gap: acid's splash is part of its dissolve-vs-metal
+ * balance (see docs/Sand/Metal-Smelting-Plan.md), and a decaying trigger
+ * would make that balance depend on how many OTHER acid splashes already
+ * happened this simulation, not on the material stats alone. */
+static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
+{
+    if (mat_id == MAT_ACID) {
+        sand_displace_material(s, x, y, SAND_SPLASH_RADIUS, mat_id);
+        return;
+    }
+    if (mat_id != MAT_WATER) {
+        return;
+    }
+    if ((rng_next(&s->rng) & 0xFF) > s->splash_chance) {
+        return;   /* this echo lost the roll - let the bounce die here */
+    }
+    sand_displace_material(s, x, y, SAND_SPLASH_RADIUS, mat_id);
+    s->splash_chance =
+        s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
+            ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
+            : SAND_SPLASH_CHANCE_FLOOR;
+}
 
 /* Add `amount` of `id` to a cell that is either empty or already that same
  * material. Mass is only ever moved, never made: every caller subtracts the
@@ -396,11 +433,8 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     }
 
     /* Checked BEFORE give_mass() writes into the target - afterward it
-     * never reads as empty again. Gated on water first so non-water falls
-     * pay nothing extra. */
-    const bool water_falling = mat_id == MAT_WATER;
-    const bool target_occupied = water_falling
-        && (unsigned)tx0 < (unsigned)w && prow != NULL
+     * never reads as empty again. */
+    const bool target_occupied = (unsigned)tx0 < (unsigned)w && prow != NULL
         && !CELL_IS_EMPTY(prow[tx0]);
 
     const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
@@ -408,17 +442,17 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
     if (down > 0) {
         moved = true;
 
-        /* WATER-ONLY, TEST INTERACTION: a drop that was exposed to open
-         * space one step away from gravity (not buried inside the body)
-         * landing on already-occupied water gets a small sand_displace(),
-         * to exercise it on a real fall-and-land trigger. */
+        /* A drop that was exposed to open space one step away from
+         * gravity (not buried inside the body) landing on an already-
+         * occupied liquid surface throws a small splash - see
+         * splash_displace()'s own comment above. */
         if (target_occupied) {
             const uint8_t *arow = dest_row(s, y - dy);
             const int ax = x - dx;
             const bool exposed = arow == NULL || (unsigned)ax >= (unsigned)w
                                   || CELL_IS_EMPTY(arow[ax]);
             if (exposed) {
-                sand_displace(s, tx0, ty0, SAND_TEST_SPLASH_RADIUS);
+                splash_displace(s, tx0, ty0, mat_id);
             }
         }
     }
@@ -1007,12 +1041,9 @@ static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
     }
     mark_move(s, x, y, nx, ny);
 
-    /* WATER-ONLY, TEST INTERACTION: a wall splash also throws a little
-     * displacement out from the impact point, exercising sand_displace()
-     * on the same trigger a real splash would use. */
-    if (id == MAT_WATER) {
-        sand_displace(s, x, y, SAND_TEST_SPLASH_RADIUS);
-    }
+    /* A wall splash also throws a little displacement out from the
+     * impact point - see splash_displace()'s own comment above. */
+    splash_displace(s, x, y, id);
 }
 
 static void rebound_wall(sand_t *s, int edge, int count, int to,

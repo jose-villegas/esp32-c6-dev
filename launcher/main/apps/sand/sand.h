@@ -308,6 +308,11 @@ typedef struct {
     int        impulse_max;
     int        impulse_count;
 
+    /* Decaying trigger chance for splash_displace() (sand_liquid.c) - see
+     * SAND_SPLASH_RADIUS's own comment above for why this lives
+     * per-instance. */
+    uint8_t    splash_chance;
+
     int      last_load_dx, last_load_dy;
 
     /* The DITHERED direction of the last step, as opposed to the nearest
@@ -684,6 +689,32 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * that either. */
 #define SAND_EXPLODE_INITIAL_SPEED  255
 
+/* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
+ * - a WATER or ACID grain landing hard, either falling onto an already-
+ * occupied surface or rebounding off a wall, throws a small, MASKED
+ * sand_displace_material() at RADIUS (only the same material gets thrown -
+ * see splash_displace()'s own comment for why), exaggerated well past a
+ * real splash's reach so the effect reads clearly at this display size.
+ * Oil and lava are not wired into this - oil has no gameplay reason to
+ * scatter, and lava is a heat source whose spread timing this same
+ * exaggerated radius visibly disrupted when tried (see this constant's own
+ * commit history if that is ever revisited).
+ *
+ * A displaced grain falling back into the liquid lands hard too, which
+ * would re-trigger the same call that threw it - an unconditional trigger
+ * on every landing bounces indefinitely, and a real splash does not keep
+ * re-splashing itself. Gating whether the call fires at all fixes that:
+ * CHANCE (a chance-in-256 roll, the same idiom tick_decay() and dislodge
+ * use elsewhere) starts at START - guaranteeing the first splash - and
+ * drops by STEP on every successful trigger, so a bounce chain's own
+ * echoes are suppressed almost immediately rather than rattling on.
+ * Per-sand_t (sand_t::splash_chance below), not a shared global, so one
+ * simulation's splash history never bleeds into another's. */
+#define SAND_SPLASH_RADIUS       5
+#define SAND_SPLASH_CHANCE_START 255
+#define SAND_SPLASH_CHANCE_FLOOR 24
+#define SAND_SPLASH_CHANCE_STEP  90
+
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /
  * SAND_EXPLODE_CORE_DIVISOR`. Explosion-specific, unlike the two constants
@@ -962,6 +993,13 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * against the exact same density-scaled resistance an explosion does,
  * because both reach it through this one shared function. */
 void sand_displace(sand_t *s, int cx, int cy, int radius);
+
+/* Same as sand_displace(), but only cells whose material is exactly
+ * `mat_id` are ever queued - see its own comment in sand.c. Used by
+ * splash_displace() (sand_liquid.c) so a liquid's splash cannot fling
+ * unrelated material (dirt under a pool of water, say) along with it. */
+void sand_displace_material(sand_t *s, int cx, int cy, int radius,
+                            uint8_t mat_id);
 
 /* A THIN WRAPPER AROUND sand_displace(), ABOVE, adding exactly one thing
  * to it: a core of fire. Fill a disc of `radius` around (cx, cy) with

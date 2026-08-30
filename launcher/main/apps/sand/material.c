@@ -2590,14 +2590,17 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * every other constant in this table. */
         .conducts    = 248,
 
-        /* Acid's counter. 110 sits deliberately between stone's 60 and
-         * sand's 200 - metal gives way to acid FASTER than the stone you
-         * house it in, but slower than the loose sand acid is normally
-         * pointed at. Faster than stone rather than immune to acid,
-         * because immune would make metal strictly better than stone as
-         * a container with no cost anywhere, and there is still a reason
-         * to build in stone. */
-        .dissolvable = 110,
+        /* Balance revision, 2026-08-30: metal now resists acid as hard as
+         * this field allows without opting all the way out (0 is immune -
+         * see its own comment in material.h - and would also drop metal
+         * from the generated reaction docs, which 1 does not). Previously
+         * 110, deliberately FASTER than stone's 60 so acid was metal's
+         * documented counter; superseded, not layered on top of, by this
+         * value - see docs/Sand/Metal-Smelting-Plan.md, updated to match.
+         * A future balance pass may revisit whether metal should cost
+         * something else instead, now that it is no longer acid's weak
+         * point. */
+        .dissolvable = 1,
 
         /* Deliberately no `heats_to`, `heat_ramp`, `heat_chance`, `chills`
          * or anything else thermal. With no variant metal cannot ramp,

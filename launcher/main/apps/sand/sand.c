@@ -159,6 +159,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->impulse_buf   = NULL;
     s->impulse_max   = 0;
     s->impulse_count = 0;
+    s->splash_chance = SAND_SPLASH_CHANCE_START;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
      * step_one_row()), whether or not block_state exists, so block_cols/
@@ -430,7 +431,7 @@ static int exact_disc_count(int radius)
  * itself, further down, not up here next to its other caller - see that
  * function's own comment for why one body serves both. */
 static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
-                               bool allow_dislodge_static);
+                               bool allow_dislodge_static, int mat_filter);
 
 /* One candidate cell of sand_explode()'s own annulus scan, below - split
  * out so the ring-order loop that calls it (see that function's own
@@ -470,7 +471,8 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
  * which is what running out of room used to mean before this existed
  * (see the ring-order comment's own note on that). */
 static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
-                                  int r2, int disc_count, int keep, int *accum)
+                                  int r2, int disc_count, int keep, int *accum,
+                                  int mat_filter)
 {
     if (dx * dx + dy * dy > r2) {
         return;
@@ -527,7 +529,7 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
      * identical to any other entry; the toughness lives entirely in this
      * one boolean and the roll behind it. */
     queue_flying_grain(s, cx + dx, cy + dy, ring_of(qdx, qdy),
-                       SAND_EXPLODE_INITIAL_SPEED, true);
+                       SAND_EXPLODE_INITIAL_SPEED, true, mat_filter);
 }
 
 /* THE SHARED IMPLEMENTATION BEHIND sand_impulse() AND sand_explode()'s OWN
@@ -544,7 +546,7 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
  * automatically, the same as today - it does not inherit wall-breaking
  * just because this function grew the capability somewhere inside it. */
 static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
-                               bool allow_dislodge_static)
+                               bool allow_dislodge_static, int mat_filter)
 {
     /* Disabled, or already full - see sand_impulse()'s own comment in
      * sand.h on why both are silent no-ops rather than something a caller
@@ -560,6 +562,16 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
     const cell_t cell = s->cells[at];
     if (CELL_IS_EMPTY(cell)) {
         return;   /* nothing there to throw */
+    }
+
+    /* mat_filter < 0 means "any material", the ordinary case for a plain
+     * sand_impulse() or an unmasked sand_displace() - every existing
+     * caller. A masked displacement (sand_displace_material()) is the one
+     * exception: it exists specifically so a liquid's own splash cannot
+     * fling whatever happens to be sitting nearby (dirt under a pool of
+     * water, say) along with it. */
+    if (mat_filter >= 0 && CELL_MATERIAL(cell) != (uint8_t)mat_filter) {
+        return;
     }
 
     /* A WALL CANNOT BE THROWN BY DEFAULT, any more than one can be
@@ -633,10 +645,21 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
 
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
 {
-    queue_flying_grain(s, x, y, dir, speed, false);
+    queue_flying_grain(s, x, y, dir, speed, false, -1);
 }
 
-void sand_displace(sand_t *s, int cx, int cy, int radius)
+/* THE SHARED IMPLEMENTATION BEHIND sand_displace() AND sand_displace_
+ * material() - one body, not two, for the same reason queue_flying_grain()
+ * above is one body behind sand_impulse() and sand_explode()'s seeding: the
+ * annulus math, buffer-sharing math and ring-order scan below have nothing
+ * to do with whether a caller wants every candidate or only ones matching
+ * one material, and duplicating all of that just to add a filter would be
+ * exactly the kind of second copy this file already avoids elsewhere.
+ * `mat_filter` is threaded straight through to queue_outward_impulse() and,
+ * ultimately, queue_flying_grain() - see its own comment for what -1 means
+ * versus a real material id. */
+static void displace_disc(sand_t *s, int cx, int cy, int radius,
+                          int mat_filter)
 {
     if (s->impulse_buf == NULL) {
         return;   /* sand_enable_impulses() was never called - see its comment */
@@ -757,17 +780,38 @@ void sand_displace(sand_t *s, int cx, int cy, int radius)
     const int keep = (disc_count < room) ? disc_count : room;
     int accum = 0;
 
-    queue_outward_impulse(s, cx, cy, 0, 0, r2, disc_count, keep, &accum);
+    queue_outward_impulse(s, cx, cy, 0, 0, r2, disc_count, keep, &accum,
+                          mat_filter);
     for (int ring = 1; ring <= radius; ring++) {
         for (int dx = -ring; dx <= ring; dx++) {
-            queue_outward_impulse(s, cx, cy, dx, -ring, r2, disc_count, keep, &accum);
-            queue_outward_impulse(s, cx, cy, dx,  ring, r2, disc_count, keep, &accum);
+            queue_outward_impulse(s, cx, cy, dx, -ring, r2, disc_count, keep,
+                                  &accum, mat_filter);
+            queue_outward_impulse(s, cx, cy, dx,  ring, r2, disc_count, keep,
+                                  &accum, mat_filter);
         }
         for (int dy = -ring + 1; dy <= ring - 1; dy++) {
-            queue_outward_impulse(s, cx, cy, -ring, dy, r2, disc_count, keep, &accum);
-            queue_outward_impulse(s, cx, cy,  ring, dy, r2, disc_count, keep, &accum);
+            queue_outward_impulse(s, cx, cy, -ring, dy, r2, disc_count, keep,
+                                  &accum, mat_filter);
+            queue_outward_impulse(s, cx, cy,  ring, dy, r2, disc_count, keep,
+                                  &accum, mat_filter);
         }
     }
+}
+
+void sand_displace(sand_t *s, int cx, int cy, int radius)
+{
+    displace_disc(s, cx, cy, radius, -1);
+}
+
+/* Same as sand_displace(), but only cells whose material is exactly
+ * `mat_id` are ever queued - everything else within the radius is left
+ * untouched, unlike an ordinary displacement which throws whatever it
+ * finds. For a liquid's own splash: water landing hard should throw water,
+ * not the dirt sitting under it. */
+void sand_displace_material(sand_t *s, int cx, int cy, int radius,
+                            uint8_t mat_id)
+{
+    displace_disc(s, cx, cy, radius, (int)mat_id);
 }
 
 void sand_explode(sand_t *s, int cx, int cy, int radius)
