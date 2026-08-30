@@ -173,7 +173,7 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
 
   node -e '
     const fs = require("fs");
-    const [, , extractorPath, contentFile, docPath, patchesFile] = process.argv;
+    const [, extractorPath, contentFile, docPath, patchesFile] = process.argv;
     const { extractJsonArray } = require(extractorPath);
     const text = fs.readFileSync(contentFile, "utf8");
     const slice = extractJsonArray(text);
@@ -233,7 +233,7 @@ if [ -n "$REVIEW_MODEL" ]; then
 
   node -e '
     const fs = require("fs");
-    const [, , extractorPath, contentFile, patchesFile] = process.argv;
+    const [, extractorPath, contentFile, patchesFile] = process.argv;
     const { extractJsonArray } = require(extractorPath);
     const text = fs.readFileSync(contentFile, "utf8");
     const slice = extractJsonArray(text);
