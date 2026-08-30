@@ -812,7 +812,7 @@ Reading the call sites was enough to rule it out; flashing a build to
 confirm it would have been the measurement, not the discipline.
 
 **Committed from this attempt: nothing but this section.** Every
-experiment was reverted, and a fresh `tools/report_performance.sh`
+experiment was reverted, and a fresh `launcher/main/apps/sand/tools/report_performance.sh`
 capture on the restored tree reproduces the incoming baseline exactly -
 5801 / 16141 / 15144 / 8996 / 259, `failures=3`, unchanged. **The lesson,
 and it is a repeat of this file's oldest one wearing new clothes:**

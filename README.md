@@ -29,7 +29,7 @@ removing one touches no other file. Currently:
   the diagnostics build, the same one that carries the test suites, never
   in release.
 
-A power-on self-test (`main/post.c`) runs in every build, release included,
+A power-on self-test (`launcher/main/boot/post.c`) runs in every build, release included,
 and checks storage, memory, sensors and the display on every boot.
 
 ## Quick start
