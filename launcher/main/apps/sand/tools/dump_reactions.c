@@ -47,6 +47,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include "material.h"
 
@@ -2011,6 +2015,17 @@ static void emit_anatomy(void)
 
 int main(void)
 {
+#ifdef _WIN32
+    /* MinGW's CRT defaults stdout to text mode, which rewrites every '\n'
+     * this file prints into "\r\n" - invisible on Windows, but it makes
+     * report_reactions.sh --check compare a CRLF TMP_MD against docs/Sand/
+     * Reaction-Table.md's LF (.gitattributes forces every .md to eol=lf -
+     * see that file's own comment on why - so the committed doc is LF
+     * regardless of which platform generated it). Binary mode turns off
+     * the rewrite, so this prints the same bytes on every platform the
+     * same way find_cc.sh already picks a compiler on every platform. */
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     field_docs_offsets_are_sound();
     build_rows();
     join_names(pred_wets_liquid, " or ", wetting_liquids,
