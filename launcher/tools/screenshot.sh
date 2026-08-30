@@ -2,11 +2,13 @@
 #
 # Capture whatever the device currently has on screen, over its console's
 # serial connection - no SD card, no button on the device: this script sends
-# the request and receives the image itself.
+# the request and receives the image itself, together with a same-named
+# .json snapshot of device state at that exact frame (sensors, memory,
+# clock - see screenshot_dump()'s own comment in main/util/screenshot.c).
 #
-#   ./tools/screenshot.sh                  # auto-detected port, timestamped file
+#   ./tools/screenshot.sh                  # auto-detected port, timestamped files
 #   ./tools/screenshot.sh -p /dev/ttyACM0
-#   ./tools/screenshot.sh -o mine.bmp
+#   ./tools/screenshot.sh -o mine.bmp      # writes mine.bmp and mine.json
 #
 # The board has no other channel to a host - see main/util/screenshot.h's own
 # top comment - so this rides the exact same serial connection monitor.sh and

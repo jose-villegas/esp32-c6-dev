@@ -1,6 +1,8 @@
 /*=============================================================================
  * screenshot - streaming the current framebuffer to a host script over the
- * console's own serial connection, as an uncompressed 24-bit BMP.
+ * console's own serial connection, as an uncompressed 24-bit BMP, together
+ * with a JSON dump of device state at that same frame (sensors, memory,
+ * clock - see screenshot_dump()'s own comment for the full list).
  *
  * There is no other channel off this board: no SD-card-as-USB-drive, no
  * second data port - only the console, which on this board is the ESP32-C6's
@@ -32,6 +34,8 @@
 
 #include <stdbool.h>
 #include <stdint.h>
+
+#include "app.h"
 
 /*-----------------------------------------------------------------------------
  * BMP encoding - see screenshot.c's write loop for how these two are used
@@ -191,11 +195,22 @@ void screenshot_start(void);
  * around to checking. */
 bool screenshot_take_request(void);
 
-/* Streams the current framebuffer to stdout as base64 BMP data, framed
- * between SCREENSHOT_BEGIN/SCREENSHOT_END marker lines a host script greps
- * for - see tools/screenshot.py. Meant to be called from main.c's frame
- * loop right after a frame is drawn and before it is presented, so what is
- * captured is exactly what is about to appear on screen (see gfx.h's own
- * dirty-tracking comment: gfx_present() only sends what changed, but the
- * full framebuffer this reads from is always complete regardless). */
-void screenshot_dump(void);
+/* Streams the current framebuffer to stdout as base64 BMP data, followed by
+ * one SCREENSHOT_STATE: line of plain-text JSON - device state at the same
+ * frame the image was captured from (uptime, heap, CPU clock, die
+ * temperature, orientation, the IMU, and this frame's touch/button state) -
+ * framed between SCREENSHOT_BEGIN/SCREENSHOT_END marker lines a host script
+ * greps for; see tools/screenshot.py, and screenshot.c's own comment on the
+ * state dump for why each field is there and where it comes from.
+ *
+ * `input` is this frame's input_t, the same one main.c's loop already has -
+ * passed in rather than read fresh, so the touch/button fields in the dump
+ * describe the exact frame the image does, not whatever the console
+ * listener task happened to see arrive a frame or more later.
+ *
+ * Meant to be called from main.c's frame loop right after a frame is drawn
+ * and before it is presented, so what is captured is exactly what is about
+ * to appear on screen (see gfx.h's own dirty-tracking comment: gfx_present()
+ * only sends what changed, but the full framebuffer this reads from is
+ * always complete regardless). */
+void screenshot_dump(const input_t *input);

@@ -9,14 +9,21 @@ split there.
 Sends the trigger word over the console UART (see util/screenshot.c) and
 reads the response back out of the same stream idf_monitor would otherwise
 be showing as logs: a SCREENSHOT_BEGIN line announcing the byte count, one
-SCREENSHOT_DATA: line per base64-encoded chunk, and a SCREENSHOT_END line.
-Anything else on the wire - ordinary ESP_LOG output, in particular - is
-ignored rather than treated as an error, since the device keeps logging
-normally while it streams.
+SCREENSHOT_DATA: line per base64-encoded chunk, one SCREENSHOT_STATE: line
+of plain-text JSON (device state at that same frame - sensors, memory,
+clock; see screenshot_dump()'s own comment in screenshot.c for the field
+list), and a SCREENSHOT_END line. Anything else on the wire - ordinary
+ESP_LOG output, in particular - is ignored rather than treated as an
+error, since the device keeps logging normally while it streams.
+
+Writes two files: `--out` itself (the .bmp) and, if a SCREENSHOT_STATE:
+line arrived, a same-named .json beside it.
 """
 
 import argparse
 import base64
+import json
+import os
 import re
 import sys
 import time
@@ -25,6 +32,7 @@ import serial
 
 BEGIN_RE = re.compile(r"^SCREENSHOT_BEGIN size=(\d+)$")
 DATA_PREFIX = "SCREENSHOT_DATA:"
+STATE_PREFIX = "SCREENSHOT_STATE:"
 END_LINE = "SCREENSHOT_END"
 
 TRIGGER = b"SCREENSHOT\n"
@@ -72,6 +80,7 @@ def main() -> int:
     total_size = None
     chunks = []
     received_b64_chars = 0
+    state_json = None
 
     # Printed immediately, before anything blocks: without this, a slow but
     # perfectly healthy capture (see --timeout's own help text above) prints
@@ -143,7 +152,39 @@ def main() -> int:
                     with open(args.out, "wb") as f:
                         f.write(data)
                     print(f"wrote {args.out} ({len(data)} bytes)")
+
+                    if state_json is not None:
+                        state_path = os.path.splitext(args.out)[0] + ".json"
+                        try:
+                            # Round-tripped through json.loads/dump rather
+                            # than written raw: this both validates the
+                            # device's own formatting (screenshot.c's
+                            # snprintf() is hand-rolled, not a JSON library -
+                            # see suite_device_state.c for what IS verified,
+                            # on a host, ahead of ever reaching real
+                            # hardware) and pretty-prints it for a human
+                            # reading the file afterward.
+                            parsed = json.loads(state_json)
+                            with open(state_path, "w") as f:
+                                json.dump(parsed, f, indent=2)
+                                f.write("\n")
+                            print(f"wrote {state_path}")
+                        except json.JSONDecodeError as exc:
+                            print(f"warning: SCREENSHOT_STATE line was not "
+                                  f"valid JSON ({exc}); writing it raw to "
+                                  f"{state_path}", file=sys.stderr)
+                            with open(state_path, "w") as f:
+                                f.write(state_json + "\n")
+                            print(f"wrote {state_path} (raw, unparsed)")
+                    else:
+                        print("no SCREENSHOT_STATE line arrived - device "
+                              "state was not captured", file=sys.stderr)
+
                     return 0
+
+                if line.startswith(STATE_PREFIX):
+                    state_json = line[len(STATE_PREFIX):]
+                    continue
 
                 if line.startswith(DATA_PREFIX):
                     encoded = line[len(DATA_PREFIX):]
