@@ -416,3 +416,7 @@ against.
   codebase; this is what it is actually testing.
 - `docs/Notes/` — the hardware constraints behind the device-only
   performance tests. Start at `docs/Notes/README.md`.
+- `docs/Settings-App-Plan.md` — planned follow-up to the DEVELOPMENT/SELFTEST
+  split this guide documents: the Diagnostics app's toggle page mixes both,
+  and untangling that is what would let the SELFTEST/"diagnostics" naming
+  mismatch actually resolve rather than just get renamed over.
