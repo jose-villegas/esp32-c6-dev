@@ -309,9 +309,21 @@ typedef struct {
     int        impulse_count;
 
     /* Decaying trigger chance for splash_displace() (sand_liquid.c) - see
-     * SAND_SPLASH_RADIUS's own comment above for why this lives
-     * per-instance. */
+     * SAND_SPLASH_RADIUS_WATER's own comment above for why this lives
+     * per-instance. WATER only - see acid_splashes_this_step below for
+     * why acid needs a different kind of throttle. */
     uint8_t    splash_chance;
+
+    /* How many ACID splashes splash_displace() has already fired THIS
+     * STEP, reset to 0 at the top of every sand_step() - caps how many of
+     * a bulk pour's many simultaneously-landing columns can each throw a
+     * full SAND_SPLASH_RADIUS_ACID displacement at once, without making
+     * acid's splash depend on simulation HISTORY the way splash_chance
+     * does for water (see SAND_SPLASH_RADIUS_WATER's own comment for why
+     * acid's splash intentionally does not decay over time - a per-step
+     * cap does not conflict with that, since it forgets everything the
+     * instant the next step starts). */
+    uint8_t    acid_splashes_this_step;
 
     int      last_load_dx, last_load_dy;
 
@@ -692,9 +704,11 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
  * - a WATER or ACID grain landing hard, either falling onto an already-
  * occupied surface or rebounding off a wall, throws a small, MASKED
- * sand_displace_material() at RADIUS (only the same material gets thrown -
- * see splash_displace()'s own comment for why), exaggerated well past a
- * real splash's reach so the effect reads clearly at this display size.
+ * sand_displace_material() (only the same material gets thrown - see
+ * splash_displace()'s own comment for why), exaggerated well past a real
+ * splash's reach so the effect reads clearly at this display size.
+ * SEPARATE RADII, not one shared constant - water's splash reads better
+ * smaller than acid's own displacement, tuned independently on device.
  * Oil and lava are not wired into this - oil has no gameplay reason to
  * scatter, and lava is a heat source whose spread timing this same
  * exaggerated radius visibly disrupted when tried (see this constant's own
@@ -710,10 +724,20 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * echoes are suppressed almost immediately rather than rattling on.
  * Per-sand_t (sand_t::splash_chance below), not a shared global, so one
  * simulation's splash history never bleeds into another's. */
-#define SAND_SPLASH_RADIUS       5
+#define SAND_SPLASH_RADIUS_WATER 3
+#define SAND_SPLASH_RADIUS_ACID  5
 #define SAND_SPLASH_CHANCE_START 255
 #define SAND_SPLASH_CHANCE_FLOOR 24
 #define SAND_SPLASH_CHANCE_STEP  90
+
+/* How many ACID splashes splash_displace() (sand_liquid.c) will fire in a
+ * single sand_step() - see sand_t::acid_splashes_this_step's own comment
+ * above for why this is a per-step cap rather than the decaying budget
+ * water uses. Without it, pouring a wide block of acid landed every
+ * column hard in the same step or two, and each one threw its own full
+ * SAND_SPLASH_RADIUS_ACID displacement - dozens of overlapping blasts
+ * reading as one chaotic explosion rather than a splash. */
+#define SAND_SPLASH_ACID_PER_STEP_CAP 3
 
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /

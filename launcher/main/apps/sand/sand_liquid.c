@@ -22,12 +22,11 @@
  * moved to sand_priv.h (still static inline) now that sand.c's own sweep needs
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
-/* A liquid splash: sand_displace_material() at SAND_SPLASH_RADIUS, called
- * whenever a WATER or ACID grain lands hard - falling onto an already-
- * occupied surface, or rebounding off a wall (both call sites below).
- * Water and acid only, for now - oil and lava are not gated in here, see
- * SAND_SPLASH_RADIUS's own comment in sand.h. Same RADIUS for both
- * materials - only whether the trigger decays differs, below.
+/* A liquid splash: sand_displace_material() at a per-material radius,
+ * called whenever a WATER or ACID grain lands hard - falling onto an
+ * already-occupied surface, or rebounding off a wall (both call sites
+ * below). Water and acid only, for now - oil and lava are not gated in
+ * here, see SAND_SPLASH_RADIUS_WATER's own comment in sand.h.
  *
  * MASKED TO `mat_id`, not a plain sand_displace() - an unmasked
  * displacement throws whatever it finds within the radius, which meant
@@ -39,17 +38,30 @@
  * landing again does not just re-splash itself indefinitely - a real
  * splash does not keep re-triggering off its own spray.
  *
- * ACID DOES NOT DECAY - it always splashes at full RADIUS on every
- * qualifying landing, and never touches `splash_chance` at all (so it
- * cannot spend down water's own budget either). A balance choice, not a
- * bounce-suppression gap: acid's splash is part of its dissolve-vs-metal
+ * ACID DOES NOT DECAY OVER TIME - it always splashes at its own full
+ * radius, at full intensity, and never touches `splash_chance` at all (so
+ * it cannot spend down water's own budget either). A balance choice, not
+ * a bounce-suppression gap: acid's splash is part of its dissolve-vs-metal
  * balance (see docs/Sand/Metal-Smelting-Plan.md), and a decaying trigger
  * would make that balance depend on how many OTHER acid splashes already
- * happened this simulation, not on the material stats alone. */
+ * happened this simulation, not on the material stats alone.
+ *
+ * ACID IS CAPPED PER STEP INSTEAD (sand_t::acid_splashes_this_step,
+ * sand.h) - a bulk pour lands many columns hard on the same step or two,
+ * and each one is a genuinely fresh trigger by the rule above, so without
+ * this a wide pour queued a full SAND_SPLASH_RADIUS_ACID displacement per
+ * column - dozens at once, reading as one chaotic explosion instead of a
+ * splash. The cap forgets itself every step (sand_step(), sand.c), so it
+ * throttles simultaneous triggers without making acid's splash depend on
+ * history the way a decaying chance would. */
 static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id == MAT_ACID) {
-        sand_displace_material(s, x, y, SAND_SPLASH_RADIUS, mat_id);
+        if (s->acid_splashes_this_step >= SAND_SPLASH_ACID_PER_STEP_CAP) {
+            return;
+        }
+        s->acid_splashes_this_step++;
+        sand_displace_material(s, x, y, SAND_SPLASH_RADIUS_ACID, mat_id);
         return;
     }
     if (mat_id != MAT_WATER) {
@@ -58,7 +70,7 @@ static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
     if ((rng_next(&s->rng) & 0xFF) > s->splash_chance) {
         return;   /* this echo lost the roll - let the bounce die here */
     }
-    sand_displace_material(s, x, y, SAND_SPLASH_RADIUS, mat_id);
+    sand_displace_material(s, x, y, SAND_SPLASH_RADIUS_WATER, mat_id);
     s->splash_chance =
         s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
             ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
