@@ -70,7 +70,7 @@ fi
 } > "$PROMPT"
 
 echo "Asking $COMBO to review $(echo "$DOC_FILES" | wc -l) doc file(s) against $(wc -l < "$DIFF_STAT") changed source file(s)..."
-if ! omniroute chat --combo "$COMBO" --file "$PROMPT" --no-history > "$RESPONSE" 2>&1; then
+if ! omniroute chat -m "$COMBO" --file "$PROMPT" --no-history > "$RESPONSE" 2>&1; then
   echo "omniroute call failed:" >&2
   cat "$RESPONSE" >&2
   exit 1
