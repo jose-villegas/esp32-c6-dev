@@ -245,7 +245,11 @@ static mu_Rect draw_overlay_box(mu_Context *ctx, int w, int h)
  * Left in place even with the box's own opaque backing - a NO_BACKGROUND
  * window is still one BOOT tap away whenever partial_updates is off, and
  * the halo costs nothing extra when the backing is already opaque. */
-static void draw_fps(const input_t *input)
+/* Exposed for performance testing (suite_cube_perf.c) - timed as its own
+ * phase there, separate from the cube's own clear/rotate/rasterize work,
+ * so the suite can compare the frame budget with and without the HUD
+ * text. */
+void draw_fps(const input_t *input)
 {
     mu_Context *ctx = ui_context();
     ui_begin(input);

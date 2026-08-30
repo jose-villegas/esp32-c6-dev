@@ -46,6 +46,7 @@ extern uint32_t    last_layout_generation;
 extern void cube_enter(void);
 extern void cube_exit(void);
 extern void cube_frame(uint32_t dt_ms, const input_t *input);
+extern void draw_fps(const input_t *input);
 
 static const char *TAG = "cube_perf";
 
@@ -57,6 +58,7 @@ typedef struct {
     int64_t frame_total_us;    /* wall clock per frame */
     int64_t logic_us;          /* cube logic + scene setup */
     int64_t rasterize_us;      /* small3dlib S3L_drawScene() */
+    int64_t hud_us;            /* draw_fps() - zero when with_hud is false */
     int64_t present_us;        /* gfx_present() */
 } frame_sample_t;
 
@@ -100,17 +102,17 @@ static void cube_perf_teardown(void)
     cube_exit();
 }
 
-static int64_t time_logic(int32_t dt_ms)
-{
-    int64_t start = esp_timer_get_time();
-    cube_frame(dt_ms, NULL);  /* input NULL = no UI, just logic + draw */
-    return esp_timer_get_time() - start;
-}
-
-/* Reusable input struct (NULL input works for cube_frame). */
+/* Nothing pressed, no touch - draw_fps() feeds this straight into
+ * ui_begin()/feed_input(), which dereference it unconditionally, so a real
+ * (zeroed) input_t is required here, not NULL. */
 static const input_t null_input = { 0 };
 
-void test_cube_performance_over_10s(void)
+/* Runs the 10-second capture and writes /spiffs/cube_perf_<label>_<ts>.md.
+ * `with_hud` toggles the one line real cube_frame() always pays for -
+ * draw_fps() - timed as its own phase so a with/without run shows exactly
+ * what the HUD text costs, rather than folding it silently into whichever
+ * phase happened to run next. */
+static void run_perf_capture(const char *label, bool with_hud)
 {
     cube_perf_fixture();
     
@@ -159,18 +161,30 @@ void test_cube_performance_over_10s(void)
         if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
             gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0, frame_y1 - frame_y0);
         }
-        
+
+        /* --- HUD PHASE --- */
+        /* Same position in the frame real cube_frame() calls it from - after
+         * the cube's own dirty region is marked, before gfx_present() goes
+         * out. Skipped entirely when with_hud is false, so hud_us reads as
+         * ~0 rather than the cost of a no-op draw_fps() call. */
+        int64_t hud_start = esp_timer_get_time();
+        if (with_hud) {
+            draw_fps(&null_input);
+        }
+        int64_t hud_end = esp_timer_get_time();
+
         /* --- PRESENT PHASE --- */
         int64_t present_start = esp_timer_get_time();
         gfx_present();
         int64_t present_end = esp_timer_get_time();
-        
+
         int64_t frame_end = present_end;
-        
+
         /* Store sample */
         samples[sample_count].frame_total_us = frame_end - frame_start;
         samples[sample_count].logic_us = logic_end - logic_start;
         samples[sample_count].rasterize_us = raster_end - raster_start;
+        samples[sample_count].hud_us = with_hud ? (hud_end - hud_start) : 0;
         samples[sample_count].present_us = present_end - present_start;
         sample_count++;
         frame_idx++;
@@ -187,67 +201,79 @@ void test_cube_performance_over_10s(void)
     int64_t total_min = INT64_MAX, total_max = 0, total_sum = 0;
     int64_t logic_min = INT64_MAX, logic_max = 0, logic_sum = 0;
     int64_t rast_min = INT64_MAX, rast_max = 0, rast_sum = 0;
+    int64_t hud_min = INT64_MAX, hud_max = 0, hud_sum = 0;
     int64_t pres_min = INT64_MAX, pres_max = 0, pres_sum = 0;
-    
+
     int64_t totals[MAX_SAMPLES];
     int64_t logics[MAX_SAMPLES];
     int64_t rasts[MAX_SAMPLES];
+    int64_t huds[MAX_SAMPLES];
     int64_t press[MAX_SAMPLES];
-    
+
     for (int i = 0; i < sample_count; i++) {
         int64_t t = samples[i].frame_total_us;
         int64_t l = samples[i].logic_us;
         int64_t r = samples[i].rasterize_us;
+        int64_t h = samples[i].hud_us;
         int64_t p = samples[i].present_us;
-        
+
         totals[i] = t;
         logics[i] = l;
         rasts[i] = r;
+        huds[i] = h;
         press[i] = p;
-        
+
         if (t < total_min) total_min = t;
         if (t > total_max) total_max = t;
         total_sum += t;
-        
+
         if (l < logic_min) logic_min = l;
         if (l > logic_max) logic_max = l;
         logic_sum += l;
-        
+
         if (r < rast_min) rast_min = r;
         if (r > rast_max) rast_max = r;
         rast_sum += r;
-        
+
+        if (h < hud_min) hud_min = h;
+        if (h > hud_max) hud_max = h;
+        hud_sum += h;
+
         if (p < pres_min) pres_min = p;
         if (p > pres_max) pres_max = p;
         pres_sum += p;
     }
-    
+
     int64_t total_avg = total_sum / sample_count;
     int64_t logic_avg = logic_sum / sample_count;
     int64_t rast_avg = rast_sum / sample_count;
+    int64_t hud_avg = hud_sum / sample_count;
     int64_t pres_avg = pres_sum / sample_count;
-    
+
     int64_t total_med = median_of(totals, sample_count);
     int64_t logic_med = median_of(logics, sample_count);
     int64_t rast_med = median_of(rasts, sample_count);
+    int64_t hud_med = median_of(huds, sample_count);
     int64_t pres_med = median_of(press, sample_count);
-    
+
     /* P95 = 95th percentile */
     int64_t total_p95 = totals[(sample_count * 95) / 100];
     int64_t logic_p95 = logics[(sample_count * 95) / 100];
     int64_t rast_p95 = rasts[(sample_count * 95) / 100];
+    int64_t hud_p95 = huds[(sample_count * 95) / 100];
     int64_t pres_p95 = press[(sample_count * 95) / 100];
-    
+
     /* --- OUTPUT MARKDOWN REPORT --- */
     char report_path[128];
     snprintf(report_path, sizeof(report_path),
-             "/spiffs/cube_perf_%lld.md", (long long)(test_start / 1000000));
-    
+             "/spiffs/cube_perf_%s_%lld.md", label,
+             (long long)(test_start / 1000000));
+
     FILE *f = fopen(report_path, "w");
     if (f) {
-        fprintf(f, "# Cube App Performance Report\n\n");
+        fprintf(f, "# Cube App Performance Report (%s)\n\n", label);
         fprintf(f, "Captured: %lld frames over %d seconds\n\n", (long long)sample_count, SAMPLE_SECONDS);
-        
+
         fprintf(f, "## Frame Total (wall clock)\n");
         fprintf(f, "| Stat | us | fps |\n");
         fprintf(f, "|---|---:|---:|\n");
@@ -256,7 +282,7 @@ void test_cube_performance_over_10s(void)
         fprintf(f, "| Average | %lld | %.1f |\n", (long long)total_avg, 1000000.0 / total_avg);
         fprintf(f, "| Median | %lld | %.1f |\n", (long long)total_med, 1000000.0 / total_med);
         fprintf(f, "| P95 | %lld | %.1f |\n\n", (long long)total_p95, 1000000.0 / total_p95);
-        
+
         fprintf(f, "## Breakdown\n");
         fprintf(f, "| Phase | Min | Max | Avg | Median | P95 |\n");
         fprintf(f, "|---|---:|---:|---:|---:|---:|\n");
@@ -266,21 +292,25 @@ void test_cube_performance_over_10s(void)
         fprintf(f, "| Rasterize | %lld | %lld | %lld | %lld | %lld |\n",
                 (long long)rast_min, (long long)rast_max, (long long)rast_avg,
                 (long long)rast_med, (long long)rast_p95);
+        fprintf(f, "| HUD (draw_fps) | %lld | %lld | %lld | %lld | %lld |\n",
+                (long long)hud_min, (long long)hud_max, (long long)hud_avg,
+                (long long)hud_med, (long long)hud_p95);
         fprintf(f, "| Present | %lld | %lld | %lld | %lld | %lld |\n",
                 (long long)pres_min, (long long)pres_max, (long long)pres_avg,
                 (long long)pres_med, (long long)pres_p95);
         fprintf(f, "| **Total** | %lld | %lld | %lld | %lld | %lld |\n\n",
                 (long long)total_min, (long long)total_max, (long long)total_avg,
                 (long long)total_med, (long long)total_p95);
-        
+
         fprintf(f, "## Frame Budget vs Target (60 fps = 16667 us)\n");
         fprintf(f, "| Phase | Budget %% (avg) |\n");
         fprintf(f, "|---|---:|\n");
         fprintf(f, "| Logic | %.1f%% |\n", (double)logic_avg / 16667.0 * 100.0);
         fprintf(f, "| Rasterize | %.1f%% |\n", (double)rast_avg / 16667.0 * 100.0);
+        fprintf(f, "| HUD (draw_fps) | %.1f%% |\n", (double)hud_avg / 16667.0 * 100.0);
         fprintf(f, "| Present | %.1f%% |\n", (double)pres_avg / 16667.0 * 100.0);
         fprintf(f, "| **Total** | %.1f%% |\n\n", (double)total_avg / 16667.0 * 100.0);
-        
+
         fclose(f);
         ESP_LOGI(TAG, "Report written to %s", report_path);
     } else {
@@ -288,7 +318,7 @@ void test_cube_performance_over_10s(void)
     }
     
     /* Also log to console for immediate visibility. */
-    ESP_LOGI(TAG, "=== CUBE PERF (%d frames) ===", sample_count);
+    ESP_LOGI(TAG, "=== CUBE PERF %s (%d frames) ===", label, sample_count);
     ESP_LOGI(TAG, "Total:   avg=%lldus med=%lldus p95=%lldus  (%.1f/%.1f/%.1f fps)",
              (long long)total_avg, (long long)total_med, (long long)total_p95,
              1000000.0/total_avg, 1000000.0/total_med, 1000000.0/total_p95);
@@ -296,10 +326,23 @@ void test_cube_performance_over_10s(void)
              (long long)logic_avg, (long long)logic_med, (double)logic_avg/total_avg*100);
     ESP_LOGI(TAG, "Raster:  avg=%lldus med=%lldus (%.1f%%)",
              (long long)rast_avg, (long long)rast_med, (double)rast_avg/total_avg*100);
+    ESP_LOGI(TAG, "HUD:     avg=%lldus med=%lldus (%.1f%%)",
+             (long long)hud_avg, (long long)hud_med, (double)hud_avg/total_avg*100);
     ESP_LOGI(TAG, "Present: avg=%lldus med=%lldus (%.1f%%)",
              (long long)pres_avg, (long long)pres_med, (double)pres_avg/total_avg*100);
-    
+
     cube_perf_teardown();
+}
+
+void test_cube_performance_over_10s(void)
+{
+    run_perf_capture("with_hud", true);
+    TEST_PASS();
+}
+
+void test_cube_performance_over_10s_no_hud(void)
+{
+    run_perf_capture("no_hud", false);
     TEST_PASS();
 }
 
@@ -355,6 +398,7 @@ void test_cube_performance_interlaced(void)
 void run_cube_perf_suite(void)
 {
     RUN_TEST(test_cube_performance_over_10s);
+    RUN_TEST(test_cube_performance_over_10s_no_hud);
     RUN_TEST(test_cube_performance_interlaced);
 }
 
