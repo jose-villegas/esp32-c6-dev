@@ -259,8 +259,7 @@ cube app is slower because rasterizing costs ~28 ms on top.
 
 Three steps.
 
-**1. Write `main/apps/yours/app_yours.c`** (replace `yours` with your app's
-name, e.g. `main/apps/sand/app_sand.c`):
+**1. Write `main/apps/<name>/app_<name>.c`** (e.g. `main/apps/sand/app_sand.c`):
 
 ```c
 #include "../../app.h"
