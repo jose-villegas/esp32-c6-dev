@@ -1245,11 +1245,45 @@ static bool local_depth_prev_axis_vertical;
 
 /* This frame's own answer to "is gravity close enough to a diagonal that
  * LOCAL DEPTH's single-axis approximation would look wrong" - set once by
- * update_local_depth_axis() below, read by paint_row_n()'s vertical branch
- * to freeze col_stable_depth[cx] instead of updating it - see
- * DEPTH_DIAGONAL_DEADZONE_PCT's own comment just above for the full
- * mechanism and why it freezes rather than flattening. */
+ * update_local_depth_axis() below. Purely a ratio check against THIS
+ * frame's gravity; does not by itself say whether the freeze is actually
+ * holding anything yet - see local_depth_freeze_active below for that,
+ * and why the two are not the same question. Exposed to
+ * sand_diagnostic_json() for exactly that distinction, and read by
+ * update_local_depth_axis() itself to detect the ENTRY transition. */
 static bool local_depth_in_deadzone;
+
+/* Whether paint_row_n()'s vertical branch should actually freeze
+ * col_stable_depth[cx] this frame, rather than updating it - what
+ * material_colours() ultimately sees depends on this, not on
+ * local_depth_in_deadzone directly.
+ *
+ * DELIBERATELY FALSE ON THE ENTRY FRAME - the frame local_depth_in_
+ * deadzone first becomes true. Device screenshots showed the interior
+ * going visibly FLATTER right at that transition, even though the pool's
+ * surface shape barely changed between the "before" and "after" capture -
+ * ruling out "froze on a genuinely undeveloped gradient" (the "before"
+ * capture already had one) and pointing at STAGGERED PER-COLUMN FREEZE
+ * TIMING instead: col_stable_depth[cx] only gets written when column cx is
+ * actually dirty, so entering the dead zone during an extended, real,
+ * multi-second gravity change (a genuine device rotation, not an instant
+ * step) lets different columns freeze at different SUB-MOMENTS of an
+ * still-ongoing resettle - a patchwork of individually-plausible but
+ * mutually inconsistent partial states, not the one consistent gradient
+ * either endpoint alone would show.
+ *
+ * The fix: on the entry frame specifically, update_local_depth_axis() below
+ * calls mark_sand_fully_dirty() and leaves this false, so paint_row_n()
+ * still computes every column FRESH, from the SAME live grid, on that one
+ * frame - a single consistent snapshot, not a staggered one - and this
+ * only becomes true starting the NEXT frame, freezing THAT snapshot rather
+ * than whatever staggered mess was already sitting in col_stable_depth[]
+ * from before the dead zone was ever entered. */
+static bool local_depth_freeze_active;
+
+/* Last frame's local_depth_in_deadzone, kept only to detect the entry
+ * transition local_depth_freeze_active's own comment describes. */
+static bool local_depth_prev_in_deadzone;
 
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
@@ -1271,25 +1305,39 @@ static void update_local_depth_axis(int gx, int gy)
      * comment for why that case is not this fix's target. */
     const int lo = (ax < ay) ? ax : ay;
     const int hi = (ax < ay) ? ay : ax;
-    local_depth_in_deadzone =
+    const bool now_in_deadzone =
         (hi != 0) && (lo * 100 >= hi * (100 - DEPTH_DIAGONAL_DEADZONE_PCT));
+    const bool entering_deadzone = now_in_deadzone && !local_depth_prev_in_deadzone;
+    local_depth_in_deadzone = now_in_deadzone;
+    local_depth_prev_in_deadzone = now_in_deadzone;
 
-    if (local_depth_in_deadzone) {
-        /* FROZEN - local_depth_axis_vertical, local_depth_reverse and
-         * local_depth_prev_axis_vertical all stay exactly as they were,
-         * and the Schmitt trigger and its reset below do not run at all
-         * this frame. Skipping the reset is the point, not a side effect:
-         * DEPTH_DIAGONAL_DEADZONE_PCT is wider than AXIS_HYSTERESIS_PCT on
-         * purpose, so some angles inside this dead zone would still cross
-         * the (narrower) hysteresis threshold and flip the axis if the
-         * Schmitt trigger below ran here - which would memset
-         * col_stable_depth[] via the reset it guards, wiping out exactly
-         * the frozen gradient this dead zone exists to preserve. Leaving
-         * local_depth_prev_axis_vertical untouched means the Schmitt
-         * trigger picks up exactly where it left off the instant gravity
-         * exits the dead zone again, with no lost state either. */
+    if (now_in_deadzone && !entering_deadzone) {
+        /* ALREADY FROZEN, from a previous frame - local_depth_axis_vertical,
+         * local_depth_reverse and local_depth_prev_axis_vertical all stay
+         * exactly as they were, and the Schmitt trigger and its reset below
+         * do not run at all this frame. Skipping the reset is the point,
+         * not a side effect: DEPTH_DIAGONAL_DEADZONE_PCT is wider than
+         * AXIS_HYSTERESIS_PCT on purpose, so some angles inside this dead
+         * zone would still cross the (narrower) hysteresis threshold and
+         * flip the axis if the Schmitt trigger below ran here - which
+         * would memset col_stable_depth[] via the reset it guards, wiping
+         * out exactly the frozen gradient this dead zone exists to
+         * preserve. Leaving local_depth_prev_axis_vertical untouched means
+         * the Schmitt trigger picks up exactly where it left off the
+         * instant gravity exits the dead zone again, with no lost state
+         * either. */
+        local_depth_freeze_active = true;
         return;
     }
+
+    /* Either genuinely outside the dead zone, or THIS IS THE ENTRY FRAME -
+     * both want a normal, fresh axis update: the entry frame specifically
+     * needs the freshest possible axis choice as the basis for the
+     * one-time full repaint it triggers below, not a stale one left over
+     * from before the dead zone was ever entered. Not yet freezing either
+     * way - see local_depth_freeze_active's own comment for why the entry
+     * frame stays unfrozen. */
+    local_depth_freeze_active = false;
 
     /* Schmitt trigger against LAST frame's own choice, not a plain
      * `ay >= ax` comparison - see AXIS_HYSTERESIS_PCT's own comment just
@@ -1331,6 +1379,18 @@ static void update_local_depth_axis(int gx, int gy)
      * (paint_row_n()) because they are the same question, asked on
      * whichever axis is dominant this frame - never both at once. */
     local_depth_reverse = vertical ? (gy < 0) : (gx < 0);
+
+    if (entering_deadzone) {
+        /* THE SYNCHRONISED SNAPSHOT - see local_depth_freeze_active's own
+         * comment for the staggered-columns bug this exists to fix. Marks
+         * only; draw_dirty_rows() (called later this same frame, in the
+         * ordinary per-frame flow) is what actually repaints everything,
+         * with local_depth_freeze_active still false throughout THIS
+         * frame, so every column's col_stable_depth[cx] gets written fresh
+         * from the SAME live grid before freezing starts on the next
+         * frame. */
+        mark_sand_fully_dirty();
+    }
 }
 
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
@@ -1491,15 +1551,16 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
              * above a real boundary corrupts the value that boundary
              * inherits. Clean reset, and col_top_row[cx] is left alone -
              * this cell is not a boundary request of any kind. */
-            if (local_depth_in_deadzone) {
-                /* FROZEN - see local_depth_in_deadzone's own comment
-                 * (above this function) for the full mechanism. Read
+            if (local_depth_freeze_active) {
+                /* FROZEN - see local_depth_freeze_active's own comment
+                 * (above this function) for the full mechanism, including
+                 * why this is NOT simply local_depth_in_deadzone. Read
                  * whatever col_stable_depth[cx] already holds, from the
-                 * last frame this column was painted OUTSIDE the dead
-                 * zone, and change nothing else - col_top_row[cx] stays
-                 * exactly as it was too. The write below re-stores this
-                 * same value, a harmless no-op, rather than needing its
-                 * own guard. */
+                 * synchronised snapshot update_local_depth_axis() forced
+                 * on the dead zone's entry frame, and change nothing else -
+                 * col_top_row[cx] stays exactly as it was too. The write
+                 * below re-stores this same value, a harmless no-op,
+                 * rather than needing its own guard. */
                 stable_depth = col_stable_depth[cx];
             } else if (material_of(row[cx])->kind != KIND_LIQUID) {
                 stable_depth = 0u;
@@ -1540,9 +1601,9 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         }
 
         /* The dead zone freeze already happened above, inside the vertical
-         * branch (see local_depth_in_deadzone's own comment) - nothing left
-         * to apply here. stable_depth is either this frame's real climb, or
-         * (frozen) whatever col_stable_depth[cx] already held. */
+         * branch (see local_depth_freeze_active's own comment) - nothing
+         * left to apply here. stable_depth is either this frame's real
+         * climb, or (frozen) whatever col_stable_depth[cx] already held. */
         const unsigned depth = stable_depth;
 
         gfx_color_t col[3];
@@ -3038,10 +3099,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
  * (a JSON object fragment, starting `{`, ending `}`, no trailing comma)
  * and screenshot.c's dump_state() for where this actually gets spliced in.
  *
- * Exposes exactly the two facts a screenshot capture cannot otherwise tell,
- * raised while chasing a report that the diagonal dead zone's freeze
- * (col_stable_depth[]'s own comment) was grabbing a column mid-resettle
- * rather than on a genuinely stable gradient:
+ * Exposes facts a screenshot capture cannot otherwise tell, raised while
+ * chasing a report that the diagonal dead zone's freeze (col_stable_
+ * depth[]'s own comment) was flattening the interior rather than holding
+ * it steady:
  *
  *  - tilt_x()/tilt_y() - the SMOOTHED gravity the sim actually acts on,
  *    not the raw IMU counts device_state.h already reports. tilt.c's own
@@ -3049,15 +3110,24 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
  *    rotation (see tilt.h's own top comment on TILT_TAU_MOVING_MS), so a
  *    raw ax/ay reading nowhere near the diagonal does not prove the
  *    SIMULATION's own gravity was not near it a moment before.
- *  - local_depth_in_deadzone - whether the freeze was actually active on
- *    the exact frame this capture was taken, rather than inferred (and
- *    possibly wrongly) from either gravity reading. */
+ *  - local_depth_in_deadzone - the ratio-only check, true whenever THIS
+ *    frame's gravity sits close enough to a diagonal, regardless of
+ *    whether the freeze is actually holding anything yet.
+ *  - local_depth_freeze_active - whether col_stable_depth[] was actually
+ *    being frozen (read-only) on this exact frame, as opposed to the
+ *    dead zone's own entry frame, which stays unfrozen on purpose to take
+ *    one synchronised snapshot first - see that flag's own comment for
+ *    the staggered-columns bug this distinction exists to catch. The two
+ *    disagreeing (in_deadzone true, freeze_active false) on a capture is
+ *    exactly what "this was the entry frame" looks like from the outside. */
 static void sand_diagnostic_json(char *out, size_t len)
 {
     snprintf(out, len,
-             "{\"tilt_x\":%d,\"tilt_y\":%d,\"local_depth_in_deadzone\":%s}",
+             "{\"tilt_x\":%d,\"tilt_y\":%d,\"local_depth_in_deadzone\":%s,"
+             "\"local_depth_freeze_active\":%s}",
              tilt_x(&tilt), tilt_y(&tilt),
-             local_depth_in_deadzone ? "true" : "false");
+             local_depth_in_deadzone ? "true" : "false",
+             local_depth_freeze_active ? "true" : "false");
 }
 
 /* .home_gesture deliberately left unset (false) - see app_t's own comment.

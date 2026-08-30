@@ -5985,19 +5985,24 @@ static void test_a_same_row_reset_commits_but_a_different_row_does_not(void)
 }
 
 /* THE DIAGONAL DEAD ZONE (app_sand.c's DEPTH_DIAGONAL_DEADZONE_PCT /
- * local_depth_in_deadzone / update_local_depth_axis()'s early return) -
- * mirrored here rather than called into, for the same reason as everything
- * else in this section: update_local_depth_axis() cannot link into this
- * host suite.
+ * local_depth_in_deadzone / local_depth_freeze_active /
+ * update_local_depth_axis()) - mirrored here rather than called into, for
+ * the same reason as everything else in this section:
+ * update_local_depth_axis() cannot link into this host suite.
  *
- * Pins the ONE property the freeze depends on: an axis flip must not be
- * ABLE to happen while inside the (wider) dead zone, even at a ratio that
- * would clear AXIS_HYSTERESIS_PCT's OWN (narrower) threshold - because
- * DEPTH_DIAGONAL_DEADZONE_PCT is deliberately wider than
- * AXIS_HYSTERESIS_PCT, there is a real band of angles where the two
- * disagree, and getting the deadzone check ahead of (rather than after)
- * the Schmitt trigger backwards would silently let a flip through right
- * where the freeze most needs to hold. */
+ * TWO-STEP, not one: an earlier version froze starting the very first
+ * frame inside the dead zone, and device screenshots showed the interior
+ * going visibly FLATTER right at that transition even though the pool's
+ * surface barely changed - traced to STAGGERED PER-COLUMN FREEZE TIMING,
+ * since col_stable_depth[cx] only updates when column cx is actually
+ * dirty, and entering the dead zone during a real, multi-second device
+ * rotation let different columns freeze at different sub-moments of a
+ * still-ongoing resettle. The fix: the ENTRY frame (the first frame
+ * inside the dead zone) stays UNFROZEN and forces a full repaint
+ * (mark_sand_fully_dirty(), app_sand.c - not mirrored here, it touches
+ * gfx/dirty-row state this suite has no view of) so every column gets one
+ * SYNCHRONISED, consistent snapshot before freezing starts - only the
+ * frame AFTER entry actually freezes. */
 static bool mirror_in_deadzone(int ax, int ay)
 {
     const int lo = (ax < ay) ? ax : ay;
@@ -6005,70 +6010,102 @@ static bool mirror_in_deadzone(int ax, int ay)
     return (hi != 0) && (lo * 100 >= hi * (100 - DEPTH_DIAGONAL_DEADZONE_PCT));
 }
 
-/* Mirrors update_local_depth_axis()'s early return: the Schmitt trigger
- * only runs, and only then can `vertical`/`prev_vertical` change, when
- * mirror_in_deadzone() is false. Matches that function's own signature
- * shape (in/out prev_vertical) rather than returning a struct, the same
- * pattern mirror_local_depth_frame() above already uses for the sibling
- * axis-reset mechanism. */
+/* Mirrors update_local_depth_axis()'s three-way split: genuinely outside
+ * the dead zone, the dead zone's own ENTRY frame, or already frozen from a
+ * previous frame - only the last of those skips the Schmitt trigger.
+ * `prev_in_deadzone` is the extra piece of state the two-step design needs
+ * beyond the single-step version this replaces - see this section's own
+ * top comment for why. */
 static void mirror_axis_step(int gx, int gy, bool *prev_vertical,
-                             bool *in_deadzone)
+                             bool *prev_in_deadzone, bool *in_deadzone,
+                             bool *freeze_active)
 {
     const int ax = (gx < 0) ? -gx : gx;
     const int ay = (gy < 0) ? -gy : gy;
-    *in_deadzone = mirror_in_deadzone(ax, ay);
-    if (*in_deadzone) {
+    const bool now = mirror_in_deadzone(ax, ay);
+    const bool entering = now && !*prev_in_deadzone;
+    *in_deadzone = now;
+    *prev_in_deadzone = now;
+
+    if (now && !entering) {
+        *freeze_active = true;
         return;
     }
+    *freeze_active = false;
+
     const bool vertical = *prev_vertical
         ? !(ax * 100 > ay * (100 + AXIS_HYSTERESIS_PCT))
         : (ay * 100 > ax * (100 + AXIS_HYSTERESIS_PCT));
     *prev_vertical = vertical;
 }
 
-static void test_the_axis_cannot_flip_while_inside_the_diagonal_deadzone(void)
+static void test_the_axis_freezes_only_after_the_diagonal_deadzones_entry_frame(void)
 {
     /* Settle on vertical first, comfortably outside both bands - ordinary
      * near-straight-down gravity. */
-    bool vertical = false, in_deadzone = true;
-    mirror_axis_step(0, 1000, &vertical, &in_deadzone);
+    bool vertical = false, prev_in_deadzone = false;
+    bool in_deadzone = true, freeze_active = true;
+    mirror_axis_step(0, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+                     &freeze_active);
     TEST_ASSERT_TRUE_MESSAGE(vertical,
         "setup: near-straight-down gravity must settle on the vertical "
         "axis, or this test is not starting from a real locked-in state");
     TEST_ASSERT_FALSE_MESSAGE(in_deadzone,
         "setup: near-straight-down gravity must read outside the dead "
         "zone, or this test's baseline is already wrong");
+    TEST_ASSERT_FALSE_MESSAGE(freeze_active,
+        "setup: nothing should ever be frozen outside the dead zone");
 
-    /* A gravity reading that WOULD clear AXIS_HYSTERESIS_PCT's own 15%
-     * threshold on its own (ax exceeds ay by exactly 20%, comfortably past
-     * 15) - if the dead zone check were not gating the Schmitt trigger, or
-     * were applied in the wrong order, this would flip the axis to
-     * horizontal. It must NOT: at a 20% margin this is also still inside
-     * DEPTH_DIAGONAL_DEADZONE_PCT's wider 30% band. */
-    mirror_axis_step(1200, 1000, &vertical, &in_deadzone);
+    /* THE ENTRY FRAME: a 20%% margin - clears AXIS_HYSTERESIS_PCT's 15%%
+     * threshold on its own, and is also the FIRST frame inside the wider
+     * 30%% dead zone. Must stay UNFROZEN and let the Schmitt trigger run
+     * normally - freezing before a single synchronised snapshot has been
+     * taken is exactly the staggered-columns bug this two-step design
+     * exists to avoid - so the axis DOES flip here. */
+    mirror_axis_step(1200, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+                     &freeze_active);
     TEST_ASSERT_TRUE_MESSAGE(in_deadzone,
         "setup: a 20%% margin must read INSIDE the wider 30%% dead zone, "
         "or this test is not exercising the disagreement between the two "
         "bands it exists to check");
-    TEST_ASSERT_TRUE_MESSAGE(vertical,
-        "the axis must NOT flip while inside the diagonal dead zone, even "
-        "at a margin that would clear AXIS_HYSTERESIS_PCT's own threshold "
-        "on its own - an axis flip here would memset col_stable_depth[] "
-        "via the reset it guards, destroying the frozen gradient the dead "
-        "zone exists to preserve");
+    TEST_ASSERT_FALSE_MESSAGE(freeze_active,
+        "the ENTRY frame must not freeze yet - it exists specifically to "
+        "let one fresh, synchronised snapshot happen first");
+    TEST_ASSERT_FALSE_MESSAGE(vertical,
+        "the entry frame must still run the Schmitt trigger normally and "
+        "flip if the raw margin genuinely clears AXIS_HYSTERESIS_PCT - "
+        "freezing only starts the frame AFTER this one");
 
-    /* A genuine, clearly non-diagonal sweep - ax exceeding ay by 50%,
-     * outside BOTH bands - must still flip correctly once actually clear
-     * of the dead zone, or the freeze would trap the axis forever instead
-     * of just protecting it near 45 degrees. */
-    mirror_axis_step(1500, 1000, &vertical, &in_deadzone);
+    /* THE FRAME AFTER ENTRY: same gravity again, still inside the dead
+     * zone, but no longer the entry frame - freezing starts here, and the
+     * axis must not move again regardless of what the raw margin would
+     * otherwise allow. */
+    mirror_axis_step(1200, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+                     &freeze_active);
+    TEST_ASSERT_TRUE_MESSAGE(in_deadzone, "setup: still inside the dead zone");
+    TEST_ASSERT_TRUE_MESSAGE(freeze_active,
+        "the SECOND consecutive frame inside the dead zone must freeze - "
+        "the synchronised snapshot the entry frame took is what this and "
+        "every later frame inside the dead zone holds onto");
+    TEST_ASSERT_FALSE_MESSAGE(vertical,
+        "the axis must not move on a frozen frame, whatever the raw "
+        "margin says - it already committed to horizontal on the entry "
+        "frame and must stay there until genuinely outside the dead zone");
+
+    /* EXIT: a genuine, clearly non-diagonal sweep - ax exceeding ay by
+     * 50%%, outside both bands - must resume normal axis tracking. */
+    mirror_axis_step(1500, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+                     &freeze_active);
     TEST_ASSERT_FALSE_MESSAGE(in_deadzone,
         "setup: a 50%% margin must read outside the dead zone, or this "
         "test cannot tell a real recovery from a stuck freeze");
+    TEST_ASSERT_FALSE_MESSAGE(freeze_active,
+        "nothing should be frozen once genuinely outside the dead zone");
     TEST_ASSERT_FALSE_MESSAGE(vertical,
-        "a genuine, clearly non-diagonal tilt must still flip the axis "
-        "once it is actually outside the dead zone - the freeze must "
-        "release, not stick");
+        "once genuinely outside the dead zone the axis must track "
+        "normally again - staying horizontal here is itself the correct "
+        "answer (ax still dominates), confirming the Schmitt trigger "
+        "resumed rather than getting stuck");
 }
 
 /* Mirrors app_sand.c's col_stable_depth[]/col_top_row[] debounce ON TOP OF
@@ -17656,7 +17693,7 @@ void run_sand_suite(void)
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
     RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
     RUN_TEST(test_a_same_row_reset_commits_but_a_different_row_does_not);
-    RUN_TEST(test_the_axis_cannot_flip_while_inside_the_diagonal_deadzone);
+    RUN_TEST(test_the_axis_freezes_only_after_the_diagonal_deadzones_entry_frame);
     RUN_TEST(test_a_continuously_moving_boundary_does_not_run_away);
     RUN_TEST(test_the_debounce_survives_open_air_above_the_pool);
     RUN_TEST(test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below);
