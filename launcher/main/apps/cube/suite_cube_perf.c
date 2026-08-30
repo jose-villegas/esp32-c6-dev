@@ -57,9 +57,8 @@ static const char *TAG = "cube_perf";
 
 /* Frame timing breakdown. int32_t, not int64_t: these are one frame's worth
  * of microseconds, always well under a few hundred thousand, and halving
- * their size matters here - MAX_SAMPLES of these plus stat_scratch below
- * are static, and the diag image's free heap was already close enough to
- * POST's 40 KiB floor that the int64_t version of this file tripped it. */
+ * their size matters here - see samples/stat_scratch's own comment below for
+ * why the two arrays these fields size aren't static any more either. */
 typedef struct {
     int32_t frame_total_us;    /* wall clock per frame */
     int32_t logic_us;          /* cube logic + scene setup */
@@ -91,7 +90,24 @@ typedef struct {
  * without ever paying for the whole 10s of raw samples at once; nothing
  * here needs that precision yet. */
 #define MAX_SAMPLES  128
-static frame_sample_t samples[MAX_SAMPLES];
+
+/* Heap-allocated by cube_perf_fixture() and freed by cube_perf_teardown(),
+ * not static arrays any more - a full selftest run walks every suite in one
+ * boot (see suites.c's suites_run_all(), alphabetical by suite name), and
+ * "cube_perf" sorts ahead of "sand": the ~3 KB these two arrays used to cost
+ * as permanent .bss was, on its own, more than ten times the margin by which
+ * suite_sand.c's REAL_W*REAL_H (184x224, 41216 bytes) test grids missed
+ * their single largest free block on device (40960 bytes measured - a
+ * 256-byte shortfall). That is a static-footprint problem, not the runtime
+ * heap fragmentation it first looked like: a HEAPDIAG capture taken
+ * immediately before and after this suite's own ~20s of rendering showed
+ * the largest free block completely unchanged across it, proving this
+ * suite's *execution* never touches the heap - only its *existence* as
+ * compiled-in .bss did. Freeing these before the suite returns gives that
+ * budget back to every suite that runs after it in the same boot, the same
+ * malloc/free-around-the-test pattern suite_sand.c's own big grids already
+ * use for exactly this reason. */
+static frame_sample_t *samples = NULL;
 static int sample_count = 0;
 
 static int cmp_i32(const void *a, const void *b)
@@ -141,8 +157,9 @@ typedef struct {
  * array per field, which is what overflowed the main task's stack when it
  * was five stack-local arrays, and starved gfx's own allocations when
  * moved to five static ones instead. One reused buffer costs a fifth of
- * either. */
-static int32_t stat_scratch[MAX_SAMPLES];
+ * either - heap-allocated now alongside samples above, for the same
+ * reason. */
+static int32_t *stat_scratch = NULL;
 
 static phase_stats_t compute_stats(sample_field_t field, int n)
 {
@@ -181,6 +198,21 @@ static void cube_perf_fixture(void)
      * right after this returns, since which state each is in is exactly
      * the thing being compared from one test to the next. */
 
+    /* Heap-allocated, not static - see samples's own comment above. Freed
+     * by cube_perf_teardown(), called at the end of every test that calls
+     * this fixture. */
+    samples = malloc(sizeof(frame_sample_t) * MAX_SAMPLES);
+    stat_scratch = malloc(sizeof(int32_t) * MAX_SAMPLES);
+    if (samples == NULL || stat_scratch == NULL) {
+        free(samples);
+        free(stat_scratch);
+        samples = NULL;
+        stat_scratch = NULL;
+        TEST_FAIL_MESSAGE("need samples and stat_scratch buffers for the "
+                           "cube perf capture, and at least one of the two "
+                           "failed to allocate");
+    }
+
     sample_count = 0;
 }
 
@@ -197,6 +229,11 @@ static void cube_perf_teardown(void)
      * this suite ran on device: interlace's carried-over dirty bits made
      * an otherwise-unchanged frame look like it still had pixels to send. */
     gfx_set_interlace(false);
+
+    free(samples);
+    free(stat_scratch);
+    samples = NULL;
+    stat_scratch = NULL;
 }
 
 /* Nothing pressed, no touch - draw_fps() feeds this straight into
