@@ -6056,41 +6056,43 @@ static void test_the_axis_freezes_only_after_the_diagonal_deadzones_entry_frame(
     TEST_ASSERT_FALSE_MESSAGE(freeze_active,
         "setup: nothing should ever be frozen outside the dead zone");
 
-    /* THE ENTRY FRAME: a 20%% margin - clears AXIS_HYSTERESIS_PCT's 15%%
-     * threshold on its own, and is also the FIRST frame inside the wider
-     * 30%% dead zone. Must stay UNFROZEN and let the Schmitt trigger run
-     * normally - freezing before a single synchronised snapshot has been
-     * taken is exactly the staggered-columns bug this two-step design
-     * exists to avoid - so the axis DOES flip here. */
-    mirror_axis_step(1200, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+    /* THE ENTRY FRAME: a 5%% margin - comfortably inside
+     * DEPTH_DIAGONAL_DEADZONE_PCT's 10%% band (ratio >= 0.90) and the
+     * FIRST such frame. NOTE this is deliberately well UNDER
+     * AXIS_HYSTERESIS_PCT's 15%% flip threshold - unlike an earlier
+     * version of this test, the two bands no longer overlap at all now
+     * that the dead zone shrank to 10%% (see sand.h's own comment on why
+     * they never needed to relate in the first place), so there is no
+     * margin left that is simultaneously "inside the dead zone" and
+     * "would clear the Schmitt trigger on its own" to exercise - this
+     * frame's own vertical reading would come out the same whether the
+     * trigger ran or was skipped. What IS still independently observable,
+     * and what this test actually pins, is freeze_active's own timing. */
+    mirror_axis_step(950, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
                      &freeze_active);
     TEST_ASSERT_TRUE_MESSAGE(in_deadzone,
-        "setup: a 20%% margin must read INSIDE the wider 30%% dead zone, "
-        "or this test is not exercising the disagreement between the two "
-        "bands it exists to check");
+        "setup: a 5%% margin must read INSIDE the 10%% dead zone, or this "
+        "test is not exercising the entry transition it claims to");
     TEST_ASSERT_FALSE_MESSAGE(freeze_active,
         "the ENTRY frame must not freeze yet - it exists specifically to "
         "let one fresh, synchronised snapshot happen first");
-    TEST_ASSERT_FALSE_MESSAGE(vertical,
-        "the entry frame must still run the Schmitt trigger normally and "
-        "flip if the raw margin genuinely clears AXIS_HYSTERESIS_PCT - "
-        "freezing only starts the frame AFTER this one");
+    TEST_ASSERT_TRUE_MESSAGE(vertical,
+        "setup: 950 does not clear AXIS_HYSTERESIS_PCT's 15%% threshold "
+        "against 1000, so this stays vertical regardless of whether the "
+        "entry frame's Schmitt trigger ran or was skipped - not what this "
+        "assertion is about, see freeze_active just above for that");
 
     /* THE FRAME AFTER ENTRY: same gravity again, still inside the dead
-     * zone, but no longer the entry frame - freezing starts here, and the
-     * axis must not move again regardless of what the raw margin would
-     * otherwise allow. */
-    mirror_axis_step(1200, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
+     * zone, but no longer the entry frame - freezing starts here. */
+    mirror_axis_step(950, 1000, &vertical, &prev_in_deadzone, &in_deadzone,
                      &freeze_active);
     TEST_ASSERT_TRUE_MESSAGE(in_deadzone, "setup: still inside the dead zone");
     TEST_ASSERT_TRUE_MESSAGE(freeze_active,
         "the SECOND consecutive frame inside the dead zone must freeze - "
         "the synchronised snapshot the entry frame took is what this and "
         "every later frame inside the dead zone holds onto");
-    TEST_ASSERT_FALSE_MESSAGE(vertical,
-        "the axis must not move on a frozen frame, whatever the raw "
-        "margin says - it already committed to horizontal on the entry "
-        "frame and must stay there until genuinely outside the dead zone");
+    TEST_ASSERT_TRUE_MESSAGE(vertical,
+        "the axis must not move on a frozen frame");
 
     /* EXIT: a genuine, clearly non-diagonal sweep - ax exceeding ay by
      * 50%%, outside both bands - must resume normal axis tracking. */

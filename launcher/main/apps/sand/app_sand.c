@@ -1189,20 +1189,19 @@ static bool local_depth_prev_axis_vertical;
  * why: suite_sand.c's host tests need the real value, not a hand-copied
  * duplicate. */
 
-/* THE DIAGONAL DEAD ZONE - a second, wider band around the 45 degree tie
- * point where LOCAL DEPTH FREEZES instead of updating, rather than a band
- * count that is TECHNICALLY stable (AXIS_HYSTERESIS_PCT above already
- * stops it chattering) but visibly WRONG: the single-dominant-axis
- * approximation (see LOCAL DEPTH's own top comment, "The one
- * simplification this DOES still make") paints bands running horizontally
- * or vertically, and a pool tilted anywhere near 45 degrees has a genuinely
- * DIAGONAL surface - so the bands visibly cut across it at the wrong angle,
- * confirmed on device (a triangular pool near 45 degrees, horizontal bands
- * running straight through its diagonal edge). Fixing the approximation
- * itself (bracketing gravity with two rays the way build_xflow() does for
- * the simulation's own movement) was considered and rejected as separate,
- * more invasive work - touching the walk's geometry rather than gating its
- * output.
+/* THE DIAGONAL DEAD ZONE - a band around the 45 degree tie point where
+ * LOCAL DEPTH FREEZES instead of updating, rather than a band that is
+ * TECHNICALLY stable (AXIS_HYSTERESIS_PCT above already stops it
+ * chattering) but visibly WRONG: the single-dominant-axis approximation
+ * (see LOCAL DEPTH's own top comment, "The one simplification this DOES
+ * still make") paints bands running horizontally or vertically, and a pool
+ * tilted anywhere near 45 degrees has a genuinely DIAGONAL surface - so the
+ * bands visibly cut across it at the wrong angle, confirmed on device (a
+ * triangular pool near 45 degrees, horizontal bands running straight
+ * through its diagonal edge). Fixing the approximation itself (bracketing
+ * gravity with two rays the way build_xflow() does for the simulation's
+ * own movement) was considered and rejected as separate, more invasive
+ * work - touching the walk's geometry rather than gating its output.
  *
  * FREEZES, DOES NOT FLATTEN - deliberately not the same "force depth 255"
  * fallback col_stable_depth[]'s own comment describes the reverted
@@ -1214,10 +1213,11 @@ static bool local_depth_prev_axis_vertical;
  * col_stable_depth[cx] simply stops being written while in the dead zone -
  * see paint_row_n()'s own vertical branch below for where that happens -
  * so it keeps reading out whatever it last held. update_local_depth_axis()
- * below also freezes local_depth_axis_vertical/_reverse themselves (an
- * axis flip while frozen would wipe col_stable_depth[] out from under the
- * freeze via the reset a few lines below - the exact failure this dead
- * zone exists to avoid, just reached a different way).
+ * below also freezes local_depth_axis_vertical/_reverse themselves once
+ * local_depth_freeze_active is true (an axis flip while frozen would wipe
+ * col_stable_depth[] out from under the freeze via the reset a few lines
+ * below - the exact failure this dead zone exists to avoid, just reached a
+ * different way).
  *
  * NOT the horizontal-dominant case: h_running_depth has no cross-call state
  * to freeze (see its own comment), so a column that entered the dead zone
@@ -1225,20 +1225,37 @@ static bool local_depth_prev_axis_vertical;
  * walk throughout - no worse than it already was outside the dead zone,
  * and no gradient lost either, just not specially protected here.
  *
- * WIDER than AXIS_HYSTERESIS_PCT on purpose: hysteresis only has to stop
- * two WRONG-LOOKING regimes from alternating with each other, which is a
- * near-instant win at any margin past the wobble that caused it. This has
- * a different job - hiding a regime that reads visibly wrong to a human
- * eye - and a first guess doubling the hysteresis band is deliberately
- * generous rather than tight, on the assumption that a dead zone slightly
- * too narrow (bands still occasionally look wrong) is worse than one
- * slightly too wide (a slightly larger span where the gradient just holds
- * still, which reads as normal water rather than as a bug). Move this
- * first if the diagonal artifact still shows on device (raise it) or the
- * freeze reads as lasting too long across ordinary handling (lower it) -
- * not measured against a wobble model the way AXIS_HYSTERESIS_PCT's 15
- * was, because the failure mode here is "looks wrong to a human", not
- * "flips N% of frames", which a synthetic wobble model cannot judge.
+ * SHRUNK TO 10%% (+/-3 degrees, ~6 degrees total - was 30%%, +/-10 degrees)
+ * after device evidence showed freezing alone, even with the synchronised-
+ * snapshot fix (local_depth_freeze_active's own comment), was not enough:
+ * captures around a sudden tilt (screenshot_20260830_18533x-18534x, all
+ * with the new diagnostic JSON attached) showed the interior ALREADY
+ * reading flat on frames immediately BEFORE the dead zone was even
+ * entered (local_depth_in_deadzone still false) - not a freeze bug at all,
+ * but col_stable_depth[]'s own debounce doing exactly what it is designed
+ * to do: a cell needs the SAME row to ask for a reset on two consecutive
+ * painted frames before committing (col_top_row[]'s own comment), so
+ * during active, fast resettling - most of a sudden tilt's own duration -
+ * most cells are legitimately still HELD, not yet committed, and read
+ * under-developed almost everywhere. The dead zone's freeze does not
+ * cause that; it just LOCKS IN whichever half-developed moment gravity
+ * happened to cross the threshold on, for as long as gravity stays near
+ * the diagonal.
+ *
+ * A narrower dead zone does NOT fix the debounce's own startup lag - the
+ * real fix would need the freeze to wait for the walk to actually settle
+ * before locking anything in, not just take one snapshot on entry, and
+ * that is a genuinely different (and bigger) piece of work, not done
+ * here. What shrinking DOES buy: less often does a sweep happen to land
+ * in the affected window at all, and less long does any bad snapshot it
+ * does catch stay visible before gravity clears the (now much narrower)
+ * band on its own. A probabilistic mitigation, not a fix for the
+ * debounce's own lag - reduces the SYMPTOM's frequency and duration, the
+ * same "hardcoding around a precision error rather than fixing the
+ * precision" trade already named for this whole mechanism. Move this
+ * first if the flat freeze still shows often enough to bother (lower it
+ * further) or the wrong-axis-band artifact this dead zone exists to hide
+ * becomes noticeable again at the new, narrower width (raise it).
  *
  * DECLARED IN sand.h, not here - same reason as AXIS_HYSTERESIS_PCT just
  * above: suite_sand.c's host tests need the real value. */
@@ -1278,7 +1295,15 @@ static bool local_depth_in_deadzone;
  * frame - a single consistent snapshot, not a staggered one - and this
  * only becomes true starting the NEXT frame, freezing THAT snapshot rather
  * than whatever staggered mess was already sitting in col_stable_depth[]
- * from before the dead zone was ever entered. */
+ * from before the dead zone was ever entered.
+ *
+ * FIXES THE STAGGERING, NOT THE OTHER ROOT CAUSE - a single fresh snapshot
+ * is still only as good as what the walk itself has managed to settle by
+ * that one frame, and during a sudden tilt most cells are still legitimately
+ * HELD (col_top_row[]'s own two-consecutive-frames rule), not committed, so
+ * a synchronised snapshot taken mid-resettle can still be a synchronised
+ * FLAT one. See DEPTH_DIAGONAL_DEADZONE_PCT's own comment (sand.h /
+ * app_sand.c) for that second finding and the width shrink it led to. */
 static bool local_depth_freeze_active;
 
 /* Last frame's local_depth_in_deadzone, kept only to detect the entry
