@@ -28,9 +28,10 @@
 #include "app.h"
 #include "ui/ui.h"
 
-/* app_cube.c's own toggle - forced true in the fixture below so a stray
- * BOOT-menu setting left over from manual testing can never silently skew
- * a perf run. */
+/* app_cube.c's own toggle - each test sets this explicitly (see
+ * run_perf_capture()'s with_partial parameter) rather than trusting
+ * whatever a stray BOOT-menu press left it at, since which state it is in
+ * is exactly what several of these tests compare. */
 extern bool partial_updates;
 
 /* app_cube.c's three per-frame phases plus its enter/exit, all exposed
@@ -175,11 +176,10 @@ static void cube_perf_fixture(void)
     /* Use the app's own enter to set up cube, scene, etc. */
     cube_enter();
 
-    /* Force partial updates on regardless of whatever the BOOT menu was
-     * last left at - cube_clear_frame() reads this flag itself, so this is
-     * the one place that has to guarantee it rather than trusting ambient
-     * state. */
-    partial_updates = true;
+    /* partial_updates is deliberately NOT forced here - callers set it
+     * explicitly (run_perf_capture() takes it as a parameter) rather than
+     * trusting a fixture default, since which state it should be in is
+     * exactly the thing being compared from one test to the next. */
     gfx_set_interlace(false);
 
     sample_count = 0;
@@ -205,15 +205,18 @@ static void cube_perf_teardown(void)
  * (zeroed) input_t is required here, not NULL. */
 static const input_t null_input = { 0 };
 
-/* Runs the 10-second capture and writes /spiffs/cube_perf_<label>_<ts>.md.
+/* Runs the 10-second capture and logs the resulting breakdown under `label`.
  * `with_hud` toggles the one line real cube_frame() always pays for -
  * draw_fps() - timed as its own phase so a with/without run shows exactly
  * what the HUD text costs, rather than folding it silently into whichever
- * phase happened to run next. */
-static void run_perf_capture(const char *label, bool with_hud)
+ * phase happened to run next. `with_partial` toggles cube_clear_frame()'s
+ * own partial-clear path (see cube_perf_fixture()'s comment) - this is the
+ * branch's actual optimization, so it gets the same on/off comparison. */
+static void run_perf_capture(const char *label, bool with_hud, bool with_partial)
 {
     cube_perf_fixture();
-    
+    partial_updates = with_partial;
+
     int64_t test_start = esp_timer_get_time();
     int64_t next_frame_due = test_start;
 
@@ -288,86 +291,55 @@ static void run_perf_capture(const char *label, bool with_hud)
     phase_stats_t hud   = compute_stats(FIELD_HUD, valid);
     phase_stats_t pres  = compute_stats(FIELD_PRESENT, valid);
 
-    /* --- OUTPUT MARKDOWN REPORT --- */
-    char report_path[128];
-    snprintf(report_path, sizeof(report_path),
-             "/spiffs/cube_perf_%s_%lld.md", label,
-             (long long)(test_start / 1000000));
-
-    FILE *f = fopen(report_path, "w");
-    if (f) {
-        fprintf(f, "# Cube App Performance Report (%s)\n\n", label);
-        fprintf(f, "Captured: %lld frames over %d seconds\n\n", (long long)sample_count, SAMPLE_SECONDS);
-
-        fprintf(f, "## Frame Total (wall clock)\n");
-        fprintf(f, "| Stat | us | fps |\n");
-        fprintf(f, "|---|---:|---:|\n");
-        fprintf(f, "| Min | %lld | %.1f |\n", (long long)total.min, 1000000.0 / total.min);
-        fprintf(f, "| Max | %lld | %.1f |\n", (long long)total.max, 1000000.0 / total.max);
-        fprintf(f, "| Average | %lld | %.1f |\n", (long long)total.avg, 1000000.0 / total.avg);
-        fprintf(f, "| Median | %lld | %.1f |\n", (long long)total.med, 1000000.0 / total.med);
-        fprintf(f, "| P95 | %lld | %.1f |\n\n", (long long)total.p95, 1000000.0 / total.p95);
-
-        fprintf(f, "## Breakdown\n");
-        fprintf(f, "| Phase | Min | Max | Avg | Median | P95 |\n");
-        fprintf(f, "|---|---:|---:|---:|---:|---:|\n");
-        fprintf(f, "| Logic | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)logic.min, (long long)logic.max, (long long)logic.avg,
-                (long long)logic.med, (long long)logic.p95);
-        fprintf(f, "| Rasterize | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)rast.min, (long long)rast.max, (long long)rast.avg,
-                (long long)rast.med, (long long)rast.p95);
-        fprintf(f, "| HUD (draw_fps) | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)hud.min, (long long)hud.max, (long long)hud.avg,
-                (long long)hud.med, (long long)hud.p95);
-        fprintf(f, "| Present | %lld | %lld | %lld | %lld | %lld |\n",
-                (long long)pres.min, (long long)pres.max, (long long)pres.avg,
-                (long long)pres.med, (long long)pres.p95);
-        fprintf(f, "| **Total** | %lld | %lld | %lld | %lld | %lld |\n\n",
-                (long long)total.min, (long long)total.max, (long long)total.avg,
-                (long long)total.med, (long long)total.p95);
-
-        fprintf(f, "## Frame Budget vs Target (60 fps = 16667 us)\n");
-        fprintf(f, "| Phase | Budget %% (avg) |\n");
-        fprintf(f, "|---|---:|\n");
-        fprintf(f, "| Logic | %.1f%% |\n", (double)logic.avg / 16667.0 * 100.0);
-        fprintf(f, "| Rasterize | %.1f%% |\n", (double)rast.avg / 16667.0 * 100.0);
-        fprintf(f, "| HUD (draw_fps) | %.1f%% |\n", (double)hud.avg / 16667.0 * 100.0);
-        fprintf(f, "| Present | %.1f%% |\n", (double)pres.avg / 16667.0 * 100.0);
-        fprintf(f, "| **Total** | %.1f%% |\n\n", (double)total.avg / 16667.0 * 100.0);
-
-        fclose(f);
-        ESP_LOGI(TAG, "Report written to %s", report_path);
-    } else {
-        ESP_LOGW(TAG, "Could not open %s for writing (SPIFFS not mounted?)", report_path);
-    }
-
-    /* Also log to console for immediate visibility. */
-    ESP_LOGI(TAG, "=== CUBE PERF %s (%d frames) ===", label, sample_count);
-    ESP_LOGI(TAG, "Total:   avg=%lldus med=%lldus p95=%lldus  (%.1f/%.1f/%.1f fps)",
-             (long long)total.avg, (long long)total.med, (long long)total.p95,
+    /* --- LOG THE REPORT --- */
+    /* Console only - this project has no mounted filesystem to write a
+     * persistent report to (no SPIFFS partition exists, and the SD card is
+     * unmounted again right after POST to free the SPI2 bus the display
+     * needs - see post.c). ESP_LOGI is what every other perf tool in this
+     * codebase already reports through (e.g. suite_sand.c's own budget
+     * tests), captured the same way by tools/capture_selftest.py. */
+    ESP_LOGI(TAG, "=== CUBE PERF %s (%lld frames over %ds) ===",
+             label, (long long)sample_count, SAMPLE_SECONDS);
+    ESP_LOGI(TAG, "Total:   min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f/%.1f/%.1f fps)",
+             (long long)total.min, (long long)total.max, (long long)total.avg,
+             (long long)total.med, (long long)total.p95,
              1000000.0/total.avg, 1000000.0/total.med, 1000000.0/total.p95);
-    ESP_LOGI(TAG, "Logic:   avg=%lldus med=%lldus (%.1f%%)",
-             (long long)logic.avg, (long long)logic.med, (double)logic.avg/total.avg*100);
-    ESP_LOGI(TAG, "Raster:  avg=%lldus med=%lldus (%.1f%%)",
-             (long long)rast.avg, (long long)rast.med, (double)rast.avg/total.avg*100);
-    ESP_LOGI(TAG, "HUD:     avg=%lldus med=%lldus (%.1f%%)",
-             (long long)hud.avg, (long long)hud.med, (double)hud.avg/total.avg*100);
-    ESP_LOGI(TAG, "Present: avg=%lldus med=%lldus (%.1f%%)",
-             (long long)pres.avg, (long long)pres.med, (double)pres.avg/total.avg*100);
+    ESP_LOGI(TAG, "Logic:   min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
+             (long long)logic.min, (long long)logic.max, (long long)logic.avg,
+             (long long)logic.med, (long long)logic.p95, (double)logic.avg/total.avg*100);
+    ESP_LOGI(TAG, "Raster:  min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
+             (long long)rast.min, (long long)rast.max, (long long)rast.avg,
+             (long long)rast.med, (long long)rast.p95, (double)rast.avg/total.avg*100);
+    ESP_LOGI(TAG, "HUD:     min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
+             (long long)hud.min, (long long)hud.max, (long long)hud.avg,
+             (long long)hud.med, (long long)hud.p95, (double)hud.avg/total.avg*100);
+    ESP_LOGI(TAG, "Present: min=%lldus max=%lldus avg=%lldus med=%lldus p95=%lldus (%.1f%%)",
+             (long long)pres.min, (long long)pres.max, (long long)pres.avg,
+             (long long)pres.med, (long long)pres.p95, (double)pres.avg/total.avg*100);
 
     cube_perf_teardown();
 }
 
 void test_cube_performance_over_10s(void)
 {
-    run_perf_capture("with_hud", true);
+    run_perf_capture("with_hud", true, true);
     TEST_PASS();
 }
 
 void test_cube_performance_over_10s_no_hud(void)
 {
-    run_perf_capture("no_hud", false);
+    run_perf_capture("no_hud", false, true);
+    TEST_PASS();
+}
+
+/* partial_updates off - a full gfx_clear() and a full-frame present every
+ * frame, same as any other app that never turns partial_updates on. This
+ * is the actual comparison the branch's own optimization needs: on/off
+ * for HUD only ever changes the HUD phase, but partial_updates changes
+ * both Logic (the clear) and Present (what gfx_present() finds dirty). */
+void test_cube_performance_full_clear(void)
+{
+    run_perf_capture("full_clear", true, false);
     TEST_PASS();
 }
 
@@ -375,8 +347,9 @@ void test_cube_performance_over_10s_no_hud(void)
 void test_cube_performance_interlaced(void)
 {
     cube_perf_fixture();
+    partial_updates = true;
     gfx_set_interlace(true);
-    
+
     /* Quick 100-frame sample instead of 10s. */
     sample_count = 0;
 
@@ -412,6 +385,7 @@ void run_cube_perf_suite(void)
 {
     RUN_TEST(test_cube_performance_over_10s);
     RUN_TEST(test_cube_performance_over_10s_no_hud);
+    RUN_TEST(test_cube_performance_full_clear);
     RUN_TEST(test_cube_performance_interlaced);
 }
 
