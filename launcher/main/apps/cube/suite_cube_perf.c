@@ -176,11 +176,10 @@ static void cube_perf_fixture(void)
     /* Use the app's own enter to set up cube, scene, etc. */
     cube_enter();
 
-    /* partial_updates is deliberately NOT forced here - callers set it
-     * explicitly (run_perf_capture() takes it as a parameter) rather than
-     * trusting a fixture default, since which state it should be in is
-     * exactly the thing being compared from one test to the next. */
-    gfx_set_interlace(false);
+    /* Neither partial_updates nor gfx_set_interlace() is forced here -
+     * run_perf_capture() sets both explicitly from its own parameters
+     * right after this returns, since which state each is in is exactly
+     * the thing being compared from one test to the next. */
 
     sample_count = 0;
 }
@@ -205,17 +204,24 @@ static void cube_perf_teardown(void)
  * (zeroed) input_t is required here, not NULL. */
 static const input_t null_input = { 0 };
 
-/* Runs the 10-second capture and logs the resulting breakdown under `label`.
+/* Runs the 10-second capture and logs the resulting breakdown. The label is
+ * generated from the three toggles themselves (see run_perf_variant()) so
+ * every run states its own configuration rather than a name someone has to
+ * remember to keep in sync with what the test actually does.
+ *
  * `with_hud` toggles the one line real cube_frame() always pays for -
  * draw_fps() - timed as its own phase so a with/without run shows exactly
  * what the HUD text costs, rather than folding it silently into whichever
  * phase happened to run next. `with_partial` toggles cube_clear_frame()'s
- * own partial-clear path (see cube_perf_fixture()'s comment) - this is the
- * branch's actual optimization, so it gets the same on/off comparison. */
-static void run_perf_capture(const char *label, bool with_hud, bool with_partial)
+ * own partial-clear path, and `with_interlace` toggles gfx_present()'s -
+ * both are this branch's actual optimizations, so both get the same
+ * on/off comparison the HUD does. */
+static void run_perf_capture(const char *label, bool with_hud, bool with_partial,
+                             bool with_interlace)
 {
     cube_perf_fixture();
     partial_updates = with_partial;
+    gfx_set_interlace(with_interlace);
 
     int64_t test_start = esp_timer_get_time();
     int64_t next_frame_due = test_start;
@@ -320,72 +326,63 @@ static void run_perf_capture(const char *label, bool with_hud, bool with_partial
     cube_perf_teardown();
 }
 
-void test_cube_performance_over_10s(void)
+/* Builds a label that states all three toggles explicitly - e.g.
+ * "hud_on_partial_on_interlace_off" - rather than a name someone has to
+ * remember to keep in sync with what the test actually configures, and
+ * runs the capture under it. Every test below is one line calling this
+ * with the one thing it is isolating flipped off from the all-on
+ * baseline, so the label is never a surprise. */
+static void run_perf_variant(bool with_hud, bool with_partial, bool with_interlace)
 {
-    run_perf_capture("with_hud", true, true);
+    char label[48];
+    snprintf(label, sizeof label, "hud_%s_partial_%s_interlace_%s",
+             with_hud ? "on" : "off",
+             with_partial ? "on" : "off",
+             with_interlace ? "on" : "off");
+    run_perf_capture(label, with_hud, with_partial, with_interlace);
+}
+
+/* Baseline: everything this branch adds turned on, matching app_cube.c's
+ * own real defaults (partial_updates starts true; interlace is a
+ * diagnostics-only toggle, off unless a developer turns it on). */
+void test_cube_performance_baseline(void)
+{
+    run_perf_variant(true, true, false);
     TEST_PASS();
 }
 
-void test_cube_performance_over_10s_no_hud(void)
+/* Isolates draw_fps()'s own cost - only Present (and the phase named HUD
+ * itself) should move relative to the baseline. */
+void test_cube_performance_no_hud(void)
 {
-    run_perf_capture("no_hud", false, true);
+    run_perf_variant(false, true, false);
     TEST_PASS();
 }
 
-/* partial_updates off - a full gfx_clear() and a full-frame present every
- * frame, same as any other app that never turns partial_updates on. This
- * is the actual comparison the branch's own optimization needs: on/off
- * for HUD only ever changes the HUD phase, but partial_updates changes
- * both Logic (the clear) and Present (what gfx_present() finds dirty). */
-void test_cube_performance_full_clear(void)
+/* Isolates partial_updates: a full gfx_clear() and a full-frame present
+ * every frame, same as any other app that never turns it on. This is the
+ * branch's actual headline optimization, so Logic (the clear) and Present
+ * (what gfx_present() finds dirty) are both expected to move. */
+void test_cube_performance_no_partial(void)
 {
-    run_perf_capture("full_clear", true, false);
+    run_perf_variant(true, false, false);
     TEST_PASS();
 }
 
-/* Additional test: measure with interlace mode enabled. */
+/* Isolates interlace: gfx_present() skips half the dirty strips each
+ * frame, sending the other half next frame instead - Present should drop
+ * accordingly with partial_updates still on underneath it. */
 void test_cube_performance_interlaced(void)
 {
-    cube_perf_fixture();
-    partial_updates = true;
-    gfx_set_interlace(true);
-
-    /* Quick 100-frame sample instead of 10s. */
-    sample_count = 0;
-
-    for (int i = 0; i < 100 && sample_count < MAX_SAMPLES; i++) {
-        int64_t frame_start = esp_timer_get_time();
-
-        cube_update_rotation(16);  /* ~60fps target */
-        cube_clear_frame();
-        cube_rasterize_frame();
-        gfx_present();
-
-        samples[sample_count].frame_total_us = (int32_t)(esp_timer_get_time() - frame_start);
-        sample_count++;
-    }
-    
-    int64_t total_sum = 0, total_min = INT64_MAX, total_max = 0;
-    for (int i = 0; i < sample_count; i++) {
-        int64_t t = samples[i].frame_total_us;
-        total_sum += t;
-        if (t < total_min) total_min = t;
-        if (t > total_max) total_max = t;
-    }
-    int64_t total_avg = total_sum / sample_count;
-    
-    ESP_LOGI(TAG, "INTERLACED (100 frames): avg=%lldus (%.1f fps) min=%lld max=%lld",
-             (long long)total_avg, 1000000.0/total_avg, (long long)total_min, (long long)total_max);
-    
-    cube_perf_teardown();
+    run_perf_variant(true, true, true);
     TEST_PASS();
 }
 
 void run_cube_perf_suite(void)
 {
-    RUN_TEST(test_cube_performance_over_10s);
-    RUN_TEST(test_cube_performance_over_10s_no_hud);
-    RUN_TEST(test_cube_performance_full_clear);
+    RUN_TEST(test_cube_performance_baseline);
+    RUN_TEST(test_cube_performance_no_hud);
+    RUN_TEST(test_cube_performance_no_partial);
     RUN_TEST(test_cube_performance_interlaced);
 }
 
