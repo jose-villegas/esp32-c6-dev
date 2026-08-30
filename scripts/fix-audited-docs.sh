@@ -86,6 +86,37 @@ extract_content_js='
   process.stdout.write(envelope.choices[0].message.content);
 '
 
+# A model-written find/replace string can itself contain "[" or "]" (e.g.
+# markdown link syntax), so naive indexOf/lastIndexOf on brackets is not
+# reliable. This scans from the first "[" and tracks bracket depth while
+# skipping over string literals (respecting escapes), to find the true
+# matching close of the outer array. Written to a file so both parsing
+# steps below can require() it without re-embedding the same logic twice.
+cat > "$TMPDIR/extract-array.js" << "JSEOF"
+function extractJsonArray(text) {
+  const startIdx = text.indexOf("[");
+  if (startIdx === -1) return null;
+  let depth = 0, inStr = false, esc = false;
+  for (let i = startIdx; i < text.length; i++) {
+    const c = text[i];
+    if (inStr) {
+      if (esc) esc = false;
+      else if (c === "\\") esc = true;
+      else if (c === "\"") inStr = false;
+      continue;
+    }
+    if (c === "\"") { inStr = true; continue; }
+    if (c === "[") depth++;
+    else if (c === "]") {
+      depth--;
+      if (depth === 0) return text.slice(startIdx, i + 1);
+    }
+  }
+  return null;
+}
+module.exports = { extractJsonArray };
+JSEOF
+
 for doc in "${FILES_WITH_FINDINGS[@]}"; do
   [ -f "$doc" ] || continue
   echo ""
@@ -142,13 +173,13 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
 
   node -e '
     const fs = require("fs");
-    const [, , contentFile, docPath, patchesFile] = process.argv;
+    const [, , extractorPath, contentFile, docPath, patchesFile] = process.argv;
+    const { extractJsonArray } = require(extractorPath);
     const text = fs.readFileSync(contentFile, "utf8");
-    const start = text.indexOf("[");
-    const end = text.lastIndexOf("]");
-    if (start === -1 || end === -1) { console.error("  no JSON array found in response"); process.exit(0); }
+    const slice = extractJsonArray(text);
+    if (!slice) { console.error("  no JSON array found in response"); process.exit(0); }
     let arr;
-    try { arr = JSON.parse(text.slice(start, end + 1)); }
+    try { arr = JSON.parse(slice); }
     catch (e) { console.error("  could not parse JSON: " + e.message); process.exit(0); }
 
     const docContent = fs.readFileSync(docPath, "utf8");
@@ -163,7 +194,7 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
       all.push({ file: docPath, find: p.find, replace: p.replace });
     }
     fs.writeFileSync(patchesFile, JSON.stringify(all));
-  ' "$TMPDIR/fix_content.txt" "$doc" "$PATCHES"
+  ' "$TMPDIR/extract-array.js" "$TMPDIR/fix_content.txt" "$doc" "$PATCHES"
 done
 
 PATCH_COUNT=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).length)' "$PATCHES")
@@ -202,13 +233,14 @@ if [ -n "$REVIEW_MODEL" ]; then
 
   node -e '
     const fs = require("fs");
-    const [, , contentFile, patchesFile] = process.argv;
+    const [, , extractorPath, contentFile, patchesFile] = process.argv;
+    const { extractJsonArray } = require(extractorPath);
     const text = fs.readFileSync(contentFile, "utf8");
-    const s = text.indexOf("["), e = text.lastIndexOf("]");
+    const slice = extractJsonArray(text);
     const all = JSON.parse(fs.readFileSync(patchesFile, "utf8"));
-    if (s === -1 || e === -1) { console.error("no JSON verdicts found, keeping all patches unreviewed"); process.exit(0); }
+    if (!slice) { console.error("no JSON verdicts found, keeping all patches unreviewed"); process.exit(0); }
     let verdicts;
-    try { verdicts = JSON.parse(text.slice(s, e + 1)); }
+    try { verdicts = JSON.parse(slice); }
     catch (err) { console.error("could not parse verdicts, keeping all patches unreviewed"); process.exit(0); }
     const byIndex = new Map(verdicts.map(v => [v.index, v]));
     const kept = [];
@@ -222,7 +254,7 @@ if [ -n "$REVIEW_MODEL" ]; then
     });
     fs.writeFileSync(patchesFile, JSON.stringify(kept));
     console.error(`${kept.length}/${all.length} patch(es) passed review.`);
-  ' "$TMPDIR/review_content.txt" "$PATCHES"
+  ' "$TMPDIR/extract-array.js" "$TMPDIR/review_content.txt" "$PATCHES"
 
   PATCH_COUNT=$(node -e 'console.log(JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).length)' "$PATCHES")
   if [ "$PATCH_COUNT" -eq 0 ]; then
