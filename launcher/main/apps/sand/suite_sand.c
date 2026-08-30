@@ -2458,9 +2458,20 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
      * landing, gated to a genuine fall (open space one step above) rather
      * than ordinary internal levelling. */
     enum { CX = 1, POOL_TOP = 6, SURFACE_MASS = MASS_MAX / 2 };
-    impulse_t drop_impulse_buf[SPLASH_W * SPLASH_H];
+    /* Sized well past exact_disc_count(SAND_SPLASH_RADIUS_WATER) (sand.c),
+     * NOT SPLASH_W * SPLASH_H - the disc this call seeds is a property of
+     * the RADIUS, not of this tiny 3-wide grid, and a buffer only as big
+     * as the grid's own cell count starved queue_outward_impulse()'s own
+     * thinning: `keep = min(disc_count, room)` came out buffer-limited,
+     * and thinning spread those few kept slots evenly across the WHOLE
+     * untrimmed disc - most of which falls off a grid this narrow - so
+     * every kept slot could land out of bounds and nothing ever queued,
+     * even though the trigger itself (chance, radius) fired correctly.
+     * 1024 comfortably covers today's radius with headroom for tuning it
+     * further without silently reintroducing the same starvation. */
+    impulse_t drop_impulse_buf[1024];
     sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
-    sand_enable_impulses(&splash_sim, drop_impulse_buf, SPLASH_W * SPLASH_H);
+    sand_enable_impulses(&splash_sim, drop_impulse_buf, 1024);
 
     for (int y = POOL_TOP + 1; y < SPLASH_H; y++) {
         for (int x = 0; x < SPLASH_W; x++) {
@@ -2489,6 +2500,88 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
     TEST_ASSERT_TRUE_MESSAGE(queued,
         "a drop that fell through open space and landed on an existing "
         "puddle's surface must queue a small directed impulse");
+}
+
+#define CRATER_W 11
+#define CRATER_H 12
+static uint8_t crater_cells[CRATER_W * CRATER_H];
+static sand_t  crater_sim;
+
+static void test_a_water_splash_actually_opens_a_gap(void)
+{
+    /* "impulse_count > 0" (an earlier version of this test) only proves
+     * something got QUEUED - it says nothing about whether the queued
+     * swap ever produced a visible change. can_impulse_enter()
+     * (step_impulses(), sand.c) lets a flying grain swap into ANY
+     * non-static occupant, not only an empty one, so a splash that only
+     * ever aims at more water "succeeds" mechanically while changing
+     * nothing on screen - reported on device as "still just merging, not
+     * a repel". This test pins the actual, visible claim instead: a
+     * genuine, MULTI-CELL crater opens around the point of impact, not
+     * one lonely cell - see splash_displace()'s own comment (sand_liquid.c)
+     * for why one cell was all an earlier version of the mechanic itself
+     * could ever produce (every push shared one origin and only one could
+     * ever win), which this scene is built wide enough to actually catch.
+     *
+     * A narrow (3-wide) pool was tried first and could not exercise this
+     * at all: the redesigned mechanic pushes a NEIGHBOUR further outward,
+     * which needs two clear cells past that neighbour, and a 3-wide grid
+     * has nowhere with that much room next to a contact point. This pool
+     * sits 3 columns wide (POOL_L..POOL_R) in an 11-wide grid so BOTH
+     * flanks, and both lower diagonals, have real clearance beyond them -
+     * four independent directions a crater could plausibly open in, from
+     * four different source cells that cannot collide with each other the
+     * way a single shared origin did. */
+    enum { CX = 6, POOL_TOP = 6, SURFACE_MASS = MASS_MAX / 2,
+           POOL_L = 5, POOL_R = 7 };
+    /* 1024, not CRATER_W * CRATER_H - see drop_impulse_buf's own comment
+     * in the test above for why a buffer only as big as the grid's own
+     * cell count starves queue_outward_impulse()'s thinning and can queue
+     * nothing at all, even on a correctly-firing trigger. */
+    impulse_t buf[1024];
+    sand_init(&crater_sim, crater_cells, CRATER_W, CRATER_H, 1u);
+    sand_enable_impulses(&crater_sim, buf, 1024);
+
+    for (int y = POOL_TOP; y < CRATER_H; y++) {
+        for (int x = POOL_L; x <= POOL_R; x++) {
+            if (x == CX && y == POOL_TOP) {
+                continue;   /* the surface cell gets SURFACE_MASS below */
+            }
+            sand_set(&crater_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    /* The surface row has ROOM - a fully-packed target has nothing for
+     * the straight-down transfer this trigger reads to give it. */
+    sand_set(&crater_sim, CX, POOL_TOP, CELL_MAKE(MAT_WATER, SURFACE_MASS));
+    sand_set(&crater_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    const int nbr_x[4] = { POOL_L, POOL_R, POOL_L, POOL_R };
+    const int nbr_y[4] = { POOL_TOP, POOL_TOP, POOL_TOP + 1, POOL_TOP + 1 };
+
+    for (int i = 0; i < 4; i++) {
+        char why[128];
+        snprintf(why, sizeof why,
+                 "setup: neighbour %d (%d, %d) must start as water for "
+                 "the splash to have anything to push", i, nbr_x[i], nbr_y[i]);
+        TEST_ASSERT_FALSE_MESSAGE(
+            CELL_IS_EMPTY(sand_at(&crater_sim, nbr_x[i], nbr_y[i])), why);
+    }
+
+    int cleared = 0;
+    for (int i = 0; i < 15; i++) {
+        sand_step(&crater_sim, 0, 1000, 0);
+    }
+    for (int i = 0; i < 4; i++) {
+        if (CELL_IS_EMPTY(sand_at(&crater_sim, nbr_x[i], nbr_y[i]))) {
+            cleared++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(1, cleared,
+        "a water splash landing with real room on multiple sides must "
+        "clear more than one cell around the point of impact - a single "
+        "cleared cell means the crater is still only ever one grain wide, "
+        "whatever the radius or chance settings claim to allow");
 }
 
 /* --- gas ------------------------------------------------------------------ */
@@ -17490,6 +17583,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_settled_pool_does_not_flicker);
     RUN_TEST(test_a_pool_settles_at_the_angle_it_is_tilted_to);
     RUN_TEST(test_water_falling_onto_water_also_queues_a_small_displacement);
+    RUN_TEST(test_a_water_splash_actually_opens_a_gap);
 
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
     RUN_TEST(test_gas_falls_when_the_board_is_inverted);

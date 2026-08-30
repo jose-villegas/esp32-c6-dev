@@ -704,8 +704,12 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * sand_displace_material() (only the same material gets thrown - see
  * splash_displace()'s own comment for why), exaggerated well past a real
  * splash's reach so the effect reads clearly at this display size.
- * SEPARATE RADII, not one shared constant - water's splash reads better
- * smaller than acid's own displacement, tuned independently on device.
+ * SEPARATE RADII, not one shared constant - tuned independently on
+ * device, and water's own peak ended up LARGER than acid's: the goal for
+ * water is a visible repel at the point of contact (a real splash pushes
+ * the surface it hits apart, rather than the drop quietly merging into
+ * one body), where acid's radius is closer to a balance number than a
+ * spectacle one - see SAND_SPLASH_RADIUS_ACID's own call sites for that.
  * Oil and lava are not wired into this - oil has no gameplay reason to
  * scatter, and lava is a heat source whose spread timing this same
  * exaggerated radius visibly disrupted when tried (see this constant's own
@@ -730,10 +734,20 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * string of identically-sized pops. RADIUS_WATER is both the starting
  * value (fresh from sand_init()) and the ceiling; floors at
  * RADIUS_WATER_FLOOR, stepping by RADIUS_WATER_STEP each time - never
- * recovers on its own, matching splash_chance's own one-way decay. */
-#define SAND_SPLASH_RADIUS_WATER       5
+ * recovers on its own, matching splash_chance's own one-way decay.
+ *
+ * RAISED WELL PAST ACID'S OWN RADIUS, 2026-08-31 - reported as still
+ * reading like a quiet merge rather than a repel: sand_impulse()'s own
+ * speed is already at its ceiling (SAND_EXPLODE_INITIAL_SPEED, shared
+ * with explosions, measured with nowhere left to raise it - see that
+ * constant's own comment), so radius is the one lever actually left for
+ * "hits harder". STEP raised to match, not just FLOOR left alone to
+ * stretch the ramp out longer - the ask was a stronger INITIAL punch that
+ * still settles down at roughly the same pace, not the same shape held
+ * for more bounces. 10 -> 6 -> 2 -> floor. */
+#define SAND_SPLASH_RADIUS_WATER       10
 #define SAND_SPLASH_RADIUS_WATER_FLOOR 1
-#define SAND_SPLASH_RADIUS_WATER_STEP  2
+#define SAND_SPLASH_RADIUS_WATER_STEP  4
 #define SAND_SPLASH_RADIUS_ACID        5
 #define SAND_SPLASH_CHANCE_START       255
 #define SAND_SPLASH_CHANCE_FLOOR       24

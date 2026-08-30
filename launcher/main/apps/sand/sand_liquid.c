@@ -65,31 +65,51 @@
  * throttles simultaneous triggers without making acid's splash depend on
  * history the way a decaying chance would.
  *
- * WATER ALSO GETS A DIRECTED KICK, `away` from gravity - not just the
- * radial sand_displace_material() spray above. Measured on a settled
- * pool: a radial disc mostly throws water AT OTHER WATER, which is
- * invisible (two identical, fully-packed cells swapping positions changes
- * nothing on screen), so a bigger radius bought more wasted interior
- * churn, not a bigger-looking splash - and the one cell that actually
- * took the hit (the centre) is skipped by design (see queue_outward_
- * impulse()'s own comment in sand.c). `away` is known-good: it is exactly
- * the direction the "exposed" check at this call's own site used to
- * confirm was open, one step back the way the falling drop came from - a
- * guaranteed push that way has a real chance of actually breaching the
- * surface and reading as a droplet, instead of leaving the point of
- * contact visibly untouched.
+ * WATER ALSO GETS A DIRECTED KICK toward whichever of its 8 immediate
+ * neighbours are actually EMPTY - not just the radial sand_displace_
+ * material() spray above. Measured on a settled pool: a radial disc
+ * mostly throws water AT OTHER WATER, which is invisible (two identical,
+ * fully-packed cells swapping positions changes nothing on screen), so a
+ * bigger radius bought more wasted interior churn, not a bigger-looking
+ * splash - and the one cell that actually took the hit (the centre) is
+ * skipped by design (see queue_outward_impulse()'s own comment in
+ * sand.c).
  *
- * A shape-adaptive version - scan all 8 neighbours, kick toward whichever
- * are actually open, no gravity vector needed - was tried in its place
- * (2026-08-31) and reverted the same day, UNTESTED on device: cheaper to
- * keep this fixed-direction version, already known to work, than ship an
- * unverified alternative that also costs more (up to 8 neighbour checks
- * and 8 sand_impulse() calls, against this version's 1 direction lookup
- * and a fixed 3-way fan). Worth retrying if the fixed direction turns out
- * to read wrong on a sloped or curved surface - see git history for
- * "ring_dir(dir)" in this file if so. */
-static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id,
-                                   int away_dx, int away_dy)
+ * CHECKED, NOT GUESSED - a fixed "away from gravity" direction was tried
+ * first and reverted back to here the same day: can_impulse_enter()
+ * (step_impulses(), sand.c) lets a flying grain swap into ANY non-static
+ * occupant, not only an empty one, so a fixed guess "succeeds" exactly as
+ * often whether its target is open air or more water - and during a
+ * sustained pour, straight opposite gravity from the contact point is
+ * usually more INCOMING water (the rest of the stream), not open air, so
+ * the fixed guess kept swapping two identical cells and producing no
+ * visible gap at all - reported as "still just merging, not a repel".
+ * Checking each neighbour's own emptiness before firing is what actually
+ * guarantees a swap changes anything on screen; it is also what makes the
+ * spray follow the puddle's own local shape for free (a narrow gap gets a
+ * thin jet, a wide open surface gets a broad splash, a buried pocket gets
+ * nothing because there is genuinely nowhere for it to go), which was the
+ * original motivation the first time this was tried.
+ *
+ * PUSHES THE RING OF NEIGHBOURS OUTWARD, NOT THE CONTACT POINT ITSELF -
+ * an earlier version of this loop fired every sand_impulse() FROM (x, y),
+ * one per open direction found. That reads as several pushes but is
+ * really several ENTRIES competing for the SAME one grain: step_impulses()
+ * resolves them in order, the first to succeed swaps (x, y)'s real water
+ * out and leaves it empty, and every OTHER entry queued against that same
+ * index then fails its own re-acquisition check (the byte it was queued
+ * with no longer matches) and is silently dropped - one open direction
+ * ever actually fired, whichever the roll favoured, however many the scan
+ * found. Sourcing each push from the NEIGHBOUR itself instead - pushing
+ * it one further step outward, into a SEPARATE cell checked empty too -
+ * gives every fired push its own distinct origin, so they cannot collide
+ * this way, and several can genuinely resolve in the same step: the ring
+ * immediately around the point of impact clears out together, which is
+ * what makes this actually look like a crater opening rather than one
+ * cell politely stepping aside. See test_a_water_splash_actually_opens_a_
+ * gap in suite_sand.c, added specifically because "something got queued"
+ * was never proof anything became visible. */
+static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
     if (mat_id == MAT_ACID) {
         if (s->acid_splashes_this_step >= SAND_SPLASH_ACID_PER_STEP_CAP) {
@@ -106,13 +126,21 @@ static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id,
         return;   /* this echo lost the roll - let the bounce die here */
     }
     sand_displace_material(s, x, y, s->splash_radius_water, mat_id);
-    int qdx, qdy;
-    sand_gravity_direction(away_dx, away_dy, &qdx, &qdy);
-    if (qdx != 0 || qdy != 0) {
-        const int dir = ring_of(qdx, qdy);
-        sand_impulse(s, x, y, dir, SAND_EXPLODE_INITIAL_SPEED);
-        sand_impulse(s, x, y, (dir + 7) & 7, SAND_EXPLODE_INITIAL_SPEED);
-        sand_impulse(s, x, y, (dir + 1) & 7, SAND_EXPLODE_INITIAL_SPEED);
+    for (int dir = 0; dir < 8; dir++) {
+        const int *d = ring_dir(dir);
+        const int nx = x + d[0], ny = y + d[1];
+        const int fx = x + 2 * d[0], fy = y + 2 * d[1];
+        if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h ||
+            (unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
+            continue;
+        }
+        if (CELL_IS_EMPTY(s->cells[(size_t)ny * (size_t)s->w + (size_t)nx])) {
+            continue;   /* nothing there to push outward */
+        }
+        if (!CELL_IS_EMPTY(s->cells[(size_t)fy * (size_t)s->w + (size_t)fx])) {
+            continue;   /* no room one further out to push it into */
+        }
+        sand_impulse(s, nx, ny, dir, SAND_EXPLODE_INITIAL_SPEED);
     }
     s->splash_chance =
         s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
@@ -523,7 +551,7 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
          * falloff after) already keeps rare and self-limiting, the same
          * safety net a pour's own repeated triggers rely on. */
         if (target_occupied) {
-            splash_displace(s, tx0, ty0, mat_id, -dx, -dy);
+            splash_displace(s, tx0, ty0, mat_id);
         }
     }
 
