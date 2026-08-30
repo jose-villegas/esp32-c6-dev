@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
 # On-demand doc sync: reviews code changes since docs were last touched, asks
 # OmniRoute's free "docs-update-free" combo (gpt-oss:120b -> gpt-oss:20b ->
-# github/gpt-4o-mini -> kimi-coding -> ollama-local/gemma4:26b, all $0) to
-# propose corrected README.md / docs/*.md content, then pushes a branch for
-# review. Never touches main directly -- open the printed compare URL
+# github/gpt-4o-mini -> kimi-coding -> ollama-local/gemma4:26b, all $0) which
+# doc files are plausibly affected, then sends only those files' full content
+# for a rewrite, and pushes a branch for review. Two-pass by design: this
+# repo's docs run ~650KB total (one file alone is 200KB+), so dumping every
+# doc into every prompt blows past the smallest fallback model's context
+# window. Never touches main directly -- open the printed compare URL
 # yourself (or run `gh pr create` if you have it installed).
 #
 # Usage: scripts/update-docs.sh
@@ -30,54 +33,105 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 DIFF_STAT="$TMPDIR/diffstat.txt"
 DIFF_FULL="$TMPDIR/diff.txt"
-PROMPT="$TMPDIR/prompt.txt"
-RESPONSE="$TMPDIR/response.txt"
+DOC_INDEX="$TMPDIR/docindex.txt"
+SELECT_PROMPT="$TMPDIR/select_prompt.txt"
+SELECT_RESPONSE="$TMPDIR/select_response.txt"
+UPDATE_PROMPT="$TMPDIR/update_prompt.txt"
+UPDATE_RESPONSE="$TMPDIR/update_response.txt"
 
 git diff --stat "$LAST_DOC_COMMIT"..HEAD -- . ':!README.md' ':!docs' > "$DIFF_STAT"
-git diff "$LAST_DOC_COMMIT"..HEAD -- . ':!README.md' ':!docs' | head -c 60000 > "$DIFF_FULL"
+git diff "$LAST_DOC_COMMIT"..HEAD -- . ':!README.md' ':!docs' | head -c 20000 > "$DIFF_FULL"
 
 if [ ! -s "$DIFF_STAT" ]; then
   echo "No code changes since the docs were last touched ($LAST_DOC_COMMIT). Nothing to do."
   exit 0
 fi
 
+# Pass 1: cheap index (path + first line) so the model can pick candidates
+# without paying for ~650KB of doc content up front.
+: > "$DOC_INDEX"
+while IFS= read -r f; do
+  first_line=$(head -n 1 "$f" 2>/dev/null || true)
+  printf '%s | %s\n' "$f" "$first_line" >> "$DOC_INDEX"
+done <<< "$DOC_FILES"
+
+{
+  echo "A firmware repo's code changed since its docs were last reviewed. Below is a"
+  echo "diff summary/excerpt, then an index of every doc file (path | first line)."
+  echo "List ONLY the paths (one per line, exactly as given) of doc files that are"
+  echo "plausibly now stale or inaccurate because of this diff. If none, output"
+  echo "exactly: NONE. Output nothing else -- no explanation, no markdown."
+  echo ""
+  echo "=== DIFF STAT ==="
+  cat "$DIFF_STAT"
+  echo ""
+  echo "=== DIFF EXCERPT ==="
+  cat "$DIFF_FULL"
+  echo ""
+  echo "=== DOC INDEX ==="
+  cat "$DOC_INDEX"
+} > "$SELECT_PROMPT"
+
+echo "Pass 1/2: asking $COMBO which of $(wc -l < "$DOC_INDEX") doc file(s) look affected..."
+if ! omniroute chat -m "$COMBO" --file "$SELECT_PROMPT" --no-history > "$SELECT_RESPONSE" 2>&1; then
+  echo "omniroute call failed:" >&2
+  cat "$SELECT_RESPONSE" >&2
+  exit 1
+fi
+
+if grep -qx "NONE" "$SELECT_RESPONSE"; then
+  echo "Model found no doc drift worth fixing. Nothing to do."
+  exit 0
+fi
+
+# Keep only lines that exactly match a known doc path -- ignore any
+# hallucinated or malformed paths rather than trying to write them.
+mapfile -t SELECTED < <(grep -Fxf <(echo "$DOC_FILES") "$SELECT_RESPONSE" | sort -u | head -5)
+
+if [ "${#SELECTED[@]}" -eq 0 ]; then
+  echo "Model didn't name any known doc file. Raw response:" >&2
+  cat "$SELECT_RESPONSE" >&2
+  exit 0
+fi
+
+echo "Pass 2/2: requesting rewrites for: ${SELECTED[*]}"
+
 {
   echo "You are updating technical documentation for a firmware repo (ESP32-C6 app shell)."
-  echo "Below is a summary of code changes since the docs were last touched, followed by"
-  echo "the full current content of each doc file. Identify ONLY the doc files that are now"
-  echo "stale or inaccurate because of these code changes, and output their FULL corrected"
-  echo "content. Do not rewrite files that don't need changes. Preserve the style, tone, and"
-  echo "structure of the existing docs -- make the smallest edit that fixes the drift."
+  echo "Below is the code diff, followed by the full current content of the doc file(s)"
+  echo "identified as stale. Output their FULL corrected content. Preserve the style,"
+  echo "tone, and structure of the existing docs -- make the smallest edit that fixes"
+  echo "the drift. If, after reading the full file, it turns out no change is actually"
+  echo "needed, omit it from the output entirely."
   echo ""
   echo "Output format: for each file that needs changes, output exactly:"
   echo "<<<FILE: relative/path.md>>>"
   echo "...full new file content..."
   echo "<<<END>>>"
-  echo "If nothing needs updating, output exactly: NO_CHANGES_NEEDED"
+  echo "If none of them need changes after all, output exactly: NO_CHANGES_NEEDED"
   echo ""
-  echo "=== CODE DIFF STAT ==="
+  echo "=== DIFF STAT ==="
   cat "$DIFF_STAT"
   echo ""
-  echo "=== CODE DIFF (may be truncated) ==="
+  echo "=== DIFF EXCERPT ==="
   cat "$DIFF_FULL"
   echo ""
-  echo "=== CURRENT DOC FILES ==="
-  while IFS= read -r f; do
+  echo "=== DOC FILES TO REVIEW ==="
+  for f in "${SELECTED[@]}"; do
     echo "--- FILE: $f ---"
     cat "$f"
     echo ""
-  done <<< "$DOC_FILES"
-} > "$PROMPT"
+  done
+} > "$UPDATE_PROMPT"
 
-echo "Asking $COMBO to review $(echo "$DOC_FILES" | wc -l) doc file(s) against $(wc -l < "$DIFF_STAT") changed source file(s)..."
-if ! omniroute chat -m "$COMBO" --file "$PROMPT" --no-history > "$RESPONSE" 2>&1; then
+if ! omniroute chat -m "$COMBO" --file "$UPDATE_PROMPT" --no-history > "$UPDATE_RESPONSE" 2>&1; then
   echo "omniroute call failed:" >&2
-  cat "$RESPONSE" >&2
+  cat "$UPDATE_RESPONSE" >&2
   exit 1
 fi
 
-if grep -q "NO_CHANGES_NEEDED" "$RESPONSE"; then
-  echo "Model found no doc drift worth fixing. Nothing to do."
+if grep -q "NO_CHANGES_NEEDED" "$UPDATE_RESPONSE"; then
+  echo "Model found no doc drift worth fixing on closer inspection. Nothing to do."
   exit 0
 fi
 
@@ -95,11 +149,11 @@ while ((m = re.exec(text))) {
   count++;
 }
 console.log(count);
-' "$RESPONSE")
+' "$UPDATE_RESPONSE")
 
 if [ "$CHANGED" -eq 0 ]; then
   echo "Could not parse any file blocks from the model response. Raw output:" >&2
-  cat "$RESPONSE" >&2
+  cat "$UPDATE_RESPONSE" >&2
   exit 1
 fi
 
