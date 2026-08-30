@@ -39,6 +39,8 @@ static const char *TAG = "device_tests";
 static void fixture(void)
 {
     gfx_clear_clip();
+    gfx_set_partial_clear(false);
+    gfx_invalidate();
 }
 
 /* Counts pixels equal to `expect` across the whole framebuffer, which is how
@@ -112,6 +114,65 @@ void test_clear_touches_every_pixel(void)
     const gfx_color_t c = gfx_rgb(0x123456);
     gfx_clear(c);
     TEST_ASSERT_EQUAL_INT(GFX_WIDTH * GFX_HEIGHT, count_pixels(c));
+}
+
+void test_partial_clear_erases_only_previous_drawn_region(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+
+    gfx_set_partial_clear(true);
+
+    /* Frame 1: first clear is full because partial tracking has no prior frame. */
+    gfx_clear(bg);
+    TEST_ASSERT_EQUAL_INT(GFX_WIDTH * GFX_HEIGHT, count_pixels(bg));
+
+    /* Draw a 20x20 rect at (50, 50) and mark it dirty. */
+    gfx_fill_rect(50, 50, 20, 20, fg);
+    gfx_mark_dirty(50, 50, 20, 20);
+    TEST_ASSERT_EQUAL_INT(400, count_pixels(fg));
+
+    gfx_present();
+
+    /* Frame 2: clear should erase only the 20x20 box at (50, 50). */
+    gfx_clear(bg);
+    TEST_ASSERT_EQUAL_INT(GFX_WIDTH * GFX_HEIGHT, count_pixels(bg));
+
+    /* Draw a new 10x10 rect at (100, 100) and mark it dirty. */
+    gfx_fill_rect(100, 100, 10, 10, fg);
+    gfx_mark_dirty(100, 100, 10, 10);
+    TEST_ASSERT_EQUAL_INT(100, count_pixels(fg));
+
+    gfx_present();
+
+    /* Frame 3: clear should erase only the (100, 100) 10x10 box. */
+    gfx_clear(bg);
+    TEST_ASSERT_EQUAL_INT(GFX_WIDTH * GFX_HEIGHT, count_pixels(bg));
+}
+
+void test_gfx_invalidate_forces_full_clear_in_partial_mode(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+
+    gfx_set_partial_clear(true);
+    gfx_clear(bg);
+
+    gfx_fill_rect(50, 50, 20, 20, fg);
+    gfx_mark_dirty(50, 50, 20, 20);
+    gfx_present();
+
+    /* Place rogue pixels elsewhere without marking dirty. */
+    gfx_color_t *fb = gfx_framebuffer();
+    fb[200 * GFX_WIDTH + 200] = fg;
+
+    /* Invalidation forces next clear to wipe entire screen in full. */
+    gfx_invalidate();
+    gfx_clear(bg);
+
+    TEST_ASSERT_EQUAL_INT(GFX_WIDTH * GFX_HEIGHT, count_pixels(bg));
 }
 
 void test_fill_rect_writes_exactly_its_own_area(void)
@@ -1130,6 +1191,8 @@ void run_gfx_suite(void)
     RUN_TEST(test_colour_packing_matches_the_panel_format);
 
     RUN_TEST(test_clear_touches_every_pixel);
+    RUN_TEST(test_partial_clear_erases_only_previous_drawn_region);
+    RUN_TEST(test_gfx_invalidate_forces_full_clear_in_partial_mode);
     RUN_TEST(test_fill_rect_writes_exactly_its_own_area);
     RUN_TEST(test_fill_rect_is_clipped_to_the_screen);
     RUN_TEST(test_a_horizontal_line_covers_both_endpoints);

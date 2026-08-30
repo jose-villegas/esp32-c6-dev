@@ -246,19 +246,25 @@ typedef struct {
  * coordinate plane actually is.
  *
  * RINGS is therefore how far the fade reaches, not how big the floor is -
- * and half a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a whole
- * one: at a whole unit per ring there were only ever six or seven rings
- * actually lit at once, each one a visibly distinct step in brightness
- * from its neighbours rather than something that reads as a continuous
- * wave. Twice as many rings, half as far apart, covers the same physical
- * reach with a much finer gradient between them. */
-#define BOOT_ANIM_GRID_RINGS 14
-#define BOOT_ANIM_GRID_FADE  14
+ * and a quarter of a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a
+ * whole one: at a whole unit per ring there were only ever six or seven
+ * rings actually lit at once, each one a visibly distinct step in
+ * brightness from its neighbours rather than something that reads as a
+ * continuous wave, and even the first cut of that (twice as many, half as
+ * far apart) still read as individually countable bands rather than a
+ * dense ripple once the floor itself was also allowed to grow this much
+ * bigger on screen (see boot_anim_grid_shrink_q8()) - the bigger the
+ * drawn area, the higher a frequency it takes for the same ring count to
+ * still look dense rather than sparse. Four times as many rings, a
+ * quarter as far apart, covers the same physical reach as the original
+ * whole-unit spacing. */
+#define BOOT_ANIM_GRID_RINGS 28
+#define BOOT_ANIM_GRID_FADE  28
 
-/* Half a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own comment.
- * Q12, like every other plane coordinate here (see units() in boot_anim.c,
- * which this is used in place of for the floor specifically). */
-#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 2)
+/* A quarter of a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own
+ * comment. Q12, like every other plane coordinate here (see units() in
+ * boot_anim.c, which this is used in place of for the floor specifically). */
+#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 4)
 
 /* Where one unit along each axis lands, in Q8 pixels.
  *
@@ -445,10 +451,11 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
 
 #define BOOT_ANIM_GRID_START_MS  150
 
-/* Halved alongside BOOT_ANIM_GRID_RINGS doubling (see its own comment) -
- * twice as many rings at half the stagger covers the same total arrival
- * time as before, rather than taking twice as long to sweep outward. */
-#define BOOT_ANIM_GRID_RING_MS    23   /* each ring waits for the one inside */
+/* Halved again alongside BOOT_ANIM_GRID_RINGS doubling again (see its own
+ * comment) - four times as many rings at a quarter the stagger covers the
+ * same total arrival time as the original whole-unit spacing, rather than
+ * taking four times as long to sweep outward. */
+#define BOOT_ANIM_GRID_RING_MS    12   /* each ring waits for the one inside */
 #define BOOT_ANIM_GRID_FADE_MS   300
 
 #define BOOT_ANIM_PEN_START_MS   520
@@ -495,18 +502,21 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * Drawn at anything like full strength it competes with the curve for
  * attention and wins, because there is a great deal more of it - which is
  * exactly what the first version of this did, and the curve disappeared
- * into a plaid tablecloth. Higher than that first version landed on,
- * though (was 56): even the STARTING point turned out to read as too dark
- * once the squared falloff in boot_anim_grid_alpha() below and a shared
- * hue-mixed-with-alpha ceiling are both eating into it too - see that
- * function's own comment.
+ * into a plaid tablecloth. Pulled back down from 110 (a peak reached while
+ * the grid was still small and struggling to be seen at all - see the
+ * git history around BOOT_ANIM_GRID_CEILING_MAX for that whole chase):
+ * now that boot_anim_grid_shrink_q8() keeps the floor covering the whole
+ * panel from the very first frame (see its own comment), visibility is
+ * no longer the problem brightness has to solve on its own, and a floor
+ * this large at anything but a genuinely dim starting point overwhelms
+ * the curve it is supposed to sit behind.
  *
  * It does not stay here, though - see boot_anim_grid_climb() and
  * BOOT_ANIM_GRID_CEILING_MAX just below: that backdrop reasoning only
  * holds while the floor is still competing with a full-size curve for
  * attention, and stops applying once the picture is mostly the grid
  * itself. */
-#define BOOT_ANIM_GRID_MAX 110
+#define BOOT_ANIM_GRID_MAX 70
 
 /* How far along the grid's slow climb toward full visibility things are,
  * right now - the single clock both boot_anim_grid_alpha()'s own ceiling
@@ -539,16 +549,15 @@ static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
                       BOOT_ANIM_MS - BOOT_ANIM_GRID_START_MS);
 }
 
-/* All the way up to what the axes themselves get, at the far end of the
- * climb - no longer held back from it. An earlier version capped this
- * short of 255 to keep the floor reading as backdrop even at its
- * brightest; in practice that cap was still landing on a picture read as
- * "still dark", so the backdrop distinction is left to happen through
- * everything else about the floor (its low starting point, the squared
- * falloff below, competing with a lit curve early on) rather than through
- * an artificial ceiling below what a fully-lit pixel on this panel can
- * actually do. */
-#define BOOT_ANIM_GRID_CEILING_MAX 255
+/* Pulled back from 255 (matching the axes' own full brightness) once the
+ * floor stopped needing to fight for visibility at all - see
+ * BOOT_ANIM_GRID_MAX's own comment on why that fight moved to
+ * boot_anim_grid_shrink_q8() instead. Climbing to full axis-brightness
+ * was tuned for a floor that still needed every trick available just to
+ * be seen; a floor that already covers the whole panel from frame 1 only
+ * needs to climb enough to read as brightening over time, not enough to
+ * wash out toward the same flat white the axes are. */
+#define BOOT_ANIM_GRID_CEILING_MAX 170
 
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
@@ -586,15 +595,15 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
  * off black still reads as colour-muddy at any opacity unless it is also
  * moving toward white.
  *
- * All the way to full white by the end, same as BOOT_ANIM_GRID_CEILING_MAX
- * above - an earlier version held this a little short so the rings would
- * keep a last trace of their own hue, but that hedge was part of the same
- * "still dark" problem: colour and alpha both a little short of what the
- * axes get compounds into a floor that never quite gets there. Nothing
- * stops the CURVE reading distinctly even fully bloomed to white (see
- * boot_anim.c's own use of gfx_color_mix(..., COL_WHITE, s.bloom)); the
- * grid does not need the hedge here either. */
-#define BOOT_ANIM_GRID_WHITEN_MAX 255
+ * Pulled back from 255 (full white): boot_anim_grid_hue() already turns
+ * the floor's colour as a function of both TIME and RING - "the colour
+ * travels outward as a wave instead of the whole floor blinking", per its
+ * own comment - but a hue mixed almost all the way to white shows almost
+ * none of that turning; white has no hue left to see it in. Climbing this
+ * far short of white instead of all the way to it is what keeps the
+ * travelling colour wave actually visible while the floor still reads
+ * brighter over time the way BOOT_ANIM_GRID_CEILING_MAX's own climb does. */
+#define BOOT_ANIM_GRID_WHITEN_MAX 120
 
 static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 {
@@ -640,7 +649,7 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
 #define BOOT_ANIM_TITLE     "Autana"
 #define BOOT_ANIM_TITLE_LEN 6
 
-#define BOOT_ANIM_TITLE_SCALE 3    /* glyph scale - see gfx_text_font()   */
+#define BOOT_ANIM_TITLE_SCALE 5    /* glyph scale - see gfx_text_font()   */
 #define BOOT_ANIM_TITLE_GAP   3    /* extra px of tracking between glyphs */
 
 /* The viewer's frame this whole section lays out in - see this section's
@@ -681,9 +690,19 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
  * (BOOT_ANIM_TITLE_LEN cells of 8*SCALE+GAP, less one trailing GAP, by
  * 8*SCALE) - gfx_text_font()'s (x, y) is a corner, not a centre - and
  * nudged down by half that box's own height again so the word's CENTRE,
- * not its top edge, sits on the line. */
-#define BOOT_ANIM_TITLE_VIEW_X 243
-#define BOOT_ANIM_TITLE_VIEW_Y 58
+ * not its top edge, sits on the line.
+ *
+ * SCALE went up (3 -> 5, on request - the word wanted to read bigger)
+ * without moving the golden point itself: (322.5, 70) is that point,
+ * unchanged, and X/Y below are still centred on it. What DID move is how
+ * far back from R1's own centre X sits, because the box is bigger now -
+ * at the pure golden-centred X the word's own right edge landed a couple
+ * of pixels past BOOT_ANIM_TITLE_VIEW_W, failing
+ * test_the_title_stays_on_the_panel_once_visible(). Nudged a little
+ * further left than that strictly requires, for margin - and another
+ * 15px left again on top of that, on request. */
+#define BOOT_ANIM_TITLE_VIEW_X 170
+#define BOOT_ANIM_TITLE_VIEW_Y 50
 
 #define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
                                             * after the one before it       */
@@ -1328,25 +1347,65 @@ static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
     return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_SHRINK_FLOOR_Q8);
 }
 
-/* A much bigger floor than BOOT_ANIM_SHRINK_FLOOR_Q8 - deliberately: the
- * panel-fit test below has never applied to the floor and still does not
- * here. It exists because the CURVE clipping mid-shape looks broken - a
- * loop with its tip cut off reads as a rendering error - but the floor has
- * had no edge since before any of this shrinking existed (see
- * BOOT_ANIM_GRID_RINGS's own comment): rings running past the panel and
- * fading into nothing is the intended look, the same "let clipping do the
- * work" reasoning the axes lean on too. Its outer rings ran off-panel at
- * FULL, unshrunk size from the very start of the animation, long before
- * this file gave the floor a shrink of its own - so there was never a
- * safety ceiling to sweep for here the way there was for
- * BOOT_ANIM_SHRINK_PEAK_Q8. This value is chosen for how big the ending
- * should look - "a big part of the grid clearly visible" - not for
- * anything it has to stay under. */
-#define BOOT_ANIM_GRID_SHRINK_FLOOR_Q8 128
+/* A CONSTANT, not a GROW/SETTLE curve like boot_anim_motif_shrink_q8() -
+ * the floor is supposed to fill every corner of the panel for the WHOLE
+ * animation, from the very first frame, not just once something has
+ * grown into place. A pulse that starts small necessarily has a window
+ * where it has not grown yet, and "first frames still have corners" was
+ * exactly that window showing.
+ *
+ * The panel-fit test below has never applied to the floor and still does
+ * not here - it exists because the CURVE clipping mid-shape looks broken,
+ * but the floor has had no edge since before any of this shrinking
+ * existed (see BOOT_ANIM_GRID_RINGS's own comment): rings running past
+ * the panel and fading into nothing is the intended look. So this value
+ * is not a safety ceiling either - it is sized to a real requirement,
+ * worked out numerically rather than by eye: for every one of the four
+ * panel corners, at every moment of the whole animation (BOOT_ANIM_MS,
+ * stepped finely), invert the floor's own projection (linear at t=0, so
+ * exactly invertible) to find how many world units of reach that corner
+ * needs, and take the largest value found anywhere. That maximum was
+ * 14.17 units, at t=5720 - not, as it happens, at the very start (t=0
+ * itself needs 11.93, its own local peak, from the camera's ORIGINAL
+ * fixed position before the orbit's drift begins) - so the true worst
+ * moment is late in the collapse, where the camera's own extra turn (see
+ * BOOT_ANIM_PHI_EXTRA_PHASE) has pushed the projection closest to edge-on.
+ * 600/256 gives a reach of BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12
+ * * 600 >> 8 = 16.4 units - comfortable margin over 14.17, everywhere,
+ * always. This is the FLOOR the grid never goes under, not the whole
+ * story - see boot_anim_grid_shrink_q8() just below for how
+ * boot_anim_motif_shrink_q8()'s own pulse still rides on top of it. */
+#define BOOT_ANIM_GRID_SHRINK_Q8 600
 
+/* The grid IS the plane - the coordinate system the curve's values and the
+ * axes are drawn against - not a separate decoration next to it. A grid
+ * that ignored boot_anim_motif_shrink_q8() entirely, the way a flat
+ * BOOT_ANIM_GRID_SHRINK_Q8 constant did, was drawing "1 unit" at a
+ * different pixel size than the curve and axes were using for their own
+ * "1 unit" at that same instant, any time the motif was mid-pulse - a
+ * grid that does not track the domain it represents is not really
+ * representing it. So the motif's own GROW/HOLD/SETTLE shape still
+ * multiplies in here: at boot_anim_motif_shrink_q8()'s baseline (256,
+ * i.e. before anything has grown) this reduces to exactly
+ * BOOT_ANIM_GRID_SHRINK_Q8, and while the motif swells past that toward
+ * BOOT_ANIM_SHRINK_PEAK_Q8 the grid swells right along with it - both
+ * readings of "scale" moving together, the way they should.
+ *
+ * What it does NOT do is follow the motif all the way down to
+ * BOOT_ANIM_SHRINK_FLOOR_Q8 during the collapse: that floor was tuned
+ * for the CURVE's own panel-fit safety once the camera has turned, a
+ * completely different constraint from what the grid's own corner
+ * coverage needs (see BOOT_ANIM_GRID_SHRINK_Q8's own comment) - so this
+ * is clamped to never go BELOW that base value, only ever above it. The
+ * grid reacts to the same scale the curve and axes do; it just is not
+ * allowed to react itself into leaving the panel's corners uncovered
+ * again. */
 static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 {
-    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_GRID_SHRINK_FLOOR_Q8);
+    const int32_t pulsed = ((int32_t)BOOT_ANIM_GRID_SHRINK_Q8 *
+                            boot_anim_motif_shrink_q8(now_ms)) >> 8;
+    return pulsed > BOOT_ANIM_GRID_SHRINK_Q8 ? (int)pulsed
+                                              : BOOT_ANIM_GRID_SHRINK_Q8;
 }
 
 /*---------------------------------------------------------------------------

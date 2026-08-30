@@ -244,13 +244,94 @@ gfx_color_t *gfx_framebuffer(void)
  * Dirty tracking
  *-------------------------------------------------------------------------*/
 
+/* Partial clear tracking: when enabled, gfx_clear() wipes only the bounding
+ * box of what was dirtied on the previous frame instead of wiping the entire
+ * 322 KiB framebuffer, and automatically marks that erased region dirty in
+ * gfx_dirty.
+ *
+ * prev_bbox_* stores the bounding box of what was drawn/dirtied during the
+ * previous frame.
+ *
+ * drawn_bbox_* accumulates the union of all dirty regions marked by
+ * gfx_mark_dirty() during this frame after gfx_clear(). */
+static bool partial_clear_on;
+static bool interlace_on;
+static int frame_parity;
+static bool prev_bbox_valid;
+static int prev_bbox_x0, prev_bbox_y0, prev_bbox_x1, prev_bbox_y1;
+static bool drawn_bbox_valid;
+static int drawn_bbox_x0, drawn_bbox_y0, drawn_bbox_x1, drawn_bbox_y1;
+
+void gfx_set_partial_clear(bool on)
+{
+    if (!on) {
+        prev_bbox_valid = false;
+    }
+    partial_clear_on = on;
+}
+
+bool gfx_partial_clear_enabled(void)
+{
+    return partial_clear_on;
+}
+
+void gfx_set_interlace(bool on)
+{
+    interlace_on = on;
+}
+
+bool gfx_interlace_enabled(void)
+{
+    return interlace_on;
+}
+
+void gfx_invalidate(void)
+{
+    prev_bbox_valid = false;
+}
+
 /* The actual tracking - state, geometry and the grid/leaf logic - lives in
  * gfx_dirty.h as a header-only module (see its own file comment for why:
  * mark_band() must stay inlinable into this translation unit). These three
  * are thin wrappers so gfx.h's public API keeps its existing names and
  * every other file in the project stays unaware the split exists. */
-void gfx_mark_all_dirty(void) { dirty_mark_all(); }
-void gfx_mark_dirty(int x, int y, int w, int h) { dirty_mark(x, y, w, h); }
+void gfx_mark_all_dirty(void)
+{
+    dirty_mark_all();
+    drawn_bbox_valid = false;
+    prev_bbox_valid = false;
+}
+
+void gfx_mark_dirty(int x, int y, int w, int h)
+{
+    dirty_mark(x, y, w, h);
+
+    if (w <= 0 || h <= 0) {
+        return;
+    }
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+    if (x0 < 0) x0 = 0;
+    if (y0 < 0) y0 = 0;
+    if (x1 > GFX_WIDTH) x1 = GFX_WIDTH;
+    if (y1 > GFX_HEIGHT) y1 = GFX_HEIGHT;
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    if (drawn_bbox_valid) {
+        if (x0 < drawn_bbox_x0) drawn_bbox_x0 = x0;
+        if (y0 < drawn_bbox_y0) drawn_bbox_y0 = y0;
+        if (x1 > drawn_bbox_x1) drawn_bbox_x1 = x1;
+        if (y1 > drawn_bbox_y1) drawn_bbox_y1 = y1;
+    } else {
+        drawn_bbox_x0 = x0;
+        drawn_bbox_y0 = y0;
+        drawn_bbox_x1 = x1;
+        drawn_bbox_y1 = y1;
+        drawn_bbox_valid = true;
+    }
+}
+
 bool gfx_region_dirty(int x, int y, int w, int h)
 {
     (void)x; (void)w;
@@ -298,9 +379,27 @@ void gfx_clear_clip(void)
  *-------------------------------------------------------------------------*/
 
 /* Ignores the clip rect by design - this is the whole-screen wipe that starts
- * a frame, and it writes two pixels per 32-bit store. */
+ * a frame, and it writes two pixels per 32-bit store.
+ *
+ * When partial clear is enabled and a previous frame's bounding box is valid,
+ * it clears only that bounding box rather than the whole 322 KiB framebuffer,
+ * and marks the erased box dirty for presentation. */
 void gfx_clear(gfx_color_t color)
 {
+    if (partial_clear_on && prev_bbox_valid) {
+        for (int y = prev_bbox_y0; y < prev_bbox_y1; y++) {
+            gfx_color_t *dst = fb + (size_t)y * GFX_WIDTH + prev_bbox_x0;
+            for (int x = prev_bbox_x0; x < prev_bbox_x1; x++) {
+                *dst++ = color;
+            }
+        }
+        dirty_mark(prev_bbox_x0, prev_bbox_y0,
+                   prev_bbox_x1 - prev_bbox_x0,
+                   prev_bbox_y1 - prev_bbox_y0);
+        drawn_bbox_valid = false;
+        return;
+    }
+
     const uint32_t pair = ((uint32_t)color << 16) | color;
     uint32_t *words = (uint32_t *)fb;
     const int count = (GFX_WIDTH * GFX_HEIGHT) / 2;
@@ -1043,10 +1142,26 @@ static void send_one_row(int row, int *queued)
 void gfx_present(void)
 {
     int queued = 0;
+    if (interlace_on) {
+        frame_parity = !frame_parity;
+    }
+
+    uint32_t remaining_cell_dirty = 0;
 
     for (int row = 0; row < STRIP_COUNT; row++) {
         if (!dirty_row_is_dirty(row)) {
             continue;   /* unchanged - the panel is still showing it */
+        }
+
+        if (interlace_on && (row % 2) != frame_parity) {
+            /* Carry over exactly the bits already set for this row, not
+             * every column in it - forcing the whole row dirty would widen
+             * every gathered send on this row to full width once its turn
+             * comes back around, throwing away the per-cell gather this
+             * grid exists for. */
+            remaining_cell_dirty |= cell_dirty &
+                (((1u << GRID_COLS) - 1u) << (row * GRID_COLS));
+            continue;
         }
 
         send_one_row(row, &queued);
@@ -1054,6 +1169,20 @@ void gfx_present(void)
     }
 
     dirty_frame_sent();
+    if (interlace_on) {
+        cell_dirty = remaining_cell_dirty;
+    }
+
+    if (partial_clear_on && drawn_bbox_valid) {
+        prev_bbox_x0 = drawn_bbox_x0;
+        prev_bbox_y0 = drawn_bbox_y0;
+        prev_bbox_x1 = drawn_bbox_x1;
+        prev_bbox_y1 = drawn_bbox_y1;
+        prev_bbox_valid = true;
+    } else if (!partial_clear_on) {
+        prev_bbox_valid = false;
+    }
+    drawn_bbox_valid = false;
 
     /* draw_bitmap only QUEUES a DMA transfer that reads out of the
      * framebuffer. Returning before they drain would let the next frame start
