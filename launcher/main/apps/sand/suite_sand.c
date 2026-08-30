@@ -5583,10 +5583,12 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
 
 /*=============================================================================
  * LOCAL DEPTH - the depth signal now follows each puddle's own shape
- * rather than a fixed screen-position gradient. See LOCAL DEPTH's own long
- * comment in app_sand.c for the full mechanism and the two device reports
- * ("almost like platinum"; "follows the shape of the puddle") that
- * motivated it.
+ * rather than a fixed screen-position gradient, and (as of the tests below)
+ * blends its vertical and horizontal readings continuously instead of
+ * switching between them. See LOCAL DEPTH's own long comment in app_sand.c
+ * for the full mechanism and the device reports ("almost like platinum";
+ * "follows the shape of the puddle"; "fighting multiple values"... "single
+ * source of truth") that motivated each part of it.
  *
  * paint_row_n() itself cannot be linked into this host suite - it lives in
  * app_sand.c, which check_app_sources.sh only compile-checks, the same
@@ -5596,15 +5598,16 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
  * it.
  *===========================================================================*/
 
-/* Mirrors paint_row_n()'s vertical-dominant local-depth walk (app_sand.c)
- * for a FIXED straight-down gravity - the simplest case: surface up, "above"
- * toward the surface, ascending row order. The axis-flip and horizontal-scan
- * machinery is a different claim, pinned separately by
- * test_local_depth_resets_when_gravitys_axis_flips below. Reads the LIVE
- * grid via sand_at() rather than assuming a fixed shape, the same way
- * paint_row_n() reads the live framebuffer row/above/below pointers -
- * off-grid rows read as MAT_STONE (sand_at()'s own convention), which is
- * "not the same material" as water and correctly reads as a boundary. */
+/* Mirrors paint_row_n()'s vertical local-depth walk (app_sand.c) for a
+ * FIXED straight-down-or-steeper gravity (gy > 0) - the simplest case:
+ * surface up, "above" toward the surface, ascending row order. Also serves
+ * as the vertical half of test_the_blend_has_no_jump_crossing_45_degrees
+ * below, whose gravity sweep never lets gy go negative either, so this one
+ * fixed direction covers both callers. Reads the LIVE grid via sand_at()
+ * rather than assuming a fixed shape, the same way paint_row_n() reads the
+ * live framebuffer row/above/below pointers - off-grid rows read as
+ * MAT_STONE (sand_at()'s own convention), which is "not the same material"
+ * as water and correctly reads as a boundary. */
 static void mirror_local_depth_column(sand_t *g, int cx, int h,
                                       unsigned depth_out[])
 {
@@ -5635,7 +5638,20 @@ static void mirror_local_depth_column(sand_t *g, int cx, int h,
  * resets to a small depth right there, while the other keeps climbing. A
  * pure screen-position depth - an affine function of cy alone, exactly what
  * this change replaces - cannot tell the two columns apart at all, which is
- * exactly the bug this test exists to catch a regression back into. */
+ * exactly the bug this test exists to catch a regression back into.
+ *
+ * STILL VALID after the axis-hysteresis switch was replaced by a
+ * vertical/horizontal BLEND (see LOCAL DEPTH's own top comment in
+ * app_sand.c), without changing a single assertion below, because the
+ * gravity this test feeds sand_step() is straight down - gx exactly 0. At
+ * gx == 0 the blend's own weight formula (update_local_depth_gravity() in
+ * app_sand.c) puts ALL the weight on the vertical reading and none on the
+ * horizontal one, so the blended depth mirror_local_depth_column() checks
+ * here is not an approximation of what the shipped mechanism does at this
+ * gravity - it is EXACTLY what it does, the same way it was when this was
+ * still a single dominant-axis choice rather than a blend. The blend's own
+ * behaviour AWAY from gx == 0 is a different claim, pinned separately by
+ * test_the_blend_has_no_jump_crossing_45_degrees below. */
 /* A grid of its own, sized for a settled pool deep enough to carry a
  * two-cell rock plug with real water left above and below it - the
  * standard W x H fixture (8x8) has no room for that. Named OBST_POOL_*,
@@ -5757,103 +5773,180 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
      * NUMBERS - which is exactly the property this test exists to check. */
 }
 
-/* Mirrors app_sand.c's col_local_depth[]-plus-axis-flip-reset bookkeeping in
- * miniature - not calling into app_sand.c itself, which cannot be linked
- * here (see this section's own top comment) - to pin the ONE property that
- * could otherwise only be checked by eye on the device: a stale per-column
- * reading from a VERTICAL-gravity frame must not leak into a fresh
- * VERTICAL-gravity frame across an intervening HORIZONTAL one, since the two
- * regimes give the array two entirely different meanings (see
- * update_local_depth_axis()'s own comment in app_sand.c for the full
- * argument).
- *
- * `painted_cols`/`painted_count` simulate the DIRTY-ROW optimisation: a real
- * vertical-dominant frame only writes col_local_depth[] for columns whose
- * row actually repainted, so a faithful mirror of the reset has to leave
- * SOME columns untouched by the frame that follows the flip, or the
- * unconditional "write every column" a simpler mirror would use could mask
- * a missing reset entirely - the untouched columns are exactly where a
- * missing reset would otherwise leak frame 1's value through undetected. */
-typedef struct {
-    unsigned char depth[8];
-    bool          axis_vertical;
-} mirror_local_depth_state_t;
-
-static void mirror_local_depth_frame(mirror_local_depth_state_t *st,
-                                     bool this_axis_vertical,
-                                     const int *painted_cols,
-                                     size_t painted_count,
-                                     unsigned char fresh_value)
+/* Mirrors paint_row_n()'s horizontal local-depth walk (app_sand.c) for a
+ * FIXED gravity that never points left (gx > 0) - the counterpart to
+ * mirror_local_depth_column() above: ascending column order, "left" toward
+ * the surface, a plain running value with no cross-call state. Reads the
+ * LIVE grid via sand_at(), the same off-grid-reads-as-MAT_STONE convention
+ * mirror_local_depth_column() relies on. */
+static void mirror_local_depth_row(sand_t *g, int cy, int w,
+                                   unsigned depth_out[])
 {
-    if (this_axis_vertical != st->axis_vertical) {
-        /* THE RESET UNDER TEST: see update_local_depth_axis()'s own comment
-         * in app_sand.c for why this has to happen before this frame's own
-         * painting touches the array at all. */
-        memset(st->depth, 0, sizeof st->depth);
+    unsigned running = 0;
+    for (int cx = 0; cx < w; cx++) {
+        const cell_t here = sand_at(g, cx, cy);
+        const cell_t left = sand_at(g, cx - 1, cy);
+        const bool same = CELL_MATERIAL(left) == CELL_MATERIAL(here);
+        running = same ? (running < 255u ? running + 1u : 255u) : 0u;
+        depth_out[cx] = running;
     }
-    st->axis_vertical = this_axis_vertical;
-
-    if (this_axis_vertical) {
-        for (size_t i = 0; i < painted_count; i++) {
-            st->depth[painted_cols[i]] = fresh_value;
-        }
-    }
-    /* A horizontal-dominant frame never writes col_local_depth[] at all -
-     * see LOCAL DEPTH's own comment in app_sand.c for why the horizontal
-     * case needs only a single local variable and never touches this
-     * array. */
 }
 
-static void test_local_depth_resets_when_gravitys_axis_flips(void)
-{
-    mirror_local_depth_state_t st;
-    memset(&st, 0, sizeof st);
+/*=============================================================================
+ * THE BLEND ITSELF HAS NO JUMP - the property that replaced axis hysteresis
+ * outright rather than merely tuning it further. See LOCAL DEPTH's own top
+ * comment in app_sand.c ("HYSTERESIS FIXED FREQUENCY. THIS FIXES SEVERITY.")
+ * for the full argument: hysteresis only ever reduced how OFTEN the old
+ * mechanism's dominant axis flipped, never how SEVERE the jump was on the
+ * rare frame it still did, and real sensor noise eventually flips it
+ * regardless of how well-tuned the hysteresis band is.
+ *
+ * Modelled the same way the fix itself was modelled before being written:
+ * pick ONE cell whose vertical-mode and horizontal-mode local depth
+ * disagree by nearly the ramp's own full span, then sweep GRAVITY - not the
+ * grid, which stays fixed throughout - through 30 to 60 degrees in 3-degree
+ * increments, and check the rendered luminance at that one cell never moves
+ * by more than a fraction of the ramp's full span in a single step. */
 
-    /* Frame 1, vertical: every column gets painted this frame, all with a
-     * distinctive nonzero value - stands in for a fully-dirty vertical
-     * frame. */
-    const int all_cols[8] = { 0, 1, 2, 3, 4, 5, 6, 7 };
-    mirror_local_depth_frame(&st, true, all_cols, 8, 77);
-    for (int i = 0; i < 8; i++) {
-        char why[128];
-        snprintf(why, sizeof why,
-                 "setup: column %d must read 77 right after frame 1, or "
-                 "the rest of this test proves nothing", i);
-        TEST_ASSERT_EQUAL_UINT8_MESSAGE(77, st.depth[i], why);
+/* Gravity samples for the sweep, 30 to 60 degrees in 3-degree increments -
+ * 11 points, straddling the exact 45-degree tie point the old dominant-axis
+ * comparison chattered at (0f09801) - as integer (gx, gy) pairs, magnitude
+ * ~1000, matching this app's own integer-only convention (IMU_COUNTS_PER_G
+ * is this same order of magnitude - see read_gravity_input() in
+ * app_sand.c). Precomputed (1000*sin(theta), 1000*cos(theta)), rounded, so
+ * this test needs no floating point of its own either - only the CONSTANTS
+ * were computed with it, once, by hand. */
+static const struct { int gx, gy; } BLEND_SWEEP[] = {
+    { 500, 866 },   /* 30 degrees */
+    { 545, 839 },   /* 33 degrees */
+    { 588, 809 },   /* 36 degrees */
+    { 629, 777 },   /* 39 degrees */
+    { 669, 743 },   /* 42 degrees */
+    { 707, 707 },   /* 45 degrees - gx == gy, the exact tie point */
+    { 743, 669 },   /* 48 degrees */
+    { 777, 629 },   /* 51 degrees */
+    { 809, 588 },   /* 54 degrees */
+    { 839, 545 },   /* 57 degrees */
+    { 866, 500 },   /* 60 degrees */
+};
+#define BLEND_SWEEP_N (sizeof BLEND_SWEEP / sizeof BLEND_SWEEP[0])
+
+/* A narrow, deep pool with ONE stone cell tucked beside the test column at
+ * the very bottom - built to make the two readings at the test cell
+ * disagree as much as this ramp can show, the same way the fix's own
+ * modelling picked its worst-case cell rather than an arbitrary one.
+ * TEST_CX's column is plain, uninterrupted water from row 2 all the way to
+ * the bottom (BLEND_POOL_H - 1 rows deep - comfortably past
+ * DEPTH_SATURATE_CELLS in material.c, so its vertical depth saturates),
+ * while TEST_CX - 1 at the BOTTOM row only is stone - breaking the SAME
+ * row's horizontal run at the cell immediately beside the test cell, so
+ * the test cell's horizontal depth is 0 while its vertical depth is
+ * saturated. */
+enum { BLEND_POOL_W = 4, BLEND_POOL_H = 30 };
+enum { BLEND_TEST_CX = 2, BLEND_TEST_CY = BLEND_POOL_H - 1 };
+static uint8_t blend_pool_cells[BLEND_POOL_W * BLEND_POOL_H];
+static sand_t  blend_pool;
+
+static void test_the_blend_has_no_jump_crossing_45_degrees(void)
+{
+    enum { PW = BLEND_POOL_W, PH = BLEND_POOL_H };
+    sand_init(&blend_pool, blend_pool_cells, PW, PH, 9001u);
+
+    /* Rows 0-1 stay empty (the surface); rows 2..PH-1 are a plain
+     * rectangular pool, no obstacle yet. */
+    for (int y = 2; y < PH; y++) {
+        for (int x = 0; x < PW; x++) {
+            sand_set(&blend_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
     }
 
-    /* Frame 2, horizontal: the axis itself has changed (vertical to
-     * horizontal), so THIS transition resets the array too - correct, if
-     * redundant, since a horizontal frame never writes col_local_depth[]
-     * anyway and has nothing of its own to protect it from. What actually
-     * matters is the transition just below. */
-    mirror_local_depth_frame(&st, false, NULL, 0, 0);
+    /* THE ONE OBSTACLE: a single stone cell, immediately beside the test
+     * cell, in the test cell's OWN row only - it does not touch any other
+     * row of the test column, so it cannot affect that column's vertical
+     * depth at all, only the horizontal depth of the row it sits in. */
+    sand_set(&blend_pool, BLEND_TEST_CX - 1, BLEND_TEST_CY,
+             CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
 
-    /* Frame 3, vertical again - the axis flips BACK, which is the
-     * transition this test exists for - but only column 0 is dirty this
-     * frame (most rows are NOT dirty on a typical frame; see LOCAL DEPTH's
-     * own comment in app_sand.c on why that staleness is normally
-     * accepted). If the reset on THIS transition were ever missing -
-     * suppose only the "entering horizontal" direction were wired up, say -
-     * a longer run of horizontal frames between two vertical ones (nothing
-     * about this sequence depends on there being exactly one) would leave
-     * columns 1-7 reading frame 1's 77, stale AND meaningless once the axis
-     * itself has changed and changed back, rather than the fresh 0 a
-     * genuinely reset array must show. */
-    const int just_col0[1] = { 0 };
-    mirror_local_depth_frame(&st, true, just_col0, 1, 3);
+    /* Sanity: the setup actually produces the disagreement this test is
+     * built around, or the rest of it proves nothing. */
+    unsigned vcol[PH];
+    mirror_local_depth_column(&blend_pool, BLEND_TEST_CX, PH, vcol);
+    unsigned hrow[PW];
+    mirror_local_depth_row(&blend_pool, BLEND_TEST_CY, PW, hrow);
+    const unsigned vdepth = vcol[BLEND_TEST_CY];
+    const unsigned hdepth = hrow[BLEND_TEST_CX];
 
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(3, st.depth[0],
-        "column 0 was actually painted this frame and must read its fresh "
-        "value");
-    for (int i = 1; i < 8; i++) {
-        char why[240];
+    TEST_ASSERT_TRUE_MESSAGE(vdepth >= 24u,
+        "setup: the test column must be deep enough for its vertical local "
+        "depth to reach (or pass) DEPTH_SATURATE_CELLS, or this is not the "
+        "worst-case cell the fix was modelled against");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, hdepth,
+        "setup: the stone placed beside the test cell must reset ITS "
+        "horizontal depth to 0, or this test is not exercising the "
+        "vertical/horizontal disagreement it claims to");
+
+    /* THE SWEEP: gravity steps through 30 to 60 degrees; the GRID never
+     * changes, so vdepth/hdepth above are reused unmodified for every
+     * sample - only the blend WEIGHT moves, exactly mirroring how the fix
+     * itself was modelled (see this section's own top comment). */
+    int lum[BLEND_SWEEP_N];
+    for (size_t i = 0; i < BLEND_SWEEP_N; i++) {
+        const int gx = BLEND_SWEEP[i].gx, gy = BLEND_SWEEP[i].gy;
+
+        /* THE BLEND ITSELF - see update_local_depth_gravity() and the
+         * per-cell blend in paint_row_n(), both in app_sand.c: one divide
+         * here (mirroring the ONE PER FRAME the shipped mechanism spends),
+         * then a plain multiply-add-shift, no divide, to combine the two
+         * fixed readings above. */
+        const unsigned ax = (unsigned)gx, ay = (unsigned)gy;
+        const unsigned sum = ax + ay;
+        const unsigned weight_h_q8 = (sum != 0) ? (256u * ax) / sum : 128u;
+        const unsigned depth =
+            ((vdepth * (256u - weight_h_q8)) + (hdepth * weight_h_q8)) >> 8;
+
+        gfx_color_t out[3];
+        material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, depth, out);
+        lum[i] = panel_luminance(out[0]);
+    }
+
+    /* THE BOUND: derived from the ramp's own full span (depth 0 versus
+     * depth 255, the same two extremes test_a_liquid_interior_is_shaded_by_
+     * depth already pins), not a hand-picked luminance number - robust to
+     * the ramp ever being retuned. Three quarters of that span is the
+     * threshold: comfortably above the small, often-zero per-step changes
+     * the blend actually produces, and comfortably below what a discrete
+     * switch produces in one step.
+     *
+     * PROVEN LOAD-BEARING, not merely written and trusted to catch
+     * anything: temporarily swapping the blend above for a crude hard
+     * single-axis switch (`(ay >= ax) ? vdepth : hdepth`, no blend at all)
+     * turns this test RED - every sample from 30 to 45 degrees reads
+     * depth 27 (lum 54), every sample from 48 to 60 degrees reads depth 0
+     * (lum 85), a 31-luminance jump in one 3-degree step at the crossing -
+     * exactly the full span this test measures against, reproducing the
+     * reported "jump between the axis" exactly. Restoring the blend turns
+     * it GREEN again: depth moves 17,16,15,14,14,13,12,12,11,10,9 across
+     * the same eleven samples (luminance 62,62,62,62,62,62,70,70,70,70,70),
+     * an 8-luminance jump at that same crossing and 0 everywhere else -
+     * comfortably under the three-quarters-of-31 threshold, and nowhere
+     * close to the switch's full-span pop. */
+    gfx_color_t shallow[3], deep[3];
+    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 0u, shallow);
+    material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 255u, deep);
+    const int full_span = panel_luminance(shallow[0]) - panel_luminance(deep[0]);
+    const int max_step = (full_span * 3) / 4;
+
+    for (size_t i = 1; i < BLEND_SWEEP_N; i++) {
+        const int step = lum[i] - lum[i - 1];
+        const int abs_step = step < 0 ? -step : step;
+        char why[256];
         snprintf(why, sizeof why,
-                 "column %d must read 0 right after the axis flips back "
-                 "to vertical, not 77 left over from frame 1 - the reset "
-                 "is what stops a horizontal-gravity gap from leaking a "
-                 "stale per-column reading into a fresh vertical one", i);
-        TEST_ASSERT_EQUAL_UINT8_MESSAGE(0, st.depth[i], why);
+                 "luminance jumped %d between two 3-degree gravity steps "
+                 "(sample %zu -> %zu), more than three quarters of the "
+                 "ramp's own full %d-luminance span - a blend must crossfade, "
+                 "not pop, however far it is from the 45-degree tie point",
+                 abs_step, i - 1, i, full_span);
+        TEST_ASSERT_TRUE_MESSAGE(abs_step <= max_step, why);
     }
 }
 
@@ -17128,7 +17221,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
-    RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
+    RUN_TEST(test_the_blend_has_no_jump_crossing_45_degrees);
     RUN_TEST(test_every_liquid_interior_is_exactly_the_body_colour_when_saturated);
     RUN_TEST(test_a_shallow_puddle_still_shows_real_darkening);
     RUN_TEST(test_water_foams_where_its_rim_is_curved);
