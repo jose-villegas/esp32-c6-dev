@@ -26,7 +26,10 @@
 #include "input/touch.h"
 #include "ui/ui.h"
 #include "ui/ui_launcher.h"
+
+#if CONFIG_LAUNCHER_DEVELOPMENT
 #include "util/screenshot.h"
+#endif
 
 #if CONFIG_LAUNCHER_SELFTEST
 #include "boot/selftest.h"
@@ -407,7 +410,15 @@ void app_main(void)
 
     touch_start();
     buttons_start();
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    /* A release build has nobody watching the serial console to type
+     * SCREENSHOT into - see util/screenshot.c's own top comment and
+     * docs/Testing-Guide.md's "Development-only instrumentation" section
+     * for why this is CONFIG_LAUNCHER_DEVELOPMENT rather than left ungated
+     * or tied to CONFIG_LAUNCHER_SELFTEST (it is not a test, and does not
+     * need the Diagnostics app's bench-only side effects either). */
     screenshot_start();
+#endif
 
     /* Not fatal if this fails - the display sampling below just finds
      * imu_ready() false forever after and the shell stays upright, the same
@@ -485,7 +496,8 @@ void app_main(void)
 
         step_app(&current, &input, dt_ms);
 
-        /* A capture requested from the host over the console's UART - see
+#if CONFIG_LAUNCHER_DEVELOPMENT
+        /* A capture requested from the host over the console - see
          * util/screenshot.c's own top comment for why that arrives as a
          * flag rather than a direct call from the listener task. Checked
          * after the frame is drawn but before it is sent, so what is
@@ -495,6 +507,7 @@ void app_main(void)
         if (screenshot_take_request()) {
             screenshot_dump();
         }
+#endif
 
         gfx_present();
         report_fps(now_us, &fps_window_start, &frames);

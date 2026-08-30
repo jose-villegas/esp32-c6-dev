@@ -18,6 +18,15 @@
  * test/suites/suite_screenshot.c). Actually listening on the console and
  * walking the live framebuffer needs the device; that part is screenshot.c,
  * never compiled for a host build.
+ *
+ * screenshot_start()/screenshot_take_request()/screenshot_dump() below are
+ * only ever CALLED under CONFIG_LAUNCHER_DEVELOPMENT (see main.c) - a
+ * release build has nobody watching the serial console to type SCREENSHOT
+ * into, the same reasoning app_sand.c's frame-timing averages are gated on
+ * (see docs/Testing-Guide.md's "Development-only instrumentation" section).
+ * Declared unconditionally here regardless, the same way the rest of this
+ * header stays plain C with no #if of its own - main.c is what decides
+ * whether anything ever calls them.
  *===========================================================================*/
 #pragma once
 
