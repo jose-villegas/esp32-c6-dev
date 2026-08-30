@@ -71,16 +71,57 @@ def main() -> int:
     buffer = ""
     total_size = None
     chunks = []
+    received_b64_chars = 0
+
+    # Printed immediately, before anything blocks: without this, a slow but
+    # perfectly healthy capture (see --timeout's own help text above) prints
+    # nothing at all until it either finishes or times out, and looks
+    # identical to a genuine hang for the whole minute in between.
+    print(f"sent trigger, waiting for the device "
+          f"(up to {args.timeout:g}s for a full frame)...",
+          file=sys.stderr, flush=True)
+    last_progress = time.monotonic()
 
     with port:
         port.reset_input_buffer()
         port.write(TRIGGER)
         port.flush()
+        last_trigger_sent = time.monotonic()
 
         while time.monotonic() < deadline:
             chunk = port.read(4096)
             if chunk:
                 buffer += chunk.decode("utf-8", errors="replace")
+
+            now = time.monotonic()
+
+            # Resend the trigger periodically until SCREENSHOT_BEGIN shows
+            # up. A single lost byte is easy to hit right after flashing:
+            # flashing resets the board, and if this runs before the
+            # firmware has gotten through POST and the boot animation to
+            # install its UART listener, the one-shot trigger arrives
+            # before anything is reading for it and is gone for good -
+            # otherwise indistinguishable from a genuine hang, since the
+            # firmware comes up moments later in a perfectly normal,
+            # listening state that will happily answer the NEXT one.
+            if total_size is None and now - last_trigger_sent >= 5.0:
+                print("  ... no response yet, resending trigger (the device "
+                      "may still be booting)", file=sys.stderr, flush=True)
+                port.write(TRIGGER)
+                port.flush()
+                last_trigger_sent = now
+
+            if now - last_progress >= 3.0:
+                if total_size is None:
+                    print("  ... still waiting for SCREENSHOT_BEGIN "
+                          "(nothing recognizable seen yet)",
+                          file=sys.stderr, flush=True)
+                else:
+                    received_bytes = received_b64_chars * 3 // 4
+                    pct = min(100, received_bytes * 100 // max(total_size, 1))
+                    print(f"  ... {pct}% ({received_bytes}/{total_size} bytes)",
+                          file=sys.stderr, flush=True)
+                last_progress = now
 
             while "\n" in buffer:
                 line, buffer = buffer.split("\n", 1)
@@ -90,6 +131,8 @@ def main() -> int:
                     m = BEGIN_RE.match(line)
                     if m:
                         total_size = int(m.group(1))
+                        print(f"  capturing {total_size} bytes...",
+                              file=sys.stderr, flush=True)
                     continue
 
                 if line == END_LINE:
@@ -103,7 +146,9 @@ def main() -> int:
                     return 0
 
                 if line.startswith(DATA_PREFIX):
-                    chunks.append(line[len(DATA_PREFIX):])
+                    encoded = line[len(DATA_PREFIX):]
+                    chunks.append(encoded)
+                    received_b64_chars += len(encoded)
                 # anything else on the wire is ordinary log output - ignored
 
     print(f"\ntimed out after {args.timeout:g}s without a complete capture.",

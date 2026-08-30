@@ -80,11 +80,20 @@ static void screenshot_task(void *arg)
             continue;
         }
 
-        if (c == '\n') {
+        if (c == '\n' || c == '\r') {
+            /* Either terminator ends a line - tools/screenshot.py sends a
+             * bare '\n', but treating '\r' the same way means a line typed
+             * by hand into monitor.sh (whose Enter key may send either,
+             * depending on platform) still reaches the strcmp() below,
+             * which is what makes "type SCREENSHOT into monitor.sh" a valid
+             * way to test this listener in isolation from the host script. */
             if (len > 0) {
                 line[len] = '\0';
                 if (strcmp(line, SCREENSHOT_TRIGGER) == 0) {
+                    ESP_LOGI(TAG, "trigger received");
                     s_request_pending = true;
+                } else {
+                    ESP_LOGI(TAG, "ignoring line: '%s'", line);
                 }
                 len = 0;
             }
@@ -114,19 +123,53 @@ void screenshot_start(void)
         .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
         .source_clk = UART_SCLK_DEFAULT,
     };
-    uart_param_config(SCREENSHOT_UART, &cfg);
-    uart_set_pin(SCREENSHOT_UART, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
-                 UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    uart_driver_install(SCREENSHOT_UART, 256, 0, 0, NULL, 0);
+    esp_err_t err = uart_param_config(SCREENSHOT_UART, &cfg);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "uart_param_config failed: %s - listener not started",
+                 esp_err_to_name(err));
+        return;
+    }
+
+    err = uart_set_pin(SCREENSHOT_UART, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
+                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "uart_set_pin failed: %s - listener not started",
+                 esp_err_to_name(err));
+        return;
+    }
+
+    err = uart_driver_install(SCREENSHOT_UART, 256, 0, 0, NULL, 0);
+    if (err != ESP_OK) {
+        /* The one most worth calling out by name: this is what happens if
+         * something else already installed a driver on this UART before
+         * screenshot_start() ran (ESP_ERR_INVALID_STATE) - silently
+         * leaving the console on its default non-blocking reader, which
+         * looks from the host exactly like a request that vanished into
+         * nothing rather than a boot-time failure. */
+        ESP_LOGE(TAG, "uart_driver_install failed: %s - listener not started",
+                 esp_err_to_name(err));
+        return;
+    }
+
     uart_vfs_dev_use_driver(SCREENSHOT_UART);
 
-    /* No CR/LF translation on the way in: tools/screenshot.py sends a bare
-     * '\n' after the trigger word, and this is what makes that arrive at
-     * screenshot_task() unchanged instead of being remapped as if a
-     * terminal's Enter key (CR) had produced it. */
+    /* Either terminator accepted on the way in - see screenshot_task()'s own
+     * comment on why '\r' is treated the same as '\n' there. Left at LF here
+     * (no translation) rather than switched to CR/CRLF: translating would
+     * only rewrite '\r' into '\n' before screenshot_task() ever sees it,
+     * which the task already does itself, and leaving translation off means
+     * a stray '\r' from either source arrives unchanged instead of being
+     * silently turned into two line endings for one keypress. */
     uart_vfs_dev_port_set_rx_line_endings(SCREENSHOT_UART, ESP_LINE_ENDINGS_LF);
 
-    xTaskCreate(screenshot_task, "screenshot", 3072, NULL, 4, NULL);
+    const BaseType_t created =
+        xTaskCreate(screenshot_task, "screenshot", 3072, NULL, 4, NULL);
+    if (created != pdPASS) {
+        ESP_LOGE(TAG, "xTaskCreate failed (out of memory?) - listener not started");
+        return;
+    }
+
+    ESP_LOGI(TAG, "listening for '%s' on the console UART", SCREENSHOT_TRIGGER);
 }
 
 bool screenshot_take_request(void)
