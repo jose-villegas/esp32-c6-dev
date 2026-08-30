@@ -127,6 +127,9 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
     const fs = require("fs");
     const [, , respFile, docPath, patchesFile] = process.argv;
     let text = fs.readFileSync(respFile, "utf8");
+    // omniroute chat appends a "[model · Nms · N tok]" footer line; strip it
+    // before hunting for the JSON array brackets.
+    text = text.replace(/\n\[[^\[\]]*·[^\[\]]*\]\s*$/, "");
     const start = text.indexOf("[");
     const end = text.lastIndexOf("]");
     if (start === -1 || end === -1) { console.error("  no JSON array found in response"); process.exit(0); }
@@ -183,7 +186,8 @@ if [ -n "$REVIEW_MODEL" ]; then
   node -e '
     const fs = require("fs");
     const [, , respFile, patchesFile] = process.argv;
-    const text = fs.readFileSync(respFile, "utf8");
+    let text = fs.readFileSync(respFile, "utf8");
+    text = text.replace(/\n\[[^\[\]]*·[^\[\]]*\]\s*$/, "");
     const s = text.indexOf("["), e = text.lastIndexOf("]");
     const all = JSON.parse(fs.readFileSync(patchesFile, "utf8"));
     if (s === -1 || e === -1) { console.error("no JSON verdicts found, keeping all patches unreviewed"); process.exit(0); }
