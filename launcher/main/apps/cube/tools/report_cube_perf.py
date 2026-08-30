@@ -134,7 +134,7 @@ def main() -> int:
         lines.append("| Phase | " + " | ".join(f"`{label}`" for label in labels) + " |")
         lines.append("|---|" + "---:|" * len(labels))
         for phase in PHASE_ORDER:
-            row = [phase]
+            row = [f"{phase} (us)"]
             for label in labels:
                 p = runs[label]["phases"].get(phase)
                 row.append(str(p["avg"]) if p else "?")
@@ -142,18 +142,19 @@ def main() -> int:
         lines.append("")
         lines.append("| | " + " | ".join(labels) + " |")
         lines.append("|---|" + "---:|" * len(labels))
-        total_row = ["**fps (avg)**"]
-        for label in labels:
-            total = runs[label]["phases"].get("Total")
-            total_row.append(fps(total["avg"]) if total else "?")
-        lines.append("| " + " | ".join(total_row) + " |")
+        for stat, stat_label in (("avg", "avg"), ("med", "median"), ("p95", "p95")):
+            row = [f"**Total fps ({stat_label})**"]
+            for label in labels:
+                total = runs[label]["phases"].get("Total")
+                row.append(fps(total[stat]) if total else "?")
+            lines.append("| " + " | ".join(row) + " |")
         lines.append("")
 
         for label in labels:
             run = runs[label]
             lines.append(f"## `{label}` ({run['frames']} frames over {run['seconds']}s)")
             lines.append("")
-            lines.append("| Phase | Min | Max | Avg | Median | P95 |")
+            lines.append("| Phase | Min (us) | Max (us) | Avg (us) | Median (us) | P95 (us) |")
             lines.append("|---|---:|---:|---:|---:|---:|")
             for phase in PHASE_ORDER:
                 p = run["phases"].get(phase)
