@@ -15,6 +15,12 @@
 #      reviewer's reason attached and gets a chance to be revised, up to
 #      --rounds times, before being dropped.
 #
+# Once patches are approved and applied, scripts/check-format.sh runs
+# in-place on just the changed .c/.h files (not a pre-scan over everything --
+# see the comment at that call site) before the commit, so the fixer's
+# injected text matches .clang-format rather than whatever the model felt
+# like indenting.
+#
 # --pool picks which combo of models does the bulk fixing (--combo <name>
 # overrides it with any combo by name, for one-off experiments):
 #   local        (default) local-coding -- this workspace's Ollama models,
@@ -597,6 +603,29 @@ if [ -z "$CHANGED_FILES" ]; then
 fi
 
 HAS_CHANGES=1
+
+# Normalize the fixer's injected replacement text to house style before
+# committing. Deliberately a post-step on just the files this run already
+# touched, not a pre-scan pass over everything: reformatting whole files up
+# front would land style-only diffs in the same commit as the audit fixes,
+# which is exactly the full-file-rewrite blast radius the find/replace-patch
+# design above exists to avoid. check-format.sh needs clang-format
+# installed; if that's missing or too old, warn and commit unformatted
+# rather than losing an otherwise-good, reviewer-approved fix over it.
+FORMAT_FILES=""
+for f in $CHANGED_FILES; do
+  case "$f" in
+    *.c | *.h) FORMAT_FILES="$FORMAT_FILES $f" ;;
+  esac
+done
+if [ -n "$FORMAT_FILES" ]; then
+  echo "Formatting changed files with check-format.sh..."
+  # shellcheck disable=SC2086 # FORMAT_FILES is a deliberate word-split file list
+  if ! scripts/check-format.sh $FORMAT_FILES; then
+    echo "  check-format.sh failed (clang-format missing/too old?) -- committing unformatted." >&2
+  fi
+fi
+
 if [ "$USE_WORKTREE" != "1" ]; then
   git checkout -b "$BRANCH"
 fi
