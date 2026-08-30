@@ -27,7 +27,7 @@ Reported by the BSP at boot rather than assumed:
 
 Everything on the board, and how to tell it is alive. The POST that ships in
 the firmware probes each of these at boot and prints exactly this table — see
-`main/post.c`.
+`launcher/main/boot/post.c`.
 
 | Peripheral | Part | Where | Notes |
 |---|---|---|---|
@@ -35,7 +35,7 @@ the firmware probes each of these at boot and prints exactly this table — see
 | Touch | FT5x06 (V1) / CST820 (V2) | I2C `0x38` / `0x15` | which address answers identifies the board revision |
 | IO expander | TCA9554 | I2C `0x20` | drives display and touch reset lines |
 | Power management | AXP2101 | I2C `0x34` | battery charging; the PWR button goes through it |
-| IMU | QMI8658 | I2C `0x6b` | accelerometer + gyroscope; driver in `main/imu.c`, axes in [Input-and-Sensors.md](Input-and-Sensors.md) |
+| IMU | QMI8658 | I2C `0x6b` | accelerometer + gyroscope; driver in `launcher/main/input/imu.c`, axes in [Input-and-Sensors.md](Input-and-Sensors.md) |
 | Real-time clock | PCF85063 | I2C `0x51` | |
 | Audio codec | ES8311 | I2C, I2S pins 19–23 | speaker + mic; amp enable on expander pin 7 |
 | microSD | — | SPI2, pins 6/10/11/18 | shares SPI2 with the display; see [time-multiplexing](#time-multiplexing-the-bus--the-actual-workaround) |

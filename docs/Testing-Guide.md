@@ -184,7 +184,7 @@ that refuses to.
 
 ## POST is a third thing
 
-Separate from both runners is the **power-on self test** in `main/post.c`. It
+Separate from both runners is the **power-on self test** in `launcher/main/boot/post.c`. It
 answers a different question, so it lives in a different place and obeys
 different rules.
 

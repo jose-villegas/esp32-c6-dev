@@ -57,7 +57,7 @@ and means something different by each:
 | | |
 |---|---|
 | **shell** | the frame loop and the app switching — `main.c`, whose log tag is literally `shell` |
-| **launcher** | the home screen the shell draws when no app is running — `ui/ui_launcher.c`. This is what you reach after booting. |
+| **launcher** | the home screen the shell draws when no app is running — `launcher/main/ui/ui_launcher.c`. This is what you reach after booting. |
 | **boot** | what runs once before the loop exists and never again — `boot/` |
 
 
@@ -259,11 +259,11 @@ cube app is slower because rasterizing costs ~28 ms on top.
 
 Three steps.
 
-**1. Write `main/apps/app_yours.c`:**
+**1. Write `main/apps/<name>/app_<name>.c`** (e.g. `main/apps/sand/app_sand.c`):
 
 ```c
-#include "../app.h"
-#include "../gfx.h"
+#include "../../app.h"
+#include "../../gfx/gfx.h"
 
 static void yours_enter(void) { /* reset state */ }
 
@@ -323,7 +323,7 @@ shell-owned header alongside an app one, say) stays in the shared
 `launcher/tools/` instead. `main/apps/sand/tools/block_size_sweep.ps1` is the
 first tenant - it only ever touches `sand.h` - while
 `launcher/tools/sweeps/row_leaf_sweep.ps1`, which sweeps a sand constant
-*and* a `main/gfx_dirty.h` constant together, stays shared for exactly that
+*and* a `launcher/main/gfx/gfx_dirty.h` constant together, stays shared for exactly that
 reason.
 
 See `docs/Sand/Sand-Simulation.md` for how the pieces above fit together - the
@@ -374,7 +374,7 @@ particular that `REQUIRES` must **not** be gated this way.
 
 ### Drawing a UI, in the shell or in an app
 
-`main/ui.c` owns the microui integration; `ui_launcher.c` is just one caller.
+`launcher/main/ui/ui.c` owns the microui integration; `ui_launcher.c` is just one caller.
 An app builds a UI the same way:
 
 ```c
