@@ -2525,6 +2525,68 @@ static void test_a_hard_flick_kicks_water_off_the_wall_it_just_hit(void)
         "kick some of it back into the grid");
 }
 
+static void test_a_wall_splash_also_queues_a_small_displacement(void)
+{
+    /* Same reversal-onto-a-wall scene as the test above, checking
+     * sand_displace()'s own side effect instead of where the mass ends up -
+     * rebound_one_cell() (sand_liquid.c) fires it on every successful
+     * kick. */
+    impulse_t splash_impulse_buf[REB_W * REB_H];
+    sand_init(&reb_a, reb_cells_a, REB_W, REB_H, 1u);
+    sand_enable_impulses(&reb_a, splash_impulse_buf, REB_W * REB_H);
+
+    sand_step(&reb_a, 1000, 0, 0);
+    fill_left_wall_column(&reb_a);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, reb_a.impulse_count,
+        "setup: nothing should be queued before the flick itself");
+
+    sand_set_flick(&reb_a, 255);
+    sand_step(&reb_a, -1000, 0, 0);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, reb_a.impulse_count,
+        "a wall splash hard enough to kick mass back into the grid must "
+        "also queue a small sand_displace() at the impact point");
+}
+
+#define SPLASH_W 3
+#define SPLASH_H 10
+static uint8_t splash_cells[SPLASH_W * SPLASH_H];
+static sand_t  splash_sim;
+
+static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
+{
+    /* A single dropped grain, falling through open space, lands on an
+     * existing puddle's surface - move_liquid_grain()'s own straight-down
+     * give_mass() call (sand_liquid.c) fires sand_displace() on that
+     * landing, gated to a genuine fall (open space one step above) rather
+     * than ordinary internal levelling. */
+    enum { CX = 1, POOL_TOP = 6, SURFACE_MASS = MASS_MAX / 2 };
+    impulse_t drop_impulse_buf[SPLASH_W * SPLASH_H];
+    sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
+    sand_enable_impulses(&splash_sim, drop_impulse_buf, SPLASH_W * SPLASH_H);
+
+    for (int y = POOL_TOP + 1; y < SPLASH_H; y++) {
+        for (int x = 0; x < SPLASH_W; x++) {
+            sand_set(&splash_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    /* The surface row has ROOM - a fully-packed target has nothing for the
+     * straight-down transfer this trigger reads to give it. */
+    sand_set(&splash_sim, CX, POOL_TOP, CELL_MAKE(MAT_WATER, SURFACE_MASS));
+    sand_set(&splash_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, splash_sim.impulse_count,
+        "setup: nothing should be queued before the drop has even fallen");
+
+    for (int i = 0; i < 15; i++) {
+        sand_step(&splash_sim, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, splash_sim.impulse_count,
+        "a drop that fell through open space and landed on an existing "
+        "puddle's surface must queue a small sand_displace()");
+}
+
 static void test_a_reversal_without_a_flick_signal_still_does_not_rebound(void)
 {
     /* The whole reason sand_set_flick() exists: (gx, gy) is smoothed, so a
@@ -17545,6 +17607,8 @@ void run_sand_suite(void)
     RUN_TEST(test_a_settled_pool_does_not_flicker);
     RUN_TEST(test_a_pool_settles_at_the_angle_it_is_tilted_to);
     RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
+    RUN_TEST(test_a_wall_splash_also_queues_a_small_displacement);
+    RUN_TEST(test_water_falling_onto_water_also_queues_a_small_displacement);
     RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
 
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);

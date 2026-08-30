@@ -22,6 +22,12 @@
  * moved to sand_priv.h (still static inline) now that sand.c's own sweep needs
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
+/* Radius for the water-on-water and wall-splash sand_displace() test
+ * hooks below - deliberately exaggerated (a real splash would be 1) so
+ * the effect is obvious while testing displacement; dial it back down
+ * once it looks right. */
+#define SAND_TEST_SPLASH_RADIUS 5
+
 /* Add `amount` of `id` to a cell that is either empty or already that same
  * material. Mass is only ever moved, never made: every caller subtracts the
  * same figure from somewhere else in the same breath.
@@ -389,10 +395,32 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return true;
     }
 
+    /* Checked BEFORE give_mass() writes into the target - afterward it
+     * never reads as empty again. Gated on water first so non-water falls
+     * pay nothing extra. */
+    const bool water_falling = mat_id == MAT_WATER;
+    const bool target_occupied = water_falling
+        && (unsigned)tx0 < (unsigned)w && prow != NULL
+        && !CELL_IS_EMPTY(prow[tx0]);
+
     const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
     mass -= down;
     if (down > 0) {
         moved = true;
+
+        /* WATER-ONLY, TEST INTERACTION: a drop that was exposed to open
+         * space one step away from gravity (not buried inside the body)
+         * landing on already-occupied water gets a small sand_displace(),
+         * to exercise it on a real fall-and-land trigger. */
+        if (target_occupied) {
+            const uint8_t *arow = dest_row(s, y - dy);
+            const int ax = x - dx;
+            const bool exposed = arow == NULL || (unsigned)ax >= (unsigned)w
+                                  || CELL_IS_EMPTY(arow[ax]);
+            if (exposed) {
+                sand_displace(s, tx0, ty0, SAND_TEST_SPLASH_RADIUS);
+            }
+        }
     }
 
     /* Then DOWN THE SLOPE, both ways.
@@ -978,6 +1006,13 @@ static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
         mark_depth_band(s, ny);
     }
     mark_move(s, x, y, nx, ny);
+
+    /* WATER-ONLY, TEST INTERACTION: a wall splash also throws a little
+     * displacement out from the impact point, exercising sand_displace()
+     * on the same trigger a real splash would use. */
+    if (id == MAT_WATER) {
+        sand_displace(s, x, y, SAND_TEST_SPLASH_RADIUS);
+    }
 }
 
 static void rebound_wall(sand_t *s, int edge, int count, int to,
