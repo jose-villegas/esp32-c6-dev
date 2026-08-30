@@ -311,8 +311,22 @@ typedef struct {
     /* Decaying trigger chance for splash_displace() (sand_liquid.c) - see
      * SAND_SPLASH_RADIUS_WATER's own comment above for why this lives
      * per-instance. WATER only - see acid_splashes_this_step below for
-     * why acid needs a different kind of throttle. */
+     * why acid needs a different kind of throttle.
+     *
+     * ONE OF TWO SEPARATE WATER BUDGETS, not shared with rebound_splash_
+     * chance below - splash_displace()'s own comment (sand_liquid.c)
+     * explains why one budget for both trigger contexts let whichever ran
+     * first in a step (always the ordinary per-grain trigger this field
+     * serves) starve the other of its own guaranteed-first roll. This one
+     * covers a grain landing on already-occupied liquid, and a grain's
+     * ordinary gravity-ward fall being blocked by a wall or the grid
+     * edge - both in move_liquid_grain(). */
     uint8_t    splash_chance;
+
+    /* The SECOND of the two water budgets - rebound_wall()'s own
+     * flick-driven wall-kick trigger only (rebound_one_cell(),
+     * sand_liquid.c), never touched by splash_chance above. */
+    uint8_t    rebound_splash_chance;
 
     /* How many ACID splashes splash_displace() has already fired THIS
      * STEP, reset to 0 at the top of every sand_step() - caps how many of
@@ -728,7 +742,7 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 #define SAND_SPLASH_RADIUS_ACID  5
 #define SAND_SPLASH_CHANCE_START 255
 #define SAND_SPLASH_CHANCE_FLOOR 24
-#define SAND_SPLASH_CHANCE_STEP  90
+#define SAND_SPLASH_CHANCE_STEP  140
 
 /* How many ACID splashes splash_displace() (sand_liquid.c) will fire in a
  * single sand_step() - see sand_t::acid_splashes_this_step's own comment

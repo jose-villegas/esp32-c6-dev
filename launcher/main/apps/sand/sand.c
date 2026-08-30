@@ -160,6 +160,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->impulse_max   = 0;
     s->impulse_count = 0;
     s->splash_chance = SAND_SPLASH_CHANCE_START;
+    s->rebound_splash_chance = SAND_SPLASH_CHANCE_START;
     s->acid_splashes_this_step = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
@@ -1951,7 +1952,26 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * position, same direction, already-ramped speed and all - so
              * it gets another turn next step rather than being dropped for
              * something that may clear a moment later. Reached only for a
-             * true wall now, or the grid edge - see can_impulse_enter(). */
+             * true wall now, or the grid edge - see can_impulse_enter().
+             *
+             * WATER AND ACID BOUNCE INSTEAD OF JUST WAITING - a splash
+             * hitting a wall mid-flight should kick back off it, not stall
+             * against it for the rest of its (already-ramped) flight the
+             * way a chunk of solid debris plausibly would. Reversing `dir`
+             * to the opposite ring direction turns the remaining speed
+             * into a rebound rather than a wasted wait; if the opposite
+             * direction is ALSO blocked (a corner, a one-wide gap) this
+             * simply flips again next step, which reads as the droplet
+             * vibrating in place until its flight ages out - bounded by
+             * SAND_IMPULSE_SPEED_RAMP the same as any other entry, not a
+             * new failure mode. Every other material keeps the plain wait,
+             * unchanged - see splash_displace()'s own comment in
+             * sand_liquid.c for why this scope matches the splash feature
+             * itself, water and acid only. */
+            const uint8_t mat_id = CELL_MATERIAL(entry.cell);
+            if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
+                entry.dir = (entry.dir + 4) & 7;
+            }
             s->impulse_buf[kept++] = entry;
             continue;
         }

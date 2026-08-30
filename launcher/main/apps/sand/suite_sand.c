@@ -2594,6 +2594,73 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
         "puddle's surface must queue a small directed impulse");
 }
 
+static void test_water_falling_onto_a_solid_floor_also_queues_a_small_displacement(void)
+{
+    /* A single dropped grain, falling through open space onto BARE STONE -
+     * no water there at all yet, unlike the puddle-landing test above.
+     * give_mass()'s room_in() check returns 0 against a material mismatch
+     * exactly the same way for a solid floor as it does for a full,
+     * different liquid, so move_liquid_grain() needs its own KIND_STATIC
+     * check to tell the two apart - see the `else if` branch just after
+     * the `down > 0` block in move_liquid_grain() (sand_liquid.c). */
+    enum { CX = 1, FLOOR_ROW = 6 };
+    impulse_t drop_impulse_buf[SPLASH_W * SPLASH_H];
+    sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
+    sand_enable_impulses(&splash_sim, drop_impulse_buf, SPLASH_W * SPLASH_H);
+
+    for (int x = 0; x < SPLASH_W; x++) {
+        sand_set(&splash_sim, x, FLOOR_ROW, STONE);
+    }
+    sand_set(&splash_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, splash_sim.impulse_count,
+        "setup: nothing should be queued before the drop has even fallen");
+
+    bool queued = false;
+    for (int i = 0; i < 15 && !queued; i++) {
+        sand_step(&splash_sim, 0, 1000, 0);
+        queued = splash_sim.impulse_count > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(queued,
+        "a drop that fell through open space and landed on bare solid "
+        "ground must queue a small directed impulse, the same as landing "
+        "on an already-wet surface does");
+}
+
+static void test_water_falling_onto_the_bare_grid_edge_also_queues_a_small_displacement(void)
+{
+    /* THE REAL DEVICE BOARD, unlike every other splash test above - no
+     * drawn border at all, just the grid's own edge. dest_row() returns
+     * NULL past the last row, so `prow` is NULL and `target_occupied`
+     * (which requires `prow != NULL`) is false right at the one place
+     * every drop on an undecorated board eventually lands - the KIND_
+     * STATIC check alone, without also treating an out-of-bounds `tx0` /
+     * a NULL `prow` as a wall, never fires here at all. Caught only by
+     * testing the actual boundary shape a real board has, not a fixture
+     * that happens to paint an explicit floor. */
+    enum { CX = 1 };
+    impulse_t drop_impulse_buf[SPLASH_W * SPLASH_H];
+    sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
+    sand_enable_impulses(&splash_sim, drop_impulse_buf, SPLASH_W * SPLASH_H);
+
+    sand_set(&splash_sim, CX, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, splash_sim.impulse_count,
+        "setup: nothing should be queued before the drop has even fallen");
+
+    bool queued = false;
+    for (int i = 0; i < 15 && !queued; i++) {
+        sand_step(&splash_sim, 0, 1000, 0);
+        queued = splash_sim.impulse_count > 0;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(queued,
+        "a drop that fell through open space and hit the bare grid edge, "
+        "with no wall cell drawn there at all, must still queue a small "
+        "directed impulse");
+}
+
 static void test_a_reversal_without_a_flick_signal_still_does_not_rebound(void)
 {
     /* The whole reason sand_set_flick() exists: (gx, gy) is smoothed, so a
@@ -17617,6 +17684,8 @@ void run_sand_suite(void)
     RUN_TEST(test_a_hard_flick_kicks_water_off_the_wall_it_just_hit);
     RUN_TEST(test_a_wall_splash_also_queues_a_small_displacement);
     RUN_TEST(test_water_falling_onto_water_also_queues_a_small_displacement);
+    RUN_TEST(test_water_falling_onto_a_solid_floor_also_queues_a_small_displacement);
+    RUN_TEST(test_water_falling_onto_the_bare_grid_edge_also_queues_a_small_displacement);
     RUN_TEST(test_a_reversal_without_a_flick_signal_still_does_not_rebound);
 
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
