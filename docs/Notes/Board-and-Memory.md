@@ -103,6 +103,24 @@ real full-screen framebuffer affordable.
 Sorted visibility is not pixel-exact — it cannot resolve intersecting geometry
 — but for convex solids it is correct.
 
+### Static growth taxes the heap too
+
+DIRAM is one unified pool behind `.text`, `.bss`, `.data` *and* the heap — a
+new file-scope `static` array anywhere in `main/` (not just the file you're
+editing) permanently reserves that space for the whole process lifetime,
+competing with every large device-only allocation, most sharply
+`app_sand.c`'s grid, which needs one 41,216-byte *contiguous* block on an
+already thin margin (see that allocation's own comment). This has caused two
+separate on-device OOM incidents so far, from unrelated files, in unrelated
+build variants — see [Optimization-Playbook.md](Optimization-Playbook.md)'s
+"Test and debug code shares your production memory budget" for the full
+story, the checklist for avoiding a third, and the "app exclusivity"
+convention: an app's own big buffers get malloc'd once and kept; anything
+optional (screenshots, debug overlays, future dev tooling) must be
+malloc'd-on-use and freed-after, never a permanent static, and must be
+checked with `idf.py -B build.dev size` / `build.diag size` — not just
+`build.release`, which does not even compile that code in.
+
 ### Task stacks are not the heap
 
 FreeRTOS gives each task its own small fixed stack, a few KiB. A large local
