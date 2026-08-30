@@ -26,6 +26,7 @@
 #include "input/touch.h"
 #include "ui/ui.h"
 #include "ui/ui_launcher.h"
+#include "util/screenshot.h"
 
 #if CONFIG_LAUNCHER_SELFTEST
 #include "boot/selftest.h"
@@ -406,6 +407,7 @@ void app_main(void)
 
     touch_start();
     buttons_start();
+    screenshot_start();
 
     /* Not fatal if this fails - the display sampling below just finds
      * imu_ready() false forever after and the shell stays upright, the same
@@ -482,6 +484,17 @@ void app_main(void)
         }
 
         step_app(&current, &input, dt_ms);
+
+        /* A capture requested from the host over the console's UART - see
+         * util/screenshot.c's own top comment for why that arrives as a
+         * flag rather than a direct call from the listener task. Checked
+         * after the frame is drawn but before it is sent, so what is
+         * streamed off is exactly what gfx_present() below is about to put
+         * on screen, regardless of which app (or the launcher) just drew
+         * it. */
+        if (screenshot_take_request()) {
+            screenshot_dump();
+        }
 
         gfx_present();
         report_fps(now_us, &fps_window_start, &frames);

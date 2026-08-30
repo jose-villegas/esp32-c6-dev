@@ -58,6 +58,11 @@ their own `tools/results/`:
 `./monitor.sh` (repo root) attaches to the console without paying ESP-IDF's
 ~90s environment-activation cost on every call.
 
+`./launcher/tools/screenshot.sh` captures whatever the device currently has
+on screen to an uncompressed `.bmp`, over that same serial connection - no
+SD card, no button on the device, just the running firmware and a cable
+already plugged in. Needs neither `idf.py` nor PowerShell.
+
 ## Documentation
 
 Each doc earns its length — these are working notes from actually building
