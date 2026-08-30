@@ -136,6 +136,13 @@ that only makes sense alongside them, with `CONFIG_LAUNCHER_SELFTEST`. Neither
 belongs ungated, and neither belongs gated on the other one just because they
 currently happen to travel together in `build.diag/`.
 
+A bare log line specifically has a second, complementary mechanism worth
+knowing about: ESP-IDF's own `CONFIG_LOG_MAXIMUM_LEVEL` compiles
+`ESP_LOGI`/`ESP_LOGW`/etc. calls out of the binary entirely above a given
+severity, project-wide, with no per-call-site `#if` needed — this project
+just doesn't split that ceiling per build variant yet. See
+[Log-Level-Plan.md](Log-Level-Plan.md).
+
 ### The Kconfig trap in REQUIRES
 
 One thing must **not** be gated on `CONFIG_LAUNCHER_SELFTEST`: the `unity`
@@ -420,3 +427,6 @@ against.
   split this guide documents: the Diagnostics app's toggle page mixes both,
   and untangling that is what would let the SELFTEST/"diagnostics" naming
   mismatch actually resolve rather than just get renamed over.
+- `docs/Log-Level-Plan.md` — planned compile-time log-severity ceiling per
+  build variant, complementing the DEVELOPMENT/SELFTEST split above rather
+  than replacing it.
