@@ -505,6 +505,17 @@ static tilt_t      tilt;
 static bool        failed;
 static uint32_t    label_left_ms;    /* countdown for the mode label */
 
+/* False from the moment start_sim() runs until the finger that pressed
+ * START actually lifts. Without this, the same touch that tapped START is
+ * still `input->down` on the first RUNNING frame, and handle_pour_input()
+ * cannot tell that touch apart from a deliberate pour - it would drop a
+ * blob of sand under wherever START happened to be the instant the
+ * simulation starts. The same shape as sand_ui_t's own `swallow_release`
+ * guard (see sand_ui.h) for the identical reason: wait for a release, not a
+ * fixed delay, since a delay would either cut off a genuinely fast tap or
+ * still fire early under a slow one. */
+static bool        input_ready;
+
 /* Which shell quarter the palette panel was last actually painted at - see
  * sand_frame()'s SAND_UI_PALETTE handling, which repaints the sand
  * underneath before redrawing the panel whenever display_shell_quarter()
@@ -680,6 +691,7 @@ static void start_sim(void)
     ui.mode = SAND_MODE_PAINT;
     label_left_ms = 0;
     failed = false;
+    input_ready = false;
 
     if (dirty_rows == NULL) {
         dirty_rows = malloc(GRID_H_MAX);
@@ -833,10 +845,6 @@ static void start_sim(void)
          * app degrades to plain downward sand rather than refusing to run. */
         ESP_LOGW(TAG, "No IMU - falling back to fixed downward gravity");
     }
-
-    /* A starting heap, so the app is doing something the moment it opens
-     * rather than presenting an empty screen and no clue what to do. */
-    sand_spawn(&sim, grid_w / 2, grid_h / 4, grid_w / 5, MAT_SAND);
 
     ESP_LOGI(TAG, "%d x %d grid, %d bytes, %d px cells",
              grid_w, grid_h, grid_w * grid_h, cell);
@@ -2708,7 +2716,15 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         gfx_mark_dirty(0, 0, GFX_WIDTH, GFX_HEIGHT);
     }
 
-    handle_pour_input(input, dt_ms);
+    /* input_ready's own guard: skip pour/erase/detonate/spawn entirely while
+     * the START tap that opened this run is still held down - see
+     * input_ready's own comment for why this waits for the release rather
+     * than a fixed delay. */
+    if (input_ready) {
+        handle_pour_input(input, dt_ms);
+    } else if (!input->down) {
+        input_ready = true;
+    }
     log_direction_change(gx, gy, jostle, &sample);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
