@@ -339,10 +339,16 @@ static void step_app(const app_t **current, input_t *input, uint32_t dt_ms)
     }
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
 /* Report throughput on a TIMER, not every N frames: an idle launcher repaints
  * nothing and runs at the tick ceiling, so counting frames alone lets the
  * report interval swing with load - and a log line costs several
- * milliseconds of UART, enough to throttle the very thing it is measuring. */
+ * milliseconds of UART, enough to throttle the very thing it is measuring.
+ *
+ * Gated on CONFIG_LAUNCHER_DEVELOPMENT: nobody downstream reads a frame
+ * counter, so per docs/Testing-Guide.md's "Development-only instrumentation
+ * is its own flag, not SELFTEST" section this is pure cost in a release
+ * image and must not ship in one. */
 static void report_fps(int64_t now_us, int64_t *window_start, uint32_t *frames)
 {
     (*frames)++;
@@ -353,6 +359,7 @@ static void report_fps(int64_t now_us, int64_t *window_start, uint32_t *frames)
         *window_start = now_us;
     }
 }
+#endif
 
 void app_main(void)
 {
@@ -454,8 +461,10 @@ void app_main(void)
     const app_t *current = NULL;   /* NULL means the launcher is showing */
     input_t input = { 0 };
     int64_t previous_us = esp_timer_get_time();
+#if CONFIG_LAUNCHER_DEVELOPMENT
     int64_t fps_window_start = previous_us;
     uint32_t frames = 0;
+#endif
     int64_t next_display_sample_us = previous_us;
 
     sort_apps();
@@ -510,7 +519,9 @@ void app_main(void)
 #endif
 
         gfx_present();
+#if CONFIG_LAUNCHER_DEVELOPMENT
         report_fps(now_us, &fps_window_start, &frames);
+#endif
 
         /* Yield so the idle task can feed the watchdog. */
         vTaskDelay(1);
