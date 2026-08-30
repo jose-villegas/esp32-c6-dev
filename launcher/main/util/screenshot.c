@@ -1,23 +1,35 @@
 /*=============================================================================
- * screenshot.c - the device-only half: listens on the console's UART for a
+ * screenshot.c - the device-only half: listens on the console for a
  * one-word trigger, and on request walks the live framebuffer through
  * gfx_color_rgb888() and screenshot_base64_encode(), printing the result
  * between marker lines a host script (tools/screenshot.py) reads back out
  * of the same stream idf_monitor/ESP_LOG already use.
  *
+ * WHY USB-SERIAL-JTAG, NOT UART
+ *
+ * This board's one USB-C port is the ESP32-C6's own native USB-Serial/JTAG
+ * peripheral, not an external bridge chip wired to UART0 - see
+ * sdkconfig.defaults' own comment for the full story (Waveshare's docs say
+ * so directly, and CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y there is what makes
+ * it the primary console channel - the one that is actually read as well as
+ * written). Everything below targets that peripheral for exactly the same
+ * reason the first version of this file targeted UART0: match whatever the
+ * console's own primary channel is, so this listener sees the same bytes
+ * idf_monitor does.
+ *
  * WHY A TASK, NOT AN ISR OR A POLL IN main.c's LOOP
  *
- * The default console UART reader (uart_vfs.c's ROM-polling path) is
+ * The default console reader (usb_serial_jtag_vfs.c's non-blocking path) is
  * non-blocking by construction - it returns "no data" instantly rather than
- * waiting, which is fine for a REPL that also has other work to do but
- * would mean main.c's render loop busy-polling every frame just to ask "did
+ * waiting, which is fine for code that also has other work to do but would
+ * mean main.c's render loop busy-polling every frame just to ask "did
  * anyone type SCREENSHOT yet", 40-plus thousand times a minute at this
  * shell's frame rate. screenshot_start() below switches the console fd onto
- * the UART driver's interrupt-driven reader instead (uart_vfs_dev_use_driver
- * - the exact call ESP-IDF's own esp_console REPL makes internally, for the
- * exact same reason), which is what makes a genuinely blocking read
- * possible, and gives that blocking read its own small task rather than
- * stalling anything else.
+ * the driver's interrupt-driven reader instead (usb_serial_jtag_vfs_use_driver
+ * - the same call ESP-IDF's own esp_console REPL makes internally for this
+ * peripheral, for the exact same reason), which is what makes a genuinely
+ * blocking read possible, and gives that blocking read its own small task
+ * rather than stalling anything else.
  *
  * WHY THE RESULT COMES BACK THROUGH A FLAG, NOT A DIRECT CALL
  *
@@ -36,8 +48,8 @@
 #include <stdio.h>
 #include <string.h>
 
-#include "driver/uart.h"
-#include "driver/uart_vfs.h"
+#include "driver/usb_serial_jtag.h"
+#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -46,7 +58,6 @@
 
 static const char *TAG = "screenshot";
 
-#define SCREENSHOT_UART    UART_NUM_0
 #define SCREENSHOT_TRIGGER "SCREENSHOT"
 
 static volatile bool s_request_pending;
@@ -54,9 +65,9 @@ static volatile bool s_request_pending;
 /* Reads lines from stdin forever, setting s_request_pending on an exact
  * match. Runs at a low priority (below touch/buttons - see input/touch.c,
  * input/buttons.c for their own 6/5) since it spends essentially all its
- * time blocked waiting on UART bytes nobody is usually sending; when a line
- * does arrive there is nothing time-critical about noticing it a frame or
- * two later.
+ * time blocked waiting on bytes nobody is usually sending; when a line does
+ * arrive there is nothing time-critical about noticing it a frame or two
+ * later.
  *
  * A line over SCREENSHOT_LINE_MAX is never going to match the trigger -
  * dropped by resetting `len`, not by growing the buffer, so a host
@@ -110,48 +121,21 @@ static void screenshot_task(void *arg)
 
 void screenshot_start(void)
 {
-    /* Matches ESP-IDF's own esp_console_repl_chip.c UART setup exactly
-     * (rx_buffer_size 256, no tx ring buffer, no event queue) - that
-     * component solves the identical problem (a blocking read on the
-     * console UART without disturbing normal stdout logging) and this
-     * reuses its proven call sequence rather than a hand-guessed one. */
-    const uart_config_t cfg = {
-        .baud_rate  = CONFIG_ESP_CONSOLE_UART_BAUDRATE,
-        .data_bits  = UART_DATA_8_BITS,
-        .parity     = UART_PARITY_DISABLE,
-        .stop_bits  = UART_STOP_BITS_1,
-        .flow_ctrl  = UART_HW_FLOWCTRL_DISABLE,
-        .source_clk = UART_SCLK_DEFAULT,
-    };
-    esp_err_t err = uart_param_config(SCREENSHOT_UART, &cfg);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "uart_param_config failed: %s - listener not started",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    err = uart_set_pin(SCREENSHOT_UART, UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE,
-                       UART_PIN_NO_CHANGE, UART_PIN_NO_CHANGE);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "uart_set_pin failed: %s - listener not started",
-                 esp_err_to_name(err));
-        return;
-    }
-
-    err = uart_driver_install(SCREENSHOT_UART, 256, 0, 0, NULL, 0);
+    usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
+    const esp_err_t err = usb_serial_jtag_driver_install(&cfg);
     if (err != ESP_OK) {
         /* The one most worth calling out by name: this is what happens if
-         * something else already installed a driver on this UART before
+         * something else already installed this driver before
          * screenshot_start() ran (ESP_ERR_INVALID_STATE) - silently
          * leaving the console on its default non-blocking reader, which
          * looks from the host exactly like a request that vanished into
          * nothing rather than a boot-time failure. */
-        ESP_LOGE(TAG, "uart_driver_install failed: %s - listener not started",
+        ESP_LOGE(TAG, "usb_serial_jtag_driver_install failed: %s - listener not started",
                  esp_err_to_name(err));
         return;
     }
 
-    uart_vfs_dev_use_driver(SCREENSHOT_UART);
+    usb_serial_jtag_vfs_use_driver();
 
     /* Either terminator accepted on the way in - see screenshot_task()'s own
      * comment on why '\r' is treated the same as '\n' there. Left at LF here
@@ -160,7 +144,7 @@ void screenshot_start(void)
      * which the task already does itself, and leaving translation off means
      * a stray '\r' from either source arrives unchanged instead of being
      * silently turned into two line endings for one keypress. */
-    uart_vfs_dev_port_set_rx_line_endings(SCREENSHOT_UART, ESP_LINE_ENDINGS_LF);
+    usb_serial_jtag_vfs_set_rx_line_endings(ESP_LINE_ENDINGS_LF);
 
     const BaseType_t created =
         xTaskCreate(screenshot_task, "screenshot", 3072, NULL, 4, NULL);
@@ -169,7 +153,7 @@ void screenshot_start(void)
         return;
     }
 
-    ESP_LOGI(TAG, "listening for '%s' on the console UART", SCREENSHOT_TRIGGER);
+    ESP_LOGI(TAG, "listening for '%s' on the console", SCREENSHOT_TRIGGER);
 }
 
 bool screenshot_take_request(void)

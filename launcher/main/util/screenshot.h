@@ -3,16 +3,18 @@
  * console's own serial connection, as an uncompressed 24-bit BMP.
  *
  * There is no other channel off this board: no SD-card-as-USB-drive, no
- * second data port - only the one UART that already carries boot logs and
- * idf_monitor's output (see boot/post.c's SD-card notes for the OTHER
- * shared-bus story on this board; this one shares a wire, not a bus). So a
- * screenshot triggered from a host script has to travel down that same
- * serial link, threaded between whatever else is being logged - see
- * screenshot.c's own top comment for how.
+ * second data port - only the console, which on this board is the ESP32-C6's
+ * native USB-Serial/JTAG peripheral (see sdkconfig.defaults' own comment on
+ * why - the single USB-C port is wired to that, not to UART0) already
+ * carrying boot logs and idf_monitor's output (see boot/post.c's SD-card
+ * notes for the OTHER shared-channel story on this board; this one shares a
+ * single link, not a bus). So a screenshot triggered from a host script has
+ * to travel down that same connection, threaded between whatever else is
+ * being logged - see screenshot.c's own top comment for how.
  *
  * Split the way gfx_color.h/gfx.c and ui_style.h/ui.c are: the byte-exact BMP
- * header and the base64 encoding below are pure arithmetic - no BSP, no
- * UART, no framebuffer - so they can be built and checked on a host (see
+ * header and the base64 encoding below are pure arithmetic - no BSP, no USB,
+ * no framebuffer - so they can be built and checked on a host (see
  * test/suites/suite_screenshot.c). Actually listening on the console and
  * walking the live framebuffer needs the device; that part is screenshot.c,
  * never compiled for a host build.
@@ -165,8 +167,8 @@ static inline void screenshot_base64_encode(const uint8_t *in, int32_t len, char
  * The device-only half - see screenshot.c
  *---------------------------------------------------------------------------*/
 
-/* Starts the background task that listens on the console's UART for a
- * capture request. Call once, from app_main() - the same place and the same
+/* Starts the background task that listens on the console for a capture
+ * request. Call once, from app_main() - the same place and the same
  * pattern as touch_start()/buttons_start(): a small dedicated task the shell
  * never talks to directly, its result read back out through the accessor
  * below instead. */
