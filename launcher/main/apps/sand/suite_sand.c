@@ -13332,6 +13332,69 @@ static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
         "chunk sampling regressed back to single-cell try_vent()");
 }
 
+/* THE OTHER HALF of the chunk claim - the sibling test above proves
+ * try_vent_chunk() reaches every covered cell INSIDE its own chunk;
+ * this proves it does not reach past that chunk's own bounds into a
+ * neighbour's. A second, fully sealed lava cell sits at (10, 6) -
+ * chunk-aligned bounds are [cx0, cx0+SAND_VENT_CHUNK), and (10 / 3) * 3
+ * = 9, so this cell's own would-be chunk is x in [9, 12), disjoint from
+ * (3, 6)'s own [3, 6) - but ITS chunk's own sampled corner, (9, 6), is
+ * a plain STONE wall, not lava, so that chunk can never roll
+ * vent_chance on its own either. The only way (10, 6)'s crust could
+ * ever move in this scene is try_vent_chunk() (fired FROM (3, 6),
+ * repeatedly, over the whole run) scanning wider than its own chunk
+ * bounds - a real risk to guard against given cx1/cy1 are exclusive
+ * upper bounds computed by hand, not something the type system checks.
+ * Sealed identically to (3, 6)'s own pool (crust, floor, side walls) so
+ * a bounds bug would find a genuinely coverable cell to wrongly vent,
+ * not silently no-op against an already-disqualified one. */
+static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
+{
+    static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
+    static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
+    sand_t v;
+    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
+    sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
+
+    for (int x = 2; x <= 6; x++) {
+        sand_set(&v, x, 5, STONE);
+        sand_set(&v, x, 7, STONE);
+    }
+    sand_set(&v, 2, 6, STONE);
+    sand_set(&v, 6, 6, STONE);
+    for (int x = 3; x <= 5; x++) {
+        sand_set(&v, x, 6, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    for (int x = 9; x <= 11; x++) {
+        sand_set(&v, x, 5, STONE);
+        sand_set(&v, x, 7, STONE);
+    }
+    sand_set(&v, 9, 6, STONE);
+    sand_set(&v, 11, 6, STONE);
+    sand_set(&v, 10, 6, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    bool chunk_a_fired = false;
+    for (int i = 0; i < 40000 && !chunk_a_fired; i++) {
+        sand_step(&v, 0, 1000, 0);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+            CELL_MATERIAL(sand_at(&v, 10, 5)),
+            "the neighbouring chunk's own crust must never move just "
+            "because (3, 6)'s chunk fired - (10, 6) sits outside "
+            "[3, 6) x [6, 9) and its own chunk's sampled corner "
+            "(9, 6) is stone, not lava, so nothing in this scene should "
+            "ever be able to vent it");
+        chunk_a_fired = CELL_MATERIAL(sand_at(&v, 5, 5)) != MAT_STONE;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(chunk_a_fired,
+        "setup check: (3, 6)'s own chunk must actually fire within this "
+        "budget (see the sibling test's own comment on why (5, 5) is "
+        "the honest signal for that), or the loop above proved nothing "
+        "about containment - it never got a chance to leak");
+}
+
 static void test_wood_and_steam_grain_count_is_conserved(void)
 {
     fixture();
@@ -19812,6 +19875,7 @@ void run_sand_suite(void)
     RUN_TEST(test_sealed_lava_vents_toward_gravity_relative_up);
     RUN_TEST(test_a_wide_pool_with_a_crust_vents_not_just_a_shaft);
     RUN_TEST(test_a_sampled_vent_throws_its_whole_chunk_together);
+    RUN_TEST(test_a_sampled_vent_does_not_reach_the_next_chunk);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);
