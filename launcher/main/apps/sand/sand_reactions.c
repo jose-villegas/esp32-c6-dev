@@ -3390,22 +3390,25 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     /* A SECOND, INDEPENDENT ROLL ON TOP OF vent_chance, applied only to
      * the material's own natural per-material figure - the same
      * evaporates precedent step_one_dissolver_cell() documents above,
-     * and for the same reason: a covered pool rolls vent_chance
-     * independently for every one of ITS OWN cells that qualifies every
-     * step, and on top of that reaction_t.vent_chance's own reach
-     * (SAND_VENT_REACH) throws a lot of material once a roll lands, so a
-     * rare-looking per-cell figure still read as constant venting rather
-     * than the occasional dramatic pulse the design wants. 1-in-60 here
-     * reuses acid's own final settled figure (see step_one_dissolver_
-     * cell()'s comment on why THAT number stopped at 60, after 4 and 20
-     * both still read as too frequent on device) rather than inventing a
-     * fresh one - the same "a rare event that fires constantly across a
-     * whole board is not rare" problem, at the same board scale, earning
-     * the same answer. Effective production rate is 1-in-256 (the table
-     * figure) times 1-in-60, about 1 in 15,360 per covered cell per step.
-     * Does not touch sand_set_vent_chance()'s override path - forcing
-     * this to 255 for a test still gets a single, deterministic roll,
-     * exactly as sand_set_evaporates(s, 255) does for acid.
+     * though now tuned the OPPOSITE direction that precedent was: this
+     * used to make venting rarer still (1-in-60, on top of a table
+     * figure already at its own rarest, ~1-in-15,360 combined) when the
+     * design wanted an occasional, dramatic pulse. The design has since
+     * moved to the other extreme - venting as often as possible - so
+     * this roll is now `% 1`, which is unconditionally true (anything
+     * mod 1 is 0) and costs nothing beyond the one rng_next() call
+     * itself; kept as a live roll rather than deleted so the SAME shape
+     * (resolved chance, then this second gate) still reads as one
+     * mechanism and can be tightened again later without re-deriving the
+     * structure, not because the roll accomplishes anything at its
+     * current setting. reaction_t.vent_chance's own table figure
+     * (material.c) is separately at ITS maximum too (255), so together
+     * production now fires essentially every step a lattice-sampled
+     * cell stays covered - see that field's own comment for the
+     * matching change. Does not touch sand_set_vent_chance()'s override
+     * path - forcing this to a specific value for a test still gets a
+     * single, deterministic roll, exactly as sand_set_evaporates()
+     * does for acid.
      *
      * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ONLY IN PER-MATERIAL MODE -
      * see that constant's own comment (sand.h) for the mechanism and why.
@@ -3438,7 +3441,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
          ((x % SAND_VENT_CHUNK) == 0 && (y % SAND_VENT_CHUNK) == 0)) &&
         covered_from_above(s, x, y, w, h, mat->density) &&
         (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
-        (!vent_per_material || (rng_next(&s->rng) % 60) == 0)) {
+        (!vent_per_material || (rng_next(&s->rng) % 1) == 0)) {
         try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
         acted = true;
     }
