@@ -448,11 +448,8 @@ covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density)
  * THE THROW ANGLES TOWARD `up`, NOT ALONG `scan_dir` - every one of the
  * three columns, not only the straight one, jitters its throw around
  * the true gravity-relative up direction (an acid_bubble()-style spread
- * of -1, 0 or +1 ring steps, picked ONCE per firing, not once per cell,
- * for the same "keep the whole reachable stack cascading along one
- * angled line" reason the original design picked one roll for its own
- * straight column). Material found up-left or up-right of the lava
- * used to keep flying further up-left or up-right, along its own
+ * of -1, 0 or +1 ring steps). Material found up-left or up-right of the
+ * lava used to keep flying further up-left or up-right, along its own
  * diagonal; now it gets thrown mostly straight up instead, the same as
  * the centre column. SAFE FOR THE SAME REASON THE CENTRE COLUMN'S OWN
  * JITTER EXISTS: a cell up-left or up-right of the lava already has
@@ -461,14 +458,20 @@ covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density)
  * near-vertical throw back down lands it roughly back over where it
  * started flying from - still clear of the lava - not back on top of
  * it the way a purely vertical throw from directly above the lava
- * would be without any jitter at all. Only a cell with NO inherent
- * offset (the straight "up" column, scanning with dx=0) ever needed
- * the jitter to avoid refalling into its own shaft; every column having
- * it now is what makes a vent read as one cohesive geyser aimed
- * against gravity rather than three separate jets fanning out at their
- * own fixed angles. */
+ * would be without any jitter at all.
+ *
+ * `spread` IS THE CALLER'S TO PICK, NOT ROLLED IN HERE - see try_vent()'s
+ * own comment for why the straight "up" column's spread has to be
+ * shared across every covered cell a chunk-wide throw touches (try_vent_
+ * chunk(), below), while the two corner columns keep rolling their own,
+ * independently, per cell. Both shapes are legitimate for a column that
+ * only ever throws for ONE cell; the difference only matters once
+ * try_vent_chunk() calls this for several cells at once, which is
+ * exactly why the decision moved up to whichever caller already knows
+ * how many cells it is calling this for, rather than staying a decision
+ * this function makes for itself every time. */
 static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
-                        int up)
+                        int up, int spread)
 {
     const int *ud = ring_dir(scan_dir);
 
@@ -486,7 +489,6 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
         depth = i;
     }
 
-    const int spread = (int)(rng_next(&s->rng) % 3) - 1;
     const int throw_dir = (up + spread + 8) & 7;
 
     for (int i = depth; i >= 1; i--) {
@@ -518,14 +520,33 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
  * last_load_dx/dy is the current settled gravity direction as a unit
  * vector; ring_of() turns that into the matching ring8 index, and the
  * ring directly OPPOSITE it - four steps around an 8-direction ring -
- * is "up"). */
-static void try_vent(sand_t *s, int x, int y, int w, int h)
+ * is "up").
+ *
+ * `ceiling_spread` IS THE STRAIGHT-UP COLUMN'S SPREAD, SUPPLIED RATHER
+ * THAN ROLLED HERE - see try_vent_chunk()'s own comment for why: several
+ * covered lava cells venting in the SAME chunk-wide event each get their
+ * own call to this function, and their CEILING material - directly
+ * above each of them - reads as one connected slab breaking off only if
+ * every one of those calls throws it the same way. Rolling a fresh
+ * spread per cell here, the way the two corner columns still do, would
+ * have each cell's own ceiling piece veer its own slightly different
+ * way even though they fire in the same instant - visually a scatter of
+ * independent grains that happen to pop at once, not the one cohesive
+ * ceiling breaking free that it actually is. The two corner columns
+ * (up-left, up-right) are NOT shared - they scan material that is
+ * already offset to a DIFFERENT side of each cell they came from, and a
+ * real lid does not lean the same way at both of its own edges, so
+ * keeping their own independent per-cell roll is what still reads as a
+ * lid breaking messily at its corners while its middle lifts as one
+ * piece. */
+static void try_vent(sand_t *s, int x, int y, int w, int h,
+                     int ceiling_spread)
 {
     const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
 
-    for (int off = -1; off <= 1; off++) {
-        vent_column(s, x, y, w, h, up + off, up);
-    }
+    vent_column(s, x, y, w, h, up - 1, up, (int)(rng_next(&s->rng) % 3) - 1);
+    vent_column(s, x, y, w, h, up,     up, ceiling_spread);
+    vent_column(s, x, y, w, h, up + 1, up, (int)(rng_next(&s->rng) % 3) - 1);
 }
 
 /* THE CHUNK reaction_t.vent_chance's own gate (step_one_burning_cell(),
@@ -554,7 +575,19 @@ static void try_vent(sand_t *s, int x, int y, int w, int h)
  * itself. Lava is the only material that sets vent_chance today, so in
  * practice this only ever matches more lava - but matching by material
  * rather than hardcoding MAT_LAVA costs nothing and keeps this correct
- * the day a second venting material exists. */
+ * the day a second venting material exists.
+ *
+ * ONE SHARED CEILING SPREAD FOR THE WHOLE CHUNK, rolled ONCE here rather
+ * than once per cell - see try_vent()'s own comment for why. Every
+ * covered cell this loop reaches is handed the SAME value for its own
+ * straight-up column, so the material directly above each of them - the
+ * ceiling of the pocket this chunk is relieving - all launches on the
+ * same angle in the same instant and reads as one connected slab lifting
+ * off, "even though technically" each cell's own column is still its
+ * own independent queue of impulse entries underneath. The two corner
+ * columns are untouched by this - try_vent() still rolls those
+ * independently per cell it is called for, which is what keeps a lid's
+ * own corners breaking messily while its middle lifts as one piece. */
 static void try_vent_chunk(sand_t *s, int x, int y, int w, int h,
                            uint8_t mat_id, uint8_t density)
 {
@@ -562,6 +595,7 @@ static void try_vent_chunk(sand_t *s, int x, int y, int w, int h,
     const int cy0 = (y / SAND_VENT_CHUNK) * SAND_VENT_CHUNK;
     const int cx1 = cx0 + SAND_VENT_CHUNK;
     const int cy1 = cy0 + SAND_VENT_CHUNK;
+    const int ceiling_spread = (int)(rng_next(&s->rng) % 3) - 1;
 
     for (int cy = cy0; cy < cy1 && cy < h; cy++) {
         for (int cx = cx0; cx < cx1 && cx < w; cx++) {
@@ -572,7 +606,7 @@ static void try_vent_chunk(sand_t *s, int x, int y, int w, int h,
             if (!covered_from_above(s, cx, cy, w, h, density)) {
                 continue;
             }
-            try_vent(s, cx, cy, w, h);
+            try_vent(s, cx, cy, w, h, ceiling_spread);
         }
     }
 }
@@ -3382,7 +3416,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         if (vent_per_material) {
             try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
         } else {
-            try_vent(s, x, y, w, h);
+            try_vent(s, x, y, w, h, (int)(rng_next(&s->rng) % 3) - 1);
         }
         acted = true;
     }

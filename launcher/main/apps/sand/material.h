@@ -552,7 +552,14 @@ typedef struct {
      * own comment for why aiming every column at -gravity reads as one
      * cohesive eruption rather than three jets fanning out at their own
      * angles, and is still safe against falling straight back into the
-     * seal it just cleared.
+     * seal it just cleared. When SAND_VENT_CHUNK groups several covered
+     * cells into one firing (below), their CEILING material specifically
+     * - the straight-up column directly above each of them - all launch
+     * on the exact same angle in the same instant, reading as one
+     * connected slab breaking off rather than a scatter of grains that
+     * merely happen to pop at once; see try_vent_chunk()'s own comment
+     * for why the two corner columns are deliberately excluded from
+     * that sharing.
      *
      * DELIBERATELY NOT smothered()'s all-4-cardinal rule (the one that
      * extinguishes a burning SOLID) - see covered_from_above()'s own
