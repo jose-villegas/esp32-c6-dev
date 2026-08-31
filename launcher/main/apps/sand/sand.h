@@ -793,6 +793,34 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * device. */
 #define SAND_VENT_IMPULSE_RAMP  1
 
+/* THE SAMPLING GRID reaction_t.vent_chance's own gate (step_one_burning_
+ * cell(), sand_reactions.c) checks against, rather than rolling every
+ * covered lava cell independently every step - see try_vent_chunk()'s
+ * own comment (sand_reactions.c) for the mechanism. Only a cell whose
+ * (x, y) both land on a multiple of this checks covered_from_above() and
+ * rolls vent_chance at all; every other covered lava cell only ever
+ * vents as a side effect of its OWN chunk's sampled cell succeeding.
+ *
+ * A DELIBERATE PERFORMANCE/DRAMA TRADE, NOT A CORRECTNESS FIX - a wide
+ * pool has roughly SAND_VENT_CHUNK^2 times fewer independent covered_
+ * from_above() calls and vent_chance rolls per step this way (8 in 9
+ * skipped outright at 3, before even one random number is drawn), and
+ * what those far-fewer rolls DO trigger throws every covered cell in the
+ * whole chunk together (try_vent_chunk()) rather than one narrow single-
+ * cell column - "a chunk visibly breaks off" instead of "one grain pops
+ * up out of many, one at a time." Both wanted independently: fewer total
+ * checks is the performance case for a large pool of covered lava
+ * (previously one covered_from_above() call plus a roll per covered
+ * cell, every step); a whole neighbourhood erupting together is the
+ * visual case, unrelated to how rare the trigger itself is.
+ *
+ * 3, DROP TO 2 IF THE PERFORMANCE HIT IS STILL TOO MUCH - not yet
+ * measured on device at either figure. Lower values sample more of the
+ * grid (less perf win, finer-grained chunks); this cannot go below 1
+ * (every cell sampled, chunk size of one - back to the original
+ * per-cell behaviour with no grouping at all). */
+#define SAND_VENT_CHUNK  3
+
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
  * - a WATER grain landing hard, either falling onto an already-occupied
  * surface or rebounding off a wall, throws a small, MASKED sand_displace_

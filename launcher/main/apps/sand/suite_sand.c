@@ -13262,6 +13262,76 @@ static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
         "wider than one column (see this test's own top comment)");
 }
 
+/* reaction_t.vent_chance's own trigger now samples SAND_VENT_CHUNK-
+ * aligned cells rather than rolling every covered lava cell
+ * independently (see that constant's own comment, sand.h, and try_vent_
+ * chunk()'s, sand_reactions.c) - and when a sampled cell succeeds, it
+ * throws EVERY covered lava cell in its own chunk together, not just
+ * itself. This is the one behaviour sand_set_vent_chance()'s override
+ * deliberately does NOT exercise (see the vent_chance gate's own
+ * comment for why forcing the rate skips chunk sampling entirely, the
+ * same as it already skips the second roll) - so this test runs
+ * against the REAL per-material rate instead, the only way to actually
+ * reach try_vent_chunk().
+ *
+ * COORDINATES CHOSEN TO ALIGN WITH THE LATTICE, unlike POOL_TEST's own
+ * (which predate chunking and are not aligned) - the pool sits at
+ * (3, 6), (4, 6), (5, 6): x=3 is the chunk's own sampled corner
+ * (3 % SAND_VENT_CHUNK == 0, 6 % SAND_VENT_CHUNK == 0), and all three
+ * pool cells fall inside the SAME 3x3 chunk that corner defines
+ * (x in [3, 6), y in [6, 9)).
+ *
+ * WATCHING (5, 5) SPECIFICALLY, NOT ANY CRUST CELL - try_vent()'s own
+ * three columns (up-left/up/up-right, try_vent()'s own comment) already
+ * let a SINGLE lava cell's own throw reach more than one crust cell at
+ * once (from (3, 6): up-left=(2,5), up=(3,5), up-right=(4,5)), which
+ * would make a naive "did at least two crust cells clear" check pass
+ * even WITHOUT chunk grouping, proving nothing about it - confirmed by
+ * actually trying that check first and watching it pass regardless.
+ * (5, 5) is deliberately OUTSIDE (3, 6)'s own three-column reach - it
+ * is only reachable via (4, 6)'s up-right or (5, 6)'s up column - and
+ * neither (4, 6) nor (5, 6) is itself chunk-aligned, so neither can
+ * ever roll vent_chance on its own. (5, 5) clearing is therefore
+ * unambiguous proof that try_vent_chunk() reached a DIFFERENT lava cell
+ * than the one that actually rolled. */
+#define CHUNK_TEST_W 12
+#define CHUNK_TEST_H 12
+static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
+{
+    static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
+    static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
+    sand_t v;
+    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
+    sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
+
+    /* A 3-wide, 1-deep pool (x=3..5, y=6), sealed the same way POOL_
+     * TEST's own scene is: a crust one row wider than the pool (x=2..6,
+     * y=5), a floor (y=7), and side walls (x=2, x=6) so every pool
+     * cell's three "above" neighbours are crust, not open air. */
+    for (int x = 2; x <= 6; x++) {
+        sand_set(&v, x, 5, STONE);    /* crust */
+        sand_set(&v, x, 7, STONE);    /* floor */
+    }
+    sand_set(&v, 2, 6, STONE);        /* left wall */
+    sand_set(&v, 6, 6, STONE);        /* right wall */
+    for (int x = 3; x <= 5; x++) {
+        sand_set(&v, x, 6, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    bool far_crust_moved = false;
+    for (int i = 0; i < 40000 && !far_crust_moved; i++) {
+        sand_step(&v, 0, 1000, 0);
+        far_crust_moved = CELL_MATERIAL(sand_at(&v, 5, 5)) != MAT_STONE;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(far_crust_moved,
+        "the crust above (5, 6) must eventually clear even though "
+        "(5, 6) is not itself chunk-aligned and can never roll "
+        "vent_chance on its own - only try_vent_chunk() reaching it as "
+        "part of (3, 6)'s own chunk explains this; if it never clears, "
+        "chunk sampling regressed back to single-cell try_vent()");
+}
+
 static void test_wood_and_steam_grain_count_is_conserved(void)
 {
     fixture();
@@ -19741,6 +19811,7 @@ void run_sand_suite(void)
     RUN_TEST(test_sealed_lava_vent_caps_at_three_cells);
     RUN_TEST(test_sealed_lava_vents_toward_gravity_relative_up);
     RUN_TEST(test_a_wide_pool_with_a_crust_vents_not_just_a_shaft);
+    RUN_TEST(test_a_sampled_vent_throws_its_whole_chunk_together);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);

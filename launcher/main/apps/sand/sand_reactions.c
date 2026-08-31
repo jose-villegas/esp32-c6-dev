@@ -528,6 +528,55 @@ static void try_vent(sand_t *s, int x, int y, int w, int h)
     }
 }
 
+/* THE CHUNK reaction_t.vent_chance's own gate (step_one_burning_cell(),
+ * below) samples instead of checking every covered lava cell
+ * independently every step - see SAND_VENT_CHUNK's own comment (sand.h)
+ * for why. (x, y) is the SAMPLED cell that already passed the gate's own
+ * covered_from_above()/vent_chance rolls, not necessarily this chunk's
+ * own corner; `mat_id`/`density` are its material and density, reused
+ * for every other cell checked here on the assumption that a chunk this
+ * small is one uniform pool, not a patchwork of different lava-like
+ * materials.
+ *
+ * EVERY QUALIFYING CELL IN THE CHUNK VENTS TOGETHER, UNCONDITIONALLY -
+ * no separate roll for the cells beside the one that triggered. That is
+ * the entire point of sampling coarser in the first place: trading
+ * "every covered cell rolls its own dice, independently, every step"
+ * (the previous behaviour) for "a whole neighbourhood erupts together,
+ * rarely" - re-rolling per cell here would just reintroduce the same
+ * fine-grained, spotty triggering the sampling exists to replace, while
+ * still paying for the function calls sampling was meant to save.
+ *
+ * MATCHED ON MATERIAL, NOT MERELY "IS THIS COVERED" - a cell elsewhere
+ * in the chunk that happens to be covered but is NOT the same material
+ * (the covering wall itself, say, or an unrelated neighbour) is not a
+ * pool this vent is relieving and must not be asked to vent through
+ * itself. Lava is the only material that sets vent_chance today, so in
+ * practice this only ever matches more lava - but matching by material
+ * rather than hardcoding MAT_LAVA costs nothing and keeps this correct
+ * the day a second venting material exists. */
+static void try_vent_chunk(sand_t *s, int x, int y, int w, int h,
+                           uint8_t mat_id, uint8_t density)
+{
+    const int cx0 = (x / SAND_VENT_CHUNK) * SAND_VENT_CHUNK;
+    const int cy0 = (y / SAND_VENT_CHUNK) * SAND_VENT_CHUNK;
+    const int cx1 = cx0 + SAND_VENT_CHUNK;
+    const int cy1 = cy0 + SAND_VENT_CHUNK;
+
+    for (int cy = cy0; cy < cy1 && cy < h; cy++) {
+        for (int cx = cx0; cx < cx1 && cx < w; cx++) {
+            const cell_t cell = s->cells[(size_t)cy * (size_t)w + (size_t)cx];
+            if (CELL_MATERIAL(cell) != mat_id) {
+                continue;
+            }
+            if (!covered_from_above(s, cx, cy, w, h, density)) {
+                continue;
+            }
+            try_vent(s, cx, cy, w, h);
+        }
+    }
+}
+
 /* Whether any of the four cardinal neighbours is open to the air - the
  * test behind reaction_t.needs_air.
  *
@@ -3306,14 +3355,35 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * figure) times 1-in-60, about 1 in 15,360 per covered cell per step.
      * Does not touch sand_set_vent_chance()'s override path - forcing
      * this to 255 for a test still gets a single, deterministic roll,
-     * exactly as sand_set_evaporates(s, 255) does for acid. */
+     * exactly as sand_set_evaporates(s, 255) does for acid.
+     *
+     * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ALSO ONLY IN PER-MATERIAL
+     * MODE - see that constant's own comment (sand.h) for the mechanism
+     * and why. Only a cell whose (x, y) both land on a multiple of
+     * SAND_VENT_CHUNK ever reaches covered_from_above() or draws a
+     * random number at all here; every other covered lava cell only
+     * vents as a side effect of its own chunk's sampled cell succeeding
+     * (try_vent_chunk(), below). SKIPPED ENTIRELY when overridden, same
+     * reasoning as the second roll just above: a test forcing this to
+     * 255 wants a single, deterministic trigger for the exact cell it
+     * placed, not one that silently depends on whether that cell happens
+     * to land on the sampling lattice - sand_set_vent_chance()'s whole
+     * contract is "ignore the real, deliberately rare production
+     * shape", and the chunk grid is as much a part of that shape as the
+     * rate itself. */
     const bool vent_per_material = s->vent_chance < 0;
     const int vent_chance = vent_per_material ? rx->vent_chance : s->vent_chance;
     if (vent_chance != 0 &&
+        (!vent_per_material ||
+         ((x % SAND_VENT_CHUNK) == 0 && (y % SAND_VENT_CHUNK) == 0)) &&
         covered_from_above(s, x, y, w, h, mat->density) &&
         (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
         (!vent_per_material || (rng_next(&s->rng) % 60) == 0)) {
-        try_vent(s, x, y, w, h);
+        if (vent_per_material) {
+            try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
+        } else {
+            try_vent(s, x, y, w, h);
+        }
         acted = true;
     }
 
