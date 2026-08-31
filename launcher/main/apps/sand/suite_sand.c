@@ -13274,28 +13274,43 @@ static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
  * against the REAL per-material rate instead, the only way to actually
  * reach try_vent_chunk().
  *
- * COORDINATES CHOSEN TO ALIGN WITH THE LATTICE, unlike POOL_TEST's own
- * (which predate chunking and are not aligned) - the pool sits at
- * (3, 6), (4, 6), (5, 6): x=3 is the chunk's own sampled corner
- * (3 % SAND_VENT_CHUNK == 0, 6 % SAND_VENT_CHUNK == 0), and all three
- * pool cells fall inside the SAME 3x3 chunk that corner defines
- * (x in [3, 6), y in [6, 9)).
+ * COORDINATES DERIVED FROM SAND_VENT_CHUNK, not hardcoded, so changing
+ * that constant (already done once, 3 -> 8) never needs this geometry
+ * re-derived by hand again. The pool fills its own chunk's ENTIRE
+ * width, CHUNK_TEST_X0 (== SAND_VENT_CHUNK, so it also lands exactly on
+ * the lattice: X0 % SAND_VENT_CHUNK == 0) through CHUNK_TEST_X1
+ * (X0 + SAND_VENT_CHUNK - 1, the chunk's own last column) - one lava
+ * cell per column, all in the same row, all inside the SAME chunk
+ * (x in [X0, X0 + SAND_VENT_CHUNK), y in [6, 6 + SAND_VENT_CHUNK)).
  *
- * WATCHING (5, 5) SPECIFICALLY, NOT ANY CRUST CELL - try_vent()'s own
- * three columns (up-left/up/up-right, try_vent()'s own comment) already
- * let a SINGLE lava cell's own throw reach more than one crust cell at
- * once (from (3, 6): up-left=(2,5), up=(3,5), up-right=(4,5)), which
- * would make a naive "did at least two crust cells clear" check pass
- * even WITHOUT chunk grouping, proving nothing about it - confirmed by
- * actually trying that check first and watching it pass regardless.
- * (5, 5) is deliberately OUTSIDE (3, 6)'s own three-column reach - it
- * is only reachable via (4, 6)'s up-right or (5, 6)'s up column - and
- * neither (4, 6) nor (5, 6) is itself chunk-aligned, so neither can
- * ever roll vent_chance on its own. (5, 5) clearing is therefore
- * unambiguous proof that try_vent_chunk() reached a DIFFERENT lava cell
- * than the one that actually rolled. */
-#define CHUNK_TEST_W 12
-#define CHUNK_TEST_H 12
+ * WATCHING THE FAR CRUST CELL SPECIFICALLY, NOT ANY CRUST CELL -
+ * try_vent()'s own three columns (up-left/up/up-right, try_vent()'s own
+ * comment) already let a SINGLE lava cell's own throw reach more than
+ * one crust cell at once (from X0: up-left=X0-1, up=X0, up-right=X0+1),
+ * which would make a naive "did at least two crust cells clear" check
+ * pass even WITHOUT chunk grouping, proving nothing about it - confirmed
+ * by actually trying that check first and watching it pass regardless.
+ * CHUNK_TEST_X1's own crust is deliberately OUTSIDE X0's own three-
+ * column reach for any SAND_VENT_CHUNK >= 4 (X0's reach tops out at
+ * X0+1) - it is only reachable via some OTHER column's own up/up-right
+ * throw, and no column but X0 itself is chunk-aligned, so none of them
+ * can ever roll vent_chance on its own. CHUNK_TEST_X1's crust clearing
+ * is therefore unambiguous proof that try_vent_chunk() reached a
+ * DIFFERENT lava cell than the one that actually rolled. */
+#define CHUNK_TEST_X0 SAND_VENT_CHUNK
+#define CHUNK_TEST_X1 (CHUNK_TEST_X0 + SAND_VENT_CHUNK - 1)
+#define CHUNK_TEST_ISO_X (CHUNK_TEST_X0 + 2 * SAND_VENT_CHUNK + 1)
+#define CHUNK_TEST_W (CHUNK_TEST_X0 + 3 * SAND_VENT_CHUNK + 4)
+/* THE LATTICE NEEDS BOTH COORDINATES ALIGNED, NOT JUST X - try_vent_
+ * chunk()'s own sampling gate checks (x % SAND_VENT_CHUNK == 0) AND
+ * (y % SAND_VENT_CHUNK == 0) together (step_one_burning_cell()'s own
+ * comment, sand_reactions.c). The pool's row has to land on the same
+ * lattice its column does, or the sampled cell never rolls at all -
+ * measured directly: raising SAND_VENT_CHUNK from 3 to 8 broke both
+ * tests below outright until the pool's row became a multiple of 8 too,
+ * because row 6 (valid at chunk size 3) is not a multiple of 8. */
+#define CHUNK_TEST_Y SAND_VENT_CHUNK
+#define CHUNK_TEST_H (2 * SAND_VENT_CHUNK + 4)
 static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
 {
     static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
@@ -13304,95 +13319,112 @@ static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
     sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
     sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
 
-    /* A 3-wide, 1-deep pool (x=3..5, y=6), sealed the same way POOL_
-     * TEST's own scene is: a crust one row wider than the pool (x=2..6,
-     * y=5), a floor (y=7), and side walls (x=2, x=6) so every pool
-     * cell's three "above" neighbours are crust, not open air. */
-    for (int x = 2; x <= 6; x++) {
-        sand_set(&v, x, 5, STONE);    /* crust */
-        sand_set(&v, x, 7, STONE);    /* floor */
+    /* A SAND_VENT_CHUNK-wide, 1-deep pool (x=X0..X1, y=Y), sealed the
+     * same way POOL_TEST's own scene is: a crust one row wider than the
+     * pool (x=X0-1..X1+1, y=Y-1), a floor (y=Y+1), and side walls
+     * (x=X0-1, x=X1+1) so every pool cell's three "above" neighbours are
+     * crust, not open air. */
+    for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);   /* crust */
+        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);   /* floor */
     }
-    sand_set(&v, 2, 6, STONE);        /* left wall */
-    sand_set(&v, 6, 6, STONE);        /* right wall */
-    for (int x = 3; x <= 5; x++) {
-        sand_set(&v, x, 6, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set(&v, CHUNK_TEST_X0 - 1, CHUNK_TEST_Y, STONE);   /* left wall */
+    sand_set(&v, CHUNK_TEST_X1 + 1, CHUNK_TEST_Y, STONE);   /* right wall */
+    for (int x = CHUNK_TEST_X0; x <= CHUNK_TEST_X1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
     }
 
     bool far_crust_moved = false;
     for (int i = 0; i < 40000 && !far_crust_moved; i++) {
         sand_step(&v, 0, 1000, 0);
-        far_crust_moved = CELL_MATERIAL(sand_at(&v, 5, 5)) != MAT_STONE;
+        far_crust_moved =
+            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
+            MAT_STONE;
     }
 
     TEST_ASSERT_TRUE_MESSAGE(far_crust_moved,
-        "the crust above (5, 6) must eventually clear even though "
-        "(5, 6) is not itself chunk-aligned and can never roll "
-        "vent_chance on its own - only try_vent_chunk() reaching it as "
-        "part of (3, 6)'s own chunk explains this; if it never clears, "
-        "chunk sampling regressed back to single-cell try_vent()");
+        "the crust above the chunk's own far column must eventually "
+        "clear even though that column is not itself chunk-aligned and "
+        "can never roll vent_chance on its own - only try_vent_chunk() "
+        "reaching it as part of the sampled column's own chunk explains "
+        "this; if it never clears, chunk sampling regressed back to "
+        "single-cell try_vent()");
 }
 
 /* THE OTHER HALF of the chunk claim - the sibling test above proves
  * try_vent_chunk() reaches every covered cell INSIDE its own chunk;
  * this proves it does not reach past that chunk's own bounds into a
- * neighbour's. A second, fully sealed lava cell sits at (10, 6) -
- * chunk-aligned bounds are [cx0, cx0+SAND_VENT_CHUNK), and (10 / 3) * 3
- * = 9, so this cell's own would-be chunk is x in [9, 12), disjoint from
- * (3, 6)'s own [3, 6) - but ITS chunk's own sampled corner, (9, 6), is
- * a plain STONE wall, not lava, so that chunk can never roll
- * vent_chance on its own either. The only way (10, 6)'s crust could
- * ever move in this scene is try_vent_chunk() (fired FROM (3, 6),
- * repeatedly, over the whole run) scanning wider than its own chunk
- * bounds - a real risk to guard against given cx1/cy1 are exclusive
- * upper bounds computed by hand, not something the type system checks.
- * Sealed identically to (3, 6)'s own pool (crust, floor, side walls) so
- * a bounds bug would find a genuinely coverable cell to wrongly vent,
- * not silently no-op against an already-disqualified one. */
+ * neighbour's. A second, fully sealed lava cell sits at CHUNK_TEST_ISO_X
+ * (== CHUNK_TEST_X0 + 2 * SAND_VENT_CHUNK + 1) - two whole chunks past
+ * the tracked pool's own, so its own would-be chunk is disjoint from the
+ * tracked one - but its LEFT WALL, at ISO_X - 1, lands exactly on THAT
+ * chunk's own sampled corner (X0 + 2 * SAND_VENT_CHUNK), which is
+ * therefore a plain STONE wall, not lava, so that chunk can never roll
+ * vent_chance on its own either. The only way the isolated cell's crust
+ * could ever move in this scene is try_vent_chunk() (fired from the
+ * tracked pool's own chunk, repeatedly, over the whole run) scanning
+ * wider than its own chunk bounds - a real risk to guard against given
+ * cx1/cy1 are exclusive upper bounds computed by hand, not something the
+ * type system checks. Sealed identically to the tracked pool's own
+ * (crust, floor, side walls) so a bounds bug would find a genuinely
+ * coverable cell to wrongly vent, not silently no-op against an
+ * already-disqualified one. */
 static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
 {
     static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
     static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
     sand_t v;
-    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
+    /* A DIFFERENT SEED FROM THE SIBLING TEST ABOVE (13, not 7) - measured,
+     * not derived: the extra isolated pod this test adds shifts the
+     * shared RNG stream enough (its own reactions still get scanned and
+     * decided against every step, even though its own trigger never
+     * fires) that seed 7's own tracked chunk did not roll a success
+     * within this test's 40000-step budget, while this test's own
+     * scene otherwise fires exactly as reliably as the sibling's. */
+    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 13u);
     sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
 
-    for (int x = 2; x <= 6; x++) {
-        sand_set(&v, x, 5, STONE);
-        sand_set(&v, x, 7, STONE);
+    for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
+        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);
     }
-    sand_set(&v, 2, 6, STONE);
-    sand_set(&v, 6, 6, STONE);
-    for (int x = 3; x <= 5; x++) {
-        sand_set(&v, x, 6, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set(&v, CHUNK_TEST_X0 - 1, CHUNK_TEST_Y, STONE);
+    sand_set(&v, CHUNK_TEST_X1 + 1, CHUNK_TEST_Y, STONE);
+    for (int x = CHUNK_TEST_X0; x <= CHUNK_TEST_X1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
     }
 
-    for (int x = 9; x <= 11; x++) {
-        sand_set(&v, x, 5, STONE);
-        sand_set(&v, x, 7, STONE);
+    for (int x = CHUNK_TEST_ISO_X - 1; x <= CHUNK_TEST_ISO_X + 1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
+        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);
     }
-    sand_set(&v, 9, 6, STONE);
-    sand_set(&v, 11, 6, STONE);
-    sand_set(&v, 10, 6, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set(&v, CHUNK_TEST_ISO_X - 1, CHUNK_TEST_Y, STONE);
+    sand_set(&v, CHUNK_TEST_ISO_X + 1, CHUNK_TEST_Y, STONE);
+    sand_set(&v, CHUNK_TEST_ISO_X, CHUNK_TEST_Y,
+            CELL_MAKE(MAT_LAVA, MASS_MAX));
 
     bool chunk_a_fired = false;
     for (int i = 0; i < 40000 && !chunk_a_fired; i++) {
         sand_step(&v, 0, 1000, 0);
 
         TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
-            CELL_MATERIAL(sand_at(&v, 10, 5)),
+            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_ISO_X, CHUNK_TEST_Y - 1)),
             "the neighbouring chunk's own crust must never move just "
-            "because (3, 6)'s chunk fired - (10, 6) sits outside "
-            "[3, 6) x [6, 9) and its own chunk's sampled corner "
-            "(9, 6) is stone, not lava, so nothing in this scene should "
-            "ever be able to vent it");
-        chunk_a_fired = CELL_MATERIAL(sand_at(&v, 5, 5)) != MAT_STONE;
+            "because the tracked pool's own chunk fired - the isolated "
+            "cell sits outside that chunk's own bounds, and its own "
+            "chunk's sampled corner is stone, not lava, so nothing in "
+            "this scene should ever be able to vent it");
+        chunk_a_fired =
+            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
+            MAT_STONE;
     }
 
     TEST_ASSERT_TRUE_MESSAGE(chunk_a_fired,
-        "setup check: (3, 6)'s own chunk must actually fire within this "
-        "budget (see the sibling test's own comment on why (5, 5) is "
-        "the honest signal for that), or the loop above proved nothing "
-        "about containment - it never got a chance to leak");
+        "setup check: the tracked pool's own chunk must actually fire "
+        "within this budget (see the sibling test's own comment on why "
+        "its far column is the honest signal for that), or the loop "
+        "above proved nothing about containment - it never got a "
+        "chance to leak");
 }
 
 static void test_wood_and_steam_grain_count_is_conserved(void)

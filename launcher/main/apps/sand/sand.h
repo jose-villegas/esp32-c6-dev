@@ -804,8 +804,8 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * A DELIBERATE PERFORMANCE/DRAMA TRADE, NOT A CORRECTNESS FIX - a wide
  * pool has roughly SAND_VENT_CHUNK^2 times fewer independent covered_
- * from_above() calls and vent_chance rolls per step this way (8 in 9
- * skipped outright at 3, before even one random number is drawn), and
+ * from_above() calls and vent_chance rolls per step this way (63 in 64
+ * skipped outright at 8, before even one random number is drawn), and
  * what those far-fewer rolls DO trigger throws every covered cell in the
  * whole chunk together (try_vent_chunk()) rather than one narrow single-
  * cell column - "a chunk visibly breaks off" instead of "one grain pops
@@ -815,12 +815,18 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * cell, every step); a whole neighbourhood erupting together is the
  * visual case, unrelated to how rare the trigger itself is.
  *
- * 3, DROP TO 2 IF THE PERFORMANCE HIT IS STILL TOO MUCH - not yet
- * measured on device at either figure. Lower values sample more of the
- * grid (less perf win, finer-grained chunks); this cannot go below 1
- * (every cell sampled, chunk size of one - back to the original
- * per-cell behaviour with no grouping at all). */
-#define SAND_VENT_CHUNK  3
+ * RAISED FROM 3 TO 8 - a slab of covering material eight cells long
+ * breaking off together reads as a far more substantial event than a
+ * three-cell one, at a further performance win on top (roughly 7x fewer
+ * covered_from_above() calls/rolls per step for a wide pool than at 3,
+ * on top of the win 3 itself already banked over the original per-cell
+ * design). Not yet measured on device at this figure. Lower this if the
+ * chunk starts feeling too big relative to a typical hand-drawn pool
+ * (an 8-wide slab is a large fraction of a small pool's own crust) or if
+ * it needs to trade back toward finer-grained, more frequent breakage;
+ * this cannot go below 1 (every cell sampled, chunk size of one - back
+ * to the original per-cell behaviour with no grouping at all). */
+#define SAND_VENT_CHUNK  8
 
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
  * - a WATER grain landing hard, either falling onto an already-occupied
