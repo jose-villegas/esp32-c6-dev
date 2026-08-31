@@ -74,13 +74,50 @@ not evidence; the test suite passing is.
    fine standalone. Use it directly instead:
 
    ```sh
-   ollama list                              # what's actually pulled
-   cat prompt.txt | ollama run <model> 2>/dev/null   # stderr carries the
-                                                       # spinner; drop it
+   ollama list                                        # what's actually pulled
+   cat prompt.txt | ollama run <model> --think=false 2>/dev/null
+   #                                    ^^^^^^^^^^^^^   stderr carries the
+   #                                    spinner; drop it
    ```
 
-   Re-test this assumption before trusting it again if OmniRoute's own
-   config changes - see "Things rot" below.
+   **`--think=false` is not optional if you need clean, parseable output.**
+   Confirmed live (2026-08-31): reasoning-capable models print a full
+   `Thinking... ...done thinking.` preamble straight to **stdout** by
+   default, plain text, no `<think>` tags to regex out - this isn't limited
+   to obviously-named reasoning models. `gemma4:26b` and `qwen3.8:27b` both
+   do it despite not having "reasoning" or "r1" in their names; only
+   `qwen2.5:14b`, `qwen2.5-coder:32b-instruct-q4_K_M`, and `mistral-nemo`
+   were confirmed to never emit it. If you're parsing the response for
+   anything structured (JSON, a specific format), that preamble - and any
+   `[`/`{` it happens to contain - lands in your output right along with
+   the real answer. `--think=false` suppressed it cleanly on every model
+   tested, reasoning and non-reasoning alike, so pass it unconditionally
+   rather than special-casing by model name.
+
+   **Which local model for which job** (from the same session's research,
+   ranked against real coding/instruction-following benchmarks, not
+   guessed):
+   - **Code generation / fixing**: `qwen2.5-coder:32b-instruct-q4_K_M` if
+     pulled (dedicated coder model, never reasons); `qwen2.5:14b` otherwise
+     (HumanEval 83.5%, MBPP 82%, never reasons, smaller/faster).
+   - **Review / second opinion**: pick a genuinely different model family
+     than whatever did the generation, not just a different size of the
+     same one - `gemma4:26b` (strong instruction-following, IFEval 98.5%,
+     needs `--think=false`) is the current pick; `mistral-nemo:latest` is
+     the safe, always-clean fallback if `--think=false` ever proves
+     unreliable on a given Ollama version (weaker at code, HumanEval ~32%,
+     but fine for JSON-verdict-style review).
+   - **Docs / long-context prose**: `gemma4:26b` (best IFEval/long-context
+     fit of what's pulled here; needs `--think=false`).
+   - **Avoid for structured-output delegation**: `deepseek-r1:14b` and any
+     `DeepSeek-R1-Distill-*` variant - always-on reasoning by design, and
+     while Ollama does support disabling it for this family too, there's
+     less margin than the above picks if a future Ollama/model update
+     changes how that suppression behaves.
+
+   Re-test all of this before trusting it again if OmniRoute's own config
+   changes, Ollama updates its thinking-suppression behavior, or the locally
+   pulled model set changes - see "Things rot" below.
 
 5. **Route "free tier" through OmniRoute, but test the combo first.**
    Existing combos rot: in one session, `deepseek` had no active
@@ -194,10 +231,22 @@ its own header comment) already do a more automated version of this for one
 specific, high-volume case: bulk-fixing MISRA/cppcheck findings, or doc
 audit findings, as exact find/replace patches. The code-side script has a
 mandatory review-model gate and its own `--pool local|free|subscription|all`
-selection; the docs-side script's review model is optional. Reach for
-whichever one applies when the task really is "fix N audit findings across
-files," not an open-ended feature - both have already worked out the
-patch-verification and (for code) review-loop machinery this doc doesn't
-need to repeat. `scripts/fix-audited-code-free.sh` and
-`scripts/fix-audited-docs-free.sh` are no-confirmation, free-tier-model,
-isolated-worktree launchers for each, respectively.
+selection; the docs-side script's review model is optional. Both also take
+`--local` (routes every model call through the Ollama CLI directly, per
+step 4 above - including `--think=false`, already handled for you) and
+`--no-push` (commit without pushing). Reach for whichever one applies when
+the task really is "fix N audit findings across files," not an open-ended
+feature - both have already worked out the patch-verification, the
+local/free routing, and (for code) review-loop machinery this doc doesn't
+need to repeat.
+
+Single-click launchers wrap both, so you don't need to remember the flags:
+`fix-audited-code-free.sh` / `fix-audited-docs-free.sh` (free-tier cloud,
+no confirmation prompt), `-local.sh` variants of each (same, but `--local`
+instead - zero cloud calls), and `-choose-app.sh` variants of each
+(interactive: lists real scoping targets - apps under `launcher/main/apps/`
+for code, `docs/<Name>/` folders that actually exist for docs - and prompts
+for a number or name before running free-tier). `fix-audited-code-free.sh`
+and `-local.sh` also take `--project` to widen from the apps/sand default to
+the whole project; the docs-side `-free.sh`/`-local.sh` take `--app <name>`
+to narrow from the all-docs default to one app's own doc folder.

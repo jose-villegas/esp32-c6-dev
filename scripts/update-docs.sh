@@ -3,7 +3,13 @@
 # OmniRoute's free "docs-update-free" combo (gpt-oss:120b -> gpt-oss:20b ->
 # github/gpt-4o-mini -> kimi-coding -> ollama-local/gemma4:26b, all $0) which
 # doc files are plausibly affected, then sends only those files' full content
-# for a rewrite, and pushes a branch for review. Two-pass by design: this
+# for a rewrite, and pushes a branch for review. That combo's last-resort
+# entry, ollama-local/gemma4:26b, routes through OmniRoute's own ollama-local
+# provider, confirmed to have no working connection pool as of 2026-08-31
+# (see docs/Model-Delegation-Workflow.md) -- if this script ever falls
+# through the whole chain, that last hop is likely to just time out rather
+# than actually answer; re-test with `omniroute_test_combo` before assuming
+# otherwise. Two-pass by design: this
 # repo's docs run ~650KB total (one file alone is 200KB+), so dumping every
 # doc into every prompt blows past the smallest fallback model's context
 # window. Never touches main directly -- open the printed compare URL

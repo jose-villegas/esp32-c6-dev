@@ -23,13 +23,21 @@
 #
 # --pool picks which combo of models does the bulk fixing (--combo <name>
 # overrides it with any combo by name, for one-off experiments):
-#   local        (default) local-coding -- this workspace's Ollama models,
-#                free and unlimited. MISRA/cppcheck backlogs run into the
-#                hundreds of findings (see misra_check.sh's own comment), and
-#                firing that many fixer calls at a paid cloud model in
-#                parallel is exactly the kind of bulk load local models exist
-#                to absorb -- the --review model only ever sees a handful of
-#                proposed diffs, not the whole backlog.
+#   local        (default) local-coding -- this workspace's Ollama models via
+#                OmniRoute, free and unlimited. MISRA/cppcheck backlogs run
+#                into the hundreds of findings (see misra_check.sh's own
+#                comment), and firing that many fixer calls at a paid cloud
+#                model in parallel is exactly the kind of bulk load local
+#                models exist to absorb -- the --review model only ever sees
+#                a handful of proposed diffs, not the whole backlog.
+#                WARNING: OmniRoute's own ollama-local provider has no
+#                working connection pool as of 2026-08-31 (confirmed: every
+#                model in it times out at 30s regardless of prompt) -- this
+#                pool is likely to just fail right now. Use --local instead
+#                (below), which bypasses OmniRoute for local models entirely
+#                and calls the Ollama CLI directly; re-test with a trivial
+#                `ollama run` / `omniroute_pool_status` before trusting this
+#                pool again if OmniRoute's own config has since changed.
 #   free         code-fix-free -- zero-marginal-cost API-key providers
 #                (ollama-cloud, deepseek, gemini, nvidia free tiers), local
 #                as final fallback. Higher quality than local alone, but
