@@ -70,12 +70,22 @@
   #app {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto;
+    grid-template-areas:
+      "render  kf"
+      "play    kfdetail"
+      "consts  kfdetail"
+      "err     err";
     gap: 10px;
     padding: 10px;
     max-width: 1400px;
     margin: 0 auto;
   }
+  #renderPanel   { grid-area: render; }
+  #kfPanel       { grid-area: kf; }
+  #playbar       { grid-area: play; align-self: start; }
+  #kfDetailPanel { grid-area: kfdetail; }
+  #constsPanel   { grid-area: consts; }
+  #renderError   { grid-area: err; }
   .panel {
     background: var(--panel);
     border: 1px solid var(--panel-border);
@@ -148,7 +158,6 @@
     font-variant-numeric: tabular-nums;
   }
   #renderError {
-    grid-column: 1 / 3;
     display: none;
     white-space: pre-wrap;
     font: 12px/1.4 ui-monospace, monospace;
@@ -161,7 +170,6 @@
     overflow-y: auto;
   }
   #playbar {
-    grid-column: 1 / 3;
     display: flex;
     align-items: center;
     gap: 8px;
@@ -322,18 +330,6 @@
     </div>
   </div>
 
-  <div class="panel" id="constsPanel">
-    <h2>Other consts</h2>
-    <div id="constsList"></div>
-  </div>
-
-  <div class="panel" id="kfDetailPanel">
-    <h2>Keyframe details</h2>
-    <div id="kfDetail"></div>
-  </div>
-
-  <div id="renderError"></div>
-
   <div class="panel" id="playbar">
     <button id="btnPlay">Play</button>
     <span id="msReadout" style="width:70px;text-align:right;color:var(--text-dim)">0 ms</span>
@@ -342,6 +338,18 @@
     <input type="file" id="fileInput" accept=".json" style="display:none">
     <button id="btnBake" class="primary">Bake</button>
   </div>
+
+  <div class="panel" id="kfDetailPanel">
+    <h2>Keyframe details</h2>
+    <div id="kfDetail"></div>
+  </div>
+
+  <div class="panel" id="constsPanel">
+    <h2>Other consts</h2>
+    <div id="constsList"></div>
+  </div>
+
+  <div id="renderError"></div>
 
 </div>
 
