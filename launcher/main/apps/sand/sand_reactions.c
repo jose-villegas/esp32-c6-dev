@@ -2749,6 +2749,24 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             return true;
         }
 
+        /* OIL DILUTES INTO ACID - unlike water's free swap just above,
+         * this one still pays the normal cost: pay_quench_cost() below is
+         * NOT skipped here, so the acid that did the eating still spends
+         * a unit of its own mass to grow this new acid cell. Net acid
+         * does not simply increase for free the way it would if this
+         * were wired the same way water's swap is - explicitly asked for
+         * ("it should also dissolve while doing so, so we end with a bit
+         * less of acid"). Always converts, no coin flip: oil either
+         * isn't touched this bite (the dissolvable roll above failed) or
+         * it always becomes acid when it is - the randomness lives
+         * entirely in whether the bite lands at all, the same as it does
+         * for sand or wood below. */
+        if (CELL_MATERIAL(n) == MAT_OIL) {
+            place_reacted(s, nx, ny, at, MAT_ACID);
+            pay_quench_cost(s, x, y, w);
+            return true;
+        }
+
         /* The fizz. Placed in the cell that was just eaten, which is
          * about to be empty anyway, so it costs nothing extra and appears
          * exactly where the reaction happened.

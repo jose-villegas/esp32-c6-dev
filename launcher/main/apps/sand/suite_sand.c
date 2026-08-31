@@ -10662,12 +10662,20 @@ static void test_the_fizz_rises_out_of_the_acid(void)
  * 30 - acid sinks through water on its own, see MAT_ACID's own comment in
  * material.c), so nothing moves due to gravity/density before reactions
  * runs and every column's water/acid pair stays put for a clean single-
- * step measurement. Wide (400 columns) rather than deep: each column is
- * an INDEPENDENT trial of the same roll (reaction_dirs tries "up" first,
- * see sand_reactions.c, so an acid cell's water neighbour is always the
- * first candidate checked, never skipped over), so width is what buys
- * sample size here, not steps. */
-#define DILUTE_W 400
+ * step measurement. Wide rather than deep: each column is an INDEPENDENT
+ * trial of the same roll (reaction_dirs tries "up" first, see
+ * sand_reactions.c, so an acid cell's water neighbour is always the first
+ * candidate checked, never skipped over), so width is what buys sample
+ * size here, not steps.
+ *
+ * 4000, not the original 400 - SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h)
+ * was tightened from a 3-in-4 split down to 55/45, and the fixed seed
+ * below is deterministic, not flaky, but a narrow bias needs a
+ * proportionally wider sample for the water/acid gap to clear the
+ * count's own statistical noise reliably - 400 columns at 55/45 leaves
+ * the two counts within roughly one standard deviation of each other,
+ * which is not a safe margin for a fixed-seed assertion to depend on. */
+#define DILUTE_W 4000
 #define DILUTE_H 2
 static uint8_t dilute_cells[DILUTE_W * DILUTE_H];
 static sand_t  dilute_sim;
@@ -10692,7 +10700,7 @@ static void test_acid_and_water_dilute_each_other(void)
     /* Either direction counts: a diluted column either turned its acid
      * cell to water, or turned its water cell to acid - see
      * SAND_ACID_DILUTE_TO_WATER_CHANCE's own comment (sand.h) for why
-     * both are a valid outcome of the same roll. 400 independent columns
+     * both are a valid outcome of the same roll. 4000 independent columns
      * at roughly 20% chance each per step makes waiting past one step
      * essentially unnecessary, but a small loop keeps this from being
      * sensitive to exactly which seed sand_init() above happens to use. */
@@ -10717,12 +10725,15 @@ static void test_acid_and_water_dilute_each_other(void)
  * samples rather than counts that could keep compounding into each
  * other across multiple steps. Expected counts at this fixture's width
  * and the current constants (r->dissolves=60/256, water's
- * dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=192/256): about
- * 60 columns where the acid cell becomes water, about 20 where the water
- * cell becomes acid instead - a wide enough gap that a loose assertion
- * (water-wins strictly greater than acid-wins, both counts positive)
- * will not flake on the RNG, without hard-coding the exact expected
- * counts a future retune of any of those three constants would break. */
+ * dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=141/256, a
+ * tight 55/45 split): roughly 440 columns where the acid cell becomes
+ * water, roughly 360 where the water cell becomes acid instead - a
+ * narrow bias, which is exactly why this fixture is 4000 columns wide
+ * rather than the 400 it started at (see the fixture's own comment) -
+ * a loose assertion (water-wins strictly greater than acid-wins, both
+ * counts positive) needs that much sample size to clear the gap
+ * reliably at this bias, without hard-coding the exact expected counts
+ * a future retune of any of those three constants would break. */
 static void test_water_wins_the_dilution_more_often_than_acid_does(void)
 {
     acid_water_dilute_fixture();
@@ -10742,16 +10753,90 @@ static void test_water_wins_the_dilution_more_often_than_acid_does(void)
     }
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_wins,
-        "expected at least some acid-becomes-water dilutions in 400 "
+        "expected at least some acid-becomes-water dilutions in 4000 "
         "independent columns");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_wins,
-        "expected at least some water-becomes-acid dilutions in 400 "
+        "expected at least some water-becomes-acid dilutions in 4000 "
         "independent columns - SAND_ACID_DILUTE_TO_WATER_CHANCE biases "
         "the outcome, it does not eliminate the other side entirely");
     TEST_ASSERT_GREATER_THAN_MESSAGE(acid_wins, water_wins,
         "SAND_ACID_DILUTE_TO_WATER_CHANCE is supposed to favour water - "
         "acid becoming water should be clearly more common than water "
         "becoming acid, not the other way round or a coin flip");
+}
+
+/* A dedicated fixture for oil's own dilution - oil directly above acid,
+ * oil on top because that is ALREADY the stable density ordering (oil's
+ * density is 22, acid's is 38 - oil floats on acid on its own, see
+ * MAT_OIL's own comment in material.c), so nothing moves due to
+ * gravity/density before reactions runs. Oil's dissolvable (40) is much
+ * lower than water's (220) - "slowly dilutes", not readily - so this
+ * needs more columns than the water fixture to land a comfortable
+ * sample in one step: expected conversions at 400 columns and the
+ * current constants (r->dissolves=60/256, oil's dissolvable=40/256) is
+ * about 15. */
+#define OIL_DILUTE_W 400
+#define OIL_DILUTE_H 2
+static uint8_t oil_dilute_cells[OIL_DILUTE_W * OIL_DILUTE_H];
+static sand_t  oil_dilute_sim;
+
+static void acid_oil_dilute_fixture(void)
+{
+    sand_init(&oil_dilute_sim, oil_dilute_cells, OIL_DILUTE_W, OIL_DILUTE_H, 11u);
+    sand_set_evaporates(&oil_dilute_sim, 0);
+    for (int x = 0; x < OIL_DILUTE_W; x++) {
+        sand_set(&oil_dilute_sim, x, 0, CELL_MAKE(MAT_OIL, MASS_MAX));
+        sand_set(&oil_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+}
+
+/* Unlike water's free swap, oil converting into acid is explicitly
+ * supposed to cost the eating acid a unit of its own mass too - "it
+ * should also dissolve while doing so, so we end with a bit less of
+ * acid" was the ask. Checked directly: for every column where the oil
+ * cell became acid this step, the acid cell right below it must have
+ * lost exactly the one unit pay_quench_cost() always takes, the same
+ * bite cost eating sand or wood pays. */
+static void test_oil_dilutes_into_acid_but_the_acid_pays_for_it(void)
+{
+    acid_oil_dilute_fixture();
+
+    /* dissolvable=1 (material.c) is the rarest a single byte-wide roll
+     * can express, so a single step is no longer a safe bet at 400
+     * columns the way it was before that field got tuned down - see its
+     * own comment for the earlier 40. Instead, step until the FIRST
+     * conversion appears anywhere on the (still perfectly uniform, so no
+     * ordinary liquid mass-flow to confuse the reading) board, and check
+     * only that one - one clean sample is enough to prove the invariant,
+     * and every column stays independent right up until the moment it
+     * flips. 300 steps at 400 columns is comfortably past the point
+     * where a first conversion is virtually certain to have landed. */
+    int mass_before[OIL_DILUTE_W];
+    for (int x = 0; x < OIL_DILUTE_W; x++) {
+        mass_before[x] = CELL_VARIANT(sand_at(&oil_dilute_sim, x, 1));
+    }
+
+    int converted_x = -1;
+    for (int i = 0; i < 300 && converted_x < 0; i++) {
+        sand_step(&oil_dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < OIL_DILUTE_W; x++) {
+            if (CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0)) == MAT_ACID) {
+                converted_x = x;
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(converted_x >= 0,
+        "expected at least one oil-to-acid conversion within 300 steps "
+        "across 400 independent columns");
+
+    const int mass_after = CELL_VARIANT(sand_at(&oil_dilute_sim, converted_x, 1));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(mass_before[converted_x] - 1, mass_after,
+        "the acid that converted an oil neighbour into acid must still "
+        "pay pay_quench_cost()'s usual one unit of mass for the bite, "
+        "the same as eating sand or wood would - the conversion is not "
+        "supposed to be free the way water's own swap is");
 }
 
 /* evaporates forced to 255 so this is a one-step, deterministic
@@ -18291,6 +18376,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_acid_and_water_dilute_each_other);
     RUN_TEST(test_water_wins_the_dilution_more_often_than_acid_does);
+    RUN_TEST(test_oil_dilutes_into_acid_but_the_acid_pays_for_it);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
