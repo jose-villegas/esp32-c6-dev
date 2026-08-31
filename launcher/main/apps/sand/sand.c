@@ -183,6 +183,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->vent_chance  = SAND_VENT_CHANCE_PER_MATERIAL;   /* see sand_set_vent_chance() */
+    s->vent_spread  = SAND_VENT_SPREAD_RANDOM;         /* see sand_set_vent_spread() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1347,6 +1348,13 @@ void sand_set_vent_chance(sand_t *s, int chance)
     }
 }
 
+void sand_set_vent_spread(sand_t *s, int spread)
+{
+    s->vent_spread = (spread < -1 || spread > 1)
+                         ? SAND_VENT_SPREAD_RANDOM
+                         : spread;
+}
+
 /* can_enter()/cell_open()/move_to() moved to sand_priv.h (still
  * static inline) - see that header's own comment for why the whole
  * grain-movement primitive stack lives there now. pour_into()/room_in()
@@ -2148,7 +2156,34 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * carries both "chance this turn's move happens" and "how much
          * flight is left" instead of a separate step counter alongside a
          * fixed rate, and for why that is what turns the arc into an
-         * actual curve instead of a bent line. */
+         * actual curve instead of a bent line.
+         *
+         * A DETERMINISTIC, NEVER-ROLLED VARIANT OF THIS WAS TRIED FOR
+         * entry.ramp == SAND_VENT_IMPULSE_RAMP (vent's own throw) AND
+         * REVERTED - the reasoning was sound (several entries queued in
+         * the same chunk-wide firing, already sharing a throw angle via
+         * try_vent_chunk(), still drift out of step if each ALSO
+         * independently rolls whether this turn is the one it moves),
+         * and a first attempt keying "should this move" off `speed > 0`
+         * alone measured a real regression: an entry occupies this loop
+         * for its full ~255-step budget even after landing, since
+         * nothing ever asks it to check. A second attempt kept the
+         * roll gated on genuine support (excluding liquid, since a
+         * covering cell starts out resting on the very lava it seals,
+         * which is the problem state to escape, not a landing) fixed
+         * that regression, but introduced a DIFFERENT one, measured
+         * against test_sealed_lava_vent_caps_at_three_cells: pieces
+         * that refuse to settle while merely near a liquid can end up
+         * bouncing in place - thrown up, pulled back down by gravity-
+         * drift, refusing to call that a landing, thrown again - for
+         * long enough that fewer pods cleared within the same step
+         * budget than the plain probabilistic roll already reliably
+         * clears. Left as the ordinary roll for every caller, vent
+         * included - at speed 255 that is a ~99.6% per-turn chance,
+         * close enough to deterministic in practice that a shared angle
+         * alone keeps several identically-queued entries moving
+         * together far more often than not, without the settle-timing
+         * regressions a fully deterministic version measured. */
         const bool rolled_move = rng_chance(&s->rng, entry.speed);
 
         /* Ramps down every turn, for exactly the same "no exceptions"
