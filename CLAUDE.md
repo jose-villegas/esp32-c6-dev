@@ -199,8 +199,31 @@ app or the whole project) and their single-click launchers
 `fix-audited-docs-free.sh`, `-local.sh`, `-choose-app.sh`) — each pushes a
 branch for review rather than touching `main` directly; read the header
 comment of the one you need before running it, they're self-documenting.
+`scripts/resolve-conflicts-local.sh` auto-resolves git merge conflicts the
+same local-Ollama way, one hunk at a time with a reviewer second opinion,
+but only ever commits if this repo's real test gate (`run_tests.sh` +
+`check_app_sources.sh`) passes on the result. `scripts/write-test-local.sh`
+delegates writing one Unity test *body* the same way, from a spec you write
+(exact scene + exact assertions) -- the model only renders it into house
+style, and `--regression-commit <SHA>` can prove the test actually fails on
+the pre-fix code, automating this repo's own "watch it fail before it
+passes" rule. See `docs/Model-Delegation-Workflow.md`'s "Related, narrower
+tooling" section for both.
 
 ## Status
 
 Actively developed, single-maintainer, not affiliated with Waveshare or
 Espressif. Requires ESP-IDF v5.5+.
+
+
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for cross-session backlog tracking —
+banked ideas, deferred decisions, known bugs not being fixed right now.
+Full policy (what it's for vs TodoWrite/the memory system, when to file an
+issue, git/sync rules, known rough edges) lives in `.beads/PRIME.md` and is
+injected automatically at the start of every session via the SessionStart
+hook — read it there rather than duplicating it here, since that copy is
+what actually reaches an agent every session; this pointer is for humans
+browsing the docs. `bd ready` / `bd show <id>` / `bd graph --all --compact`
+for a quick look without waiting for the hook.

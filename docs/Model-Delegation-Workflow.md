@@ -111,10 +111,29 @@ doing the typing, not you privately drafting the same text.
 
    ```sh
    ollama list                                        # what's actually pulled
-   cat prompt.txt | ollama run <model> --think=false 2>/dev/null
-   #                                    ^^^^^^^^^^^^^   stderr carries the
-   #                                    spinner; drop it
+   cat prompt.txt | ollama run <model> --think=false --nowordwrap 2>/dev/null
+   #                                    ^^^^^^^^^^^^^  ^^^^^^^^^^^^  stderr
+   #                                    carries the spinner; drop it. Both
+   #                                    flags are load-bearing - see below.
    ```
+
+   **`--nowordwrap` is not optional either, and is easy to miss because it
+   looks cosmetic.** Confirmed live (2026-08-31, building
+   `write-test-local.sh`, with `--think=false` already in place):
+   `qwen3-coder:30b` still wrote raw ANSI redraw bytes (cursor-back-N +
+   clear-to-EOL) straight into stdout whenever a streamed line was long
+   enough to soft-wrap on ollama's client-side renderer - this is a
+   *different* mechanism from the thinking-preamble leak below, not fixed
+   by `--think=false`, and not a TTY-detection bug either: piping through
+   `cat` and setting `TERM=dumb` both failed to suppress it, only
+   `--nowordwrap` did. Left uncaught it corrupts output silently and
+   specifically: the word sitting at the wrap column came back duplicated
+   and truncated (`"written"` arrived as `"wri" + escape bytes + "written"`
+   in the same line), which reads as plausible text at a glance and will
+   pass right through a naive extractor. Confirmed present on
+   `qwen3-coder:30b`; not yet re-tested on the models below, so assume any
+   of them could do the same on a long enough line and pass `--nowordwrap`
+   unconditionally, the same reasoning `--think=false` already gets.
 
    **`--think=false` is not optional if you need clean, parseable output.**
    Confirmed live (2026-08-31): reasoning-capable models print a full
@@ -133,9 +152,15 @@ doing the typing, not you privately drafting the same text.
    **Which local model for which job** (from the same session's research,
    ranked against real coding/instruction-following benchmarks, not
    guessed):
-   - **Code generation / fixing**: `qwen2.5-coder:32b-instruct-q4_K_M` if
-     pulled (dedicated coder model, never reasons); `qwen2.5:14b` otherwise
-     (HumanEval 83.5%, MBPP 82%, never reasons, smaller/faster).
+   - **Code generation / fixing**: `qwen3-coder:30b` if pulled (30B MoE,
+     3.3B active params - newer and benchmarks higher than qwen2.5-coder at
+     a similar ~18-19GB footprint, and the fewer active params should make
+     it faster too; needs `--nowordwrap`, see above, not yet re-confirmed
+     clean under `--think=false` alone the way the models below were).
+     `qwen2.5-coder:32b-instruct-q4_K_M` otherwise (dedicated coder model,
+     confirmed never emits the thinking preamble); `qwen2.5:14b` as a
+     smaller/faster fallback below that (HumanEval 83.5%, MBPP 82%, never
+     reasons).
    - **Review / second opinion**: pick a genuinely different model family
      than whatever did the generation, not just a different size of the
      same one - `gemma4:26b` (strong instruction-following, IFEval 98.5%,
@@ -327,3 +352,73 @@ for a number or name before running free-tier). `fix-audited-code-free.sh`
 and `-local.sh` also take `--project` to widen from the apps/sand default to
 the whole project; the docs-side `-free.sh`/`-local.sh` take `--app <name>`
 to narrow from the all-docs default to one app's own doc folder.
+
+`scripts/resolve-conflicts-local.sh` is the same idea applied to git merge
+conflicts instead of audit findings: one hunk, one fixer call
+(`qwen2.5-coder:32b-instruct-q4_K_M`) plus one reviewer call (`gemma4:26b`,
+a different model family - a real second opinion, not the fixer checking
+its own work), looped up to `--rounds` times on an INVALID verdict. The
+part that makes this safe to actually delegate is the hard gate after: it
+only ever commits if `./launcher/test/run_tests.sh` AND
+`check_app_sources.sh` both pass on the resolved tree, and it never forces
+a hunk the reviewer never approved - that hunk is left with its real
+`<<<<<<<`/`=======`/`>>>>>>>` markers in place instead, so a partial
+success still shows up as a normal, honest merge conflict rather than a
+silently-wrong commit. Takes `--target <branch>` (default `main`), `--
+worktree` (isolated, then pushes straight to `origin/<your-branch>` per
+the git mechanic below), and `--no-push`. See the script's own header
+comment for the full design rationale - it was worked out and tested
+end-to-end (real Ollama calls, a synthetic conflict, and both the
+test-gate-red and reviewer-never-approves failure paths, each verified to
+refuse the commit) in the session that added it.
+
+`scripts/write-test-local.sh` applies the same shape to writing ONE Unity
+test body, following this doc's own division of labor to the letter: YOU
+write the spec (a plain-text file naming the suite, the exact scene-setup
+statements, and the exact `TEST_ASSERT_*` calls - the judgment part stays
+yours), and `qwen3-coder:30b` (reviewed by `gemma4:26b`) only renders that
+into a correctly-formatted function matching the target suite's own
+examples. The gate: the suite must not already have a test of that name,
+`run_tests.sh` must still pass afterward, and the new test must show up as
+PASS *exactly once* - CLAUDE.md's "watch it fail before it passes" turned
+into an automatic wiring check. `--regression-commit <SHA>` goes further
+and actually proves the test can fail, by inserting the same generated
+function into the tree as it stood at `<SHA>^` in an isolated worktree and
+checking it does NOT pass there - a WARNING, not a hard abort, since a
+test that also passes on the pre-fix code may simply be new coverage
+rather than a regression guard, which is a legitimate thing for it to be.
+
+Built in the same session as resolve-conflicts-local.sh, immediately after
+pulling `qwen3-coder:30b`, and every one of the following was a REAL bug
+caught by actually running the tool against this repo's real files, not
+assumed away:
+- `qwen3-coder:30b` writes raw ANSI word-wrap-redraw bytes into stdout
+  even with `--think=false` already set - `--nowordwrap` is required for
+  it specifically (see this doc's own `--nowordwrap` entry above).
+- The same model sometimes writes the bare function name as its own title
+  line before the real declaration - fixed by mechanically stripping an
+  exact-match leading line rather than trying to prompt it away, since a
+  mechanical strip is a guarantee and re-prompting is only ever a
+  reduction in frequency.
+- The naive "insert after the last `RUN_TEST(...)` in the function" landed
+  a portable test's wiring inside an `#ifdef DEVICE_BUILD` guard, where a
+  host build silently compiles the RUN_TEST call back out - the only
+  symptom was `-Werror=unused-function`, not a test failure. Fixed by
+  tracking `#if`/`#ifdef`/`#endif` depth and only considering unconditional
+  `RUN_TEST` lines.
+- Formatting the whole suite file with `scripts/check-format.sh` (as
+  fix-audited-code.sh does) rewrote ~18000 unrelated lines of a real
+  file's house style for the sake of one new function - exactly what
+  CLAUDE.md's own formatting section warns against. Fixed by having the
+  insertion logic report the exact 1-based line ranges it touched, then
+  calling `clang-format -i --lines=N:M` (repeatable per range) instead of
+  formatting the file whole.
+- The regression-commit proof's first version copied the CURRENT
+  (already-modified) suite file into the pre-fix worktree before
+  re-inserting - creating a duplicate definition, a compile error, and an
+  exit-code-only check that misreported the resulting failure as
+  "confirmed fails as expected". Fixed by using the worktree's own,
+  correctly-checked-out pre-fix file untouched, and by checking for the
+  test's specific PASS/FAIL line rather than the suite's overall exit
+  code, with an INCONCLUSIVE result (not a false "confirmed") when neither
+  line appears at all.
