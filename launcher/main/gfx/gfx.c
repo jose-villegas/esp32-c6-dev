@@ -5,6 +5,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* See gfx.h's own comment on ESP_PLATFORM: everything hardware-only in this
+ * file - panel bring-up and presentation, not the drawing primitives - is
+ * gated on it, so a host build (a plain `gcc` invocation, same as
+ * test/run_tests.sh already uses) never sees these includes at all. The
+ * device branch of everything gated this way is moved verbatim, never
+ * edited, so real firmware behavior cannot change. */
+#ifdef ESP_PLATFORM
 #include "driver/spi_master.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_io.h"
@@ -15,6 +22,7 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#endif
 
 /* gfx_dirty.h cannot include gfx.h (it must stay ESP-IDF-free to compile on
  * a host), so it carries its own GFX_DIRTY_WIDTH/HEIGHT literals instead of
@@ -23,9 +31,13 @@
 _Static_assert(GFX_WIDTH == GFX_DIRTY_WIDTH && GFX_HEIGHT == GFX_DIRTY_HEIGHT,
               "gfx_dirty.h's screen dimensions must match gfx.h's");
 
+#ifdef ESP_PLATFORM
 static const char *TAG = "gfx";
+#endif
 
 static gfx_color_t *fb;
+
+#ifdef ESP_PLATFORM
 static esp_lcd_panel_handle_t panel;
 static esp_lcd_panel_io_handle_t panel_io;
 static bool spi_bus_up;
@@ -53,10 +65,12 @@ static const sh8601_lcd_init_cmd_t lcd_init_cmds[] = {
     {0x29, (uint8_t[]){0x00}, 0, 10},
     {0x51, (uint8_t[]){0xFF}, 1, 0},
 };
+#endif
 
 /* Current clip rectangle, as inclusive-exclusive bounds. */
 static struct { int x0, y0, x1, y1; } clip;
 
+#ifdef ESP_PLATFORM
 /* Scratch space for packing one gathered run's box edge-to-edge before
  * sending it as one draw_bitmap() call - see gather_and_send(). Bounded by
  * GATHER_MAX_PIXELS (gfx_dirty.h) - a run bigger than that is not worth
@@ -68,11 +82,15 @@ static struct { int x0, y0, x1, y1; } clip;
  * the DMA can't read cleanly does not fail loudly; it reads back subtly
  * wrong, which is a much worse failure to chase. */
 static gfx_color_t *gather_buf;
+#endif
 
 /*---------------------------------------------------------------------------
- * Panel plumbing
+ * Panel plumbing - device-only. A host build never brings a panel up or
+ * presents to one; see gfx_init()/gfx_suspend()/gfx_resume()/gfx_present()
+ * below for the host side of each.
  *-------------------------------------------------------------------------*/
 
+#ifdef ESP_PLATFORM
 static bool IRAM_ATTR on_strip_sent(esp_lcd_panel_io_handle_t io,
                                     esp_lcd_panel_io_event_data_t *event,
                                     void *user_context)
@@ -156,15 +174,19 @@ static void panel_tear_down(void)
         spi_bus_up = false;
     }
 }
+#endif   /* ESP_PLATFORM - panel plumbing */
 
 bool gfx_suspend(void)
 {
+#ifdef ESP_PLATFORM
     panel_tear_down();
+#endif
     return true;
 }
 
 bool gfx_resume(bool full_init)
 {
+#ifdef ESP_PLATFORM
     /* A full re-initialisation reloads the panel's registers and can leave its
      * GRAM in an unknown state, so nothing may be assumed to still be on
      * screen. Cheap insurance: one full frame after a resume. */
@@ -172,10 +194,15 @@ bool gfx_resume(bool full_init)
         gfx_mark_all_dirty();
     }
     return panel_bring_up(full_init) == ESP_OK;
+#else
+    (void)full_init;
+    return true;
+#endif
 }
 
 bool gfx_init(void)
 {
+#ifdef ESP_PLATFORM
     /* Counting, not binary: a whole frame's rows are queued before any is
      * awaited, so several finish first. A binary semaphore would saturate at
      * one, discard the rest, and deadlock on the next wait.
@@ -230,6 +257,20 @@ bool gfx_init(void)
              GFX_WIDTH, GFX_HEIGHT, (unsigned)bytes,
              (unsigned)esp_get_free_heap_size());
     return true;
+#else
+    /* No panel, no DMA, no heap capabilities to ask for - a host renderer
+     * reads gfx_framebuffer() directly once the drawing calls are done, it
+     * never presents. Plain malloc is all the framebuffer itself ever
+     * needed anyway (see gfx.h's own top comment: it is ordinary RAM). */
+    const size_t bytes = (size_t)GFX_WIDTH * GFX_HEIGHT * sizeof(gfx_color_t);
+    fb = malloc(bytes);
+    if (fb == NULL) {
+        return false;
+    }
+    gfx_clear_clip();
+    gfx_mark_all_dirty();
+    return true;
+#endif
 }
 
 gfx_color_t *gfx_framebuffer(void)
@@ -927,6 +968,13 @@ void gfx_set_debug_overlay(bool on)
 }
 #endif
 
+/* Everything from here through gfx_present() itself is device-only - it is
+ * how a gathered/full-row/partial-band send actually reaches the panel over
+ * QSPI. A host build's gfx_present() (below, in the #else) is a no-op: a
+ * host renderer reads gfx_framebuffer() straight after drawing, it never
+ * presents to anything. */
+#ifdef ESP_PLATFORM
+
 /* Packs [x0,x1) x [y0,y1) into gather_buf and sends it as one draw_bitmap()
  * call.
  *
@@ -1231,6 +1279,15 @@ void gfx_present(void)
         xSemaphoreTake(strip_sent, portMAX_DELAY);
     }
 }
+
+#else   /* !ESP_PLATFORM */
+
+void gfx_present(void)
+{
+    /* No panel on a host build - see this section's own top comment. */
+}
+
+#endif   /* ESP_PLATFORM - the presentation pipeline */
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Test-only: sends the ENTIRE framebuffer as one esp_lcd_panel_draw_bitmap()

@@ -1319,16 +1319,34 @@ static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
 }
 
 /*---------------------------------------------------------------------------
- * The one hardware-facing entry point
+ * Entry points into boot_anim.c
  *
  * Declared here and defined in boot_anim.c, the same arrangement icon_check()
  * has at the bottom of icons.h: a declaration costs this header none of its
  * host-portability, and a second header for one function would be worse.
  *-------------------------------------------------------------------------*/
 
+/* Draw one frame at `now_ms` - gfx calls only, no clock read of its own (see
+ * this header's own top comment on passing time in). gfx_init() must have
+ * succeeded first.
+ *
+ * Public - not just boot_anim_run()'s own inner loop below - because it is
+ * also every host renderer's actual entry point: gfx.c's drawing primitives
+ * are host-portable (see its own ESP_PLATFORM comment), so a plain host
+ * binary can call gfx_init(), call this for whatever `now_ms` it wants, and
+ * read gfx_framebuffer() straight back out - the real firmware picture, not
+ * a reimplementation of it. See tools/boot_anim_render_host.c. */
+void boot_anim_draw_frame(uint32_t now_ms);
+
+#ifdef ESP_PLATFORM
 /* Draw the whole animation, start to finish - about BOOT_ANIM_MS of it.
  *
  * BLOCKS, and is meant to: it runs during boot, before the shell's frame loop
  * exists and before there is anything to switch to. gfx_init() must have
- * succeeded first. Yields every frame so the watchdog stays fed. */
+ * succeeded first. Yields every frame so the watchdog stays fed.
+ *
+ * Device-only: the only thing this adds over calling boot_anim_draw_frame()
+ * directly is a real wall clock and gfx_present() to a real panel, neither
+ * of which exists off the device. */
 void boot_anim_run(void);
+#endif

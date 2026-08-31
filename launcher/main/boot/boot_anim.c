@@ -33,12 +33,20 @@
 #include "util/fixed.h"
 #include "util/intmath.h"
 
+/* Only boot_anim_run() itself, at the bottom of this file, touches
+ * ESP-IDF/FreeRTOS - see gfx.c's own ESP_PLATFORM comment for why that is
+ * the natural, zero-plumbing switch for a host build (a plain `gcc`
+ * invocation never defines it). boot_anim_draw_frame() above it is plain
+ * gfx calls and already took `now_ms` as a parameter rather than reading
+ * the clock itself, so it needs none of this. */
+#ifdef ESP_PLATFORM
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "boot_anim";
+#endif
 
 /* True black, not the launcher's near-black. On an AMOLED that is the pixel
  * switched off, and lit colour on switched-off pixels is the thing this panel
@@ -575,7 +583,7 @@ static void draw_title(uint32_t now_ms, uint8_t ink)
  * The loop
  *-------------------------------------------------------------------------*/
 
-static void draw_frame(uint32_t now_ms)
+void boot_anim_draw_frame(uint32_t now_ms)
 {
     const uint8_t ink = boot_anim_ink(now_ms);
 
@@ -606,6 +614,7 @@ static void draw_frame(uint32_t now_ms)
     }
 }
 
+#ifdef ESP_PLATFORM
 void boot_anim_run(void)
 {
     const int64_t started_us = esp_timer_get_time();
@@ -618,7 +627,7 @@ void boot_anim_run(void)
             break;
         }
 
-        draw_frame(now_ms);
+        boot_anim_draw_frame(now_ms);
         gfx_present();
         frames++;
 
@@ -639,3 +648,4 @@ void boot_anim_run(void)
      * another full transfer clearing it here, and the last frame drawn was
      * already all but faded out. */
 }
+#endif

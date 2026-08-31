@@ -14,12 +14,26 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef ESP_PLATFORM
 #include "bsp/esp-bsp.h"
+#endif
 #include "gfx/gfx_color.h"
 #include "gfx/gfx_font.h"
 
+/* ESP_PLATFORM is defined by ESP-IDF's own toolchain file - never by this
+ * project - which is what makes it the natural, zero-plumbing switch
+ * between the device build and a host one: a plain `gcc` invocation (the
+ * same one test/run_tests.sh already uses) simply never defines it. The
+ * host figures are literals rather than pulled from anywhere, the same
+ * reason gfx_dirty.h and test/suites/suite_boot_anim.c already hardcode
+ * them - a BSP header is exactly what a host build cannot include. */
+#ifdef ESP_PLATFORM
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
+#else
+#define GFX_WIDTH   368
+#define GFX_HEIGHT  448
+#endif
 
 /* QSPI clock for the panel.
  *
