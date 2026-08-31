@@ -189,11 +189,15 @@ it being a living document instead of a one-off spec.
 
 ## Related, narrower tooling
 
-`scripts/fix-audited-code.sh` (and its docs/ own header comment) already
-does a more automated version of this for one specific, high-volume case:
-bulk-fixing MISRA/cppcheck findings as exact find/replace patches, with a
+`scripts/fix-audited-code.sh` and `scripts/fix-audited-docs.sh` (each has
+its own header comment) already do a more automated version of this for one
+specific, high-volume case: bulk-fixing MISRA/cppcheck findings, or doc
+audit findings, as exact find/replace patches. The code-side script has a
 mandatory review-model gate and its own `--pool local|free|subscription|all`
-selection. Reach for that script when the task really is "fix N audit
-findings across files," not an open-ended feature - it has already worked
-out the patch-verification and review-loop machinery this doc doesn't need
-to repeat.
+selection; the docs-side script's review model is optional. Reach for
+whichever one applies when the task really is "fix N audit findings across
+files," not an open-ended feature - both have already worked out the
+patch-verification and (for code) review-loop machinery this doc doesn't
+need to repeat. `scripts/fix-audited-code-free.sh` and
+`scripts/fix-audited-docs-free.sh` are no-confirmation, free-tier-model,
+isolated-worktree launchers for each, respectively.
