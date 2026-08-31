@@ -172,6 +172,8 @@ smelt - lava against a dirt bed - rather than drawing a bar.
 | `conducts` | 248 | see below |
 | `dissolvable` | 1 | balance revision 2026-08-30: metal now resists acid instead of being its counter (was 110, deliberately above stone's 60); stone 60, sand 200 unchanged. 1 rather than 0 (immune) so metal stays in the generated reaction docs |
 | dirt `heat_chance` | 10 | slower than sand into glass (16). Smelting should be a project |
+| dirt `flaw_to` / `flaw_chance` | MAT_STONE / 40 | revision 2026-08-31, see "Decisions taken" - starting point, tune on device |
+| dirt `spoils_to` / `spoils_chance` | MAT_SAND / 24 | revision 2026-08-31, see "Decisions taken" - starting point, tune on device |
 | everything else | 0 | never catches, never a heat source, never melts |
 
 All of these are starting points, to be tuned on device like every other
@@ -230,10 +232,23 @@ the cost is zero.
 
 ## Tests
 
-- dry dirt beside lava becomes metal
-- saturated dirt takes roughly 8x as long, and emits steam on the way
-- watered dirt beside lava steams **before** it smelts - assert the
-  sequence, not just the endpoint
+- dry dirt beside lava smelts into metal OR stone (revision 2026-08-31 -
+  `flaw_to` means it is no longer guaranteed all-metal)
+- a bone-dry dirt cell can come out flawed (stone) at all, from a sample
+  large enough that chance is not a factor -
+  `test_dry_dirt_flaws_into_stone_at_least_sometimes`
+- a self-growing metal rod (below) can contain a flawed stone cell mid-run
+  and keep conducting past it, and flawed cells appear in clumped runs
+  rather than an even speckle - the rolling-modulo mechanism's own
+  guarantee, checked as an exact structural bound, not a statistical one
+- saturated dirt takes roughly 8x as long, and emits steam on the way -
+  unless it spoils to sand first (revision 2026-08-31 - `spoils_to`)
+- a saturated dirt cell can spoil into sand instead of ever smelting -
+  `test_wet_dirt_can_spoil_into_sand_instead_of_smelting`
+- watered dirt beside lava steams **before** it resolves (smelts OR
+  spoils) - assert the sequence, not just the endpoint. Guaranteed by
+  `spoils_chance`'s own gate: a cell cannot spoil on its very first
+  successful roll off full saturation
 - `sand -> glass` still works; the `dries` guard must not catch sand
 - heat crosses a metal run far further than a stone one (the pair above)
 - **the rod terminates**: lava at one end of a long dirt bed grows a metal
@@ -268,12 +283,34 @@ Plus the ordinary additions: metal and dirt into that diagram, and
 
 ## Decisions taken
 
-**Yield: all-metal.** A bed of dirt under lava becomes a bed of metal.
-Abundance is tuned with `heat_chance` alone. A partial slag yield - some
-cells coming out stone - was considered and rejected for now: it would read
-as ore veins, but it needs a new `reaction_t` field serving exactly one
-material, and `heat_chance` is the knob that already exists. Revisit only
-if metal turns out too cheap on device.
+**Yield: mostly metal, sometimes stone, clumped.** Revised 2026-08-31 - the
+rejection below no longer holds. Dirt's reaction row gained `flaw_to` =
+MAT_STONE and `flaw_chance` = 40 in 256 (~16%): on a successful dry smelt,
+that fraction comes out as stone instead of metal. Abundance is still
+`heat_chance` alone; `flaw_chance` only decides the SHAPE of what already
+smelted, not how much of it there is. The decision is not drawn per cell -
+a rolling-modulo counter in `try_heat_transform()` (`sand_reactions.c`,
+`HEAT_FLAW_CLUMP`, currently 5) only rerolls once every few successful
+smelts and reuses that decision for the ones in between, so stone comes out
+in clumped runs rather than an even speckle. That clumping is what makes
+this the ore-veins design the paragraph below once rejected, not the
+salt-and-pepper noise a plain independent roll would have given.
+
+~~A partial slag yield - some cells coming out stone - was considered and
+rejected for now: it would read as ore veins, but it needs a new
+`reaction_t` field serving exactly one material, and `heat_chance` is the
+knob that already exists. Revisit only if metal turns out too cheap on
+device.~~ Revisited above.
+
+**Wet dirt can also spoil into sand.** `spoils_to` = MAT_SAND and
+`spoils_chance` = 24 in 256 (~9%), rolled only against a WET cell (nonzero
+moisture). On a successful heat roll, instead of driving off one level of
+moisture as steam, the cell can crack straight to sand instead - heated too
+fast while still wet. Not rolled on a cell's very first successful roll off
+full saturation (`SOIL_MOISTURE_MAX`): that one always steams, so a watered
+cell is guaranteed at least one puff before it is ever at risk. Independent
+of `flaw_to` above by construction - a cell that spoils never reaches the
+dry branch at all, so the two chances never compete for the same roll.
 
 **Renewable, deliberately.** `sand + water -> dirt` already exists at rate
 8, so the chain sand, soak, smelt regenerates metal without limit. This is

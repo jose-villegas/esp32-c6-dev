@@ -802,6 +802,27 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * SOIL_MOISTURE_MAX - to reach metal instead of one. */
         .heats_to    = MATX(MATX_METAL),
         .heat_chance = 10,
+
+        /* IMPURE ORE. Metal-Smelting-Plan.md originally rejected a mixed
+         * yield as "a new field serving exactly one material" and shipped
+         * all-metal instead. Revised: 40 in 256 (~16%) of successful dry
+         * smelts come out stone instead - readable ore veins rather than
+         * a guaranteed bar, at the cost of exactly the field the plan
+         * declined to add. See reaction_t.flaw_to's own comment
+         * (material.h) for the clumping that keeps this from reading as
+         * salt-and-pepper noise. */
+        .flaw_to     = MAT_STONE,
+        .flaw_chance = 40,
+
+        /* RUINED BY HASTE. 24 in 256 (~9%) of the successful rolls that
+         * would otherwise drive off one level of moisture instead crack
+         * the cell straight to sand. Saturated dirt rolls this up to
+         * SOIL_MOISTURE_MAX + 1 times on its way to bone dry, so the
+         * chance of surviving all of them uncracked is (1 - 24/256)^8 -
+         * a bit under half - which is the point: watering ore before it
+         * fires is a real risk, not a formality. */
+        .spoils_to     = MAT_SAND,
+        .spoils_chance = 24,
     },
 
     [MAT_SNOW] = {

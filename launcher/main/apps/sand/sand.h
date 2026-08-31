@@ -322,6 +322,17 @@ typedef struct {
      * instant the next step starts). */
     uint8_t    acid_splashes_this_step;
 
+    /* THE ROLLING-MODULO CLUMP behind reaction_t.flaw_to (material.h) - see
+     * try_heat_transform()'s own comment (sand_reactions.c) for the
+     * mechanism. Shared across every material that ever sets flaw_to
+     * (dirt is the only one today), deliberately: this is what makes
+     * consecutive smelt successes come out as a run of the same
+     * material - a nodule - instead of an independent per-cell coin flip.
+     * heat_flaw_seq counts triggers; heat_flaw_is_flawed is the decision
+     * currently being shared across the run of HEAT_FLAW_CLUMP of them. */
+    uint16_t heat_flaw_seq;
+    bool     heat_flaw_is_flawed;
+
     int      last_load_dx, last_load_dy;
 
     /* The DITHERED direction of the last step, as opposed to the nearest
