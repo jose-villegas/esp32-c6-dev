@@ -2741,6 +2741,26 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
                 row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
+
+                /* A small "fizzle" at the moment water actually wins -
+                 * explicitly asked for, and only for this outcome (not
+                 * the rarer acid-spreads branch below): a puff of gas
+                 * into whatever empty cell is nearby, the same residue
+                 * idiom emit_into_empty_neighbor() already gives ember's
+                 * flame and wet dirt's steam (just a no-op if nothing
+                 * empty is adjacent, same as those), plus a small
+                 * impulse pop off the newly-diluted cell reusing
+                 * acid_bubble()'s own "against gravity, with a little
+                 * spread" direction math for a consistent look. Neither
+                 * is gated on exposure the way acid_bubble() itself is -
+                 * sand_impulse() already no-ops harmlessly into a
+                 * blocked destination, so there is nothing here worth
+                 * the extra check. */
+                emit_into_empty_neighbor(s, x, y, w, h, MAT_GAS);
+                const int dx = s->last_step_dx, dy = s->last_step_dy;
+                const int i_up = (ring_of(dx, dy) + 4) & 7;
+                const int spread = (int)(rng_next(&s->rng) % 3) - 1;
+                sand_impulse(s, x, y, (i_up + spread + 8) & 7, SAND_ACID_DILUTE_FIZZ_SPEED);
             } else {
                 s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
                 mark_rows(s, ny, ny);
