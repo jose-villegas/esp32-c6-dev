@@ -431,7 +431,7 @@ static int exact_disc_count(int radius)
  * function's own comment for why one body serves both. */
 static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
                                bool allow_dislodge_static, int mat_filter,
-                               bool guaranteed_dislodge);
+                               bool guaranteed_dislodge, int ramp);
 
 /* One candidate cell of sand_explode()'s own annulus scan, below - split
  * out so the ring-order loop that calls it (see that function's own
@@ -529,7 +529,8 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
      * identical to any other entry; the toughness lives entirely in this
      * one boolean and the roll behind it. */
     queue_flying_grain(s, cx + dx, cy + dy, ring_of(qdx, qdy),
-                       SAND_EXPLODE_INITIAL_SPEED, true, mat_filter, false);
+                       SAND_EXPLODE_INITIAL_SPEED, true, mat_filter, false,
+                       SAND_IMPULSE_SPEED_RAMP);
 }
 
 /* THE SHARED IMPLEMENTATION BEHIND sand_impulse() AND sand_explode()'s OWN
@@ -544,10 +545,20 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
  * one caller that has, and passes true. A future caller of sand_impulse()
  * itself (gunpowder, gas, whatever comes next) inherits the SAFE default
  * automatically, the same as today - it does not inherit wall-breaking
- * just because this function grew the capability somewhere inside it. */
+ * just because this function grew the capability somewhere inside it.
+ *
+ * `ramp` is impulse_t's own per-entry speed decay (see that struct's own
+ * comment) - threaded straight through rather than hardcoded so a caller
+ * wanting a throw to travel farther (or less far) than SAND_IMPULSE_
+ * SPEED_RAMP's own, already-measured figure can ask for that WITHOUT
+ * retuning every other caller of this same shared mechanism. sand_
+ * impulse() and queue_outward_impulse() (sand_explode()'s own seeding,
+ * above) both pass SAND_IMPULSE_SPEED_RAMP unchanged; sand_impulse_
+ * dislodge() is the one caller that passes something else - see its own
+ * comment in sand.h for why reaction_t.vent_chance's throw wants to. */
 static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
                                bool allow_dislodge_static, int mat_filter,
-                               bool guaranteed_dislodge)
+                               bool guaranteed_dislodge, int ramp)
 {
     /* Disabled, or already full - see sand_impulse()'s own comment in
      * sand.h on why both are silent no-ops rather than something a caller
@@ -709,21 +720,27 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
     entry->cell  = cell;
     entry->dir   = (uint8_t)dir;
     entry->speed = (uint8_t)speed;
+    entry->ramp  = (uint8_t)ramp;
 }
 
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
 {
-    queue_flying_grain(s, x, y, dir, speed, false, -1, false);
+    queue_flying_grain(s, x, y, dir, speed, false, -1, false,
+                       SAND_IMPULSE_SPEED_RAMP);
 }
 
 /* reaction_t.vent_chance's (material.h) own single-cell dislodge - the
  * static-wall equivalent of sand_impulse() itself, with `allow_dislodge_
  * static` forced true and `guaranteed_dislodge` set - see queue_flying_
  * grain()'s own comment on why a vent's push skips the density-scaled
- * toughness roll every other wall-dislodging caller keeps. */
-void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed)
+ * toughness roll every other wall-dislodging caller keeps. `ramp` is
+ * threaded straight through to impulse_t's own field - see sand.h's own
+ * comment on SAND_VENT_IMPULSE_RAMP for why a vent's own throw wants a
+ * different one from every other caller of this mechanism. */
+void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
+                           int ramp)
 {
-    queue_flying_grain(s, x, y, dir, speed, true, -1, true);
+    queue_flying_grain(s, x, y, dir, speed, true, -1, true, ramp);
 }
 
 /* THE SHARED IMPLEMENTATION BEHIND sand_displace() AND sand_displace_
@@ -2155,10 +2172,10 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * vocabulary for "loses energy" instead of two different shapes.
          * Scoped to water/acid, same as the cascade and the wall-bounce
          * just above splash_displace()'s own call site - every other
-         * material keeps the original linear SAND_IMPULSE_SPEED_RAMP
-         * unchanged, so this does not touch sand_explode()'s own
-         * extensively-measured tuning (see SAND_IMPULSE_SPEED_RAMP's and
-         * SAND_EXPLODE_CORE_DIVISOR's comments in sand.h for that history).
+         * material keeps the original linear ramp unchanged, so this does
+         * not touch sand_explode()'s own extensively-measured tuning (see
+         * SAND_IMPULSE_SPEED_RAMP's and SAND_EXPLODE_CORE_DIVISOR's
+         * comments in sand.h for that history).
          *
          * DID INTERACT WITH THE CASCADE GATE - caught by
          * test_a_cascading_impulse_moves_more_than_one_cell (suite_sand.c)
@@ -2169,13 +2186,21 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * geometric shift now, not the old linear ramp. Fixed by dropping
          * SAND_CASCADE_MIN_SPEED to 1 (see its own comment) so the gate
          * stops being the thing that cuts a chain short - the roll's own
-         * exhaustion is. */
+         * exhaustion is.
+         *
+         * entry.ramp, NOT A HARDCODED SAND_IMPULSE_SPEED_RAMP - see
+         * impulse_t's own comment for why this is now per-entry rather
+         * than one constant every caller shares. sand_impulse() and
+         * queue_outward_impulse() both queue with entry.ramp ==
+         * SAND_IMPULSE_SPEED_RAMP, so this line does exactly what it
+         * always did for them; only sand_impulse_dislodge() (reaction_t.
+         * vent_chance's own throw) ever queues a different figure. */
         if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
             entry.speed = (uint8_t)(entry.speed -
                                     (entry.speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
         } else {
-            entry.speed = (entry.speed > SAND_IMPULSE_SPEED_RAMP)
-                              ? (uint8_t)(entry.speed - SAND_IMPULSE_SPEED_RAMP)
+            entry.speed = (entry.speed > entry.ramp)
+                              ? (uint8_t)(entry.speed - entry.ramp)
                               : 0;
         }
 
@@ -2346,6 +2371,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
         s->impulse_buf[kept].cell  = entry.cell;
         s->impulse_buf[kept].dir   = entry.dir;
         s->impulse_buf[kept].speed = entry.speed;
+        s->impulse_buf[kept].ramp  = entry.ramp;
         kept++;
     }
 

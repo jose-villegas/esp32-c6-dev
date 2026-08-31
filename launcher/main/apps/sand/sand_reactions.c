@@ -386,10 +386,12 @@ covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density)
 }
 
 /* ONE OF THE THREE COLUMNS try_vent() throws - see its own comment for
- * why there are three. `dir` is which ring8 direction this particular
- * column scans and throws along (one of "up-left", "up", "up-right",
- * gravity-relative); everything else is identical to the single-column
- * version this replaced.
+ * why there are three. `scan_dir` is which ring8 direction this
+ * particular column SCANS along (one of "up-left", "up", "up-right",
+ * gravity-relative) to decide how deep it reaches and which cells
+ * qualify; `up` is the true gravity-relative up direction shared by all
+ * three calls, and is what the THROW angles toward - see the split
+ * between the two, below, for why they are no longer the same thing.
  *
  * Stops scanning at the first EMPTY cell in that direction (nothing left
  * to push, and nothing further out needs venting either), the first
@@ -438,33 +440,37 @@ covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density)
  * sand_impulse() refuses to move by default. A vent that could only ever
  * push loose powder through a stone lid would never do anything a player
  * could see: stone is the one material actually capable of covering lava
- * from above.
+ * from above. SAND_VENT_IMPULSE_RAMP, not SAND_IMPULSE_SPEED_RAMP - see
+ * its own comment (sand.h) for why a vent's own throw wants to travel
+ * noticeably farther than an ordinary explosion's, without retuning that
+ * shared, already-measured constant for every other caller.
  *
- * `jitter_throw`, ONLY for the straight "up" column (try_vent()'s own
- * off==0 case) - a purely vertical throw has no sideways component at
- * all, so once its outward push fizzles (SAND_IMPULSE_SPEED_RAMP decay,
- * sand.h), step_impulses()'s own gravity-drift for airborne KIND_STATIC
- * material ("AIRBORNE SOLIDS FALL TOO", sand.c) has nothing pulling it
- * anywhere but straight back down the exact shaft it just left - measured
- * doing precisely that at a high SAND_VENT_REACH, oscillating between
- * fully thrown and fully re-covered forever instead of ever actually
- * escaping, because nothing ever moves it clear of its own reach window.
- * The two diagonal columns never have this problem: their throw already
- * has a sideways component, so gravity pulling them down lands them
- * BESIDE the lava, not back on top of it. One acid_bubble()-style spread
- * roll (-1, 0 or +1 ring steps) picked ONCE per firing, not once per
- * cell, keeps the whole reachable stack cascading along a single
- * (now slightly angled) line together - vent_column()'s own farthest-
- * first ordering depends on each cell's target being exactly where the
- * cell ahead of it just vacated, which a PER-CELL independent jitter
- * would break. Applied only to the THROW direction, never the SCAN
- * above - the depth this function measures must stay anchored to the
- * exact line covered_from_above() already confirmed is covered, not
- * wander off it. */
-static void vent_column(sand_t *s, int x, int y, int w, int h, int dir,
-                        bool jitter_throw)
+ * THE THROW ANGLES TOWARD `up`, NOT ALONG `scan_dir` - every one of the
+ * three columns, not only the straight one, jitters its throw around
+ * the true gravity-relative up direction (an acid_bubble()-style spread
+ * of -1, 0 or +1 ring steps, picked ONCE per firing, not once per cell,
+ * for the same "keep the whole reachable stack cascading along one
+ * angled line" reason the original design picked one roll for its own
+ * straight column). Material found up-left or up-right of the lava
+ * used to keep flying further up-left or up-right, along its own
+ * diagonal; now it gets thrown mostly straight up instead, the same as
+ * the centre column. SAFE FOR THE SAME REASON THE CENTRE COLUMN'S OWN
+ * JITTER EXISTS: a cell up-left or up-right of the lava already has
+ * genuine horizontal offset from it (that is what SCANNING along that
+ * diagonal means), so step_impulses()'s own gravity-drift pulling a
+ * near-vertical throw back down lands it roughly back over where it
+ * started flying from - still clear of the lava - not back on top of
+ * it the way a purely vertical throw from directly above the lava
+ * would be without any jitter at all. Only a cell with NO inherent
+ * offset (the straight "up" column, scanning with dx=0) ever needed
+ * the jitter to avoid refalling into its own shaft; every column having
+ * it now is what makes a vent read as one cohesive geyser aimed
+ * against gravity rather than three separate jets fanning out at their
+ * own fixed angles. */
+static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
+                        int up)
 {
-    const int *ud = ring_dir(dir);
+    const int *ud = ring_dir(scan_dir);
 
     int depth = 0;
     for (int i = 1; i <= SAND_VENT_REACH; i++) {
@@ -480,14 +486,12 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int dir,
         depth = i;
     }
 
-    const int spread = jitter_throw
-                        ? (int)(rng_next(&s->rng) % 3) - 1
-                        : 0;
-    const int throw_dir = (dir + spread + 8) & 7;
+    const int spread = (int)(rng_next(&s->rng) % 3) - 1;
+    const int throw_dir = (up + spread + 8) & 7;
 
     for (int i = depth; i >= 1; i--) {
         sand_impulse_dislodge(s, x + ud[0] * i, y + ud[1] * i, throw_dir,
-                              SAND_VENT_SPEED);
+                              SAND_VENT_SPEED, SAND_VENT_IMPULSE_RAMP);
     }
 }
 
@@ -497,28 +501,30 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int dir,
  * vent_chance successfully - this function's own job is purely "which
  * cells get thrown, and in which direction."
  *
- * THREE COLUMNS, NOT ONE - the same three gravity-relative directions
- * covered_from_above() checks to decide a lid exists at all (up-left, up,
- * up-right) each get their own independent vent_column(), so material
- * sitting up-left of the lava is thrown further up-left, material
- * directly above is thrown straight up, and material up-right is thrown
- * further up-right - a lid blows outward in the direction it was already
- * leaning over the pool, rather than every covering cell converging on
- * one narrow column regardless of where it actually sits. "Above" IS
- * GRAVITY-RELATIVE throughout, not screen-up: a vent has to punch through
- * whatever is actually sitting over the pool from the BOARD's own point
- * of view, which on a tilted device is not necessarily +y. Reuses the
- * exact ring math anchored() and the wet-earth percolation code already
- * use for the same reason (s->last_load_dx/dy is the current settled
- * gravity direction as a unit vector; ring_of() turns that into the
- * matching ring8 index, and the ring directly OPPOSITE it - four steps
- * around an 8-direction ring - is "up"). */
+ * THREE COLUMNS, NOT ONE, FOR WHERE THEY SCAN - the same three gravity-
+ * relative directions covered_from_above() checks to decide a lid exists
+ * at all (up-left, up, up-right) each get their own independent vent_
+ * column(), so material sitting up-left of the lava, directly above it,
+ * or up-right of it are each found and measured along their own line,
+ * rather than every covering cell converging on one narrow column
+ * regardless of where it actually sits. Where they THROW is a separate
+ * question - see vent_column()'s own comment on why every column now
+ * angles its throw toward `up` rather than continuing along its own
+ * scan direction. "Above" IS GRAVITY-RELATIVE throughout, not screen-up:
+ * a vent has to punch through whatever is actually sitting over the pool
+ * from the BOARD's own point of view, which on a tilted device is not
+ * necessarily +y. Reuses the exact ring math anchored() and the wet-
+ * earth percolation code already use for the same reason (s->
+ * last_load_dx/dy is the current settled gravity direction as a unit
+ * vector; ring_of() turns that into the matching ring8 index, and the
+ * ring directly OPPOSITE it - four steps around an 8-direction ring -
+ * is "up"). */
 static void try_vent(sand_t *s, int x, int y, int w, int h)
 {
     const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
 
     for (int off = -1; off <= 1; off++) {
-        vent_column(s, x, y, w, h, up + off, off == 0);
+        vent_column(s, x, y, w, h, up + off, up);
     }
 }
 

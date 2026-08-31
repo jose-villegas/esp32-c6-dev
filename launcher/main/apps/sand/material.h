@@ -545,7 +545,14 @@ typedef struct {
      * up, up-right - see try_vent()'s and vent_column()'s own comments,
      * sand_reactions.c), up to SAND_VENT_REACH cells deep along that
      * direction. A lid leaning to one side gets hit where it actually is,
-     * not from a single fixed point.
+     * not from a single fixed point - but wherever it is found, it gets
+     * THROWN toward gravity-relative up, not further along whichever
+     * diagonal it was found on, and noticeably farther than an ordinary
+     * explosion (SAND_VENT_IMPULSE_RAMP, sand.h) - see vent_column()'s
+     * own comment for why aiming every column at -gravity reads as one
+     * cohesive eruption rather than three jets fanning out at their own
+     * angles, and is still safe against falling straight back into the
+     * seal it just cleared.
      *
      * DELIBERATELY NOT smothered()'s all-4-cardinal rule (the one that
      * extinguishes a burning SOLID) - see covered_from_above()'s own

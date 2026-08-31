@@ -14361,7 +14361,7 @@ static void test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fail
     sand_enable_impulses(&s, impulse_buf, W * H);
 
     sand_set(&s, 3, 0, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-    sand_impulse_dislodge(&s, 3, 0, 0, 0);
+    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
 
     for (int i = 0; i < H; i++) {
         sand_step(&s, 0, 1000, 0);

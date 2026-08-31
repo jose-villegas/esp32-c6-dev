@@ -150,12 +150,28 @@
  * each need their own full byte for the reasons above. And reordering the
  * fields buys nothing: the struct's alignment is fixed at 2 by `index`
  * alone, so the five logical bytes any ordering produces still round up
- * to six - the pad moves, it does not shrink. */
+ * to six - the pad moves, it does not shrink.
+ *
+ * `ramp` FILLS THAT EXISTING PAD BYTE, so it is not a size increase -
+ * still six bytes, the same "true floor" the paragraph above measured,
+ * just with what used to be unused padding now doing something. Carries
+ * queue_flying_grain()'s own `ramp` parameter (see its own comment in
+ * sand.c) with the entry for as long as it flies: how fast `speed`
+ * decays every turn (step_impulses(), this file) used to be the single
+ * shared SAND_IMPULSE_SPEED_RAMP for every caller, which is right for an
+ * ordinary explosion or splash but wrong for reaction_t.vent_chance's
+ * own throw (try_vent(), sand_reactions.c) wanting to travel much
+ * farther than that shared, already-measured figure allows without
+ * changing what every OTHER caller of this same mechanism gets for
+ * free. Ignored entirely for water/acid, which keep their own separate
+ * geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT) regardless of what
+ * this field holds. */
 typedef struct {
     uint16_t index;
     cell_t   cell;
     uint8_t  dir;
     uint8_t  speed;
+    uint8_t  ramp;
 } impulse_t;
 
 typedef struct {
@@ -581,8 +597,15 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * comment in sand.c for why a vent's push - pressure from directly beneath
  * the exact seal it is relieving, not a stray blast fragment grazing an
  * arbitrary wall - skips the density-scaled toughness roll every other
- * wall-dislodging caller keeps. */
-void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed);
+ * wall-dislodging caller keeps.
+ *
+ * `ramp` is the entry's own per-turn speed decay (impulse_t's own field,
+ * this file) - pass SAND_VENT_IMPULSE_RAMP, not SAND_IMPULSE_SPEED_RAMP,
+ * for a throw that travels noticeably farther than an ordinary explosion
+ * without touching that shared, already-measured constant for every
+ * other caller - see SAND_VENT_IMPULSE_RAMP's own comment for why. */
+void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
+                           int ramp);
 
 /* Chance in 256, per step, that a queued grain's outward move happens THIS
  * turn - see sand_impulse()'s `speed` parameter, which is this chance at
@@ -741,6 +764,34 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed);
  * SPEED's own comment for why full speed, not a distance-scaled one, is
  * what actually produces a dramatic throw rather than a shorter one. */
 #define SAND_VENT_SPEED  SAND_EXPLODE_INITIAL_SPEED
+
+/* The per-entry `ramp` (impulse_t's own comment, this file) vent_column()
+ * hands to sand_impulse_dislodge() for each cell it throws - how much
+ * `speed` loses every turn (step_impulses(), sand.c), same idiom as
+ * SAND_IMPULSE_SPEED_RAMP but a SEPARATE dial, not a change to that one:
+ * SAND_IMPULSE_SPEED_RAMP is shared by every other impulse-driven effect
+ * (ordinary explosions, splashes) and is already extensively measured
+ * against the dune scene (see its own comment) - lowering it to make
+ * vent's own throw travel farther would silently retune every one of
+ * those other effects along with it. A vent's own pulse is already the
+ * rare, deliberately dramatic event this whole feature pairs a low
+ * vent_chance with a deep SAND_VENT_REACH to produce (see that field's
+ * own comment); the material it throws reading as merely "explosion-
+ * distance" undersold that pairing rather than completing it - a held-
+ * in eruption should send debris noticeably farther than an ordinary
+ * blast, not the same distance from a rarer trigger.
+ *
+ * 1, THE LOWEST VALUE THAT STILL GUARANTEES TERMINATION - `speed` must
+ * reach zero eventually or a BLOCKED entry (one whose per-turn roll
+ * keeps succeeding but whose target never opens) would never hit the
+ * `!rolled_move` branch that ends its tracked lifetime, growing the
+ * impulse buffer without bound the same way an unrolled roll would (see
+ * step_impulses()'s own comment on why the roll - and therefore the
+ * decay right beside it - runs every turn, blocked or not). At 1 against
+ * SAND_IMPULSE_SPEED_RAMP's 2, a vent-thrown cell's flight roughly
+ * doubles in expected length - a starting point, not measured on
+ * device. */
+#define SAND_VENT_IMPULSE_RAMP  1
 
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
  * - a WATER grain landing hard, either falling onto an already-occupied
