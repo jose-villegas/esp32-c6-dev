@@ -805,24 +805,34 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
         /* IMPURE ORE. Metal-Smelting-Plan.md originally rejected a mixed
          * yield as "a new field serving exactly one material" and shipped
-         * all-metal instead. Revised: 40 in 256 (~16%) of successful dry
-         * smelts come out stone instead - readable ore veins rather than
-         * a guaranteed bar, at the cost of exactly the field the plan
-         * declined to add. See reaction_t.flaw_to's own comment
-         * (material.h) for the clumping that keeps this from reading as
-         * salt-and-pepper noise. */
+         * all-metal instead. First revision (2026-08-31) picked 40 in 256
+         * (~16%) and read as mostly metal on device; a same-day rebalance
+         * moved it to 90 (~35%), and that still read as too much metal.
+         * Second rebalance, same day: 220 in 256 (~86%) of successful dry
+         * smelts come out stone instead, leaving metal the genuinely rare
+         * outcome (~14%) rather than the default one. See reaction_t.
+         * flaw_to's own comment (material.h) for the clumping that keeps
+         * this from reading as salt-and-pepper noise even at this share. */
         .flaw_to     = MAT_STONE,
-        .flaw_chance = 40,
+        .flaw_chance = 220,
 
-        /* RUINED BY HASTE. 24 in 256 (~9%) of the successful rolls that
-         * would otherwise drive off one level of moisture instead crack
-         * the cell straight to sand. Saturated dirt rolls this up to
-         * SOIL_MOISTURE_MAX + 1 times on its way to bone dry, so the
-         * chance of surviving all of them uncracked is (1 - 24/256)^8 -
-         * a bit under half - which is the point: watering ore before it
-         * fires is a real risk, not a formality. */
+        /* RUINED BY HASTE. First revision (2026-08-31) picked 24 in 256
+         * (~9%) and read as too rare to matter on device; a same-day
+         * rebalance moved it to 128 (exactly half), and that still wasn't
+         * strong enough. Second rebalance, same day: 235 in 256 (~92%) per
+         * eligible roll, and no longer gated to spare a cell's very first
+         * roll - see try_heat_transform()'s own comment on why that gate
+         * could never actually deliver the guarantee it promised. Saturated
+         * dirt gets SOIL_MOISTURE_MAX = 7 such rolls on its way to bone dry
+         * - moisture 7 down through 1, all seven now equally at risk - so
+         * the chance of surviving every one of them uncracked is
+         * (1 - 235/256)^7, on the order of 0.000003%. Watering ore before
+         * it fires is now, for all practical purposes, a guarantee of
+         * ruining it, and can happen on literal first contact with no
+         * warning - wet dirt reaching metal or stone at all should be a
+         * rare surprise, not a normal outcome. */
         .spoils_to     = MAT_SAND,
-        .spoils_chance = 24,
+        .spoils_chance = 235,
     },
 
     [MAT_SNOW] = {

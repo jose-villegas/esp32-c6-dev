@@ -533,16 +533,28 @@ try_heat_transform(sand_t *s, int nx, int ny, int w, int h)
          * a cell either cracks to `spoils_to` this roll, or it dries by
          * one level as it always did - never both from one success.
          *
-         * Gated on `CELL_MOISTURE(n) < SOIL_MOISTURE_MAX` - NOT eligible
-         * on a cell's very first successful roll off full saturation. That
-         * is what keeps test_watered_dirt_steams_before_it_smelts's own
-         * guarantee true: a cell poured at SOIL_MOISTURE_MAX always sheds
-         * its first level (and puffs its first steam) before it is ever at
-         * risk of cracking - only a cell already partway dry can spoil.
-         * Reads fine in the fiction too: the first heat boils off surface
-         * moisture cleanly; cracking is a risk for the clay underneath, not
-         * the wet skin on top of it. */
-        if (r->spoils_to != 0 && CELL_MOISTURE(n) < SOIL_MOISTURE_MAX &&
+         * UNCONDITIONAL - no "exempt the first roll" gate, on purpose. An
+         * earlier version of this gated on `CELL_MOISTURE(n) <
+         * SOIL_MOISTURE_MAX`, trying to guarantee a cell always puffs one
+         * free level of steam before it is ever at risk. That reasoning
+         * had a hole: dirt also dries AMBIENTLY (this same `dries` field,
+         * ticking every step regardless of any heat source - see the
+         * MOISTURE SPREADS block above), so a cell can already be below
+         * SOIL_MOISTURE_MAX by the time HEAT ever touches it for the first
+         * time, at which point the gate reads as "already used its
+         * exemption" when it never actually got one. At dirt's own rates
+         * (heat_chance 10, dries 5) that race is won by ambient drying
+         * roughly a third of the time - rare enough to hide behind a low
+         * spoils_chance, and exactly what broke
+         * test_watered_dirt_steams_before_it_smelts once spoils_chance was
+         * rebalanced high enough to matter. No amount of moisture-based
+         * gating can fix it without a spare bit dirt's variant does not
+         * have (material.c's own comment: "Dirt's variant is fully
+         * spent"). So: no gate. A cell CAN now spoil on the very first
+         * heat contact it ever gets, with no warning puff first - which is
+         * the correct reading of "even stronger" besides: wet ore cracking
+         * on first contact, not after a polite warning, is the point. */
+        if (r->spoils_to != 0 &&
             (int)(rng_next(&s->rng) & 0xFF) < r->spoils_chance) {
             place_reacted(s, nx, ny, at, (material_id_t)r->spoils_to);
             return true;

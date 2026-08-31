@@ -11774,36 +11774,42 @@ static void test_saturated_dirt_smelts_roughly_eight_times_slower(void)
             "what makes it roughly SOIL_MOISTURE_MAX + 1 times as much "
             "work as bone-dry dirt's single conversion");
     } else {
-        /* Spoiled instead. Still bounded below: reaction_t.spoils_chance
-         * is gated so a cell cannot spoil on its very first successful
-         * roll off full saturation (see that field's own comment) - it
-         * must shed at least one moisture level, cleanly, before it is
-         * ever eligible. So even the fastest possible spoil still passes
-         * through two distinct values: SOIL_MOISTURE_MAX itself, then one
-         * level down. */
-        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2,
-            distinct_moisture_levels_seen,
-            "even a dirt cell that spoils instead of smelting must have "
-            "shed at least one moisture level first - spoils_chance's own "
-            "gate forbids spoiling on the very first roll off full "
-            "saturation");
+        /* Spoiled instead - and, at spoils_chance 235/256, the LIKELY path
+         * for this whole test now (rebalanced 2026-08-31 specifically so
+         * wet dirt reaching metal or stone at all is the rare outcome).
+         * No lower bound to assert here any more: spoils_chance is
+         * unconditional (see its own comment in material.h for why an
+         * earlier "spare the first roll" gate could not actually be made
+         * to work), so a cell can spoil on the very first successful
+         * heat_chance roll it ever gets, with distinct_moisture_levels_
+         * seen staying at 1 - that is expected, not a bug to bound
+         * against. This branch exists so the test does not silently stop
+         * meaning anything once spoiling became the common case; there is
+         * nothing left to assert on this path beyond "it resolved at
+         * all", already checked above. */
     }
 }
 
-/* A FULL tank of moisture rather than a single level. dirt's ordinary
+/* A FULL tank of moisture rather than a single level - originally so
  * ambient drying (reaction_t.dries, ticking independently of any heat
- * source at a rate lower than the wet-earth branch's own heat_chance)
- * competes with the new branch to remove each level, and either one
- * winning a given level is silent except the heat-driven one, which
- * steams - so a SINGLE level of moisture is not quite enough to
- * guarantee steam ever appears (ambient drying could in principle win
- * the one race that matters). With SOIL_MOISTURE_MAX levels to get
- * through, ambient drying would have to win every one of them for no
- * steam to appear at all - vanishingly unlikely, and the cell cannot
- * possibly smelt until every one of those levels, however each was
- * removed, is gone. Asserts the SEQUENCE, not just that both eventually
- * happen. */
-static void test_watered_dirt_steams_before_it_smelts(void)
+ * source) winning every one of SOIL_MOISTURE_MAX levels before heat ever
+ * won one would be vanishingly unlikely, guaranteeing steam eventually
+ * appeared. That guarantee is GONE since spoils_chance's 2026-08-31
+ * rebalances: at 235/256, a saturated cell now has roughly a 92% chance of
+ * spoiling straight to sand on the very FIRST successful heat_chance roll
+ * it ever gets - unconditional, no "spare the first roll" gate any more
+ * (see spoils_chance's own comment in material.h for why that gate could
+ * never really be made to work). So for ONE cell, steam appearing at all
+ * is now the MINORITY outcome, not a near-certainty - test_dry_dirt_
+ * flaws_into_stone_at_least_sometimes's sibling test proves the STEAM path
+ * still exists at all, from a sample large enough that chance is not a
+ * factor; this test keeps only the ordering claim that is STILL true
+ * whenever steam does happen: it cannot ever land on the same step this
+ * cell resolves (spoiling and steaming-while-draining are mutually
+ * exclusive outcomes of the same roll - see try_heat_transform()), and it
+ * cannot happen on any step after resolution either, since a resolved
+ * cell has left MAT_DIRT and this branch never runs on it again. */
+static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
 {
     lava_beside_dirt(SOIL_MOISTURE_MAX);
 
@@ -11822,32 +11828,103 @@ static void test_watered_dirt_steams_before_it_smelts(void)
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(steamed_at >= 0,
-        "fixture check: watered dirt against lava must steam at all");
     TEST_ASSERT_TRUE_MESSAGE(resolved_at >= 0,
-        "fixture check: it must eventually resolve too");
-    /* Guaranteed by reaction_t.spoils_chance's own gate
-     * (CELL_MOISTURE(n) < SOIL_MOISTURE_MAX - see its comment in
-     * material.h and try_heat_transform()'s in sand_reactions.c): a cell
-     * poured at SOIL_MOISTURE_MAX cannot spoil on its very first
-     * successful roll, so that roll can only ever drive off a moisture
-     * level (and puff steam) - resolving strictly later remains true
-     * whichever of the three ways this cell eventually resolves. */
+        "fixture check: it must eventually resolve");
+    if (steamed_at < 0) {
+        return;   /* did not steam this run - now the expected majority
+                   * outcome at spoils_chance 235/256, and there is nothing
+                   * left to assert an ORDER over */
+    }
+    /* Structurally guaranteed whenever steam DOES appear (see this
+     * function's own top comment) - resolving strictly later, whichever
+     * of the three ways this cell eventually resolves. */
     TEST_ASSERT_LESS_THAN_MESSAGE(resolved_at, steamed_at,
-        "steam must appear strictly BEFORE the cell resolves - heat works "
-        "on the water first, and a cell poured fully saturated cannot "
-        "spoil on that very first roll, so it always steams at least "
-        "once before smelting OR spoiling");
+        "when watered dirt against lava does steam, that must happen "
+        "strictly BEFORE the cell resolves - spoiling and steaming are "
+        "mutually exclusive outcomes of the same roll, and a resolved "
+        "cell is no longer dirt so it can never steam again afterward");
+}
+
+/* The steam path itself still exists at all - not dead code the previous
+ * test can no longer exercise reliably. At spoils_chance 235/256
+ * unconditional, a single saturated cell steams before it resolves only
+ * on the roughly 8% of first rolls that do NOT immediately spoil (see
+ * the sequencing test just above for the full reasoning), so a single-
+ * cell scene is now the wrong tool to prove the path is live at all -
+ * exactly the same shape of problem test_dry_dirt_smelting_reaches_both_
+ * metal_and_stone solved for the now-rare metal case. STEAM_TEST_PODS
+ * independent saturated pockets, each in a lava_beside_dirt()-shaped box
+ * on one dedicated wide grid (SPOILS_TEST_PODS's shared `wide` above is
+ * far too narrow to hold this many): per pod, P(never steams before
+ * resolving) is the chance its very first roll spoils outright,
+ * spoils_chance/256 ~= 0.918, so P(NONE of STEAM_TEST_PODS pods ever
+ * steam) is 0.918^STEAM_TEST_PODS - with 200 pods that is on the order of
+ * 1 in 27 million, vanishingly small regardless of seed. */
+#define STEAM_TEST_PODS 200
+#define STEAM_TEST_SPACING 4
+#define STEAM_TEST_W (2 + STEAM_TEST_SPACING * STEAM_TEST_PODS + 2)
+#define STEAM_TEST_H 6
+static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(void)
+{
+    static uint8_t steam_cells[STEAM_TEST_W * STEAM_TEST_H];
+    sand_t st;
+    sand_init(&st, steam_cells, STEAM_TEST_W, STEAM_TEST_H, 3u);
+    sand_set_mobility(&st, 0);
+
+    const int y = 2;
+    for (int x = 0; x < STEAM_TEST_W; x++) {
+        sand_set(&st, x, y + 1, STONE);        /* one shared floor */
+    }
+    for (int k = 0; k < STEAM_TEST_PODS; k++) {
+        const int lava_x = 2 + STEAM_TEST_SPACING * k;
+        sand_set(&st, lava_x - 1, y, STONE);
+        sand_set(&st, lava_x, y - 1, STONE);
+        sand_set(&st, lava_x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        sand_set(&st, lava_x + 1, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+
+    /* Existence only - not per-pod sequencing. Steam is KIND_GAS and
+     * rises/drifts once emitted (sand_step_gas()), so pinning WHICH pod a
+     * given steam cell came from would mean fighting the same dispersal
+     * the simulation is supposed to do; a single board-wide count is
+     * immune to that because it does not care which pod produced it,
+     * only that at least one did.
+     *
+     * NOT count_cells_of() - that helper is hardcoded to the shared
+     * fixture's `s`/`W`/`H` globals (see its own definition), not
+     * whichever sand_t is passed to sand_step() - it would silently
+     * count cells on a completely unrelated grid here. Scanned inline
+     * against `st`/STEAM_TEST_W/STEAM_TEST_H instead. */
+    bool steamed_any = false;
+    for (int i = 0; i < 8000 && !steamed_any; i++) {
+        sand_step(&st, 0, 1000, 0);
+        for (int y = 0; y < STEAM_TEST_H && !steamed_any; y++) {
+            for (int x = 0; x < STEAM_TEST_W && !steamed_any; x++) {
+                steamed_any = CELL_MATERIAL(sand_at(&st, x, y)) == MAT_STEAM;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(steamed_any,
+        "at least one of many saturated dirt cells against lava must "
+        "still steam before spoiling - the drain-then-steam path in "
+        "try_heat_transform() must still be reachable even though "
+        "spoils_chance 235/256 makes it the minority outcome; if this "
+        "never fires across STEAM_TEST_PODS independent attempts, either "
+        "spoils_chance regressed to 255 (unconditional, path dead) or the "
+        "steam emit itself broke");
 }
 
 /* reaction_t.spoils_to (material.h) actually fires, rather than just being
  * a field nobody reaches: many INDEPENDENT saturated-dirt-beside-lava
  * pockets side by side, each the same shape as lava_beside_dirt()'s one
- * cell, run until every one of them has resolved. At spoils_chance 24/256
- * gated behind at least one prior moisture drop (see that field's own
- * comment), a single cell spoiling is unlikely enough to be worth padding
- * against - PODS pockets makes the chance of NONE of them ever spoiling
- * negligible without this test depending on which exact cell it was. */
+ * cell, run until every one of them has resolved. Written when
+ * spoils_chance was still 24/256 (~9%), where a single cell spoiling was
+ * unlikely enough to need padding against; two rebalances later it sits at
+ * 235/256 (~92%, unconditional - no gate any more, see that field's own
+ * comment in material.h) and a single pod would already be enough on its
+ * own, but PODS pockets costs nothing extra and keeps this test's
+ * confidence independent of which exact cell it happens to be. */
 #define SPOILS_TEST_PODS 6
 static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
 {
@@ -11884,26 +11961,39 @@ static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
         "regressed to zero or the gate is wrong");
 }
 
-/* reaction_t.flaw_to (material.h) fires AT ALL, from a sample large
- * enough that chance is not a factor - see
- * test_the_rod_terminates_at_conduct_reach_not_the_far_wall's own comment
- * for why a single ~30-cell rod is NOT big enough to make that claim
- * reliably (the clump mechanism only rerolls once every
+/* reaction_t.flaw_to (material.h) fires AT ALL, and so does its complement
+ * - metal itself - from a sample large enough that chance is not a factor
+ * either way. See test_the_rod_terminates_at_conduct_reach_not_the_far_
+ * wall's own comment for why a single ~30-cell rod is NOT big enough to
+ * make either claim reliably (the clump mechanism only rerolls once every
  * HEAT_FLAW_CLUMP_TEST triggers, so a rod that long gets only ~6
  * independent rerolls).
+ *
+ * Both directions need their own proof now, not just flaw_to's: the second
+ * 2026-08-31 rebalance moved flaw_chance to 220/256 (~86%) specifically to
+ * make METAL the rare outcome, which means "does metal still ever happen
+ * at all" is now exactly as real a question as "does stone" was when
+ * metal was still the default.
  *
  * FLAW_TEST_PODS independent bone-dry dirt cells, each in its own
  * lava_beside_dirt()-shaped box, laid out in one dedicated wide grid
  * (SPOILS_TEST_PODS's shared `wide` is far too narrow to hold this many).
- * At flaw_chance 40/256 and HEAT_FLAW_CLUMP_TEST 5, this many pods gives
- * FLAW_TEST_PODS / HEAT_FLAW_CLUMP_TEST independent reroll opportunities;
- * with 400 pods that is 80 of them, and the chance NONE ever flaws is
- * (1 - 40/256)^80, vanishingly small regardless of seed. */
+ * At HEAT_FLAW_CLUMP_TEST 5, this many pods gives FLAW_TEST_PODS /
+ * HEAT_FLAW_CLUMP_TEST independent reroll opportunities; with 400 pods
+ * that is 80 of them. The chance NONE of the 80 ever flaws is
+ * (1 - 220/256)^80, and the chance ALL 80 flaw (never leaving room for a
+ * metal cell) is (220/256)^80 - both vanishingly small regardless of seed,
+ * so both a total absence of stone and a total absence of metal would be
+ * a real regression, not bad luck. Runs the full budget rather than
+ * exiting on the first stone sighting (unlike the old flaw-only version of
+ * this test) precisely because stone is now the FAST, common outcome and
+ * metal the slow, rare one - stopping early would answer the easy question
+ * and never even look for the hard one. */
 #define FLAW_TEST_PODS 400
 #define FLAW_TEST_SPACING 4
 #define FLAW_TEST_W (2 + FLAW_TEST_SPACING * FLAW_TEST_PODS + 2)
 #define FLAW_TEST_H 6
-static void test_dry_dirt_flaws_into_stone_at_least_sometimes(void)
+static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
 {
     static uint8_t flaw_cells[FLAW_TEST_W * FLAW_TEST_H];
     sand_t flaw;
@@ -11922,22 +12012,33 @@ static void test_dry_dirt_flaws_into_stone_at_least_sometimes(void)
         sand_set(&flaw, lava_x + 1, y, CELL_SOIL(MAT_DIRT, 1, 0)); /* dry */
     }
 
-    bool flawed_any = false;
-    for (int i = 0; i < 6000 && !flawed_any; i++) {
+    for (int i = 0; i < 6000; i++) {
         sand_step(&flaw, 0, 1000, 0);
-        for (int k = 0; k < FLAW_TEST_PODS && !flawed_any; k++) {
-            const int lava_x = 2 + FLAW_TEST_SPACING * k;
-            flawed_any =
-                CELL_MATERIAL(sand_at(&flaw, lava_x + 1, y)) == MAT_STONE;
+    }
+
+    int stone_count = 0, metal_count = 0;
+    for (int k = 0; k < FLAW_TEST_PODS; k++) {
+        const int lava_x = 2 + FLAW_TEST_SPACING * k;
+        const cell_t c = sand_at(&flaw, lava_x + 1, y);
+        if (CELL_MATERIAL(c) == MAT_STONE) {
+            stone_count++;
+        } else if (cell_is_extended(c) && CELL_VARIANT(c) == MATX_METAL) {
+            metal_count++;
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(flawed_any,
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, stone_count,
         "at least one of many bone-dry dirt cells against lava must come "
         "out as stone instead of metal - reaction_t.flaw_to/flaw_chance "
         "(material.h) exists precisely so a smelt is not a guaranteed "
         "clean bar; if this never fires across FLAW_TEST_PODS independent "
         "attempts, flaw_to/flaw_chance regressed to zero");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, metal_count,
+        "at least one of many bone-dry dirt cells against lava must still "
+        "come out as metal - flaw_chance 220/256 makes it the RARE "
+        "outcome, not an impossible one; if this never fires across "
+        "FLAW_TEST_PODS independent attempts, flaw_chance is effectively "
+        "255 (metal can no longer exist) rather than merely high");
 }
 
 /* Every smelting test above this one holds a POOL OF LAVA against the
@@ -12280,14 +12381,19 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
      * exactly the scene that motivated flaw_to in the first place. The
      * clump mechanism only RE-ROLLS once every HEAT_FLAW_CLUMP_TEST
      * triggers (see the comment below), so a rod ~30 cells long gets only
-     * ~6 independent rerolls, not ~30 - at flaw_chance 40/256 that is
-     * (1 - 40/256)^6 ~ 35% likely to land on all-metal by pure chance for
-     * some fixed seed. Measured: seed 3u here is exactly one of those -
-     * this rod comes out all metal, and that is a fair outcome, not a
-     * bug. test_dry_dirt_flaws_into_stone_at_least_sometimes below
-     * proves flaw_to fires at all, from a sample large enough that
-     * chance is not a factor; this test's job is the SHAPE of a flaw
-     * when one happens, not proving one happens here. */
+     * ~6 independent rerolls, not ~30. At flaw_chance 220/256 (rebalanced
+     * twice on 2026-08-31, 40 -> 90 -> 220, to make METAL the rare
+     * outcome), the odds have flipped from the original worry: the chance
+     * of landing on all-metal by pure chance is now (1 - 220/256)^6, on
+     * the order of 0.0008% - effectively never - but the chance of landing
+     * on all-STONE, zero metal anywhere in the rod, is (220/256)^6, ~40%,
+     * a real and unremarkable outcome for a sample this small. Either
+     * extreme is still not this test's job to rule out.
+     * test_dry_dirt_smelting_reaches_both_metal_and_stone below proves
+     * both flaw_to AND metal itself still fire, from a sample large
+     * enough that chance is not a factor either way; this test's job is
+     * the SHAPE of a flaw when one happens, not proving one happens (or
+     * doesn't) here. */
 
     /* THE CLUMPING ITSELF. Successes along this rod happen one at a time,
      * in strict spatial order - each cell has to smelt before conduction
@@ -18206,9 +18312,10 @@ void run_sand_suite(void)
     RUN_TEST(test_the_boiler_end_to_end);
     RUN_TEST(test_dry_dirt_beside_lava_smelts_into_metal_or_stone);
     RUN_TEST(test_saturated_dirt_smelts_roughly_eight_times_slower);
-    RUN_TEST(test_watered_dirt_steams_before_it_smelts);
+    RUN_TEST(test_watered_dirt_steaming_precedes_resolving_when_it_happens);
+    RUN_TEST(test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes);
     RUN_TEST(test_wet_dirt_can_spoil_into_sand_instead_of_smelting);
-    RUN_TEST(test_dry_dirt_flaws_into_stone_at_least_sometimes);
+    RUN_TEST(test_dry_dirt_smelting_reaches_both_metal_and_stone);
     RUN_TEST(test_a_held_flame_smelts_dirt_as_lava_does);
     RUN_TEST(test_heat_through_a_stone_wall_smelts_the_dirt_beyond_it);
     RUN_TEST(test_sand_still_becomes_glass_beside_the_new_dirt_branch);
