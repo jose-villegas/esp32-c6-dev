@@ -78,6 +78,7 @@ this, not a tour. Start wherever your question is:
 | [`docs/Sand/Sand-Simulation.md`](docs/Sand/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
 | [`docs/Notes/`](docs/Notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | How the host and on-device test suites work, and why release builds carry none of the test code. |
+| [`docs/Model-Delegation-Workflow.md`](docs/Model-Delegation-Workflow.md) | Delegating feature implementation to local Ollama models or free-tier models through OmniRoute, with review and verification kept on the driving session. |
 
 ## Status
 
