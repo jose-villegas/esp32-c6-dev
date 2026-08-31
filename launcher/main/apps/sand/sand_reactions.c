@@ -337,6 +337,171 @@ smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
     return true;
 }
 
+/* Whether ANY of the three neighbours "above" this cell - gravity-
+ * relative, not screen-up, exactly like try_vent()'s own "up" (see its
+ * comment for why that must be s->last_load_dx/dy rather than a fixed
+ * direction) - is strictly denser and non-liquid. The three checked are
+ * the ring8 direction directly opposite gravity plus the one either side
+ * of it: for ordinary downward gravity that is up-left, up, up-right.
+ *
+ * ANY, NOT ALL THREE - each of the three feeds its own independent
+ * vent_column() (try_vent()'s own comment), so each direction clears on
+ * its own schedule: one corner's covering cell can vent away long before
+ * the other corner's, or the straight-up one's, does. Gating on ALL
+ * THREE would break the moment the FIRST of them clears - covered_from_
+ * above() would go false right there, and vent_chance would never roll
+ * again, permanently freezing whichever column had not yet had its own
+ * lucky pickup roll (see queue_flying_grain()'s own comment in sand.c),
+ * even though it is still just as covered as it always was. ANY keeps
+ * firing for as long as there is still SOMETHING left to push through
+ * from some angle; vent_column()'s own depth scan already turns "nothing
+ * covering this direction any more" into a no-op, so an already-cleared
+ * column costs nothing extra when the other two are still being worked
+ * on.
+ *
+ * Deliberately NOT smothered()'s all-4-cardinal rule. That rule means
+ * true burial and exists for extinguishing a burning SOLID (fire,
+ * ember), which is usually a thin or scattered thing, not a wide
+ * contiguous body - being surrounded on every side is a reasonable bar
+ * for "no air reaches this" there. Lava is not: a pool of it wider than
+ * one cell has more lava to its sides and below, and lava is KIND_LIQUID,
+ * so neighbor_smothers() never counts another lava cell as smothering
+ * this one - smothered() can therefore never be true for any cell in a
+ * pool more than one cell wide, no matter how completely a crust seals
+ * its surface. That is precisely the case reaction_t.vent_chance exists
+ * to unstick (see its own comment, material.h), so it needs its own,
+ * narrower question: not "is this cell buried on every side" but "is
+ * there a lid directly over it" - what is beside or below a lava cell
+ * does not trap its heat, only what is sitting on top of it does. */
+static inline bool
+covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
+    const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
+    for (int off = -1; off <= 1; off++) {
+        const int* d = ring_dir(up + off);
+        if (neighbor_smothers(s, x + d[0], y + d[1], w, h, density)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* ONE OF THE THREE COLUMNS try_vent() throws - see its own comment for
+ * why there are three. `dir` is which ring8 direction this particular
+ * column scans and throws along (one of "up-left", "up", "up-right",
+ * gravity-relative); everything else is identical to the single-column
+ * version this replaced.
+ *
+ * Stops scanning at the first EMPTY cell in that direction (nothing left
+ * to push, and nothing further out needs venting either) or the edge of
+ * the grid, whichever comes first - "push however many are there, cap at
+ * SAND_VENT_REACH" was the exact shape asked for, not "always push
+ * exactly SAND_VENT_REACH cells regardless of what is really there."
+ *
+ * QUEUED FARTHEST-FIRST, same idea as the cascade relay splash_displace()
+ * uses for water (step_impulses(), sand.c): can_impulse_enter() refuses a
+ * KIND_STATIC destination unconditionally, so a cell can only actually
+ * move if the cell one step beyond it is already open. Queuing nearest-
+ * first would leave every cell but the farthest one blocked on its own
+ * first attempt, each waiting on step_impulses()'s per-step retry to
+ * eventually notice its neighbour cleared - correct eventually, but only
+ * after as many extra step_impulses() passes as there are cells in the
+ * stack. Queuing farthest-first instead means the outermost cell, the one
+ * cell here actually facing open air, is FIRST in s->impulse_buf and so
+ * moves FIRST within this very same step_impulses() pass; the next cell
+ * in is then queued right behind it and finds that farther cell's old
+ * position already vacated, and so on down to the cell sitting directly
+ * on the lava - the whole reachable stack shifts in one pass instead of
+ * one cell surfacing per step.
+ *
+ * sand_impulse_dislodge(), NOT plain sand_impulse() - whatever is dense
+ * enough to cover lava in the first place (the condition that gets a
+ * cell here at all) is, in practice, exactly the KIND_STATIC wall
+ * sand_impulse() refuses to move by default. A vent that could only ever
+ * push loose powder through a stone lid would never do anything a player
+ * could see: stone is the one material actually capable of covering lava
+ * from above.
+ *
+ * `jitter_throw`, ONLY for the straight "up" column (try_vent()'s own
+ * off==0 case) - a purely vertical throw has no sideways component at
+ * all, so once its outward push fizzles (SAND_IMPULSE_SPEED_RAMP decay,
+ * sand.h), step_impulses()'s own gravity-drift for airborne KIND_STATIC
+ * material ("AIRBORNE SOLIDS FALL TOO", sand.c) has nothing pulling it
+ * anywhere but straight back down the exact shaft it just left - measured
+ * doing precisely that at a high SAND_VENT_REACH, oscillating between
+ * fully thrown and fully re-covered forever instead of ever actually
+ * escaping, because nothing ever moves it clear of its own reach window.
+ * The two diagonal columns never have this problem: their throw already
+ * has a sideways component, so gravity pulling them down lands them
+ * BESIDE the lava, not back on top of it. One acid_bubble()-style spread
+ * roll (-1, 0 or +1 ring steps) picked ONCE per firing, not once per
+ * cell, keeps the whole reachable stack cascading along a single
+ * (now slightly angled) line together - vent_column()'s own farthest-
+ * first ordering depends on each cell's target being exactly where the
+ * cell ahead of it just vacated, which a PER-CELL independent jitter
+ * would break. Applied only to the THROW direction, never the SCAN
+ * above - the depth this function measures must stay anchored to the
+ * exact line covered_from_above() already confirmed is covered, not
+ * wander off it. */
+static void vent_column(sand_t *s, int x, int y, int w, int h, int dir,
+                        bool jitter_throw)
+{
+    const int *ud = ring_dir(dir);
+
+    int depth = 0;
+    for (int i = 1; i <= SAND_VENT_REACH; i++) {
+        const int vx = x + ud[0] * i;
+        const int vy = y + ud[1] * i;
+        if ((unsigned)vx >= (unsigned)w || (unsigned)vy >= (unsigned)h) {
+            break;
+        }
+        if (CELL_IS_EMPTY(s->cells[(size_t)vy * (size_t)w + (size_t)vx])) {
+            break;
+        }
+        depth = i;
+    }
+
+    const int spread = jitter_throw
+                        ? (int)(rng_next(&s->rng) % 3) - 1
+                        : 0;
+    const int throw_dir = (dir + spread + 8) & 7;
+
+    for (int i = depth; i >= 1; i--) {
+        sand_impulse_dislodge(s, x + ud[0] * i, y + ud[1] * i, throw_dir,
+                              SAND_VENT_SPEED);
+    }
+}
+
+/* TRAPPED HEAT VENTS UPWARD - see reaction_t.vent_chance's own comment
+ * (material.h) for the design this implements. Called only once (x, y) is
+ * already known to be covered_from_above() and to have rolled its
+ * vent_chance successfully - this function's own job is purely "which
+ * cells get thrown, and in which direction."
+ *
+ * THREE COLUMNS, NOT ONE - the same three gravity-relative directions
+ * covered_from_above() checks to decide a lid exists at all (up-left, up,
+ * up-right) each get their own independent vent_column(), so material
+ * sitting up-left of the lava is thrown further up-left, material
+ * directly above is thrown straight up, and material up-right is thrown
+ * further up-right - a lid blows outward in the direction it was already
+ * leaning over the pool, rather than every covering cell converging on
+ * one narrow column regardless of where it actually sits. "Above" IS
+ * GRAVITY-RELATIVE throughout, not screen-up: a vent has to punch through
+ * whatever is actually sitting over the pool from the BOARD's own point
+ * of view, which on a tilted device is not necessarily +y. Reuses the
+ * exact ring math anchored() and the wet-earth percolation code already
+ * use for the same reason (s->last_load_dx/dy is the current settled
+ * gravity direction as a unit vector; ring_of() turns that into the
+ * matching ring8 index, and the ring directly OPPOSITE it - four steps
+ * around an 8-direction ring - is "up"). */
+static void try_vent(sand_t *s, int x, int y, int w, int h)
+{
+    const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
+
+    for (int off = -1; off <= 1; off++) {
+        vent_column(s, x, y, w, h, up + off, off == 0);
+    }
+}
+
 /* Whether any of the four cardinal neighbours is open to the air - the
  * test behind reaction_t.needs_air.
  *
@@ -3010,7 +3175,12 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      *
      * neighbor_smothers() already refuses to count a liquid NEIGHBOUR, for
      * the mirror of this reason. This is the same rule applied to the cell
-     * doing the burning. */
+     * doing the burning.
+     *
+     * reaction_t.vent_chance, below, needs a DIFFERENT question for a
+     * burning LIQUID - not "is this buried on all 4 sides" but "is there
+     * a lid over it" - so it does not share this same smothered() call;
+     * see covered_from_above()'s own comment for why. */
     if (mat->kind != KIND_LIQUID && smothered(s, x, y, w, h, mat->density)) {
         /* Burying a burning log smothers the BURN, not the log. Same
          * reasoning as quenching one. */
@@ -3021,6 +3191,33 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     }
 
     bool acted = false;
+
+    /* TRAPPED HEAT VENTS UPWARD - see reaction_t.vent_chance's own comment
+     * (material.h). s->vent_chance mirrors s->flammability's/s->conduction's
+     * own override (see sand_set_vent_chance()): negative (the default)
+     * means "each material's own table figure", anything else overrides
+     * every material alike - what lets a test force this to 255 instead
+     * of looping a step count scaled to whatever the real, deliberately
+     * rare production figure happens to be tuned to.
+     *
+     * Gated on the resolved chance FIRST, before covered_from_above() even
+     * runs and certainly before any random number is drawn - the same
+     * "check whether this could ever matter before rolling" discipline
+     * step_one_soaking_cell() and try_ignite() both document for the
+     * identical reason: on a board with no lava (or any other material
+     * that ever sets this field), this costs one predicted-false
+     * comparison per burning cell and shifts the RNG stream not at all.
+     * Independent of everything else this function does - the cell itself
+     * is untouched, so ignition, conduction and flaring below all still
+     * run exactly as if this had not fired. */
+    const int vent_chance = (s->vent_chance >= 0) ? s->vent_chance : rx->vent_chance;
+    if (vent_chance != 0 &&
+        covered_from_above(s, x, y, w, h, mat->density) &&
+        (int)(rng_next(&s->rng) & 0xFF) < vent_chance) {
+        try_vent(s, x, y, w, h);
+        acted = true;
+    }
+
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];

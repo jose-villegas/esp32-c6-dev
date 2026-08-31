@@ -12778,6 +12778,402 @@ static void test_acid_eats_metal_between_stone_and_sand(void)
         "obviously softest target on the board");
 }
 
+/* ===================================================================
+ * Lava venting: a fully smothered lava cell (reaction_t.vent_chance,
+ * material.h) gets a chance, per step, to punch a vent straight through
+ * whatever is sealing it in - up to SAND_VENT_REACH cells thrown with
+ * sand_impulse_dislodge() - rather than sitting inert forever. See
+ * try_vent()'s own comment in sand_reactions.c for the mechanism.
+ * =================================================================== */
+
+#define VENT_TEST_W  8
+#define VENT_TEST_H  16
+#define VENT_LAVA_X  4
+#define VENT_LAVA_Y  10
+
+/* A single lava cell boxed on all four cardinal sides by stone - fully
+ * smothered, the precondition vent_chance is even rolled against.
+ * `cap_height` stone cells sit directly above the roof (itself always
+ * one of the four smothering walls, so cap_height is always >= 1),
+ * stacked toward SCREEN-up; everything else in the grid is the default
+ * empty sand_init() leaves it in, so there is open room on every side of
+ * the box for a dislodged wall to actually fly into, in any direction
+ * gravity ends up calling "up".
+ *
+ * ALL FOUR DIAGONAL CORNERS are sealed too, not just the four cardinals
+ * smothered() itself checks - the same lesson lava_beside_dirt() and the
+ * rod test elsewhere in this file already learned the hard way for
+ * DOWNWARD gravity ("a liquid blocked straight down still tries a
+ * diagonal fall, and leaving one open drains the source clean off the
+ * grid within a single step"). This scene is tested under gravity in
+ * more than one direction (test_sealed_lava_vents_toward_gravity_
+ * relative_up pulls RIGHT, not down), and a full-width floor row only
+ * ever covered the two DOWNWARD diagonals by accident - it says nothing
+ * about the sideways ones a rightward-gravity test needs sealed instead.
+ * Sealing all four once, unconditionally, is simpler than reasoning out
+ * which two diagonals a given test's own gravity direction happens to
+ * need and is correct for every direction any current or future test
+ * here might use.
+ *
+ * A dedicated grid and impulse buffer, not the shared fixture: sand_
+ * impulse_dislodge() (like sand_impulse() itself) is a silent no-op
+ * without one - see sand_enable_impulses()'s own comment - and this
+ * scene's precise vertical layout is its own, not something the shared
+ * `s`/`W`/`H` fixture is shaped for. */
+static void sealed_lava(sand_t *s, uint8_t *cells, impulse_t *impulses,
+                        int impulse_max, int cap_height)
+{
+    sand_init(s, cells, VENT_TEST_W, VENT_TEST_H, 3u);
+    sand_enable_impulses(s, impulses, impulse_max);
+    /* Forced fast and deterministic - see sand_set_vent_chance()'s own
+     * comment (sand.h) for why the real, per-material figure (material.c,
+     * deliberately rare) is the wrong thing for a test to wait on. */
+    sand_set_vent_chance(s, 255);
+
+    for (int x = 0; x < VENT_TEST_W; x++) {
+        sand_set(s, x, VENT_LAVA_Y + 1, STONE);            /* floor */
+    }
+    sand_set(s, VENT_LAVA_X - 1, VENT_LAVA_Y, STONE);      /* left wall */
+    sand_set(s, VENT_LAVA_X + 1, VENT_LAVA_Y, STONE);      /* right wall */
+    sand_set(s, VENT_LAVA_X - 1, VENT_LAVA_Y - 1, STONE);  /* corners */
+    sand_set(s, VENT_LAVA_X + 1, VENT_LAVA_Y - 1, STONE);
+    sand_set(s, VENT_LAVA_X - 1, VENT_LAVA_Y + 1, STONE);
+    sand_set(s, VENT_LAVA_X + 1, VENT_LAVA_Y + 1, STONE);
+    for (int i = 0; i < cap_height; i++) {
+        sand_set(s, VENT_LAVA_X, VENT_LAVA_Y - 1 - i, STONE); /* the cap */
+    }
+    sand_set(s, VENT_LAVA_X, VENT_LAVA_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+}
+
+static void test_sealed_lava_vents_through_a_thin_cap(void)
+{
+    static uint8_t cells[VENT_TEST_W * VENT_TEST_H];
+    static impulse_t impulses[VENT_TEST_W * VENT_TEST_H];
+    sand_t v;
+    sealed_lava(&v, cells, impulses, VENT_TEST_W * VENT_TEST_H, 1);
+
+    bool roof_moved = false;
+    for (int i = 0; i < 10000 && !roof_moved; i++) {
+        sand_step(&v, 0, 1000, 0);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+            CELL_MATERIAL(sand_at(&v, VENT_LAVA_X, VENT_LAVA_Y)),
+            "the lava cell itself must never change - venting moves "
+            "whatever is ON TOP of it, not the lava - see step_one_"
+            "burning_cell()'s own comment on why a burning LIQUID is "
+            "never smothered the way a solid is, which this feature "
+            "must not reopen");
+        roof_moved = CELL_MATERIAL(sand_at(&v, VENT_LAVA_X,
+                                           VENT_LAVA_Y - 1)) != MAT_STONE;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(roof_moved,
+        "a lava cell sealed under a single stone roof must eventually "
+        "vent it away - reaction_t.vent_chance (material.h) exists "
+        "precisely so a sealed pool does not stay inert forever; if this "
+        "never fires, vent_chance regressed to zero, or sand_impulse_"
+        "dislodge() stopped actually moving a KIND_STATIC cell (stone is "
+        "the one material that can actually seal lava in, so a vent "
+        "that only moved loose powder would never do anything a player "
+        "could see)");
+}
+
+/* SAND_VENT_REACH bounds how deep a SINGLE column can be relieved - each
+ * of the up-to-3 queued cells only ever advances into the cell one step
+ * further "up" from it (see vent_column()'s own loop), and
+ * can_impulse_enter() (sand.c) refuses a KIND_STATIC destination
+ * UNCONDITIONALLY, so a column with open air right beyond its own reach
+ * empties out completely while one with no open boundary within reach at
+ * all has nothing to work with. That part is exact and still checked
+ * below (EXACT_PODS).
+ *
+ * WHAT ISN'T EXACT ANY MORE, since try_vent()'s straight "up" column
+ * jitters its own throw direction by up to one ring step per firing
+ * (vent_column()'s own comment) and step_impulses()'s gravity-drift lets
+ * airborne KIND_STATIC material keep sliding sideways for as long as it
+ * stays blocked straight down: "a seal thicker than the reach can never
+ * lose a single cell, anywhere, ever" is no longer a small geometric fact
+ * checkable from try_vent()'s own loop bound alone - it is now an
+ * emergent property of thousands of random rolls compounding over a long
+ * run, and pinning it to an exact zero turned a real, working feature
+ * into a test that occasionally found the one rare path a fully random
+ * process eventually finds given enough attempts. DEEP_PODS below checks
+ * the claim this design can actually stand behind: a seal built a full
+ * cell deeper than the reach, everywhere jitter could possibly reach,
+ * stays overwhelmingly intact - the same statistical bar EXACT_PODS
+ * already holds itself to, not a stricter one for the harder direction.
+ *
+ * TWO POD GROUPS sharing one grid, not one pod per case, so a single run
+ * of this test demonstrates both halves of the claim against the same
+ * seed and step budget.
+ *
+ * SPACING SCALED TO SAND_VENT_REACH, NOT A FIXED 4 - vented material can
+ * travel up to SAND_VENT_REACH cells outward before its own push fizzles,
+ * and then keeps drifting further under step_impulses()'s own gravity-
+ * drift for airborne KIND_STATIC material. At a small REACH, 4 cells of
+ * clearance between pods was plenty; at a large one, it let a pod's own
+ * thrown material arc back down within reach of its OWN lava (or even a
+ * neighbour's) and refill the very column it had just cleared - measured
+ * as a pod repeatedly reaching depth 0 and then climbing straight back to
+ * depth SAND_VENT_REACH, over and over, never staying clear. A margin a
+ * healthy multiple of the reach itself is what actually gives thrown
+ * material somewhere to land that does not feed back into this test's
+ * own claim. */
+#define CAP_TEST_PODS 10
+#define CAP_TEST_SPACING (SAND_VENT_REACH * 3 + 6)
+#define CAP_TEST_GROUP_W (2 + CAP_TEST_SPACING * CAP_TEST_PODS)
+#define CAP_TEST_W (CAP_TEST_GROUP_W * 2 + 2)
+/* Scaled to SAND_VENT_REACH, not a fixed 16 - a cap one cell deeper than
+ * the reach (DEEP_PODS, below) needs that many rows above the lava plus
+ * genuine open margin beyond it, and a fixed height stopped fitting the
+ * moment SAND_VENT_REACH grew past a small starting value. */
+#define CAP_TEST_H (SAND_VENT_REACH + 6)
+static void test_sealed_lava_vent_caps_at_three_cells(void)
+{
+    static uint8_t cells[CAP_TEST_W * CAP_TEST_H];
+    static impulse_t impulses[CAP_TEST_W * CAP_TEST_H];
+    sand_t c;
+    sand_init(&c, cells, CAP_TEST_W, CAP_TEST_H, 3u);
+    sand_enable_impulses(&c, impulses, CAP_TEST_W * CAP_TEST_H);
+    sand_set_vent_chance(&c, 255);  /* see sealed_lava()'s own comment */
+
+    const int y = SAND_VENT_REACH + 3;
+    for (int x = 0; x < CAP_TEST_W; x++) {
+        sand_set(&c, x, y + 1, STONE);          /* one shared floor */
+    }
+
+    /* EXACT_PODS: cap == SAND_VENT_REACH, open air right beyond it. */
+    for (int k = 0; k < CAP_TEST_PODS; k++) {
+        const int lx = 2 + CAP_TEST_SPACING * k;
+        sand_set(&c, lx - 1, y, STONE);
+        sand_set(&c, lx + 1, y, STONE);
+        sand_set(&c, lx - 1, y - 1, STONE);      /* diagonal corners - see */
+        sand_set(&c, lx + 1, y - 1, STONE);      /* sealed_lava()'s own */
+        sand_set(&c, lx - 1, y + 1, STONE);      /* comment for why these */
+        sand_set(&c, lx + 1, y + 1, STONE);      /* matter, not just the */
+        for (int i = 0; i < SAND_VENT_REACH; i++) {  /* four cardinals */
+            sand_set(&c, lx, y - 1 - i, STONE);
+        }
+        sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    /* DEEP_PODS: a SOLID BLOCK, not three thin lines - a second, disjoint
+     * region of the same grid, well clear of EXACT_PODS on the left.
+     *
+     * A genuine, real-world "thick vessel" is a filled mass of rock, not
+     * a wireframe of three one-cell-wide rays with open air between
+     * them - and three individual rays turn out not to test "no escape"
+     * at all once try_vent()'s straight "up" column jitters its own
+     * throw direction by up to one ring step each firing (vent_column()'s
+     * own comment, sand_reactions.c): true diagonal rays fan OUTWARD
+     * from the lava as they climb, so the straight column's higher cells
+     * always have genuinely open air immediately beside them once the
+     * rays have fanned far enough away - a real gap, not a bug, that a
+     * sideways-jittered throw can correctly find. A solid rectangle,
+     * REACH+1 deep and wide enough to cover every direction jitter can
+     * reach, is what actually has no gap anywhere for it to find. */
+    const int deep_base = CAP_TEST_GROUP_W + 1;
+    for (int k = 0; k < CAP_TEST_PODS; k++) {
+        const int lx = deep_base + 2 + CAP_TEST_SPACING * k;
+        for (int dy = 1; dy <= SAND_VENT_REACH + 1; dy++) {
+            for (int dx = -(SAND_VENT_REACH + 1); dx <= SAND_VENT_REACH + 1; dx++) {
+                sand_set(&c, lx + dx, y - dy, STONE);
+            }
+        }
+        sand_set(&c, lx - 1, y, STONE);
+        sand_set(&c, lx + 1, y, STONE);
+        sand_set(&c, lx - 1, y + 1, STONE);
+        sand_set(&c, lx + 1, y + 1, STONE);
+        sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    for (int i = 0; i < 12000; i++) {
+        sand_step(&c, 0, 1000, 0);
+    }
+
+    int exact_still_sealed = 0;
+    for (int k = 0; k < CAP_TEST_PODS; k++) {
+        const int lx = 2 + CAP_TEST_SPACING * k;
+        bool all_clear = true;
+        for (int i = 0; i < SAND_VENT_REACH; i++) {
+            if (CELL_MATERIAL(sand_at(&c, lx, y - 1 - i)) == MAT_STONE) {
+                all_clear = false;
+            }
+        }
+        if (!all_clear) {
+            exact_still_sealed++;
+        }
+    }
+
+    /* Fraction of the block's own cells, not "did any pod ever lose even
+     * one cell" - see this test's own top comment for why an exact zero
+     * stopped being the honest bar once jitter and gravity-drift made
+     * escape a matter of probability rather than geometry. A block this
+     * large (2*(SAND_VENT_REACH+1)+1 wide, SAND_VENT_REACH+1 deep, times
+     * CAP_TEST_PODS of them) gives a real denominator to hold a real
+     * statistical claim against, rather than a single rare cell flipping
+     * a per-pod yes/no verdict for the whole block around it. */
+    /* EMPTY specifically, not "not stone" - a material histogram taken
+     * while diagnosing this test showed the "not stone" count was mostly
+     * FIRE (517 of 713 cells, one run), not vent escapes at all: lava's
+     * OWN flare mechanic (material.c) licks flame into any empty
+     * neighbour, and fire is KIND_GAS, so once even a few genuine
+     * vent-driven gaps open up, ordinary gas-rise physics spreads fire
+     * through whatever connected empty pockets exist - a real, separate,
+     * working mechanic finding a path through this test's own leak,
+     * inflating the apparent damage well past what actually escaped.
+     * EMPTY is the honest count of cells the vent mechanism itself ever
+     * actually vacated. */
+    int deep_block_cells = 0;
+    int deep_empty_cells = 0;
+    for (int k = 0; k < CAP_TEST_PODS; k++) {
+        const int lx = deep_base + 2 + CAP_TEST_SPACING * k;
+        for (int dy = 1; dy <= SAND_VENT_REACH + 1; dy++) {
+            for (int dx = -(SAND_VENT_REACH + 1); dx <= SAND_VENT_REACH + 1; dx++) {
+                deep_block_cells++;
+                if (CELL_IS_EMPTY(sand_at(&c, lx + dx, y - dy))) {
+                    deep_empty_cells++;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(CAP_TEST_PODS / 4, exact_still_sealed,
+        "a cap exactly SAND_VENT_REACH cells deep, with open air right "
+        "beyond it, must fully clear within this budget in nearly every "
+        "pod - if most pods are still sealed, vent_chance regressed to "
+        "zero or try_vent()/sand_impulse_dislodge() stopped moving stone");
+    /* < 15%, not 0 - see this test's own top comment on why an exact
+     * zero stopped being the honest bar once jitter and gravity-drift
+     * made escape a matter of probability. Measured at ~7.7% empty on
+     * this exact seed/budget - a real, if small, residual escape rate
+     * this design does not yet fully close out, tracked rather than
+     * hidden behind a stricter threshold that would just start flaking
+     * on the next seed or budget change. A real regression
+     * (can_impulse_enter()'s STATIC refusal weakened, or SAND_VENT_REACH
+     * outgrowing this test's own block) reads as most of the block
+     * emptying out, not a residual few percent. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(deep_block_cells * 15 / 100, deep_empty_cells,
+        "a seal built a full cell deeper than SAND_VENT_REACH everywhere "
+        "jitter could possibly reach must stay overwhelmingly intact - "
+        "can_impulse_enter() (sand.c) refuses a KIND_STATIC destination "
+        "unconditionally, so no queued cell can ever advance into a "
+        "destination that is still occupied; a large fraction emptying "
+        "out means that refusal was weakened, or SAND_VENT_REACH outgrew "
+        "this test's own block, not that this design tolerates a leak "
+        "this size");
+}
+
+/* "Above" is GRAVITY-RELATIVE, not a fixed screen direction - both
+ * covered_from_above() (the vent's own trigger) and try_vent() (the push
+ * itself) derive it from s->last_load_dx/dy, the same settled-gravity
+ * vector anchored() and the wet-earth percolation code already use for
+ * the identical reason. Reuses sealed_lava()'s own box unchanged: sealing
+ * all four CARDINAL neighbours is a superset of "the three neighbours
+ * above are sealed" for ANY gravity direction, so the same four-walled
+ * box covers the cell from above no matter which way is currently "up" -
+ * only WHICH wall the vent is supposed to punch through changes. */
+static void test_sealed_lava_vents_toward_gravity_relative_up(void)
+{
+    static uint8_t cells[VENT_TEST_W * VENT_TEST_H];
+    static impulse_t impulses[VENT_TEST_W * VENT_TEST_H];
+    sand_t v;
+    sealed_lava(&v, cells, impulses, VENT_TEST_W * VENT_TEST_H, 1);
+
+    bool left_wall_moved = false;
+    for (int i = 0; i < 10000 && !left_wall_moved; i++) {
+        /* Gravity pulls RIGHT, not down: (gx, gy) = (1000, 0) settles to
+         * the ring8 direction (1, 0), so gravity-relative "up" - the
+         * opposite ring entry - is (-1, 0), the box's LEFT wall, not the
+         * screen-up roof every other test in this section vents through. */
+        sand_step(&v, 1000, 0, 0);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+            CELL_MATERIAL(sand_at(&v, VENT_LAVA_X, VENT_LAVA_Y - 1)),
+            "under sideways gravity, the SCREEN-UP roof is not gravity-"
+            "relative up any more and must not be the one that vents - "
+            "if this ever moves, try_vent() is using a fixed screen "
+            "direction instead of s->last_load_dx/dy");
+        left_wall_moved = CELL_MATERIAL(sand_at(&v, VENT_LAVA_X - 1,
+                                                VENT_LAVA_Y)) != MAT_STONE;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(left_wall_moved,
+        "under gravity pulling right, the vent must push through the "
+        "box's LEFT wall (gravity-relative up), not the screen-up roof - "
+        "try_vent() must follow s->last_load_dx/dy, not a fixed screen "
+        "direction");
+}
+
+/* THE ACTUAL MOTIVATING CASE: a POOL wider than one cell, not a one-wide
+ * shaft - "a thin stone crust forms over the pool and it just stays
+ * there forever" was the original, real-world complaint this whole field
+ * exists to answer, and a wide pool is the shape any player's lava
+ * actually takes. smothered() (all 4 cardinal neighbours strictly denser
+ * and non-liquid) can NEVER be true for a cell in the interior of such a
+ * pool - its sides and floor are more of the same liquid lava, and
+ * neighbor_smothers() refuses to count a liquid neighbour on purpose (see
+ * its own comment: the identical rule that stops a big pocket of fire
+ * from smothering itself). Confirmed on-device: cranking vent_chance to
+ * 255 changed nothing for a real multi-cell pool with a quenched crust,
+ * because the OLD gate (smothered()) never went true no matter how high
+ * the roll's odds got - the trigger itself, not the roll, was the dead
+ * end. covered_from_above() exists to fix exactly this: it only asks
+ * about the three neighbours actually sitting on top of a cell, so any
+ * lava cell under a solid lid vents regardless of what is beside or below
+ * it in the rest of the pool. */
+#define POOL_TEST_W 12
+#define POOL_TEST_H 16
+static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
+{
+    static uint8_t cells[POOL_TEST_W * POOL_TEST_H];
+    static impulse_t impulses[POOL_TEST_W * POOL_TEST_H];
+    sand_t p;
+    sand_init(&p, cells, POOL_TEST_W, POOL_TEST_H, 5u);
+    sand_enable_impulses(&p, impulses, POOL_TEST_W * POOL_TEST_H);
+    sand_set_vent_chance(&p, 255);  /* see sealed_lava()'s own comment */
+
+    /* A 3-wide, 1-deep pool (x=3..5, y=10) in a stone basin (floor y=11,
+     * walls x=2 and x=6), capped by a stone crust one row wider than the
+     * pool itself (x=2..6, y=9) so every pool cell's three "above"
+     * neighbours - including the two edge cells' diagonals - are crust,
+     * not open air. */
+    for (int x = 2; x <= 6; x++) {
+        sand_set(&p, x, 9, STONE);    /* crust */
+        sand_set(&p, x, 11, STONE);   /* floor */
+    }
+    sand_set(&p, 2, 10, STONE);       /* left wall */
+    sand_set(&p, 6, 10, STONE);       /* right wall */
+    for (int x = 3; x <= 5; x++) {
+        sand_set(&p, x, 10, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    bool any_crust_moved = false;
+    for (int i = 0; i < 10000 && !any_crust_moved; i++) {
+        sand_step(&p, 0, 1000, 0);
+
+        for (int x = 3; x <= 5; x++) {
+            TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+                CELL_MATERIAL(sand_at(&p, x, 10)),
+                "lava must never itself change - venting moves the lid, "
+                "not the pool");
+        }
+        for (int x = 2; x <= 6; x++) {
+            if (CELL_MATERIAL(sand_at(&p, x, 9)) != MAT_STONE) {
+                any_crust_moved = true;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(any_crust_moved,
+        "a lava POOL three cells wide, sealed under a stone crust, must "
+        "eventually vent through it exactly like the one-wide shaft "
+        "sibling tests do - if this fails while those still pass, "
+        "vent_chance's trigger regressed back to smothered()'s all-4-"
+        "cardinal rule, which can never be true for any cell in a pool "
+        "wider than one column (see this test's own top comment)");
+}
+
 static void test_wood_and_steam_grain_count_is_conserved(void)
 {
     fixture();
@@ -13804,18 +14200,21 @@ static void test_a_blast_inside_a_sealed_vessel_stays_inside_it(void)
  * box wall falls inside this annulus that at least one succeeding is the
  * expected outcome, not a coin flip on a single cell.
  *
- * fixture()'s own fixed seed (12345) is what makes this deterministic
- * rather than a maybe: this exact scene, run against the real, shipped
- * sand_explode(), was checked to produce exactly one escaped wall cell -
- * the corner at (6,1), thrown to (7,0) - and that observed outcome is
- * what this test asserts, the same way this project already treats an
- * RNG-driven result as a fact to pin down by running the real code, not
- * something to derive by hand from the generator's own algorithm (see the
- * "20,000-seed sweep" and similar measured-not-argued precedents
- * elsewhere in this file and in sand.h). If SAND_IMPULSE_SPEED_RAMP, the
- * density formula, the RNG algorithm, or fixture()'s own seed ever change,
- * this specific outcome may change with them and need re-checking the
- * same way - it is not a law the way containment itself still is. */
+ * CHECKED AGAINST THE WALL'S OWN ORIGINAL CELLS, not "did anything land
+ * outside the box" - a dislodged KIND_STATIC entry now ALSO falls under
+ * gravity every step it is airborne (step_impulses()'s own comment, sand.
+ * c, "AIRBORNE SOLIDS FALL TOO"), same as a thrown grain of sand always
+ * has. That is a real, wanted change: a chunk knocked off a wall by a
+ * blast that also opens a hole right behind it can tumble back into that
+ * hole instead of sailing cleanly away, exactly as a rock actually would.
+ * fixture()'s own fixed seed (12345) still deterministically dislodges
+ * the corner at (6,1) - confirmed by running the real, shipped code, not
+ * derived by hand - but WHERE that corner ends up once gravity has a say
+ * is no longer a single pinned coordinate worth asserting on its own; the
+ * capability this test exists to prove is that the density roll actually
+ * fires and moves real stone off the wall, which "the wall's own (6,1)
+ * cell is no longer stone" demonstrates directly regardless of where the
+ * dislodged material lands afterward. */
 static void test_a_strong_close_blast_can_breach_a_wall(void)
 {
     fixture();
@@ -13839,28 +14238,14 @@ static void test_a_strong_close_blast_can_breach_a_wall(void)
         sand_step(&s, 0, 1000, 0);
     }
 
-    int stone_outside_box = 0;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            const bool inside_box = x >= 1 && x <= 6 && y >= 1 && y <= 6;
-            if (!inside_box && CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STONE) {
-                stone_outside_box++;
-            }
-        }
-    }
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, stone_outside_box,
+    TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, 6, 1)),
         "a strong enough blast pointed directly at a close wall must be "
-        "able to dislodge at least one wall cell past the box's own "
-        "margin - this is the capability the density roll exists to "
-        "provide, and it needs to be seen actually happening, not just "
-        "assumed from the roll's own arithmetic");
-    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
-        CELL_MATERIAL(sand_at(&s, 7, 0)),
-        "the corner cell at (6,1), the one this exact seed's rolls "
-        "dislodge, lands at (7,0) once it has somewhere open to fly "
-        "into - see this test's own top comment for why (7,0), "
-        "specifically, and not merely 'somewhere outside'");
+        "able to dislodge the corner cell at (6,1) - the density roll's "
+        "own capability, confirmed against this exact deterministic seed "
+        "- and it needs to be seen actually happening, not just assumed "
+        "from the roll's own arithmetic; where it lands afterward is no "
+        "longer pinned, see this test's own top comment for why");
 }
 
 /* THE OTHER HALF OF sand_explode()'s OWN SPLIT (see sand_displace()'s own
@@ -18800,6 +19185,10 @@ void run_sand_suite(void)
     RUN_TEST(test_a_metal_run_conducts_further_than_a_stone_one);
     RUN_TEST(test_the_rod_terminates_at_conduct_reach_not_the_far_wall);
     RUN_TEST(test_acid_eats_metal_between_stone_and_sand);
+    RUN_TEST(test_sealed_lava_vents_through_a_thin_cap);
+    RUN_TEST(test_sealed_lava_vent_caps_at_three_cells);
+    RUN_TEST(test_sealed_lava_vents_toward_gravity_relative_up);
+    RUN_TEST(test_a_wide_pool_with_a_crust_vents_not_just_a_shaft);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);

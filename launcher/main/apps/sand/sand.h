@@ -341,6 +341,7 @@ typedef struct {
     int      mobility;     /* see sand_set_mobility() */
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
+    int      vent_chance;  /* see sand_set_vent_chance() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -562,15 +563,22 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  *
  * THIS PRIMITIVE'S OWN KIND_STATIC REFUSAL HAS NO EXCEPTIONS - a wall
  * cannot be thrown through THIS function, by any caller, ever. sand_
- * explode()'s own seeding loop reaches a static cell through a separate,
- * internal path (queue_flying_grain() in sand.c) with a density-scaled
- * chance to override that refusal - a blast should read as tougher
- * against stone than sand, not indestructible - but that override is
- * explicit, opt-in, and local to the one caller that asked for it; it is
- * not a hidden exception buried in this shared primitive that some future
+ * explode()'s own seeding loop, and sand_impulse_dislodge() just below,
+ * both reach a static cell through queue_flying_grain() (sand.c) with a
+ * density-scaled chance to override that refusal - a blast should read as
+ * tougher against stone than sand, not indestructible - but that override
+ * is explicit, opt-in, and asked for BY NAME at each call site; it is not
+ * a hidden exception buried in this shared primitive that some future
  * caller (gunpowder, gas, whatever comes next) could trip over by
  * accident. Calling sand_impulse() itself always gets the safe default. */
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
+
+/* sand_impulse()'s sibling for the one caller that genuinely needs a wall
+ * to give way - see its own comment in sand.c. Same signature, same
+ * flight mechanics once queued; the only difference is a KIND_STATIC cell
+ * gets the density-scaled dislodge roll queue_outward_impulse() already
+ * gives a blast, rather than sand_impulse()'s own unconditional refusal. */
+void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed);
 
 /* Chance in 256, per step, that a queued grain's outward move happens THIS
  * turn - see sand_impulse()'s `speed` parameter, which is this chance at
@@ -698,6 +706,31 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * is still nowhere to raise this to, so a bigger radius did not change
  * that either. */
 #define SAND_EXPLODE_INITIAL_SPEED  255
+
+/* How far reaction_t.vent_chance's own push (try_vent(), sand_reactions.c)
+ * reaches along each of its three columns: at most this many cells get
+ * thrown per direction - fewer if open air is reached first. A fixed
+ * depth rather than a radius or a `heat_ramp`-style accumulation, per the
+ * exact shape asked for when this was designed: "push however many are
+ * there, cap at REACH."
+ *
+ * SET HIGH ON PURPOSE, paired with vent_chance's own rate being set LOW
+ * (material.c, ~1 in 256) - the two are one dial, not two independent
+ * ones: a rare roll that throws a lot when it finally lands reads as a
+ * held-in eruption, where a frequent roll that throws only a little would
+ * read as a constant hiss instead. Raising this without also keeping
+ * vent_chance low would turn "occasional dramatic pulse" back into
+ * "frequent large leak" - see reaction_t.vent_chance's own comment
+ * (material.h) for the other half of this pairing. A starting point, not
+ * measured on device. */
+#define SAND_VENT_REACH  10
+
+/* Initial `speed` for the same push - shares SAND_EXPLODE_INITIAL_SPEED's
+ * value rather than inventing a second number with no measurement behind
+ * it either, but is its OWN constant because a vent is not an explosion
+ * (no fire, no radial spread, no core) and there is no reason the two
+ * should have to move together once one of them actually gets tuned. */
+#define SAND_VENT_SPEED  SAND_EXPLODE_INITIAL_SPEED
 
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
  * - a WATER grain landing hard, either falling onto an already-occupied
@@ -1433,6 +1466,23 @@ void sand_set_flammability(sand_t *s, int chance);
  * something" into a one-step, deterministic assertion. */
 void sand_set_conduction(sand_t *s, int chance);
 #define SAND_CONDUCTION_PER_MATERIAL (-1)
+
+/* How often a fully COVERED lava cell vents through whatever is sealing
+ * it in, per step, as a chance in 256 - see material.h's reaction_t.
+ * vent_chance field and try_vent()/covered_from_above() (sand_reactions.
+ * c) for the mechanism. Defaults to SAND_VENT_CHANCE_PER_MATERIAL, same
+ * reasoning as sand_set_flammability()'s own default: venting only ever
+ * happens to an already-burning LIQUID that is ALSO covered_from_above(),
+ * a scenario a scene has to be deliberately built to reach, so there is
+ * no background chance to guard an unrelated test against the way there
+ * is for decay ticking or a grain scattering on their own. Without an
+ * override, a test that wants to watch a THICK seal stay sealed for a
+ * while uses the real, deliberately rare production figure; a test that
+ * wants to watch a THIN seal actually vent forces this to 255 instead of
+ * looping a number of steps scaled to however rare that figure ends up
+ * being tuned. */
+void sand_set_vent_chance(sand_t *s, int chance);
+#define SAND_VENT_CHANCE_PER_MATERIAL (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
