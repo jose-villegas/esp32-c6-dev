@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "embedded",
+  "dolt_database": "omniroute_mcp_integration_6def47",
+  "project_id": "99e79694-af31-4570-9019-f8919d1d56f0"
+}
