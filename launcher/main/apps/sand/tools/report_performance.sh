@@ -81,7 +81,16 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     # build.diag/sdkconfig. Kept to ONE line on purpose: this PowerShell
     # block is a bash double-quoted string, where PowerShell backtick
     # line-continuations are bash command substitution - a parse error.
-    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag\" -D SDKCONFIG=build.diag/sdkconfig build
+    # A THIRD fragment, sdkconfig.defaults.diag_autorun, is layered on top:
+    # CONFIG_LAUNCHER_SELFTEST_AUTORUN defaults to n, so without it the
+    # suites compile in but never run at boot, the device just sits in the
+    # launcher, and the capture below waits out its full timeout with no
+    # SELFTEST_COMPLETE and no measurements. That is exactly what happened
+    # on 2026-08-31: c4979fa made the suites opt-in and taught
+    # tools/report_test_results.sh to layer this file, but not this script,
+    # which a2daa87 had already moved into the sand app's own tools folder.
+    # The two scripts do the same job and must be changed together.
+    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun\" -D SDKCONFIG=build.diag/sdkconfig build
     if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
     idf.py -B build.diag -p '$COM_PORT' flash
     exit \$LASTEXITCODE
