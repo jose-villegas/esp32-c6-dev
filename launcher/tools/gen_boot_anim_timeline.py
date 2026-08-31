@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Generate main/boot/boot_anim_timeline.h - the boot animation's timing and
-camera keyframes.
+"""Generate main/boot/boot_anim_timeline.h - the boot animation's timing
+constants and its two keyframed 3D transforms (camera, and the space the
+grid+curve live in).
 
     python tools/gen_boot_anim_timeline.py main/boot/boot_anim_timeline.json > main/boot/boot_anim_timeline.h
 
@@ -11,23 +12,41 @@ edited through tools/boot_anim_editor.html's "Bake" button, which downloads a
 JSON file in exactly this shape to replace it. This script never talks to
 the editor directly - the two are joined only by the file format.
 
-WHAT IS A KEYFRAME HERE
+WHAT A KEYFRAME IS
 
-Position (the view origin, in panel pixels), rotation (the camera's pitch
-phase - boot_anim_sin()'s 0..65536-per-turn convention; only the X component
-is read by the current animation, Y/Z are carried for a future one that
-might want them) and scale (one uniform "motif shrink" factor, again
-mirrored into X/Y/Z for forward-compatibility though only ever one value
-today). boot_anim.h's boot_anim_timeline_sample() walks this table and lerps
-between the two keyframes bracketing `now_ms`, easing the fraction with
-whichever of linear/ease_out/ease_in the arriving keyframe names - the same
-three shapes util/tween.h already provides, so nothing new is needed on the
-firmware side to interpret them.
+Two full position/rotation/scale transforms - "camera" and "space" - per
+keyframe, plus which millisecond it lands on and how the segment ARRIVING
+at it is eased. Both transforms are authored in plain, human units:
 
-The `timing` block is everything else that paces the animation but is not a
-transform of the space: how fast the grid rings fade in, how the title
+    pos     meters (one space-unit is one meter - see boot_anim.h's own
+            top comment for why the curve/grid's existing geometry already
+            IS this same unit, nothing further to convert on that side)
+    rot     degrees, composed Z-then-X-then-Y (small3dlib's own order -
+            see S3L_Transform3D's comment in small3dlib.h - NOT X-Y-Z)
+    scale   a plain multiplier, 1.0 meaning "as authored" - an untouched
+            keyframe's scale is [1, 1, 1], not a magic 256 or 512
+
+and converted to small3dlib's own fixed point (S3L_F = 512 = 1.0) here, at
+bake time - see meters_to_s3l()/degrees_to_s3l()/scale_to_s3l() below - so
+neither the JSON nor the editor's UI ever has to deal with that scale
+directly.
+
+boot_anim.h's boot_anim_timeline_sample() walks the generated table and
+lerps both transforms' every number between the two keyframes bracketing
+`now_ms`, easing the fraction with whichever of linear/ease_out/ease_in the
+arriving keyframe names - the same three shapes util/tween.h already
+provides, so nothing new is needed on the firmware side to interpret them.
+
+`camera_focal` is the one thing here that is not per-keyframe: a single
+lens setting (small3dlib's own S3L_Camera.focalLength - see
+boot_anim.h's "The projection" section for what 0 does to it: an
+orthographic projection, not a second code path to maintain).
+
+The `timing` block is everything else that paces the animation but is not
+a transform of the space: how fast the grid rings fade in, how the title
 letters fly in and wobble, how the grid's own hue travels. Plain values,
-straight through to #define.
+straight through to #define - unchanged in shape from before this file
+grew a second transform.
 
 VALIDATION
 
@@ -43,6 +62,11 @@ import json
 import sys
 
 EASE_NAMES = ["linear", "ease_out", "ease_in"]
+TRANSFORMS = ["camera", "space"]
+
+# small3dlib's own S3L_FRACTIONS_PER_UNIT - see small3dlib.h. 1.0 in its
+# fixed point.
+S3L_F = 512
 
 # Must match BOOT_ANIM_TITLE_LEN in boot_anim.h - only used for the
 # soft landing-before-fade warning below, not emitted anywhere.
@@ -55,6 +79,18 @@ def fail(msg):
 
 def warn(msg):
     print("gen_boot_anim_timeline.py: warning: " + msg, file=sys.stderr)
+
+
+def meters_to_s3l(v):
+    return round(v * S3L_F)
+
+
+def degrees_to_s3l(v):
+    return round(v / 360.0 * S3L_F)
+
+
+def scale_to_s3l(v):
+    return round(v * S3L_F)
 
 
 def validate(cfg):
@@ -73,14 +109,13 @@ def validate(cfg):
         if kf["ease"] not in EASE_NAMES:
             fail("unknown ease %r - must be one of %s" %
                  (kf["ease"], EASE_NAMES))
-        for axis in ("pos", "rot", "scale"):
-            if len(kf[axis]) != (2 if axis == "pos" else 3):
-                fail("keyframe at %d: %s needs %d components" %
-                     (kf["ms"], axis, 2 if axis == "pos" else 3))
-        for v in list(kf["pos"]) + list(kf["rot"]) + list(kf["scale"]):
-            if abs(v) > 32767:
-                fail("keyframe at %d: a component does not fit an int16" %
-                     kf["ms"])
+        for xf in TRANSFORMS:
+            if xf not in kf:
+                fail("keyframe at %d: missing %r transform" % (kf["ms"], xf))
+            for axis in ("pos", "rot", "scale"):
+                if len(kf[xf][axis]) != 3:
+                    fail("keyframe at %d: %s.%s needs 3 components" %
+                         (kf["ms"], xf, axis))
 
     pen_end = timing["pen_start_ms"] + timing["pen_ms"]
     if pen_end > timing["fade_start_ms"]:
@@ -103,8 +138,8 @@ def validate(cfg):
 
     if kfs[-1]["ms"] != timing["total_ms"]:
         warn("the last keyframe is at %d, not total_ms (%d) - the camera "
-             "will hold its last keyframe value for the remainder" %
-             (kfs[-1]["ms"], timing["total_ms"]))
+             "and space will hold their last keyframe values for the "
+             "remainder" % (kfs[-1]["ms"], timing["total_ms"]))
 
 
 TIMING_ORDER = [
@@ -150,6 +185,16 @@ EASE_ENUM = {"linear": "BOOT_ANIM_EASE_LINEAR",
              "ease_in": "BOOT_ANIM_EASE_IN"}
 
 
+def s3l_transform(xf):
+    """A keyframe's one transform (plain meters/degrees/multiplier), converted
+    to the six int32s (pos then rot; scale is separate - see caller) the
+    generated struct actually stores."""
+    pos = [meters_to_s3l(v) for v in xf["pos"]]
+    rot = [degrees_to_s3l(v) for v in xf["rot"]]
+    scale = [scale_to_s3l(v) for v in xf["scale"]]
+    return pos, rot, scale
+
+
 def main():
     if len(sys.argv) != 2:
         fail("usage: gen_boot_anim_timeline.py <boot_anim_timeline.json>")
@@ -172,11 +217,14 @@ def main():
     w(" *\n")
     w(" *     python tools/gen_boot_anim_timeline.py main/boot/boot_anim_timeline.json > main/boot/boot_anim_timeline.h\n")
     w(" *\n")
-    w(" * The boot animation's timing constants and camera keyframes, edited as\n")
+    w(" * The boot animation's timing constants and its two keyframed 3D\n")
+    w(" * transforms (camera, and the space the grid+curve live in), edited as\n")
     w(" * main/boot/boot_anim_timeline.json - by hand, or via\n")
     w(" * tools/boot_anim_editor.html's Bake button - and turned into this header by\n")
-    w(" * this script. See that script's own top comment for what a keyframe is and\n")
-    w(" * boot_anim.h's boot_anim_timeline_sample() for how they are interpolated.\n")
+    w(" * this script. See that script's own top comment for what a keyframe is\n")
+    w(" * (plain meters/degrees/multiplier units, converted to small3dlib's fixed\n")
+    w(" * point right here) and boot_anim.h's boot_anim_timeline_sample() for how\n")
+    w(" * they are interpolated.\n")
     w(" *===========================================================================*/\n")
     w("#pragma once\n\n#include <stdint.h>\n\n")
 
@@ -186,33 +234,50 @@ def main():
         w("#define %s %d\n" % (name, timing[key]))
         w("\n" if note else "")
 
+    w("/* small3dlib's S3L_Camera.focalLength - 0 is an orthographic\n")
+    w(" * projection (see boot_anim.h's \"The projection\" section), any other\n")
+    w(" * value a perspective one; S3L_F (512) is small3dlib's own \"normal\"\n")
+    w(" * lens default. Authored directly in this unit - it is a lens\n")
+    w(" * property, not a position or angle, so meters/degrees do not apply. */\n")
+    w("#define BOOT_ANIM_CAMERA_FOCAL %d\n\n" % cfg["camera_focal"])
+
     w("typedef enum {\n")
     w("    BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */\n")
     w("    BOOT_ANIM_EASE_OUT    = 1,   /* tween_ease_out() - fast then settle */\n")
     w("    BOOT_ANIM_EASE_IN     = 2,   /* tween_ease_in() - slow then rush    */\n")
     w("} boot_anim_ease_t;\n\n")
 
-    w("/* pos/rot are panel pixels and a boot_anim_sin() phase; scale is Q8\n")
-    w(" * (256 == 1.0). `ease` says how the segment ENDING at this keyframe -\n")
-    w(" * from the previous one - is eased; the first keyframe's is unused. Only\n")
-    w(" * rot[0] and scale[0] are read by boot_anim.h today - see this file's own\n")
-    w(" * top comment. */\n")
+    w("/* Both transforms' pos/rot/scale are small3dlib fixed point (S3L_F =\n")
+    w(" * 512 = 1.0) already - converted from the JSON's plain meters/degrees/\n")
+    w(" * multiplier units by this script, not at runtime. `ease` says how the\n")
+    w(" * segment ENDING at this keyframe - from the previous one - is eased;\n")
+    w(" * the first keyframe's is unused. */\n")
     w("typedef struct {\n")
     w("    uint32_t ms;\n")
-    w("    int16_t  pos[2];\n")
-    w("    int16_t  rot[3];\n")
-    w("    int16_t  scale[3];\n")
+    w("    int32_t  camera_pos[3];\n")
+    w("    int32_t  camera_rot[3];\n")
+    w("    int32_t  camera_scale[3];\n")
+    w("    int32_t  space_pos[3];\n")
+    w("    int32_t  space_rot[3];\n")
+    w("    int32_t  space_scale[3];\n")
     w("    uint8_t  ease;\n")
     w("} boot_anim_keyframe_t;\n\n")
 
     w("#define BOOT_ANIM_KEYFRAME_COUNT %d\n\n" % len(kfs))
     w("static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] = {\n")
     for kf in kfs:
-        w("    { %5d, { %4d, %4d }, { %6d, %4d, %4d }, { %4d, %4d, %4d }, %s },\n" % (
-            kf["ms"], kf["pos"][0], kf["pos"][1],
-            kf["rot"][0], kf["rot"][1], kf["rot"][2],
-            kf["scale"][0], kf["scale"][1], kf["scale"][2],
-            EASE_ENUM[kf["ease"]]))
+        cam_pos, cam_rot, cam_scale = s3l_transform(kf["camera"])
+        sp_pos, sp_rot, sp_scale = s3l_transform(kf["space"])
+        w("    { %5d,\n" % kf["ms"])
+        w("      { %6d, %6d, %6d }, { %6d, %6d, %6d }, { %6d, %6d, %6d },\n" % (
+            cam_pos[0], cam_pos[1], cam_pos[2],
+            cam_rot[0], cam_rot[1], cam_rot[2],
+            cam_scale[0], cam_scale[1], cam_scale[2]))
+        w("      { %6d, %6d, %6d }, { %6d, %6d, %6d }, { %6d, %6d, %6d },\n" % (
+            sp_pos[0], sp_pos[1], sp_pos[2],
+            sp_rot[0], sp_rot[1], sp_rot[2],
+            sp_scale[0], sp_scale[1], sp_scale[2]))
+        w("      %s },\n" % EASE_ENUM[kf["ease"]])
     w("};\n")
 
 

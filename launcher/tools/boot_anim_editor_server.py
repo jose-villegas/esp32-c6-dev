@@ -11,12 +11,13 @@ JS reimplementation of it.
 
 HOW A REQUEST IS HANDLED
 
-POST /render body is {"timing": {...}, "keyframes": [...], "ms": 1234} -
-phase 1's boot_anim_timeline.json shape, plus which millisecond to show.
+POST /render body is {"timing": {...}, "camera_focal": 512, "keyframes":
+[...], "ms": 1234} - boot_anim_timeline.json's own shape, plus which
+millisecond to show.
 
-  1. Hash {timing, keyframes}. If it matches the last build, skip straight
-     to step 4 - scrubbing/playback (ms alone changing) never recompiles,
-     it is one process spawn of an already-built binary.
+  1. Hash {timing, camera_focal, keyframes}. If it matches the last build,
+     skip straight to step 4 - scrubbing/playback (ms alone changing) never
+     recompiles, it is one process spawn of an already-built binary.
   2. Otherwise: write that JSON to a SCRATCH copy of boot_anim_timeline.json
      (never the real, committed one - only this repo's tools/
      boot_anim_editor.html's own Bake button writes anything meant to be
@@ -25,11 +26,15 @@ phase 1's boot_anim_timeline.json shape, plus which millisecond to show.
      etc.) is reported back as a 400 with the generator's own message.
   3. Compile tools/boot_anim_render_host.c + main/gfx/gfx.c +
      main/boot/boot_anim.c, with the scratch directory (holding the DRAFT
-     boot_anim_timeline.h from step 2) on the include path AHEAD of `main`,
-     so it shadows the real one without ever touching it. A compile
-     failure is reported back as a 500 with the compiler's own stderr.
+     boot_anim_timeline.h from step 2) and components/small3dlib/include
+     (the camera/space transform math boot_anim.h now builds on) on the
+     include path, the scratch one AHEAD of `main` so it shadows the real
+     committed header without ever touching it. A compile failure is
+     reported back as a 500 with the compiler's own stderr.
   4. Run the (cached or freshly built) binary with the requested `ms` and
-     stream its stdout - a BMP - back as the response body.
+     stream its stdout - a BMP - back as the response body, with the
+     origin readout it printed to stderr (see boot_anim_render_host.c's
+     own comment on that line) passed through as an X-Origin header.
 
 Single-threaded on purpose: this is a local, single-user tool, and every
 render already serializes through one compiler/one binary anyway.
@@ -47,6 +52,7 @@ import tempfile
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 LAUNCHER_DIR = os.path.dirname(TOOLS_DIR)
 MAIN_DIR = os.path.join(LAUNCHER_DIR, "main")
+SMALL3DLIB_DIR = os.path.join(LAUNCHER_DIR, "components", "small3dlib", "include")
 EDITOR_HTML = os.path.join(TOOLS_DIR, "boot_anim_editor.html")
 GENERATOR = os.path.join(TOOLS_DIR, "gen_boot_anim_timeline.py")
 
@@ -117,12 +123,13 @@ class Renderer:
                 '    Add-MpPreference -ExclusionPath "%s"' % self.scratch,
                 file=sys.stderr)
 
-    def _regenerate_and_compile(self, payload_hash, timing, keyframes):
+    def _regenerate_and_compile(self, payload_hash, timing, camera_focal, keyframes):
         scratch_json = os.path.join(self.scratch, "boot_anim_timeline.json")
         scratch_header = os.path.join(self.scratch, "boot", "boot_anim_timeline.h")
 
         with open(scratch_json, "w", encoding="utf-8") as f:
-            json.dump({"timing": timing, "keyframes": keyframes}, f)
+            json.dump({"timing": timing, "camera_focal": camera_focal,
+                      "keyframes": keyframes}, f)
 
         gen = subprocess.run(
             [sys.executable, GENERATOR, scratch_json],
@@ -142,7 +149,7 @@ class Renderer:
             self.cc, "-std=c11", "-Wall", "-Wextra",
             "-Wno-unused-parameter", "-Wno-unused-function",
             "-Wno-unused-variable", "-O1",
-            "-I", self.scratch, "-I", MAIN_DIR,
+            "-I", self.scratch, "-I", MAIN_DIR, "-I", SMALL3DLIB_DIR,
             *sources, "-o", self.binary,
         ]
         cc_result = subprocess.run(cmd, capture_output=True, text=True)
@@ -152,13 +159,15 @@ class Renderer:
 
         self.built_hash = payload_hash
 
-    def render(self, timing, keyframes, ms):
+    def render(self, timing, camera_focal, keyframes, ms):
+        """Returns (bmp_bytes, (origin_x, origin_y) or None)."""
         payload_hash = hashlib.sha256(
-            json.dumps({"timing": timing, "keyframes": keyframes},
+            json.dumps({"timing": timing, "camera_focal": camera_focal,
+                      "keyframes": keyframes},
                       sort_keys=True).encode("utf-8")).hexdigest()
 
         if payload_hash != self.built_hash:
-            self._regenerate_and_compile(payload_hash, timing, keyframes)
+            self._regenerate_and_compile(payload_hash, timing, camera_focal, keyframes)
 
         run = subprocess.run([self.binary, str(int(ms))], capture_output=True)
         if run.returncode != 0:
@@ -166,7 +175,15 @@ class Renderer:
                 500,
                 (run.stderr.decode("utf-8", "replace").strip() or
                  "renderer exited with code %d" % run.returncode))
-        return run.stdout
+
+        origin = None
+        for line in run.stderr.decode("utf-8", "replace").splitlines():
+            if line.startswith("ORIGIN "):
+                parts = line.split()
+                if len(parts) == 3:
+                    origin = (int(parts[1]), int(parts[2]))
+                break
+        return run.stdout, origin
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -190,6 +207,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
             timing = body["timing"]
+            camera_focal = body["camera_focal"]
             keyframes = body["keyframes"]
             ms = body["ms"]
         except (ValueError, KeyError) as exc:
@@ -197,7 +215,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            bmp = self.renderer.render(timing, keyframes, ms)
+            bmp, origin = self.renderer.render(timing, camera_focal, keyframes, ms)
         except RenderError as exc:
             self._send_json_error(exc.status, exc.message)
             return
@@ -208,6 +226,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "image/bmp")
         self.send_header("Content-Length", str(len(bmp)))
+        if origin is not None:
+            self.send_header("X-Origin", "%d,%d" % origin)
         self.end_headers()
         self.wfile.write(bmp)
 

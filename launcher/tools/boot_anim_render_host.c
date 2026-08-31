@@ -27,6 +27,10 @@
  * for exactly this shape of problem (device pixels -> a BMP a host script
  * reads) even though its one caller today streams over serial instead of
  * writing to stdout.
+ *
+ * Also prints one line to STDERR - "ORIGIN <x> <y>", the space's own local
+ * origin projected through this frame's transform - see the comment at the
+ * call site below for why.
  *===========================================================================*/
 
 #include <stdint.h>
@@ -64,6 +68,19 @@ int main(int argc, char **argv)
     }
 
     boot_anim_draw_frame(now_ms);
+
+    /* The space's own local origin (0,0,0 - t=0, zeta=0), projected through
+     * this frame's camera+space transform and printed to STDERR (never
+     * stdout, which is the BMP) - kept, as asked, now that a real 3D
+     * transform has nowhere on the JSON side to author a screen position
+     * directly: boot_anim_editor_server.py reads this line and hands it to
+     * the editor as a read-only "where does the origin land" readout. */
+    {
+        const boot_anim_view_t view = boot_anim_view(GFX_WIDTH, GFX_HEIGHT, now_ms);
+        int ox, oy;
+        boot_anim_project(0, 0, 0, &view, &ox, &oy);
+        fprintf(stderr, "ORIGIN %d %d\n", ox, oy);
+    }
 
     const gfx_color_t *fb = gfx_framebuffer();
     const int32_t stride = screenshot_bmp_row_stride(GFX_WIDTH);

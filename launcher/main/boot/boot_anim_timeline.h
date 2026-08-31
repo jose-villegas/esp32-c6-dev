@@ -3,11 +3,14 @@
  *
  *     python tools/gen_boot_anim_timeline.py main/boot/boot_anim_timeline.json > main/boot/boot_anim_timeline.h
  *
- * The boot animation's timing constants and camera keyframes, edited as
+ * The boot animation's timing constants and its two keyframed 3D
+ * transforms (camera, and the space the grid+curve live in), edited as
  * main/boot/boot_anim_timeline.json - by hand, or via
  * tools/boot_anim_editor.html's Bake button - and turned into this header by
- * this script. See that script's own top comment for what a keyframe is and
- * boot_anim.h's boot_anim_timeline_sample() for how they are interpolated.
+ * this script. See that script's own top comment for what a keyframe is
+ * (plain meters/degrees/multiplier units, converted to small3dlib's fixed
+ * point right here) and boot_anim.h's boot_anim_timeline_sample() for how
+ * they are interpolated.
  *===========================================================================*/
 #pragma once
 
@@ -63,33 +66,64 @@
 #define BOOT_ANIM_GRID_WHITEN_MAX 120
 #define BOOT_ANIM_GRID_CEILING_MAX 170
 #define BOOT_ANIM_GRID_MAX 70
+/* small3dlib's S3L_Camera.focalLength - 0 is an orthographic
+ * projection (see boot_anim.h's "The projection" section), any other
+ * value a perspective one; S3L_F (512) is small3dlib's own "normal"
+ * lens default. Authored directly in this unit - it is a lens
+ * property, not a position or angle, so meters/degrees do not apply. */
+#define BOOT_ANIM_CAMERA_FOCAL 512
+
 typedef enum {
     BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */
     BOOT_ANIM_EASE_OUT    = 1,   /* tween_ease_out() - fast then settle */
     BOOT_ANIM_EASE_IN     = 2,   /* tween_ease_in() - slow then rush    */
 } boot_anim_ease_t;
 
-/* pos/rot are panel pixels and a boot_anim_sin() phase; scale is Q8
- * (256 == 1.0). `ease` says how the segment ENDING at this keyframe -
- * from the previous one - is eased; the first keyframe's is unused. Only
- * rot[0] and scale[0] are read by boot_anim.h today - see this file's own
- * top comment. */
+/* Both transforms' pos/rot/scale are small3dlib fixed point (S3L_F =
+ * 512 = 1.0) already - converted from the JSON's plain meters/degrees/
+ * multiplier units by this script, not at runtime. `ease` says how the
+ * segment ENDING at this keyframe - from the previous one - is eased;
+ * the first keyframe's is unused. */
 typedef struct {
     uint32_t ms;
-    int16_t  pos[2];
-    int16_t  rot[3];
-    int16_t  scale[3];
+    int32_t  camera_pos[3];
+    int32_t  camera_rot[3];
+    int32_t  camera_scale[3];
+    int32_t  space_pos[3];
+    int32_t  space_rot[3];
+    int32_t  space_scale[3];
     uint8_t  ease;
 } boot_anim_keyframe_t;
 
 #define BOOT_ANIM_KEYFRAME_COUNT 7
 
 static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] = {
-    {   520, {  184,  336 }, {      0,    0,    0 }, {  256,  256,  256 }, BOOT_ANIM_EASE_LINEAR },
-    {  2500, {  184,  112 }, {  10559,    0,    0 }, {  256,  256,  256 }, BOOT_ANIM_EASE_LINEAR },
-    {  2700, {  184,  112 }, {  10559,    0,    0 }, {  256,  256,  256 }, BOOT_ANIM_EASE_LINEAR },
-    {  3600, {  184,  112 }, {  10559,    0,    0 }, {  380,  380,  380 }, BOOT_ANIM_EASE_OUT },
-    {  4200, {  184,  112 }, {  10559,    0,    0 }, {   28,   28,   28 }, BOOT_ANIM_EASE_IN },
-    {  4300, {  184,  112 }, {  10559,    0,    0 }, {   28,   28,   28 }, BOOT_ANIM_EASE_LINEAR },
-    {  5800, {  151,  138 }, {  20936,    0,    0 }, {   28,   28,   28 }, BOOT_ANIM_EASE_OUT },
+    {   520,
+      {      0,   1024,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
+      {      0,      0,      0 }, {      0,      0,      0 }, {    512,    512,    512 },
+      BOOT_ANIM_EASE_LINEAR },
+    {  2500,
+      {      0,   1024,  -5120 }, {     82,      0,      0 }, {    512,    512,    512 },
+      {      0,      0,      0 }, {      0,      0,      0 }, {    512,    512,    512 },
+      BOOT_ANIM_EASE_LINEAR },
+    {  2700,
+      {      0,   1024,  -5120 }, {     82,      0,      0 }, {    512,    512,    512 },
+      {      0,      0,      0 }, {      0,      0,      0 }, {    512,    512,    512 },
+      BOOT_ANIM_EASE_LINEAR },
+    {  3600,
+      {      0,   1024,  -5120 }, {     82,      0,      0 }, {    512,    512,    512 },
+      {      0,      0,      0 }, {      0,      0,      0 }, {    717,    717,    717 },
+      BOOT_ANIM_EASE_OUT },
+    {  4200,
+      {      0,   1024,  -5120 }, {     82,      0,      0 }, {    512,    512,    512 },
+      {      0,      0,      0 }, {      0,      0,      0 }, {     56,     56,     56 },
+      BOOT_ANIM_EASE_IN },
+    {  4300,
+      {      0,   1024,  -5120 }, {     82,      0,      0 }, {    512,    512,    512 },
+      {      0,      0,      0 }, {      0,      0,      0 }, {     56,     56,     56 },
+      BOOT_ANIM_EASE_LINEAR },
+    {  5800,
+      {   1024,   1024,  -5120 }, {    114,      0,      0 }, {    512,    512,    512 },
+      {   -512,      0,      0 }, {      0,      0,      0 }, {     56,     56,     56 },
+      BOOT_ANIM_EASE_OUT },
 };

@@ -28,37 +28,73 @@
  * So the picture is not decorative arithmetic: the Riemann hypothesis is the
  * conjecture that this line is the only place those crossings happen.
  *
- * THE CAMERA ORBITS
+ * A CAMERA, AND A SPACE, BOTH KEYFRAMED
  *
- * It does not stay at that first side-on view. Over the course of the climb
- * the camera pitches up, as though gliding across the surface of a sphere
- * centred on the origin while turning to keep it in view: the floor tips from
- * "a plane receding into the distance" toward "a disc facing the viewer", the
- * t axis foreshortens from its full vertical length toward a point, and what
- * was a helix seen from the side ends up read almost face-on, as the spiral
- * it always was. Almost, not exactly - stopping short of a true top-down view
- * is what keeps the floor legibly tilted rather than flattened to a line with
- * no depth in it.
+ * Two independent small3dlib transforms (components/small3dlib - the same
+ * library apps/cube's own rasterizer uses), each a full position/rotation/
+ * scale: a CAMERA, and the SPACE the grid and curve live in. Both are
+ * keyframed data (boot_anim_keyframes[], generated from
+ * boot_anim_timeline.json by tools/gen_boot_anim_timeline.py - see "The
+ * timeline" below), edited live in tools/boot_anim_editor.html rather than
+ * hand-derived once the way this file's camera math used to be. Projection
+ * is real perspective, not the old axonometric three-fixed-directions
+ * trick - see "The projection" below, including how to get back to
+ * orthographic if that ever turns out to be wanted.
  *
- * The origin's own position on screen drifts to match, from low on the panel
- * up to the mirror image of where it started - see boot_anim_view() for the
- * exact relationship. Two effects, one motion: rotating the world about a
- * fixed point does not move that point, so the drift is a second, explicit
- * animation riding alongside the orbit, not a side effect of it.
+ * ONE SPACE-UNIT IS ONE METER
  *
- * FIXED POINT, AND FOUR SCALES OF IT
+ * Both transforms' positions are in real, consistent units - a keyframe
+ * that moves the camera "5" moves it 5 meters - and the curve/grid's own
+ * existing coordinates ARE that same space, not a separate scale converted
+ * into it at the last moment (see "The timeline" below for exactly how).
  *
- * The chip has no FPU, so everything is integers. Mixing the scales up is the
- * mistake to watch for:
+ * FIXED POINT THROUGHOUT
  *
- *   Q12   a value of zeta. 4096 is 1.0, one unit of the floor grid.
- *   Q8    a height t. 256 is 1.0, and 35 * 256 still fits an int16.
- *   Q8    the projection's own axis vectors, in pixels per unit.
- *   Q15   sines and cosines of the camera's tilt. 32767 is 1.0.
+ * The chip has no FPU, so everything is integers, in more than one scale -
+ * mixing them up is the mistake to watch for:
+ *
+ *   Q12    a value of zeta. 4096 is 1.0, one unit of the floor grid.
+ *   Q8     a height t. 256 is 1.0, and 35 * 256 still fits an int16.
+ *   S3L_F  small3dlib's own fixed point (512 = 1.0) - meters once
+ *          projected, camera/space transform numbers throughout, and a
+ *          full turn of rotation.
+ *   Q15    sines and cosines from this file's own trig table (still used
+ *          by the title's wobble/wave - see "Trigonometry" below - even
+ *          though the camera no longer reads it directly).
  *===========================================================================*/
 #pragma once
 
 #include <stdint.h>
+
+/* small3dlib - the same header-only fixed-point 3D library apps/cube already
+ * vendors (components/small3dlib), reused here for the camera and space
+ * transforms - see "The timeline" below for why this file stopped hand-
+ * rolling its own rotation math. Header-only (its own CMakeLists.txt: "compiles
+ * its implementation into whichever component includes it"), already a
+ * dependency of the `main` component, so nothing to add to any CMakeLists to
+ * use it from here.
+ *
+ * S3L_PIXEL_FUNCTION must be defined before including - the header #errors
+ * otherwise - even though this file never calls the rasterizer at all (only
+ * the transform/matrix/projection half: S3L_Transform3D, S3L_makeWorldMatrix/
+ * makeCameraMatrix, S3L_mat4Xmat4, S3L_vec3Xmat4, S3L_perspectiveDivide,
+ * S3L_mapProjectionPlaneToScreen). The stub is defined AFTER the include,
+ * once S3L_PixelInfo actually exists to declare it against - the header's own
+ * forward declaration is what the macro name has to match. */
+#define S3L_PIXEL_FUNCTION boot_anim_unused_pixel
+#define S3L_RESOLUTION_X 368   /* GFX_WIDTH - see gfx.h; a literal for the same
+                                * reason gfx_dirty.h and boot_anim_curve.h's
+                                * own callers already carry it as one: gfx.h
+                                * drags in the BSP and this file has to
+                                * compile on a host. */
+#define S3L_RESOLUTION_Y 448   /* GFX_HEIGHT */
+#define S3L_Z_BUFFER 0         /* no rasterizer, no depth buffer to keep */
+#define S3L_SORT 0             /* no rasterizer, nothing to sort */
+#define S3L_MAX_TRIANGES_DRAWN 1   /* the rasterizer is never called; small3dlib
+                                    * still sizes an internal array off this */
+#include "small3dlib.h"
+
+static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
 
 #include "boot/boot_anim_curve.h"
 #include "boot/boot_anim_timeline.h"
@@ -68,38 +104,52 @@
 #define BOOT_ANIM_ONE  (1 << BOOT_ANIM_Q)   /* 4096 == 1.0 */
 #define BOOT_ANIM_TQ   8                    /* t's own fixed point */
 
-/* The origin - where t is 0 and zeta is 0. (w/2, h*3/4) is where the camera
- * starts: low and centred, because everything else is above it. It does not
- * stay there - see boot_anim_view() below - but this is that starting point,
- * and the fixed point everything else orbits around. Defined ahead of both
- * "The camera" and "The projection" below because each needs it. */
-static inline int boot_anim_origin_x(int w) { return w / 2; }
-static inline int boot_anim_origin_y(int h) { return (h * 3) / 4; }
+/* Where t is 0 and zeta is 0 no longer has a fixed formula of its own -
+ * (w/2, h*3/4), the old boot_anim_origin_x()/_y(), was where the OLD
+ * camera's hand-derived orbit happened to start, not a property of the
+ * space itself. The space's own local origin still means the same thing
+ * it always did (t=0, zeta=0) - projecting the point (0,0,0) through
+ * whatever the CURRENT keyframed camera+space transform is
+ * (boot_anim_project(0, 0, 0, view, &x, &y), see "The projection" below)
+ * is what answers "where is the origin on screen right now", the same
+ * question this used to answer with a formula instead of a projection. */
 
 /*---------------------------------------------------------------------------
  * The timeline
  *
- * Where the camera actually comes from now: boot_anim_keyframes[], generated
- * into boot_anim_timeline.h from boot_anim_timeline.json by
- * tools/gen_boot_anim_timeline.py - see that script's own top comment for
- * what a keyframe is. What used to be boot_anim_orbit_progress() and
- * boot_anim_finale_reach() blended through two hardcoded windows to produce
- * the camera's phase and the origin's drift is now just this: find the two
- * keyframes bracketing `now_ms`, ramp between their times, ease that ramp by
- * whichever shape the arriving keyframe names, and lerp every channel by it -
- * the exact vocabulary util/tween.h already provides, so nothing new needed
- * inventing to interpret the table.
+ * Where the camera - and now the space it looks at - actually come from:
+ * boot_anim_keyframes[], generated into boot_anim_timeline.h from
+ * boot_anim_timeline.json by tools/gen_boot_anim_timeline.py, each entry
+ * carrying TWO full small3dlib transforms (S3L_Transform3D: translation,
+ * rotation, scale) - one for the camera, one for the "space" the grid and
+ * curve live in - rather than the single hand-derived rotation+2D-drift
+ * this used to be. Interpolating them is the same idea as before, just more
+ * channels: find the two keyframes bracketing `now_ms`, ramp between their
+ * times, ease that ramp by whichever shape the arriving keyframe names, and
+ * lerp every number by it - still util/tween.h's own vocabulary, nothing
+ * new invented to interpret the table.
+ *
+ * UNITS
+ *
+ * Position is in METERS, one space-unit to one - see boot_anim_project()
+ * below for where the curve/grid's own existing Q12 "zeta value" and Q8 "t"
+ * units get converted into this same space, so "1 unit = 1 meter" is true
+ * of the geometry already there, not a second figure to keep in sync with
+ * it. Rotation is in small3dlib's own S3L_F-per-turn convention (one degree
+ * = S3L_F / 360) and - this matters, see S3L_Transform3D's own comment in
+ * small3dlib.h - composes in Z, THEN X, THEN Y order, not X-Y-Z. Scale is a
+ * plain multiplier, S3L_F itself standing for 1.0 (S3L_transform3DInit()'s
+ * own default), which is why an untouched keyframe's scale reads back as
+ * 1,1,1 rather than needing a special case here to make it so.
  *
  * Placed ahead of "The camera" rather than after it: boot_anim_view() below
- * needs this, and so - independently - do boot_anim_motif_shrink_q8() and
- * boot_anim_finale_reach() much further down, so this has to exist before
- * all three rather than living beside just one of them.
+ * needs this, and so does boot_anim_finale_reach() much further down, so
+ * this has to exist before both rather than living beside just one of them.
  *-------------------------------------------------------------------------*/
 
 typedef struct {
-    int32_t ox, oy;       /* pixels, panel frame */
-    int32_t rot_phase;    /* boot_anim_sin()'s 0..65536-per-turn convention */
-    int32_t scale_q8;     /* Q8, 256 == 1.0 */
+    S3L_Transform3D camera;
+    S3L_Transform3D space;
 } boot_anim_timeline_state_t;
 
 /* linear/ease_out/ease_in, by the enum baked into the generated table -
@@ -113,12 +163,50 @@ static inline uint8_t boot_anim_timeline_ease(uint8_t linear, uint8_t ease)
     }
 }
 
+/* One keyframe's stored pos[3]/rot[3]/scale[3] arrays, as an actual
+ * S3L_Transform3D - the shape every other small3dlib call in this file
+ * wants. `.w` on each S3L_Vec4 is left at 0; nothing here ever reads it. */
+static inline S3L_Transform3D boot_anim_kf_transform(const int32_t pos[3],
+                                                      const int32_t rot[3],
+                                                      const int32_t scale[3])
+{
+    S3L_Transform3D t;
+    t.translation.x = pos[0]; t.translation.y = pos[1]; t.translation.z = pos[2];
+    t.rotation.x = rot[0];    t.rotation.y = rot[1];    t.rotation.z = rot[2];
+    t.scale.x = scale[0];     t.scale.y = scale[1];     t.scale.z = scale[2];
+    t.translation.w = t.rotation.w = t.scale.w = 0;
+    return t;
+}
+
+/* Every one of an S3L_Transform3D's 9 numbers, lerped by the same fraction -
+ * util/tween.h's tween_lerp_i32(), same as every other channel in this
+ * file, just written out per field rather than looped: this file's own
+ * style throughout (see e.g. boot_anim_spline()) unrolls a fixed, small set
+ * of fields rather than reaching for a generic loop over them. */
+static inline S3L_Transform3D boot_anim_lerp_transform(S3L_Transform3D a,
+                                                        S3L_Transform3D b,
+                                                        uint8_t u8)
+{
+    S3L_Transform3D t;
+    t.translation.x = tween_lerp_i32(a.translation.x, b.translation.x, u8);
+    t.translation.y = tween_lerp_i32(a.translation.y, b.translation.y, u8);
+    t.translation.z = tween_lerp_i32(a.translation.z, b.translation.z, u8);
+    t.rotation.x = tween_lerp_i32(a.rotation.x, b.rotation.x, u8);
+    t.rotation.y = tween_lerp_i32(a.rotation.y, b.rotation.y, u8);
+    t.rotation.z = tween_lerp_i32(a.rotation.z, b.rotation.z, u8);
+    t.scale.x = tween_lerp_i32(a.scale.x, b.scale.x, u8);
+    t.scale.y = tween_lerp_i32(a.scale.y, b.scale.y, u8);
+    t.scale.z = tween_lerp_i32(a.scale.z, b.scale.z, u8);
+    t.translation.w = t.rotation.w = t.scale.w = 0;
+    return t;
+}
+
 /* Before the first keyframe or after the last, the state holds at that
  * keyframe's own value - the same clamping boot_anim_sample() already does
  * for the curve table, for the same reason: it pins the ends rather than
- * leaving them undefined. The table is short (today seven entries) so a
- * linear scan for the bracketing pair costs nothing worth a binary search
- * over. */
+ * leaving them undefined. The table is short (today a handful of entries)
+ * so a linear scan for the bracketing pair costs nothing worth a binary
+ * search over. */
 static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_ms)
 {
     const boot_anim_keyframe_t *first = &boot_anim_keyframes[0];
@@ -127,12 +215,9 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
     boot_anim_timeline_state_t s;
 
     if (now_ms <= first->ms || now_ms >= last->ms) {
-        const boot_anim_keyframe_t *clamp =
-            now_ms <= first->ms ? first : last;
-        s.ox = clamp->pos[0];
-        s.oy = clamp->pos[1];
-        s.rot_phase = clamp->rot[0];
-        s.scale_q8 = clamp->scale[0];
+        const boot_anim_keyframe_t *k = now_ms <= first->ms ? first : last;
+        s.camera = boot_anim_kf_transform(k->camera_pos, k->camera_rot, k->camera_scale);
+        s.space  = boot_anim_kf_transform(k->space_pos,  k->space_rot,  k->space_scale);
         return s;
     }
 
@@ -146,19 +231,27 @@ static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_
     const uint8_t linear = tween_ramp(now_ms, a->ms, b->ms - a->ms);
     const uint8_t u8 = boot_anim_timeline_ease(linear, b->ease);
 
-    s.ox = tween_lerp_i32(a->pos[0], b->pos[0], u8);
-    s.oy = tween_lerp_i32(a->pos[1], b->pos[1], u8);
-    s.rot_phase = tween_lerp_i32(a->rot[0], b->rot[0], u8);
-    s.scale_q8 = tween_lerp_i32(a->scale[0], b->scale[0], u8);
+    const S3L_Transform3D ca = boot_anim_kf_transform(a->camera_pos, a->camera_rot, a->camera_scale);
+    const S3L_Transform3D cb = boot_anim_kf_transform(b->camera_pos, b->camera_rot, b->camera_scale);
+    const S3L_Transform3D sa = boot_anim_kf_transform(a->space_pos, a->space_rot, a->space_scale);
+    const S3L_Transform3D sb = boot_anim_kf_transform(b->space_pos, b->space_rot, b->space_scale);
+
+    s.camera = boot_anim_lerp_transform(ca, cb, u8);
+    s.space  = boot_anim_lerp_transform(sa, sb, u8);
     return s;
 }
 
 /*---------------------------------------------------------------------------
- * The camera
+ * Trigonometry
  *
- * Everything the orbit needs, ahead of "The projection" below because
- * boot_anim_screen_y() consumes a boot_anim_view_t and so needs the type and
- * the sine table it is built from to already exist.
+ * Used to be "The camera" - the sine table and the two functions built on
+ * it existed for the camera's own rotation, back when that rotation was a
+ * single hand-derived phase (see boot_anim.h's git history for the
+ * Rodrigues-rotation machinery this section used to also hold, now gone:
+ * small3dlib owns the camera's rotation entirely - see "The timeline"
+ * above). Kept, unrenamed in what they compute: "The title"'s own wobble/
+ * wave (boot_anim_title_wobble(), boot_anim_title_wave()) still use
+ * boot_anim_sin() directly and always have, independently of the camera.
  *-------------------------------------------------------------------------*/
 
 /* A quarter wave at 65 points - sin(k * pi/128), Q15 - reflected into the
@@ -219,93 +312,34 @@ static inline int32_t boot_anim_cos(uint16_t phase)
     return boot_anim_sin((uint16_t)(phase + 16384u));
 }
 
-/* How far the camera tilts, and where the origin drifts to - both now
- * keyframe DATA (boot_anim_keyframes[], see "The timeline" above) rather
- * than a pair of constants derived once and blended through a hardcoded
- * window. 58 degrees at the top of the climb, not 90: the whole point of
- * stopping short is a floor that is still visibly a floor, not a line with
- * no depth left in it - see "THE CAMERA ORBITS" at the top of this file.
- *
- * THE ROTATION, TURNED INTO NINE CONSTANTS AT COMPILE TIME
- *
- * The camera has two screen-space directions, right and down, each a
- * 3-vector of how far one unit of (Re, Im, t) moves a point in that screen
- * direction. `right` is the pitch axis - the orbit rotates the world about
- * it, so it never moves, and BOOT_ANIM_RE_X/IM_X below are exactly what they
- * always were. `down` is what rotates.
- *
- * Given a fixed unit vector `axis` (= normalised `right`) and `A` (= `down`
- * at zero tilt, today's original constants read back as directions rather
- * than pixels), Rodrigues' rotation of `A` about `axis` through angle phi is
- *
- *     down(phi) = A*cos(phi) + (axis x A)*sin(phi) + axis*(axis . A)*(1 - cos(phi))
- *
- * Both `axis` and `A` are fixed, so everything about that formula that is
- * NOT cos(phi) or sin(phi) is a compile-time constant. Multiplying out and
- * collecting terms:
- *
- *     down(phi) = D*cos(phi) + B*sin(phi) + C
- *
- *     where  C = axis * (axis . A)
- *            D = A - C
- *            B = axis x A
- *
- * which is what turns a rotation - cross products, dot products, a matrix -
- * into three vectors baked in at compile time and two multiplies at runtime.
- * D, B and C below are those three vectors, each split into a Re/Im/t triple
- * and each already scaled the way BOOT_ANIM_RE_X was: Re and Im components
- * carry BOOT_ANIM_Z_PX, the t component carries BOOT_ANIM_T_PX, all as Q8.
- * boot_anim_view() below recombines them with cos(phi)/sin(phi) each frame.
- *
- * Verified two ways before being trusted here: the algebraic identity above
- * checked against a from-scratch rotation at seven angles from 0 to 90
- * degrees (agreement to float noise), and the resulting fixed-point path
- * checked against that same float reference across the whole 0..3000ms
- * timeline and the whole curve (worst case under 3px, and the drawn part of
- * the curve never left the panel at any point in the sweep). */
-#define BOOT_ANIM_D_RE_Y  4152
-#define BOOT_ANIM_D_IM_Y  5517
-#define BOOT_ANIM_D_T_Y  (-2304)
-#define BOOT_ANIM_B_RE_Y  5387
-#define BOOT_ANIM_B_IM_Y  7159
-#define BOOT_ANIM_B_T_Y   1776
-#define BOOT_ANIM_C_RE_Y (-1087)
-#define BOOT_ANIM_C_IM_Y   818
-#define BOOT_ANIM_C_T_Y     0
-
-/* Everything boot_anim_screen_x()/screen_y() need for one frame, computed
- * once rather than once per point: the rotated screen-space weights for
- * Re/Im/t, all Q8 like BOOT_ANIM_RE_X was, and the frame's origin - which,
- * unlike everything before the finale (see "The finale" below), can now
- * drift horizontally as well as vertically.
- *
- * The CONSTRUCTOR, boot_anim_view(), is defined further down, after both
- * the choreography and the finale sections - it needs boot_anim_pen() and
- * boot_anim_finale_reach(), and this struct only needs to be a complete
- * TYPE this early, not have its constructor defined yet, for
- * boot_anim_screen_x()/screen_y() below to compile against it. */
-typedef struct {
-    int32_t re_y, im_y, t_y;   /* Q8 - see boot_anim_screen_y() */
-    int     ox, oy;             /* pixels */
-} boot_anim_view_t;
-
 /*---------------------------------------------------------------------------
  * The projection
  *
- * Axonometric, not perspective - three directions on screen and no divide per
- * point - but the directions are not all fixed any more. The real axis's
- * screen direction never changes; the imaginary and t axes' do, orbiting
- * together as the camera pitches. See "THE CAMERA ORBITS" above for what that
- * looks like and boot_anim_view() above for where the numbers come from.
+ * Perspective, via small3dlib - the same library apps/cube already uses for
+ * its own camera. A frame's `boot_anim_view_t` is the composed space-then-
+ * camera matrix (see boot_anim_view() below, and "The timeline" above for
+ * where the camera's and the space's own transforms come from) plus the
+ * camera's focal length; projecting a point is then one matrix-vector
+ * multiply and one divide (S3L_perspectiveDivide()) - a real per-point cost
+ * the old axonometric projection never had, accepted for actual foreshortening-
+ * by-distance rather than the old fixed screen-direction weights.
  *
- * Screen size arrives as a parameter rather than as GFX_WIDTH/GFX_HEIGHT,
- * because gfx.h drags in the BSP and this file has to compile on a host.
- * gfx_dirty.h has the same problem and mirrors the two numbers as literals;
- * taking them as arguments leaves nothing to drift out of step.
+ * THE SWAP BACK TO ORTHOGRAPHIC, IF IT IS EVER WANTED
+ *
+ * small3dlib already draws this line itself: S3L_Camera.focalLength == 0
+ * IS an orthographic projection to it (S3L_perspectiveDivide() no-ops on a
+ * zero focal length), with zoom then coming from the camera's own scale
+ * instead - see that field's own comment in small3dlib.h. So this is not a
+ * second code path to build later; it is BOOT_ANIM_CAMERA_FOCAL (generated,
+ * "other consts" in tools/boot_anim_editor.html) set to 0.
+ *
+ * Screen size doesn't arrive as a parameter here the way it used to -
+ * S3L_RESOLUTION_X/Y (set to GFX_WIDTH/GFX_HEIGHT literals above, before
+ * including small3dlib.h, for the same host-portability reason
+ * gfx_dirty.h's own literals exist) are what small3dlib itself sizes the
+ * projection against.
  *-------------------------------------------------------------------------*/
 
-#define BOOT_ANIM_Z_PX  35     /* pixels per unit of zeta's value */
-#define BOOT_ANIM_T_PX   9     /* pixels per unit of t            */
 #define BOOT_ANIM_T_MAX 126    /* the top of the climb            */
 
 /* The top of phase 1's climb specifically - see boot_anim_pen()'s "TWO
@@ -332,7 +366,9 @@ typedef struct {
  * continuous wave, and even the first cut of that (twice as many, half as
  * far apart) still read as individually countable bands rather than a
  * dense ripple once the floor itself was also allowed to grow this much
- * bigger on screen (see boot_anim_grid_shrink_q8()) - the bigger the
+ * bigger on screen (the old projection's own floor-shrink mechanism, since
+ * replaced by the space transform's own scale - see "The timeline" above) -
+ * the bigger the
  * drawn area, the higher a frequency it takes for the same ring count to
  * still look dense rather than sparse. Four times as many rings, a
  * quarter as far apart, covers the same physical reach as the original
@@ -345,73 +381,102 @@ typedef struct {
  * boot_anim.c, which this is used in place of for the floor specifically). */
 #define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 4)
 
-/* Where one unit along each axis lands, in Q8 pixels.
- *
- *   real       20 degrees below horizontal, to the right
- *   imaginary  45 degrees below horizontal, to the left
- *
- * 45 for the imaginary axis because that is the angle that reads as "going
- * away from you". 20 rather than another 45 for the real one because two
- * symmetric axes make a floor that looks like it is being seen edge on, with
- * the grid squares collapsed into slivers.
- *
- * Q8 rather than Q12 for headroom: these multiply a Q12 value of up to about
- * 3.7, and at Q12 that product would come within a factor of two of
- * overflowing an int32. That failure would show up as the curve folding in
- * half at its widest point - not as anything that announces itself.
- */
-#define BOOT_ANIM_RE_X  8420   /*  cos(20) * Z_PX * 256           */
-#define BOOT_ANIM_IM_X (-6336) /* -cos(45) * Z_PX * 256           */
+/* Converting the curve/grid's own existing Q12 "zeta value" units into
+ * small3dlib's own fixed point - see "The timeline"'s own UNITS comment for
+ * why 1 zeta-value-unit is 1 meter, no second conversion figure to keep in
+ * sync with it. A shift, not a multiply-then-shift: both BOOT_ANIM_ONE
+ * (4096) and S3L_F (512) are powers of two, so the ratio between them
+ * (4096 / 512 = 8) is exact. */
+#define BOOT_ANIM_ZETA_TO_S3L(v) ((v) >> 3)
 
-/* value -> screen x, for the CURRENT frame's view.
- *
- * The WEIGHTS (BOOT_ANIM_RE_X/IM_X) are unaffected by the camera orbiting,
- * because the real axis's screen direction is the pitch axis - see
- * boot_anim_view() - and rotating about an axis leaves that axis exactly
- * where it was. The ORIGIN is a different matter: view->ox can drift during
- * the finale (see "The finale" below), which is why this takes a view at
- * all now, where once it did not.
- *
- * The shift is 20 because a Q12 value times a Q8 pixels-per-unit is Q20.
- *
- * NOT util/fixed.h, deliberately. fx_mul_floor() exists to make the widening
- * cast unforgettable at sites that need one; this does not need one, because
- * the operands were sized so the product cannot overflow an int32 - the
- * largest is about 1.7e8 against a 2.1e9 ceiling. Routing it through a 64-bit
- * helper would put back the arithmetic the scale choice exists to avoid, on a
- * path that runs several thousand times a frame.
- *
- * The two terms are also summed BEFORE the shift, which fx_mul_floor() cannot
- * express: flooring each product separately and then adding can land a pixel
- * off the one the geometry asks for. */
-static inline int boot_anim_screen_x(int32_t re_q12, int32_t im_q12,
-                                     const boot_anim_view_t *view)
+/* t is a DIFFERENT unit (Q8, 256 == one "t-unit") and was always drawn
+ * shorter, relative to a zeta-value unit, than a literal 1:1 would give -
+ * the old projection's own BOOT_ANIM_T_PX / BOOT_ANIM_Z_PX was 9/35 -
+ * which is what keeps the climb reading as a tall SPIRAL rather than a
+ * flagpole once every axis shares one physical unit. Preserved as a single
+ * Q8 multiplier rather than re-deriving it from two axis scales that no
+ * longer otherwise exist anywhere in this file:
+ * round(S3L_F * 9 / (35 * 256) * 256) = round(512 * 9 / 35) = 132, applied
+ * as a Q8 fraction of the already-Q8 t so the whole conversion is one
+ * multiply and one shift. */
+#define BOOT_ANIM_T_TO_S3L_Q8 132
+
+static inline int32_t boot_anim_t_to_s3l(int32_t t_q8)
 {
-    return view->ox +
-           (int)((re_q12 * BOOT_ANIM_RE_X + im_q12 * BOOT_ANIM_IM_X) >> 20);
+    return (t_q8 * BOOT_ANIM_T_TO_S3L_Q8) >> 8;
 }
 
-/* (value, height) -> screen y, for the CURRENT frame's view - see
- * boot_anim_view() above for what a view is and where its numbers come from.
+/* A frame's view: the composed space-then-camera matrix (see
+ * boot_anim_view() below) plus the camera's own focal length, which
+ * S3L_perspectiveDivide() needs alongside the matrix and which does not
+ * live inside one. */
+typedef struct {
+    S3L_Mat4 matrix;
+    S3L_Unit focal;
+} boot_anim_view_t;
+
+/* The view for `now_ms`: composes the space's own transform with the
+ * camera's (see "The timeline" above for both) into one matrix, space
+ * first then camera - see S3L_mat4Xmat4()'s own comment in small3dlib.h
+ * for why that argument order means "apply m1, then m2": a point already
+ * in the space's own local frame lands in camera space in one multiply
+ * this way, rather than two kept separate until the last moment.
  *
- * Same 32-bit reasoning as boot_anim_screen_x(): view->re_y and view->im_y
- * are Q8 by construction (see boot_anim_view()), so this is the same shift-
- * by-20, sum-before-shift arithmetic, just reading the frame's rotated
- * weights instead of a fixed compile-time pair.
- *
- * view->t_y carries an extra Q8 of fraction on top of that - it has to,
- * since unlike the old bare BOOT_ANIM_T_PX it is not always exactly nine, it
- * is nine SCALED BY A ROTATING DIRECTION, so it needs to represent values
- * between whatever t foreshortens to and back - hence the wider shift, 8
- * more than the re/im term needs to shed the same Q8. */
-static inline int boot_anim_screen_y(int h, int32_t re_q12, int32_t im_q12,
-                                     int32_t t_q8,
-                                     const boot_anim_view_t *view)
+ * `w`/`h` go unused - S3L_RESOLUTION_X/Y (GFX_WIDTH/GFX_HEIGHT, set before
+ * including small3dlib.h above) are what size the projection now, not
+ * these. Kept as parameters anyway so the call site and every test calling
+ * this do not have to change. */
+static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 {
-    (void)h;    /* baked into view->oy already - see boot_anim_view() */
-    return view->oy +
-           (int)((re_q12 * view->re_y + im_q12 * view->im_y) >> 20) +
-           (int)((t_q8 * view->t_y) >> (BOOT_ANIM_TQ + 8));
+    (void)w;
+    (void)h;
+
+    const boot_anim_timeline_state_t st = boot_anim_timeline_sample(now_ms);
+
+    S3L_Mat4 space_mat, cam_mat;
+    S3L_makeWorldMatrix(st.space, space_mat);
+    S3L_makeCameraMatrix(st.camera, cam_mat);
+    S3L_mat4Xmat4(space_mat, cam_mat);
+
+    boot_anim_view_t v;
+    S3L_mat4Copy(space_mat, v.matrix);
+    v.focal = BOOT_ANIM_CAMERA_FOCAL;
+    return v;
+}
+
+/* value -> screen (x, y), for the CURRENT frame's view: one matrix-vector
+ * multiply by the composed space-then-camera transform, then one
+ * perspective divide - see this section's own top comment for the
+ * swap-to-orthographic note.
+ *
+ * re/im are Q12 "zeta value" units, t is Q8 "t" units - the exact table
+ * this file has always sampled boot_anim_curve[] in, converted to
+ * small3dlib's own fixed point right here rather than carrying a second,
+ * pre-converted copy of the curve anywhere. */
+static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
+                                     int32_t t_q8,
+                                     const boot_anim_view_t *view,
+                                     int *screen_x, int *screen_y)
+{
+    S3L_Vec4 p;
+    p.x = BOOT_ANIM_ZETA_TO_S3L(re_q12);
+    p.y = boot_anim_t_to_s3l(t_q8);
+    p.z = BOOT_ANIM_ZETA_TO_S3L(im_q12);
+    p.w = S3L_F;
+
+    /* Cast away const: S3L_vec3Xmat4() only ever reads its matrix argument
+     * (see its own body in small3dlib.h - it takes a copy of `v` before
+     * touching anything), the parameter is just typed non-const upstream.
+     * `view` stays const from boot_anim_project()'s own caller's point of
+     * view; nothing here writes through it. */
+    S3L_vec3Xmat4(&p, (S3L_Unit (*)[4])view->matrix);
+    p.z = S3L_nonZero(p.z);
+    S3L_perspectiveDivide(&p, view->focal);
+
+    S3L_ScreenCoord sx, sy;
+    S3L_mapProjectionPlaneToScreen(p, &sx, &sy);
+    *screen_x = sx;
+    *screen_y = sy;
 }
 
 /*---------------------------------------------------------------------------
@@ -461,10 +526,13 @@ static inline boot_anim_pt_t boot_anim_spline(boot_anim_pt_t c0,
                                               boot_anim_pt_t c2,
                                               int32_t t_q12)
 {
-    /* 32-bit throughout, for the same reason boot_anim_screen_x() is - see
-     * its comment on why util/fixed.h is not used here. t_q12 is at most
-     * BOOT_ANIM_ONE, so the weights are at most 2.0 in Q12 and the three
-     * weighted samples sum to well under 4e7. */
+    /* 32-bit throughout, deliberately not util/fixed.h's widening helpers:
+     * the operands here are sized so the product cannot overflow an int32,
+     * and routing them through a 64-bit helper would put back the
+     * arithmetic that sizing exists to avoid, on a path that runs several
+     * thousand times a frame. t_q12 is at most BOOT_ANIM_ONE, so the
+     * weights are at most 2.0 in Q12 and the three weighted samples sum to
+     * well under 4e7. */
     const int32_t u  = BOOT_ANIM_ONE - t_q12;
     const int32_t w0 = (u * u) >> BOOT_ANIM_Q;
     const int32_t w2 = (t_q12 * t_q12) >> BOOT_ANIM_Q;
@@ -550,9 +618,10 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * into a plaid tablecloth. Pulled back down from 110 (a peak reached while
  * the grid was still small and struggling to be seen at all - see the
  * git history around BOOT_ANIM_GRID_CEILING_MAX for that whole chase):
- * now that boot_anim_grid_shrink_q8() keeps the floor covering the whole
- * panel from the very first frame (see its own comment), visibility is
- * no longer the problem brightness has to solve on its own, and a floor
+ * now that the floor covers the whole panel from the very first frame
+ * (the space transform's own scale, not a floor-specific mechanism any
+ * more - see "The timeline" above), visibility is no longer the problem
+ * brightness has to solve on its own, and a floor
  * this large at anything but a genuinely dim starting point overwhelms
  * the curve it is supposed to sit behind.
  *
@@ -595,8 +664,8 @@ static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
 
 /* Pulled back from 255 (matching the axes' own full brightness) once the
  * floor stopped needing to fight for visibility at all - see
- * BOOT_ANIM_GRID_MAX's own comment on why that fight moved to
- * boot_anim_grid_shrink_q8() instead. Climbing to full axis-brightness
+ * BOOT_ANIM_GRID_MAX's own comment on why that fight moved to the space
+ * transform's own scale instead. Climbing to full axis-brightness
  * was tuned for a floor that still needed every trick available just to
  * be seen; a floor that already covers the whole panel from frame 1 only
  * needs to climb enough to read as brightening over time, not enough to
@@ -794,8 +863,8 @@ static inline int boot_anim_title_wobble(int32_t d_q12)
      * the truncation is not a bug to guard against, it is how a phase past
      * one full turn wraps back into boot_anim_sin()'s range. Comfortably
      * inside int32 range: the largest product is under 1e9 against a 2.1e9
-     * ceiling, so - like boot_anim_screen_x()'s own arithmetic - this does
-     * not reach for util/fixed.h's widening cast. */
+     * ceiling, so this does not reach for util/fixed.h's widening cast
+     * either. */
     const uint16_t phase = (uint16_t)
         ((d2_q12 * BOOT_ANIM_TITLE_TURNS_PHASE) >> BOOT_ANIM_Q);
 
@@ -1144,30 +1213,23 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
  * The finale
  *
  * The camera does not stop turning once the curve is finished, and the
- * origin does not stop drifting either: while the title arrives, both keep
- * moving, further than the curve-drawing phase alone ever took them, ending
- * where the t axis reads vertical again - much as it did at the very start,
- * but now seen from past the point the floor went edge-on to a line - while
- * the origin has slid left, leaving room for the word beside it.
- *
- * That whole arc - the extra turn, the origin's slide, the motif's own
- * grow-then-settle swell, the axes losing their labelled tips - used to
- * share one hand-picked window (BOOT_ANIM_FINALE_END_MS +
+ * space does not stop moving either: while the title arrives, both keep
+ * animating, however the last keyframes on the timeline say they should -
+ * see "The timeline" above. That is the whole mechanism now: there used to
+ * be a second thing here, a hand-picked window (BOOT_ANIM_FINALE_END_MS +
  * BOOT_ANIM_COLLAPSE_MS) kept in sync with the title's own timing by a
- * literal plus a _Static_assert. Now the turn/slide is just the LAST
- * segment of boot_anim_keyframes[] (see "The timeline" above) - wherever
- * the last two keyframes happen to sit - and the motif's swell is the
- * middle two. There is no longer a separate window to keep in step: moving
- * a keyframe on the timeline moves the motion, full stop.
+ * literal plus a _Static_assert, driving a camera turn and a motif shrink
+ * that were their own separate mechanisms from the keyframed camera. Now
+ * there is only the one mechanism - the keyframe table - so there is only
+ * this section's own boot_anim_finale_reach() left to actually define here.
  *
- * What DOES still need a shared window is boot_anim_finale_reach() just
- * below, which is not a transform of the space at all - it is how far the
- * AXES have grown from their short, labelled length toward the unbounded
- * lines the floor already draws (see draw_axes() in boot_anim.c). Reusing
- * BOOT_ANIM_FADE_START_MS/BOOT_ANIM_MS - the same window boot_anim_ink()
- * already dissolves the whole picture over - means the axes finish
- * unbounding exactly as the picture finishes disappearing, which reads as
- * one ending rather than two separately-timed ones.
+ * boot_anim_finale_reach() is not a transform of the space at all - it is
+ * how far the AXES have grown from their short, labelled length toward the
+ * unbounded lines the floor already draws (see draw_axes() in boot_anim.c).
+ * Reusing BOOT_ANIM_FADE_START_MS/BOOT_ANIM_MS - the same window
+ * boot_anim_ink() already dissolves the whole picture over - means the axes
+ * finish unbounding exactly as the picture finishes disappearing, which
+ * reads as one ending rather than two separately-timed ones.
  *-------------------------------------------------------------------------*/
 
 static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
@@ -1181,142 +1243,6 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * panel and let clipping do the work" reasoning applies to an axis exactly
  * as much as to a grid line. */
 #define BOOT_ANIM_AXIS_FAR_UNITS 24
-
-/* The view for `now_ms`. Constructed here rather than in "The camera" above
- * because the boot_anim_view_t TYPE had to exist early, for
- * boot_anim_screen_x()/screen_y() to compile against it, but the
- * constructor did not - it only needs boot_anim_timeline_sample(), which by
- * now it has.
- *
- * `w`/`h` are unused: the keyframe table's pos values are already panel
- * pixels, generated for GFX_WIDTH x GFX_HEIGHT (see
- * gen_boot_anim_timeline.py) exactly the way boot_anim_screen_y() already
- * treats `h` as baked in rather than live. Kept as parameters anyway so the
- * call site and every test calling this do not have to change. */
-static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
-{
-    (void)w;
-    (void)h;
-
-    const boot_anim_timeline_state_t st = boot_anim_timeline_sample(now_ms);
-    const uint16_t phase = (uint16_t)st.rot_phase;
-    const int32_t c15 = boot_anim_cos(phase);
-    const int32_t s15 = boot_anim_sin(phase);
-
-    boot_anim_view_t v;
-    v.re_y = ((BOOT_ANIM_D_RE_Y * c15 + BOOT_ANIM_B_RE_Y * s15) >> 15) +
-             BOOT_ANIM_C_RE_Y;
-    v.im_y = ((BOOT_ANIM_D_IM_Y * c15 + BOOT_ANIM_B_IM_Y * s15) >> 15) +
-             BOOT_ANIM_C_IM_Y;
-    v.t_y  = ((BOOT_ANIM_D_T_Y  * c15 + BOOT_ANIM_B_T_Y  * s15) >> 15) +
-             BOOT_ANIM_C_T_Y;
-    v.ox = (int)st.ox;
-    v.oy = (int)st.oy;
-
-    return v;
-}
-
-/* The MOTIF's shrink, toward the view's origin, as the finale turns the
- * camera the rest of the way and the letters arrive - the axes shrink down
- * together with the curve now, rather than the curve alone shrinking
- * inside axes that stay unbounded around it, so the spiral-plus-axes reads
- * as one coherent thing collapsing into a small icon, not two independent
- * effects layered on each other.
- *
- * The floor stays OUT of this on purpose - see draw_floor()'s own comment
- * in boot_anim.c for why the grid plane is the backdrop the motif shrinks
- * into rather than one more thing shrinking along with it. "Whole space"
- * would be the wrong name for what this now scales.
- *
- * Not part of boot_anim_view_t: it is a scale on the pixel OFFSET from
- * view->ox/oy, applied after projection, not on (re, im, t) themselves -
- * see boot_anim.c's csx()/csy() for where it is spent, shared by
- * draw_axes()/draw_arm() and draw_curve()/draw_heads().
- *
- * TWO PHASES: GROW, THEN SETTLE - NO HOLD, used to be a hand-written pair of
- * GROW/SETTLE windows here (boot_anim_shrink_to_floor_q8(), driven by
- * BOOT_ANIM_SHRINK_GROW_MS/SETTLE_MS/PEAK_Q8/FLOOR_Q8, guarded by a
- * _Static_assert that they finished before the collapse started). That
- * shape - ease_out up to a peak, ease_in back down to a floor, no flat hold
- * at the top - is now just two consecutive keyframes with those two eases,
- * in boot_anim_keyframes[] (see "The timeline" above): the one at the peak
- * carries BOOT_ANIM_EASE_OUT, the one at the floor carries
- * BOOT_ANIM_EASE_IN. Nothing here has to separately guarantee they finish
- * before the turn/drift segment starts - they are just earlier keyframes on
- * the same table, in the order they are in.
- *
- * This is now a thin read of that table's scale channel: kept as its own
- * name (rather than every call site reading
- * boot_anim_timeline_sample(now_ms).scale_q8 directly) because
- * boot_anim_grid_shrink_q8() just below needs to say, in its own name, that
- * it rides the SAME pulse - and because "the motif's own shrink" is a
- * clearer thing to say boot_anim.c's callers are asking for than "the
- * timeline's scale channel" would be. */
-static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
-{
-    return (int)boot_anim_timeline_sample(now_ms).scale_q8;
-}
-
-/* A CONSTANT, not a GROW/SETTLE curve like boot_anim_motif_shrink_q8() -
- * the floor is supposed to fill every corner of the panel for the WHOLE
- * animation, from the very first frame, not just once something has
- * grown into place. A pulse that starts small necessarily has a window
- * where it has not grown yet, and "first frames still have corners" was
- * exactly that window showing.
- *
- * The panel-fit test below has never applied to the floor and still does
- * not here - it exists because the CURVE clipping mid-shape looks broken,
- * but the floor has had no edge since before any of this shrinking
- * existed (see BOOT_ANIM_GRID_RINGS's own comment): rings running past
- * the panel and fading into nothing is the intended look. So this value
- * is not a safety ceiling either - it is sized to a real requirement,
- * worked out numerically rather than by eye: for every one of the four
- * panel corners, at every moment of the whole animation (BOOT_ANIM_MS,
- * stepped finely), invert the floor's own projection (linear at t=0, so
- * exactly invertible) to find how many world units of reach that corner
- * needs, and take the largest value found anywhere. That maximum was
- * 14.17 units, at t=5720 - not, as it happens, at the very start (t=0
- * itself needs 11.93, its own local peak, from the camera's ORIGINAL
- * fixed position before the orbit's drift begins) - so the true worst
- * moment is late in the collapse, where the camera's own extra turn (see
- * BOOT_ANIM_PHI_EXTRA_PHASE) has pushed the projection closest to edge-on.
- * 600/256 gives a reach of BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12
- * * 600 >> 8 = 16.4 units - comfortable margin over 14.17, everywhere,
- * always. This is the FLOOR the grid never goes under, not the whole
- * story - see boot_anim_grid_shrink_q8() just below for how
- * boot_anim_motif_shrink_q8()'s own pulse still rides on top of it. */
-#define BOOT_ANIM_GRID_SHRINK_Q8 600
-
-/* The grid IS the plane - the coordinate system the curve's values and the
- * axes are drawn against - not a separate decoration next to it. A grid
- * that ignored boot_anim_motif_shrink_q8() entirely, the way a flat
- * BOOT_ANIM_GRID_SHRINK_Q8 constant did, was drawing "1 unit" at a
- * different pixel size than the curve and axes were using for their own
- * "1 unit" at that same instant, any time the motif was mid-pulse - a
- * grid that does not track the domain it represents is not really
- * representing it. So the motif's own GROW/HOLD/SETTLE shape still
- * multiplies in here: at boot_anim_motif_shrink_q8()'s baseline (256,
- * i.e. before anything has grown) this reduces to exactly
- * BOOT_ANIM_GRID_SHRINK_Q8, and while the motif swells past that toward
- * BOOT_ANIM_SHRINK_PEAK_Q8 the grid swells right along with it - both
- * readings of "scale" moving together, the way they should.
- *
- * What it does NOT do is follow the motif all the way down to
- * BOOT_ANIM_SHRINK_FLOOR_Q8 during the collapse: that floor was tuned
- * for the CURVE's own panel-fit safety once the camera has turned, a
- * completely different constraint from what the grid's own corner
- * coverage needs (see BOOT_ANIM_GRID_SHRINK_Q8's own comment) - so this
- * is clamped to never go BELOW that base value, only ever above it. The
- * grid reacts to the same scale the curve and axes do; it just is not
- * allowed to react itself into leaving the panel's corners uncovered
- * again. */
-static inline int boot_anim_grid_shrink_q8(uint32_t now_ms)
-{
-    const int32_t pulsed = ((int32_t)BOOT_ANIM_GRID_SHRINK_Q8 *
-                            boot_anim_motif_shrink_q8(now_ms)) >> 8;
-    return pulsed > BOOT_ANIM_GRID_SHRINK_Q8 ? (int)pulsed
-                                              : BOOT_ANIM_GRID_SHRINK_Q8;
-}
 
 /*---------------------------------------------------------------------------
  * Entry points into boot_anim.c
