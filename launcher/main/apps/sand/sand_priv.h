@@ -718,8 +718,15 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
  * Empty space always yields. Anything else yields only to something denser,
  * which is how sand sinks through water while water cannot push its way back
  * up through sand. Static materials never yield whatever the arithmetic says,
- * so a wall stays a wall. */
-static inline bool can_enter(uint8_t mover_density, cell_t target)
+ * so a wall stays a wall.
+ *
+ * `mover_id` exists only for the one-pairing exception below, and costs
+ * nothing on every other call: it is a plain uint8_t already sitting in a
+ * register at every call site (CELL_MATERIAL() of a cell_t already in
+ * hand), and the branch that reads it is reached only once density has
+ * already said yes - the common misses (empty target aside, already
+ * handled above; static target; insufficient density) never touch it. */
+static inline bool can_enter(uint8_t mover_density, uint8_t mover_id, cell_t target)
 {
     if (CELL_IS_EMPTY(target)) {
         return true;
@@ -737,8 +744,21 @@ static inline bool can_enter(uint8_t mover_density, cell_t target)
      * rather than landing on it, which is exactly what it looked like.
      * Density still decides fluids - sand sinks in water, snow floats on
      * it - and stops deciding anything between solids. */
-    return (t->kind == KIND_LIQUID || t->kind == KIND_GAS) &&
-           mover_density > t->density;
+    if (!(t->kind == KIND_LIQUID || t->kind == KIND_GAS) ||
+        mover_density <= t->density) {
+        return false;
+    }
+
+    /* Sand does not sink into oil, despite being denser (60 against 22 -
+     * see material.c). Oil's density has to stay low so it floats on
+     * every OTHER liquid it meets there, which makes it look lighter than
+     * sand too - a side effect of the one shared scalar, not something
+     * true about sand and oil specifically. Named directly by material id
+     * rather than given its own field: this is the only pairing density
+     * gets wrong, so a generic mechanism would cost more than it explains.
+     * Reached only past the density check above, so every other mover and
+     * every other target pay nothing for it. */
+    return !(mover_id == MAT_SAND && CELL_MATERIAL(target) == MAT_OIL);
 }
 
 /* Whether a cell exists and can be entered, without moving anything into it.
@@ -746,10 +766,11 @@ static inline bool can_enter(uint8_t mover_density, cell_t target)
  * Needed so scatter can be decided ONLY for cells that could actually fall.
  * Drawing a random number for every cell regardless would undo the single
  * biggest saving in this loop - see the note on the common path below. */
-static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density)
+static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density,
+                             uint8_t mat_id)
 {
     return row != NULL && (unsigned)nx < (unsigned)w &&
-           can_enter(density, row[nx]);
+           can_enter(density, mat_id, row[nx]);
 }
 
 /* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
@@ -761,7 +782,7 @@ static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
                            int x, int nx, int w, cell_t mover, uint8_t density)
 {
     if (to_row == NULL || (unsigned)nx >= (unsigned)w ||
-        !can_enter(density, to_row[nx])) {
+        !can_enter(density, CELL_MATERIAL(mover), to_row[nx])) {
         return false;
     }
 
@@ -818,7 +839,8 @@ static inline bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
                                const int *slide_b, cell_t grain,
                                uint8_t density, int scatter)
 {
-    if (scatter == 0 || !cell_open(prow, x + dx, w, density)) {
+    if (scatter == 0 ||
+        !cell_open(prow, x + dx, w, density, CELL_MATERIAL(grain))) {
         return false;
     }
 

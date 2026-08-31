@@ -10867,6 +10867,56 @@ static void test_oil_trapped_under_water_floats_to_the_surface(void)
         "from the other end");
 }
 
+/* The one exception to "denser sinks": sand is 60 against oil's 22, and by
+ * can_enter()'s ordinary rule that sinks straight through, the same way it
+ * sinks through water (test_sand_sinks_through_water above). can_enter()
+ * carries a named exception for exactly this pairing instead - see its own
+ * comment in sand_priv.h for why oil's density cannot simply be raised to
+ * fix this the way every other material pairing is resolved. */
+static void test_sand_floats_on_oil(void)
+{
+    fixture();
+    for (int y = 4; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, OIL);
+        }
+    }
+    sand_set(&s, 3, 3, SAND);
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_SAND, CELL_MATERIAL(sand_at(&s, 3, 4)),
+        "sand must rest on top of an oil pool rather than sink into it, "
+        "despite being denser");
+}
+
+/* The exception is named by material id, not by kind or density band, so
+ * it must not leak onto another powder that happens to share the same
+ * fate. Dirt (62) is denser than sand and gets no exception - it must
+ * keep sinking through oil exactly as the density table says. */
+static void test_dirt_still_sinks_through_oil(void)
+{
+    fixture();
+    for (int y = 4; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, OIL);
+        }
+    }
+    sand_set(&s, 3, 3, CELL_SOIL(MAT_DIRT, 1, 0));
+
+    for (int i = 0; i < 60; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_DIRT,
+        CELL_MATERIAL(sand_at(&s, 3, H - 1)),
+        "dirt is not sand, and the sand/oil exception must not have "
+        "spread to it - dirt is denser than oil and must still sink "
+        "all the way through the pool");
+}
+
 /* Lava is the first material that is a liquid AND a heat source, so it
  * is the first place the variant nibble's two meanings could collide.
  * decay != 0 would make tick_decay() read a lava cell's MASS as a
@@ -17730,6 +17780,8 @@ void run_sand_suite(void)
     RUN_TEST(test_oil_does_not_put_fire_out);
     RUN_TEST(test_water_still_puts_fire_out);
     RUN_TEST(test_oil_trapped_under_water_floats_to_the_surface);
+    RUN_TEST(test_sand_floats_on_oil);
+    RUN_TEST(test_dirt_still_sinks_through_oil);
     RUN_TEST(test_acid_dissolves_sand);
     RUN_TEST(test_acid_does_not_dissolve_its_container);
     RUN_TEST(test_acid_eats_through_stone);
