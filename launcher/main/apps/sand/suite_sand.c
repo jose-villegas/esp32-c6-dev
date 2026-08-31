@@ -14306,6 +14306,46 @@ static void test_a_strong_close_blast_can_breach_a_wall(void)
         "longer pinned, see this test's own top comment for why");
 }
 
+/* A ROLL FAILING IS NOT THE SAME AS LANDING - step_impulses()'s own
+ * comment (sand.c, the block right before the outward-push roll) spells
+ * out the bug this guards against: dropping a KIND_STATIC entry from
+ * impulse tracking the instant its per-turn outward-push roll fails,
+ * regardless of whether it has actually reached anything to rest on.
+ * Since that roll is a per-turn coin flip on `speed` rather than a
+ * threshold, it can fail on literally the FIRST turn - speed 0, forced
+ * here, guarantees it - while the dislodged cell is still hanging over
+ * open space with nothing beneath it. The only thing that ever makes a
+ * KIND_STATIC cell fall at all is the unconditional gravity-drift that
+ * runs "while an entry is tracked here at all" (that block's own
+ * comment) - so an entry dropped while still airborne would previously
+ * freeze exactly where gravity-drift happened to leave it after ONE
+ * step, floating there for the rest of the run with nothing left to
+ * ever revisit it.
+ *
+ * dir DOES NOT MATTER HERE - speed 0 means the outward-push roll can
+ * never succeed, so the only thing moving this cell at all is the
+ * unconditional gravity-drift, which ignores `dir` entirely. */
+static void test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 3, 0, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_impulse_dislodge(&s, 3, 0, 0, 0);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
+        "a dislodged KIND_STATIC cell whose very first outward-push roll "
+        "fails (speed 0 here, guaranteeing it on every turn) must still "
+        "keep falling under the unconditional gravity-drift every step "
+        "until it is genuinely supported - stopping partway down means "
+        "the failed roll dropped it from impulse tracking while it was "
+        "still airborne, exactly the bug this test exists to catch");
+}
+
 /* THE OTHER HALF OF sand_explode()'s OWN SPLIT (see sand_displace()'s own
  * comment in sand.h for the two reasons a caller might want the push
  * without the fire - correctness, for a future pure-pressure event like
@@ -19311,6 +19351,7 @@ void run_sand_suite(void)
 
     RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
     RUN_TEST(test_a_strong_close_blast_can_breach_a_wall);
+    RUN_TEST(test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails);
     RUN_TEST(test_sand_displace_alone_never_creates_fire_or_smoke);
     RUN_TEST(test_a_blast_conserves_grains);
     RUN_TEST(test_a_blast_at_the_edge_stays_in_bounds);

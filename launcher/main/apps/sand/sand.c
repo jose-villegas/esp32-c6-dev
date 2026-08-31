@@ -2179,8 +2179,55 @@ static void step_impulses(sand_t *s, int dx, int dy)
                               : 0;
         }
 
+        /* "OUT OF FLIGHT" USED TO MEAN "SETTLES EXACTLY WHERE IT IS" -
+         * dropped from tracking (not re-added to kept, below) the instant
+         * a single per-turn roll failed, regardless of whether the entry
+         * had actually landed on anything. Harmless for every kind except
+         * KIND_STATIC: a liquid or powder entry keeps falling under the
+         * ordinary sweep whether or not this loop is still tracking it,
+         * so ending the outward push the moment the roll fails costs it
+         * nothing it was not about to lose anyway. KIND_STATIC has no
+         * such fallback - the "AIRBORNE SOLIDS FALL TOO" gravity-drift
+         * just above is the ONLY thing that ever moves it once thrown,
+         * and it only runs "while an entry is tracked here at all" (that
+         * block's own comment). A roll can fail at essentially any point
+         * in the flight - even early, with plenty of `speed` left, this
+         * is a per-turn coin flip, not a threshold - so a dislodged wall
+         * chunk still hanging over open space, nowhere near anything to
+         * rest on, could lose tracking on an ordinary unlucky roll and be
+         * left floating there permanently: nothing else in this engine
+         * ever revisits a KIND_STATIC cell to ask whether it should
+         * still be falling.
+         *
+         * SUPPORTED, NOT MERELY ROLLED, IS WHAT DECIDES "SETTLED" NOW,
+         * for KIND_STATIC specifically - the same gravity-relative
+         * "is there something under it" question covered_from_above()'s
+         * neighbours and try_flare()'s own falling check both already
+         * ask elsewhere in this feature, applied here to the entry's
+         * OWN cell rather than a lava cell it might be covering. Still
+         * airborne (empty beneath, gravity-relative) keeps the entry
+         * tracked - re-added to kept exactly as the blocked branch below
+         * already does - so next step gets another unconditional
+         * gravity-drift attempt AND another chance at the outward-push
+         * roll, however small `speed` has decayed to; the roll failing
+         * no longer ends the entry's only route to eventually landing.
+         * Genuinely supported (or, for every OTHER kind, any roll
+         * failure at all) still drops it exactly as before - this only
+         * closes the gap for a KIND_STATIC entry that has not actually
+         * come to rest. Bounded the same way an ordinary fall already
+         * is: the grid has a finite height, and sand_at()'s own off-grid-
+         * is-STONE convention means even a chunk thrown off the visible
+         * edge reads as supported once it would otherwise fall forever. */
         if (!rolled_move) {
-            continue;   /* out of flight - settles exactly where it is */
+            if (materials[mat_id].kind == KIND_STATIC) {
+                const int rx = (int)((unsigned)entry.index % (unsigned)w);
+                const int ry = (int)((unsigned)entry.index / (unsigned)w);
+                if (CELL_IS_EMPTY(sand_at(s, rx + dx, ry + dy))) {
+                    s->impulse_buf[kept++] = entry;
+                    continue;   /* still airborne - keep falling */
+                }
+            }
+            continue;   /* settled - out of flight for good */
         }
 
         const int x = (int)((unsigned)entry.index % (unsigned)w);
