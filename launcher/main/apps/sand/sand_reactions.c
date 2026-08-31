@@ -392,10 +392,29 @@ covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density)
  * version this replaced.
  *
  * Stops scanning at the first EMPTY cell in that direction (nothing left
- * to push, and nothing further out needs venting either) or the edge of
- * the grid, whichever comes first - "push however many are there, cap at
- * SAND_VENT_REACH" was the exact shape asked for, not "always push
- * exactly SAND_VENT_REACH cells regardless of what is really there."
+ * to push, and nothing further out needs venting either), the first
+ * LIQUID cell, or the edge of the grid, whichever comes first - "push
+ * however many are there, cap at SAND_VENT_REACH" was the exact shape
+ * asked for, not "always push exactly SAND_VENT_REACH cells regardless
+ * of what is really there."
+ *
+ * A LIQUID STOPS THE SCAN THE SAME AS EMPTY DOES, AND IS NEVER ITSELF
+ * QUEUED - the same principle neighbor_smothers() already applies one
+ * neighbour out (a liquid neighbour never counts as sealing a cell in,
+ * see that function's own comment): a liquid sitting further along this
+ * column is not part of the SOLID lid covered_from_above() found, it is
+ * just another body that happens to be contiguous with it, and this
+ * function has no business throwing it. Concretely this matters most for
+ * another pocket of LAVA sitting along the same line (overflow resting
+ * on a crust, or a second nearby pocket lining up with this one) -
+ * before this check, vent_column() could not tell that apart from an
+ * ordinary covering wall and would throw it exactly the same way,
+ * guaranteed dislodge and all, which is how lava that was never part of
+ * THIS pocket's seal ended up flung and relocated by a vent it had
+ * nothing to do with. reaction_t.vent_chance's own "the cell itself
+ * never changes" guarantee (material.h) only ever covered the
+ * ORIGINATING lava cell try_vent() was called for; this closes the same
+ * hole for every OTHER liquid cell a column might otherwise reach.
  *
  * QUEUED FARTHEST-FIRST, same idea as the cascade relay splash_displace()
  * uses for water (step_impulses(), sand.c): can_impulse_enter() refuses a
@@ -454,7 +473,8 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int dir,
         if ((unsigned)vx >= (unsigned)w || (unsigned)vy >= (unsigned)h) {
             break;
         }
-        if (CELL_IS_EMPTY(s->cells[(size_t)vy * (size_t)w + (size_t)vx])) {
+        const cell_t vc = s->cells[(size_t)vy * (size_t)w + (size_t)vx];
+        if (CELL_IS_EMPTY(vc) || material_of(vc)->kind == KIND_LIQUID) {
             break;
         }
         depth = i;
@@ -2641,10 +2661,62 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
  * places ordinary MAT_FIRE in the first empty cardinal neighbour - see
  * emit_into_empty_neighbor() just above, which this now shares with the
  * wet-dirt stage of try_heat_transform(). Returns whether it placed
- * anything. */
+ * anything.
+ *
+ * SKIPPED OUTRIGHT WHILE THIS CELL IS STILL FALLING - reaction_t.flare's
+ * own comment (material.h) is explicit that the mechanic is "meaningless
+ * for anything that is not a static heat source with nothing above it -
+ * left at zero for everything but the one material that needs to look
+ * like it is licking a flame upward while STAYING PUT itself." Lava
+ * later got a non-zero flare too, and lava is KIND_LIQUID - it moves,
+ * including free-falling one cell per step for the whole length of a
+ * pour, which the mechanic was never designed to run against: a poured
+ * stream lands as many separate single-cell grains that each spend
+ * several steps in open air before settling, and emit_into_empty_
+ * neighbor()'s FIXED "up" first (reaction_dirs[0], not gravity-relative)
+ * finds empty air on nearly every one of those falling steps, so a tall
+ * pour rolled - and on a hit, placed - flare once per falling cell per
+ * step of fall, not once per cell that actually settled. Each successful
+ * roll is a fresh MAT_FIRE cell that then latches may_have_burning and
+ * keeps the whole reactions pass alive until it burns out and rolls its
+ * own residue chance for smoke - not yet measured against a real pour on
+ * device, but the clear suspect for lava reading as the most expensive
+ * material to pour.
+ * SUPPORTED, gravity-relative (s->last_step_dx/dy - the same per-step
+ * dithered direction the movement sweep just used, so "is there
+ * anything to fall onto" matches what the sweep itself would ask), is
+ * the same bar covered_from_above()'s own neighbours use elsewhere in
+ * this file: this is not a new predicate invented for lava, it is the
+ * SAME "does this have something under it" question, and off-grid reads
+ * as STONE (sand_at()'s own convention) so falling off the bottom edge
+ * still counts as supported rather than perpetually airborne. A settled
+ * pool's cells all have something beneath them (the floor, or more of
+ * the same pool) and flare exactly as before; a falling grain does not,
+ * and now skips the roll entirely rather than spending it on a cell that
+ * is about to move again next step regardless.
+ *
+ * KIND_STATIC IS EXEMPT FROM THIS CHECK - ember, the mechanic's original
+ * case, is defined by never moving on its own (material_kind_t's own
+ * comment: "never moves"), so "nothing beneath it" says nothing about
+ * whether it is about to fall - it never falls, supported or not, the
+ * ordinary gravity sweep does not touch KIND_STATIC at all. Applying the
+ * falling check to ember too made an unsupported (but perfectly settled,
+ * by ember's own definition of settled) ember cell refuse to flare,
+ * which is exactly backwards for the mechanic's own original case. */
 static inline bool
-try_flare(sand_t* s, int x, int y, int w, int h, uint8_t flare) {
-    if (flare == 0 || (int)(rng_next(&s->rng) & 0xFF) >= flare) {
+try_flare(sand_t* s, int x, int y, int w, int h, const material_t* mat,
+         uint8_t flare) {
+    if (flare == 0) {
+        return false;
+    }
+    if (mat->kind != KIND_STATIC) {
+        const cell_t below = sand_at(s, x + s->last_step_dx,
+                                     y + s->last_step_dy);
+        if (CELL_IS_EMPTY(below)) {
+            return false;
+        }
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= flare) {
         return false;
     }
     return emit_into_empty_neighbor(s, x, y, w, h, MAT_FIRE);
@@ -3257,7 +3329,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         acted = true;
     }
 
-    if (try_flare(s, x, y, w, h, reaction_of(grain)->flare)) {
+    if (try_flare(s, x, y, w, h, mat, reaction_of(grain)->flare)) {
         acted = true;
     }
 

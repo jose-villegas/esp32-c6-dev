@@ -11394,6 +11394,64 @@ static void test_lava_does_not_put_fire_out(void)
         "fuel nor burning itself");
 }
 
+/* reaction_t.flare (material.h) exists to look like a heat source licking
+ * a flame upward while staying PUT itself - see try_flare()'s own comment
+ * (sand_reactions.c) for the mechanic's original, ember-shaped case and
+ * why it does the wrong thing, over and over, for a material that
+ * actually moves: a poured stream of lava lands as many single-cell
+ * grains each free-falling for several steps before settling, and every
+ * one of those falling steps used to roll flare exactly as if the grain
+ * were a settled pool. Two halves in one test, same grain: it must never
+ * flare while genuinely airborne, and must still flare normally once it
+ * lands - the falling check is a temporary skip, not a permanent one. */
+static void test_falling_lava_does_not_flare(void)
+{
+    fixture();
+    sand_set(&s, 3, 0, LAVA);
+
+    bool found_fire = false;
+    for (int i = 0; i < H - 1 && !found_fire; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_fire; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_FIRE) {
+                    found_fire = true;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_FALSE_MESSAGE(found_fire,
+        "a lava grain in free fall (nothing beneath it, gravity-relative) "
+        "must not flare - try_flare() skips the roll entirely while a "
+        "non-KIND_STATIC material is still falling, which is what keeps "
+        "a long pour from rolling (and, on a hit, spawning a fresh "
+        "MAT_FIRE cell for) flare on every single step of its fall");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_LAVA),
+        "setup check: the grain must actually have reached the grid's "
+        "own floor (off-grid reads as STONE, sand_at()'s own convention) "
+        "by now, or the loop above proved nothing about landing, only "
+        "about a fixed number of steps");
+
+    for (int i = 0; i < 200 && !found_fire; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_fire; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_FIRE) {
+                    found_fire = true;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(found_fire,
+        "once the same grain has settled on the floor, it must eventually "
+        "flare like any other supported lava cell - the falling check "
+        "must only ever suppress flare while genuinely airborne, not "
+        "disable it for the rest of that cell's life");
+}
+
 static void test_steam_bubbles_up_through_standing_water(void)
 {
     water_column();
@@ -19181,6 +19239,7 @@ void run_sand_suite(void)
     RUN_TEST(test_water_freezes_lava_into_stone);
     RUN_TEST(test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag);
     RUN_TEST(test_lava_does_not_put_fire_out);
+    RUN_TEST(test_falling_lava_does_not_flare);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);
     RUN_TEST(test_bubbling_conserves_the_water_it_displaces);
     RUN_TEST(test_plain_gas_bubbles_up_through_water_too);

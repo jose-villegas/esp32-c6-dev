@@ -520,10 +520,21 @@ typedef struct {
     uint8_t quench_to;
 
     /* Chance in 256, per step, that this material emits a MAT_FIRE cell
-     * into an adjacent empty cell. Meaningless for anything that is not a
-     * static heat source with nothing above it - left at zero for
-     * everything but the one material that needs to look like it is
-     * licking a flame upward while staying put itself. */
+     * into an adjacent empty cell (try_flare(), sand_reactions.c) -
+     * meant for something that looks like it is licking a flame upward
+     * while staying PUT itself, left at zero for everything else. Ember
+     * (KIND_STATIC, never moves on its own) is the mechanic's original
+     * case; lava (KIND_LIQUID) sets it too, which is the one case where
+     * "staying put" is not guaranteed - try_flare() itself now SKIPS the
+     * roll entirely while a cell is still free-falling (nothing beneath
+     * it, gravity-relative), rather than rolling it every step of a long
+     * pour's fall, which used to make lava specifically the most
+     * expensive material to pour: many separate falling grains each
+     * spending several steps in open air, each independently rolling
+     * this every one of those steps, each successful roll latching
+     * may_have_burning for a fresh MAT_FIRE cell that then keeps burning
+     * (and eventually rolls `residue`, above, for its own smoke) long
+     * after the pour itself is done. */
     uint8_t flare;
 
     /* TRAPPED HEAT VENTS UPWARD. Chance in 256, per step, that a cell of
@@ -555,6 +566,11 @@ typedef struct {
      * itself had already rolled true read as broken on a thin, realistic
      * crust - the single-layer result of water quenching a pool's
      * surface, and the case this feature is actually judged against.
+     * NO OTHER LIQUID CHANGES EITHER - vent_column()'s own scan (sand_
+     * reactions.c) stops at the first liquid cell it meets, the same as
+     * it stops at empty, so a second pocket of lava (or any other
+     * liquid) sitting further along the same line is never mistaken for
+     * part of the seal and never thrown alongside it.
      *
      * RARE ON PURPOSE, AND RARER STILL THAN THE TABLE FIGURE BELOW SAYS -
      * step_one_burning_cell() (sand_reactions.c) rolls a SECOND,
