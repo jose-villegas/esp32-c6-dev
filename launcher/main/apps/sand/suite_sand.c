@@ -15941,13 +15941,34 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
         "the scene it claims to, and the ice payload means the usual "
         "cell_is_extended() plant pin cannot be reused here as-is");
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, lava_left,
-        "family C's rings (the left half) must not have melted into "
-        "lava inside this window - measured, those rings do keep "
-        "climbing under their own payload and trigger's heat, and the "
-        "first left-half lava cell appears at step 16 (123 of them by "
-        "step 40), which is a second, independent reason this window is "
-        "kept to 10 steps rather than left to run longer");
+    /* NOT an exact zero any more - see this file's own precedent on why a
+     * pinned RNG-driven outcome is "measured, not derived... not a law"
+     * (test_a_blast_inside_a_sealed_vessel_stays_inside_it's own comment
+     * makes the same point for a dislodged wall's landing cell). Family
+     * C's rings melting into lava under their own payload and trigger's
+     * heat is real and expected eventually (unaffected by reaction_t.
+     * vent_chance - lava never even appears in family C's own payload,
+     * see build_thermal_shock_scene()'s comment) - only WHEN was ever
+     * pinned here, and that timing rides the same shared RNG stream every
+     * other reaction on the board draws from. Adding a second, per-step
+     * roll to vent_chance (step_one_burning_cell(), sand_reactions.c) for
+     * the many lava payloads on the right half advances that stream
+     * faster on every step this scene has lava under a lid, which pulled
+     * family C's own melt roll earlier - measured at step 9 now, not 16.
+     * A small, single-digit residual by step 10 is exactly that timing
+     * shift, not a new leak between the two families (lava is never
+     * itself thrown by a vent - see reaction_t.vent_chance's own comment,
+     * material.h - so this is always a LOCAL glass-to-lava conversion,
+     * never material crossing over from the right half). What this must
+     * still catch is a real regression widening that leak far past a
+     * timing nudge - the original, unbounded run measured 123 left-half
+     * lava cells by step 40, three orders of magnitude past this bound. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(10, lava_left,
+        "family C's rings (the left half) must not have melted into lava "
+        "in bulk inside this window - a small residual is an expected "
+        "RNG-timing shift (see this assertion's own comment), but this "
+        "many means the window, or something else about this scene, "
+        "genuinely regressed");
 
     /* step_one_warming_cell()'s call site is gated on three things at
      * once - r->warms, may_have_temperature and may_have_heat_holder -

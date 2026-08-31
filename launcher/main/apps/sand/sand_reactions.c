@@ -3210,10 +3210,31 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * Independent of everything else this function does - the cell itself
      * is untouched, so ignition, conduction and flaring below all still
      * run exactly as if this had not fired. */
-    const int vent_chance = (s->vent_chance >= 0) ? s->vent_chance : rx->vent_chance;
+    /* A SECOND, INDEPENDENT ROLL ON TOP OF vent_chance, applied only to
+     * the material's own natural per-material figure - the same
+     * evaporates precedent step_one_dissolver_cell() documents above,
+     * and for the same reason: a covered pool rolls vent_chance
+     * independently for every one of ITS OWN cells that qualifies every
+     * step, and on top of that reaction_t.vent_chance's own reach
+     * (SAND_VENT_REACH) throws a lot of material once a roll lands, so a
+     * rare-looking per-cell figure still read as constant venting rather
+     * than the occasional dramatic pulse the design wants. 1-in-60 here
+     * reuses acid's own final settled figure (see step_one_dissolver_
+     * cell()'s comment on why THAT number stopped at 60, after 4 and 20
+     * both still read as too frequent on device) rather than inventing a
+     * fresh one - the same "a rare event that fires constantly across a
+     * whole board is not rare" problem, at the same board scale, earning
+     * the same answer. Effective production rate is 1-in-256 (the table
+     * figure) times 1-in-60, about 1 in 15,360 per covered cell per step.
+     * Does not touch sand_set_vent_chance()'s override path - forcing
+     * this to 255 for a test still gets a single, deterministic roll,
+     * exactly as sand_set_evaporates(s, 255) does for acid. */
+    const bool vent_per_material = s->vent_chance < 0;
+    const int vent_chance = vent_per_material ? rx->vent_chance : s->vent_chance;
     if (vent_chance != 0 &&
         covered_from_above(s, x, y, w, h, mat->density) &&
-        (int)(rng_next(&s->rng) & 0xFF) < vent_chance) {
+        (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
+        (!vent_per_material || (rng_next(&s->rng) % 60) == 0)) {
         try_vent(s, x, y, w, h);
         acted = true;
     }
