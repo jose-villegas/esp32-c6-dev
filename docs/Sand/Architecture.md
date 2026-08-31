@@ -488,32 +488,40 @@ breaks no behaviour and nothing else would notice.
   nearly the old ramp's own endpoints, 0x4A4F5A and 0x767D8C.
 - **Hatched** (glass, metal) draws two families of single-pixel diagonals,
   one every eight pixels each way, over three colours: the body, a quiet
-  **grain** that does not move, and a brighter **shine** that does. The
-  shine is a band that travels along the diagonal on a clock, not aimed by
-  gravity or tilt - an earlier version aligned it to the board's tilt
-  instead and it never became visible, two diagonals differing only in
-  which way they lean being too fine a difference for the eye to catch on
-  this grid. Movement reads unmistakably where direction did not, which is
-  most of what sells it as a surface catching light rather than a texture
-  printed on one.
+  **grain** that does not move or care about gravity, and a brighter
+  **shine** that does both. The shine is a band that travels on a clock
+  AND sweeps along whichever direction gravity currently points - a Q8
+  unit vector (`material_shine_direction()`) recomputed once a frame and
+  projected onto each pixel, so tilting the board visibly rotates which
+  way the band runs rather than merely picking between two fixed
+  diagonals. That binary version is what an earlier attempt tried first,
+  and it never became visible: two diagonals differing only in which way
+  they lean was too fine a difference for the eye to catch on this grid.
+  Movement was what finally sold it as a surface catching light rather
+  than a texture printed on one; a continuously rotating angle is the
+  second attempt at making direction read too, layered on top of the
+  movement rather than instead of it.
 
-  Both were tried the other way round first and neither worked. Wide bands
-  buried the pane - half the pixels were line and a quarter were highlight.
-  And the lines mixed *toward the background*, which is the obvious thing
-  to do for something see-through and came out as no pattern at all: a
-  dark line on a dark pane is invisible. Light caught on glass is lighter
-  than the glass, so they lift toward white instead.
+  Both the grain and the shine's WIDTH were tried the other way round
+  first and neither worked. Wide bands buried the pane - half the pixels
+  were line and a quarter were highlight. And the lines mixed *toward the
+  background*, which is the obvious thing to do for something see-through
+  and came out as no pattern at all: a dark line on a dark pane is
+  invisible. Light caught on glass is lighter than the glass, so they lift
+  toward white instead.
 
   Lines are measured in screen pixels so they run unbroken from one cell
   into the next. Hatched is the one pattern that cannot be constant-folded
   and the only one that does per-pixel work.
 
-  Metal reuses this same mechanism with no gravity or variant involved at
-  all - it has no variant to shade a reflection by, since an extended
-  material's low nibble names WHICH one it is rather than holding a shade
-  (see `MAT_EXTENDED` above). Its grain and shine are each one constant
-  colour rather than glass's per-heat ramp, and unlike glass it has no
-  per-heat edge dimming either, for the same reason.
+  Metal reuses this same mechanism with no variant involved at all - it
+  has no variant to shade a reflection by, since an extended material's
+  low nibble names WHICH one it is rather than holding a shade (see
+  `MAT_EXTENDED` above). Its grain and shine are each one constant colour
+  rather than glass's per-heat ramp, and unlike glass it has no per-heat
+  edge dimming either, for the same reason - but it gets the same
+  gravity-following shine angle glass does, since that mechanism has never
+  depended on a variant to begin with.
 
 All of it happens *inside* a cell's block. The dirty-run tracking works on
 grid cells, so a pattern made of whole cells would break every run into

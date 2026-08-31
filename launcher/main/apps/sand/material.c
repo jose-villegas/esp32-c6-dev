@@ -1996,6 +1996,26 @@ material_set_gravity(int gx, int gy) {
     }
 }
 
+/* See this function's own declaration in material.h for what it is for and
+ * why it is a separate, stateless function rather than another table filled
+ * alongside liquid_spec[] above.
+ *
+ * Same MINUS-gravity unit vector material_set_gravity() computes for the
+ * specular table, just handed back to the caller instead of dotted against
+ * a fixed set of edge normals - a travelling shine has no mask of edge bits
+ * to look one up by, only a direction to sweep along. */
+void
+material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
+    const int len = im_len(gx, gy);
+    if (len == 0) {
+        *ux_q8 = 181;
+        *uy_q8 = 181;
+        return;
+    }
+    *ux_q8 = (-gx * 256) / len;
+    *uy_q8 = (-gy * 256) / len;
+}
+
 /*=============================================================================
  * WATER'S FOAM: gathered at crevices, never on a flat run.
  *
