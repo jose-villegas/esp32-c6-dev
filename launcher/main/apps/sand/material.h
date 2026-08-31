@@ -1372,6 +1372,23 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
  * gravity's DIRECTION is the specular table above. */
 void material_set_gravity(int gx, int gy);
 
+/* The Q8 unit vector a travelling shine should sweep along, for this frame's
+ * gravity - what turns paint_row_n()'s HATCHED shine band from a fixed
+ * diagonal into one that tracks the way the board is held.
+ *
+ * MINUS gravity, same convention liquid_spec's highlight above uses: the
+ * shine sweeps toward wherever up currently is, the same direction real
+ * light would slide across a tilted reflective surface.
+ *
+ * Pure and stateless, unlike material_set_gravity() - there is no per-cell
+ * table to fill ahead of a hot loop, just two numbers the caller reads once
+ * a frame and carries into paint_row_n() itself (see shine_ux_q8/shine_uy_q8
+ * there). Degenerate input (flat, or free fall - `im_len(gx, gy) == 0`) has
+ * no "up" to sweep toward, so it returns the plain (1, 1) diagonal the shine
+ * always travelled before gravity had any say in it, rather than inventing
+ * a direction nothing measured. */
+void material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8);
+
 /* Called once per frame, before painting, with a value that climbs steadily
  * over real time - see app_sand.c's own FOAM_PHASE_MS for how it derives one
  * from dt_ms.

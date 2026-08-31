@@ -5836,6 +5836,95 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
         "light now");
 }
 
+/* material_shine_direction()'s degenerate case: no gravity to sweep toward,
+ * so it must hand back the plain (1, 1) diagonal the shine always travelled
+ * before gravity had any say in it - not (0, 0), which would collapse the
+ * whole band to a single unmoving phase across every pixel of a cell. */
+static void test_shine_direction_holds_the_old_diagonal_with_no_gravity(void)
+{
+    int ux_q8 = 0, uy_q8 = 0;
+    material_shine_direction(0, 0, &ux_q8, &uy_q8);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(181, ux_q8,
+        "flat or free fall must fall back to the original diagonal, not "
+        "collapse the shine's direction to nothing");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(181, uy_q8, "same for the y half of it");
+}
+
+/* The shine sweeps AWAY from gravity, the same MINUS-gravity convention
+ * liquid_spec's rim highlight uses (test_a_liquid_rim_catches_the_light_
+ * from_above just above pins that one's sign) - light comes from "up",
+ * whichever way up currently is. */
+static void test_shine_direction_points_opposite_gravity(void)
+{
+    int ux_q8 = 999, uy_q8 = 999;
+
+    material_shine_direction(0, 1000, &ux_q8, &uy_q8);
+    TEST_ASSERT_TRUE_MESSAGE(uy_q8 < -200,
+        "gravity straight down must sweep the shine straight up");
+    TEST_ASSERT_TRUE_MESSAGE(ux_q8 > -20 && ux_q8 < 20,
+        "and put none of that sweep sideways");
+
+    material_shine_direction(1000, 0, &ux_q8, &uy_q8);
+    TEST_ASSERT_TRUE_MESSAGE(ux_q8 < -200,
+        "gravity pointing right must sweep the shine left");
+    TEST_ASSERT_TRUE_MESSAGE(uy_q8 > -20 && uy_q8 < 20,
+        "and put none of that sweep vertically");
+}
+
+/* A genuine ANGLE, not a choice between a couple of fixed diagonals - the
+ * one thing an earlier, abandoned attempt at gravity-linked shine never
+ * had (see paint_row_n()'s own comment on why that version was dropped).
+ * A gravity vector halfway between two axes must sweep the shine halfway
+ * between them too, not snap to whichever axis is closer. */
+static void test_shine_direction_is_a_genuine_angle_not_a_snap(void)
+{
+    int axis_ux_q8, axis_uy_q8, diag_ux_q8, diag_uy_q8;
+
+    material_shine_direction(1000, 0, &axis_ux_q8, &axis_uy_q8);
+    material_shine_direction(1000, 1000, &diag_ux_q8, &diag_uy_q8);
+
+    TEST_ASSERT_TRUE_MESSAGE(diag_uy_q8 < -20,
+        "gravity split evenly between right and down must still sweep the "
+        "shine somewhat upward, not only leftward like the pure-right case "
+        "above - a snap-to-nearest-axis implementation would leave this at "
+        "zero");
+    TEST_ASSERT_TRUE_MESSAGE(diag_ux_q8 != axis_ux_q8,
+        "and the sideways component must differ from the pure-axis case - "
+        "splitting gravity's magnitude across two axes weakens each");
+}
+
+/* Whatever direction comes out must actually be a unit vector - im_len()'s
+ * own ~4% approximation (material_set_gravity() trusts the same thing for
+ * the same reason) is the only slack allowed, not an arbitrary scale that
+ * would make the shine sweep faster or slower depending on which way the
+ * board happens to be tilted. */
+static void test_shine_direction_is_unit_length(void)
+{
+    static const int gxs[] = { 1000, 1000, 0, -700, 300 };
+    static const int gys[] = { 0, 1000, -1000, 400, -900 };
+
+    for (unsigned i = 0; i < sizeof gxs / sizeof gxs[0]; i++) {
+        int ux_q8, uy_q8;
+        material_shine_direction(gxs[i], gys[i], &ux_q8, &uy_q8);
+
+        /* im_len()'s error swings both ways with angle - it UNDERSHOOTS
+         * the true length by about 1% on an exact diagonal and OVERSHOOTS
+         * it by close to 8% around a 2:1 ratio (r=0.4 is this shape's own
+         * worst case; see im_len()'s own comment in intmath.h for the
+         * formula). Dividing 256 by an over-long len under-shoots this
+         * vector's own magnitude and vice versa, so the honest tolerance
+         * this test can hold it to is [256/1.08, 256/0.99], not a tight
+         * band around 256 - anything outside THAT is a real bug (wrong
+         * scale, or gx/gy swapped for x/y). */
+        const long mag_sq = (long)ux_q8 * ux_q8 + (long)uy_q8 * uy_q8;
+        char why[64];
+        snprintf(why, sizeof why, "gravity (%d, %d)", gxs[i], gys[i]);
+        TEST_ASSERT_TRUE_MESSAGE(mag_sq > 230L * 230L && mag_sq < 265L * 265L,
+            why);
+    }
+}
+
 /*=============================================================================
  * LOCAL DEPTH - the depth signal now follows each puddle's own shape
  * rather than a fixed screen-position gradient. See LOCAL DEPTH's own long
@@ -19894,6 +19983,10 @@ void run_sand_suite(void)
     RUN_TEST(test_only_a_liquid_interior_reads_depth);
     RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
+    RUN_TEST(test_shine_direction_holds_the_old_diagonal_with_no_gravity);
+    RUN_TEST(test_shine_direction_points_opposite_gravity);
+    RUN_TEST(test_shine_direction_is_a_genuine_angle_not_a_snap);
+    RUN_TEST(test_shine_direction_is_unit_length);
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
     RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
     RUN_TEST(test_a_same_row_reset_commits_but_a_different_row_does_not);
