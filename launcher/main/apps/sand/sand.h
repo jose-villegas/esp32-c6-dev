@@ -274,6 +274,20 @@ typedef struct {
      * otherwise bare board would simply have been skipped for ever. */
     bool     may_have_withering;
 
+    /* And its own flag again for condensing (reaction_t.condenses - steam
+     * is the only one today), for the same reason may_have_dissolver and
+     * may_have_withering each got theirs: condensing is not a rider on
+     * anything else. `boils` needs no such flag - it only ever gets read
+     * from inside conduct_heat(), which is already reached through
+     * may_have_burning - but condensing has to keep being checked for as
+     * long as any steam exists on the board, whether or not anything is
+     * burning, dissolving, tempered, wet, falling or withering. Without
+     * its own flag, a board holding nothing but a drifting cloud of steam
+     * would have sand_step_reactions() stop running the moment nothing
+     * else gave it a reason to, and the steam would sit there forever,
+     * never getting a chance to condense. */
+    bool     may_have_condenser;
+
     /* See sand_set_soak(). 0, the default, means nothing soaks. */
     int      soak;
 
@@ -342,6 +356,8 @@ typedef struct {
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
     int      vent_chance;  /* see sand_set_vent_chance() */
+    int      boils;        /* see sand_set_boils() */
+    int      condenses;    /* see sand_set_condenses() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -953,6 +969,34 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed);
  * not a measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
 
+/* QUENCHING A FLAME - acid putting out fire is not water's clean,
+ * deterministic flash to steam (see step_one_burning_cell(),
+ * sand_reactions.c): unconditionally leaving a cell of gas or smoke
+ * behind every single time read as too busy on a board where acid keeps
+ * meeting fire, the same over-frequent complaint that shaped `evaporates`
+ * and `fizz` down to their own current, much rarer figures. Two
+ * independent rolls, not one - "does anything visible happen at all"
+ * first, and only then "which of the two it is":
+ *
+ * SAND_ACID_QUENCH_RESIDUE_CHANCE - chance in 256 that quenching a flame
+ * with acid leaves ANY residue behind, instead of the flame simply going
+ * out with nothing left to see (the same silent-clear fallback fire's own
+ * `residue` field already uses when ITS roll misses). A miss here is not
+ * a bug - it is acid putting a fire out cleanly, which is allowed to be
+ * the common case.
+ *
+ * SAND_ACID_QUENCH_SMOKE_CHANCE - chance in 256 that, given residue DOES
+ * happen, it is smoke rather than gas - biased toward smoke rather than
+ * fizz's even coin flip (step_one_dissolver_cell()'s residue pick),
+ * because this puff comes from a flame going out, and smoke is what a
+ * dying flame is already understood to leave (reaction_t.residue, just
+ * above) - gas is still possible, just the less likely of the two here.
+ *
+ * Both starting points, not measured - tune on device like every other
+ * constant here. */
+#define SAND_ACID_QUENCH_RESIDUE_CHANCE 96
+#define SAND_ACID_QUENCH_SMOKE_CHANCE   180
+
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /
  * SAND_EXPLODE_CORE_DIVISOR`. Explosion-specific, unlike the two constants
@@ -1495,6 +1539,30 @@ void sand_set_conduction(sand_t *s, int chance);
  * being tuned. */
 void sand_set_vent_chance(sand_t *s, int chance);
 #define SAND_VENT_CHANCE_PER_MATERIAL (-1)
+
+/* How often conducted heat that has already reached a liquid (see
+ * conduct_heat(), sand_reactions.c) actually boils it into steam that
+ * same step, as a chance in 256 - see material.h's reaction_t.boils
+ * field. A second roll on top of the `conducts` roll that got the heat
+ * there in the first place, not a replacement for it. Defaults to
+ * SAND_BOILS_PER_MATERIAL (each material's own table figure). Without an
+ * override, a test that wants to watch water resist boiling for a while
+ * uses the real, deliberately low figure it is tuned to; a test that
+ * wants a deterministic one-step boil forces this to 255 instead, the
+ * same reasoning sand_set_conduction()'s own override gives. */
+void sand_set_boils(sand_t *s, int chance);
+#define SAND_BOILS_PER_MATERIAL (-1)
+
+/* How often a 2x2 square of one material collapses into a single cell of
+ * another, per step, as a chance in 256 - see material.h's reaction_t.
+ * condenses field and step_one_condensing_cell() (sand_reactions.c).
+ * Defaults to SAND_CONDENSES_PER_MATERIAL (each material's own table
+ * figure - steam's own deliberately rare one, today). A test that wants
+ * a deterministic one-step condensation forces this to 255 instead of
+ * looping a number of steps scaled to however rare the real figure ends
+ * up being tuned. */
+void sand_set_condenses(sand_t *s, int chance);
+#define SAND_CONDENSES_PER_MATERIAL (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,

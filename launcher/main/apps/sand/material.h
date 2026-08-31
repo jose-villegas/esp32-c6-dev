@@ -500,6 +500,33 @@ typedef struct {
      * material that exists to be a heat conductor. */
     uint8_t conducts;
 
+    /* Chance in 256, per step, that a liquid conduct_heat() (sand_reactions.
+     * c) has already decided conducted heat reaches THIS step actually
+     * boils it into steam - a second roll, not the one `conducts` already
+     * made getting the heat there. 0, the default, means immune to
+     * conducted-heat boiling entirely; a liquid opts in by setting a
+     * nonzero figure, same idiom as `dissolves`/`vent_chance` below.
+     *
+     * Water sets a low figure so a poured stream can occasionally outpace
+     * evaporation over a hot stone crust rather than every drop flashing
+     * to steam the instant heat arrives. Acid, which also qualifies for
+     * conduct_heat()'s boiling branch, sets 255 (effectively always) so
+     * its own pre-existing instant-boil behaviour is unchanged now that
+     * this field exists to gate it. */
+    uint8_t boils;
+
+    /* What a `boils` roll above turns this liquid into - a material_id_t,
+     * narrowed, same idiom as `quench_to`. 0 means MAT_STEAM, so water
+     * (and every other liquid that never sets this) keeps the original,
+     * literal reading of "boils". Acid overrides it to MAT_GAS: acid
+     * boiling through a wall is not water and has no business leaving
+     * the same white kettle-steam behind - it already leaves MAT_GAS
+     * everywhere else it evaporates (step_one_dissolver_cell()'s
+     * `evaporates` roll, `fizz`'s dissolving residue), and conducted-heat
+     * boiling was the one path still hardcoded to steam regardless of
+     * which liquid was on the far side of the wall. */
+    uint8_t boils_to;
+
     /* Chance in 256 that a burnt-out cell of this material leaves
      * MAT_SMOKE behind instead of simply clearing.
      *
@@ -609,6 +636,24 @@ typedef struct {
      * neighbour required, unlike boiling. 0, the default, means never;
      * only acid sets it. */
     uint8_t evaporates;
+
+    /* The inverse of evaporating: chance in 256, per step, that a 2x2
+     * square of four cells all holding this same material COLLAPSES into
+     * a single cell of `condenses_to`, at the square's own top-left
+     * corner, with the other three cleared to empty. 0, the default,
+     * means never; only steam sets it, turning a stray puff quietly back
+     * into a little water.
+     *
+     * Deliberately not a real thermal model - no cold surface to check
+     * for, no heat reading involved - which is what keeps this a rare
+     * cosmetic touch (fake condensation) rather than a second boiler to
+     * tune. See step_one_condensing_cell() in sand_reactions.c. */
+    uint8_t condenses;
+
+    /* What a successful `condenses` roll above produces - a
+     * material_id_t, narrowed, the same relationship `quench_to` has with
+     * its own trigger field. Meaningless while `condenses` is 0. */
+    uint8_t condenses_to;
 
     /* What HEAT alone turns this material into, without burning it, and
      * the chance in 256 per step per adjacent heat source that it does.

@@ -183,6 +183,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->vent_chance  = SAND_VENT_CHANCE_PER_MATERIAL;   /* see sand_set_vent_chance() */
+    s->boils        = SAND_BOILS_PER_MATERIAL;         /* see sand_set_boils() */
+    s->condenses    = SAND_CONDENSES_PER_MATERIAL;     /* see sand_set_condenses() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1310,6 +1312,24 @@ void sand_set_vent_chance(sand_t *s, int chance)
         s->vent_chance = SAND_VENT_CHANCE_PER_MATERIAL;
     } else {
         s->vent_chance = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_boils(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->boils = SAND_BOILS_PER_MATERIAL;
+    } else {
+        s->boils = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_condenses(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->condenses = SAND_CONDENSES_PER_MATERIAL;
+    } else {
+        s->condenses = chance > 255 ? 255 : chance;
     }
 }
 

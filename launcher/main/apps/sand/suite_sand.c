@@ -3510,6 +3510,92 @@ static void test_quenching_costs_the_water_a_unit_of_mass(void)
         "should cost a pot a sip of water per step boiled, not a gulp");
 }
 
+/* MAT_FIRE.quench_to is MAT_STEAM (material.c) - water's own figure -
+ * but step_one_burning_cell() substitutes the QUENCHING liquid's own
+ * boils_to when that liquid is acid, and then, unlike water's clean
+ * deterministic flash to steam, rolls twice more - see
+ * SAND_ACID_QUENCH_RESIDUE_CHANCE / SAND_ACID_QUENCH_SMOKE_CHANCE's own
+ * comment (sand.h) for why: whether anything is left behind at all, and
+ * if so, gas or smoke (biased toward smoke). 2000 independent fire/acid
+ * pairs, one step, counted - the same loose statistical-bias shape
+ * test_water_wins_the_dilution_more_often_than_acid_does already uses for
+ * SAND_ACID_DILUTE_TO_WATER_CHANCE, for the same reason: asserting on the
+ * bias itself, not a single sample, and without hard-coding exact counts
+ * a future retune of either constant would break. */
+#define QUENCH_W 2000
+static uint8_t quench_cells[QUENCH_W * 2];
+static sand_t  quench_sim;
+
+static void acid_quench_fixture(void)
+{
+    sand_init(&quench_sim, quench_cells, QUENCH_W, 2, 11u);
+    sand_set_mobility(&quench_sim, 0);   /* keep fire from rising away
+                                          * before reactions quenches it
+                                          * this same step - same
+                                          * technique
+                                          * test_creating_steam_arms_the_gas_pass
+                                          * already uses */
+    for (int x = 0; x < QUENCH_W; x++) {
+        sand_set(&quench_sim, x, 0, FIRE);
+        sand_set(&quench_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+}
+
+static void test_acid_quenching_fire_never_leaves_steam(void)
+{
+    acid_quench_fixture();
+    sand_step(&quench_sim, 0, 1000, 0);
+
+    for (int x = 0; x < QUENCH_W; x++) {
+        TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_STEAM,
+            CELL_MATERIAL(sand_at(&quench_sim, x, 0)),
+            "acid quenching fire must never leave MAT_STEAM behind - "
+            "steam is water's own byproduct");
+    }
+}
+
+static void test_acid_quenching_fire_sometimes_leaves_nothing(void)
+{
+    acid_quench_fixture();
+    sand_step(&quench_sim, 0, 1000, 0);
+
+    int empty = 0;
+    for (int x = 0; x < QUENCH_W; x++) {
+        if (CELL_IS_EMPTY(sand_at(&quench_sim, x, 0))) {
+            empty++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, empty,
+        "SAND_ACID_QUENCH_RESIDUE_CHANCE must be able to miss - some acid "
+        "quenches must leave the flame simply out, with nothing behind, "
+        "not a residue cell every single time");
+}
+
+static void test_acid_quenching_fire_favours_smoke_over_gas(void)
+{
+    acid_quench_fixture();
+    sand_step(&quench_sim, 0, 1000, 0);
+
+    int smoke = 0;
+    int gas   = 0;
+    for (int x = 0; x < QUENCH_W; x++) {
+        const uint8_t m = CELL_MATERIAL(sand_at(&quench_sim, x, 0));
+        if (m == MAT_SMOKE) {
+            smoke++;
+        } else if (m == MAT_GAS) {
+            gas++;
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, gas,
+        "setup: acid quenching fire must sometimes leave gas too, not "
+        "only smoke, or the bias below proves nothing");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(gas, smoke,
+        "SAND_ACID_QUENCH_SMOKE_CHANCE must favour smoke over gas when "
+        "acid quenches a flame");
+}
+
 static void test_steam_rises_and_disperses(void)
 {
     fixture();
@@ -7520,6 +7606,11 @@ static void test_hot_gas_warms_what_it_touches(void)
 {
     fixture();
     sand_clear(&s);
+    /* This scene refills a whole row of steam every step for 300 steps -
+     * plenty of chances for a 2x2 patch to condense away before it ever
+     * reaches the stone below it, which has nothing to do with what this
+     * test exists to measure (see reaction_t.condenses). */
+    sand_set_condenses(&s, 0);
 
     /* A stone slab with nothing but steam against it - no fire, no
      * conduction path, nothing else that could account for the heat. */
@@ -11567,6 +11658,11 @@ static void test_stone_conducts_heat_into_water_beyond_it(void)
                                  * technique used throughout this
                                  * section */
     sand_set_conduction(&s, 255);
+    sand_set_boils(&s, 255);   /* deterministic single-step boil once
+                                 * conducted heat arrives - see
+                                 * reaction_t.boils's own comment for the
+                                 * real, much slower figure this
+                                 * overrides */
     sand_set(&s, 3, 3, FIRE);
     sand_set(&s, 4, 3, STONE);
     /* Floor plus both down-diagonals under the water, not the floor
@@ -11809,6 +11905,110 @@ static void test_boiling_converts_the_cell_nearest_the_heat(void)
         "its own way up by bubbling rather than being conjured at the "
         "top of the column. A surface cell boiling first would mean the "
         "old against-gravity walk had come back");
+}
+
+/* reaction_t.boils gates conduct_heat()'s conversion above behind a
+ * second roll, so a liquid can resist conducted-heat boiling instead of
+ * flashing to steam the instant heat reaches it - see this field's own
+ * comment in material.h. sand_set_boils(0) must be able to disable that
+ * conversion completely, the same override discipline every other
+ * chance field in this file already gives (sand_set_conduction(0) seals
+ * a wall shut, sand_set_vent_chance(0) seals lava in for good, ...) -
+ * proof this is a real second condition and not decoration. */
+static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    sand_set_conduction(&wide, 255);
+    sand_set_boils(&wide, 0);
+    sand_set_mobility(&wide, 0);
+
+    const int x = 5;
+    const int fire_y = 6, stone_y = 5, water_y = 4;
+
+    sand_set(&wide, x, fire_y, FIRE);
+    sand_set(&wide, x, stone_y, STONE);
+    sand_set(&wide, x, water_y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    for (int y = water_y; y <= fire_y; y++) {
+        sand_set(&wide, x - 1, y, STONE);
+        sand_set(&wide, x + 1, y, STONE);
+    }
+
+    for (int i = 0; i < 50; i++) {
+        sand_step(&wide, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&wide, x, water_y)),
+        "sand_set_boils(0) must stop conducted heat from ever boiling a "
+        "liquid, even with conduction itself forced to 255 and fifty "
+        "steps to try");
+}
+
+/* And boiling a liquid that DOES pass its `boils` roll must hand the new
+ * steam less than a full cell's own worth of life - see
+ * BOILED_STEAM_LIFE's own comment in sand_reactions.c. The point of the
+ * reduction is a boiler that visibly makes less steam to look at, not
+ * merely the same amount arriving slower. */
+static void test_boiled_steam_starts_below_full_life(void)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    sand_set_conduction(&wide, 255);
+    sand_set_boils(&wide, 255);
+    sand_set_mobility(&wide, 0);
+
+    const int x = 5;
+    const int fire_y = 6, stone_y = 5, water_y = 4;
+
+    sand_set(&wide, x, fire_y, FIRE);
+    sand_set(&wide, x, stone_y, STONE);
+    sand_set(&wide, x, water_y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    for (int y = water_y; y <= fire_y; y++) {
+        sand_set(&wide, x - 1, y, STONE);
+        sand_set(&wide, x + 1, y, STONE);
+    }
+
+    sand_step(&wide, 0, 1000, 0);
+
+    const cell_t c = sand_at(&wide, x, water_y);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(c),
+        "sand_set_boils(255) must still boil deterministically in one "
+        "step, exactly as boiling always has");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(MATERIAL_VARIANTS - 1, CELL_VARIANT(c),
+        "boiling must hand the new steam cell less than a full cell's "
+        "worth of life");
+}
+
+/* conduct_heat()'s boiling branch used to hand every liquid MAT_STEAM
+ * regardless of which one was actually boiling - acid conducted through
+ * a wall came out as the same white kettle-steam water does, instead of
+ * the MAT_GAS acid produces everywhere else it evaporates (`evaporates`,
+ * `fizz` - see reaction_t.boils_to's own comment in material.h). Same
+ * scene as test_boiled_steam_starts_below_full_life just above, water
+ * swapped for acid, MAT_STEAM swapped for MAT_GAS. */
+static void test_boiling_acid_produces_gas_not_steam(void)
+{
+    sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
+    sand_set_conduction(&wide, 255);
+    sand_set_boils(&wide, 255);
+    sand_set_mobility(&wide, 0);
+
+    const int x = 5;
+    const int fire_y = 6, stone_y = 5, acid_y = 4;
+
+    sand_set(&wide, x, fire_y, FIRE);
+    sand_set(&wide, x, stone_y, STONE);
+    sand_set(&wide, x, acid_y, CELL_MAKE(MAT_ACID, MASS_MAX));
+    for (int y = acid_y; y <= fire_y; y++) {
+        sand_set(&wide, x - 1, y, STONE);
+        sand_set(&wide, x + 1, y, STONE);
+    }
+
+    sand_step(&wide, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&wide, x, acid_y)),
+        "conducted heat boiling acid must leave MAT_GAS behind, the same "
+        "byproduct acid leaves everywhere else it evaporates - not "
+        "MAT_STEAM, which is water's own byproduct");
 }
 
 static void test_the_boiler_end_to_end(void)
@@ -12518,6 +12718,10 @@ static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
 {
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_mobility(&wide, 0);
+    /* This measures CONDUCTION speed, not water's own new resistance to
+     * boiling once heat arrives - forced to 255 so a slow real `boils`
+     * figure cannot be mistaken for slow conduction. */
+    sand_set_boils(&wide, 255);
 
     const int y = 2;
     const int lava_x  = 1;
@@ -13207,19 +13411,26 @@ static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
 static void test_wood_and_steam_grain_count_is_conserved(void)
 {
     fixture();
-    /* No reaction side-effects to worry about here, unlike ember: wood
-     * never burns on its own (it has no burning neighbour in this
-     * scene) and steam does not react at all (reactions[MAT_STEAM] is
-     * all-zero), so may_have_burning never even arms and
-     * sand_step_reactions() early-returns every step - this is purely
-     * a movement (or, for wood, non-movement) conservation check.
-     * Ember is deliberately NOT covered here: its flare
+    /* Condensation forced off: this is purely a movement (or, for wood,
+     * non-movement) conservation check, and reaction_t.condenses is NOT
+     * one-for-one the way an ordinary material swap is - a 2x2 patch of
+     * steam collapsing into a single water cell is a real, deliberate
+     * loss of three grains, which is exactly what this test exists to
+     * catch when it is a BUG rather than a feature working as designed.
+     * With it off, wood never burns on its own (it has no burning
+     * neighbour in this scene) and steam has nothing left to react with
+     * (its only other field, `warms`, needs a heat-holder neighbour this
+     * scene has none of), so may_have_burning and may_have_condenser
+     * both stay clear and sand_step_reactions() early-returns every
+     * step. Ember is deliberately NOT covered here: its flare
      * (reaction_t.flare) can spawn a brand new MAT_FIRE cell out of an
      * empty neighbour, which is the feature working as designed
      * (test_an_ember_flares_fire_into_an_empty_neighbour), not a
      * conservation violation - but it does mean a strict grain-count
      * invariant, the kind this test checks, does not apply to ember the
      * way it does to every other material here. */
+    sand_set_condenses(&s, 0);
+
     for (int y = 1; y <= 2; y++) {
         for (int x = 1; x <= 3; x++) {
             sand_set(&s, x, y, WOOD);
@@ -13244,6 +13455,81 @@ static void test_wood_and_steam_grain_count_is_conserved(void)
                 "gravity direction, the same as every other material");
         }
     }
+}
+
+/* Fake condensation - reaction_t.condenses/condenses_to. A really small,
+ * deliberately rare per-step chance in real play, so a test that wants
+ * to actually see it happen forces the override to 255 instead of
+ * waiting on the real figure - the same discipline sand_set_boils() and
+ * every other chance override in this file already gives.
+ *
+ * The 2x2 pocket is sealed in stone on every side a stationary gas cell
+ * could otherwise be moved out of by sand_step_gas() (which runs BEFORE
+ * sand_step_reactions() within one sand_step() call - see sand.c): stone
+ * above the top row blocks a rise attempt, stone left of the left column
+ * and right of the right column blocks the cross-flow spread pass. Without
+ * that sealing, a single step's own gas movement could scatter the block
+ * before the condensation check ever saw it intact. */
+static void test_a_2x2_block_of_steam_condenses_into_one_water_cell(void)
+{
+    fixture();
+    sand_set_condenses(&s, 255);
+    sand_set_mobility(&s, 0);
+
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 2, 4, STONE);
+    sand_set(&s, 5, 3, STONE);
+    sand_set(&s, 5, 4, STONE);
+
+    sand_set(&s, 3, 3, STEAM);
+    sand_set(&s, 4, 3, STEAM);
+    sand_set(&s, 3, 4, STEAM);
+    sand_set(&s, 4, 4, STEAM);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "a forced roll must condense the square into water at its own "
+        "top-left corner");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 3)),
+        "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 4)),
+        "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 4)),
+        "and clear the other three corners of the square");
+}
+
+/* Three matching corners and a fourth cell that is NOT steam (stone,
+ * here, not left empty - an empty fourth cell risks a neighbouring gas
+ * cell sliding into it during the very same step's gas pass, before the
+ * reactions pass ever gets to look, which would turn this into an
+ * accidental positive instead of the negative it is meant to be) must
+ * never condense, no matter how the roll would have gone. */
+static void test_condensation_needs_a_genuine_2x2_square(void)
+{
+    fixture();
+    sand_set_condenses(&s, 255);
+    sand_set_mobility(&s, 0);
+
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 2, 4, STONE);
+    sand_set(&s, 5, 3, STONE);
+    sand_set(&s, 5, 4, STONE);
+
+    sand_set(&s, 3, 3, STEAM);
+    sand_set(&s, 4, 3, STEAM);
+    sand_set(&s, 3, 4, STEAM);
+    sand_set(&s, 4, 4, STONE);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "three steam cells beside one that is not steam must never "
+        "condense, even with the roll forced to succeed every time");
 }
 
 /* --- dirty rows: nothing changes without saying so ---------------------- */
@@ -15502,6 +15788,13 @@ static void test_the_smoke_and_steam_scene_stays_a_gas_screen(void)
     sand_t s;
     sand_init(&s, big, REAL_W, REAL_H, 31u);
     sand_enable_sleeping(&s, blocks);
+    /* This scene's whole point is a screen where every cell is one gas
+     * or the other, conserved - and reaction_t.condenses genuinely is
+     * not conserving: a 2x2 patch of steam collapsing into one water
+     * cell is a real, deliberate loss of three cells. Forced off so
+     * that real, working feature does not read as this test's cells
+     * "quietly emptying into something else". */
+    sand_set_condenses(&s, 0);
 
     build_smoke_and_steam_scene(&s);
     const int total = REAL_W * REAL_H;
@@ -16047,7 +16340,7 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
  * "Almost" is the honest word, and it is why the host test below asserts
  * a FLOOR on the count rather than an equality. Measured: the count sits
  * exactly at its window-start value for the first twenty steps of the
- * measured window and then starts climbing, reaching 8343 from 8280 by
+ * measured window and then starts climbing, reaching 8287 from 8280 by
  * the end of it - the boil has by then opened enough gaps in the water
  * above the slab for flare to reach them. An equality would simply fail
  * here - and it is worth knowing that it held for the shorter settle an
@@ -16106,9 +16399,13 @@ static void build_boiler_scene(sand_t *s)
  * measured window - four intervals, so the per-quarter loss assertions
  * below can catch a basin that boils hard at first and then tails off,
  * which a single before/after comparison could not. Measured, the four
- * quarters lose 206, 211, 215 and 157 cells of water: level enough to
- * call it steady, and the assertions are held at 100 so ordinary
- * quarter-to-quarter variation does not read as a stall. */
+ * quarters lose 19, 19, 26 and 17 cells of water - roughly a tenth of
+ * the figures this test saw before reaction_t.boils existed, since
+ * water now resists conducted-heat boiling instead of flashing to steam
+ * unconditionally the moment heat reaches it (see material.c's own row
+ * for water's real figure). Level enough to call it steady, and the
+ * assertions are held at 8 so ordinary quarter-to-quarter variation
+ * does not read as a stall. */
 static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -16129,6 +16426,15 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
     sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
     sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    /* Condensation is a separate, orthogonal mechanic from the boiling
+     * this scene measures, and it is not one-for-one the way boiling
+     * water into steam is - a 2x2 patch of steam collapses into a SINGLE
+     * water cell, a net loss of three cells each time it fires. Left at
+     * its real (rare) figure, it would eventually violate the
+     * sand_count_now floor below on a long enough run, for a reason that
+     * has nothing to do with what this test exists to measure. Forced
+     * off here; condensation gets its own dedicated test instead. */
+    sand_set_condenses(&s, 0);
 
     build_boiler_scene(&s);
 
@@ -16209,16 +16515,17 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
                  "quiet quarter means the basin exhausted its heat or "
                  "its water before the window was over, and this is "
                  "meant to be a STEADY state, not a transient", q, lost);
-        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(100, lost, why);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(8, lost, why);
     }
 
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(3500, water,
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(5000, water,
         "the basin must not be exhausted by the end of the window - "
-        "measured, 3958 cells of water are left, 83% of what the window "
-        "started with and 74% of what was painted, which is what makes "
+        "measured, 5206 cells of water are left, 98% of what the window "
+        "started with (reaction_t.boils makes water resist conducted-heat "
+        "boiling now, see material.c's own row), which is what makes "
         "this a steady state rather than another transient like the "
         "thermal shock lattice above");
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(800, steam,
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(80, steam,
         "steam production must be sustained through to the end of the "
         "window");
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(steam_window_start, steam,
@@ -16237,11 +16544,11 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
 
     /* Both halves boil, not just the lava-fed one - the wood-fed half's
      * ember has to be pulling its own weight too. */
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(200,
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(30,
         water_left_start - water_left,
         "the left (lava-fed) half of the basin must have lost a real "
         "amount of water over the window");
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(200,
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(30,
         water_right_start - water_right,
         "the right (wood-fed) half of the basin must have lost a real "
         "amount of water over the window - a low loss here would mean "
@@ -16255,11 +16562,14 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
         "it. The stone enclosure (side walls, slab, grid floor) leaves "
         "flare almost nowhere to put fresh fire, and measured the count "
         "holds at its window-start 8280 for twenty steps before the boil "
-        "opens gaps above the slab and it climbs to 8343 - see "
-        "build_boiler_scene()'s comment. Water boiling to steam and steam "
-        "condensing back are both one-for-one, so a count BELOW the "
-        "window's start means cells went missing, which is a different "
-        "and much worse thing than flare adding a few");
+        "opens gaps above the slab and it climbs to 8287 - see "
+        "build_boiler_scene()'s comment. Water boiling to steam is "
+        "one-for-one, and condensation (a real, DIFFERENT loss of three "
+        "cells per event - see the sand_set_condenses() call above) is "
+        "forced off in this scene precisely so it cannot fire here, so a "
+        "count BELOW the window's start means cells went missing for a "
+        "reason this scene has no business producing, which is a "
+        "different and much worse thing than flare adding a few");
 
     /* Same reasoning as the thermal shock lattice's plant pin above, and
      * the plain cell_is_extended() form works here, unlike there,
@@ -19431,6 +19741,9 @@ void run_sand_suite(void)
     RUN_TEST(test_an_ember_burns_out_over_time);
     RUN_TEST(test_an_ember_flares_fire_into_an_empty_neighbour);
     RUN_TEST(test_quenching_costs_the_water_a_unit_of_mass);
+    RUN_TEST(test_acid_quenching_fire_never_leaves_steam);
+    RUN_TEST(test_acid_quenching_fire_sometimes_leaves_nothing);
+    RUN_TEST(test_acid_quenching_fire_favours_smoke_over_gas);
     RUN_TEST(test_steam_rises_and_disperses);
     RUN_TEST(test_creating_steam_arms_the_gas_pass);
     RUN_TEST(test_burnt_out_fire_can_leave_smoke);
@@ -19604,6 +19917,9 @@ void run_sand_suite(void)
     RUN_TEST(test_conduction_stops_at_the_reach_cap);
     RUN_TEST(test_a_thick_wall_conducts_more_slowly_than_a_thin_one);
     RUN_TEST(test_boiling_converts_the_cell_nearest_the_heat);
+    RUN_TEST(test_sand_set_boils_zero_disables_conducted_heat_boiling);
+    RUN_TEST(test_boiled_steam_starts_below_full_life);
+    RUN_TEST(test_boiling_acid_produces_gas_not_steam);
     RUN_TEST(test_the_boiler_end_to_end);
     RUN_TEST(test_dry_dirt_beside_lava_smelts_into_metal_or_stone);
     RUN_TEST(test_saturated_dirt_smelts_roughly_eight_times_slower);
@@ -19622,6 +19938,8 @@ void run_sand_suite(void)
     RUN_TEST(test_sealed_lava_vents_toward_gravity_relative_up);
     RUN_TEST(test_a_wide_pool_with_a_crust_vents_not_just_a_shaft);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
+    RUN_TEST(test_a_2x2_block_of_steam_condenses_into_one_water_cell);
+    RUN_TEST(test_condensation_needs_a_genuine_2x2_square);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);
     RUN_TEST(test_grains_are_never_created_or_destroyed);

@@ -14,6 +14,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 
 ### Water
 
+- Once conducted heat reaches it, boils into steam fast.
 - Wets whatever it touches: things that soak will draw it in.
 - Dissolves in acid easily.
 
@@ -42,6 +43,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Steam
 
 - Warms whatever it touches swiftly, without igniting or quenching anything.
+- A 2x2 block of it steadily condenses into a single cell of water.
 
 ### Smoke
 
@@ -59,6 +61,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 
 ### Acid
 
+- Once conducted heat reaches it, boils into gas instantly.
 - Dissolves an adjacent cell swiftly, sometimes leaving smoke behind.
 - Spontaneously evaporates into gas slowly - unconditional, no heat or neighbour required.
 
