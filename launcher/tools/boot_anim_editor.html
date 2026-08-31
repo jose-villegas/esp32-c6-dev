@@ -191,11 +191,23 @@
   }
   #constsPanel .group-title:first-child { margin-top: 0; }
 
+  /* The panel is a flex column so the list (flex: 1 below) claims whatever
+   * height the grid's row-stretch gives this panel - which, next to the
+   * render view's fixed 448:368 aspect ratio, is real, usable room - down
+   * to just what the track and the Add button actually need, rather than
+   * a small fixed-height scrollbox leaving the rest of the panel empty. */
+  #kfPanel {
+    display: flex;
+    flex-direction: column;
+  }
+
   /* The slim strip: a visual/drag reference for WHERE keyframes sit on the
    * timeline, not the primary way to select or inspect one - see the list
-   * just below it for that. */
+   * just below it for that. flex-shrink: 0 - fixed height regardless of
+   * how much room the list ends up with. */
   #kfTrack {
     position: relative;
+    flex-shrink: 0;
     height: 28px;
     background: #0d0e12;
     border-radius: 4px;
@@ -221,9 +233,14 @@
     pointer-events: none;
   }
 
-  /* The list: the actual, clickable interface for keyframes. */
+  /* The list: the actual, clickable interface for keyframes. flex: 1 -
+   * fills whatever the panel has left after the track above and the Add
+   * button below; min-height: 0 is what lets a flex child actually shrink
+   * enough for its own overflow-y to take over instead of pushing the
+   * panel taller than the row it is in. */
   #kfList {
-    max-height: 190px;
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
     border: 1px solid var(--panel-border);
     border-radius: 4px;
@@ -261,7 +278,7 @@
   }
   .kf-row .kf-del:hover { color: var(--danger); border-color: transparent; }
 
-  #kfButtons { display: flex; gap: 6px; margin-top: 8px; }
+  #kfButtons { display: flex; flex-shrink: 0; gap: 6px; margin-top: 8px; }
   .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
   .subhead { font-size: 11px; color: var(--text-dim); margin: 8px 0 2px; }
 </style>
