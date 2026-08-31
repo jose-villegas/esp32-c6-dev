@@ -327,3 +327,22 @@ for a number or name before running free-tier). `fix-audited-code-free.sh`
 and `-local.sh` also take `--project` to widen from the apps/sand default to
 the whole project; the docs-side `-free.sh`/`-local.sh` take `--app <name>`
 to narrow from the all-docs default to one app's own doc folder.
+
+`scripts/resolve-conflicts-local.sh` is the same idea applied to git merge
+conflicts instead of audit findings: one hunk, one fixer call
+(`qwen2.5-coder:32b-instruct-q4_K_M`) plus one reviewer call (`gemma4:26b`,
+a different model family - a real second opinion, not the fixer checking
+its own work), looped up to `--rounds` times on an INVALID verdict. The
+part that makes this safe to actually delegate is the hard gate after: it
+only ever commits if `./launcher/test/run_tests.sh` AND
+`check_app_sources.sh` both pass on the resolved tree, and it never forces
+a hunk the reviewer never approved - that hunk is left with its real
+`<<<<<<<`/`=======`/`>>>>>>>` markers in place instead, so a partial
+success still shows up as a normal, honest merge conflict rather than a
+silently-wrong commit. Takes `--target <branch>` (default `main`), `--
+worktree` (isolated, then pushes straight to `origin/<your-branch>` per
+the git mechanic below), and `--no-push`. See the script's own header
+comment for the full design rationale - it was worked out and tested
+end-to-end (real Ollama calls, a synthetic conflict, and both the
+test-gate-red and reviewer-never-approves failure paths, each verified to
+refuse the commit) in the session that added it.
