@@ -675,6 +675,20 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                      * The flame rises off, exposing the
                                      * layer beneath, which is what eats
                                      * the pool downward */
+
+            /* Lets acid's ordinary dissolve roll land on oil - the same
+             * field water uses for its own acid interaction (see its own
+             * comment above), but the OUTCOME is different: oil always
+             * becomes acid on a successful bite (step_one_dissolver_cell(),
+             * sand_reactions.c), not a biased coin flip between the two
+             * materials the way water's is. Started at 40 ("slowly
+             * dilutes", explicitly asked for), dropped to 1 (the rarest a
+             * single byte-wide roll can express) once still reported too
+             * fast, then brought back up to 16 once 1 read as too slow -
+             * about one bite in sixteen, between the two extremes already
+             * tried. Starting point, not final - tune on device like
+             * every other constant here. */
+            .dissolvable = 16,
         },
 
     [MAT_LAVA] =

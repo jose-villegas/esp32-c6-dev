@@ -887,12 +887,23 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * this happen at all" - MAT_WATER's own `dissolvable` (material.c)
  * answers that exactly the way sand's or wood's already does, and this
  * constant only decides the OUTCOME once that roll has already landed:
- * whether the acid cell that bit becomes water (dilution, the common
- * case) or the water cell it bit becomes acid instead (acid spreading,
- * the rarer one). Chance-in-256 that WATER wins. 192 (3 in 4) is a
- * starting bias, not a measured one - tune on device like every other
- * constant here. */
-#define SAND_ACID_DILUTE_TO_WATER_CHANCE 192
+ * whether the acid cell that bit becomes water (dilution, the more
+ * common case) or the water cell it bit becomes acid instead (acid
+ * spreading). Chance-in-256 that WATER wins. Started at 192 (3 in 4),
+ * toned down to 160 (about 5 in 8) once reported as too strongly one-
+ * sided, then tightened further to a 55/45 split (141) - close enough
+ * to even that acid spreading reads as a real, regular outcome rather
+ * than the rare exception it was at the wider splits. Starting bias,
+ * not a measured one - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
+
+/* The impulse speed for the small "fizzle" pop water's win of the above
+ * roll throws - see step_one_dissolver_cell()'s own comment for the full
+ * mechanic. Well below SAND_ACID_BUBBLE_SPEED's 120: this is meant to
+ * read as a brief, minor fizzle at the moment of dilution, not another
+ * carbonation-style bubble competing with acid_bubble()'s own. Starting
+ * point, not final - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_FIZZ_SPEED 60
 
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /
