@@ -226,6 +226,15 @@ static const field_doc_t field_docs[] = {
      * row gets. */
     FCHANCE_VOCAB(dissolvable, GRP_ACID, "dissolves in acid", ease_words),
     FCHANCE(fizz,        GRP_ACID, "leaves smoke"),
+    /* `evaporates` reads as generic in its own material.h comment - any
+     * material could set it - but only acid does today, and it is rolled
+     * in the same step_one_dissolver_cell() (sand_reactions.c) that rolls
+     * `dissolves`, every step, unconditionally. That makes it a genuine
+     * per-step rate (FRATE, not FCHANCE: there is no single triggering
+     * moment to be conditional on, unlike `fizz`), grouped with the acid
+     * family it currently belongs to rather than GRP_TRANSFORM, whose two
+     * fields are both heat-driven - this one explicitly is not. */
+    FRATE(evaporates,   GRP_ACID, "evaporates into gas"),
 
     /* GRP_TRANSFORM */
     F(heats_to,     GRP_TRANSFORM, FK_TARGET, NULL),
