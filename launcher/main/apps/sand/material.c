@@ -601,6 +601,17 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * Starting point, not final - tune on device like every other
              * constant here. */
             .dissolvable = 220,
+
+            /* Low, deliberately: a poured stream should be able to
+             * occasionally outpace evaporation over a hot stone crust and
+             * pool up a little, rather than every drop flashing to steam
+             * the instant conducted heat reaches it (see conduct_heat(),
+             * sand_reactions.c). Acid, below, sits at the opposite end of
+             * this same field. Started at 24, raised about 20% (~9.4% ->
+             * ~11.3% per step) once reported as resisting more than
+             * wanted. Starting point, not final - tune on device like
+             * every other constant here. */
+            .boils = 29,
         },
 
     [MAT_ACID] =
@@ -651,6 +662,20 @@ const reaction_t reactions[MATERIAL_MAX] = {
                              * uses whatever chance it is given exactly.
                              * Starting point, not final - tune on device
                              * like every other constant here. */
+
+            /* Acid boiled via conducted heat unconditionally before this
+             * field existed. 255 is what keeps that behaviour effectively
+             * unchanged now that boiling is gated by a roll at all, rather
+             * than acid quietly going immune to it by omission - the
+             * opposite end of this same field from water's own low
+             * figure above. */
+            .boils = 255,
+
+            /* Not water's MAT_STEAM default - acid evaporating through a
+             * hot wall should leave the same MAT_GAS it leaves everywhere
+             * else it evaporates (see .evaporates and .fizz above), not
+             * kettle-steam. */
+            .boils_to = MAT_GAS,
         },
 
     [MAT_OIL] =
@@ -943,12 +968,26 @@ const reaction_t reactions[MATERIAL_MAX] = {
             .thaws = 4,
         },
 
-    /* Steam and smoke have rows here only for convection - they are
-     * byproducts that react with nothing else, which is the usual reason a
-     * material skips this table entirely. */
+    /* Steam and smoke have rows here for convection, and steam now for
+     * one more thing - see .condenses below. Otherwise they are
+     * byproducts that react with nothing else, which is the usual reason
+     * a material skips this table entirely. */
     [MAT_STEAM] =
         {
             .warms = 48, /* the hotter carrier: water that has just boiled */
+
+            /* The inverse of water's own evaporation: a small,
+             * deliberately rare per-step chance that a 2x2 patch of
+             * steam quietly turns back into a droplet of water - fake
+             * condensation, a cosmetic touch, not a real thermal model
+             * (no cold surface checked, no heat reading involved - see
+             * reaction_t.condenses's own comment in material.h). Started
+             * at 3 (roughly 1 in 85), halved to roughly 1 in 128 once
+             * reported as happening more than a "small chance" should.
+             * Starting point, not final - tune on device like every
+             * other constant here. */
+            .condenses = 2,
+            .condenses_to = MAT_WATER,
         },
 
     [MAT_SMOKE] =
