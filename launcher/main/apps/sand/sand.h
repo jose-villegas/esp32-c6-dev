@@ -797,14 +797,26 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 /* THE SAMPLING GRID reaction_t.vent_chance's own gate (step_one_burning_
  * cell(), sand_reactions.c) checks against, rather than rolling every
  * covered lava cell independently every step - see try_vent_chunk()'s
- * own comment (sand_reactions.c) for the mechanism. Only a cell whose
- * (x, y) both land on a multiple of this checks covered_from_above() and
- * rolls vent_chance at all; every other covered lava cell only ever
- * vents as a side effect of its OWN chunk's sampled cell succeeding.
+ * own comment (sand_reactions.c) for the mechanism. Only a cell whose x
+ * lands on a multiple of this checks covered_from_above() and rolls
+ * vent_chance at all; every other covered lava cell only ever vents as a
+ * side effect of its OWN chunk's sampled cell succeeding.
+ *
+ * X ONLY, NOT Y TOO - the gate used to also require y % SAND_VENT_CHUNK
+ * == 0, sampling a true 2D lattice. Measured on device to be a real bug,
+ * not just a rarer trigger: the only row of a lava pool that can ever BE
+ * covered_from_above() is its exposed top surface, and that row's
+ * absolute y is wherever the pool happened to settle - arbitrary, not
+ * periodic, not something the player or the sim arranges. Once this
+ * constant grew past 1-2 the odds of that one fixed y ever landing on
+ * the lattice got small enough that whole pools stopped venting for
+ * their entire lifetime, independent of vent_chance's own value. x alone
+ * still delivers the sampling win this constant exists for for a WIDE
+ * pool, without gating on a coordinate that has no reason to cooperate.
  *
  * A DELIBERATE PERFORMANCE/DRAMA TRADE, NOT A CORRECTNESS FIX - a wide
- * pool has roughly SAND_VENT_CHUNK^2 times fewer independent covered_
- * from_above() calls and vent_chance rolls per step this way (63 in 64
+ * pool has roughly SAND_VENT_CHUNK times fewer independent covered_
+ * from_above() calls and vent_chance rolls per step this way (7 in 8
  * skipped outright at 8, before even one random number is drawn), and
  * what those far-fewer rolls DO trigger throws every covered cell in the
  * whole chunk together (try_vent_chunk()) rather than one narrow single-
@@ -817,11 +829,13 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  *
  * RAISED FROM 3 TO 8 - a slab of covering material eight cells long
  * breaking off together reads as a far more substantial event than a
- * three-cell one, at a further performance win on top (roughly 7x fewer
- * covered_from_above() calls/rolls per step for a wide pool than at 3,
- * on top of the win 3 itself already banked over the original per-cell
- * design). Not yet measured on device at this figure. Lower this if the
- * chunk starts feeling too big relative to a typical hand-drawn pool
+ * three-cell one, at a further performance win on top (roughly 2.7x
+ * fewer covered_from_above() calls/rolls per step for a wide pool than
+ * at 3, on top of the win 3 itself already banked over the original
+ * per-cell design). MEASURED ON DEVICE at this figure - it is what
+ * exposed the x-and-y-both bug documented above; that bug, not this
+ * width itself, was the actual regression. Lower this if the chunk
+ * starts feeling too big relative to a typical hand-drawn pool
  * (an 8-wide slab is a large fraction of a small pool's own crust) or if
  * it needs to trade back toward finer-grained, more frequent breakage;
  * this cannot go below 1 (every cell sampled, chunk size of one - back
