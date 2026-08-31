@@ -2692,8 +2692,9 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
 static bool step_one_dissolver_cell(sand_t *s, uint8_t *row, int x, int y,
                                     int w, int h, const reaction_t *r)
 {
-    if (r->evaporates != 0 &&
-        (int)(rng_next(&s->rng) & 0xFF) < r->evaporates) {
+    const int evaporates = (s->evaporates >= 0) ? s->evaporates
+                                                : r->evaporates;
+    if (evaporates != 0 && (int)(rng_next(&s->rng) & 0xFF) < evaporates) {
         const size_t at = (size_t)y * (size_t)w + (size_t)x;
         place_reacted(s, x, y, at, MAT_GAS);
         return true;

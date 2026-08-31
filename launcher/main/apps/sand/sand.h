@@ -337,6 +337,7 @@ typedef struct {
 
     int      scatter;      /* see sand_set_scatter() */
     int      decay;        /* see sand_set_decay() */
+    int      evaporates;   /* see sand_set_evaporates() */
     int      mobility;     /* see sand_set_mobility() */
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
@@ -1327,6 +1328,23 @@ void sand_set_scatter(sand_t *s, int chance);
  * test that specifically wants to watch something decay wants instead. */
 void sand_set_decay(sand_t *s, int chance);
 #define SAND_DECAY_PER_MATERIAL (-1)
+
+/* How often a cell spontaneously turns into MAT_GAS, as a chance in 256 -
+ * see material.h's `evaporates` field. Zero, the default, turns it off
+ * entirely regardless of what the table says, for the same reason decay
+ * defaults off: nothing here needs a neighbour or a trigger to fire, so
+ * without this override every test with a standing pool of acid would
+ * quietly lose cells to it whether or not the test had any opinion about
+ * evaporation - exactly what happened to the acid mass-accounting, fizz
+ * and metal-eating-budget tests the day this field was added, before this
+ * override existed to shield them from it.
+ *
+ * Pass SAND_EVAPORATES_PER_MATERIAL to use each material's own figure
+ * instead - what the app wants, since only acid sets it. Any other value
+ * overrides all of them, which is what a test that specifically wants to
+ * watch a cell evaporate wants instead. */
+void sand_set_evaporates(sand_t *s, int chance);
+#define SAND_EVAPORATES_PER_MATERIAL (-1)
 
 /* How readily anything SOAKS UP a liquid it is touching - sand turning to
  * dirt, dirt taking on moisture.
