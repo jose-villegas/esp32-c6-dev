@@ -9912,8 +9912,11 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
 }
 
 
-/* Plant, leaf, ice and metal are speckled, and everything else extended is
- * not.
+/* Plant, leaf, ice and metal all take their texture from the position hash,
+ * and everything else extended does not. Metal alone is HATCHED rather than
+ * SPECKLED - it is the only one of the four with a travelling shine on top
+ * of its grain (see metal_dither/metal_shine's own comment in material.c) -
+ * so it gets its own pattern check instead of sharing the other three's.
  *
  * An extended material's variant IS which one it is, so neither can carry
  * a shade and the position hash is the only variation available - the same
@@ -9925,14 +9928,14 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
  * a mistake there does not fail to build - it paints some other extended
  * material in leaf green, which is the sort of thing nobody notices until
  * a fourteenth material arrives and comes out looking like a hedge. */
-static void test_the_right_extended_materials_are_speckled(void)
+static void test_the_right_extended_materials_are_grained(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
 
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const cell_t c = MATX(k);
-        const bool grained = (k == MATX_PLANT || k == MATX_LEAF ||
-                              k == MATX_ICE || k == MATX_METAL);
+        const bool speckled = (k == MATX_PLANT || k == MATX_LEAF || k == MATX_ICE);
+        const bool hatched = (k == MATX_METAL);
 
         int distinct = 0;
         gfx_color_t seen[8];
@@ -9943,7 +9946,9 @@ static void test_the_right_extended_materials_are_speckled(void)
             char why[96];
             snprintf(why, sizeof why, "extended material %d", k);
             TEST_ASSERT_EQUAL_MESSAGE(
-                grained ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
+                hatched ? MATERIAL_HATCHED
+                        : (speckled ? MATERIAL_SPECKLED : MATERIAL_FLAT),
+                pat, why);
 
             bool known = false;
             for (int i = 0; i < distinct; i++) {
@@ -9954,9 +9959,9 @@ static void test_the_right_extended_materials_are_speckled(void)
             }
         }
 
-        if (grained) {
+        if (speckled || hatched) {
             TEST_ASSERT_GREATER_THAN_MESSAGE(4, distinct,
-                "a speckled material must actually use its grain - a table "
+                "a grained material must actually use its grain - a table "
                 "of eight identical colours is a flat fill with extra steps");
         } else {
             TEST_ASSERT_EQUAL_INT_MESSAGE(1, distinct,
@@ -9965,6 +9970,40 @@ static void test_the_right_extended_materials_are_speckled(void)
                 "through the wrong branch");
         }
     }
+}
+
+/* Metal's body, its lines and their crossings must all differ - the same
+ * requirement glass's own painted-the-way-it-should-be check makes, just
+ * asserted here instead since metal is extended rather than a top-level
+ * MAT_* the other test's loop reaches (see MAT_COUNT <= MAT_EXTENDED in
+ * material.h). Equal ones would paint a flat block and the shine would
+ * never be seen. */
+static void test_metal_hatched_body_lines_and_shine_differ(void)
+{
+    gfx_color_t col[3] = { 0, 0, 0 };
+    material_colours(MATX(MATX_METAL), 0u, 0u, 255u, col);
+
+    TEST_ASSERT_TRUE_MESSAGE(col[0] != col[1] && col[1] != col[2],
+        "metal is hatched, so its body, its lines and their crossings "
+        "must all differ - equal ones paint a flat block and the shine "
+        "vanishes");
+}
+
+/* Metal's lines and shine do NOT vary from cell to cell, same reasoning as
+ * test_the_shine_does_not_vary_between_cells for glass: they are light
+ * landing on the surface, not the surface itself, and a highlight that
+ * wobbled per cell would look chewed rather than reflective. Unlike
+ * glass's version this has no variant loop to run - metal has none. */
+static void test_metal_shine_does_not_vary_between_cells(void)
+{
+    gfx_color_t a[3], b[3];
+    material_colours(MATX(MATX_METAL), 0u, 0u, 255u, a);
+    material_colours(MATX(MATX_METAL), 5u, 0u, 255u, b);
+
+    TEST_ASSERT_EQUAL_MESSAGE(a[1], b[1],
+        "metal's line colour must be identical in every cell");
+    TEST_ASSERT_EQUAL_MESSAGE(a[2], b[2],
+        "metal's shine colour must be identical in every cell");
 }
 
 
@@ -19797,7 +19836,9 @@ void run_sand_suite(void)
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
     RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
-    RUN_TEST(test_the_right_extended_materials_are_speckled);
+    RUN_TEST(test_the_right_extended_materials_are_grained);
+    RUN_TEST(test_metal_hatched_body_lines_and_shine_differ);
+    RUN_TEST(test_metal_shine_does_not_vary_between_cells);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);

@@ -486,13 +486,16 @@ breaks no behaviour and nothing else would notice.
   to average at and read as a different, murkier material. A fifth toward
   black and a fifth toward white from resting grey lands back on very
   nearly the old ramp's own endpoints, 0x4A4F5A and 0x767D8C.
-- **Hatched** (glass) draws two families of single-pixel diagonals, one
-  every eight pixels each way, over three colours: the pane, a quiet
-  **grain** that does not move, and a brighter **reflection** that does.
-  Which diagonal reflects is chosen by gravity, and its phase shifts with
-  orientation, so the glints slide across a pane as the board is tilted.
-  That movement is most of what sells it as a surface catching light
-  rather than a texture printed on one.
+- **Hatched** (glass, metal) draws two families of single-pixel diagonals,
+  one every eight pixels each way, over three colours: the body, a quiet
+  **grain** that does not move, and a brighter **shine** that does. The
+  shine is a band that travels along the diagonal on a clock, not aimed by
+  gravity or tilt - an earlier version aligned it to the board's tilt
+  instead and it never became visible, two diagonals differing only in
+  which way they lean being too fine a difference for the eye to catch on
+  this grid. Movement reads unmistakably where direction did not, which is
+  most of what sells it as a surface catching light rather than a texture
+  printed on one.
 
   Both were tried the other way round first and neither worked. Wide bands
   buried the pane - half the pixels were line and a quarter were highlight.
@@ -502,8 +505,15 @@ breaks no behaviour and nothing else would notice.
   than the glass, so they lift toward white instead.
 
   Lines are measured in screen pixels so they run unbroken from one cell
-  into the next. That is the one pattern that cannot be constant-folded,
+  into the next. Hatched is the one pattern that cannot be constant-folded
   and the only one that does per-pixel work.
+
+  Metal reuses this same mechanism with no gravity or variant involved at
+  all - it has no variant to shade a reflection by, since an extended
+  material's low nibble names WHICH one it is rather than holding a shade
+  (see `MAT_EXTENDED` above). Its grain and shine are each one constant
+  colour rather than glass's per-heat ramp, and unlike glass it has no
+  per-heat edge dimming either, for the same reason.
 
 All of it happens *inside* a cell's block. The dirty-run tracking works on
 grid cells, so a pattern made of whole cells would break every run into

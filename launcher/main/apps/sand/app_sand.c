@@ -1576,8 +1576,12 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * pattern printed on one. A single family of lines was almost
          * invisible; the crossings are what the eye picks up.
          *
-         * The gravity-aligned diagonal is the one drawn slightly stronger
-         * (it picks `lit` first), so the grain still follows the board.
+         * Both diagonals are drawn identically today - no gravity
+         * asymmetry between them. An earlier version favoured whichever
+         * one aligned with the board's tilt; see SHINE_PERIOD's own
+         * comment above for why a gravity-aligned difference like that
+         * turned out to be imperceptible on this grid and was dropped in
+         * favour of the travelling band below.
          *
          * Measured in SCREEN pixels rather than within the block, so the
          * lines run unbroken from one cell into the next instead of

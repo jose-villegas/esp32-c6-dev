@@ -1838,6 +1838,23 @@ static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
 
+/* Metal's woven line and travelling shine - the same HATCHED mechanism
+ * glass uses in paint_row_n(), which is generic to anything hatched and
+ * not glass-specific (the diagonal grain, the crossings, the travelling
+ * band all key off the pattern, never the material). What glass gets that
+ * metal cannot is a per-variant ramp to shade these by: an extended
+ * material's low nibble is spent naming WHICH one it is rather than
+ * holding a variant (see the MAT_EXTENDED case below), so there is one
+ * dither tone and one shine tone here, not sixteen.
+ *
+ * Lifted off METAL_LIGHT rather than off metal_grain's own per-cell
+ * wobble, same reasoning as GLASS_LINE/GLASS_SHINE above: a highlight
+ * that wobbled per cell would look chewed rather than reflective. Same
+ * two weights as glass's, 4 and 11 of 15 - metal is meant to look
+ * brushed and catching light exactly the way a pane does, just opaque. */
+static const gfx_color_t metal_dither = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 4));
+static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
+
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),  STONE_EDGE_ROW(3),
     STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),  STONE_EDGE_ROW(6),  STONE_EDGE_ROW(7),
@@ -2424,20 +2441,28 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * rather than a variant - see MATX(). Anything without a grain of
          * its own falls through to the flat palette entry below.
          *
-         * Left as a guard plus a ternary chain rather than respelled as a
-         * switch, which is what adding a third material to it wanted. This
-         * runs per painted cell, and in this codebase a respelling of a
-         * hot branch is a performance change: an if/else rewrite elsewhere
-         * cost 14% through the inlining cliff, and a single unhinted
-         * branch cost 26% of a benchmark with the simulation byte-
-         * identical either way. Ship the shape that was measured - see
-         * docs/Sand/Tuning-At-a-Glance.md. That measurement was taken at
-         * three materials deep; metal makes it a fourth. */
-            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_METAL) {
-                out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
+         * Metal gets its own leading equality check, ahead of the guard
+         * below, because it returns a different PATTERN (HATCHED) rather
+         * than just a different colour - it cannot live inside the
+         * ternary, which only ever chooses a colour for one shared
+         * MATERIAL_SPECKLED return. That guard-plus-ternary shape below is
+         * otherwise untouched and back to the three materials it was
+         * measured at: a respelling of it into a switch cost 14% through
+         * the inlining cliff, and a single unhinted branch cost 26% of a
+         * benchmark, simulation byte-identical either way - see
+         * docs/Sand/Tuning-At-a-Glance.md. Adding metal's check ahead of it
+         * is one more cheap equality test per extended cell, not a
+         * restructure of the measured shape. */
+            if (v == MATX_METAL) {
+                out[0] = metal_grain[hash & 7u];
+                out[1] = metal_dither;
+                out[2] = metal_shine;
+                return MATERIAL_HATCHED;
+            }
+            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
+                out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
-                         : (v == MATX_ICE)  ? ice_grain[hash & 7u]
-                                            : metal_grain[hash & 7u];
+                                            : ice_grain[hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
                 return MATERIAL_SPECKLED;
