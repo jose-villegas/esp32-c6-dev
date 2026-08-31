@@ -209,3 +209,16 @@ but only ever commits if this repo's real test gate (`run_tests.sh` +
 
 Actively developed, single-maintainer, not affiliated with Waveshare or
 Espressif. Requires ESP-IDF v5.5+.
+
+
+## Beads Issue Tracker
+
+This project uses **bd (beads)** for cross-session backlog tracking —
+banked ideas, deferred decisions, known bugs not being fixed right now.
+Full policy (what it's for vs TodoWrite/the memory system, when to file an
+issue, git/sync rules, known rough edges) lives in `.beads/PRIME.md` and is
+injected automatically at the start of every session via the SessionStart
+hook — read it there rather than duplicating it here, since that copy is
+what actually reaches an agent every session; this pointer is for humans
+browsing the docs. `bd ready` / `bd show <id>` / `bd graph --all --compact`
+for a quick look without waiting for the hook.
