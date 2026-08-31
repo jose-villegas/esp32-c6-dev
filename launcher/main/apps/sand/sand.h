@@ -311,6 +311,17 @@ typedef struct {
      * big the ones that do are) rather than one. */
     uint8_t    splash_radius_water;
 
+    /* THE ROLLING-MODULO CLUMP behind reaction_t.flaw_to (material.h) - see
+     * try_heat_transform()'s own comment (sand_reactions.c) for the
+     * mechanism. Shared across every material that ever sets flaw_to
+     * (dirt is the only one today), deliberately: this is what makes
+     * consecutive smelt successes come out as a run of the same
+     * material - a nodule - instead of an independent per-cell coin flip.
+     * heat_flaw_seq counts triggers; heat_flaw_is_flawed is the decision
+     * currently being shared across the run of HEAT_FLAW_CLUMP of them. */
+    uint16_t heat_flaw_seq;
+    bool     heat_flaw_is_flawed;
+
     int      last_load_dx, last_load_dy;
 
     /* The DITHERED direction of the last step, as opposed to the nearest
@@ -891,6 +902,23 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * values this same comment already knew were too subtle to see. */
 #define SAND_ACID_BUBBLE_CHANCE 40
 #define SAND_ACID_BUBBLE_SPEED  220
+
+/* DILUTION - water touching acid rolls a chance to become one or the
+ * other, biased toward water, reusing the same trigger acid's ordinary
+ * eating already has: the dissolves/dissolvable pair in
+ * step_one_dissolver_cell() (sand_reactions.c). No new field for "does
+ * this happen at all" - MAT_WATER's own `dissolvable` (material.c)
+ * answers that exactly the way sand's or wood's already does, and this
+ * constant only decides the OUTCOME once that roll has already landed:
+ * whether the acid cell that bit becomes water (dilution, the more
+ * common case) or the water cell it bit becomes acid instead (acid
+ * spreading). Chance-in-256 that WATER wins. Started at 192 (3 in 4),
+ * toned down to 160 (about 5 in 8) once reported as too strongly one-
+ * sided, then tightened further to a 55/45 split (141) - close enough
+ * to even that acid spreading reads as a real, regular outcome rather
+ * than the rare exception it was at the wider splits. Starting bias,
+ * not a measured one - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
 
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /

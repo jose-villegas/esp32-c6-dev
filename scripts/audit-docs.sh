@@ -18,7 +18,16 @@
 # and picks no diff window -- it catches doc rot that accumulated over time,
 # not just drift from the latest change.
 #
-# Usage: scripts/audit-docs.sh [doc-file ...]   (default: all tracked docs)
+# --local skips OmniRoute's "docs-update-free" combo entirely and calls
+# Ollama directly (`ollama run`) for the tier-2 cross-check, so this makes
+# zero network calls to any cloud provider. See Model-Delegation-Workflow.md's
+# "Route local through the Ollama CLI directly, not OmniRoute" -- OmniRoute's
+# own ollama-local provider has no working connection pool. Uses gemma4:26b
+# by default (the same model docs-update-free itself falls back to as its
+# last, free, local tier); override with the LOCAL_MODEL env var if you have
+# something else pulled (`ollama list`).
+#
+# Usage: scripts/audit-docs.sh [--local] [doc-file ...]   (default: all tracked docs)
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -30,8 +39,38 @@ MAX_DOC_CHARS=80000                 # cap so even the smallest fallback model fi
 MAX_SRC_CHARS=40000
 MAX_REFS=8
 
-if [ "$#" -gt 0 ]; then
-  DOC_FILES="$*"
+LOCAL_MODE=0
+LOCAL_MODEL="${LOCAL_MODEL:-gemma4:26b}"
+ARGS=()
+for a in "$@"; do
+  case "$a" in
+    --local) LOCAL_MODE=1 ;;
+    *) ARGS+=("$a") ;;
+  esac
+done
+[ "$LOCAL_MODE" = "1" ] && COMBO="$LOCAL_MODEL"
+
+# call_model PROMPT_FILE OUT_FILE -- writes the model's raw text response to
+# OUT_FILE (this script never used --output json, so there's no envelope to
+# unwrap either way). Returns nonzero on failure.
+#
+# --think=false: confirmed live that reasoning-capable local models
+# (gemma4:26b included) print a full "Thinking... ...done thinking."
+# preamble to stdout by default, plain text, no tags to strip -- left in,
+# it would land inside the audit findings this script emits. See
+# fix-audited-code.sh's chat_call for the fuller writeup.
+call_model() {
+  local prompt_file="$1" out_file="$2"
+  if [ "$LOCAL_MODE" = "1" ]; then
+    ollama run "$COMBO" --think=false < "$prompt_file" > "$out_file" 2>/dev/null
+    return $?
+  fi
+  omniroute chat -m "$COMBO" --reasoning-effort low --max-tokens 3000 \
+      --file "$prompt_file" --no-history > "$out_file" 2>&1
+}
+
+if [ "${#ARGS[@]}" -gt 0 ]; then
+  DOC_FILES="${ARGS[*]}"
 else
   DOC_FILES=$(git ls-files README.md docs)
 fi
@@ -171,9 +210,8 @@ for doc in $DOC_FILES; do
   } > "$PROMPT"
 
   echo "  cross-checking against: ${FOUND[*]}"
-  if ! omniroute chat -m "$COMBO" --reasoning-effort low --max-tokens 3000 \
-        --file "$PROMPT" --no-history > "$RESPONSE" 2>&1; then
-    echo "  omniroute call failed:" >&2
+  if ! call_model "$PROMPT" "$RESPONSE"; then
+    echo "  model call failed:" >&2
     cat "$RESPONSE" >&2
     continue
   fi

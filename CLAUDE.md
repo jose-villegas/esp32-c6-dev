@@ -37,6 +37,7 @@ markdown report into their own `tools/results/`:
 
 ```sh
 ./launcher/tools/build_flash.sh                          # build + flash release firmware
+./launcher/tools/build_flash_select.sh                    # interactive: variant + any worktree/branch, creating one if needed
 ./launcher/tools/report_test_results.sh                  # every suite, pass/fail
 ./launcher/main/apps/sand/tools/report_performance.sh    # sand's frame-budget numbers
 ```
@@ -190,11 +191,14 @@ don't read all of them per session:
 | [`docs/Settings-App-Plan.md`](docs/Settings-App-Plan.md) | Planned: split Diagnostics' dev-toggle page into its own Settings app |
 | [`docs/Log-Level-Plan.md`](docs/Log-Level-Plan.md) | Planned: per-build-variant log-severity ceiling |
 
-`scripts/` also has OmniRoute-backed doc/code audit automation
-(`audit-docs.sh`, `update-docs.sh`, `run-code-audit-free.sh`,
-`review-misra-free.sh`) — each pushes a branch for review rather than
-touching `main` directly; read the header comment of the one you need before
-running it, they're self-documenting.
+`scripts/` also has OmniRoute/Ollama-backed doc/code audit automation --
+`audit-docs.sh` and `update-docs.sh` at the core, plus `fix-audited-code.sh`
+/ `fix-audited-docs.sh` (the find/replace-patch fixers, each scopable to one
+app or the whole project) and their single-click launchers
+(`fix-audited-code-free.sh`, `-local.sh`, `-choose-app.sh`;
+`fix-audited-docs-free.sh`, `-local.sh`, `-choose-app.sh`) — each pushes a
+branch for review rather than touching `main` directly; read the header
+comment of the one you need before running it, they're self-documenting.
 
 ## Status
 

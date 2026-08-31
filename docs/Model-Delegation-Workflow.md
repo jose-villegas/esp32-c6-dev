@@ -22,20 +22,41 @@ answer a specific request, not as a default implementation strategy.
 relevant files, finding the exact insertion point, checking whether the
 approach has already been tried and rejected (grep the function name -
 this codebase in particular leaves detailed "why not X" comments precisely
-to stop someone re-treading a dead end), and noticing constraints a model
+to stop someone re-treading a dead end), noticing constraints a model
 without that context has no way to know about (a hot-path budget, a struct
-size ceiling, an existing invariant a test already pins).
+size ceiling, an existing invariant a test already pins), and - once the
+shape of the change is settled - **breaking it into a list of atomic
+edits** (see step 3 below). Deciding the design is your job. Typing out
+every resulting field, comment, doc paragraph, and test body yourself is
+not, by default.
 
 **The delegate models** do small, mechanical, fill-in-the-blank text
 generation: "here is the exact current code, here is exactly what changes,
 give me the replacement block." Not "implement feature X" - that's still
-your job, just handed out one precise snippet at a time.
+your job, just handed out one precise snippet at a time. This covers far
+more than tricky logic diffs - it is the *default* home for struct field
+declarations plus their doc comments, material/config table rows, doc
+prose given a fixed set of facts to state, mechanical call-site updates
+repeated across a file, and test function bodies given the exact scene-
+building helpers and exact assertions to make. If you can write the spec
+for an edit in one paragraph of "here is the current text, here is the
+change," it is a delegation candidate - do not default to writing it
+yourself just because you already know what it should say.
 
 **You again** review what comes back, reconcile it with what you already
 know, apply it by hand (rewriting comments to match house voice - delegate
 output tends to be terser and in a different register), and verify with a
 real build and the real test suite. A model's confident-sounding output is
 not evidence; the test suite passing is.
+
+**Self-check before calling the feature done:** count how many atomic
+edits landed in the diff, and how many of them came from a delegated call
+versus a direct Edit you wrote yourself. If self-authored edits are the
+majority, the workflow was not actually followed, even if the feature is
+correct and every test passes - go back and re-delegate what should have
+been delegated in the first place. "I already knew the answer" is not a
+reason to skip the call; the point of this workflow is the local model
+doing the typing, not you privately drafting the same text.
 
 ---
 
@@ -57,13 +78,28 @@ not evidence; the test suite passing is.
    real `step_one_dissolver_cell()` body and told exactly which two things
    to change inside it will not.
 
-3. **Keep each delegated ask small.** One field, one function, one
-   struct-literal block per call - not a five-file feature spec in one
-   prompt. This isn't just cleanliness: large prompts to local/free
-   endpoints reliably **timed out** in practice, while the same content
-   split into three small asks (one per file) came back in single-digit
-   to double-digit seconds each. If a call times out, don't retry it as-is
-   - shrink it.
+3. **Keep each delegated ask small - and before writing any code yourself,
+   write out the FULL list of atomic edits the feature needs.** One field,
+   one function, one struct-literal block, one doc paragraph, one test
+   body per call - not a five-file feature spec in one prompt, but also
+   not silently absorbed into "the parts that need context." Go through
+   every file the plan touches and list each self-contained change as its
+   own line (e.g. "material.h: two new reaction_t fields + comments",
+   "material.c: dirt's row gains four fields", "suite_sand.c: rewrite
+   test X's assertion", "docs/Foo.md: revise the 'Decisions' paragraph").
+   Every line on that list is a delegation candidate by default; only pull
+   one back to do yourself if it genuinely cannot be specified without
+   context a model would have to reconstruct from scratch (a novel
+   algorithm's core logic, a change spanning an invariant that isn't
+   written down anywhere). This is where the previous version of this doc
+   went wrong in practice - see "The failure mode this section used to
+   allow" below.
+
+   This isn't just cleanliness: large prompts to local/free endpoints
+   reliably **timed out** in practice, while the same content split into
+   three small asks (one per file) came back in single-digit to
+   double-digit seconds each. If a call times out, don't retry it as-is -
+   shrink it further.
 
 4. **Route "local" through the Ollama CLI directly, not OmniRoute.**
    OmniRoute's `ollama-local` provider had **no active connection pool** -
@@ -74,13 +110,50 @@ not evidence; the test suite passing is.
    fine standalone. Use it directly instead:
 
    ```sh
-   ollama list                              # what's actually pulled
-   cat prompt.txt | ollama run <model> 2>/dev/null   # stderr carries the
-                                                       # spinner; drop it
+   ollama list                                        # what's actually pulled
+   cat prompt.txt | ollama run <model> --think=false 2>/dev/null
+   #                                    ^^^^^^^^^^^^^   stderr carries the
+   #                                    spinner; drop it
    ```
 
-   Re-test this assumption before trusting it again if OmniRoute's own
-   config changes - see "Things rot" below.
+   **`--think=false` is not optional if you need clean, parseable output.**
+   Confirmed live (2026-08-31): reasoning-capable models print a full
+   `Thinking... ...done thinking.` preamble straight to **stdout** by
+   default, plain text, no `<think>` tags to regex out - this isn't limited
+   to obviously-named reasoning models. `gemma4:26b` and `qwen3.8:27b` both
+   do it despite not having "reasoning" or "r1" in their names; only
+   `qwen2.5:14b`, `qwen2.5-coder:32b-instruct-q4_K_M`, and `mistral-nemo`
+   were confirmed to never emit it. If you're parsing the response for
+   anything structured (JSON, a specific format), that preamble - and any
+   `[`/`{` it happens to contain - lands in your output right along with
+   the real answer. `--think=false` suppressed it cleanly on every model
+   tested, reasoning and non-reasoning alike, so pass it unconditionally
+   rather than special-casing by model name.
+
+   **Which local model for which job** (from the same session's research,
+   ranked against real coding/instruction-following benchmarks, not
+   guessed):
+   - **Code generation / fixing**: `qwen2.5-coder:32b-instruct-q4_K_M` if
+     pulled (dedicated coder model, never reasons); `qwen2.5:14b` otherwise
+     (HumanEval 83.5%, MBPP 82%, never reasons, smaller/faster).
+   - **Review / second opinion**: pick a genuinely different model family
+     than whatever did the generation, not just a different size of the
+     same one - `gemma4:26b` (strong instruction-following, IFEval 98.5%,
+     needs `--think=false`) is the current pick; `mistral-nemo:latest` is
+     the safe, always-clean fallback if `--think=false` ever proves
+     unreliable on a given Ollama version (weaker at code, HumanEval ~32%,
+     but fine for JSON-verdict-style review).
+   - **Docs / long-context prose**: `gemma4:26b` (best IFEval/long-context
+     fit of what's pulled here; needs `--think=false`).
+   - **Avoid for structured-output delegation**: `deepseek-r1:14b` and any
+     `DeepSeek-R1-Distill-*` variant - always-on reasoning by design, and
+     while Ollama does support disabling it for this family too, there's
+     less margin than the above picks if a future Ollama/model update
+     changes how that suppression behaves.
+
+   Re-test all of this before trusting it again if OmniRoute's own config
+   changes, Ollama updates its thinking-suppression behavior, or the locally
+   pulled model set changes - see "Things rot" below.
 
 5. **Route "free tier" through OmniRoute, but test the combo first.**
    Existing combos rot: in one session, `deepseek` had no active
@@ -148,6 +221,47 @@ not evidence; the test suite passing is.
 
 ---
 
+## The failure mode this section used to allow
+
+Recorded 2026-08-31, from the sand dirt/heat-flaw feature (dirt smelting
+into metal-or-stone with a rolling-modulo clump, plus a wet-dirt spoil
+path). The user asked for this workflow by name, watched the session run,
+and reported back: their machine's CPU/GPU usage never moved. They were
+right to call it out - the diff had four new `reaction_t` fields plus
+comments, a `material.c` tuning block, new `sand_t` state, the actual
+`try_heat_transform()` logic, a `dump_reactions.c` doc-generator update,
+and roughly ten test edits. Of all of that, exactly one function tail was
+sent to a local model - and even that call was used as a *cross-check* on
+an answer already worked out by hand, not as the source of the diff that
+got applied. Every doc comment, every struct field, every test body was
+typed directly.
+
+**What went wrong, specifically:** step 1 of this doc ("investigate and
+plan first, entirely yourself") was read as license to also *implement*
+everything the investigation touched, on the theory that dense, comment-
+heavy files like this one's need someone tracking every existing
+invariant while writing each line. That reasoning is true of the *design*
+- which invariant a change has to respect, which existing field to reuse,
+what the new comment has to say to stay accurate - and false of the
+*typing*. A model handed the exact surrounding comment style, the exact
+field it is documenting, and a one-paragraph statement of what to say does
+not need to independently discover the invariant; it needs to be told it,
+the same way the delegation prompt for a logic diff already tells the
+model exactly what to change and where.
+
+**The fix is the "atomic edit list" now required in step 3 above**, plus
+the self-check at the end of "The division of labor": before writing a
+single line of the implementation, list every self-contained edit the
+plan implies, and default every line of that list to a delegated call. Do
+not stop at the trickiest piece of logic and call the rest "context-
+dependent" - a struct field's doc comment is not context-dependent just
+because you personally already know what it should say. If a whole
+category of edit (struct fields + comments, doc paragraphs, test bodies)
+never went through a model this session, that is the signal this section
+exists to catch.
+
+---
+
 ## Git mechanics specific to worktrees
 
 If you're running in a `.claude/worktrees/...` checkout (this project uses
@@ -189,11 +303,27 @@ it being a living document instead of a one-off spec.
 
 ## Related, narrower tooling
 
-`scripts/fix-audited-code.sh` (and its docs/ own header comment) already
-does a more automated version of this for one specific, high-volume case:
-bulk-fixing MISRA/cppcheck findings as exact find/replace patches, with a
+`scripts/fix-audited-code.sh` and `scripts/fix-audited-docs.sh` (each has
+its own header comment) already do a more automated version of this for one
+specific, high-volume case: bulk-fixing MISRA/cppcheck findings, or doc
+audit findings, as exact find/replace patches. The code-side script has a
 mandatory review-model gate and its own `--pool local|free|subscription|all`
-selection. Reach for that script when the task really is "fix N audit
-findings across files," not an open-ended feature - it has already worked
-out the patch-verification and review-loop machinery this doc doesn't need
-to repeat.
+selection; the docs-side script's review model is optional. Both also take
+`--local` (routes every model call through the Ollama CLI directly, per
+step 4 above - including `--think=false`, already handled for you) and
+`--no-push` (commit without pushing). Reach for whichever one applies when
+the task really is "fix N audit findings across files," not an open-ended
+feature - both have already worked out the patch-verification, the
+local/free routing, and (for code) review-loop machinery this doc doesn't
+need to repeat.
+
+Single-click launchers wrap both, so you don't need to remember the flags:
+`fix-audited-code-free.sh` / `fix-audited-docs-free.sh` (free-tier cloud,
+no confirmation prompt), `-local.sh` variants of each (same, but `--local`
+instead - zero cloud calls), and `-choose-app.sh` variants of each
+(interactive: lists real scoping targets - apps under `launcher/main/apps/`
+for code, `docs/<Name>/` folders that actually exist for docs - and prompts
+for a number or name before running free-tier). `fix-audited-code-free.sh`
+and `-local.sh` also take `--project` to widen from the apps/sand default to
+the whole project; the docs-side `-free.sh`/`-local.sh` take `--app <name>`
+to narrow from the all-docs default to one app's own doc folder.

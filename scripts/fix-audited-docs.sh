@@ -22,7 +22,21 @@
 # automatically; if something does, both are left behind for you to inspect
 # before opening the PR.
 #
-# Usage: scripts/fix-audited-docs.sh [--review <model-id>] [--worktree] [doc-file ...]
+# --no-push commits on the branch (worktree or not) but stops short of
+# `git push` -- the branch/worktree is left for you to inspect and push
+# yourself when ready.
+#
+# --local skips OmniRoute (including its own "docs-update-free" combo used
+# by audit-docs.sh's tier-2 cross-check, forwarded --local there too) and
+# calls Ollama directly (`ollama run`) for every model call this makes, so
+# the whole run makes zero network calls to any cloud provider. See Model-
+# Delegation-Workflow.md's "Route local through the Ollama CLI directly, not
+# OmniRoute" -- OmniRoute's own ollama-local provider has no working
+# connection pool. Uses gemma4:26b by default (LOCAL_MODEL env var to
+# override); if you also pass --review with --local, REVIEW_MODEL is treated
+# as a local Ollama tag too, not a cloud model id.
+#
+# Usage: scripts/fix-audited-docs.sh [--review <model-id>] [--worktree] [--local] [--no-push] [doc-file ...]
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -31,6 +45,9 @@ cd "$REPO_ROOT"
 COMBO="docs-update-free"
 REVIEW_MODEL=""
 USE_WORKTREE=0
+LOCAL_MODE=0
+LOCAL_MODEL="${LOCAL_MODEL:-gemma4:26b}"
+NO_PUSH=0
 DOC_ARGS=()
 
 while [ "$#" -gt 0 ]; do
@@ -43,12 +60,21 @@ while [ "$#" -gt 0 ]; do
       USE_WORKTREE=1
       shift
       ;;
+    --local)
+      LOCAL_MODE=1
+      shift
+      ;;
+    --no-push)
+      NO_PUSH=1
+      shift
+      ;;
     *)
       DOC_ARGS+=("$1")
       shift
       ;;
   esac
 done
+[ "$LOCAL_MODE" = "1" ] && COMBO="$LOCAL_MODEL"
 
 BRANCH="docs-audit-fix-$(date +%Y%m%d-%H%M%S)"
 WORKTREE_DIR=""
@@ -84,8 +110,10 @@ PATCHES="$TMPDIR/patches.json"
 echo "[]" > "$PATCHES"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+AUDIT_EXTRA_ARGS=()
+[ "$LOCAL_MODE" = "1" ] && AUDIT_EXTRA_ARGS+=(--local)
 echo "Running audit-docs.sh..."
-"$SCRIPT_DIR/audit-docs.sh" ${DOC_ARGS[@]+"${DOC_ARGS[@]}"} > "$AUDIT_OUT" 2>&1 || true
+"$SCRIPT_DIR/audit-docs.sh" "${AUDIT_EXTRA_ARGS[@]}" ${DOC_ARGS[@]+"${DOC_ARGS[@]}"} > "$AUDIT_OUT" 2>&1 || true
 cat "$AUDIT_OUT"
 
 if ! grep -q "AUDIT REPORT" "$AUDIT_OUT"; then
@@ -153,6 +181,35 @@ function extractJsonArray(text) {
 module.exports = { extractJsonArray };
 JSEOF
 
+# chat_call PROMPT_FILE OUT_FILE MODEL_ID MAX_TOKENS [REASONING_EFFORT] --
+# writes the model's raw text response (unwrapped from any provider
+# envelope) to OUT_FILE. LOCAL_MODE=1 calls Ollama directly instead of
+# OmniRoute -- see the --local comment near the top of this file. Returns
+# nonzero on failure.
+#
+# --think=false is load-bearing, not decoration: confirmed live that
+# reasoning-capable local models (gemma4:26b included, not just the
+# obviously-named deepseek-r1 ones) print a full "Thinking... ...done
+# thinking." preamble to stdout by default in plain text, no <think> tags to
+# strip -- left in, it would corrupt the find/replace JSON array this
+# script scans for. See fix-audited-code.sh's chat_call for the fuller
+# writeup.
+chat_call() {
+  local prompt_file="$1" out_file="$2" model_id="$3" max_tokens="$4" effort="${5:-}"
+  if [ "$LOCAL_MODE" = "1" ]; then
+    ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>/dev/null
+    return $?
+  fi
+  local envelope="$out_file.envelope"
+  local effort_args=()
+  [ -n "$effort" ] && effort_args=(--reasoning-effort "$effort")
+  if ! omniroute --output json chat -m "$model_id" "${effort_args[@]}" --max-tokens "$max_tokens" \
+        --file "$prompt_file" --no-history > "$envelope" 2>&1; then
+    return 1
+  fi
+  node -e "$extract_content_js" "$envelope" > "$out_file" 2>/dev/null
+}
+
 for doc in "${FILES_WITH_FINDINGS[@]}"; do
   [ -f "$doc" ] || continue
   echo ""
@@ -175,7 +232,7 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
   fi
 
   FIX_PROMPT="$TMPDIR/fix_prompt.txt"
-  FIX_RESPONSE="$TMPDIR/fix_response.txt"
+  FIX_CONTENT="$TMPDIR/fix_content.txt"
 
   {
     echo "The following audit findings were raised against one documentation file."
@@ -197,15 +254,10 @@ for doc in "${FILES_WITH_FINDINGS[@]}"; do
     head -c "$MAX_DOC_CHARS" "$doc"
   } > "$FIX_PROMPT"
 
-  if ! omniroute --output json chat -m "$COMBO" --reasoning-effort low --max-tokens 2000 \
-        --file "$FIX_PROMPT" --no-history > "$FIX_RESPONSE" 2>&1; then
-    echo "  omniroute call failed:" >&2
-    cat "$FIX_RESPONSE" >&2
+  if ! chat_call "$FIX_PROMPT" "$FIX_CONTENT" "$COMBO" 2000 low; then
+    echo "  model call failed" >&2
     continue
   fi
-
-  CONTENT=$(node -e "$extract_content_js" "$FIX_RESPONSE") || { echo "  no response envelope found" >&2; continue; }
-  echo "$CONTENT" > "$TMPDIR/fix_content.txt"
 
   node -e '
     const fs = require("fs");
@@ -244,7 +296,7 @@ fi
 if [ -n "$REVIEW_MODEL" ]; then
   echo "Sending patches to $REVIEW_MODEL for review..."
   REVIEW_PROMPT="$TMPDIR/review_prompt.txt"
-  REVIEW_RESPONSE="$TMPDIR/review_response.txt"
+  REVIEW_CONTENT_FILE="$TMPDIR/review_content.txt"
   {
     echo "Here is a JSON array of proposed documentation fixes, each a find/replace"
     echo "patch responding to an audit finding. For each item (by its 0-based index"
@@ -257,19 +309,10 @@ if [ -n "$REVIEW_MODEL" ]; then
     cat "$PATCHES"
   } > "$REVIEW_PROMPT"
 
-  REVIEW_OK=1
-  if ! omniroute --output json chat -m "$REVIEW_MODEL" --reasoning-effort low --max-tokens 4000 \
-        --file "$REVIEW_PROMPT" --no-history > "$REVIEW_RESPONSE" 2>&1; then
-    echo "Review call failed (keeping all patches unreviewed):" >&2
-    cat "$REVIEW_RESPONSE" >&2
-    REVIEW_OK=0
+  if ! chat_call "$REVIEW_PROMPT" "$REVIEW_CONTENT_FILE" "$REVIEW_MODEL" 4000 low; then
+    echo "Review call failed (keeping all patches unreviewed)." >&2
+    echo "[]" > "$REVIEW_CONTENT_FILE"
   fi
-
-  REVIEW_CONTENT="[]"
-  if [ "$REVIEW_OK" -eq 1 ]; then
-    REVIEW_CONTENT=$(node -e "$extract_content_js" "$REVIEW_RESPONSE") || { echo "no response envelope found, keeping all patches unreviewed" >&2; REVIEW_CONTENT="[]"; }
-  fi
-  echo "$REVIEW_CONTENT" > "$TMPDIR/review_content.txt"
 
   node -e '
     const fs = require("fs");
@@ -338,14 +381,27 @@ git add $CHANGED_FILES
 REVIEW_NOTE=""
 [ -n "$REVIEW_MODEL" ] && REVIEW_NOTE=", reviewed by $REVIEW_MODEL"
 git commit -m "docs: fix audit findings (via $COMBO$REVIEW_NOTE)"
-git push -u origin "$BRANCH"
 
-REMOTE_URL=$(git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##')
-echo ""
-echo "Pushed $BRANCH. Open a PR here:"
-echo "$REMOTE_URL/compare/main...$BRANCH?expand=1"
-if [ -n "$WORKTREE_DIR" ]; then
+if [ "$NO_PUSH" = "1" ]; then
   echo ""
-  echo "Worktree left at $WORKTREE_DIR for inspection -- remove when done:"
-  echo "  git worktree remove \"$WORKTREE_DIR\""
+  echo "Committed on branch $BRANCH (--no-push: not pushed)."
+  if [ -n "$WORKTREE_DIR" ]; then
+    echo "Worktree left at $WORKTREE_DIR for inspection. When ready:"
+    echo "  cd \"$WORKTREE_DIR\" && git push -u origin $BRANCH"
+    echo "  git worktree remove \"$WORKTREE_DIR\"   # when done with it"
+  else
+    echo "Push it yourself when ready: git push -u origin $BRANCH"
+  fi
+else
+  git push -u origin "$BRANCH"
+
+  REMOTE_URL=$(git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##')
+  echo ""
+  echo "Pushed $BRANCH. Open a PR here:"
+  echo "$REMOTE_URL/compare/main...$BRANCH?expand=1"
+  if [ -n "$WORKTREE_DIR" ]; then
+    echo ""
+    echo "Worktree left at $WORKTREE_DIR for inspection -- remove when done:"
+    echo "  git worktree remove \"$WORKTREE_DIR\""
+  fi
 fi
