@@ -61,6 +61,7 @@
 #include <stdint.h>
 
 #include "boot/boot_anim_curve.h"
+#include "boot/boot_anim_timeline.h"
 #include "util/tween.h"
 
 #define BOOT_ANIM_Q    12
@@ -74,6 +75,83 @@
  * "The camera" and "The projection" below because each needs it. */
 static inline int boot_anim_origin_x(int w) { return w / 2; }
 static inline int boot_anim_origin_y(int h) { return (h * 3) / 4; }
+
+/*---------------------------------------------------------------------------
+ * The timeline
+ *
+ * Where the camera actually comes from now: boot_anim_keyframes[], generated
+ * into boot_anim_timeline.h from boot_anim_timeline.json by
+ * tools/gen_boot_anim_timeline.py - see that script's own top comment for
+ * what a keyframe is. What used to be boot_anim_orbit_progress() and
+ * boot_anim_finale_reach() blended through two hardcoded windows to produce
+ * the camera's phase and the origin's drift is now just this: find the two
+ * keyframes bracketing `now_ms`, ramp between their times, ease that ramp by
+ * whichever shape the arriving keyframe names, and lerp every channel by it -
+ * the exact vocabulary util/tween.h already provides, so nothing new needed
+ * inventing to interpret the table.
+ *
+ * Placed ahead of "The camera" rather than after it: boot_anim_view() below
+ * needs this, and so - independently - do boot_anim_motif_shrink_q8() and
+ * boot_anim_finale_reach() much further down, so this has to exist before
+ * all three rather than living beside just one of them.
+ *-------------------------------------------------------------------------*/
+
+typedef struct {
+    int32_t ox, oy;       /* pixels, panel frame */
+    int32_t rot_phase;    /* boot_anim_sin()'s 0..65536-per-turn convention */
+    int32_t scale_q8;     /* Q8, 256 == 1.0 */
+} boot_anim_timeline_state_t;
+
+/* linear/ease_out/ease_in, by the enum baked into the generated table -
+ * util/tween.h's own three shapes, not a fourth invented here. */
+static inline uint8_t boot_anim_timeline_ease(uint8_t linear, uint8_t ease)
+{
+    switch (ease) {
+    case BOOT_ANIM_EASE_OUT: return tween_ease_out(linear);
+    case BOOT_ANIM_EASE_IN:  return tween_ease_in(linear);
+    default:                 return linear;
+    }
+}
+
+/* Before the first keyframe or after the last, the state holds at that
+ * keyframe's own value - the same clamping boot_anim_sample() already does
+ * for the curve table, for the same reason: it pins the ends rather than
+ * leaving them undefined. The table is short (today seven entries) so a
+ * linear scan for the bracketing pair costs nothing worth a binary search
+ * over. */
+static inline boot_anim_timeline_state_t boot_anim_timeline_sample(uint32_t now_ms)
+{
+    const boot_anim_keyframe_t *first = &boot_anim_keyframes[0];
+    const boot_anim_keyframe_t *last =
+        &boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT - 1];
+    boot_anim_timeline_state_t s;
+
+    if (now_ms <= first->ms || now_ms >= last->ms) {
+        const boot_anim_keyframe_t *clamp =
+            now_ms <= first->ms ? first : last;
+        s.ox = clamp->pos[0];
+        s.oy = clamp->pos[1];
+        s.rot_phase = clamp->rot[0];
+        s.scale_q8 = clamp->scale[0];
+        return s;
+    }
+
+    int i = 1;
+    while (boot_anim_keyframes[i].ms < now_ms) {
+        i++;
+    }
+    const boot_anim_keyframe_t *a = &boot_anim_keyframes[i - 1];
+    const boot_anim_keyframe_t *b = &boot_anim_keyframes[i];
+
+    const uint8_t linear = tween_ramp(now_ms, a->ms, b->ms - a->ms);
+    const uint8_t u8 = boot_anim_timeline_ease(linear, b->ease);
+
+    s.ox = tween_lerp_i32(a->pos[0], b->pos[0], u8);
+    s.oy = tween_lerp_i32(a->pos[1], b->pos[1], u8);
+    s.rot_phase = tween_lerp_i32(a->rot[0], b->rot[0], u8);
+    s.scale_q8 = tween_lerp_i32(a->scale[0], b->scale[0], u8);
+    return s;
+}
 
 /*---------------------------------------------------------------------------
  * The camera
@@ -141,13 +219,14 @@ static inline int32_t boot_anim_cos(uint16_t phase)
     return boot_anim_sin((uint16_t)(phase + 16384u));
 }
 
-/* How far the camera tilts by the end of the climb, as a 16-bit phase
- * (65536 == 360 degrees). 58 degrees, not 90: the whole point of stopping
- * short is a floor that is still visibly a floor, not a line with no depth
- * left in it - see "THE CAMERA ORBITS" at the top of this file. */
-#define BOOT_ANIM_PHI_END_PHASE 10559   /* round(58 / 360 * 65536) */
-
-/* THE ROTATION, TURNED INTO NINE CONSTANTS AT COMPILE TIME
+/* How far the camera tilts, and where the origin drifts to - both now
+ * keyframe DATA (boot_anim_keyframes[], see "The timeline" above) rather
+ * than a pair of constants derived once and blended through a hardcoded
+ * window. 58 degrees at the top of the climb, not 90: the whole point of
+ * stopping short is a floor that is still visibly a floor, not a line with
+ * no depth left in it - see "THE CAMERA ORBITS" at the top of this file.
+ *
+ * THE ROTATION, TURNED INTO NINE CONSTANTS AT COMPILE TIME
  *
  * The camera has two screen-space directions, right and down, each a
  * 3-vector of how far one unit of (Re, Im, t) moves a point in that screen
@@ -430,53 +509,19 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
  * transfer plus however much curve there is to draw by then.
  *-------------------------------------------------------------------------*/
 
-/* How long the finale's own collapse takes - the camera's extra turn, the
- * origin's drift to its resting spot, the motif settling down from its
- * grown size, and the picture fading out - ALL of it, together, packed
- * into the same stretch at the very end rather than spread across the
- * whole letter-arrival window. See boot_anim_finale_reach() and
- * boot_anim_motif_shrink_q8()'s own comments for why: turning and
- * drifting early was what left no room for the motif to grow at all while
- * letters were still arriving, so both moved here, timed to start the
- * instant the last letter lands (BOOT_ANIM_FINALE_END_MS) and run out
- * exactly as the picture finishes fading (BOOT_ANIM_MS). */
-#define BOOT_ANIM_COLLAPSE_MS 1500
-
-/* BOOT_ANIM_MS is derived below, once BOOT_ANIM_FADE_START_MS is - see that
- * constant's own comment for why this file computes it by hand instead of
- * writing `BOOT_ANIM_FADE_START_MS + BOOT_ANIM_COLLAPSE_MS` directly. */
-#define BOOT_ANIM_MS 5800
-
-#define BOOT_ANIM_AXES_MS        450   /* the axes grow out of the origin */
-
-#define BOOT_ANIM_GRID_START_MS  150
-
-/* Halved again alongside BOOT_ANIM_GRID_RINGS doubling again (see its own
- * comment) - four times as many rings at a quarter the stagger covers the
- * same total arrival time as the original whole-unit spacing, rather than
- * taking four times as long to sweep outward. */
-#define BOOT_ANIM_GRID_RING_MS    12   /* each ring waits for the one inside */
-#define BOOT_ANIM_GRID_FADE_MS   300
-
-#define BOOT_ANIM_PEN_START_MS   520
-#define BOOT_ANIM_PEN_MS        1980   /* the curve is done at 2500 */
-
-/* The title arrives after the curve, not during it - see "The title" below -
- * with 200ms of held breath between the two. */
-#define BOOT_ANIM_TITLE_START_MS 2700
-
-/* Exactly BOOT_ANIM_FINALE_END_MS - the instant the last letter lands - so
- * the collapse (see BOOT_ANIM_COLLAPSE_MS's own comment) starts the moment
- * there is nothing left arriving to interrupt. Not written as
- * `BOOT_ANIM_FINALE_END_MS` directly: that constant is computed further
- * down, from title timing this section is not allowed to depend on without
- * reordering the whole file, so this is instead a literal that has to keep
- * agreeing with it - see the _Static_assert next to FINALE_END_MS's own
- * definition, which is what actually enforces that rather than a comment's
- * say-so. */
-#define BOOT_ANIM_FADE_START_MS 4300   /* dissolve into the launcher */
-
-/* The ramp/ease-out/lerp vocabulary itself now lives in util/tween.h, shared
+/* Every #define this section used to hand-write - BOOT_ANIM_MS,
+ * BOOT_ANIM_AXES_MS, BOOT_ANIM_GRID_START_MS/RING_MS/FADE_MS,
+ * BOOT_ANIM_PEN_START_MS/PEN_MS, BOOT_ANIM_TITLE_START_MS and
+ * BOOT_ANIM_FADE_START_MS - now comes from boot_anim_timeline.h, generated
+ * from boot_anim_timeline.json (see "The timeline" above and
+ * tools/gen_boot_anim_timeline.py's own top comment). The old
+ * BOOT_ANIM_COLLAPSE_MS is gone entirely: the finale's own turn/drift/settle
+ * window is now just the segment between whichever keyframes span it, and
+ * boot_anim_finale_reach() below reuses BOOT_ANIM_FADE_START_MS/BOOT_ANIM_MS
+ * directly rather than a separately-named window that has to be kept in
+ * step with them.
+ *
+ * The ramp/ease-out/lerp vocabulary itself now lives in util/tween.h, shared
  * rather than private to this file - see that header's own top comment for
  * why. boot_anim_ramp() and boot_anim_ease_out() used to be defined here,
  * doing exactly what tween_ramp()/tween_ease_out() do now; every call site
@@ -515,8 +560,7 @@ static inline uint8_t boot_anim_axis_reach(uint32_t now_ms)
  * BOOT_ANIM_GRID_CEILING_MAX just below: that backdrop reasoning only
  * holds while the floor is still competing with a full-size curve for
  * attention, and stops applying once the picture is mostly the grid
- * itself. */
-#define BOOT_ANIM_GRID_MAX 70
+ * itself. Now generated - BOOT_ANIM_GRID_MAX lives in boot_anim_timeline.h. */
 
 /* How far along the grid's slow climb toward full visibility things are,
  * right now - the single clock both boot_anim_grid_alpha()'s own ceiling
@@ -556,8 +600,8 @@ static inline uint8_t boot_anim_grid_climb(uint32_t now_ms)
  * was tuned for a floor that still needed every trick available just to
  * be seen; a floor that already covers the whole panel from frame 1 only
  * needs to climb enough to read as brightening over time, not enough to
- * wash out toward the same flat white the axes are. */
-#define BOOT_ANIM_GRID_CEILING_MAX 170
+ * wash out toward the same flat white the axes are. Now generated -
+ * BOOT_ANIM_GRID_CEILING_MAX lives in boot_anim_timeline.h. */
 
 static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
 {
@@ -602,8 +646,8 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
  * none of that turning; white has no hue left to see it in. Climbing this
  * far short of white instead of all the way to it is what keeps the
  * travelling colour wave actually visible while the floor still reads
- * brighter over time the way BOOT_ANIM_GRID_CEILING_MAX's own climb does. */
-#define BOOT_ANIM_GRID_WHITEN_MAX 120
+ * brighter over time the way BOOT_ANIM_GRID_CEILING_MAX's own climb does.
+ * Now generated - BOOT_ANIM_GRID_WHITEN_MAX lives in boot_anim_timeline.h. */
 
 static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 {
@@ -611,10 +655,11 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
                                    boot_anim_grid_climb(now_ms));
 }
 
-_Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
-               BOOT_ANIM_FADE_START_MS,
-               "phase 1 of the curve must finish - handing off to phase 2, "
-               "see boot_anim_pen() - before the picture starts fading");
+/* "Phase 1 of the curve must finish before the picture starts fading" used
+ * to be enforced here with a _Static_assert on BOOT_ANIM_PEN_START_MS/
+ * PEN_MS/FADE_START_MS. Now that those are generated data rather than
+ * source, tools/gen_boot_anim_timeline.py checks the same thing before it
+ * will emit a header at all - see its own validate(). */
 
 /*---------------------------------------------------------------------------
  * The title
@@ -704,20 +749,17 @@ _Static_assert(BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS <=
 #define BOOT_ANIM_TITLE_VIEW_X 170
 #define BOOT_ANIM_TITLE_VIEW_Y 50
 
-#define BOOT_ANIM_TITLE_STAGGER_MS  140   /* each letter starts this much
-                                            * after the one before it       */
-#define BOOT_ANIM_TITLE_FLIGHT_MS   900   /* how long ONE letter's flight is */
-#define BOOT_ANIM_TITLE_ENTRY_PX    320   /* how far off-panel it starts -
-                                            * must clear BOOT_ANIM_TITLE_VIEW_X
-                                            * itself, the first letter's own
-                                            * final_x, or its flight starts
-                                            * already on the panel          */
-
-/* The wobble: how many oscillations are packed into the early part of the
- * flight (as a raw phase value - see boot_anim_sin()'s own 65536-per-turn
- * convention, so this is 3.5 turns) and the peak swing right at the start. */
-#define BOOT_ANIM_TITLE_TURNS_PHASE 229376   /* round(3.5 * 65536) */
-#define BOOT_ANIM_TITLE_AMPLITUDE_PX  22
+/* BOOT_ANIM_TITLE_STAGGER_MS/FLIGHT_MS/ENTRY_PX (each letter's stagger,
+ * flight duration, and how far off-panel it starts - which must clear
+ * BOOT_ANIM_TITLE_VIEW_X itself, the first letter's own final_x, or its
+ * flight starts already on the panel) are generated, in
+ * boot_anim_timeline.h.
+ *
+ * So are BOOT_ANIM_TITLE_TURNS_PHASE and BOOT_ANIM_TITLE_AMPLITUDE_PX, the
+ * wobble's own shape: how many oscillations are packed into the early part
+ * of the flight (as a raw phase value - see boot_anim_sin()'s own
+ * 65536-per-turn convention, so 229376 is 3.5 turns) and the peak swing
+ * right at the start. */
 
 /* The vertical wobble, `d_q12` being how much of its OWN flight a letter has
  * left - BOOT_ANIM_ONE at the moment it sets off, 0 the instant it arrives.
@@ -780,10 +822,9 @@ typedef struct {
  * BOOT_ANIM_TITLE_WAVE_STAGGER_MS worth of the cycle, so the six letters
  * do not bob in lockstep - the eye reads a wave travelling left to right
  * along the word, the same left-to-right sense the letters themselves flew
- * in on, rather than the whole word pulsing as one block. */
-#define BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX 11
-#define BOOT_ANIM_TITLE_WAVE_PERIOD_MS    1600
-#define BOOT_ANIM_TITLE_WAVE_STAGGER_MS   90
+ * in on, rather than the whole word pulsing as one block. Generated, in
+ * boot_anim_timeline.h: BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX/PERIOD_MS/
+ * STAGGER_MS. */
 
 static inline int boot_anim_title_wave(int i, uint32_t now_ms)
 {
@@ -824,11 +865,12 @@ static inline boot_anim_title_pos_t boot_anim_title_letter(int i,
     return p;
 }
 
-_Static_assert(BOOT_ANIM_TITLE_START_MS +
-               (BOOT_ANIM_TITLE_LEN - 1) * BOOT_ANIM_TITLE_STAGGER_MS +
-               BOOT_ANIM_TITLE_FLIGHT_MS <= BOOT_ANIM_FADE_START_MS,
-               "every letter must have landed before the picture starts "
-               "fading");
+/* "Every letter must have landed before the picture starts fading" used to
+ * be a _Static_assert here. tools/gen_boot_anim_timeline.py checks the same
+ * thing now - as a WARNING, not a refusal to emit: unlike the curve still
+ * being drawn when the fade starts (which is unambiguously broken), a
+ * letter still arriving as the picture dissolves is a look someone editing
+ * the timeline might actually want. */
 
 /*---------------------------------------------------------------------------
  * Colour
@@ -878,9 +920,8 @@ static inline uint32_t boot_anim_hue_rgb(int hue)
  * nothing, so it is where a slow colour change costs nothing and is not in
  * competition with anything. Distance is folded in as well as time, so the
  * rings do not all change together - the colour travels outward as a wave
- * instead of the whole floor blinking. */
-#define BOOT_ANIM_GRID_HUE_MS     2600   /* one whole turn takes this long */
-#define BOOT_ANIM_GRID_HUE_SPREAD 70     /* wheel positions per ring outward */
+ * instead of the whole floor blinking. Generated, in boot_anim_timeline.h:
+ * BOOT_ANIM_GRID_HUE_MS/HUE_SPREAD. */
 
 static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
 {
@@ -889,26 +930,16 @@ static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
     return (int)turn + ring * BOOT_ANIM_GRID_HUE_SPREAD;
 }
 
-/* How far through the camera's ORBIT the picture is, as a Q12 fraction -
- * 0 at BOOT_ANIM_PEN_START_MS, BOOT_ANIM_ONE at BOOT_ANIM_PEN_START_MS +
- * BOOT_ANIM_PEN_MS and forever after.
- *
- * This is what boot_anim_pen() itself used to be, in full, before the climb
- * was extended past BOOT_ANIM_CURVE_PHASE1_POINTS - see that function's own
- * "TWO PHASES" comment. boot_anim_view() reads THIS for how far the camera
- * has turned and the origin has mirrored, not boot_anim_pen(): the orbit and
- * the mirror-drift are already-tuned, already-approved motion (see this
- * file's own top comment on the camera), and letting them keep pacing off
- * however long the curve now takes to finish drawing would have quietly
- * stretched them out to BOOT_ANIM_FADE_START_MS too - four times longer
- * than they were designed to take, and no longer the motion that was
- * signed off on. */
-static inline int32_t boot_anim_orbit_progress(uint32_t now_ms)
-{
-    const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_PEN_START_MS,
-                                          BOOT_ANIM_PEN_MS);
-    return tween_lerp_i32(0, BOOT_ANIM_ONE, linear);
-}
+/* How far through the camera's ORBIT the picture is used to be its own
+ * function here, boot_anim_orbit_progress() - paced off BOOT_ANIM_PEN_START_MS/
+ * PEN_MS independently of boot_anim_pen() itself for the reason its own
+ * comment gave: the orbit and the mirror-drift are tuned, approved motion,
+ * and letting them keep pacing off however long the curve takes to finish
+ * drawing would have quietly stretched them out too. That reasoning still
+ * holds, but the mechanism is gone - boot_anim_view() now reads the camera's
+ * phase and the origin's position straight from boot_anim_timeline_sample()
+ * (see "The timeline" above), which paces itself off the keyframe table's
+ * own ms values, decoupled from boot_anim_pen() the same way this was. */
 
 /* How much of the curve has been drawn, as a Q12 fraction of its length.
  *
@@ -1119,73 +1150,31 @@ static inline boot_anim_stroke_t boot_anim_stroke(int32_t along_q12,
  * but now seen from past the point the floor went edge-on to a line - while
  * the origin has slid left, leaving room for the word beside it.
  *
- * Three effects - the extra turn, the origin's horizontal slide, and the
- * axes losing their labelled tips to become unbounded lines like the floor
- * already is - share ONE clock rather than three independent ones, the same
- * reasoning as the first half of the orbit: driven by a single progress
- * value, they cannot drift out of sync with each other or with how far the
- * title has arrived, because it is the SAME window - start to finish - that
- * paces the letters.
+ * That whole arc - the extra turn, the origin's slide, the motif's own
+ * grow-then-settle swell, the axes losing their labelled tips - used to
+ * share one hand-picked window (BOOT_ANIM_FINALE_END_MS +
+ * BOOT_ANIM_COLLAPSE_MS) kept in sync with the title's own timing by a
+ * literal plus a _Static_assert. Now the turn/slide is just the LAST
+ * segment of boot_anim_keyframes[] (see "The timeline" above) - wherever
+ * the last two keyframes happen to sit - and the motif's swell is the
+ * middle two. There is no longer a separate window to keep in step: moving
+ * a keyframe on the timeline moves the motion, full stop.
  *
- * Placed here, after "Colour", rather than beside "The camera" it extends:
- * boot_anim_view() needs boot_anim_pen(), which is defined above in this
- * same section, and boot_anim_finale_reach() below needs the title's own
- * timing constants - so this is the first point in the file everything it
- * touches already exists.
+ * What DOES still need a shared window is boot_anim_finale_reach() just
+ * below, which is not a transform of the space at all - it is how far the
+ * AXES have grown from their short, labelled length toward the unbounded
+ * lines the floor already draws (see draw_axes() in boot_anim.c). Reusing
+ * BOOT_ANIM_FADE_START_MS/BOOT_ANIM_MS - the same window boot_anim_ink()
+ * already dissolves the whole picture over - means the axes finish
+ * unbounding exactly as the picture finishes disappearing, which reads as
+ * one ending rather than two separately-timed ones.
  *-------------------------------------------------------------------------*/
 
-/* When the last letter lands - the finale's own finish line. */
-#define BOOT_ANIM_FINALE_END_MS (BOOT_ANIM_TITLE_START_MS +               \
-    (BOOT_ANIM_TITLE_LEN - 1) * BOOT_ANIM_TITLE_STAGGER_MS +              \
-    BOOT_ANIM_TITLE_FLIGHT_MS)
-
-/* BOOT_ANIM_FADE_START_MS has to equal this exactly - see its own comment,
- * back where it is actually defined, for why it is a literal rather than
- * a reference to this constant. This is what actually enforces the two
- * stay in agreement, rather than leaving that to the comment there. */
-_Static_assert(BOOT_ANIM_FADE_START_MS == BOOT_ANIM_FINALE_END_MS,
-               "the collapse must start exactly when the last letter lands");
-
-/* Reads from BOOT_ANIM_FINALE_END_MS, not BOOT_ANIM_TITLE_START_MS: the
- * camera's extra turn and the origin's drift - what this fraction actually
- * paces, in boot_anim_view() - now happen entirely within the collapse
- * (see BOOT_ANIM_COLLAPSE_MS's own comment), after every letter has
- * already landed, not spread out across the whole time they were still
- * arriving. */
 static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 {
     return tween_ease_out(tween_ramp(
-        now_ms, BOOT_ANIM_FINALE_END_MS, BOOT_ANIM_COLLAPSE_MS));
+        now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
 }
-
-/* The extra turn: on top of BOOT_ANIM_PHI_END_PHASE (58 degrees, reached
- * when the curve finishes), the finale adds another 57 - a total of 115 -
- * continuing the same turn well past where the t axis's own screen weight
- * passed through zero (around 52 degrees - fully foreshortened, "pointing
- * at the screen") without running it all the way to where the floor goes
- * edge-on: stopping at 115 leaves the floor plane visibly tilted rather
- * than flattened to a line, so the motif keeps some depth rather than
- * reading as flat. See boot_anim_view()'s own comment for the reasoning
- * that led here, and the file's own top comment, "THE CAMERA ORBITS", for
- * what it looks like. */
-#define BOOT_ANIM_PHI_EXTRA_PHASE 10377   /* round(57 / 360 * 65536) */
-
-/* Where the origin settles once the finale finishes, in the VIEWER's frame
- * - see "The title"'s own top comment on why that frame, not the panel's,
- * and BOOT_ANIM_TITLE_VIEW_X's for the golden rectangle spiral this and the
- * word are both now placed from.
- *
- * X is square 1's own centre - square 1 being the whole big square the
- * motif spirals inward through - not the divider where square 1 meets
- * square 2 an earlier attempt anchored to: that put the motif at 62% of
- * the frame's own width, which read as pinned to the divider rather than
- * settled in the square it names, on a render pointing at the difference
- * directly. Y is unchanged: square 2's own top edge, the corner it shares
- * with square 1 along that divider - only X moved, toward square 1's own
- * middle. boot_anim_view() is what turns this VIEW point back into
- * ox/oy. */
-#define BOOT_ANIM_FINALE_ORIGIN_VIEW_X 138
-#define BOOT_ANIM_FINALE_ORIGIN_VIEW_Y 217
 
 /* How far the two floor-plane axes reach once unbounded, matching the
  * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the
@@ -1194,28 +1183,23 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
 #define BOOT_ANIM_AXIS_FAR_UNITS 24
 
 /* The view for `now_ms`. Constructed here rather than in "The camera" above
- * because it depends on both boot_anim_orbit_progress() and
- * boot_anim_finale_reach() (just above) - the boot_anim_view_t TYPE had to
- * exist early, for boot_anim_screen_x()/screen_y() to compile against it,
- * but the constructor did not.
+ * because the boot_anim_view_t TYPE had to exist early, for
+ * boot_anim_screen_x()/screen_y() to compile against it, but the
+ * constructor did not - it only needs boot_anim_timeline_sample(), which by
+ * now it has.
  *
- * oy reaches its mirror position - see boot_anim_origin_y()'s own comment -
- * by the time the ORBIT finishes (boot_anim_orbit_progress(), not
- * boot_anim_pen() - see that function's own comment for why they are no
- * longer the same clock), and both ox and oy hold there unchanged until the
- * finale starts; only once it does do they move again, together this time,
- * toward BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y - see that constant's own comment
- * for why a VIEW coordinate turns into two panel ones the way it does
- * below. */
+ * `w`/`h` are unused: the keyframe table's pos values are already panel
+ * pixels, generated for GFX_WIDTH x GFX_HEIGHT (see
+ * gen_boot_anim_timeline.py) exactly the way boot_anim_screen_y() already
+ * treats `h` as baked in rather than live. Kept as parameters anyway so the
+ * call site and every test calling this do not have to change. */
 static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
 {
-    const int32_t curve_progress = boot_anim_orbit_progress(now_ms); /* 0..ONE */
-    const uint8_t finale = boot_anim_finale_reach(now_ms);  /* 0..255 */
+    (void)w;
+    (void)h;
 
-    const int32_t phase32 =
-        ((curve_progress * BOOT_ANIM_PHI_END_PHASE) >> BOOT_ANIM_Q) +
-        (((int32_t)finale * BOOT_ANIM_PHI_EXTRA_PHASE) / 255);
-    const uint16_t phase = (uint16_t)phase32;
+    const boot_anim_timeline_state_t st = boot_anim_timeline_sample(now_ms);
+    const uint16_t phase = (uint16_t)st.rot_phase;
     const int32_t c15 = boot_anim_cos(phase);
     const int32_t s15 = boot_anim_sin(phase);
 
@@ -1226,24 +1210,8 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
              BOOT_ANIM_C_IM_Y;
     v.t_y  = ((BOOT_ANIM_D_T_Y  * c15 + BOOT_ANIM_B_T_Y  * s15) >> 15) +
              BOOT_ANIM_C_T_Y;
-
-    const int oy_start = boot_anim_origin_y(h);
-    const int oy_mirror = oy_start +
-           (int)((((int64_t)(h - 2 * oy_start)) * curve_progress) >>
-                 BOOT_ANIM_Q);
-    const int ox_mirror = boot_anim_origin_x(w);
-
-    /* oy_mirror/ox_mirror are already exactly h-oy_start / boot_anim_origin_x(w)
-     * for the whole finale, since curve_progress has saturated at ONE by
-     * the time finale can be nonzero - see boot_anim_finale_reach() and
-     * BOOT_ANIM_TITLE_START_MS's own placement after BOOT_ANIM_PEN_START_MS
-     * + BOOT_ANIM_PEN_MS. A VIEW point (view_x, view_y) is a PANEL point
-     * (h - view_y, view_x) - see "The title"'s top comment - so the target
-     * this interpolates toward is (w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y,
-     * BOOT_ANIM_FINALE_ORIGIN_VIEW_X). */
-    v.oy = tween_lerp_i32(oy_mirror, BOOT_ANIM_FINALE_ORIGIN_VIEW_X, finale);
-    v.ox = tween_lerp_i32(ox_mirror, w - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y,
-                          finale);
+    v.ox = (int)st.ox;
+    v.oy = (int)st.oy;
 
     return v;
 }
@@ -1265,86 +1233,28 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
  * see boot_anim.c's csx()/csy() for where it is spent, shared by
  * draw_axes()/draw_arm() and draw_curve()/draw_heads().
  *
- * Eased at both ends (tween_ease_out() gives the back half of that;
- * tween_ramp() itself is linear, so the "in" half is not eased the
- * same way a pure ease-in-out would be, close enough here that the
- * difference does not read) rather than linear throughout, so the motif
- * visibly settles into its final size instead of stopping short.
+ * TWO PHASES: GROW, THEN SETTLE - NO HOLD, used to be a hand-written pair of
+ * GROW/SETTLE windows here (boot_anim_shrink_to_floor_q8(), driven by
+ * BOOT_ANIM_SHRINK_GROW_MS/SETTLE_MS/PEAK_Q8/FLOOR_Q8, guarded by a
+ * _Static_assert that they finished before the collapse started). That
+ * shape - ease_out up to a peak, ease_in back down to a floor, no flat hold
+ * at the top - is now just two consecutive keyframes with those two eases,
+ * in boot_anim_keyframes[] (see "The timeline" above): the one at the peak
+ * carries BOOT_ANIM_EASE_OUT, the one at the floor carries
+ * BOOT_ANIM_EASE_IN. Nothing here has to separately guarantee they finish
+ * before the turn/drift segment starts - they are just earlier keyframes on
+ * the same table, in the order they are in.
  *
- * TWO PHASES: GROW, THEN SETTLE - NO HOLD
- *
- * The motif grows FIRST - a swell past its own full size while the letters
- * are still arriving - and the moment it peaks, SETTLES straight back down
- * to BOOT_ANIM_SHRINK_FLOOR_Q8. No flat plateau at PEAK in between: an
- * earlier version held there until every letter had landed, and a held
- * value reads as the animation having stopped, not as one continuous
- * motion, no matter how smoothly it eases in and out of the hold itself.
- * "In and out": grow, then shrink, not a stop at the top between them
- * either. GROW eases OUT into the peak and SETTLE eases IN away from it
- * (tween_ease_in(), the mirror of tween_ease_out() - see its own comment)
- * so both sides are moving slowly right at the peak, which is what makes
- * it read as one smooth apex rather than two ramps meeting at a corner.
- *
- * Both phases finish comfortably before BOOT_ANIM_FINALE_END_MS, when the
- * collapse starts turning the camera and drifting the origin (see
- * BOOT_ANIM_COLLAPSE_MS's own comment) - the _Static_assert below is what
- * actually guarantees that, not just this comment. Which is what makes
- * growing (and settling) safe: nothing is simultaneously eating into the
- * room the unshrunk projection already fits in (see the panel-fit test's
- * own comment on this - it is what would have caught an earlier attempt at
- * a grow phase overflowing by over 100px the moment the turn and the drift
- * started at the same time). By BOOT_ANIM_FINALE_END_MS the motif is
- * already sitting at BOOT_ANIM_SHRINK_FLOOR_Q8 and simply holds there
- * through the collapse - which was never a real overflow risk the way PEAK
- * is (settling can only pull a point closer to the origin, never push it
- * further out, so whatever fits at PEAK still fits smaller after).
- *
- * BOOT_ANIM_SHRINK_PEAK_Q8 - how far past full size (256) it swells - is
- * the one number here that IS a real overflow risk, and was swept for it:
- * the actual projection, a 5ms step across the whole animation, grown
- * until something first ran off the panel and backed off from there. */
-#define BOOT_ANIM_SHRINK_GROW_MS   900
-#define BOOT_ANIM_SHRINK_SETTLE_MS 600
-#define BOOT_ANIM_SHRINK_PEAK_Q8   380
-#define BOOT_ANIM_SHRINK_FLOOR_Q8  28    /* held from here through the collapse */
-
-/* The guarantee "THE TWO PHASES" above depends on: grow+settle finish
- * before the collapse starts moving the camera and origin, so neither
- * phase ever has to share a clock with something that moves the room
- * itself. If this ever trips, SETTLE needs to go back to racing to outrun
- * the turn and the drift the way an earlier version of it did, rather than
- * assuming it already has the room to itself. */
-_Static_assert(BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS +
-                   BOOT_ANIM_SHRINK_SETTLE_MS <= BOOT_ANIM_FINALE_END_MS,
-               "grow+settle must finish before the collapse starts moving "
-               "the room");
-
-/* Shared by boot_anim_motif_shrink_q8() and boot_anim_grid_shrink_q8() just
- * below - same GROW/SETTLE shape (see "TWO PHASES" above), different
- * resting floor. */
-static inline int boot_anim_shrink_to_floor_q8(uint32_t now_ms, int floor_q8)
-{
-    const uint32_t grow_end_ms =
-        BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
-    const uint32_t settle_end_ms = grow_end_ms + BOOT_ANIM_SHRINK_SETTLE_MS;
-
-    if (now_ms <= grow_end_ms) {
-        const uint8_t u8 = tween_ease_out(tween_ramp(
-            now_ms, BOOT_ANIM_TITLE_START_MS, BOOT_ANIM_SHRINK_GROW_MS));
-        return tween_lerp_i32(256, BOOT_ANIM_SHRINK_PEAK_Q8, u8);
-    }
-    if (now_ms >= settle_end_ms) {
-        return floor_q8;
-    }
-
-    const uint8_t u8 = tween_ease_in(tween_ramp(
-        now_ms, grow_end_ms, BOOT_ANIM_SHRINK_SETTLE_MS));
-    return tween_lerp_i32(BOOT_ANIM_SHRINK_PEAK_Q8, floor_q8, u8);
-}
-
+ * This is now a thin read of that table's scale channel: kept as its own
+ * name (rather than every call site reading
+ * boot_anim_timeline_sample(now_ms).scale_q8 directly) because
+ * boot_anim_grid_shrink_q8() just below needs to say, in its own name, that
+ * it rides the SAME pulse - and because "the motif's own shrink" is a
+ * clearer thing to say boot_anim.c's callers are asking for than "the
+ * timeline's scale channel" would be. */
 static inline int boot_anim_motif_shrink_q8(uint32_t now_ms)
 {
-    return boot_anim_shrink_to_floor_q8(now_ms, BOOT_ANIM_SHRINK_FLOOR_Q8);
+    return (int)boot_anim_timeline_sample(now_ms).scale_q8;
 }
 
 /* A CONSTANT, not a GROW/SETTLE curve like boot_anim_motif_shrink_q8() -

@@ -266,16 +266,17 @@ static void test_the_finale_turns_t_back_toward_vertical(void)
         "its starting magnitude, not stayed foreshortened");
 }
 
-/* The finale settles the origin at BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y, a VIEW
- * point - see that constant's own comment in boot_anim.h - which is why
- * this checks ox/oy against PANEL_H - VIEW_X and PANEL_W - VIEW_Y rather
- * than against VIEW_X/Y directly: that translation is the exact thing under
- * test, the same reasoning test_a_letter_starts_off_panel_to_the_left() and
- * the rest of "The title"'s tests apply on the other side of it.
+/* The finale settles the origin at the LAST keyframe's own pos - see
+ * boot_anim_timeline.json and gen_boot_anim_timeline.py's own top comment
+ * for what that keyframe is. Used to be checked against
+ * BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y, a VIEW point translated into panel
+ * pixels inside boot_anim_view() itself; the keyframe table now stores the
+ * already-translated panel pixels directly (151, 138 - see the seed
+ * table in gen_boot_anim_timeline.py's plan, or just read the last row of
+ * boot_anim_keyframes[]), so this checks those literals rather than
+ * re-deriving them from a VIEW-frame constant that no longer exists.
  *
- * Checked at BOOT_ANIM_MS, not BOOT_ANIM_FINALE_END_MS - see
- * BOOT_ANIM_COLLAPSE_MS's own comment: the drift does not start until
- * every letter has landed and takes BOOT_ANIM_COLLAPSE_MS from there. */
+ * Checked at BOOT_ANIM_MS, the last keyframe's own ms. */
 static void test_the_finale_settles_the_origin_at_its_view_target(void)
 {
     const boot_anim_view_t before =
@@ -285,14 +286,12 @@ static void test_the_finale_settles_the_origin_at_its_view_target(void)
 
     TEST_ASSERT_TRUE_MESSAGE(after.ox != before.ox || after.oy != before.oy,
         "the origin should have moved during the finale");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(
-        BOOT_ANIM_FINALE_ORIGIN_VIEW_X, after.oy,
-        "oy should land exactly on the view target's x by the time the "
-        "finale ends");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(
-        PANEL_W - BOOT_ANIM_FINALE_ORIGIN_VIEW_Y, after.ox,
-        "ox should land exactly on the view target's y by the time the "
-        "finale ends");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(138, after.oy,
+        "oy should land exactly on the last keyframe's target by the time "
+        "the finale ends");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(151, after.ox,
+        "ox should land exactly on the last keyframe's target by the time "
+        "the finale ends");
 }
 
 /* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends up
@@ -408,10 +407,13 @@ static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
  * clipped loop tip - and it still demands EXACT fit before the grow starts
  * and after the settle finishes, which is the part that actually has to
  * look tidy. */
-#define BOOT_ANIM_TEST_GROW_START_MS  BOOT_ANIM_TITLE_START_MS
-#define BOOT_ANIM_TEST_SETTLED_MS \
-    (BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS + \
-     BOOT_ANIM_SHRINK_SETTLE_MS)
+/* The motif's own grow-then-settle window, from boot_anim_timeline.json's
+ * seed keyframes: it starts growing at the keyframe holding it flat at 256
+ * (ms 2700) and is back at its resting floor by the keyframe after the one
+ * that peaks (ms 4200) - see boot_anim_keyframes[] in the generated
+ * boot_anim_timeline.h for the literal table these mirror. */
+#define BOOT_ANIM_TEST_GROW_START_MS  2700
+#define BOOT_ANIM_TEST_SETTLED_MS     4200
 #define BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX 260
 
 static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
@@ -472,21 +474,25 @@ static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
  * FLOOR (clamped back to the base, not following it all the way down). */
 static void test_the_grid_shrink_pulses_with_the_motif_above_a_floor(void)
 {
+    /* The motif's own grown PEAK (380) and where it is reached (ms 3600) -
+     * see the same seed keyframes BOOT_ANIM_TEST_GROW_START_MS/SETTLED_MS
+     * above mirror. */
+    const int motif_peak_q8 = 380;
+    const uint32_t peak_ms = 3600;
+
     TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8, boot_anim_grid_shrink_q8(0));
     TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8,
-                          boot_anim_grid_shrink_q8(BOOT_ANIM_TITLE_START_MS));
+                          boot_anim_grid_shrink_q8(BOOT_ANIM_TEST_GROW_START_MS));
 
-    const uint32_t grow_end_ms =
-        BOOT_ANIM_TITLE_START_MS + BOOT_ANIM_SHRINK_GROW_MS;
     TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_grid_shrink_q8(grow_end_ms) > BOOT_ANIM_GRID_SHRINK_Q8,
+        boot_anim_grid_shrink_q8(peak_ms) > BOOT_ANIM_GRID_SHRINK_Q8,
         "the grid should swell above its own base while the motif is at "
         "its own grown PEAK, not sit still while everything else grows");
 
     TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8,
                           boot_anim_grid_shrink_q8(BOOT_ANIM_MS));
     TEST_ASSERT_TRUE_MESSAGE(
-        BOOT_ANIM_GRID_SHRINK_Q8 > BOOT_ANIM_SHRINK_PEAK_Q8,
+        BOOT_ANIM_GRID_SHRINK_Q8 > motif_peak_q8,
         "the grid's own base should be noticeably bigger than even the "
         "motif's own grown PEAK, let alone its much smaller settled floor");
 }

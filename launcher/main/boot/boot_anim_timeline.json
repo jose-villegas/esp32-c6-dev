@@ -1,0 +1,35 @@
+{
+    "timing": {
+        "total_ms": 5800,
+        "axes_ms": 450,
+        "grid_start_ms": 150,
+        "grid_ring_ms": 12,
+        "grid_fade_ms": 300,
+        "pen_start_ms": 520,
+        "pen_ms": 1980,
+        "title_start_ms": 2700,
+        "title_stagger_ms": 140,
+        "title_flight_ms": 900,
+        "title_entry_px": 320,
+        "title_turns_phase": 229376,
+        "title_amplitude_px": 22,
+        "title_wave_amplitude_px": 11,
+        "title_wave_period_ms": 1600,
+        "title_wave_stagger_ms": 90,
+        "fade_start_ms": 4300,
+        "grid_hue_ms": 2600,
+        "grid_hue_spread": 70,
+        "grid_whiten_max": 120,
+        "grid_ceiling_max": 170,
+        "grid_max": 70
+    },
+    "keyframes": [
+        { "ms": 520,  "pos": [184, 336], "rot": [0, 0, 0],     "scale": [256, 256, 256], "ease": "linear" },
+        { "ms": 2500, "pos": [184, 112], "rot": [10559, 0, 0], "scale": [256, 256, 256], "ease": "linear" },
+        { "ms": 2700, "pos": [184, 112], "rot": [10559, 0, 0], "scale": [256, 256, 256], "ease": "linear" },
+        { "ms": 3600, "pos": [184, 112], "rot": [10559, 0, 0], "scale": [380, 380, 380], "ease": "ease_out" },
+        { "ms": 4200, "pos": [184, 112], "rot": [10559, 0, 0], "scale": [28, 28, 28],    "ease": "ease_in" },
+        { "ms": 4300, "pos": [184, 112], "rot": [10559, 0, 0], "scale": [28, 28, 28],    "ease": "linear" },
+        { "ms": 5800, "pos": [151, 138], "rot": [20936, 0, 0], "scale": [28, 28, 28],    "ease": "ease_out" }
+    ]
+}
