@@ -151,34 +151,67 @@ doing the typing, not you privately drafting the same text.
 
    **Which local model for which job** (from the same session's research,
    ranked against real coding/instruction-following benchmarks, not
-   guessed):
-   - **Code generation / fixing**: `qwen3-coder:30b` if pulled (30B MoE,
-     3.3B active params - newer and benchmarks higher than qwen2.5-coder at
-     a similar ~18-19GB footprint, and the fewer active params should make
-     it faster too; needs `--nowordwrap`, see above, not yet re-confirmed
-     clean under `--think=false` alone the way the models below were).
-     `qwen2.5-coder:32b-instruct-q4_K_M` otherwise (dedicated coder model,
-     confirmed never emits the thinking preamble); `qwen2.5:14b` as a
-     smaller/faster fallback below that (HumanEval 83.5%, MBPP 82%, never
-     reasons).
+   guessed - but see the VRAM-footprint note right after this list, which
+   overrides the sizing part of these picks even though the quality
+   ranking below is still accurate):
+   - **Code generation / fixing**: `qwen2.5:14b` by default (~9 GB weights,
+     fits a 16 GB card with room for KV cache; HumanEval 83.5%, MBPP 82%,
+     never reasons, confirmed never emits the thinking preamble).
+     `qwen3-coder:30b` (30B MoE, 3.3B active params, needs `--nowordwrap`,
+     see above) or `qwen2.5-coder:32b-instruct-q4_K_M` (dedicated coder
+     model) benchmark higher and remain available as explicit env-var
+     overrides for anyone who actually has the ~18-19 GB of VRAM headroom
+     to spare - just not the silent default anymore, see below.
    - **Review / second opinion**: pick a genuinely different model family
      than whatever did the generation, not just a different size of the
-     same one - `gemma4:26b` (strong instruction-following, IFEval 98.5%,
-     needs `--think=false`) is the current pick; `mistral-nemo:latest` is
+     same one - `mistral-nemo:latest` (~7 GB weights, fits easily; weaker
+     at code, HumanEval ~32%, but fine for JSON-verdict-style review; also
      the safe, always-clean fallback if `--think=false` ever proves
-     unreliable on a given Ollama version (weaker at code, HumanEval ~32%,
-     but fine for JSON-verdict-style review).
-   - **Docs / long-context prose**: `gemma4:26b` (best IFEval/long-context
-     fit of what's pulled here; needs `--think=false`).
+     unreliable on a given Ollama version) is the default. `gemma4:26b`
+     (strong instruction-following, IFEval 98.5%, needs `--think=false`,
+     ~18 GB weights) remains available as an override for anyone with
+     headroom who wants the stronger review.
+   - **Docs / long-context prose**: `mistral-nemo:latest` by default (fits
+     easily). `gemma4:26b` (best IFEval/long-context fit of what's pulled
+     here, ~18 GB weights) remains an override for anyone with headroom.
    - **Avoid for structured-output delegation**: `deepseek-r1:14b` and any
      `DeepSeek-R1-Distill-*` variant - always-on reasoning by design, and
      while Ollama does support disabling it for this family too, there's
      less margin than the above picks if a future Ollama/model update
      changes how that suppression behaves.
 
+   **A global Ollama setting can make picking a "small enough" model
+   pointless on its own.** Confirmed 2026-08-31: local-coding runs were
+   freezing the whole machine even when the model itself was a reasonable
+   size. Root cause was not any script or model choice - the Ollama
+   desktop app's own **Settings -> Context length** was set to 262144
+   machine-wide, which shows up in `%LOCALAPPDATA%\Ollama\server-*.log` as
+   `OLLAMA_CONTEXT_LENGTH:262144` in the server's own startup config, and
+   this overrides every model's context regardless of its size or a
+   `Modelfile`'s own `num_ctx`. Verified live: `mistral-nemo:latest`
+   (weights ~7 GB) loaded at 262144 context anyway - `ollama ps` reported a
+   52 GB footprint, 74% on CPU. The log's own repeating `"model predicted
+   to exceed available memory, evicting"` lines, logged while
+   `system_free` dropped as low as 617 MB, are the actual freeze mechanism:
+   Ollama thrashing between allocate/evict cycles under near-zero free
+   system RAM, not merely "slow inference." **The fix is a one-time,
+   machine-wide change**: open the Ollama tray app's Settings, lower
+   Context length to something sane (8192-16384 is plenty for anything
+   this repo's scripts send - one hunk plus a few lines of context, or one
+   file's worth of audit findings), and restart Ollama. No script-side
+   `ollama create --parameter num_ctx ...` workaround is needed once that
+   setting is sane - comments in this repo's scripts previously claimed a
+   locally-created capped tag existed for this; that was aspirational and
+   never actually done, and has been removed now that the real fix is
+   documented here. The model-sizing picks above are still worth keeping
+   as **defense in depth** independent of that setting - a stray oversized
+   default can't reintroduce this on its own even if the app setting drifts
+   back up.
+
    Re-test all of this before trusting it again if OmniRoute's own config
-   changes, Ollama updates its thinking-suppression behavior, or the locally
-   pulled model set changes - see "Things rot" below.
+   changes, Ollama updates its thinking-suppression or context-length
+   defaults, or the locally pulled model set changes - see "Things rot"
+   below.
 
 5. **Route "free tier" through OmniRoute, but test the combo first.**
    Existing combos rot: in one session, `deepseek` had no active
@@ -355,9 +388,9 @@ to narrow from the all-docs default to one app's own doc folder.
 
 `scripts/resolve-conflicts-local.sh` is the same idea applied to git merge
 conflicts instead of audit findings: one hunk, one fixer call
-(`qwen2.5-coder:32b-instruct-q4_K_M`) plus one reviewer call (`gemma4:26b`,
-a different model family - a real second opinion, not the fixer checking
-its own work), looped up to `--rounds` times on an INVALID verdict. The
+(`qwen2.5:14b`) plus one reviewer call (`mistral-nemo:latest`, a different
+model family - a real second opinion, not the fixer checking its own
+work), looped up to `--rounds` times on an INVALID verdict. The
 part that makes this safe to actually delegate is the hard gate after: it
 only ever commits if `./launcher/test/run_tests.sh` AND
 `check_app_sources.sh` both pass on the resolved tree, and it never forces
@@ -376,8 +409,8 @@ refuse the commit) in the session that added it.
 test body, following this doc's own division of labor to the letter: YOU
 write the spec (a plain-text file naming the suite, the exact scene-setup
 statements, and the exact `TEST_ASSERT_*` calls - the judgment part stays
-yours), and `qwen3-coder:30b` (reviewed by `gemma4:26b`) only renders that
-into a correctly-formatted function matching the target suite's own
+yours), and `qwen2.5:14b` (reviewed by `mistral-nemo:latest`) only renders
+that into a correctly-formatted function matching the target suite's own
 examples. The gate: the suite must not already have a test of that name,
 `run_tests.sh` must still pass afterward, and the new test must show up as
 PASS *exactly once* - CLAUDE.md's "watch it fail before it passes" turned

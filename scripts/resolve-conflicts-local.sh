@@ -4,7 +4,7 @@
 # gate is green. Zero cloud calls -- see docs/Model-Delegation-Workflow.md's
 # "Route local through the Ollama CLI directly" section, which this follows
 # exactly (--think=false, stderr routed to a log not merged into stdout,
-# qwen2.5-coder:32b-instruct-q4_K_M / gemma4:26b as fixer/reviewer).
+# qwen2.5:14b / mistral-nemo:latest as fixer/reviewer).
 #
 # WHY A HARD TEST GATE, NOT JUST A REVIEWER MODEL
 #
@@ -42,7 +42,7 @@
 #
 # REVIEW LOOP, PER HUNK
 #
-# gemma4:26b (a different model family from the qwen2.5-coder fixer, so
+# mistral-nemo:latest (a different model family from the qwen fixer, so
 # this is a genuine second opinion rather than the same model checking its
 # own work -- see the workflow doc's "pick a genuinely different model
 # family" note) gets the same context plus the fixer's proposed resolution
@@ -92,13 +92,19 @@
 # Env overrides (same override convention as fix-audited-code.sh's
 # LOCAL_FIXER_MODEL/LOCAL_REVIEW_MODEL, kept as distinct names so setting
 # one script's models never silently changes the other's):
-#   CONFLICT_FIXER_MODEL   default qwen2.5-coder:32b-instruct-q4_K_M
-#   CONFLICT_REVIEW_MODEL  default gemma4:26b
+#   CONFLICT_FIXER_MODEL   default qwen2.5:14b
+#   CONFLICT_REVIEW_MODEL  default mistral-nemo:latest
 # See docs/Model-Delegation-Workflow.md's "Which local model for which job"
-# for why these two and what to fall back to if either is not pulled
-# locally (`ollama list`) -- mistral-nemo:latest for the reviewer is the
-# documented safe fallback if gemma4:26b's --think=false ever proves
-# unreliable on a given Ollama version.
+# for why these two -- both chosen so their weights alone (~9GB / ~7GB) fit
+# a 16GB card, with bigger/higher-quality options like
+# qwen2.5-coder:32b-instruct-q4_K_M or gemma4:26b (~18-19GB each) available
+# via the env vars above for anyone with real VRAM headroom. If local
+# Ollama runs are freezing the machine regardless of model choice, see that
+# doc's "A global Ollama setting can make picking a 'small enough' model
+# pointless" -- a stuck 262144 Context Length setting in the Ollama app
+# itself overrides every model's context and is the far more likely
+# culprit; a hunk plus a few lines of context never needs anywhere near
+# that once the app setting is sane.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -143,8 +149,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 
-FIXER_MODEL="${CONFLICT_FIXER_MODEL:-qwen2.5-coder:32b-instruct-q4_K_M}"
-REVIEW_MODEL="${CONFLICT_REVIEW_MODEL:-gemma4:26b}"
+FIXER_MODEL="${CONFLICT_FIXER_MODEL:-qwen2.5:14b}"
+REVIEW_MODEL="${CONFLICT_REVIEW_MODEL:-mistral-nemo:latest}"
 
 for m in "$FIXER_MODEL" "$REVIEW_MODEL"; do
   if ! ollama list | awk '{print $1}' | grep -qxF "$m"; then
