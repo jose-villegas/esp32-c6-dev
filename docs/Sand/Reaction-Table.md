@@ -57,7 +57,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Lava
 
 - Is a heat source in its own right, and licks flame into an empty neighbour readily. Touched by a quenching liquid, becomes stone.
-- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - throws whatever is covering it instantly, up to SAND_VENT_REACH cells deep along each covered direction independently, guaranteed to dislodge.
+- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - throws whatever is covering it fast, up to SAND_VENT_REACH cells deep along each covered direction independently, guaranteed to dislodge.
 
 ### Acid
 

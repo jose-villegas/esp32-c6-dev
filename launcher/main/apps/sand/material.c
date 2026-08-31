@@ -738,28 +738,39 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
-            /* RAISED TO THE MAXIMUM A SINGLE BYTE-WIDE ROLL CAN EXPRESS -
-             * 255 in 256 (~99.6%), per step, once a pool is COVERED FROM
+            /* SETTLED BACK TO A MODERATE FIGURE, MEASURED ON DEVICE -
+             * 24 in 256 (~9.4%), per step, once a pool is COVERED FROM
              * ABOVE - see reaction_t.vent_chance's own comment for the
              * design and try_vent()/covered_from_above() (sand_
-             * reactions.c) for the mechanism. Was 1 (the RAREST this same
-             * roll can express, ~0.4%), the opposite extreme, when this
-             * feature first shipped; the design's own balance has moved
-             * since then from "occasional, dramatic pulse" toward "fires
-             * essentially every step a lattice-sampled cell stays
-             * covered" - see step_one_burning_cell()'s own comment
-             * (sand_reactions.c) for the matching change to the second,
-             * independent roll that used to cut this rate down further
-             * still. SAND_VENT_REACH and SAND_VENT_CHUNK (sand.h) are
-             * unaffected - how FAR a pulse throws and how WIDE a slab it
-             * grabs are separate dials from how OFTEN one happens, and
-             * stay exactly as tuned. sand_set_vent_chance() (sand.h)
-             * still overrides this for tests that need an exact, pinned
-             * value regardless of what production is currently tuned to.
-             * A living balance number, not a protected constant - see
-             * this project's own convention of revising these on request
-             * rather than treating a shipped figure as fixed. */
-            .vent_chance = 255,
+             * reactions.c) for the mechanism. This briefly sat at 255
+             * (the maximum this roll can express) and, combined with the
+             * second roll below also being maxed, produced a real,
+             * observed-on-device problem: a stream of water quenching
+             * lava creates a covered cell (fresh stone, covered by
+             * nothing yet but itself sitting over more lava) that then
+             * gets thrown away the very next step, before any more crust
+             * can build on top of it - "material pops the instant water
+             * touches lava", not "a sealed slab breaks free". Watched live
+             * over the serial console (VENT_DBG instrumentation, since
+             * removed) confirmed the mechanism was firing exactly as
+             * coded, just too fast for a slab to ever exist long enough to
+             * see. This figure, paired with the second roll's own return
+             * to a real gate (see step_one_burning_cell()'s own comment),
+             * is a first attempt at a middle ground: noticeably more
+             * frequent than the original 1 (~0.4%, an occasional pulse
+             * over minutes) without firing before a crust can accumulate.
+             * Not yet re-measured on device at this exact figure - tune
+             * further if it still fires too fast or has gone too rare.
+             * SAND_VENT_REACH and SAND_VENT_CHUNK (sand.h) are unaffected
+             * - how FAR a pulse throws and how WIDE a slab it grabs are
+             * separate dials from how OFTEN one happens, and stay exactly
+             * as tuned. sand_set_vent_chance() (sand.h) still overrides
+             * this for tests that need an exact, pinned value regardless
+             * of what production is currently tuned to. A living balance
+             * number, not a protected constant - see this project's own
+             * convention of revising these on request rather than
+             * treating a shipped figure as fixed. */
+            .vent_chance = 24,
 
             /* No residue: lava never burns out (decay 0 above), so nothing
          * here would ever fire. No conducts either - lava IS the heat,

@@ -613,23 +613,33 @@ typedef struct {
      * liquid) sitting further along the same line is never mistaken for
      * part of the seal and never thrown alongside it.
      *
-     * AS FREQUENT AS THIS SAME ROLL CAN EXPRESS, NOW - the table figure
-     * below is 255 (was 1, the opposite extreme, when this feature first
-     * shipped as an occasional, dramatic pulse), and step_one_burning_
-     * cell()'s (sand_reactions.c) own second, independent roll on top of
-     * this one - the same shape reaction_t.evaporates uses, see step_one_
-     * dissolver_cell()'s own comment there - is now `% 1`, unconditionally
-     * true, rather than the 60-times-rarer figure it used to apply.
-     * Together production now fires essentially every step a lattice-
-     * sampled covered cell rolls at all (SAND_VENT_CHUNK, sand.h, decides
-     * WHICH cells get to roll; this decides how often the ones that do
-     * succeed). SAND_VENT_REACH and SAND_VENT_CHUNK are unaffected by this
-     * change - how far a pulse throws and how wide a slab it grabs are
-     * separate dials from how often one happens; see their own comments
-     * (sand.h) for those. A living balance number, not a protected
-     * constant - this project's own convention is to revise a shipped
-     * figure on request and update this comment alongside it, not to
-     * treat "that is what shipped" as a reason to leave it.
+     * A MODERATE MIDDLE GROUND, MEASURED ON DEVICE - the table figure
+     * below is 24 (~9.4%; was 1, the rarest this roll can express, when
+     * this feature first shipped as an occasional, dramatic pulse), and
+     * step_one_burning_cell()'s (sand_reactions.c) own second, independent
+     * roll on top of this one - the same shape reaction_t.evaporates uses,
+     * see step_one_dissolver_cell()'s own comment there - is `% 8`
+     * (~12.5%), rather than the 60-times-rarer figure it used to apply.
+     * Both figures briefly went to their absolute extreme (255 and `% 1`,
+     * unconditionally true) in pursuit of "venting as often as possible",
+     * and that extreme was measured on device to be a real problem, not
+     * just louder: a stream of water quenching lava creates a covered cell
+     * that gets thrown away the very next step, before any more crust can
+     * build on top of it, so it read as "material pops the instant water
+     * touches lava" rather than "a sealed slab breaks free" - there was
+     * never time for a slab to exist. These two figures pull back from
+     * that extreme to something that still fires roughly 14x more often
+     * than the original design while leaving a covered cell several
+     * expected steps to accumulate before it vents. Not yet re-measured on
+     * device at this exact pairing - retune further if it still fires
+     * before a slab can form, or has gone too rare to notice.
+     * SAND_VENT_REACH and SAND_VENT_CHUNK are unaffected by any of this -
+     * how far a pulse throws and how wide a slab it grabs are separate
+     * dials from how often one happens; see their own comments (sand.h)
+     * for those. A living balance number, not a protected constant - this
+     * project's own convention is to revise a shipped figure on request
+     * and update this comment alongside it, not to treat "that is what
+     * shipped" as a reason to leave it.
      *
      * This is lava's own answer to a real dead end: a burning LIQUID is
      * never smothered the way a solid is (see step_one_burning_cell()'s
