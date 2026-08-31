@@ -2853,6 +2853,16 @@ pay_quench_cost(sand_t* s, int nx, int ny, int w) {
  * anything about how far heat can really travel. */
 #define CONDUCT_REACH 32
 
+/* The starting life a cell gets from boiling (steam for water, gas for
+ * acid - reaction_t.boils_to), below the full MATERIAL_VARIANTS - 1
+ * place_reacted() would otherwise hand it - see conduct_heat()'s own use
+ * of this, just below, for why boiling deliberately makes less of its
+ * product to look at now rather than only making it slower. Started at
+ * 20% below full (a cut of 3), reported as too drastic - the cut is
+ * roughly 30% smaller now (2 instead of 3), landing at 13 rather than
+ * 12. */
+#define BOILED_LIFE ((MATERIAL_VARIANTS - 1) - 2)
+
 /* Heat crossing a run of conductor cells - the boiler. See this file's
  * own top comment ("THE BOILER") for the two problems this and
  * solves, and why an exactly-one-cell reach was tried first and did
@@ -2978,9 +2988,37 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
              * deadlocked), so boiling anywhere but the surface produced
              * nothing anyone could see. Bubbling removed that constraint
              * entirely, and with it the only reason this code needed to
-             * know which way was up. */
-            place_reacted(s, rx, ry, bat, MAT_STEAM);
-            acted = true;
+             * know which way was up.
+             *
+             * Gated on `boils` now, a second roll on top of the `conducts`
+             * roll that already got the heat here - see reaction_t.boils's
+             * own comment in material.h for why (water resisting long
+             * enough to occasionally win against evaporation). A miss
+             * here means nothing happens THIS step, not that it never
+             * will - the same cell gets another roll next step, for as
+             * long as heat keeps reaching it. */
+            const int boils = (s->boils >= 0) ? s->boils : reaction_of(bc)->boils;
+            if (boils != 0 && (int)(rng_next(&s->rng) & 0xFF) < boils) {
+                /* boils_to, not a hardcoded MAT_STEAM - this branch used
+                 * to turn every boiling liquid into steam regardless of
+                 * which one it was, so acid conducted through a wall
+                 * boiled into the same white kettle-steam water does
+                 * instead of the MAT_GAS it produces everywhere else it
+                 * evaporates. 0 (water's default) still means MAT_STEAM,
+                 * so water's own behaviour is unchanged.
+                 *
+                 * Less than a full cell of life, not the usual
+                 * place_reacted() default (MATERIAL_VARIANTS - 1) - see
+                 * BOILED_LIFE's own comment above for the figure - so
+                 * boiling now makes noticeably less of its product than
+                 * it used to, a boiler reading as producing a bit less
+                 * to look at rather than just producing it slower.
+                 * place_cell() directly, since place_reacted() always
+                 * hands a fresh non-ramping material its full life. */
+                const uint8_t boils_to = reaction_of(bc)->boils_to ? reaction_of(bc)->boils_to : MAT_STEAM;
+                place_cell(s, rx, ry, bat, CELL_MAKE(boils_to, BOILED_LIFE));
+                acted = true;
+            }
         } else {
             const reaction_t* br = reaction_of(bc);
             if (br->heat_ramp != 0 || (br->heats_to != 0 && br->heat_chance != 0)) {
@@ -3325,7 +3363,45 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                     mark_rows(s, y, y);
                     wake_block_and_neighbors(s, x, y);
                 } else if (quench_to != 0) {
-                    place_reacted(s, x, y, at, quench_to);
+                    /* FIRE's quench_to (MAT_STEAM, material.c) models the
+                     * quenching LIQUID flash-boiling at contact - the same
+                     * physical event conduct_heat()'s boiling branch
+                     * already handles for heat crossing a wall
+                     * (reaction_t.boils_to) - not a state change of the
+                     * fire itself, unlike lava's quench_to (MAT_STONE),
+                     * which is what lava becomes regardless of which
+                     * liquid touched it. So fire alone substitutes the
+                     * quenching liquid's own boils_to here (0 still
+                     * defaulting to MAT_STEAM, water's figure). */
+                    uint8_t product      = quench_to;
+                    bool leaves_residue  = true;
+                    if (mat_id == MAT_FIRE) {
+                        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+                        const uint8_t liquid_boils_to = reaction_of(s->cells[nat])->boils_to;
+                        if (liquid_boils_to == MAT_GAS) {
+                            /* Acid putting a flame out is not water's
+                             * clean, deterministic flash to steam - see
+                             * SAND_ACID_QUENCH_RESIDUE_CHANCE/
+                             * SAND_ACID_QUENCH_SMOKE_CHANCE's own comment
+                             * (sand.h) for why this is two rolls, not
+                             * one. */
+                            leaves_residue = (int)(rng_next(&s->rng) & 0xFF)
+                                             < SAND_ACID_QUENCH_RESIDUE_CHANCE;
+                            product = ((int)(rng_next(&s->rng) & 0xFF)
+                                       < SAND_ACID_QUENCH_SMOKE_CHANCE)
+                                          ? MAT_SMOKE
+                                          : MAT_GAS;
+                        } else {
+                            product = liquid_boils_to ? liquid_boils_to : MAT_STEAM;
+                        }
+                    }
+                    if (leaves_residue) {
+                        place_reacted(s, x, y, at, product);
+                    } else {
+                        row[x] = CELL_EMPTY;
+                        mark_rows(s, y, y);
+                        wake_block_and_neighbors(s, x, y);
+                    }
                 } else {
                     row[x] = CELL_EMPTY;
                     mark_rows(s, y, y);
@@ -3484,6 +3560,52 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     return acted;
 }
 
+/* A small chance for four cells of the same material, sitting in a
+ * square, to collapse into a single cell of reaction_t.condenses_to -
+ * fake condensation, today only steam turning back into a droplet of
+ * water. See reaction_t.condenses's own comment in material.h for why
+ * this deliberately checks nothing about temperature or a cold surface:
+ * it is a rare cosmetic touch, not a second boiler to tune.
+ *
+ * (x, y) is only ever checked as the square's own top-left corner. That
+ * is not a limitation - step_one_reacting_row() below calls this once
+ * per condensing cell it finds, scanning left to right, top to bottom,
+ * so any real 2x2 block of this material is reached from its own
+ * top-left cell before it could ever be reached from another corner.
+ * The other three corners still get their own call, from their own
+ * position, and simply find no complete square there (their own
+ * top-left neighbour is not part of any OTHER square once this one
+ * fires) - a cheap, honest miss, not a case this function needs to
+ * special-case away. */
+static inline bool
+step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    if (x + 1 >= w || y + 1 >= h) {
+        return false;
+    }
+    const size_t at    = (size_t)y * (size_t)w + (size_t)x;
+    const size_t at_r  = at + 1;
+    const size_t at_d  = at + (size_t)w;
+    const size_t at_dr = at_d + 1;
+    const uint8_t mat_id = CELL_MATERIAL(s->cells[at]);
+
+    if (CELL_IS_EMPTY(s->cells[at_r]) || CELL_MATERIAL(s->cells[at_r]) != mat_id
+        || CELL_IS_EMPTY(s->cells[at_d]) || CELL_MATERIAL(s->cells[at_d]) != mat_id
+        || CELL_IS_EMPTY(s->cells[at_dr]) || CELL_MATERIAL(s->cells[at_dr]) != mat_id) {
+        return false;
+    }
+
+    const int condenses = (s->condenses >= 0) ? s->condenses : r->condenses;
+    if (condenses == 0 || (int)(rng_next(&s->rng) & 0xFF) >= condenses) {
+        return false;
+    }
+
+    place_reacted(s, x, y, at, r->condenses_to);
+    place_cell(s, x + 1, y, at_r, CELL_EMPTY);
+    place_cell(s, x, y + 1, at_d, CELL_EMPTY);
+    place_cell(s, x + 1, y + 1, at_dr, CELL_EMPTY);
+    return true;
+}
+
 /* One row's share of the scan - only burning cells are dispatched; keyed
  * on reaction_t.burns (material.h), NOT on kind == KIND_STATIC. Stone
  * and ember both share that kind, and every unused material slot shares
@@ -3512,6 +3634,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
 #define FOUND_MOISTURE    8u
 #define FOUND_FALLER      16u
 #define FOUND_WITHERING   32u
+#define FOUND_CONDENSING  64u
 
 static unsigned
 step_one_reacting_row(sand_t* s, int y, int w, int h) {
@@ -3540,6 +3663,20 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             }
             step_one_dissolver_cell(s, row, x, y, w, h, r);
             continue;
+        }
+        /* Condensing, on its own presence-not-activity footing exactly
+         * like dissolving above: a steam cell that finds no complete
+         * square this step (or rolls a miss) still exists, and has to be
+         * found again next step - see may_have_condenser's own comment
+         * (sand.h) for why that needs its own flag rather than riding
+         * may_have_temperature, which steam already arms via `warms` but
+         * which nothing keeps re-arming on a board with no heat-holder
+         * anywhere. */
+        if (r->condenses != 0) {
+            found |= FOUND_CONDENSING;
+            if (step_one_condensing_cell(s, x, y, w, h, r)) {
+                continue;
+            }
         }
         /* Only cells ALREADY holding heat need a turn. A cold pane is
          * heated from the fire's side by try_heat_transform(), the same as
@@ -3659,8 +3796,12 @@ sand_step_reactions(sand_t* s) {
     /* Heat is a third independent reason to run, not a rider on fire: glass
      * goes on cooling long after the flame that heated it is out, and gated
      * behind may_have_burning it would freeze mid-ramp instead. */
+    /* Condensing is a fourth independent reason to run, the same shape as
+     * dissolving: a board can hold nothing but drifting steam, with
+     * nothing burning, dissolving, tempered, wet, falling or withering
+     * anywhere on it, and condensation still has to keep getting checked. */
     if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
-        && !s->may_have_faller && !s->may_have_withering) {
+        && !s->may_have_faller && !s->may_have_withering && !s->may_have_condenser) {
         return;
     }
 
@@ -3689,6 +3830,9 @@ sand_step_reactions(sand_t* s) {
     }
     if (!(found & FOUND_WITHERING)) {
         s->may_have_withering = false;
+    }
+    if (!(found & FOUND_CONDENSING)) {
+        s->may_have_condenser = false;
     }
 
     /* may_have_heat_holder is deliberately NOT cleared here, unlike the

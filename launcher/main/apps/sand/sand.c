@@ -184,6 +184,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->vent_chance  = SAND_VENT_CHANCE_PER_MATERIAL;   /* see sand_set_vent_chance() */
     s->vent_spread  = SAND_VENT_SPREAD_RANDOM;         /* see sand_set_vent_spread() */
+    s->boils        = SAND_BOILS_PER_MATERIAL;         /* see sand_set_boils() */
+    s->condenses    = SAND_CONDENSES_PER_MATERIAL;     /* see sand_set_condenses() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1353,6 +1355,24 @@ void sand_set_vent_spread(sand_t *s, int spread)
     s->vent_spread = (spread < -1 || spread > 1)
                          ? SAND_VENT_SPREAD_RANDOM
                          : spread;
+}
+
+void sand_set_boils(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->boils = SAND_BOILS_PER_MATERIAL;
+    } else {
+        s->boils = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_condenses(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->condenses = SAND_CONDENSES_PER_MATERIAL;
+    } else {
+        s->condenses = chance > 255 ? 255 : chance;
+    }
 }
 
 /* can_enter()/cell_open()/move_to() moved to sand_priv.h (still
