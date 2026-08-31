@@ -59,6 +59,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Acid
 
 - Dissolves an adjacent cell swiftly, sometimes leaving smoke behind.
+- Spontaneously evaporates into gas slowly - unconditional, no heat or neighbour required.
 
 ### Glass
 
@@ -75,6 +76,8 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Dirt
 
 - Beside fire or lava, melts to metal readily.
+  usually comes out as stone instead, in clumped runs rather than an even speckle.
+- Spoils into sand [TODO: trigger].
 - Soaks up any water it touches swiftly, growing wetter (its own moisture rises) rather than changing into anything.
 - Dries back out readily, on its own, with no partner needed.
 - Dissolves in acid easily.

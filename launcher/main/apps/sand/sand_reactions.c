@@ -385,6 +385,13 @@ static void crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from,
  * earlier of its two callers. */
 static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec);
 
+/* How many consecutive successful dry smelts share one flaw/no-flaw
+ * decision - see reaction_t.flaw_to's own comment (material.h) for what
+ * this exists to fix, and try_heat_transform()'s SMELT FLAW comment below
+ * for the mechanism itself. A starting point, like every other constant in
+ * this file - tune on device once there is ore to look at. */
+#define HEAT_FLAW_CLUMP 5
+
 /* FORCED INLINE, and that is a performance fix rather than a preference.
  *
  * The wet-earth branch below (723fac6) pushed this function past GCC's
@@ -392,6 +399,12 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
  * all - inlined at all four call sites - and at 723fac6 it is emitted
  * out of line with a cold .part.0 split beside it, so every scene that
  * carries heat pays for a call it did not used to make.
+ *
+ * The flaw/spoils branches added after this measurement grow the function
+ * further still, in the same direction the wet-earth branch already did -
+ * this has NOT been re-measured on device. If a future capture shows the
+ * cost climbing again, look here first rather than assuming the ratio
+ * above still holds.
  *
  * Host, best of seven with all five candidates interleaved, simulation
  * byte-identical either way: full screen of fire -12.1%, lava stress
@@ -505,6 +518,38 @@ try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
      * to reach metal instead of one, and each of the first
      * SOIL_MOISTURE_MAX is visible as steam. */
     if (r->dries != 0 && CELL_MOISTURE(n) != 0) {
+        /* RUINED BY HASTE, off this SAME roll - see reaction_t.spoils_to's
+         * own comment (material.h). Checked first, so a spoil pre-empts
+         * the moisture-driving step below rather than competing with it:
+         * a cell either cracks to `spoils_to` this roll, or it dries by
+         * one level as it always did - never both from one success.
+         *
+         * UNCONDITIONAL - no "exempt the first roll" gate, on purpose. An
+         * earlier version of this gated on `CELL_MOISTURE(n) <
+         * SOIL_MOISTURE_MAX`, trying to guarantee a cell always puffs one
+         * free level of steam before it is ever at risk. That reasoning
+         * had a hole: dirt also dries AMBIENTLY (this same `dries` field,
+         * ticking every step regardless of any heat source - see the
+         * MOISTURE SPREADS block above), so a cell can already be below
+         * SOIL_MOISTURE_MAX by the time HEAT ever touches it for the first
+         * time, at which point the gate reads as "already used its
+         * exemption" when it never actually got one. At dirt's own rates
+         * (heat_chance 10, dries 5) that race is won by ambient drying
+         * roughly a third of the time - rare enough to hide behind a low
+         * spoils_chance, and exactly what broke
+         * test_watered_dirt_steams_before_it_smelts once spoils_chance was
+         * rebalanced high enough to matter. No amount of moisture-based
+         * gating can fix it without a spare bit dirt's variant does not
+         * have (material.c's own comment: "Dirt's variant is fully
+         * spent"). So: no gate. A cell CAN now spoil on the very first
+         * heat contact it ever gets, with no warning puff first - which is
+         * the correct reading of "even stronger" besides: wet ore cracking
+         * on first contact, not after a polite warning, is the point. */
+        if (r->spoils_to != 0 &&
+            (int)(rng_next(&s->rng) & 0xFF) < r->spoils_chance) {
+            place_reacted(s, nx, ny, at, (material_id_t)r->spoils_to);
+            return true;
+        }
         s->cells[at] = CELL_WITH_MOISTURE(n, CELL_MOISTURE(n) - 1);
         mark_rows(s, ny, ny);
         wake_block_and_neighbors(s, nx, ny);
@@ -512,7 +557,43 @@ try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
         return true;
     }
 
-    place_reacted(s, nx, ny, at, (material_id_t)r->heats_to);
+    material_id_t yield = (material_id_t)r->heats_to;
+
+    /* SMELT FLAW, CLUMPED. A second, independent roll per cell would give
+     * `flaw_chance` its right AVERAGE but the wrong SHAPE - a fine, even
+     * speckle of stone through the metal, because two cells right next to
+     * each other have no way to know what the other one just rolled. Ore
+     * does not look like that; it comes in veins.
+     *
+     * So the decision is not drawn per cell. heat_flaw_seq is a counter
+     * that rolls forward once per successful dry smelt, of ANY material
+     * that sets flaw_to - dirt is the only one today, so in practice this
+     * is dirt's own counter. Every HEAT_FLAW_CLUMP-th trigger (the modulo
+     * below), heat_flaw_is_flawed is rerolled and then simply reused, as
+     * given, for the next HEAT_FLAW_CLUMP - 1 triggers. Because this pass
+     * visits cells in a fixed scan order (see this file's own top
+     * comment), a run of dirt smelting under the same lava front visits
+     * consecutive triggers in roughly the order they sit on the grid, so
+     * a shared decision reads as a NODULE of stone or metal rather than
+     * noise - not a true 2D blob, closer to a streak along the scan
+     * direction, which is the simplest shape "reuse the last decision"
+     * can produce and is judged good enough to ship and tune from.
+     *
+     * Checked mod BEFORE incrementing, so the very first trigger this
+     * sand_t ever sees (seq == 0) rolls fresh rather than reusing whatever
+     * heat_flaw_is_flawed happened to start at. */
+    if (r->flaw_to != 0) {
+        if (s->heat_flaw_seq % HEAT_FLAW_CLUMP == 0) {
+            s->heat_flaw_is_flawed =
+                (int)(rng_next(&s->rng) & 0xFF) < r->flaw_chance;
+        }
+        s->heat_flaw_seq++;
+        if (s->heat_flaw_is_flawed) {
+            yield = (material_id_t)r->flaw_to;
+        }
+    }
+
+    place_reacted(s, nx, ny, at, yield);
     return true;
 }
 

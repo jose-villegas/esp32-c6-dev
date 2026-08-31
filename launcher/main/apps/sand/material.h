@@ -584,6 +584,47 @@ typedef struct {
     uint8_t heats_to;
     uint8_t heat_chance;
 
+    /* THE IMPURE YIELD. Rolled off the SAME successful heat_chance roll
+     * above, not a trigger of its own: chance in 256 that a bone-dry cell
+     * converts into `flaw_to` instead of `heats_to`. 0, the default, means
+     * every successful roll is clean - exactly the behaviour before this
+     * field existed.
+     *
+     * Dirt names MAT_STONE here: a smelt run too fast, or ore that was
+     * never pure to begin with, comes out part stone rather than part
+     * metal. Rejected once as "a new field serving exactly one material"
+     * (docs/Sand/Metal-Smelting-Plan.md, "Decisions taken") - it still is,
+     * and that is fine; not every mechanic has to earn its keep across the
+     * whole table the way `heats_to` does.
+     *
+     * A flaw is not drawn independently per cell - see try_heat_transform()
+     * (sand_reactions.c) for the rolling-modulo clump that turns
+     * `flaw_chance` into NODULES of stone rather than a speckle. */
+    uint8_t flaw_to;
+    uint8_t flaw_chance;
+
+    /* THE RUINED YIELD. Rolled off the SAME successful heat_chance roll
+     * above, on a cell the wet-earth branch below would otherwise drive one
+     * moisture level off of: chance in 256 that the cell spoils into
+     * `spoils_to` outright instead. 0, the default, means wet cells never
+     * spoil - the moisture-draining behaviour runs exactly as it did before
+     * this field existed.
+     *
+     * Dirt names MAT_SAND here: clay fired too fast while it is still wet
+     * cracks rather than firing clean. Independent of `flaw_to` above by
+     * construction - a cell that spoils never reaches the dry branch at
+     * all, so the two chances are never rolled against the same event.
+     *
+     * Unconditional - rolled from the FIRST successful heat_chance roll a
+     * wet cell ever gets, no exemption. An earlier version tried to
+     * guarantee a free first puff of steam before any risk of spoiling by
+     * gating on the moisture value; see try_heat_transform()'s own comment
+     * (sand_reactions.c) for why that cannot work (ambient drying can beat
+     * heat to the first level, unrelated to this field entirely) and was
+     * removed rather than patched further. */
+    uint8_t spoils_to;
+    uint8_t spoils_chance;
+
     /* HEAT THAT ACCUMULATES, rather than a roll that either fires or does
      * not. Non-zero `heat_ramp` means this material banks heat in its own
      * variant nibble instead of transforming on contact: each step beside a

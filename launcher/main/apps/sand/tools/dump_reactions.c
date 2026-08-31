@@ -226,19 +226,29 @@ static const field_doc_t field_docs[] = {
      * row gets. */
     FCHANCE_VOCAB(dissolvable, GRP_ACID, "dissolves in acid", ease_words),
     FCHANCE(fizz,        GRP_ACID, "leaves smoke"),
-    /* `evaporates` reads as generic in its own material.h comment - any
-     * material could set it - but only acid does today, and it is rolled
-     * in the same step_one_dissolver_cell() (sand_reactions.c) that rolls
-     * `dissolves`, every step, unconditionally. That makes it a genuine
-     * per-step rate (FRATE, not FCHANCE: there is no single triggering
-     * moment to be conditional on, unlike `fizz`), grouped with the acid
-     * family it currently belongs to rather than GRP_TRANSFORM, whose two
-     * fields are both heat-driven - this one explicitly is not. */
-    FRATE(evaporates,   GRP_ACID, "evaporates into gas"),
+    /* Pre-existing gap, unrelated to whatever else changed in this table
+     * recently: `evaporates` never had a field_docs row at all, so this
+     * file has not compiled since the field was added - caught trying to
+     * regenerate the doc for an unrelated change, fixed here rather than
+     * left for the next person. Genuine per-step rate, no partner or
+     * condition required - the same shape as `dries` elsewhere in this
+     * file (FRATE(dries, GRP_WET, ...)), not a one-shot FCHANCE. */
+    FRATE(evaporates,   GRP_ACID, "spontaneously evaporates into gas"),
 
-    /* GRP_TRANSFORM */
+    /* GRP_TRANSFORM. `flaw_chance` is a one-shot chance conditioned on
+     * heat_chance's roll already having succeeded, the same shape as
+     * `dissolvable` - not a rate of its own, so FCHANCE rather than
+     * FRATE. `spoils_to`/`spoils_chance` fire from a condition
+     * (heat_chance succeeding on a WET cell) that lives entirely at the
+     * read site in sand_reactions.c, not in this table - see this file's
+     * own top comment on shatters_to for why that gets the [TODO: trigger]
+     * treatment (emit_spoils()) rather than guessed prose. */
     F(heats_to,     GRP_TRANSFORM, FK_TARGET, NULL),
     FRATE(heat_chance, GRP_TRANSFORM, "melts"),
+    F(flaw_to,       GRP_TRANSFORM, FK_TARGET, NULL),
+    FCHANCE(flaw_chance, GRP_TRANSFORM, "comes out flawed"),
+    F(spoils_to,     GRP_TRANSFORM, FK_TARGET, NULL),
+    FCHANCE(spoils_chance, GRP_TRANSFORM, "spoils"),
 
     /* GRP_TEMPERATURE */
     FRATE(heat_ramp, GRP_TEMPERATURE, "holds heat"),
@@ -731,7 +741,23 @@ static void emit_transform(const reaction_t *r)
         printf("- Beside %s, melts to %s %s.\n", heat_sources,
                prose_name(to_name(r->heats_to)),
                adverb("heat_chance", r->heat_chance));
+        if (r->flaw_to != 0) {
+            /* Same trigger as the clause just printed - the SAME roll,
+             * not a second one - so this reads as a qualifier on it
+             * rather than a separate reaction. */
+            printf("  %s comes out as %s instead, in clumped runs "
+                   "rather than an even speckle.\n",
+                   adverb("flaw_chance", r->flaw_chance),
+                   prose_name(to_name(r->flaw_to)));
+        }
     }
+}
+
+static void emit_spoils(const reaction_t *r)
+{
+    if (r->spoils_to == 0) return;
+    printf("- Spoils into %s %s.\n", prose_name(to_name(r->spoils_to)),
+           CAUSE);
 }
 
 static void emit_temperature(const reaction_t *r)
@@ -843,6 +869,14 @@ static void emit_acid(const reaction_t *r)
     }
 }
 
+static void emit_evaporates(const reaction_t *r)
+{
+    if (r->evaporates == 0) return;
+    printf("- Spontaneously evaporates into gas %s - unconditional, no "
+           "heat or neighbour required.\n",
+           adverb("evaporates", r->evaporates));
+}
+
 static void emit_grow(const reaction_t *r)
 {
     if (r->grows != 0) {
@@ -938,12 +972,14 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_ignite(r, self_id);
     emit_burn(r);
     emit_transform(r);
+    emit_spoils(r);
     emit_temperature(r);
     emit_cold(r);
     emit_warmth(r);
     emit_thaw(r);
     emit_wet(r);
     emit_acid(r);
+    emit_evaporates(r);
     emit_grow(r);
     emit_harden(r);
     emit_regrow(r);
