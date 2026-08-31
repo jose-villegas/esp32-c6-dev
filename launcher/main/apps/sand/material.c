@@ -606,24 +606,21 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * acid has a budget, and when it is spent the puddle is gone. */
             .dissolves = 60,
 
-            .fizz = 16, /* WAS 40 ("about one bite in six"), DROPPED SHARPLY
-                         * to 6 on 2026-09-01 - reported as producing far too
-                         * much gas: .dissolves alone already fires roughly
-                         * one bite in four per acid cell per step, so 40
-                         * meant a wide pool eating through a pile kept a
-                         * steady stream of smoke going the whole time, not
-                         * the occasional wisp this was meant to be. 6 turned
-                         * out to be the other extreme once .evaporates (a
-                         * SEPARATE, unrelated field - ambient acid-turns-to-
-                         * gas, nothing to do with dissolving) was ALSO
-                         * driven down hard the same session: with both
-                         * knobs low at once, "acid was the cause" stopped
-                         * reading as rare and started reading as gone.
-                         * Brought back up partway to 16 - about one bite in
-                         * sixteen, roughly 1.4% per acid cell per step once
-                         * combined with .dissolves - now that .evaporates is
-                         * covering the "ambient" gas on its own, .fizz only
-                         * needs to answer "acid was the cause" for actual
+            .fizz = 40, /* "about one bite in six" - roughly one visible
+                         * puff every four steps once combined with
+                         * .dissolves. DROPPED SHARPLY to 6 on 2026-09-01,
+                         * same session, on a report of producing far too
+                         * much gas - but that drop landed at the same time
+                         * .evaporates (a SEPARATE, unrelated field -
+                         * ambient acid-turns-to-gas, nothing to do with
+                         * dissolving) was ALSO driven down hard, and with
+                         * both knobs low at once "acid was the cause"
+                         * stopped reading as rare and started reading as
+                         * gone. Walked back up in steps (16, then 32) and
+                         * settled back at the original 40 once .evaporates
+                         * alone was judged enough to cover the "ambient"
+                         * gas side on its own - .fizz only needs to answer
+                         * "acid was the cause" for actual
                          * dissolving again. Starting point, not final - tune
                          * on device like every other constant here. */
 
