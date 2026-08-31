@@ -561,6 +561,12 @@ typedef struct {
      * here", which is what this is. */
     uint8_t fizz;
 
+    /* Chance in 256, per step, that a cell of this material spontaneously
+     * turns into a single MAT_GAS cell - unconditional, no heat or
+     * neighbour required, unlike boiling. 0, the default, means never;
+     * only acid sets it. */
+    uint8_t evaporates;
+
     /* What HEAT alone turns this material into, without burning it, and
      * the chance in 256 per step per adjacent heat source that it does.
      *

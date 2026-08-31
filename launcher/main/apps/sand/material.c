@@ -601,6 +601,12 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * thing being eaten rather than instead of it.
                          * Starting point, not final - tune on device like
                          * every other constant here. */
+
+        .evaporates = 3,    /* far rarer than dissolves - a puddle
+                             * thinning quietly over a long watch, not
+                             * something you catch happening. Starting
+                             * point, not final - tune on device like
+                             * every other constant here. */
     },
 
     [MAT_OIL] = {
