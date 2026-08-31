@@ -301,8 +301,8 @@ typedef struct {
 
     /* Decaying trigger chance for splash_displace() (sand_liquid.c) - see
      * SAND_SPLASH_RADIUS_WATER's own comment above for why this lives
-     * per-instance. WATER only - see acid_splashes_this_step below for
-     * why acid needs a different kind of throttle. */
+     * per-instance. WATER only - acid does not use splash_displace() at
+     * all any more, see acid_bubble()'s own comment in sand_liquid.c. */
     uint8_t    splash_chance;
 
     /* Decaying splash RADIUS, water only, alongside splash_chance above -
@@ -310,17 +310,6 @@ typedef struct {
      * independent decays (whether a bounce splashes at all, versus how
      * big the ones that do are) rather than one. */
     uint8_t    splash_radius_water;
-
-    /* How many ACID splashes splash_displace() has already fired THIS
-     * STEP, reset to 0 at the top of every sand_step() - caps how many of
-     * a bulk pour's many simultaneously-landing columns can each throw a
-     * full SAND_SPLASH_RADIUS_ACID displacement at once, without making
-     * acid's splash depend on simulation HISTORY the way splash_chance
-     * does for water (see SAND_SPLASH_RADIUS_WATER's own comment for why
-     * acid's splash intentionally does not decay over time - a per-step
-     * cap does not conflict with that, since it forgets everything the
-     * instant the next step starts). */
-    uint8_t    acid_splashes_this_step;
 
     int      last_load_dx, last_load_dy;
 
@@ -700,21 +689,20 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 #define SAND_EXPLODE_INITIAL_SPEED  255
 
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
- * - a WATER or ACID grain landing hard, either falling onto an already-
- * occupied surface or rebounding off a wall, throws a small, MASKED
- * sand_displace_material() (only the same material gets thrown - see
- * splash_displace()'s own comment for why), exaggerated well past a real
- * splash's reach so the effect reads clearly at this display size.
- * SEPARATE RADII, not one shared constant - tuned independently on
- * device, and water's own peak ended up LARGER than acid's: the goal for
- * water is a visible repel at the point of contact (a real splash pushes
- * the surface it hits apart, rather than the drop quietly merging into
- * one body), where acid's radius is closer to a balance number than a
- * spectacle one - see SAND_SPLASH_RADIUS_ACID's own call sites for that.
- * Oil and lava are not wired into this - oil has no gameplay reason to
- * scatter, and lava is a heat source whose spread timing this same
- * exaggerated radius visibly disrupted when tried (see this constant's own
- * commit history if that is ever revisited).
+ * - a WATER grain landing hard, either falling onto an already-occupied
+ * surface or rebounding off a wall, throws a small, MASKED sand_displace_
+ * material() (only the same material gets thrown - see splash_displace()'s
+ * own comment for why), exaggerated well past a real splash's reach so the
+ * effect reads clearly at this display size.
+ *
+ * WATER ONLY, NOT ACID ANY MORE - acid used to share this exact mechanism
+ * (a smaller, non-decaying radius, see git history from before 2026-09-01
+ * if that is ever worth reviving), and no longer does: see acid_bubble()'s
+ * own comment in sand_liquid.c for what replaced it and why. Oil and lava
+ * are not wired into this either - oil has no gameplay reason to scatter,
+ * and lava is a heat source whose spread timing this same exaggerated
+ * radius visibly disrupted when tried (see this constant's own commit
+ * history if that is ever revisited).
  *
  * A displaced grain falling back into the liquid lands hard too, which
  * would re-trigger the same call that threw it - an unconditional trigger
@@ -756,14 +744,13 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * scaled with it, same 10:1:4 shape as before, so the decay still reads as
  * the same settling-down curve, just starting from a bigger first hit: 20
  * -> 12 -> 4 -> floor. Not yet confirmed on device at this size - the next
- * on-device pass should look at whether SAND_SPLASH_ACID_PER_STEP_CAP and
- * SAND_CASCADE_MAX_PER_STEP still hold at a wider blast, the same way
- * SAND_EXPLODE_CORE_DIVISOR needed reconfirming when DETONATE_RADIUS_PX
- * doubled (see that constant's own comment). */
+ * on-device pass should look at whether SAND_CASCADE_MAX_PER_STEP still
+ * holds at a wider blast, the same way SAND_EXPLODE_CORE_DIVISOR needed
+ * reconfirming when DETONATE_RADIUS_PX doubled (see that constant's own
+ * comment). */
 #define SAND_SPLASH_RADIUS_WATER       20
 #define SAND_SPLASH_RADIUS_WATER_FLOOR 2
 #define SAND_SPLASH_RADIUS_WATER_STEP  8
-#define SAND_SPLASH_RADIUS_ACID        5
 #define SAND_SPLASH_CHANCE_START       255
 #define SAND_SPLASH_CHANCE_FLOOR       24
 #define SAND_SPLASH_CHANCE_STEP        140
@@ -853,14 +840,45 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 #define SAND_CASCADE_MIN_SPEED     1
 #define SAND_CASCADE_MAX_PER_STEP  64
 
-/* How many ACID splashes splash_displace() (sand_liquid.c) will fire in a
- * single sand_step() - see sand_t::acid_splashes_this_step's own comment
- * above for why this is a per-step cap rather than the decaying budget
- * water uses. Without it, pouring a wide block of acid landed every
- * column hard in the same step or two, and each one threw its own full
- * SAND_SPLASH_RADIUS_ACID displacement - dozens of overlapping blasts
- * reading as one chaotic explosion rather than a splash. */
-#define SAND_SPLASH_ACID_PER_STEP_CAP 3
+/* ACID BUBBLES - see acid_bubble()'s own comment in sand_reactions.c for the
+ * full account of what this replaced and why (2026-09-01): the old "landed
+ * hard on already-occupied liquid" trigger splash_displace() shared with
+ * water turned out to concentrate acid's activity wherever ordinary cross-
+ * flow physics happened to pile material up first, reading as a strong,
+ * unwanted spatial preference rather than the ambient "bubbling, almost
+ * carbonated" look this was meant to have.
+ *
+ * CHANCE is a flat, non-decaying chance-in-256, rolled once per acid cell
+ * this pass visits that has open space directly against gravity from it -
+ * the "rim" of an exposed surface - checked every step regardless of
+ * history, the same way mobility or flare are. No per-step cap, no
+ * decaying budget: unlike the old trigger, this one has no bulk-pour
+ * pathology to guard against in the first place, because it is never
+ * fired many times from the same *event* - only ever once per rim cell
+ * per step, and a step's worth of rim cells is already a small, bounded
+ * set.
+ *
+ * RAISED SHARPLY, 2026-09-02 - the starting values (6, 40) were reachable
+ * in a host test but reported as invisible on device even once the real
+ * bug (acid_bubble() living behind block-sleeping, fixed the same round)
+ * was gone. The reason was never traced to one exact line, but the ARITHMETIC
+ * alone explains most of it: SPEED 40 only has ~15.6% chance to move on its
+ * OWN FIRST roll, and decays (SAND_SPLASH_SPEED_DECAY_SHIFT, geometric,
+ * scoped to water/acid) fast enough that most queued bubbles likely settled
+ * without ever visibly moving even once - a silent near-miss, not a
+ * visible pop, on the majority of rolls. CHANCE 6-in-256 (~2.3%) compounds
+ * that: on a modest rim a bubble is already rare, and most of the rare
+ * ones then failed to ever actually move. Both raised well past a
+ * literal reading of "small bubble, occasional pop": CHANCE to 40 (~15.6%,
+ * several times a second on an ordinary rim) so the trigger itself is
+ * common, and SPEED to 220 (near SAND_EXPLODE_INITIAL_SPEED's own ceiling,
+ * not equal to it - a bubble should still read as smaller than a splash)
+ * so a fired bubble is very likely to actually move, more than once,
+ * before its geometric decay catches it - an actual multi-cell arc rather
+ * than a single-frame flicker easy to miss. Not yet confirmed on device at
+ * these values. */
+#define SAND_ACID_BUBBLE_CHANCE 20
+#define SAND_ACID_BUBBLE_SPEED  120
 
 /* How much of the blast radius sand_explode() fills with fire before it
  * queues a single flight entry - the filled radius is `radius /

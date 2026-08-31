@@ -19,6 +19,7 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
 #include <string.h>
 
 #include "sand.h"
@@ -55,9 +56,22 @@ static inline uint8_t *dest_row(const sand_t *s, int y)
  * a single pair of points to wake blocks from - see the comment there. */
 static inline void mark_rows(sand_t *s, int y0, int y1)
 {
+    /* DEFENSIVE, ADDED 2026-09-01 - see wake_block_and_neighbors()'s own
+     * matching guard, just above in this same file, for the real device
+     * crash this was traced to (mark_move(), called from gas cell
+     * movement, sand_gas.c). y0/y1 were "guaranteed in range at every
+     * call site" by design, and a heap-poisoning-enabled rebuild reproduced
+     * the identical crash, ruling out memory corruption from elsewhere as
+     * the cause - something upstream is genuinely computing an
+     * out-of-range row, not yet pinned to one exact line. This bound stops
+     * the out-of-bounds write while that is still being tracked down. */
     if (s->dirty_rows != NULL) {
-        s->dirty_rows[y0] = 1;
-        s->dirty_rows[y1] = 1;
+        if ((unsigned)y0 < (unsigned)s->h) {
+            s->dirty_rows[y0] = 1;
+        }
+        if ((unsigned)y1 < (unsigned)s->h) {
+            s->dirty_rows[y1] = 1;
+        }
     }
 }
 
@@ -318,6 +332,22 @@ static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
 static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
 {
     if (s->block_state == NULL) {
+        return;
+    }
+    /* DEFENSIVE, ADDED 2026-09-01 - a real device crash (Guru Meditation,
+     * Store/Load access fault) traced here through mark_move(), called
+     * from equalise_gas_one_cell() (sand_gas.c) with a gas grain's own
+     * destination coordinates. The unsigned cast just below this comment
+     * assumes x,y are always in-range grid coordinates - true of every
+     * OTHER call site, but the exact upstream source of an out-of-range
+     * (x, y) reaching this one was not pinned down before this landed;
+     * see mark_rows()'s own matching guard, just below in this same file,
+     * and the git history around both for the investigation. Cheap
+     * unsigned-compare, same idiom the rest of this file already uses -
+     * this does not paper over the real bug, it just stops it from
+     * reading/writing block_state out of bounds while that bug is still
+     * being tracked down. */
+    if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) {
         return;
     }
 

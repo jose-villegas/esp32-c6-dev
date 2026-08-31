@@ -1,8 +1,8 @@
-#include <stddef.h>   /* NULL - material.h does not pull it in, and
+#include <stddef.h> /* NULL - material.h does not pull it in, and
                       * whether anything else does is a property of
                       * the toolchain rather than of this file */
 #include "material.h"
-#include "util/intmath.h"   /* im_len() - see material_set_gravity() below,
+#include "util/intmath.h" /* im_len() - see material_set_gravity() below,
                              * which measures gravity the same way
                              * build_xflow() in sand.c does */
 
@@ -13,73 +13,78 @@
  *===========================================================================*/
 
 const material_t materials[MATERIAL_MAX] = {
-    [MAT_EMPTY] = {
-        .name    = "empty",
-        .kind    = KIND_NONE,
-        .density = 0,
-    },
+    [MAT_EMPTY] =
+        {
+            .name = "empty",
+            .kind = KIND_NONE,
+            .density = 0,
+        },
 
-    [MAT_SAND] = {
-        .name    = "Sand",
-        .kind    = KIND_POWDER,
-        .density = 60,
-        /* Buried sand locks up quickly - this is what stops a floor of it
+    [MAT_SAND] =
+        {
+            .name = "Sand",
+            .kind = KIND_POWDER,
+            .density = 60,
+            /* Buried sand locks up quickly - this is what stops a floor of it
          * skating sideways on the faintest tilt. */
-        .slip    = 96,
-        .repose  = 7,        /* about 35 degrees, dry sand */
-        .scatter = 40,
-    },
+            .slip = 96,
+            .repose = 7, /* about 35 degrees, dry sand */
+            .scatter = 40,
+        },
 
-    [MAT_WATER] = {
+    [MAT_WATER] =
+        {
 
-        .name    = "Water",
-        .kind    = KIND_LIQUID,
-        .density = 30,       /* lighter than sand, so sand sinks through it */
+            .name = "Water",
+            .kind = KIND_LIQUID,
+            .density = 30, /* lighter than sand, so sand sinks through it */
 
-        /* Unused by a liquid: it does not slide, pile or scatter, it flows
+            /* Unused by a liquid: it does not slide, pile or scatter, it flows
          * between neighbours as an amount. Left at the values that mean "no
          * resistance", so that anything reading them generically still gets a
          * sensible answer. */
-        .slip    = 255,
-        .repose  = 0,
-        .scatter = 0,
+            .slip = 255,
+            .repose = 0,
+            .scatter = 0,
 
-        .mobility = 255,     /* VISCOSITY, inverted - see material.h's own
+            .mobility = 255, /* VISCOSITY, inverted - see material.h's own
                               * comment on the field. Water is the runny
                               * one and moves on every step it can, which
                               * is exactly what every liquid did before
                               * this field had a second reader, so water's
                               * behaviour is unchanged by its arrival. */
-    },
+        },
 
-    [MAT_STONE] = {
-        .name    = "Stone",
-        .kind    = KIND_STATIC,
-        .density = 200,      /* nothing displaces it */
-        .slip    = 0,
-        .repose  = 0,
-        .scatter = 0,
-    },
+    [MAT_STONE] =
+        {
+            .name = "Stone",
+            .kind = KIND_STATIC,
+            .density = 200, /* nothing displaces it */
+            .slip = 0,
+            .repose = 0,
+            .scatter = 0,
+        },
 
-    [MAT_GAS] = {
-        .name    = "Gas",
-        .kind    = KIND_GAS,
-        .density = 10,       /* between empty (0) and water (30), so sand and
+    [MAT_GAS] =
+        {
+            .name = "Gas",
+            .kind = KIND_GAS,
+            .density = 10, /* between empty (0) and water (30), so sand and
                                * water sinking through it in the main sweep
                                * displace it automatically - not sensitive,
                                * anywhere from about 1 to 25 works the same */
 
-        /* Same "no resistance" values as water, and for the same reason:
+            /* Same "no resistance" values as water, and for the same reason:
          * gas rises and slides via sand's own try_fall_or_scatter()/
          * try_slide() (see sand_gas.c), inverted, and a real angle of
          * repose or load resistance would stop it from spreading at all,
          * the opposite of what it is for. */
-        .slip    = 255,
-        .repose  = 0,
-        .scatter = 120,      /* well above sand's 40 - a visibly turbulent,
+            .slip = 255,
+            .repose = 0,
+            .scatter = 120, /* well above sand's 40 - a visibly turbulent,
                                * wispy rise rather than a rigid column */
 
-        /* THE LONGEST-LIVED thing in the air, where it had been the
+            /* THE LONGEST-LIVED thing in the air, where it had been the
          * shortest.
          *
          * The three airborne materials already agree about weight and
@@ -104,7 +109,7 @@ const material_t materials[MATERIAL_MAX] = {
          * still 20,589. Every budget here is per-step, so nothing on the
          * scoreboard moves; a room full of gas simply stays expensive for
          * twenty seconds instead of five, which is the player's doing. */
-        .decay   = 6,         /* 15 ticks needed to clear a fresh grain,
+            .decay = 6, /* 15 ticks needed to clear a fresh grain,
                                * 256/32 = 8 steps average between ticks -
                                * ~120 steps, around 2 seconds at this app's
                                * ~60fps step rate. Gas is whole-grain, not
@@ -117,7 +122,7 @@ const material_t materials[MATERIAL_MAX] = {
                                * Starting point, not final - tune on device
                                * like every other constant here. */
 
-        .mobility = 96,        /* ~2.7 steps average between rises - was 32
+            .mobility = 96, /* ~2.7 steps average between rises - was 32
                                * (~8 steps average), measured on device as
                                * too sluggish to read as rising at all.
                                * Visibly slower than sand's instant
@@ -130,7 +135,7 @@ const material_t materials[MATERIAL_MAX] = {
                                * on device like every other constant
                                * here. */
 
-        .sight = 16,           /* was the global SAND_GAS_SIGHT constant,
+            .sight = 16, /* was the global SAND_GAS_SIGHT constant,
                                * now this material's own figure - see
                                * material.h's own comment on `sight` for
                                * why it moved. Same value, same
@@ -140,11 +145,12 @@ const material_t materials[MATERIAL_MAX] = {
                                * dispersing faster/further than water
                                * levels, given both use the same
                                * equalise_*() mechanism. */
-    },
+        },
 
-    [MAT_FIRE] = {
-        .name    = "Fire",
-        .kind    = KIND_GAS,    /* rises and disperses through the exact
+    [MAT_FIRE] =
+        {
+            .name = "Fire",
+            .kind = KIND_GAS, /* rises and disperses through the exact
                                  * same pass gas does (sand_step_gas()
                                  * dispatches on kind, not material ID) -
                                  * tighter and shorter-lived than gas via
@@ -156,7 +162,7 @@ const material_t materials[MATERIAL_MAX] = {
                                  * plan this redesign was built from for
                                  * why that changed. */
 
-        .density = 15,          /* strictly between gas's 10 and sand's
+            .density = 15, /* strictly between gas's 10 and sand's
                                  * 60 - three things depend on this at
                                  * once: sand must still sink through
                                  * fire (needs fire < sand); fire must
@@ -176,14 +182,14 @@ const material_t materials[MATERIAL_MAX] = {
                                  * mixing - the same already-accepted
                                  * limitation gas has displacing more
                                  * gas. */
-        .slip    = 255,         /* no resistance, same reasoning as
+            .slip = 255,   /* no resistance, same reasoning as
                                  * gas's own row above */
-        .repose  = 0,
-        .scatter = 120,         /* matches gas's own figure - equally
+            .repose = 0,
+            .scatter = 120, /* matches gas's own figure - equally
                                  * turbulent rise, tune independently
                                  * later if it should read differently */
 
-        .decay    = 96,        /* much the shortest life in the air, and
+            .decay = 96,    /* much the shortest life in the air, and
                                 * with gas now the longest the gap is
                                 * wider than the 32 this used to cite:
                                 * 15 ticks *
@@ -193,22 +199,23 @@ const material_t materials[MATERIAL_MAX] = {
                                 * faster than gas fades. Starting point,
                                 * not final - tune on device like every
                                 * other constant here. */
-        .mobility = 96,         /* matches gas's own figure as a
+            .mobility = 96, /* matches gas's own figure as a
                                 * starting point - tune independently if
                                 * fire should rise faster/slower than
                                 * gas once seen in motion */
-        .sight    = 5,          /* noticeably tighter than gas's 16 -
+            .sight = 5,     /* noticeably tighter than gas's 16 -
                                 * "tighter instead of sparse". Starting
                                 * point, not final - tune on device */
-    },
+        },
 
-    [MAT_WOOD] = {
-        .name    = "Wood",
-        .kind    = KIND_STATIC,     /* a log does not fall over or pile up
+    [MAT_WOOD] =
+        {
+            .name = "Wood",
+            .kind = KIND_STATIC, /* a log does not fall over or pile up
                                      * - it sits where it is drawn until
                                      * fire chars it into an ember (see
                                      * sand_reactions.c) */
-        .density = 150,             /* above sand (60) and water (30), so
+            .density = 150,      /* above sand (60) and water (30), so
                                      * neither can displace a log - it
                                      * holds its shape under a pour, the
                                      * way a real log does not wash away.
@@ -217,13 +224,14 @@ const material_t materials[MATERIAL_MAX] = {
                                      * Starting point, not final - tune on
                                      * device like every other constant
                                      * here. */
-        /* slip/repose/scatter/decay/mobility/sight all meaningless for a
+            /* slip/repose/scatter/decay/mobility/sight all meaningless for a
          * KIND_STATIC material and left at zero, same as stone's own row. */
-    },
+        },
 
-    [MAT_STEAM] = {
-        .name    = "Steam",
-        .kind    = KIND_GAS,        /* rises and disperses through the
+    [MAT_STEAM] =
+        {
+            .name = "Steam",
+            .kind = KIND_GAS, /* rises and disperses through the
                                      * same pass gas and fire do
                                      * (sand_step_gas() dispatches on
                                      * kind, not material ID) - lighter
@@ -248,7 +256,7 @@ const material_t materials[MATERIAL_MAX] = {
                                      * no water anywhere near it. Two
                                      * rows, two palettes. */
 
-        .density = 5,               /* below gas (10) and fire (15), so
+            .density = 5, /* below gas (10) and fire (15), so
                                      * both of those can rise through and
                                      * displace steam, mixing through it
                                      * - can_enter() requires strictly
@@ -267,39 +275,40 @@ const material_t materials[MATERIAL_MAX] = {
                                      * is the one place the ordinary
                                      * displacement rule is deliberately
                                      * inverted. */
-        .slip    = 255,             /* no resistance, same reasoning as
+            .slip = 255,  /* no resistance, same reasoning as
                                      * gas's own row */
-        .repose  = 0,
-        .scatter = 140,             /* above both gas's 120 and fire's
+            .repose = 0,
+            .scatter = 140, /* above both gas's 120 and fire's
                                      * 120 - a wispier, more turbulent
                                      * rise. Starting point, not final -
                                      * tune on device like every other
                                      * constant here. */
 
-        .decay    = 24,             /* matches ember's own figure as a
+            .decay = 24,     /* matches ember's own figure as a
                                      * starting point, tune independently
                                      * later - roughly 160 steps, ~2.7s
                                      * at ~60fps, so a wisp of steam
                                      * visibly fades rather than either
                                      * lingering or vanishing at once. */
-        .mobility = 160,            /* noticeably faster than gas's 96 or
+            .mobility = 160, /* noticeably faster than gas's 96 or
                                      * fire's 96 - steam should read as
                                      * rising eagerly off a boiling pot,
                                      * not drifting the way gas does.
                                      * Starting point, not final - tune
                                      * on device like every other
                                      * constant here. */
-        .sight    = 20,             /* wider than gas's 16 - a puff of
+            .sight = 20,     /* wider than gas's 16 - a puff of
                                      * steam disperses generously rather
                                      * than staying a tight column the
                                      * way fire's own 5 does. Starting
                                      * point, not final - tune on device
                                      * like every other constant here. */
-    },
+        },
 
-    [MAT_SMOKE] = {
-        .name    = "Smoke",
-        .kind    = KIND_GAS,        /* same pass as steam, gas and fire -
+    [MAT_SMOKE] =
+        {
+            .name = "Smoke",
+            .kind = KIND_GAS, /* same pass as steam, gas and fire -
                                      * see steam's own row above. Smoke
                                      * is what FUEL leaves behind when it
                                      * burns out (reaction_t.smoke),
@@ -316,7 +325,7 @@ const material_t materials[MATERIAL_MAX] = {
                                      * below is the real payload of this
                                      * row. */
 
-        .density = 7,               /* between steam's 5 and gas's 10 -
+            .density = 7, /* between steam's 5 and gas's 10 -
                                      * nothing here is load bearing, it
                                      * only keeps smoke and steam from
                                      * being mutually undisplaceable the
@@ -327,16 +336,16 @@ const material_t materials[MATERIAL_MAX] = {
                                      * can rise through smoke, which is
                                      * the right way round for a basin
                                      * sitting over a fire. */
-        .slip    = 255,             /* no resistance, same reasoning as
+            .slip = 255,  /* no resistance, same reasoning as
                                      * gas's own row */
-        .repose  = 0,
-        .scatter = 150,             /* just above steam's 140 - smoke
+            .repose = 0,
+            .scatter = 150, /* just above steam's 140 - smoke
                                      * curls a little more than steam
                                      * does. Starting point, not final -
                                      * tune on device like every other
                                      * constant here. */
 
-        .decay    = 16,             /* lower than steam's 24, so smoke
+            .decay = 16,     /* lower than steam's 24, so smoke
                                      * LASTS LONGER - decay is the chance
                                      * per step of losing a life tick, so
                                      * smaller is slower. Roughly 240
@@ -346,24 +355,25 @@ const material_t materials[MATERIAL_MAX] = {
                                      * Starting point, not final - tune
                                      * on device like every other
                                      * constant here. */
-        .mobility = 120,            /* between gas's 96 and steam's 160 -
+            .mobility = 120, /* between gas's 96 and steam's 160 -
                                      * smoke climbs, but lazily, where
                                      * steam comes off a boil eagerly.
                                      * Starting point, not final - tune
                                      * on device like every other
                                      * constant here. */
-        .sight    = 24,             /* widest of any gas here (steam 20,
+            .sight = 24,     /* widest of any gas here (steam 20,
                                      * gas 16, fire 5) - smoke spreads
                                      * and thins into a haze rather than
                                      * holding a column. Starting point,
                                      * not final - tune on device like
                                      * every other constant here. */
-    },
+        },
 
-    [MAT_OIL] = {
-        .name    = "Oil",
-        .kind    = KIND_LIQUID,
-        .density = 22,       /* below water's 30, which is what makes oil
+    [MAT_OIL] =
+        {
+            .name = "Oil",
+            .kind = KIND_LIQUID,
+            .density = 22, /* below water's 30, which is what makes oil
                               * float rather than sink when the two meet -
                               * see the density swap in
                               * move_liquid_grain() (sand_liquid.c).
@@ -371,7 +381,7 @@ const material_t materials[MATERIAL_MAX] = {
                               * flame can shove around. Sand (60) still
                               * sinks straight through it. */
 
-        .mobility = 140,     /* VISCOSITY, inverted - see material.h. Oil
+            .mobility = 140, /* VISCOSITY, inverted - see material.h. Oil
                               * moves on a bit over half its steps where
                               * water moves on all of them, so it lags
                               * behind a tilt and holds a slope for a
@@ -396,27 +406,28 @@ const material_t materials[MATERIAL_MAX] = {
                               * not final - tune on device like every
                               * other constant here. */
 
-        /* The same "no resistance" values water uses, and for the same
+            /* The same "no resistance" values water uses, and for the same
          * reason: a liquid does not slide, pile or scatter, it flows
          * between neighbours as an amount. */
-        .slip    = 255,
-        .repose  = 0,
-        .scatter = 0,
-    },
+            .slip = 255,
+            .repose = 0,
+            .scatter = 0,
+        },
 
-    [MAT_LAVA] = {
-        .name    = "Lava",
-        .kind    = KIND_LIQUID,
-        .density = 45,       /* above water (30) so lava sinks and water
+    [MAT_LAVA] =
+        {
+            .name = "Lava",
+            .kind = KIND_LIQUID,
+            .density = 45, /* above water (30) so lava sinks and water
                               * floats when they meet, below sand (60) so
                               * sand still sinks through lava. Both fall
                               * out of the existing rules; neither needs
                               * lava-specific code. */
-        .slip    = 255,
-        .repose  = 0,
-        .scatter = 0,
+            .slip = 255,
+            .repose = 0,
+            .scatter = 0,
 
-        .mobility = 70,      /* VISCOSITY, inverted - see material.h, and
+            .mobility = 70, /* VISCOSITY, inverted - see material.h, and
                               * the slowest thing on the board by a wide
                               * margin: 44 steps to spread as far as water
                               * goes in 8 and oil in 18. Molten rock
@@ -444,7 +455,7 @@ const material_t materials[MATERIAL_MAX] = {
                               * Starting point, not final - tune on device
                               * like every other constant here. */
 
-        .decay   = 0,        /* MUST stay 0, and this is not a style
+            .decay = 0, /* MUST stay 0, and this is not a style
                               * choice. decay != 0 is what switches the
                               * variant nibble from meaning "how much of
                               * this cell is full" to meaning "life
@@ -457,84 +468,88 @@ const material_t materials[MATERIAL_MAX] = {
                               * could collide. Immortal is also simply
                               * what lava should be: it cools by touching
                               * water, not by waiting. */
-    },
+        },
 
-    [MAT_ACID] = {
-        .name    = "Acid",
-        .kind    = KIND_LIQUID,
-        .density = 38,       /* between water's 30 and lava's 45: acid
+    [MAT_ACID] =
+        {
+            .name = "Acid",
+            .kind = KIND_LIQUID,
+            .density = 38, /* between water's 30 and lava's 45: acid
                               * sinks through water and floats on lava,
                               * both of which fall out of
                               * sink_through_lighter_liquid() with no
                               * acid-specific code. Sand (60) still sinks
                               * through it, which matters - a grain has to
                               * get INTO the acid to be eaten by it. */
-        .slip    = 255,      /* the usual "no resistance" values a liquid
+            .slip = 255,   /* the usual "no resistance" values a liquid
                               * leaves these at - see water's own row */
-        .repose  = 0,
-        .scatter = 0,
+            .repose = 0,
+            .scatter = 0,
 
-        .mobility = 220,     /* VISCOSITY, inverted - see material.h.
+            .mobility = 220, /* VISCOSITY, inverted - see material.h.
                               * Just short of water's 255: acid is runny,
                               * and being fractionally slower is enough to
                               * read as heavier without behaving like oil.
                               * Starting point, not final - tune on device
                               * like every other constant here. */
-    },
+        },
 
-    [MAT_GLASS] = {
-        .name    = "Glass",
-        .kind    = KIND_STATIC,
-        .density = 200,      /* stone's own figure, and for the same
+    [MAT_GLASS] =
+        {
+            .name = "Glass",
+            .kind = KIND_STATIC,
+            .density = 200, /* stone's own figure, and for the same
                               * reason: nothing displaces it, and it
                               * smothers a buried flame the way stone
                               * does. Glass differs from stone in what
                               * ACID does to it, not in how it sits. */
-        .slip    = 0,
-        .repose  = 0,
-        .scatter = 0,
-    },
+            .slip = 0,
+            .repose = 0,
+            .scatter = 0,
+        },
 
-    [MAT_DIRT] = {
-        .name    = "Dirt",
-        .kind    = KIND_POWDER,
-        .density = 62,       /* just above sand's 60. Soil is sand with
+    [MAT_DIRT] =
+        {
+            .name = "Dirt",
+            .kind = KIND_POWDER,
+            .density = 62, /* just above sand's 60. Soil is sand with
                               * water and organic matter packed into the
                               * gaps, so it should sink through a loose
                               * pile rather than float on it - and being
                               * only just heavier keeps that slow */
-        .slip    = 64,       /* stickier than sand's 96: damp soil clumps
+            .slip = 64,    /* stickier than sand's 96: damp soil clumps
                               * where dry sand runs */
-        .repose  = 11,       /* ~48 degrees against sand's ~35. A bank of
+            .repose = 11,  /* ~48 degrees against sand's ~35. A bank of
                               * earth holds a much steeper face than a
                               * dune does, which is most of what makes it
                               * read as soil rather than as brown sand */
-        .scatter = 12,       /* well under sand's 40 - it lands where it
+            .scatter = 12, /* well under sand's 40 - it lands where it
                               * falls instead of skittering */
-    },
+        },
 
-    [MAT_SNOW] = {
-        .name    = "Snow",
-        .kind    = KIND_POWDER,
-        .density = 15,       /* Under oil's 22 and well under water's 30,
+    [MAT_SNOW] =
+        {
+            .name = "Snow",
+            .kind = KIND_POWDER,
+            .density = 15, /* Under oil's 22 and well under water's 30,
                               * so snow FLOATS on both - can_enter() lets
                               * the denser one displace it and that is the
                               * whole mechanism. Snow sitting on top of a
                               * pool is right, and it also puts the snow
                               * where it is useful: on the surface, in
                               * reach of whatever is above it. */
-        .slip    = 64,       /* Stickier than sand's 96. Snow clumps, and a
+            .slip = 64,    /* Stickier than sand's 96. Snow clumps, and a
                               * bank that holds its shape is what makes it
                               * possible to pack snow ONTO a glass pane and
                               * have it stay there long enough to matter. */
-        .repose  = 9,        /* ~42 degrees, steeper than dry sand's ~35 -
+            .repose = 9,   /* ~42 degrees, steeper than dry sand's ~35 -
                               * again so a bank holds. */
-        .scatter = 90,       /* High, and the one purely cosmetic number
+            .scatter = 90, /* High, and the one purely cosmetic number
                               * here: falling snow drifts instead of
                               * dropping straight, which is most of what
                               * makes it read as snow rather than as pale
                               * sand. */
-    },
+        },
 
     /* ONE row for all sixteen extended materials - see MAT_EXTENDED in
      * material.h. The sweep reads this per cell per step and must not care
@@ -544,13 +559,12 @@ const material_t materials[MATERIAL_MAX] = {
      * That sharing is the whole trick, and also the whole limit. Anything
      * that needs its own density, kind, slip, repose or scatter cannot
      * live here and needs one of the ordinary slots. */
-    [MAT_EXTENDED] = {
-        .name    = "Extended",
-        .kind    = KIND_STATIC,
-        .density = 200,      /* stone's figure: undisplaceable, and it
+    [MAT_EXTENDED] =
+        {
+            .name = "Extended", .kind = KIND_STATIC, .density = 200, /* stone's figure: undisplaceable, and it
                               * smothers a buried flame the way stone
                               * does */
-    },
+        },
 };
 
 /*=============================================================================
@@ -571,12 +585,14 @@ const reaction_t reactions[MATERIAL_MAX] = {
      * which is why it had no row here at all. Wetting is driven from the
      * other side too, and that is exactly the problem: `soaks` belongs to
      * sand and soil, and they cannot tell water from oil. */
-    [MAT_WATER] = {
-        .wets        = 1,
-    },
+    [MAT_WATER] =
+        {
+            .wets = 1,
+        },
 
-    [MAT_ACID] = {
-        /* The only thing that dissolves anything. 60 in 256 is roughly
+    [MAT_ACID] =
+        {
+            /* The only thing that dissolves anything. 60 in 256 is roughly
          * one bite every four steps per acid cell, which eats a pile of
          * sand at a pace you can watch rather than one that removes it
          * between frames.
@@ -588,33 +604,48 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * still be a single cell, which is the same mistake oil-soaked
          * ash made before soaking became a real transfer. A puddle of
          * acid has a budget, and when it is spent the puddle is gone. */
-        .dissolves = 60,
+            .dissolves = 60,
 
-        .fizz = 40,     /* about one bite in six leaves a wisp of smoke.
-                         * Acid was silent before this: cells simply
-                         * vanished, with nothing on screen to say the
-                         * acid was the cause or that it was working.
-                         *
-                         * Modest on purpose - every bite fizzing would
-                         * bury a dissolving pile under its own exhaust,
-                         * and the smoke has to be readable against the
-                         * thing being eaten rather than instead of it.
-                         * Starting point, not final - tune on device like
-                         * every other constant here. */
+            .fizz = 16, /* WAS 40 ("about one bite in six"), DROPPED SHARPLY
+                         * to 6 on 2026-09-01 - reported as producing far too
+                         * much gas: .dissolves alone already fires roughly
+                         * one bite in four per acid cell per step, so 40
+                         * meant a wide pool eating through a pile kept a
+                         * steady stream of smoke going the whole time, not
+                         * the occasional wisp this was meant to be. 6 turned
+                         * out to be the other extreme once .evaporates (a
+                         * SEPARATE, unrelated field - ambient acid-turns-to-
+                         * gas, nothing to do with dissolving) was ALSO
+                         * driven down hard the same session: with both
+                         * knobs low at once, "acid was the cause" stopped
+                         * reading as rare and started reading as gone.
+                         * Brought back up partway to 16 - about one bite in
+                         * sixteen, roughly 1.4% per acid cell per step once
+                         * combined with .dissolves - now that .evaporates is
+                         * covering the "ambient" gas on its own, .fizz only
+                         * needs to answer "acid was the cause" for actual
+                         * dissolving again. Starting point, not final - tune
+                         * on device like every other constant here. */
 
-        .evaporates = 1,    /* the rarest this field can express - 1 in
-                             * 256 per cell per step still means a
-                             * standing puddle left untouched for a long
-                             * while will visibly thin, since every one
-                             * of its cells keeps rolling. That is the
-                             * point: a rare wisp now and then, not a
-                             * clock on the puddle. Starting point, not
-                             * final - tune on device like every other
-                             * constant here. */
-    },
+            .evaporates = 1, /* the rarest a single byte-wide roll can
+                             * express - 1 in 256 per cell per step. Still
+                             * read as too frequent on device once a real
+                             * puddle (many cells, all rolling every step)
+                             * was watched rather than a single cell - see
+                             * step_one_dissolver_cell()'s own comment for
+                             * the extra gate (now 1-in-60, effective 1 in
+                             * 15360) that takes the natural, per-material
+                             * rate the rest of the way down.
+                             * sand_set_evaporates()'s override path
+                             * (tests, debug) bypasses that extra gate and
+                             * uses whatever chance it is given exactly.
+                             * Starting point, not final - tune on device
+                             * like every other constant here. */
+        },
 
-    [MAT_OIL] = {
-        /* Catches readily, but only where it meets air - see
+    [MAT_OIL] =
+        {
+            /* Catches readily, but only where it meets air - see
          * material.h's own comment on `needs_air`. Without that flag a
          * spark landing on a pool would light every cell of it in a
          * single pass (this file's scan order propagates ignition
@@ -626,24 +657,25 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * than wood's 6, slow enough to watch a surface layer light up
          * rather than blink. Starting point, not final - tune on device
          * like every other constant here. */
-        .flammability = 50,
-        .needs_air    = 1,
-        .ignites_to   = MAT_FIRE,   /* burns straight to flame, unlike
+            .flammability = 50,
+            .needs_air = 1,
+            .ignites_to = MAT_FIRE, /* burns straight to flame, unlike
                                      * wood: there is no log left to
                                      * smoulder, the fuel simply goes.
                                      * The flame rises off, exposing the
                                      * layer beneath, which is what eats
                                      * the pool downward */
-    },
+        },
 
-    [MAT_LAVA] = {
-        /* A heat source that happens to be a liquid, and the clearest
+    [MAT_LAVA] =
+        {
+            /* A heat source that happens to be a liquid, and the clearest
          * proof the movement and reaction axes really are independent:
          * KIND_LIQUID in materials[] above, `burns` here, and not one
          * line of code anywhere knows about the combination. */
-        .burns = 1,
+            .burns = 1,
 
-        .quench_to = MAT_STONE,   /* water puts lava out by turning it to
+            .quench_to = MAT_STONE, /* water puts lava out by turning it to
                                    * rock, rather than by making it
                                    * vanish. The water pays a unit of its
                                    * own mass for it, exactly as it does
@@ -651,31 +683,32 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * so a small puddle cannot pave an
                                    * ocean of lava for free. */
 
-        .flare = 16,              /* well below ember's 48: lava licks the
+            .flare = 16, /* well below ember's 48: lava licks the
                                    * occasional flame rather than burning
                                    * with one. Mostly so a pool reads as
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
-        /* No residue: lava never burns out (decay 0 above), so nothing
+            /* No residue: lava never burns out (decay 0 above), so nothing
          * here would ever fire. No conducts either - lava IS the heat,
          * it does not pass someone else's along. */
-    },
+        },
 
-    [MAT_SAND] = {
-        /* Acid eats sand readily - it is the obvious thing to point acid
+    [MAT_SAND] =
+        {
+            /* Acid eats sand readily - it is the obvious thing to point acid
          * at, and the one that shows what it does. */
-        .dissolvable = 200,
+            .dissolvable = 200,
 
-        /* Wet sand slowly becomes soil. Far slower than dirt drinks -
+            /* Wet sand slowly becomes soil. Far slower than dirt drinks -
          * 8 against 60 - because this is sand CHANGING rather than dirt
          * filling up, and it should read as a shoreline turning to mud
          * over time rather than as a puddle instantly making earth. */
-        .soaks       = 8,
-        .soaks_to    = MAT_DIRT,
+            .soaks = 8,
+            .soaks_to = MAT_DIRT,
 
-        .heats_to    = MAT_GLASS,
-        .heat_chance = 16,   /* 16 in 256 per adjacent heat source per
+            .heats_to = MAT_GLASS,
+            .heat_chance = 16, /* 16 in 256 per adjacent heat source per
                               * step. Deliberately slow - glass should be
                               * something you set up and wait for, not
                               * something that happens whenever a spark
@@ -697,10 +730,11 @@ const reaction_t reactions[MATERIAL_MAX] = {
                               * into something a passing spark makes.
                               * Starting point, not final - tune on device
                               * like every other constant here. */
-    },
+        },
 
-    [MAT_GLASS] = {
-        /* Conducts exactly as well as stone, and the sameness is the
+    [MAT_GLASS] =
+        {
+            /* Conducts exactly as well as stone, and the sameness is the
          * point: glass and stone should differ in ONE thing - what acid
          * does to them - so choosing between them is a decision about
          * acid and nothing else. A second axis of difference would make
@@ -713,9 +747,9 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * and the only one that survives acid. Nothing announced it: an
          * absent row reads as "no reactions", which is right for most
          * materials and was wrong for this one. */
-        .conducts = 220,
+            .conducts = 220,
 
-        /* Glass BANKS heat in its own variant nibble rather than
+            /* Glass BANKS heat in its own variant nibble rather than
          * transforming on contact, and at the top of that ramp it melts.
          * See reaction_t.heat_ramp in material.h for why accumulation
          * rather than a per-step roll: a roll has no memory, so it cannot
@@ -732,10 +766,10 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * to be large enough that heat visibly DRAINS once the fire is
          * out, because that draining is the only thing that makes the
          * ramp mean duration rather than merely total exposure. */
-        .heats_to    = MAT_LAVA,
-        .heat_ramp   = 64,
+            .heats_to = MAT_LAVA,
+            .heat_ramp = 64,
 
-        /* `cools` is the drain ONE level above ambient; it scales with how
+            /* `cools` is the drain ONE level above ambient; it scales with how
          * far above ambient the cell already is (step_one_tempered_cell()).
          * So this pair is not a tug of war at a single fixed rate - 64 up
          * against 10, then 20, then 30 as it climbs.
@@ -757,18 +791,19 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * within a couple of steps. Measured, it peaks around 6 whether the
          * ramp is 64 or 160. Heat has to be HELD against glass, which is
          * the right lesson for the player to learn from it. */
-        .cools       = 5,
+            .cools = 5,
 
-        /* Shocked glass goes back to being sand, which closes the loop it
+            /* Shocked glass goes back to being sand, which closes the loop it
          * opened: sand fuses to glass under heat, glass returns to sand
          * when the heat is pulled out of it too fast. The player can
          * un-make the material without a second material and without
          * spending one of the two remaining slots. */
-        .shatters_to = MAT_SAND,
-    },
+            .shatters_to = MAT_SAND,
+        },
 
-    [MAT_DIRT] = {
-        /* Dirt's variant is MOISTURE, 0 dry to 15 saturated. It soaks up
+    [MAT_DIRT] =
+        {
+            /* Dirt's variant is MOISTURE, 0 dry to 15 saturated. It soaks up
          * any liquid it touches - `soaks_to` is left at zero, so what it
          * absorbs raises its own variant rather than turning it into
          * something else - and dries back out slowly.
@@ -777,12 +812,12 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * stays useful for a while and does not stay useful forever, which
          * is what makes watering a thing you do rather than a thing you
          * did once. */
-        .soaks       = 60,
-        .dries       = 5,
+            .soaks = 60,
+            .dries = 5,
 
-        .dissolvable = 200,  /* the same as sand: it is mostly sand */
+            .dissolvable = 200, /* the same as sand: it is mostly sand */
 
-        /* SMELTING. Dirt's variant is fully spent - a tone bit plus
+            /* SMELTING. Dirt's variant is fully spent - a tone bit plus
          * SOIL_MOISTURE_BITS of moisture - so there is nowhere to bank a
          * `heat_ramp` the way glass and stone do; this has to be a
          * memoryless roll, like sand into glass. See
@@ -800,12 +835,13 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * first (try_heat_transform() in sand_reactions.c), so saturated
          * dirt takes roughly eight successes - one per level of
          * SOIL_MOISTURE_MAX - to reach metal instead of one. */
-        .heats_to    = MATX(MATX_METAL),
-        .heat_chance = 10,
-    },
+            .heats_to = MATX(MATX_METAL),
+            .heat_chance = 10,
+        },
 
-    [MAT_SNOW] = {
-        /* The only cold thing on the board, and the reason thermal shock
+    [MAT_SNOW] =
+        {
+            /* The only cold thing on the board, and the reason thermal shock
          * is legible at all. `chills` pulls a heat level out of a hot
          * neighbour and marks snow as cold for the shock rule - 40 in 256
          * so a bank cools a pane briskly without a single flake being an
@@ -817,32 +853,35 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * high - snow near ANY heat source is short-lived, which is the
          * behaviour you want when you have to pack a bank onto a pane
          * that is already hot. */
-        .chills      = 40,
-        .heats_to    = MAT_WATER,
-        .heat_chance = 120,
+            .chills = 40,
+            .heats_to = MAT_WATER,
+            .heat_chance = 120,
 
-        /* And it melts in liquid, at its own far slower rate - see
+            /* And it melts in liquid, at its own far slower rate - see
          * reaction_t.thaws. 120 beside a flame is two steps; 4 in water is
          * nearer a second per touching face, which is long enough to watch
          * a drift land on a pond and ride on it before it goes. Snow is
          * lighter than water precisely so that it does. */
-        .thaws       = 4,
-    },
+            .thaws = 4,
+        },
 
     /* Steam and smoke have rows here only for convection - they are
      * byproducts that react with nothing else, which is the usual reason a
      * material skips this table entirely. */
-    [MAT_STEAM] = {
-        .warms = 48,   /* the hotter carrier: water that has just boiled */
-    },
+    [MAT_STEAM] =
+        {
+            .warms = 48, /* the hotter carrier: water that has just boiled */
+        },
 
-    [MAT_SMOKE] = {
-        .warms = 28,   /* cooler than steam and far longer lived, so a
+    [MAT_SMOKE] =
+        {
+            .warms = 28, /* cooler than steam and far longer lived, so a
                         * lower rate spread over more steps */
-    },
+        },
 
-    [MAT_STONE] = {
-        /* Stone carries a temperature exactly as glass does - its variant
+    [MAT_STONE] =
+        {
+            /* Stone carries a temperature exactly as glass does - its variant
          * is heat, it frosts, it glows, and a cold shock cracks it into
          * sand. Same fields, same scale, same colours meaning the same
          * things, because a player who has learned to read one wall should
@@ -868,10 +907,10 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * take longer to come up to temperature, and it is the more common
          * building material - a wall that glowed the instant a flame came
          * near would have the whole board lit up. */
-        .heat_ramp   = 32,
-        .cools       = 5,
+            .heat_ramp = 32,
+            .cools = 5,
 
-        .dissolvable = 60,   /* Stone gives way to acid now, just slowly -
+            .dissolvable = 60, /* Stone gives way to acid now, just slowly -
                               * well under sand's 200, so a wall holds for
                               * a while and then does not. It used to be
                               * immune, and being immune made it the only
@@ -886,7 +925,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
                               * simply has no `dissolvable` - which is the
                               * same route every other material takes. */
 
-        /* 220 in 256 (~0.86) is the chance heat crosses ONE cell of
+            /* 220 in 256 (~0.86) is the chance heat crosses ONE cell of
          * stone - see conduct_heat()'s own comment in sand_reactions.c
          * for the walk this actually drives. It attenuates with depth,
          * not a fixed reach: crossing d cells succeeds with probability
@@ -907,31 +946,33 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * Thickness still matters, just over a usable range rather than
          * an unusable one. Starting point, not final - tune on device
          * like every other constant here. */
-        .conducts = 220,
-    },
+            .conducts = 220,
+        },
 
-    [MAT_GAS] = {
-        /* 255: gas catches the instant fire touches it, and - because
+    [MAT_GAS] =
+        {
+            /* 255: gas catches the instant fire touches it, and - because
          * try_ignite() checks for 255 before ever drawing a random number -
          * costs no RNG draw doing it, exactly as a plain boolean flammable
          * flag used to. That is what keeps every existing gas/fire test,
          * and the device frame-budget captures that depend on their exact
          * random sequence, bit-identical after this table split. */
-        .flammability = 255,
-        .ignites_to   = MAT_FIRE,   /* the only fuel today; written out
+            .flammability = 255,
+            .ignites_to = MAT_FIRE, /* the only fuel today; written out
                                      * explicitly rather than relying on
                                      * the "0 reads as MAT_FIRE" default,
                                      * since MAT_FIRE is what should be
                                      * here regardless of which enum value
                                      * happens to be 0 */
-    },
+        },
 
-    [MAT_FIRE] = {
-        .burns = 1,     /* the one heat source that exists today - see
+    [MAT_FIRE] =
+        {
+            .burns = 1, /* the one heat source that exists today - see
                          * sand_reactions.c's dispatch, which now keys off
                          * this instead of CELL_MATERIAL(c) == MAT_FIRE */
 
-        .residue = 40,    /* chance in 256 that a burnt-out fire cell leaves
+            .residue = 40, /* chance in 256 that a burnt-out fire cell leaves
                          * MAT_STEAM behind - smoke, physically the same
                          * material a kettle's steam is (see MAT_STEAM's
                          * own row above). Lower than ember's 90: a flame
@@ -940,17 +981,18 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * burn. Starting point, not final - tune on
                          * device like every other constant here. */
 
-        .quench_to = MAT_STEAM,   /* touching water no longer just
+            .quench_to = MAT_STEAM, /* touching water no longer just
                                   * vanishes - it boils off, at the cost
                                   * of a unit of the water's own mass
                                   * (see step_one_burning_cell() in
                                   * sand_reactions.c). Steam is a
                                   * byproduct, not a free lunch: a pot
                                   * boiled dry should eventually run dry. */
-    },
+        },
 
-    [MAT_WOOD] = {
-        /* Wood standing in wet ground buds FOLIAGE. Slow - 6 in 256 is
+    [MAT_WOOD] =
+        {
+            /* Wood standing in wet ground buds FOLIAGE. Slow - 6 in 256 is
          * one bud every forty steps or so per cell of trunk touching wet
          * soil, and only while somebody keeps the ground watered.
          *
@@ -971,30 +1013,30 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * wanting to come back to life should be producing anyway. It
          * takes a grower back out of the growth loop rather than adding
          * one, which this feature has needed twice already. */
-        .sprouts     = 6,
-        .sprouts_to  = MATX(MATX_LEAF),
+            .sprouts = 6,
+            .sprouts_to = MATX(MATX_LEAF),
 
-        /* And a crowned trunk puts out new GROWTH, which is where a tree
+            /* And a crowned trunk puts out new GROWTH, which is where a tree
          * gets taller now that hardening leaves no green tip behind.
          * Rarer than leafing: a bud is a whole new limb rather than a
          * frond, and it is the only thing that compounds, so it is the
          * number to turn down first if a forest gets away. */
-        .buds        = 32,
-        .buds_to     = MATX(MATX_PLANT),
+            .buds = 32,
+            .buds_to = MATX(MATX_PLANT),
 
-        /* A trunk standing in water waters its own roots, at a third of
+            /* A trunk standing in water waters its own roots, at a third of
          * green growth's rate - bark is not a leaf. */
-        .drinks      = 12,
+            .drinks = 12,
 
-        /* 6 in 256 is roughly 43 steps of contact with a single flame
+            /* 6 in 256 is roughly 43 steps of contact with a single flame
          * before it catches - a fire that has to work at it, which is
          * the whole point of "slowly consumed" (see sand_reactions.c's
          * top comment for why wood does not just ignite straight to
          * MAT_FIRE the way gas does). Starting point, not final - tune
          * on device like every other constant here. */
-        .flammability = 6,
+            .flammability = 6,
 
-        /* Ignites into ITSELF. Wood's variant is how much of it is left to
+            /* Ignites into ITSELF. Wood's variant is how much of it is left to
          * burn, so catching fire means going to a full one - which is
          * exactly what place_reacted() writes - rather than becoming some
          * other material.
@@ -1004,21 +1046,21 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * differed from wood in seven fields of which only decay was in
          * the movement table. A state that needs its own row costs a slot;
          * a state the variant can hold does not. */
-        .ignites_to   = MAT_WOOD,
+            .ignites_to = MAT_WOOD,
 
-        /* 24 in 256 per step across 15 levels is ~160 steps, about 2.7s at
+            /* 24 in 256 per step across 15 levels is ~160 steps, about 2.7s at
          * this app's step rate - a log that visibly smoulders rather than
          * one that either lingers forever or guts out at once. Ember's own
          * figure, kept: the burn did not change, only where it lives. */
-        .burn_decay   = 24,
+            .burn_decay = 24,
 
-        .residue   = 90,          /* well above fire's 40: a whole log
+            .residue = 90, /* well above fire's 40: a whole log
                                    * finishing its burn is a bigger, more
                                    * definite event than a flame guttering
                                    * out, and should leave smoke far more
                                    * often */
 
-        .quench_to = 0,           /* water on a burning log puts it OUT
+            .quench_to = 0, /* water on a burning log puts it OUT
                                    * rather than replacing it - the log is
                                    * still there, just no longer alight,
                                    * which is what step_one_burning_cell()
@@ -1028,7 +1070,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * the fire, so quenching it had to
                                    * replace it with something. */
 
-        .flare     = 48,          /* chance in 256 per step that a burning
+            .flare = 48, /* chance in 256 per step that a burning
                                    * log emits a MAT_FIRE cell into an
                                    * empty cardinal neighbour. Wood is
                                    * KIND_STATIC and would otherwise be a
@@ -1038,10 +1080,10 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * burning below, flame above" falls out
                                    * of this one field */
 
-        .dissolvable  = 160,      /* slower than sand's 200: a plank holds
+            .dissolvable = 160, /* slower than sand's 200: a plank holds
                                    * out a moment longer than a loose pile
                                    * does */
-    },
+        },
 
 };
 
@@ -1057,14 +1099,10 @@ const reaction_t reactions[MATERIAL_MAX] = {
  *===========================================================================*/
 
 /* Channel `sh` of the way from `lo` to `hi`, out of 15. */
-#define LERP_CH(lo, hi, shift, sh)                                        \
-    ((((((lo) >> (shift)) & 0xFF) * (15 - (sh)) +                         \
-       (((hi) >> (shift)) & 0xFF) * (sh)) / 15) & 0xFF)
+#define LERP_CH(lo, hi, shift, sh)                                                                                     \
+    ((((((lo) >> (shift)) & 0xFF) * (15 - (sh)) + (((hi) >> (shift)) & 0xFF) * (sh)) / 15) & 0xFF)
 
-#define LERP(lo, hi, sh)                                                  \
-    ((LERP_CH(lo, hi, 16, sh) << 16) |                                    \
-     (LERP_CH(lo, hi,  8, sh) <<  8) |                                    \
-      LERP_CH(lo, hi,  0, sh))
+#define LERP(lo, hi, sh)  ((LERP_CH(lo, hi, 16, sh) << 16) | (LERP_CH(lo, hi, 8, sh) << 8) | LERP_CH(lo, hi, 0, sh))
 
 /* A ramp for `n` steps between two colours, for a material that needs its
  * sixteen entries built in more than one piece. */
@@ -1111,9 +1149,9 @@ const reaction_t reactions[MATERIAL_MAX] = {
 /* Dirt's colour at a given MOISTURE. Wet soil really is darker than dry,
  * so the direction is not a choice - and it means a watered patch shows as
  * a dark stain rather than as a number only the plants can see. */
-#define DIRT_DRY 0x9A7B52
-#define DIRT_WET 0x3A2A18
-#define DIRT_RGB(v) LERP(DIRT_DRY, DIRT_WET, v)
+#define DIRT_DRY          0x9A7B52
+#define DIRT_WET          0x3A2A18
+#define DIRT_RGB(v)       LERP(DIRT_DRY, DIRT_WET, v)
 
 /* One tone of soil: the dry and wet ends shifted together, so a bank shows
  * its strata whether it is parched or sodden. Tone 0 is the darker.
@@ -1135,27 +1173,30 @@ const reaction_t reactions[MATERIAL_MAX] = {
 #define SOIL_TONE_LO(rgb) LERP((rgb), 0x000000, 4)
 #define SOIL_TONE_HI(rgb) LERP((rgb), 0xFFFFFF, 3)
 
-#define SOIL_END(t, rgb) ((t) ? SOIL_TONE_HI(rgb) : SOIL_TONE_LO(rgb))
+#define SOIL_END(t, rgb)  ((t) ? SOIL_TONE_HI(rgb) : SOIL_TONE_LO(rgb))
 
 /* Eight steps of wetness at one tone, which is half of dirt's palette
  * block; the other half is the same thing at the other tone. */
-#define SOIL_RAMP(t)                                                       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  0)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  2)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  4)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  6)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET),  9)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 11)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 13)),       \
-    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 15))
+#define SOIL_RAMP(t)                                                                                                   \
+    GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 0)),                                                    \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 2)),                                                \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 4)),                                                \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 6)),                                                \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 9)),                                                \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 11)),                                               \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 13)),                                               \
+        GFX_RGB(LERP(SOIL_END(t, DIRT_DRY), SOIL_END(t, DIRT_WET), 15))
 
-#define WOOD_UNLIT 0x5A3D24
-#define WOOD_CHAR  0x2A0A00
-#define WOOD_GLOW  0xFF7A28
+#define WOOD_UNLIT   0x5A3D24
+#define WOOD_CHAR    0x2A0A00
+#define WOOD_GLOW    0xFF7A28
 
 #define WOOD_BURN(i) GFX_RGB(LERP(WOOD_CHAR, WOOD_GLOW, ((i) - 1) * 15 / 14))
 
-#define WOOD_SHADES                                                            GFX_RGB(WOOD_UNLIT),                                                       WOOD_BURN(1),  WOOD_BURN(2),  WOOD_BURN(3),  WOOD_BURN(4),                 WOOD_BURN(5),  WOOD_BURN(6),  WOOD_BURN(7),  WOOD_BURN(8),                 WOOD_BURN(9),  WOOD_BURN(10), WOOD_BURN(11), WOOD_BURN(12),                WOOD_BURN(13), WOOD_BURN(14), WOOD_BURN(15)
+#define WOOD_SHADES                                                                                                    \
+    GFX_RGB(WOOD_UNLIT), WOOD_BURN(1), WOOD_BURN(2), WOOD_BURN(3), WOOD_BURN(4), WOOD_BURN(5), WOOD_BURN(6),           \
+        WOOD_BURN(7), WOOD_BURN(8), WOOD_BURN(9), WOOD_BURN(10), WOOD_BURN(11), WOOD_BURN(12), WOOD_BURN(13),          \
+        WOOD_BURN(14), WOOD_BURN(15)
 
 /* Stone's ramp, built the same way glass's is and meaning the same things
  * at the same levels - see the glass block below for why the splits are
@@ -1173,30 +1214,23 @@ const reaction_t reactions[MATERIAL_MAX] = {
 #define STONE_GLOW    0x9E3A18
 #define STONE_MOLTEN  0xE8752A
 
-#define STONE_COOL(v)  LERP(STONE_FROST, STONE_AMBIENT,                    \
-                            ((v) * 15) / (SAND_AMBIENT_HEAT > 0            \
-                                          ? SAND_AMBIENT_HEAT : 1))
-#define STONE_WARM(v)  LERP(STONE_AMBIENT, STONE_NEUTRAL,                  \
-                            (((v) - SAND_AMBIENT_HEAT) * 15) /             \
-                            (SAND_SHOCK_HEAT > SAND_AMBIENT_HEAT           \
-                             ? SAND_SHOCK_HEAT - SAND_AMBIENT_HEAT : 1))
-#define STONE_HOT(v)   LERP(STONE_GLOW, STONE_MOLTEN,                      \
-                            (((v) - SAND_SHOCK_HEAT) * 15) /               \
-                            (SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1       \
-                             ? MATERIAL_VARIANTS - 1 - SAND_SHOCK_HEAT : 1))
+#define STONE_COOL(v) LERP(STONE_FROST, STONE_AMBIENT, ((v) * 15) / (SAND_AMBIENT_HEAT > 0 ? SAND_AMBIENT_HEAT : 1))
+#define STONE_WARM(v)                                                                                                  \
+    LERP(STONE_AMBIENT, STONE_NEUTRAL,                                                                                 \
+         (((v) - SAND_AMBIENT_HEAT) * 15)                                                                              \
+             / (SAND_SHOCK_HEAT > SAND_AMBIENT_HEAT ? SAND_SHOCK_HEAT - SAND_AMBIENT_HEAT : 1))
+#define STONE_HOT(v)                                                                                                   \
+    LERP(STONE_GLOW, STONE_MOLTEN,                                                                                     \
+         (((v) - SAND_SHOCK_HEAT) * 15)                                                                                \
+             / (SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1 ? MATERIAL_VARIANTS - 1 - SAND_SHOCK_HEAT : 1))
 
-#define STONE_RGB(v)                                                       \
-    ((v) <= SAND_AMBIENT_HEAT ? STONE_COOL(v)                              \
-     : (v) < SAND_SHOCK_HEAT  ? STONE_WARM(v)                              \
-                              : STONE_HOT(v))
+#define STONE_RGB(v) ((v) <= SAND_AMBIENT_HEAT ? STONE_COOL(v) : (v) < SAND_SHOCK_HEAT ? STONE_WARM(v) : STONE_HOT(v))
 
-#define STONE_AT(v) GFX_RGB(STONE_RGB(v))
+#define STONE_AT(v)  GFX_RGB(STONE_RGB(v))
 
-#define STONE_SHADES                                                       \
-    STONE_AT(0),  STONE_AT(1),  STONE_AT(2),  STONE_AT(3),                 \
-    STONE_AT(4),  STONE_AT(5),  STONE_AT(6),  STONE_AT(7),                 \
-    STONE_AT(8),  STONE_AT(9),  STONE_AT(10), STONE_AT(11),                \
-    STONE_AT(12), STONE_AT(13), STONE_AT(14), STONE_AT(15)
+#define STONE_SHADES                                                                                                   \
+    STONE_AT(0), STONE_AT(1), STONE_AT(2), STONE_AT(3), STONE_AT(4), STONE_AT(5), STONE_AT(6), STONE_AT(7),            \
+        STONE_AT(8), STONE_AT(9), STONE_AT(10), STONE_AT(11), STONE_AT(12), STONE_AT(13), STONE_AT(14), STONE_AT(15)
 
 #define GLASS_FROST   0xD6EEF8
 #define GLASS_AMBIENT 0x2E6B85
@@ -1207,73 +1241,53 @@ const reaction_t reactions[MATERIAL_MAX] = {
 /* The three segments, each mapped onto 0..15 for LERP. Every branch has to
  * compute without dividing by zero even where it is not selected, hence the
  * guards on the denominators. */
-#define GLASS_COOL(v)  LERP(GLASS_FROST, GLASS_AMBIENT,                    \
-                            ((v) * 15) / (SAND_AMBIENT_HEAT > 0            \
-                                          ? SAND_AMBIENT_HEAT : 1))
-#define GLASS_WARM(v)  LERP(GLASS_AMBIENT, GLASS_NEUTRAL,                  \
-                            (((v) - SAND_AMBIENT_HEAT) * 15) /             \
-                            (SAND_SHOCK_HEAT > SAND_AMBIENT_HEAT           \
-                             ? SAND_SHOCK_HEAT - SAND_AMBIENT_HEAT : 1))
-#define GLASS_HOT(v)   LERP(GLASS_GLOW, GLASS_MOLTEN,                      \
-                            (((v) - SAND_SHOCK_HEAT) * 15) /               \
-                            (SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1       \
-                             ? MATERIAL_VARIANTS - 1 - SAND_SHOCK_HEAT : 1))
+#define GLASS_COOL(v) LERP(GLASS_FROST, GLASS_AMBIENT, ((v) * 15) / (SAND_AMBIENT_HEAT > 0 ? SAND_AMBIENT_HEAT : 1))
+#define GLASS_WARM(v)                                                                                                  \
+    LERP(GLASS_AMBIENT, GLASS_NEUTRAL,                                                                                 \
+         (((v) - SAND_AMBIENT_HEAT) * 15)                                                                              \
+             / (SAND_SHOCK_HEAT > SAND_AMBIENT_HEAT ? SAND_SHOCK_HEAT - SAND_AMBIENT_HEAT : 1))
+#define GLASS_HOT(v)                                                                                                   \
+    LERP(GLASS_GLOW, GLASS_MOLTEN,                                                                                     \
+         (((v) - SAND_SHOCK_HEAT) * 15)                                                                                \
+             / (SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1 ? MATERIAL_VARIANTS - 1 - SAND_SHOCK_HEAT : 1))
 
-#define GLASS_AT(v)                                                        \
-    GFX_RGB((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v)                       \
-            : (v) < SAND_SHOCK_HEAT  ? GLASS_WARM(v)                       \
-                                     : GLASS_HOT(v))
+#define GLASS_AT(v)                                                                                                    \
+    GFX_RGB((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v) : (v) < SAND_SHOCK_HEAT ? GLASS_WARM(v) : GLASS_HOT(v))
 
-#define GLASS_SHADES                                                       \
-    GLASS_AT(0),  GLASS_AT(1),  GLASS_AT(2),  GLASS_AT(3),                 \
-    GLASS_AT(4),  GLASS_AT(5),  GLASS_AT(6),  GLASS_AT(7),                 \
-    GLASS_AT(8),  GLASS_AT(9),  GLASS_AT(10), GLASS_AT(11),                \
-    GLASS_AT(12), GLASS_AT(13), GLASS_AT(14), GLASS_AT(15)
+#define GLASS_SHADES                                                                                                   \
+    GLASS_AT(0), GLASS_AT(1), GLASS_AT(2), GLASS_AT(3), GLASS_AT(4), GLASS_AT(5), GLASS_AT(6), GLASS_AT(7),            \
+        GLASS_AT(8), GLASS_AT(9), GLASS_AT(10), GLASS_AT(11), GLASS_AT(12), GLASS_AT(13), GLASS_AT(14), GLASS_AT(15)
 
 /* The ramp is computed, so the two levels only need to be sane: room
  * temperature strictly inside the range with the shock point above it and
  * below the top. */
-_Static_assert(SAND_AMBIENT_HEAT > 0 &&
-               SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT &&
-               SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1,
+_Static_assert(SAND_AMBIENT_HEAT > 0 && SAND_AMBIENT_HEAT < SAND_SHOCK_HEAT && SAND_SHOCK_HEAT < MATERIAL_VARIANTS - 1,
                "glass needs room below ambient for frost, room above the "
                "shock point to keep climbing, and ambient strictly between");
 /* Sand's two bands. Twelve steps then four, so both are spread across the
  * full 0-15 interpolation regardless of how many entries they have. */
-#define SAND_DUNE  0xB07430
-#define SAND_PALE  0xF2CE90
-#define CULLET_LO  0xB9D2CC
-#define CULLET_HI  0xF0FAF6
+#define SAND_DUNE 0xB07430
+#define SAND_PALE 0xF2CE90
+#define CULLET_LO 0xB9D2CC
+#define CULLET_HI 0xF0FAF6
 
-#define SAND_DUNE_RAMP                                                    \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  0)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  1)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  2)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  4)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  5)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  6)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  8)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE,  9)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 10)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 12)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 13)),                              \
-    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 15))
+#define SAND_DUNE_RAMP                                                                                                 \
+    GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 0)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 1)),                                    \
+        GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 2)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 4)),                                \
+        GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 5)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 6)),                                \
+        GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 8)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 9)),                                \
+        GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 10)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 12)),                              \
+        GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 13)), GFX_RGB(LERP(SAND_DUNE, SAND_PALE, 15))
 
-#define SAND_CULLET_RAMP                                                  \
-    GFX_RGB(LERP(CULLET_LO, CULLET_HI,  0)),                              \
-    GFX_RGB(LERP(CULLET_LO, CULLET_HI,  5)),                              \
-    GFX_RGB(LERP(CULLET_LO, CULLET_HI, 10)),                              \
-    GFX_RGB(LERP(CULLET_LO, CULLET_HI, 15))
+#define SAND_CULLET_RAMP                                                                                               \
+    GFX_RGB(LERP(CULLET_LO, CULLET_HI, 0)), GFX_RGB(LERP(CULLET_LO, CULLET_HI, 5)),                                    \
+        GFX_RGB(LERP(CULLET_LO, CULLET_HI, 10)), GFX_RGB(LERP(CULLET_LO, CULLET_HI, 15))
 
-#define SHADES(lo, hi)                                                    \
-    GFX_RGB(LERP(lo, hi,  0)), GFX_RGB(LERP(lo, hi,  1)),                 \
-    GFX_RGB(LERP(lo, hi,  2)), GFX_RGB(LERP(lo, hi,  3)),                 \
-    GFX_RGB(LERP(lo, hi,  4)), GFX_RGB(LERP(lo, hi,  5)),                 \
-    GFX_RGB(LERP(lo, hi,  6)), GFX_RGB(LERP(lo, hi,  7)),                 \
-    GFX_RGB(LERP(lo, hi,  8)), GFX_RGB(LERP(lo, hi,  9)),                 \
-    GFX_RGB(LERP(lo, hi, 10)), GFX_RGB(LERP(lo, hi, 11)),                 \
-    GFX_RGB(LERP(lo, hi, 12)), GFX_RGB(LERP(lo, hi, 13)),                 \
-    GFX_RGB(LERP(lo, hi, 14)), GFX_RGB(LERP(lo, hi, 15))
+#define SHADES(lo, hi)                                                                                                 \
+    GFX_RGB(LERP(lo, hi, 0)), GFX_RGB(LERP(lo, hi, 1)), GFX_RGB(LERP(lo, hi, 2)), GFX_RGB(LERP(lo, hi, 3)),            \
+        GFX_RGB(LERP(lo, hi, 4)), GFX_RGB(LERP(lo, hi, 5)), GFX_RGB(LERP(lo, hi, 6)), GFX_RGB(LERP(lo, hi, 7)),        \
+        GFX_RGB(LERP(lo, hi, 8)), GFX_RGB(LERP(lo, hi, 9)), GFX_RGB(LERP(lo, hi, 10)), GFX_RGB(LERP(lo, hi, 11)),      \
+        GFX_RGB(LERP(lo, hi, 12)), GFX_RGB(LERP(lo, hi, 13)), GFX_RGB(LERP(lo, hi, 14)), GFX_RGB(LERP(lo, hi, 15))
 
 /* Sixteen entries for an unused material id, so the table is a full 256 and a
  * corrupt cell byte can only ever index a colour, never run off the end. */
@@ -1282,38 +1296,32 @@ _Static_assert(SAND_AMBIENT_HEAT > 0 &&
 /* THE source of colour. The material table deliberately carries none, so there
  * is one place to change and none to forget. Rows are in material_id_t order. */
 static const gfx_color_t palette[256] = {
-    [MAT_EMPTY * MATERIAL_VARIANTS] =
-    SHADES(0x0A0C14, 0x0A0C14),   /* empty - the background */
+    [MAT_EMPTY * MATERIAL_VARIANTS] = SHADES(0x0A0C14, 0x0A0C14), /* empty - the background */
     [MAT_SAND * MATERIAL_VARIANTS] =
-    /* sand - twelve DUNE shades and then four of CULLET, sand that used to
+        /* sand - twelve DUNE shades and then four of CULLET, sand that used to
      * be glass (see SAND_CULLET_BASE). The cullet band deliberately leaves
      * the ramp rather than extending it: a paler warm tan is still tan,
      * and what says "this was a window" is the cool desaturated cast, not
      * the brightness. It is pulled towards frosted glass's own colour, so
      * a pane and its wreckage are recognisably the same substance. */
-    SAND_DUNE_RAMP, SAND_CULLET_RAMP,
-    [MAT_WATER * MATERIAL_VARIANTS] =
-    SHADES(0x77C4E8, 0x14406F),   /* water - shallow is pale, deep is dark */
-    [MAT_STONE * MATERIAL_VARIANTS] =
-    STONE_SHADES,                 /* stone - a TEMPERATURE scale now, not a
+    SAND_DUNE_RAMP,
+    SAND_CULLET_RAMP,
+    [MAT_WATER * MATERIAL_VARIANTS] = SHADES(0x77C4E8, 0x14406F), /* water - shallow is pale, deep is dark */
+    [MAT_STONE * MATERIAL_VARIANTS] = STONE_SHADES,               /* stone - a TEMPERATURE scale now, not a
                                     * shade ramp: same levels and the same
                                     * meanings as glass, so one wall reads
                                     * like the other */
-    [MAT_GAS * MATERIAL_VARIANTS] =
-    SHADES(0x445544, 0xC8E8B8),   /* gas   */
-    [MAT_FIRE * MATERIAL_VARIANTS] =
-    SHADES(0x400A00, 0xFFE060),   /* fire  - dying ember is dark, freshly
+    [MAT_GAS * MATERIAL_VARIANTS] = SHADES(0x445544, 0xC8E8B8),   /* gas   */
+    [MAT_FIRE * MATERIAL_VARIANTS] = SHADES(0x400A00, 0xFFE060),  /* fire  - dying ember is dark, freshly
                                     * lit is bright yellow-white; variant
                                     * is life remaining, same trick gas
                                     * already uses */
-    [MAT_WOOD * MATERIAL_VARIANTS] =
-    WOOD_SHADES,                  /* wood - variant 0 is UNLIT and every
+    [MAT_WOOD * MATERIAL_VARIANTS] = WOOD_SHADES,                 /* wood - variant 0 is UNLIT and every
                                     * other value is how much is left to
                                     * burn, so this ramp is one colour of
                                     * timber followed by a burn ramp. See
                                     * WOOD_SHADES above */
-    [MAT_STEAM * MATERIAL_VARIANTS] =
-    SHADES(0x6E8496, 0xF2FAFF),   /* steam - variant is life remaining, so
+    [MAT_STEAM * MATERIAL_VARIANTS] = SHADES(0x6E8496, 0xF2FAFF), /* steam - variant is life remaining, so
                                     * a dying wisp is a cool blue-grey and
                                     * a fresh one is almost white; same
                                     * trick fire and gas already use.
@@ -1325,8 +1333,7 @@ static const gfx_color_t palette[256] = {
                                     * reason they are two materials rather
                                     * than one (see MAT_SMOKE's own row in
                                     * the material table above). */
-    [MAT_SMOKE * MATERIAL_VARIANTS] =
-    SHADES(0x2A2622, 0x857A6E),   /* smoke - dying wisp is near-black soot,
+    [MAT_SMOKE * MATERIAL_VARIANTS] = SHADES(0x2A2622, 0x857A6E), /* smoke - dying wisp is near-black soot,
                                     * fresh is a warm mid grey-brown. Warm
                                     * rather than neutral so it reads as
                                     * soot off a fire, not fog.
@@ -1356,8 +1363,7 @@ static const gfx_color_t palette[256] = {
                                     * reason they are separate materials,
                                     * so it is worth a test rather than a
                                     * good intention. */
-    [MAT_OIL * MATERIAL_VARIANTS] =
-    SHADES(0x6E5A22, 0x14100A),   /* oil   - a liquid's variant is FILL
+    [MAT_OIL * MATERIAL_VARIANTS] = SHADES(0x6E5A22, 0x14100A),   /* oil   - a liquid's variant is FILL
                                     * LEVEL, not life, so this runs the
                                     * same way water's does: a thin film
                                     * is a murky olive and a deep pool is
@@ -1366,8 +1372,7 @@ static const gfx_color_t palette[256] = {
                                     * floating on water is unmistakable -
                                     * which is the whole point of giving
                                     * oil a density below water's */
-    [MAT_LAVA * MATERIAL_VARIANTS] =
-    SHADES(0xFFC24A, 0x8A1400),   /* lava  - fill level again, and
+    [MAT_LAVA * MATERIAL_VARIANTS] = SHADES(0xFFC24A, 0x8A1400),  /* lava  - fill level again, and
                                     * deliberately INVERTED against
                                     * fire's own ramp: a thin skim is
                                     * bright yellow and a deep pool is
@@ -1376,8 +1381,7 @@ static const gfx_color_t palette[256] = {
                                     * heat. Keeps a lava pool visually
                                     * distinct from the flames it
                                     * flares */
-    [MAT_ACID * MATERIAL_VARIANTS] =
-    SHADES(0xEAFF3C, 0x2E6B0A),   /* acid  - a liquid's variant is FILL
+    [MAT_ACID * MATERIAL_VARIANTS] = SHADES(0xEAFF3C, 0x2E6B0A),  /* acid  - a liquid's variant is FILL
                                     * LEVEL, so this runs the way water's
                                     * does: a thin film is a vivid lime and
                                     * a deep pool is dark olive. Saturated
@@ -1387,8 +1391,7 @@ static const gfx_color_t palette[256] = {
                                     * the density ladder but they are
                                     * adjacent on screen the moment
                                     * something fizzes */
-    [MAT_GLASS * MATERIAL_VARIANTS] =
-    GLASS_SHADES,                 /* glass - NOT a shade ramp. Glass is the
+    [MAT_GLASS * MATERIAL_VARIANTS] = GLASS_SHADES,               /* glass - NOT a shade ramp. Glass is the
                                     * one material whose variant is HEAT
                                     * (material.h's top comment), so this
                                     * ramp is a temperature scale and a
@@ -1407,7 +1410,7 @@ static const gfx_color_t palette[256] = {
                                     * into, and the transformation lands
                                     * without a visible seam */
     [MAT_DIRT * MATERIAL_VARIANTS] =
-    /* dirt - TWO wetness ramps, one per carried tone, because the variant
+        /* dirt - TWO wetness ramps, one per carried tone, because the variant
      * is a tone in the top bit and moisture in the low three (see
      * SOIL_MOISTURE_BITS). Dry dusty tan at 0 through to dark damp earth
      * at 7, twice. Wet soil really is darker than dry, so the direction is
@@ -1418,9 +1421,9 @@ static const gfx_color_t palette[256] = {
      * into the cell. They are a little further apart than stone's speckle:
      * soil is the least uniform thing on the board, and the variation is
      * most of what says so. */
-    SOIL_RAMP(0), SOIL_RAMP(1),
-    [MAT_SNOW * MATERIAL_VARIANTS] =
-    SHADES(0xC6D8E4, 0xFFFFFF),   /* snow  - a powder, so a shade ramp
+    SOIL_RAMP(0),
+    SOIL_RAMP(1),
+    [MAT_SNOW * MATERIAL_VARIANTS] = SHADES(0xC6D8E4, 0xFFFFFF), /* snow  - a powder, so a shade ramp
                                     * again, and a narrow one: cold blue
                                     * white to plain white. Deliberately
                                     * the palest thing on the board, since
@@ -1443,13 +1446,11 @@ static const gfx_color_t palette[256] = {
      * all sixteen are non-zero, because zero renders BLACK and black looks
      * like a styling choice rather than a bug. It has caught exactly that
      * twice. */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ICE] =
-    GFX_RGB(0xB6E4F2),            /* ice - paler and bluer than snow's
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ICE] = GFX_RGB(0xB6E4F2),   /* ice - paler and bluer than snow's
                                     * white, and flat rather than speckled:
                                     * a block of it should read as solid
                                     * and cold, where snow reads as loose */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_PLANT] =
-    GFX_RGB(0x55672D),            /* plant - OLIVE, pulled most of the
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_PLANT] = GFX_RGB(0x55672D), /* plant - OLIVE, pulled most of the
                                     * way to wood's brown: a stem is
                                     * timber that has not arrived yet,
                                     * and every one of these cells is on
@@ -1459,13 +1460,11 @@ static const gfx_color_t palette[256] = {
                                     * the whole tree glow. The leaves
                                     * keep the green - they are the part
                                     * meant to catch the eye */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] =
-    GFX_RGB(0x69B03A),            /* leaf - the one green left in a tree
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_LEAF] = GFX_RGB(0x69B03A),  /* leaf - the one green left in a tree
                                     * now that the stem is olive, and the
                                     * only part meant to catch the eye.
                                     * only part meant to catch the eye */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL] =
-    GFX_RGB(0x7C8794),            /* metal - a cool blue-grey, brighter and
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL] = GFX_RGB(0x7C8794), /* metal - a cool blue-grey, brighter and
                                     * cooler than ambient stone (STONE_AMBIENT
                                     * 0x5F6673) so a wall of it separates from
                                     * a stone one at two screen pixels per
@@ -1475,12 +1474,18 @@ static const gfx_color_t palette[256] = {
                                     * on the panel, same as every other
                                     * starting-point constant in this table
                                     * (see docs/Sand/Metal-Smelting-Plan.md). */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL + 1] =
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL + 1] = GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF), GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
+    GFX_RGB(0xFF00FF),
 };
 
 /* Glass's SECOND colour: the same temperature, mixed halfway to the
@@ -1498,15 +1503,12 @@ static const gfx_color_t palette[256] = {
  *
  * Only glass has one. Everything else dithers against itself, which is the
  * same as not dithering - see material_dither() and paint_row_n(). */
-#define GLASS_DIM(v) GFX_RGB(GLASS_LINE(GLASS_RGB(v)))
+#define GLASS_DIM(v)      GFX_RGB(GLASS_LINE(GLASS_RGB(v)))
 
 /* The same ramps pulled two thirds of the way back to their own ambient
  * colour, used wherever a cell touches empty space. Ten of fifteen, so an
  * outline still shifts with heat - just a third as far as the body does. */
-#define GLASS_RGB(v)                                                       \
-    ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v)                              \
-     : (v) < SAND_SHOCK_HEAT  ? GLASS_WARM(v)                              \
-                              : GLASS_HOT(v))
+#define GLASS_RGB(v)      ((v) <= SAND_AMBIENT_HEAT ? GLASS_COOL(v) : (v) < SAND_SHOCK_HEAT ? GLASS_WARM(v) : GLASS_HOT(v))
 
 #define GLASS_EDGE_RGB(v) LERP(GLASS_RGB(v), GLASS_RGB(SAND_AMBIENT_HEAT), 10)
 #define STONE_EDGE_RGB(v) LERP(STONE_RGB(v), STONE_RGB(SAND_AMBIENT_HEAT), 10)
@@ -1517,39 +1519,33 @@ static const gfx_color_t palette[256] = {
  * all - a dark line on a dark pane is invisible. What glass actually shows
  * is light caught on it, so the lines lift toward white and the crossings
  * go most of the way there. That is the shine. */
-#define GLASS_LINE(rgb)  LERP((rgb), 0xFFFFFF, 4)
-#define GLASS_SHINE(rgb) LERP((rgb), 0xFFFFFF, 11)
+#define GLASS_LINE(rgb)   LERP((rgb), 0xFFFFFF, 4)
+#define GLASS_SHINE(rgb)  LERP((rgb), 0xFFFFFF, 11)
 
 #define GLASS_EDGE_DIM(v) GFX_RGB(GLASS_LINE(GLASS_EDGE_RGB(v)))
 
 static const gfx_color_t glass_edge_dither[MATERIAL_VARIANTS] = {
-    GLASS_EDGE_DIM(0),  GLASS_EDGE_DIM(1),  GLASS_EDGE_DIM(2),
-    GLASS_EDGE_DIM(3),  GLASS_EDGE_DIM(4),  GLASS_EDGE_DIM(5),
-    GLASS_EDGE_DIM(6),  GLASS_EDGE_DIM(7),  GLASS_EDGE_DIM(8),
-    GLASS_EDGE_DIM(9),  GLASS_EDGE_DIM(10), GLASS_EDGE_DIM(11),
-    GLASS_EDGE_DIM(12), GLASS_EDGE_DIM(13), GLASS_EDGE_DIM(14),
-    GLASS_EDGE_DIM(15),
+    GLASS_EDGE_DIM(0),  GLASS_EDGE_DIM(1),  GLASS_EDGE_DIM(2),  GLASS_EDGE_DIM(3),
+    GLASS_EDGE_DIM(4),  GLASS_EDGE_DIM(5),  GLASS_EDGE_DIM(6),  GLASS_EDGE_DIM(7),
+    GLASS_EDGE_DIM(8),  GLASS_EDGE_DIM(9),  GLASS_EDGE_DIM(10), GLASS_EDGE_DIM(11),
+    GLASS_EDGE_DIM(12), GLASS_EDGE_DIM(13), GLASS_EDGE_DIM(14), GLASS_EDGE_DIM(15),
 };
 
 #define GLASS_EDGE_SHINE(v) GFX_RGB(GLASS_SHINE(GLASS_EDGE_RGB(v)))
 #define GLASS_AT_SHINE(v)   GFX_RGB(GLASS_SHINE(GLASS_RGB(v)))
 
 static const gfx_color_t glass_edge_shine[MATERIAL_VARIANTS] = {
-    GLASS_EDGE_SHINE(0),  GLASS_EDGE_SHINE(1),  GLASS_EDGE_SHINE(2),
-    GLASS_EDGE_SHINE(3),  GLASS_EDGE_SHINE(4),  GLASS_EDGE_SHINE(5),
-    GLASS_EDGE_SHINE(6),  GLASS_EDGE_SHINE(7),  GLASS_EDGE_SHINE(8),
-    GLASS_EDGE_SHINE(9),  GLASS_EDGE_SHINE(10), GLASS_EDGE_SHINE(11),
-    GLASS_EDGE_SHINE(12), GLASS_EDGE_SHINE(13), GLASS_EDGE_SHINE(14),
-    GLASS_EDGE_SHINE(15),
+    GLASS_EDGE_SHINE(0),  GLASS_EDGE_SHINE(1),  GLASS_EDGE_SHINE(2),  GLASS_EDGE_SHINE(3),
+    GLASS_EDGE_SHINE(4),  GLASS_EDGE_SHINE(5),  GLASS_EDGE_SHINE(6),  GLASS_EDGE_SHINE(7),
+    GLASS_EDGE_SHINE(8),  GLASS_EDGE_SHINE(9),  GLASS_EDGE_SHINE(10), GLASS_EDGE_SHINE(11),
+    GLASS_EDGE_SHINE(12), GLASS_EDGE_SHINE(13), GLASS_EDGE_SHINE(14), GLASS_EDGE_SHINE(15),
 };
 
 static const gfx_color_t glass_shine[MATERIAL_VARIANTS] = {
-    GLASS_AT_SHINE(0),  GLASS_AT_SHINE(1),  GLASS_AT_SHINE(2),
-    GLASS_AT_SHINE(3),  GLASS_AT_SHINE(4),  GLASS_AT_SHINE(5),
-    GLASS_AT_SHINE(6),  GLASS_AT_SHINE(7),  GLASS_AT_SHINE(8),
-    GLASS_AT_SHINE(9),  GLASS_AT_SHINE(10), GLASS_AT_SHINE(11),
-    GLASS_AT_SHINE(12), GLASS_AT_SHINE(13), GLASS_AT_SHINE(14),
-    GLASS_AT_SHINE(15),
+    GLASS_AT_SHINE(0),  GLASS_AT_SHINE(1),  GLASS_AT_SHINE(2),  GLASS_AT_SHINE(3),
+    GLASS_AT_SHINE(4),  GLASS_AT_SHINE(5),  GLASS_AT_SHINE(6),  GLASS_AT_SHINE(7),
+    GLASS_AT_SHINE(8),  GLASS_AT_SHINE(9),  GLASS_AT_SHINE(10), GLASS_AT_SHINE(11),
+    GLASS_AT_SHINE(12), GLASS_AT_SHINE(13), GLASS_AT_SHINE(14), GLASS_AT_SHINE(15),
 };
 
 /* A per-cell wobble in the PANE, the same trick stone's speckle uses and
@@ -1560,42 +1556,33 @@ static const gfx_color_t glass_shine[MATERIAL_VARIANTS] = {
  * The lines and the shine are left uniform. They are light landing on the
  * surface rather than the surface itself, and letting them wobble per cell
  * makes a highlight look chewed rather than reflective. */
-#define GLASS_GRAIN(rgb, k)                                                \
-    GFX_RGB(LERP(LERP((rgb), 0x000000, 1), LERP((rgb), 0xFFFFFF, 1),       \
-                 (k) * 5))
+#define GLASS_GRAIN(rgb, k) GFX_RGB(LERP(LERP((rgb), 0x000000, 1), LERP((rgb), 0xFFFFFF, 1), (k) * 5))
 
-#define GLASS_BODY_ROW(v)                                                  \
-    { GLASS_GRAIN(GLASS_RGB(v), 0), GLASS_GRAIN(GLASS_RGB(v), 1),          \
-      GLASS_GRAIN(GLASS_RGB(v), 2), GLASS_GRAIN(GLASS_RGB(v), 3) }
+#define GLASS_BODY_ROW(v)                                                                                              \
+    {GLASS_GRAIN(GLASS_RGB(v), 0), GLASS_GRAIN(GLASS_RGB(v), 1), GLASS_GRAIN(GLASS_RGB(v), 2),                         \
+     GLASS_GRAIN(GLASS_RGB(v), 3)}
 
-#define GLASS_EDGE_BODY_ROW(v)                                             \
-    { GLASS_GRAIN(GLASS_EDGE_RGB(v), 0), GLASS_GRAIN(GLASS_EDGE_RGB(v), 1),\
-      GLASS_GRAIN(GLASS_EDGE_RGB(v), 2), GLASS_GRAIN(GLASS_EDGE_RGB(v), 3) }
+#define GLASS_EDGE_BODY_ROW(v)                                                                                         \
+    {GLASS_GRAIN(GLASS_EDGE_RGB(v), 0), GLASS_GRAIN(GLASS_EDGE_RGB(v), 1), GLASS_GRAIN(GLASS_EDGE_RGB(v), 2),          \
+     GLASS_GRAIN(GLASS_EDGE_RGB(v), 3)}
 
 static const gfx_color_t glass_body[MATERIAL_VARIANTS][4] = {
-    GLASS_BODY_ROW(0),  GLASS_BODY_ROW(1),  GLASS_BODY_ROW(2),
-    GLASS_BODY_ROW(3),  GLASS_BODY_ROW(4),  GLASS_BODY_ROW(5),
-    GLASS_BODY_ROW(6),  GLASS_BODY_ROW(7),  GLASS_BODY_ROW(8),
-    GLASS_BODY_ROW(9),  GLASS_BODY_ROW(10), GLASS_BODY_ROW(11),
-    GLASS_BODY_ROW(12), GLASS_BODY_ROW(13), GLASS_BODY_ROW(14),
-    GLASS_BODY_ROW(15),
+    GLASS_BODY_ROW(0),  GLASS_BODY_ROW(1),  GLASS_BODY_ROW(2),  GLASS_BODY_ROW(3),
+    GLASS_BODY_ROW(4),  GLASS_BODY_ROW(5),  GLASS_BODY_ROW(6),  GLASS_BODY_ROW(7),
+    GLASS_BODY_ROW(8),  GLASS_BODY_ROW(9),  GLASS_BODY_ROW(10), GLASS_BODY_ROW(11),
+    GLASS_BODY_ROW(12), GLASS_BODY_ROW(13), GLASS_BODY_ROW(14), GLASS_BODY_ROW(15),
 };
 
 static const gfx_color_t glass_edge_body[MATERIAL_VARIANTS][4] = {
-    GLASS_EDGE_BODY_ROW(0),  GLASS_EDGE_BODY_ROW(1),
-    GLASS_EDGE_BODY_ROW(2),  GLASS_EDGE_BODY_ROW(3),
-    GLASS_EDGE_BODY_ROW(4),  GLASS_EDGE_BODY_ROW(5),
-    GLASS_EDGE_BODY_ROW(6),  GLASS_EDGE_BODY_ROW(7),
-    GLASS_EDGE_BODY_ROW(8),  GLASS_EDGE_BODY_ROW(9),
-    GLASS_EDGE_BODY_ROW(10), GLASS_EDGE_BODY_ROW(11),
-    GLASS_EDGE_BODY_ROW(12), GLASS_EDGE_BODY_ROW(13),
-    GLASS_EDGE_BODY_ROW(14), GLASS_EDGE_BODY_ROW(15),
+    GLASS_EDGE_BODY_ROW(0),  GLASS_EDGE_BODY_ROW(1),  GLASS_EDGE_BODY_ROW(2),  GLASS_EDGE_BODY_ROW(3),
+    GLASS_EDGE_BODY_ROW(4),  GLASS_EDGE_BODY_ROW(5),  GLASS_EDGE_BODY_ROW(6),  GLASS_EDGE_BODY_ROW(7),
+    GLASS_EDGE_BODY_ROW(8),  GLASS_EDGE_BODY_ROW(9),  GLASS_EDGE_BODY_ROW(10), GLASS_EDGE_BODY_ROW(11),
+    GLASS_EDGE_BODY_ROW(12), GLASS_EDGE_BODY_ROW(13), GLASS_EDGE_BODY_ROW(14), GLASS_EDGE_BODY_ROW(15),
 };
 
 static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
-    GLASS_DIM(0),  GLASS_DIM(1),  GLASS_DIM(2),  GLASS_DIM(3),
-    GLASS_DIM(4),  GLASS_DIM(5),  GLASS_DIM(6),  GLASS_DIM(7),
-    GLASS_DIM(8),  GLASS_DIM(9),  GLASS_DIM(10), GLASS_DIM(11),
+    GLASS_DIM(0),  GLASS_DIM(1),  GLASS_DIM(2),  GLASS_DIM(3),  GLASS_DIM(4),  GLASS_DIM(5),
+    GLASS_DIM(6),  GLASS_DIM(7),  GLASS_DIM(8),  GLASS_DIM(9),  GLASS_DIM(10), GLASS_DIM(11),
     GLASS_DIM(12), GLASS_DIM(13), GLASS_DIM(14), GLASS_DIM(15),
 };
 
@@ -1620,37 +1607,29 @@ static const gfx_color_t glass_dither[MATERIAL_VARIANTS] = {
  * spanned the whole grey range because grey was all it had to say; this
  * one has to leave the temperature legible underneath it, so it is a
  * texture on top of a colour rather than the colour itself. */
-#define STONE_DARK(rgb)  LERP((rgb), 0x000000, 3)
-#define STONE_LIGHT(rgb) LERP((rgb), 0xFFFFFF, 3)
+#define STONE_DARK(rgb)     LERP((rgb), 0x000000, 3)
+#define STONE_LIGHT(rgb)    LERP((rgb), 0xFFFFFF, 3)
 
-#define STONE_GRAIN(rgb, k)                                                \
-    GFX_RGB(LERP(STONE_DARK(rgb), STONE_LIGHT(rgb), (k) * 15 / 7))
+#define STONE_GRAIN(rgb, k) GFX_RGB(LERP(STONE_DARK(rgb), STONE_LIGHT(rgb), (k) * 15 / 7))
 
 #define STONE_SPECKLE(v, k) STONE_GRAIN(STONE_RGB(v), k)
 
-#define STONE_SPECKLE_ROW(v)                                               \
-    { STONE_SPECKLE(v, 0), STONE_SPECKLE(v, 1), STONE_SPECKLE(v, 2),       \
-      STONE_SPECKLE(v, 3), STONE_SPECKLE(v, 4), STONE_SPECKLE(v, 5),       \
-      STONE_SPECKLE(v, 6), STONE_SPECKLE(v, 7) }
+#define STONE_SPECKLE_ROW(v)                                                                                           \
+    {STONE_SPECKLE(v, 0), STONE_SPECKLE(v, 1), STONE_SPECKLE(v, 2), STONE_SPECKLE(v, 3),                               \
+     STONE_SPECKLE(v, 4), STONE_SPECKLE(v, 5), STONE_SPECKLE(v, 6), STONE_SPECKLE(v, 7)}
 
 static const gfx_color_t stone_speckle[MATERIAL_VARIANTS][8] = {
-    STONE_SPECKLE_ROW(0),  STONE_SPECKLE_ROW(1),
-    STONE_SPECKLE_ROW(2),  STONE_SPECKLE_ROW(3),
-    STONE_SPECKLE_ROW(4),  STONE_SPECKLE_ROW(5),
-    STONE_SPECKLE_ROW(6),  STONE_SPECKLE_ROW(7),
-    STONE_SPECKLE_ROW(8),  STONE_SPECKLE_ROW(9),
-    STONE_SPECKLE_ROW(10), STONE_SPECKLE_ROW(11),
-    STONE_SPECKLE_ROW(12), STONE_SPECKLE_ROW(13),
-    STONE_SPECKLE_ROW(14), STONE_SPECKLE_ROW(15),
+    STONE_SPECKLE_ROW(0),  STONE_SPECKLE_ROW(1),  STONE_SPECKLE_ROW(2),  STONE_SPECKLE_ROW(3),
+    STONE_SPECKLE_ROW(4),  STONE_SPECKLE_ROW(5),  STONE_SPECKLE_ROW(6),  STONE_SPECKLE_ROW(7),
+    STONE_SPECKLE_ROW(8),  STONE_SPECKLE_ROW(9),  STONE_SPECKLE_ROW(10), STONE_SPECKLE_ROW(11),
+    STONE_SPECKLE_ROW(12), STONE_SPECKLE_ROW(13), STONE_SPECKLE_ROW(14), STONE_SPECKLE_ROW(15),
 };
 
 #define STONE_EDGE_SPECKLE(v, k) STONE_GRAIN(STONE_EDGE_RGB(v), k)
 
-#define STONE_EDGE_ROW(v)                                                  \
-    { STONE_EDGE_SPECKLE(v, 0), STONE_EDGE_SPECKLE(v, 1),                  \
-      STONE_EDGE_SPECKLE(v, 2), STONE_EDGE_SPECKLE(v, 3),                  \
-      STONE_EDGE_SPECKLE(v, 4), STONE_EDGE_SPECKLE(v, 5),                  \
-      STONE_EDGE_SPECKLE(v, 6), STONE_EDGE_SPECKLE(v, 7) }
+#define STONE_EDGE_ROW(v)                                                                                              \
+    {STONE_EDGE_SPECKLE(v, 0), STONE_EDGE_SPECKLE(v, 1), STONE_EDGE_SPECKLE(v, 2), STONE_EDGE_SPECKLE(v, 3),           \
+     STONE_EDGE_SPECKLE(v, 4), STONE_EDGE_SPECKLE(v, 5), STONE_EDGE_SPECKLE(v, 6), STONE_EDGE_SPECKLE(v, 7)}
 
 /* Wood's grain, on the same footing as stone's speckle and for the same
  * reason: wood spent its shade on burn progress, so an unlit log was one
@@ -1659,9 +1638,7 @@ static const gfx_color_t stone_speckle[MATERIAL_VARIANTS][8] = {
  * Only UNLIT wood is speckled. A burning log is glowing, and a glow that
  * varies cell to cell reads as dirty rather than as fire - the same
  * reasoning that keeps glass's shine uniform while its pane is not. */
-#define WOOD_GRAIN(k)                                                      \
-    GFX_RGB(LERP(LERP(WOOD_UNLIT, 0x000000, 3),                            \
-                 LERP(WOOD_UNLIT, 0xFFFFFF, 2), (k) * 15 / 7))
+#define WOOD_GRAIN(k) GFX_RGB(LERP(LERP(WOOD_UNLIT, 0x000000, 3), LERP(WOOD_UNLIT, 0xFFFFFF, 2), (k) * 15 / 7))
 
 /* Dirt has no grain table. It used to, hashed from screen position like
  * stone's and wood's, and that is only right for a material that never
@@ -1705,8 +1682,8 @@ static const gfx_color_t wood_grain[8] = {
  * beside the trunk instead of on top of it. The leaves are untouched and
  * are still the bright thing in a tree, which is correct - they are the
  * only part that is supposed to catch the eye. */
-#define PLANT_DARK  0x495422
-#define PLANT_LIGHT 0x778746
+#define PLANT_DARK        0x495422
+#define PLANT_LIGHT       0x778746
 
 /* Foliage: lighter and yellower than the stem, and a wider spread than
  * either of the others. A crown is sunlit on one side and shaded on the
@@ -1720,11 +1697,11 @@ static const gfx_color_t wood_grain[8] = {
  * ageing chain that turned it gold and brown was built, measured and
  * removed: it cost two of the sixteen extended slots and, being
  * reachable only through senescence, was barely visible when it ran. */
-#define LEAF_DARK   0x468F26
-#define LEAF_LIGHT  0x8CD24E
+#define LEAF_DARK         0x468F26
+#define LEAF_LIGHT        0x8CD24E
 
-#define ICE_DARK    0x93C9DE
-#define ICE_LIGHT   0xDEF5FD
+#define ICE_DARK          0x93C9DE
+#define ICE_LIGHT         0xDEF5FD
 
 /* Metal: a wall of it does not move any more than a wall of ice does, so
  * it gets the same treatment - the position hash is the only variation a
@@ -1732,28 +1709,25 @@ static const gfx_color_t wood_grain[8] = {
  * ice's, closer to ice's own range than leaf's wide one: metal is a cast,
  * uniform substance, and its speckle is meant to read as light catching a
  * surface rather than as real variation in the material. */
-#define METAL_DARK  0x7C8794
-#define METAL_LIGHT 0xB9C4D2
+#define METAL_DARK        0x7C8794
+#define METAL_LIGHT       0xB9C4D2
 
 #define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
 
-#define GRAIN8_ROW(lo, hi)                                                 \
-    { GRAIN8(lo, hi, 0), GRAIN8(lo, hi, 1), GRAIN8(lo, hi, 2),             \
-      GRAIN8(lo, hi, 3), GRAIN8(lo, hi, 4), GRAIN8(lo, hi, 5),             \
-      GRAIN8(lo, hi, 6), GRAIN8(lo, hi, 7) }
+#define GRAIN8_ROW(lo, hi)                                                                                             \
+    {GRAIN8(lo, hi, 0), GRAIN8(lo, hi, 1), GRAIN8(lo, hi, 2), GRAIN8(lo, hi, 3),                                       \
+     GRAIN8(lo, hi, 4), GRAIN8(lo, hi, 5), GRAIN8(lo, hi, 6), GRAIN8(lo, hi, 7)}
 
 static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
-static const gfx_color_t ice_grain[8]   = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
-static const gfx_color_t leaf_grain[8]  = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
+static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
+static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
 
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
-    STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),
-    STONE_EDGE_ROW(3),  STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),
-    STONE_EDGE_ROW(6),  STONE_EDGE_ROW(7),  STONE_EDGE_ROW(8),
-    STONE_EDGE_ROW(9),  STONE_EDGE_ROW(10), STONE_EDGE_ROW(11),
-    STONE_EDGE_ROW(12), STONE_EDGE_ROW(13), STONE_EDGE_ROW(14),
-    STONE_EDGE_ROW(15),
+    STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),  STONE_EDGE_ROW(3),
+    STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),  STONE_EDGE_ROW(6),  STONE_EDGE_ROW(7),
+    STONE_EDGE_ROW(8),  STONE_EDGE_ROW(9),  STONE_EDGE_ROW(10), STONE_EDGE_ROW(11),
+    STONE_EDGE_ROW(12), STONE_EDGE_ROW(13), STONE_EDGE_ROW(14), STONE_EDGE_ROW(15),
 };
 
 /*=============================================================================
@@ -1807,8 +1781,8 @@ static int8_t liquid_spec[MATERIAL_EDGE_MASK_COUNT];
  * rest of this file's ramps (they only ever walk forward through a table)
  * but wrong here: a specular term that rounds -0.5 to 0 every time is a
  * highlight that is quietly weaker on one side than the other. */
-static int fx_round_div(int n, int d)
-{
+static int
+fx_round_div(int n, int d) {
     if (n >= 0) {
         return (n + d / 2) / d;
     }
@@ -1846,8 +1820,8 @@ static int fx_round_div(int n, int d)
  * remaining job is the specular table below, which is why it no longer
  * takes a grid size either - see material.h's own comment on this
  * function's declaration. */
-void material_set_gravity(int gx, int gy)
-{
+void
+material_set_gravity(int gx, int gy) {
     const int len = im_len(gx, gy);
     if (len == 0) {
         /* Free fall, or the board laid flat with nothing driving it: no
@@ -1865,10 +1839,8 @@ void material_set_gravity(int gx, int gy)
     const int uy_q8 = (-gy * 256) / len;
 
     for (unsigned mask = 0; mask < MATERIAL_EDGE_MASK_COUNT; mask++) {
-        const int nx = ((mask & MATERIAL_EDGE_RIGHT) ? 1 : 0) -
-                       ((mask & MATERIAL_EDGE_LEFT)  ? 1 : 0);
-        const int ny = ((mask & MATERIAL_EDGE_DOWN)  ? 1 : 0) -
-                       ((mask & MATERIAL_EDGE_UP)    ? 1 : 0);
+        const int nx = ((mask & MATERIAL_EDGE_RIGHT) ? 1 : 0) - ((mask & MATERIAL_EDGE_LEFT) ? 1 : 0);
+        const int ny = ((mask & MATERIAL_EDGE_DOWN) ? 1 : 0) - ((mask & MATERIAL_EDGE_UP) ? 1 : 0);
 
         if (nx == 0 && ny == 0) {
             liquid_spec[mask] = 0;
@@ -1879,7 +1851,7 @@ void material_set_gravity(int gx, int gy)
         /* 181/256 is 1/sqrt(2), for the diagonal case; the axis-only case
          * is already unit length and needs no scaling at all. */
         const int norm_q8 = (nx != 0 && ny != 0) ? 181 : 256;
-        const int spec_q8 = (raw_q8 * norm_q8) / 256;   /* now in [-256,256] */
+        const int spec_q8 = (raw_q8 * norm_q8) / 256; /* now in [-256,256] */
 
         /* NEGATED: the ramp runs bright-to-dark as fill rises, so a
          * positive specular term (facing away from gravity, wants to be
@@ -1888,8 +1860,7 @@ void material_set_gravity(int gx, int gy)
          * test_a_liquid_rim_catches_the_light_from_above in suite_sand.c,
          * which exists specifically to catch that mistake rather than
          * trust the arithmetic by eye. */
-        liquid_spec[mask] =
-            (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
+        liquid_spec[mask] = (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
     }
 }
 
@@ -2040,10 +2011,10 @@ static const gfx_color_t water_foam = GFX_RGB(0xE8F6FF);
  * test_a_flat_rim_still_never_foams in suite_sand.c, which pins exactly
  * that after this change. */
 static const uint8_t water_foam_threshold[WATER_FOAM_CURVATURE_MAX + 1] = {
-    0,  /* curvature 0, flat   - no foam at all */
-    3,  /* curvature 1, light  - foams on 3 of 8 hash values */
-    5,  /* curvature 2, medium - foams on 5 of 8 */
-    7,  /* curvature 3+, heavy - foams on 7 of 8 */
+    0, /* curvature 0, flat   - no foam at all */
+    3, /* curvature 1, light  - foams on 3 of 8 hash values */
+    5, /* curvature 2, medium - foams on 5 of 8 */
+    7, /* curvature 3+, heavy - foams on 7 of 8 */
 };
 
 /* THIS FRAME'S FOAM PHASE - see material_set_foam_phase() and its own
@@ -2054,8 +2025,8 @@ static const uint8_t water_foam_threshold[WATER_FOAM_CURVATURE_MAX + 1] = {
  * material_colours() before a frame ever runs (tests included). */
 static unsigned foam_phase;
 
-void material_set_foam_phase(unsigned phase)
-{
+void
+material_set_foam_phase(unsigned phase) {
     foam_phase = phase;
 }
 
@@ -2065,8 +2036,8 @@ void material_set_foam_phase(unsigned phase)
  * helper would need to justify its own generality. No floating point, and
  * cheap enough for a path already gated to water rim cells only - see
  * paint_row_n() in app_sand.c for where that gate actually lives. */
-static unsigned material_popcount8(unsigned mask)
-{
+static unsigned
+material_popcount8(unsigned mask) {
     unsigned count = 0;
     for (unsigned bit = 0; bit < 8u; bit++) {
         count += (mask >> bit) & 1u;
@@ -2086,7 +2057,7 @@ static unsigned material_popcount8(unsigned mask)
  * too strong (lower it) or too subtle (raise it); it never touches the
  * rim, which keeps its own two terms (fill level and liquid_spec[]'s
  * specular) untouched by this constant entirely. */
-#define DEPTH_RANGE 4
+#define DEPTH_RANGE          4
 
 /* HOW MANY CELLS OF LOCAL DEPTH IT TAKES A LIQUID INTERIOR TO REACH FULL
  * DARKENING - the material's own body colour, with none of DEPTH_RANGE's
@@ -2136,9 +2107,8 @@ static unsigned material_popcount8(unsigned mask)
  * drift apart the day only one of them gets retuned. */
 #define DEPTH_SATURATE_CELLS MATERIAL_LIQUID_DEPTH_BAND
 
-material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
-                                    unsigned depth, gfx_color_t out[3])
-{
+material_pattern_t
+material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_color_t out[3]) {
     const uint8_t v = CELL_VARIANT(c);
 
     /* A LIQUID paints one of two ways depending on whether this cell is a
@@ -2279,8 +2249,7 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
              * own clamp in app_sand.c), and DEPTH_SATURATE_CELLS - depth
              * would wrap to a huge unsigned value the moment depth exceeds
              * it if this cap were not applied first. */
-            const unsigned depth_capped = depth < DEPTH_SATURATE_CELLS
-                                              ? depth : DEPTH_SATURATE_CELLS;
+            const unsigned depth_capped = depth < DEPTH_SATURATE_CELLS ? depth : DEPTH_SATURATE_CELLS;
 
             /* Distance-to-saturation, out of DEPTH_RANGE whole shade steps -
              * see DEPTH_SATURATE_CELLS's own comment above for the constant
@@ -2290,8 +2259,7 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
              * only to keep a wave residual's fractional resolution alive
              * through the merge, and there is no wave left to preserve. */
             const int bright =
-                ((int)DEPTH_RANGE * (int)(DEPTH_SATURATE_CELLS - depth_capped))
-                    / (int)DEPTH_SATURATE_CELLS;
+                ((int)DEPTH_RANGE * (int)(DEPTH_SATURATE_CELLS - depth_capped)) / (int)DEPTH_SATURATE_CELLS;
             int idx = (int)MASS_MAX - bright;
             idx = idx < 0 ? 0 : (idx > MASS_MAX ? MASS_MAX : idx);
             out[0] = palette[CELL_MAKE(id, (uint8_t)idx)];
@@ -2302,9 +2270,7 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
 
             if (id == MAT_WATER) {
                 const unsigned empty_count = material_popcount8(mask);
-                unsigned curvature = (empty_count > 3)
-                                        ? (empty_count - 3)
-                                        : (3 - empty_count);
+                unsigned curvature = (empty_count > 3) ? (empty_count - 3) : (3 - empty_count);
                 if (curvature > WATER_FOAM_CURVATURE_MAX) {
                     curvature = WATER_FOAM_CURVATURE_MAX;
                 }
@@ -2338,8 +2304,8 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
     }
 
     switch (CELL_MATERIAL(c)) {
-    case MAT_EXTENDED:
-        /* Switched on the low nibble, which for these is their identity
+        case MAT_EXTENDED:
+            /* Switched on the low nibble, which for these is their identity
          * rather than a variant - see MATX(). Anything without a grain of
          * its own falls through to the flat palette entry below.
          *
@@ -2352,49 +2318,45 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
          * identical either way. Ship the shape that was measured - see
          * docs/Sand/Tuning-At-a-Glance.md. That measurement was taken at
          * three materials deep; metal makes it a fourth. */
-        if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE ||
-            v == MATX_METAL) {
-            out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
-                   : (v == MATX_LEAF)  ? leaf_grain[hash & 7u]
-                   : (v == MATX_ICE)   ? ice_grain[hash & 7u]
-                                       : metal_grain[hash & 7u];
-            out[1] = out[0];
-            out[2] = out[0];
-            return MATERIAL_SPECKLED;
-        }
-        break;
-    case MAT_GLASS: {
-        /* CARDINAL bits only - see MATERIAL_EDGE_CARDINAL's own comment in
+            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_METAL) {
+                out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
+                         : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
+                         : (v == MATX_ICE)  ? ice_grain[hash & 7u]
+                                            : metal_grain[hash & 7u];
+                out[1] = out[0];
+                out[2] = out[0];
+                return MATERIAL_SPECKLED;
+            }
+            break;
+        case MAT_GLASS: {
+            /* CARDINAL bits only - see MATERIAL_EDGE_CARDINAL's own comment in
          * material.h. `mask != 0` would be wrong now that the mask can
          * carry diagonal bits a water rim reads: a pane with every
          * cardinal neighbour occupied but one diagonal empty must stay
          * interior, not spring an edge. */
-        const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
-        out[0] = edge ? glass_edge_body[v][hash & 3u]
-                      : glass_body[v][hash & 3u];
-        out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
-        out[2] = edge ? glass_edge_shine[v]  : glass_shine[v];
-        return MATERIAL_HATCHED;
-    }
-    case MAT_STONE:
-        /* Same CARDINAL-only test as glass above, and for the same reason -
-         * see MATERIAL_EDGE_CARDINAL's own comment in material.h. */
-        out[0] = ((mask & MATERIAL_EDGE_CARDINAL) != 0)
-                     ? stone_edge_speckle[v][hash & 7u]
-                     : stone_speckle[v][hash & 7u];
-        out[1] = out[0];
-        out[2] = out[0];
-        return MATERIAL_SPECKLED;
-    case MAT_WOOD:
-        if (v != 0) {
-            break;              /* alight: one flat glow, not grain */
+            const bool edge = (mask & MATERIAL_EDGE_CARDINAL) != 0;
+            out[0] = edge ? glass_edge_body[v][hash & 3u] : glass_body[v][hash & 3u];
+            out[1] = edge ? glass_edge_dither[v] : glass_dither[v];
+            out[2] = edge ? glass_edge_shine[v] : glass_shine[v];
+            return MATERIAL_HATCHED;
         }
-        out[0] = wood_grain[hash & 7u];
-        out[1] = out[0];
-        out[2] = out[0];
-        return MATERIAL_SPECKLED;
-    default:
-        break;
+        case MAT_STONE:
+            /* Same CARDINAL-only test as glass above, and for the same reason -
+         * see MATERIAL_EDGE_CARDINAL's own comment in material.h. */
+            out[0] =
+                ((mask & MATERIAL_EDGE_CARDINAL) != 0) ? stone_edge_speckle[v][hash & 7u] : stone_speckle[v][hash & 7u];
+            out[1] = out[0];
+            out[2] = out[0];
+            return MATERIAL_SPECKLED;
+        case MAT_WOOD:
+            if (v != 0) {
+                break; /* alight: one flat glow, not grain */
+            }
+            out[0] = wood_grain[hash & 7u];
+            out[1] = out[0];
+            out[2] = out[0];
+            return MATERIAL_SPECKLED;
+        default: break;
     }
 
     out[0] = palette[c];
@@ -2408,17 +2370,17 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
  * This is where an extended material gets to be itself. The physics row
  * above is shared, so everything that distinguishes one from another lives
  * either here or in the palette. */
-static const char *const extended_names[MATERIAL_EXTENDED_COUNT] = {
-    [MATX_ICE]   = "Ice",
+static const char* const extended_names[MATERIAL_EXTENDED_COUNT] = {
+    [MATX_ICE] = "Ice",
     [MATX_PLANT] = "Plant",
-    [MATX_LEAF]  = "Leaf",
+    [MATX_LEAF] = "Leaf",
     [MATX_METAL] = "Metal",
 };
 
-const char *material_name(cell_t c)
-{
+const char*
+material_name(cell_t c) {
     if (cell_is_extended(c)) {
-        const char *n = extended_names[CELL_VARIANT(c)];
+        const char* n = extended_names[CELL_VARIANT(c)];
         return (n != NULL) ? n : "?";
     }
     return materials[CELL_MATERIAL(c)].name;
@@ -2426,8 +2388,9 @@ const char *material_name(cell_t c)
 
 const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
 
-    [MATX_ICE] = {
-        /* Snow that stays where it is put.
+    [MATX_ICE] =
+        {
+            /* Snow that stays where it is put.
          *
          * Snow is a powder: it drifts as it falls (scatter 90), floats on
          * water, and melts in anything liquid, so aiming it at one face of
@@ -2443,14 +2406,15 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * Melts to water near heat like snow does, and slowly in liquid -
          * `thaws` 2 against snow's 4, since a block does not dissolve at
          * the rate a flake does. */
-        .chills      = 60,
-        .heats_to    = MAT_WATER,
-        .heat_chance = 90,
-        .thaws       = 2,
-    },
+            .chills = 60,
+            .heats_to = MAT_WATER,
+            .heat_chance = 90,
+            .thaws = 2,
+        },
 
-    [MATX_PLANT] = {
-        /* Grows on wet soil, against gravity, and turns to wood where it
+    [MATX_PLANT] =
+        {
+            /* Grows on wet soil, against gravity, and turns to wood where it
          * gets tall. The whole reason it can be an extended material is
          * that none of that needs a variant: growth is SPATIAL - it
          * occupies more cells rather than filling up a counter - so the
@@ -2464,36 +2428,36 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * Six in a line becomes wood. Low enough that a sapling turns into
          * a trunk while you are watching it, high enough that a plant
          * creeping over flat ground never does. */
-        /* Drinks briskly. This is drainage as much as it is nutrition -
+            /* Drinks briskly. This is drainage as much as it is nutrition -
          * water sitting in a thicket with nowhere to go looks broken, and
          * the fix wants to be visible at the speed the player poured it. */
-        .drinks      = 40,
+            .drinks = 40,
 
-        .grows       = 12,
-        .hardens_to  = MAT_WOOD,
-        .clings_to   = MAT_WOOD,
+            .grows = 12,
+            .hardens_to = MAT_WOOD,
+            .clings_to = MAT_WOOD,
 
-        /* What hardening leaves behind: a trunk two cells wider than a
+            /* What hardening leaves behind: a trunk two cells wider than a
          * stick at the foot, and foliage round the top of it.
          *
          * 110 in 256 per candidate space, over the five upward directions
          * of the top three cells of the run - so a crown of three or four
          * leaves, varying, rather than a fixed rosette. */
-        .canopy      = 110,
-        .canopy_to   = MATX(MATX_LEAF),
-        .trunk_girth = 2,
+            .canopy = 110,
+            .canopy_to = MATX(MATX_LEAF),
+            .trunk_girth = 2,
 
-        /* High, but not certain. At 255 a limb is a perfectly straight
+            /* High, but not certain. At 255 a limb is a perfectly straight
          * ray; the occasional reversion to reckoning from gravity is what
          * bends it back towards upright, which is what a real bough does
          * and what keeps a tree from looking like a diagram. */
-        .holds_line  = 200,   /* and it is part of one, which is the
+            .holds_line = 200, /* and it is part of one, which is the
                                     * same material here and will not be
                                     * once foliage exists */
-        .harden_run  = 6,
-        .harden_chance = 64,      /* one in four; measured */
+            .harden_run = 6,
+            .harden_chance = 64, /* one in four; measured */
 
-        /* And it POURS, so a handful of seeds scattered over a bed
+            /* And it POURS, so a handful of seeds scattered over a bed
          * behaves like a handful of seeds rather than hanging wherever the
          * brush left them. It cannot be a KIND_POWDER to get that - see
          * reaction_t.falls - and would not want to be: this rule leaves a
@@ -2503,29 +2467,30 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * cell per step and a leaf should not: at full speed a loose scrap
          * of green crossed the board faster than the eye follows, which
          * reads as teleporting rather than as falling. */
-        .falls       = 85,
+            .falls = 85,
 
-        /* The slowest rate this scale can express, and it wants to be.
+            /* The slowest rate this scale can express, and it wants to be.
          * Measured, forty scraps on bare stone: at 3 in 256 half of them
          * were gone by step 60 - two seconds - and a seed poured onto dry
          * soil died before its water arrived. At 1 the half-life is about
          * six seconds, which gives a player time to fetch the watering can
          * and still clears the litter from a broken tree inside twenty. */
-        .withers     = 1,
+            .withers = 1,
 
-        /* And it burns, which is most of the point of growing a tree. Well
+            /* And it burns, which is most of the point of growing a tree. Well
          * above wood's 6: green growth catches far more readily than
          * seasoned timber, and it flashes to flame rather than charring,
          * because there is not enough of it in one cell to smoulder. */
-        .flammability = 40,
+            .flammability = 40,
 
-        .dissolvable  = 220,   /* softer than wood's 160 - acid goes
+            .dissolvable = 220, /* softer than wood's 160 - acid goes
                                 * through leaves faster than through a
                                 * plank */
-    },
+        },
 
-    [MATX_LEAF] = {
-        /* FOLIAGE. What a tree puts out when a run of it hardens - see the
+    [MATX_LEAF] =
+        {
+            /* FOLIAGE. What a tree puts out when a run of it hardens - see the
          * canopy in sand_reactions.c - and deliberately a material of its
          * own rather than more plant.
          *
@@ -2542,19 +2507,19 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * `hardens_to`. Leaves do not spread, do not fall and never turn
          * into timber. What they do is hang there being green, catch fire
          * readily, and let water through. */
-        .clings_to    = MAT_WOOD,
-        .sheltered_by = MAT_WOOD,   /* a tree in drought keeps its leaves */
+            .clings_to = MAT_WOOD,
+            .sheltered_by = MAT_WOOD, /* a tree in drought keeps its leaves */
 
-        /* It has to DRINK, which sounds like the opposite of everything
+            /* It has to DRINK, which sounds like the opposite of everything
          * above and is not optional. Every extended material shares one
          * physics row - KIND_STATIC at stone's density - so water can
          * neither fall through a canopy nor soak into it, and a bowl of
          * leaves holds a pond indefinitely. That was a real bug once
          * already, on the plant, and a leaf is the surface rain actually
          * lands on. */
-        .drinks       = 40,
+            .drinks = 40,
 
-        /* And it must be able to GO. Nothing else would ever clear it:
+            /* And it must be able to GO. Nothing else would ever clear it:
          * with no `falls`, a crown whose trunk burns away would hang in
          * the air permanently. Withering handles it, and `clings_to`
          * above is what stops a living tree shedding - a leaf touching
@@ -2562,15 +2527,15 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * the plant, not twice it: a stem being stouter than a leaf was
          * the old reasoning, and a shed leaf lasting longer used up the
          * difference. */
-        .withers      = 1,
+            .withers = 1,
 
-        /* Catches far more readily than green stem (40) or seasoned wood
+            /* Catches far more readily than green stem (40) or seasoned wood
          * (6). A fire that reaches a canopy should run through it, which
          * is both what happens and the best thing to look at. */
-        .flammability = 90,
+            .flammability = 90,
 
-        .dissolvable  = 240,   /* the softest thing on the board */
-    },
+            .dissolvable = 240, /* the softest thing on the board */
+        },
 
     /* METAL. Dirt smelted by sustained heat - see
      * docs/Sand/Metal-Smelting-Plan.md, which this row follows exactly.
@@ -2581,8 +2546,9 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
      * metal's whole job is the one thing nothing else on the board does
      * well, moving heat a LONG way, and everything below is in service of
      * that one axis. */
-    [MATX_METAL] = {
-        /* Rolled per cell crossed by conduct_heat()'s walk, so depth d
+    [MATX_METAL] =
+        {
+            /* Rolled per cell crossed by conduct_heat()'s walk, so depth d
          * succeeds with probability (conducts/256)^d - see that
          * function's own comment in sand_reactions.c. 248 puts the mean
          * walk at roughly CONDUCT_REACH cells (32), against stone and
@@ -2600,9 +2566,9 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * a length the player can see is a designed limit rather than an
          * arbitrary one. Starting point, not final - tune on device like
          * every other constant in this table. */
-        .conducts    = 248,
+            .conducts = 248,
 
-        /* Balance revision, 2026-08-30: metal now resists acid as hard as
+            /* Balance revision, 2026-08-30: metal now resists acid as hard as
          * this field allows without opting all the way out (0 is immune -
          * see its own comment in material.h - and would also drop metal
          * from the generated reaction docs, which 1 does not). Previously
@@ -2612,9 +2578,9 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * A future balance pass may revisit whether metal should cost
          * something else instead, now that it is no longer acid's weak
          * point. */
-        .dissolvable = 1,
+            .dissolvable = 1,
 
-        /* Deliberately no `heats_to`, `heat_ramp`, `heat_chance`, `chills`
+            /* Deliberately no `heats_to`, `heat_ramp`, `heat_chance`, `chills`
          * or anything else thermal. With no variant metal cannot ramp,
          * and a memoryless heat_chance roll would mean a metal wall
          * beside lava randomly catching and turning to lava on its own -
@@ -2626,10 +2592,10 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * named above is 0, and that is a decision, not an oversight -
          * see reactions[]'s own top comment on what an absent field means
          * field by field. */
-    },
+        },
 };
 
-const gfx_color_t *material_palette(void)
-{
+const gfx_color_t*
+material_palette(void) {
     return palette;
 }

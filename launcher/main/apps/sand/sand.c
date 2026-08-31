@@ -161,7 +161,6 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->impulse_count = 0;
     s->splash_chance = SAND_SPLASH_CHANCE_START;
     s->splash_radius_water = SAND_SPLASH_RADIUS_WATER;
-    s->acid_splashes_this_step = 0;
     /* Computed here, unconditionally, rather than only when sleeping is
      * enabled: the main sweep always walks block-columns (see
      * step_one_row()), whether or not block_state exists, so block_cols/
@@ -2119,11 +2118,6 @@ void sand_step(sand_t *s, int gx, int gy, int jostle)
      * sand_step()" as the design calls for, not "once per step gravity
      * happens to be nonzero". */
     emit_from_emitters(s);
-
-    /* Reset EVERY step, unconditionally - see sand_t::acid_splashes_this_
-     * step's own comment (sand.h) for why this is a per-step cap rather
-     * than a decaying budget like water's splash_chance. */
-    s->acid_splashes_this_step = 0;
 
     /* Dithered rather than nearest, so a tilt between two of the eight
      * directions flows at its true angle instead of snapping. Costs one random
