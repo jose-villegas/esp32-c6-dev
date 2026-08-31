@@ -526,6 +526,49 @@ typedef struct {
      * licking a flame upward while staying put itself. */
     uint8_t flare;
 
+    /* TRAPPED HEAT VENTS UPWARD. Chance in 256, per step, that a cell of
+     * this material that is COVERED FROM ABOVE (see covered_from_above(),
+     * sand_reactions.c - ANY of the three neighbours "above" it, gravity-
+     * relative, strictly denser and non-liquid) punches a vent through
+     * whatever is sealing it in: up to SAND_VENT_REACH cells along EACH
+     * covered direction (up-left, up, up-right - each independently, not
+     * only the one straight "above" - see try_vent()'s own comment) get
+     * thrown with sand_impulse_dislodge(), each column stopping at the
+     * first empty cell found along its own direction. The cell itself
+     * never changes - no fire, no conversion, nothing to name a byproduct
+     * for - only whatever was sitting over it moves, and it moves further
+     * along whichever direction it was already sitting in, not all
+     * converging on one column.
+     *
+     * DELIBERATELY NOT smothered()'s all-4-cardinal rule (the one that
+     * extinguishes a burning SOLID) - see covered_from_above()'s own
+     * comment for why a lid on top is the right question for a wide
+     * liquid pool, where smothered() can never be true no matter how
+     * sealed the surface is (a pool wider than one cell always has more
+     * of the same liquid to its sides and below, and neighbor_smothers()
+     * never counts a liquid neighbour). What is beside or below a lava
+     * cell does not trap its heat; only what sits on top of it does.
+     *
+     * SAND_VENT_REACH IS A HARD DEPTH LIMIT, NOT A PISTON - a covering
+     * exactly that many cells deep, with open space right beyond it,
+     * clears completely; a covering even one cell deeper has no open
+     * space within reach at all and stays sealed forever, because nothing
+     * can move into a destination that is still occupied (see try_vent()'s
+     * own comment for the full mechanics). Deliberate, not a shortfall:
+     * thin seals get relieved, a genuinely thick vessel stays contained.
+     *
+     * This is lava's own answer to a real dead end: a burning LIQUID is
+     * never smothered the way a solid is (see step_one_burning_cell()'s
+     * own long comment on why burying lava must bury something hot rather
+     * than delete it), which is correct and, on its own, means a sealed
+     * pool of lava - walled in by stone, or capped by its own quenched
+     * crust - has no way to ever matter again. `vent_chance` does not
+     * reopen that decision: the lava is still never deleted, still never
+     * extinguished, still just as hot as it always was. It only adds that
+     * being sealed in a THIN shell is not the safe, inert state it used to
+     * read as. 0, the default, means never - only lava sets it. */
+    uint8_t vent_chance;
+
     /* Chance in 256, per step, that a cell of this material DISSOLVES one
      * of its four cardinal neighbours. Acid is the only thing that does.
      *

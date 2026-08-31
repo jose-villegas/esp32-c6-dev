@@ -211,6 +211,7 @@ static const field_doc_t field_docs[] = {
     FCHANCE(residue,  GRP_BURN, "leaves smoke"),
     F(quench_to,    GRP_BURN, FK_TARGET, NULL),
     FRATE(flare,     GRP_BURN, "licks flame into the air"),
+    FRATE(vent_chance, GRP_BURN, "vents through whatever covers it from above"),
 
     /* GRP_ACID (dissolves/dissolvable/fizz all belong to the acid pair,
      * whichever side of it this row is on - see emit_acid()). `dissolves`
@@ -715,6 +716,14 @@ static void emit_burn(const reaction_t *r)
         printf(". Touched by a quenching liquid, simply goes out");
     }
     printf(".\n");
+
+    if (r->vent_chance != 0) {
+        printf("- If covered from above - anything directly above it, "
+               "up-left, or up-right, gravity-relative - vents through "
+               "the lid %s, throwing up to SAND_VENT_REACH cells along "
+               "each covered direction independently.\n",
+               adverb("vent_chance", r->vent_chance));
+    }
 }
 
 static void emit_transform(const reaction_t *r)
