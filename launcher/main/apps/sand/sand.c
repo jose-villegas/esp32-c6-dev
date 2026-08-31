@@ -182,6 +182,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->mobility     = 255;  /* full speed by default - see sand_set_mobility() */
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
+    s->vent_chance  = SAND_VENT_CHANCE_PER_MATERIAL;   /* see sand_set_vent_chance() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -634,6 +635,53 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
         }
     }
 
+    /* REFUSE A SECOND ENTRY FOR A CELL ALREADY TRACKED - two entries both
+     * claiming to BE the one grain of material sitting at `at` is always
+     * a bookkeeping error, not a feature: only one physical cell exists
+     * there, so only one entry can ever legitimately move it. Callers
+     * that queue once per event (a single sand_explode()'s own annulus,
+     * a single splash) never hit this - each candidate cell is visited at
+     * most once per call, and step_impulses()'s per-step retry already
+     * covers "try again next step" for whatever is still blocked. The
+     * caller this actually guards is one that RE-QUEUES the same cells
+     * on a schedule of its own regardless of whether earlier entries for
+     * them are still in flight - reaction_t.vent_chance (material.h) at a
+     * high roll rate is exactly that: covered_from_above() stays true for
+     * as long as ANY covering cell remains, so try_vent() (sand_
+     * reactions.c) can fire again on literally the next step, and without
+     * this check every such re-fire would add a FRESH duplicate for
+     * every cell still blocked from a PRIOR firing - measured filling the
+     * impulse buffer to within a few percent of impulse_max on a 20-pod
+     * vent-cap test before this existed, with real entries then silently
+     * refused once it filled. A linear scan of the buffer, not a per-cell
+     * flag - see the "spoken for" comment on step_impulses()'s own
+     * re-acquisition just above for why this file avoids the latter, and
+     * impulse_count is small enough in every real use of this system
+     * (bounded by design intent, not merely by observation so far) that
+     * the scan costs nothing worth avoiding.
+     *
+     * MATCHED ON `cell` TOO, NOT INDEX ALONE - an existing entry's stored
+     * index can be STALE at this exact point: step_impulses()'s own
+     * "verify before moving" re-acquisition (its own comment) only runs
+     * when THAT entry is next processed, which is later in the same
+     * step, not retroactively the moment something else touches its
+     * cell. Queuing happens during REACTIONS, earlier in the step, so an
+     * existing entry here may already no longer describe what is
+     * actually sitting at `at`. Treating a stale index as "still tracked"
+     * would refuse a genuinely fresh, accurate entry forever - measured
+     * turning "some pods still sealed" into "every pod stays sealed"
+     * outright when this check compared index alone. Requiring the
+     * stored cell to still match the byte just read into `cell` above
+     * confirms the existing entry is still an accurate description of
+     * this same physical grain, not simply an old index nobody has
+     * cleaned up yet. */
+    for (int existing = 0; existing < s->impulse_count; existing++) {
+        if (s->impulse_buf[existing].index == (uint16_t)at &&
+            s->impulse_buf[existing].cell == cell) {
+            return;
+        }
+    }
+
     impulse_t *entry = &s->impulse_buf[s->impulse_count++];
     entry->index = (uint16_t)at;
     entry->cell  = cell;
@@ -644,6 +692,24 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
 {
     queue_flying_grain(s, x, y, dir, speed, false, -1);
+}
+
+/* sand_impulse()'s sibling for the one thing it deliberately never does -
+ * see queue_flying_grain()'s own comment on why THIS PRIMITIVE'S OWN
+ * KIND_STATIC REFUSAL HAS NO EXCEPTIONS for the safe default every other
+ * caller inherits automatically. A single targeted push (reaction_t.
+ * vent_chance's try_vent(), sand_reactions.c) needs the opt-in queue_
+ * outward_impulse() already has for a blast - the same density-scaled
+ * chance to dislodge a wall rather than an unconditional refusal - without
+ * pulling in a whole disc's worth of ring/thinning machinery for what is
+ * a fixed, short, straight line of cells. Exists as its own name rather
+ * than a bool parameter on sand_impulse() itself so that every EXISTING
+ * caller of sand_impulse() keeps getting the safe refusal with no risk of
+ * a stray `true` at some future call site quietly making sand able to
+ * throw a wall through the air. */
+void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed)
+{
+    queue_flying_grain(s, x, y, dir, speed, true, -1);
 }
 
 /* THE SHARED IMPLEMENTATION BEHIND sand_displace() AND sand_displace_
@@ -1238,6 +1304,15 @@ void sand_set_conduction(sand_t *s, int chance)
     }
 }
 
+void sand_set_vent_chance(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->vent_chance = SAND_VENT_CHANCE_PER_MATERIAL;
+    } else {
+        s->vent_chance = chance > 255 ? 255 : chance;
+    }
+}
+
 /* can_enter()/cell_open()/move_to() moved to sand_priv.h (still
  * static inline) - see that header's own comment for why the whole
  * grain-movement primitive stack lives there now. pour_into()/room_in()
@@ -1829,6 +1904,41 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * entry.cell to whatever byte is actually found keeps its stored
          * mass/variant truthful for every check after this one. */
         if (s->cells[entry.index] != entry.cell) {
+            bool reacquired = false;
+
+            /* HEAT-RAMPING MATERIALS FIRST, AND CHECKED AT THEIR OWN
+             * POSITION ONLY, before even trying the movement candidates
+             * below - a heat-ramping material's variant nibble IS a
+             * TEMPERATURE, not a shade (see random_cell()'s own comment),
+             * and it keeps drifting every step for as long as the cell
+             * sits next to whatever is heating it. A BLOCKED entry never
+             * actually moves - can_impulse_enter() (below) is what keeps
+             * it waiting at the exact index it was queued with - so a
+             * mismatch here is guaranteed to be drift, never motion, and
+             * the entry's own position is the only place that drift could
+             * have happened. Trying the movement candidates FIRST would
+             * risk exactly the failure this exists to prevent: several
+             * cells of the same heat-ramping material sitting near the
+             * same heat source drift in step with each other, so a
+             * neighbour in the gravity direction can easily carry the
+             * exact same stale byte by coincidence, and the byte-exact
+             * candidate check below cannot tell that apart from a real
+             * move - silently handing the entry a neighbouring wall
+             * cell's identity instead of its own. Exactly the case
+             * sand_impulse_dislodge()'s callers hit hardest: the stone
+             * try_vent() (sand_reactions.c) throws is, by definition,
+             * touching the lava it was sealing in, so it is ALWAYS
+             * actively ramping while it waits for a turn to actually
+             * move. */
+            const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
+            if (reactions[lost_mat].heat_ramp != 0) {
+                const cell_t here = s->cells[entry.index];
+                if (!CELL_IS_EMPTY(here) && CELL_MATERIAL(here) == lost_mat) {
+                    entry.cell = here;
+                    reacquired = true;
+                }
+            }
+
             const int ox = (int)((unsigned)entry.index % (unsigned)w);
             const int oy = (int)((unsigned)entry.index / (unsigned)w);
             const int i_dir = ring_of(dx, dy);
@@ -1840,7 +1950,6 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 { ox + slide_b[0], oy + slide_b[1] },
             };
 
-            bool reacquired = false;
             for (int c = 0; c < 3 && !reacquired; c++) {
                 const int cx = cand[c][0];
                 const int cy = cand[c][1];
@@ -1856,7 +1965,6 @@ static void step_impulses(sand_t *s, int dx, int dy)
             }
 
             if (!reacquired) {
-                const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
                 if (lost_mat == MAT_WATER || lost_mat == MAT_ACID) {
                     const cell_t here = s->cells[entry.index];
                     if (!CELL_IS_EMPTY(here) &&
@@ -1893,6 +2001,90 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * see its own comment above) has had its say, and reused for every
          * material check below instead of re-deriving it three times. */
         const uint8_t mat_id = CELL_MATERIAL(entry.cell);
+
+        /* AIRBORNE SOLIDS FALL TOO. A KIND_STATIC material never moves on
+         * its own - the main sweep (sand_step(), this file) skips it
+         * outright, which is exactly what makes stone or glass hold its
+         * shape. That is also why a THROWN chunk of it never arced the
+         * way a thrown grain of sand or splash of water does: those get
+         * gravity for free from the ordinary sweep EVERY step in addition
+         * to whatever this loop does, while a flying KIND_STATIC entry
+         * only ever got this loop's own directional push - a straight
+         * line, not a fall. This is the sweep's missing half for exactly
+         * the one case that needs it: while an entry is tracked here at
+         * all (thrown, not yet resting), it ALSO gets one unconditional
+         * gravity-ward attempt every step, same candidate order as an
+         * ordinary grain's own fall (straight down first, then the two
+         * diagonal slides either side) and the same can_impulse_enter()
+         * rule every other move in this loop already uses. Combined with
+         * the outward push below - which fades as `speed` decays while
+         * this does not - the two together turn "moves outward for a
+         * while, then drops straight down" into a visible arc, the same
+         * way the sweep+impulse combination already does for non-static
+         * material; this just extends that combination to the one kind
+         * that never got it. UNCONDITIONAL, not rolled: a thrown chunk
+         * should fall every bit as reliably as a grain the sweep touches
+         * every step, and gating this on `speed` would tie "still
+         * falling" to "still has outward energy left", which is
+         * backwards - the whole point is that it keeps falling well
+         * after the outward push has spent itself. */
+        if (materials[mat_id].kind == KIND_STATIC) {
+            const int gi_dir = ring_of(dx, dy);
+            const int *g_slide_a = ring_dir(gi_dir + 7);
+            const int *g_slide_b = ring_dir(gi_dir + 1);
+            const int gx = (int)((unsigned)entry.index % (unsigned)w);
+            const int gy = (int)((unsigned)entry.index / (unsigned)w);
+            const int gcand[3][2] = {
+                { gx + dx,           gy + dy           },
+                { gx + g_slide_a[0], gy + g_slide_a[1] },
+                { gx + g_slide_b[0], gy + g_slide_b[1] },
+            };
+            for (int c = 0; c < 3; c++) {
+                const int cx = gcand[c][0];
+                const int cy = gcand[c][1];
+                if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
+                    continue;
+                }
+                /* NOT can_impulse_enter() - that lets a flying entry
+                 * shoulder aside a LIQUID same as any other non-static
+                 * occupant, which is fine for a deliberate outward THROW
+                 * but wrong for this unconditional per-step fall: a
+                 * covering cell dislodged from directly beside lava has
+                 * one of its own settling-slide candidates land right
+                 * back on the lava cell it just came from (the two are
+                 * diagonally adjacent by construction), and lava is
+                 * KIND_LIQUID, so can_impulse_enter() would happily let
+                 * the falling chunk swap straight into it - overwriting
+                 * the very lava this feature exists to never touch (see
+                 * step_one_burning_cell()'s "a burning LIQUID is never
+                 * smothered" invariant). A falling solid should rest ON a
+                 * liquid surface, not sink into it - the same principle
+                 * already applied elsewhere (sand resting on oil instead
+                 * of sinking) - so gravity-drift treats a liquid target
+                 * as blocked, same as a wall, and only ever falls into
+                 * genuinely empty space or a non-liquid occupant. */
+                const cell_t gtarget = sand_at(s, cx, cy);
+                if (!CELL_IS_EMPTY(gtarget) &&
+                    material_of(gtarget)->kind == KIND_LIQUID) {
+                    continue;
+                }
+                if (!can_impulse_enter(gtarget)) {
+                    continue;
+                }
+                const size_t gat  = entry.index;
+                const size_t gnat = (size_t)cy * (size_t)w + (size_t)cx;
+                const cell_t gdisplaced = s->cells[gnat];
+                s->cells[gnat] = entry.cell;
+                s->cells[gat]  = gdisplaced;
+                latch_content_flags(s, entry.cell);
+                if (!CELL_IS_EMPTY(gdisplaced)) {
+                    latch_content_flags(s, gdisplaced);
+                }
+                mark_move(s, gx, gy, cx, cy);
+                entry.index = (uint16_t)gnat;
+                break;
+            }
+        }
 
         /* The roll happens before the move attempt, and it happens EVERY
          * turn - blocked or not. Two ways to write this, and the choice

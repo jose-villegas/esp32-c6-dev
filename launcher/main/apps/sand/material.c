@@ -713,6 +713,27 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
+            /* SEALED IN IS NOT SAFE, BUT A PULSE SHOULD BE RARE - 1 in 256
+             * (~0.4%), per step, once a pool is COVERED FROM ABOVE - see
+             * reaction_t.vent_chance's own comment for the design and
+             * try_vent()/covered_from_above() (sand_reactions.c) for the
+             * mechanism. The rarest a single byte-wide roll can express
+             * (same floor sand_set_evaporates()'s own per-material figure
+             * starts from, material.c's MAT_ACID row), deliberate: this
+             * rolls every step a cell STAYS covered, not once per pool, so
+             * even this floor still fires roughly once every 256 steps per
+             * covered cell - frequent enough that a sealed pool is not
+             * permanently inert, rare enough that a vent reads as an
+             * occasional, dramatic pulse rather than a constant leak.
+             * Paired with SAND_VENT_REACH set high (sand.h) so that rare
+             * pulse throws a lot of material when it does fire, instead of
+             * a small, frequent trickle - a held-in eruption rather than a
+             * hiss. sand_set_vent_chance() (sand.h) overrides this for
+             * tests that need a fast, deterministic pulse instead of
+             * waiting on this real figure. Starting point, not measured on
+             * device. */
+            .vent_chance = 1,
+
             /* No residue: lava never burns out (decay 0 above), so nothing
          * here would ever fire. No conducts either - lava IS the heat,
          * it does not pass someone else's along. */
