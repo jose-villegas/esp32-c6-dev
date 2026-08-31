@@ -2677,11 +2677,14 @@ pay_quench_cost(sand_t* s, int nx, int ny, int w) {
 #define CONDUCT_REACH 32
 
 /* The starting life a cell gets from boiling (steam for water, gas for
- * acid - reaction_t.boils_to), 20% below the full MATERIAL_VARIANTS - 1
+ * acid - reaction_t.boils_to), below the full MATERIAL_VARIANTS - 1
  * place_reacted() would otherwise hand it - see conduct_heat()'s own use
  * of this, just below, for why boiling deliberately makes less of its
- * product to look at now rather than only making it slower. */
-#define BOILED_LIFE ((MATERIAL_VARIANTS - 1) - (MATERIAL_VARIANTS - 1) / 5)
+ * product to look at now rather than only making it slower. Started at
+ * 20% below full (a cut of 3), reported as too drastic - the cut is
+ * roughly 30% smaller now (2 instead of 3), landing at 13 rather than
+ * 12. */
+#define BOILED_LIFE ((MATERIAL_VARIANTS - 1) - 2)
 
 /* Heat crossing a run of conductor cells - the boiler. See this file's
  * own top comment ("THE BOILER") for the two problems this and
@@ -2828,13 +2831,13 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
                  * so water's own behaviour is unchanged.
                  *
                  * Less than a full cell of life, not the usual
-                 * place_reacted() default (MATERIAL_VARIANTS - 1) -
+                 * place_reacted() default (MATERIAL_VARIANTS - 1) - see
+                 * BOILED_LIFE's own comment above for the figure - so
                  * boiling now makes noticeably less of its product than
-                 * it used to, 20% below full, so a boiler reads as
-                 * producing a bit less to look at rather than just
-                 * producing it slower. place_cell() directly, since
-                 * place_reacted() always hands a fresh non-ramping
-                 * material its full life. */
+                 * it used to, a boiler reading as producing a bit less
+                 * to look at rather than just producing it slower.
+                 * place_cell() directly, since place_reacted() always
+                 * hands a fresh non-ramping material its full life. */
                 const uint8_t boils_to = reaction_of(bc)->boils_to ? reaction_of(bc)->boils_to : MAT_STEAM;
                 place_cell(s, rx, ry, bat, CELL_MAKE(boils_to, BOILED_LIFE));
                 acted = true;

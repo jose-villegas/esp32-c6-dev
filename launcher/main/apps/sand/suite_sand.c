@@ -16340,7 +16340,7 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
  * "Almost" is the honest word, and it is why the host test below asserts
  * a FLOOR on the count rather than an equality. Measured: the count sits
  * exactly at its window-start value for the first twenty steps of the
- * measured window and then starts climbing, reaching 8287 from 8280 by
+ * measured window and then starts climbing, reaching 8293 from 8280 by
  * the end of it - the boil has by then opened enough gaps in the water
  * above the slab for flare to reach them. An equality would simply fail
  * here - and it is worth knowing that it held for the shorter settle an
@@ -16399,13 +16399,14 @@ static void build_boiler_scene(sand_t *s)
  * measured window - four intervals, so the per-quarter loss assertions
  * below can catch a basin that boils hard at first and then tails off,
  * which a single before/after comparison could not. Measured, the four
- * quarters lose 19, 19, 26 and 17 cells of water - roughly a tenth of
- * the figures this test saw before reaction_t.boils existed, since
- * water now resists conducted-heat boiling instead of flashing to steam
+ * quarters lose 27, 34, 26 and 25 cells of water - a fraction of the
+ * figures this test saw before reaction_t.boils existed, since water
+ * now resists conducted-heat boiling instead of flashing to steam
  * unconditionally the moment heat reaches it (see material.c's own row
- * for water's real figure). Level enough to call it steady, and the
- * assertions are held at 8 so ordinary quarter-to-quarter variation
- * does not read as a stall. */
+ * for water's real figure, raised once from its own first tuning pass
+ * for resisting more than wanted). Level enough to call it steady, and
+ * the assertions are held at 12 - roughly half the measured minimum -
+ * so ordinary quarter-to-quarter variation does not read as a stall. */
 static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -16515,17 +16516,17 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
                  "quiet quarter means the basin exhausted its heat or "
                  "its water before the window was over, and this is "
                  "meant to be a STEADY state, not a transient", q, lost);
-        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(8, lost, why);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(12, lost, why);
     }
 
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(5000, water,
         "the basin must not be exhausted by the end of the window - "
-        "measured, 5206 cells of water are left, 98% of what the window "
+        "measured, 5158 cells of water are left, 98% of what the window "
         "started with (reaction_t.boils makes water resist conducted-heat "
         "boiling now, see material.c's own row), which is what makes "
         "this a steady state rather than another transient like the "
         "thermal shock lattice above");
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(80, steam,
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(150, steam,
         "steam production must be sustained through to the end of the "
         "window");
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(steam_window_start, steam,
@@ -16562,7 +16563,7 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
         "it. The stone enclosure (side walls, slab, grid floor) leaves "
         "flare almost nowhere to put fresh fire, and measured the count "
         "holds at its window-start 8280 for twenty steps before the boil "
-        "opens gaps above the slab and it climbs to 8287 - see "
+        "opens gaps above the slab and it climbs to 8293 - see "
         "build_boiler_scene()'s comment. Water boiling to steam is "
         "one-for-one, and condensation (a real, DIFFERENT loss of three "
         "cells per event - see the sand_set_condenses() call above) is "

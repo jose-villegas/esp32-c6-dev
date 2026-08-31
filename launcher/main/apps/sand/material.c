@@ -607,9 +607,11 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * pool up a little, rather than every drop flashing to steam
              * the instant conducted heat reaches it (see conduct_heat(),
              * sand_reactions.c). Acid, below, sits at the opposite end of
-             * this same field. Starting point, not final - tune on device
-             * like every other constant here. */
-            .boils = 24,
+             * this same field. Started at 24, raised about 20% (~9.4% ->
+             * ~11.3% per step) once reported as resisting more than
+             * wanted. Starting point, not final - tune on device like
+             * every other constant here. */
+            .boils = 29,
         },
 
     [MAT_ACID] =
@@ -973,14 +975,16 @@ const reaction_t reactions[MATERIAL_MAX] = {
             .warms = 48, /* the hotter carrier: water that has just boiled */
 
             /* The inverse of water's own evaporation: a small,
-             * deliberately rare per-step chance (roughly 1 in 85) that a
-             * 2x2 patch of steam quietly turns back into a droplet of
-             * water - fake condensation, a cosmetic touch, not a real
-             * thermal model (no cold surface checked, no heat reading
-             * involved - see reaction_t.condenses's own comment in
-             * material.h). Starting point, not final - tune on device
-             * like every other constant here. */
-            .condenses = 3,
+             * deliberately rare per-step chance that a 2x2 patch of
+             * steam quietly turns back into a droplet of water - fake
+             * condensation, a cosmetic touch, not a real thermal model
+             * (no cold surface checked, no heat reading involved - see
+             * reaction_t.condenses's own comment in material.h). Started
+             * at 3 (roughly 1 in 85), halved to roughly 1 in 128 once
+             * reported as happening more than a "small chance" should.
+             * Starting point, not final - tune on device like every
+             * other constant here. */
+            .condenses = 2,
             .condenses_to = MAT_WATER,
         },
 
