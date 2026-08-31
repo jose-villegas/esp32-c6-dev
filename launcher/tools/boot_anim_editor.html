@@ -22,6 +22,14 @@
   currently in this page, on the machine running the server. See
   boot_anim_editor_server.py for exactly how.
 
+  Each keyframe carries TWO real 3D transforms - a camera, and the "space"
+  the grid+curve live in - position/rotation/scale on every axis, in plain
+  units (meters, degrees, a 1.0-is-untouched multiplier - see
+  boot_anim_timeline.json's own comment on why and on the Z-then-X-then-Y
+  rotation order small3dlib composes in). The origin readout under the
+  render view is DERIVED, not authored: a real 3D transform has nowhere to
+  type a screen position into directly any more.
+
   WHAT "BAKE" DOES
 
   Downloads a JSON file in boot_anim_timeline.json's shape. This page never
@@ -129,6 +137,16 @@
   }
   #renderStatus.busy { color: var(--accent); }
   #renderStatus.error { color: var(--danger); background: rgba(60,10,10,.85); }
+  #originReadout {
+    position: absolute;
+    bottom: 6px; left: 6px;
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    background: rgba(0,0,0,.6);
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
   #renderError {
     grid-column: 1 / 3;
     display: none;
@@ -291,6 +309,7 @@
     <div id="renderFrame">
       <img id="renderImg" alt="">
       <div id="renderStatus"></div>
+      <div id="originReadout" title="Where the space's own local origin (t=0, zeta=0) lands on screen - derived, not authored"></div>
     </div>
   </div>
 
@@ -333,6 +352,12 @@
  * State
  * ======================================================================= */
 
+/* pos in meters, rot in degrees (small3dlib's own Z-then-X-then-Y
+ * composition order - see boot_anim_timeline.json's own comment), scale a
+ * plain multiplier (1 = untouched) - the exact shape
+ * gen_boot_anim_timeline.py's own top comment documents, kept in sync with
+ * main/boot/boot_anim_timeline.json by hand since this page has no way to
+ * read that file directly (see this file's own top comment on Bake/Load). */
 const DEFAULT_STATE = {
   timing: {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
@@ -344,14 +369,36 @@ const DEFAULT_STATE = {
     grid_hue_spread: 70, grid_whiten_max: 120, grid_ceiling_max: 170,
     grid_max: 70,
   },
+  camera_focal: 512,
   keyframes: [
-    { ms: 520, pos: [184, 336], rot: [0, 0, 0], scale: [256, 256, 256], ease: 'linear' },
-    { ms: 2500, pos: [184, 112], rot: [10559, 0, 0], scale: [256, 256, 256], ease: 'linear' },
-    { ms: 2700, pos: [184, 112], rot: [10559, 0, 0], scale: [256, 256, 256], ease: 'linear' },
-    { ms: 3600, pos: [184, 112], rot: [10559, 0, 0], scale: [380, 380, 380], ease: 'ease_out' },
-    { ms: 4200, pos: [184, 112], rot: [10559, 0, 0], scale: [28, 28, 28], ease: 'ease_in' },
-    { ms: 4300, pos: [184, 112], rot: [10559, 0, 0], scale: [28, 28, 28], ease: 'linear' },
-    { ms: 5800, pos: [151, 138], rot: [20936, 0, 0], scale: [28, 28, 28], ease: 'ease_out' },
+    { ms: 520,
+      camera: { pos: [0, 2, -10], rot: [0, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1, 1, 1] },
+      ease: 'linear' },
+    { ms: 2500,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1, 1, 1] },
+      ease: 'linear' },
+    { ms: 2700,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1, 1, 1] },
+      ease: 'linear' },
+    { ms: 3600,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1.4, 1.4, 1.4] },
+      ease: 'ease_out' },
+    { ms: 4200,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [0.11, 0.11, 0.11] },
+      ease: 'ease_in' },
+    { ms: 4300,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [0.11, 0.11, 0.11] },
+      ease: 'linear' },
+    { ms: 5800,
+      camera: { pos: [2, 2, -10], rot: [80, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [-1, 0, 0], rot: [0, 0, 0], scale: [0.11, 0.11, 0.11] },
+      ease: 'ease_out' },
   ],
 };
 
@@ -388,6 +435,7 @@ function sortKeyframes() {
  * ======================================================================= */
 
 const statusEl = document.getElementById('renderStatus');
+const originEl = document.getElementById('originReadout');
 const errorEl = document.getElementById('renderError');
 const imgEl = document.getElementById('renderImg');
 const scrub = document.getElementById('scrub');
@@ -407,7 +455,10 @@ async function renderNow() {
     res = await fetch('/render', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ timing: state.timing, keyframes: state.keyframes, ms: playhead }),
+      body: JSON.stringify({
+        timing: state.timing, camera_focal: state.camera_focal,
+        keyframes: state.keyframes, ms: playhead,
+      }),
     });
   } catch (err) {
     if (seq !== renderSeq) return;
@@ -435,6 +486,13 @@ async function renderNow() {
   if (prev) URL.revokeObjectURL(prev);
   statusEl.textContent = '';
   statusEl.className = '';
+
+  /* The space's local origin, projected server-side through this exact
+   * frame's transform and handed back as a header - see
+   * boot_anim_render_host.c's own comment on why this is read-only now
+   * rather than an authored field. */
+  const origin = res.headers.get('X-Origin');
+  originEl.textContent = origin ? `origin: ${origin}px` : '';
 }
 
 function showError(msg) {
@@ -471,6 +529,31 @@ function renderDebounced() {
 function renderConsts() {
   const list = document.getElementById('constsList');
   list.innerHTML = '';
+
+  /* Not per-keyframe, unlike everything else the camera/space transforms
+   * carry - see boot_anim_timeline.json's own comment: a lens property, not
+   * a position or angle. small3dlib's own S3L_F (512) is its "normal" FOV;
+   * 0 is orthographic (see boot_anim.h's "The projection" section) - not a
+   * second code path, just this one field. */
+  const focalHead = document.createElement('div');
+  focalHead.className = 'group-title';
+  focalHead.textContent = 'Camera lens';
+  list.appendChild(focalHead);
+  const focalLabel = document.createElement('label');
+  focalLabel.className = 'field';
+  const focalSpan = document.createElement('span');
+  focalSpan.textContent = 'camera_focal (0 = orthographic)';
+  const focalInput = document.createElement('input');
+  focalInput.type = 'number';
+  focalInput.value = state.camera_focal;
+  focalInput.addEventListener('input', () => {
+    state.camera_focal = Number(focalInput.value) || 0;
+    renderDebounced();
+  });
+  focalLabel.appendChild(focalSpan);
+  focalLabel.appendChild(focalInput);
+  list.appendChild(focalLabel);
+
   for (const group of TIMING_GROUPS) {
     const h = document.createElement('div');
     h.className = 'group-title';
@@ -500,7 +583,8 @@ function renderConsts() {
  * ======================================================================= */
 
 function kfSummary(kf) {
-  return `pos ${kf.pos[0]},${kf.pos[1]}  rot ${kf.rot[0]}  scale ${kf.scale[0]}  ${kf.ease}`;
+  return `cam ${kf.camera.pos.join(',')} / ${kf.camera.rot[0]}°  `
+       + `space scale ${kf.space.scale[0]}  ${kf.ease}`;
 }
 
 /* Selecting a keyframe moves the playhead to it and re-renders, same as
@@ -610,29 +694,62 @@ function renderKfList() {
   });
 }
 
+/* One "pos / rot / scale, x/y/z" block - used twice below (camera, space),
+ * identical in shape since both are full small3dlib transforms - see
+ * boot_anim_timeline.json's own comment on why both got the same TRS
+ * rather than the camera being special-cased down to just pos/rot. */
+function addTransformBlock(el, title, xf, onChange) {
+  const head = document.createElement('div');
+  head.className = 'subhead';
+  head.style.color = 'var(--accent)';
+  head.style.fontSize = '12px';
+  head.style.marginTop = '10px';
+  head.textContent = title;
+  el.appendChild(head);
+
+  const addRow3 = (label, arr, step) => {
+    const sub = document.createElement('div');
+    sub.className = 'subhead';
+    sub.textContent = label;
+    el.appendChild(sub);
+    const row = document.createElement('div');
+    row.className = 'row3';
+    ['x', 'y', 'z'].forEach((axis, i) => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = step;
+      input.value = arr[i];
+      input.addEventListener('input', () => {
+        arr[i] = Number(input.value) || 0;
+        onChange();
+      });
+      row.appendChild(input);
+    });
+    el.appendChild(row);
+  };
+
+  addRow3('pos (meters)', xf.pos, 'any');
+  addRow3('rot (degrees - Z, then X, then Y composition)', xf.rot, 'any');
+  addRow3('scale (1 = untouched)', xf.scale, '0.01');
+}
+
 function renderKfDetail() {
   const kf = state.keyframes[selectedKf];
   const el = document.getElementById('kfDetail');
   el.innerHTML = '';
   if (!kf) return;
 
-  const addField = (label, value, onChange, disabled) => {
-    const row = document.createElement('label');
-    row.className = 'field';
-    const span = document.createElement('span');
-    span.textContent = label;
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.value = value;
-    input.disabled = !!disabled;
-    input.addEventListener('input', () => onChange(Number(input.value) || 0));
-    row.appendChild(span);
-    row.appendChild(input);
-    el.appendChild(row);
-  };
+  const onChange = () => { renderKfList(); renderDebounced(); };
 
-  addField('ms', kf.ms, (v) => {
-    kf.ms = v;
+  const msRow = document.createElement('label');
+  msRow.className = 'field';
+  const msSpan = document.createElement('span');
+  msSpan.textContent = 'ms';
+  const msInput = document.createElement('input');
+  msInput.type = 'number';
+  msInput.value = kf.ms;
+  msInput.addEventListener('input', () => {
+    kf.ms = Number(msInput.value) || 0;
     sortKeyframes();
     playhead = kf.ms;
     renderKfTrack();
@@ -640,63 +757,16 @@ function renderKfDetail() {
     renderDebounced();
     renderFrame();
   });
+  msRow.appendChild(msSpan);
+  msRow.appendChild(msInput);
+  el.appendChild(msRow);
 
-  const sub1 = document.createElement('div');
-  sub1.className = 'subhead';
-  sub1.textContent = 'pos (panel px)';
-  el.appendChild(sub1);
-  const posRow = document.createElement('div');
-  posRow.className = 'row3';
-  ['x', 'y'].forEach((axis, i) => {
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.value = kf.pos[i];
-    input.addEventListener('input', () => {
-      kf.pos[i] = Number(input.value) || 0;
-      renderKfList();
-      renderDebounced();
-    });
-    posRow.appendChild(input);
-  });
-  el.appendChild(posRow);
-
-  const sub2 = document.createElement('div');
-  sub2.className = 'subhead';
-  sub2.textContent = 'rot (x = camera pitch phase, 0..65536; y/z unused by this animation)';
-  el.appendChild(sub2);
-  const rotRow = document.createElement('div');
-  rotRow.className = 'row3';
-  ['x', 'y', 'z'].forEach((axis, i) => {
-    const input = document.createElement('input');
-    input.type = 'number';
-    input.value = kf.rot[i];
-    input.disabled = i > 0;
-    input.addEventListener('input', () => {
-      kf.rot[i] = Number(input.value) || 0;
-      renderKfList();
-      renderDebounced();
-    });
-    rotRow.appendChild(input);
-  });
-  el.appendChild(rotRow);
-
-  const sub3 = document.createElement('div');
-  sub3.className = 'subhead';
-  sub3.textContent = 'scale (uniform - x/y/z locked together, 256 = 1.0)';
-  el.appendChild(sub3);
-  const scaleInput = document.createElement('input');
-  scaleInput.type = 'number';
-  scaleInput.value = kf.scale[0];
-  scaleInput.addEventListener('input', () => {
-    const v = Number(scaleInput.value) || 0;
-    kf.scale[0] = kf.scale[1] = kf.scale[2] = v;
-    renderKfList();
-    renderDebounced();
-  });
-  el.appendChild(scaleInput);
+  addTransformBlock(el, 'Camera', kf.camera, onChange);
+  addTransformBlock(el, 'Space (the grid + curve)', kf.space, onChange);
 
   const sub4 = document.createElement('div');
   sub4.className = 'subhead';
+  sub4.style.marginTop = '10px';
   sub4.textContent = 'ease (of the segment arriving at this keyframe)';
   el.appendChild(sub4);
   const easeSelect = document.createElement('select');
@@ -723,11 +793,11 @@ document.getElementById('btnAddKf').addEventListener('click', () => {
    * the playhead's neighbourhood, and every field is right there in the
    * details panel to correct immediately after. */
   const base = state.keyframes[selectedKf] || state.keyframes[0];
+  const copyXf = (xf) => ({ pos: [...xf.pos], rot: [...xf.rot], scale: [...xf.scale] });
   state.keyframes.push({
     ms: Math.round(clamp(playhead, 0, state.timing.total_ms)),
-    pos: [...base.pos],
-    rot: [...base.rot],
-    scale: [...base.scale],
+    camera: copyXf(base.camera),
+    space: copyXf(base.space),
     ease: 'linear',
   });
   sortKeyframes();
@@ -787,7 +857,10 @@ function tick(now) {
  * ======================================================================= */
 
 document.getElementById('btnBake').addEventListener('click', () => {
-  const payload = { timing: state.timing, keyframes: state.keyframes };
+  const payload = {
+    timing: state.timing, camera_focal: state.camera_focal,
+    keyframes: state.keyframes,
+  };
   const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -809,7 +882,9 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   reader.onload = () => {
     try {
       const loaded = JSON.parse(reader.result);
-      if (!loaded.timing || !loaded.keyframes) throw new Error('missing timing/keyframes');
+      if (!loaded.timing || !loaded.keyframes || loaded.camera_focal === undefined) {
+        throw new Error('missing timing/camera_focal/keyframes');
+      }
       state = loaded;
       selectedKf = 0;
       playhead = 0;

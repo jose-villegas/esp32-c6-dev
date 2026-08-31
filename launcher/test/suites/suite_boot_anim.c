@@ -199,328 +199,157 @@ static void test_the_quarter_points_are_exact(void)
  * pre-finale tests meant by "full progress". */
 #define CURVE_DONE_MS 2600
 
-/* At t=0 the view must reproduce the ORIGINAL fixed camera - the one this
- * whole file described before the orbit existed - to within a couple of Q8
- * units. Not bit-exact: D+C reconstructs A (see boot_anim.h's derivation
- * comment) through two independently-rounded compile-time constants rather
- * than the single rounding the old RE_Y/IM_Y had, so a unit or two of drift
- * is the honest cost of that, not a bug. */
-static void test_the_view_starts_at_the_original_fixed_camera(void)
+/* A plain identity matrix (small3dlib's own S3L_mat4Init()) and an
+ * orthographic focal length (0 - see boot_anim.h's "The projection" section
+ * on why 0 means that) - the simplest boot_anim_view_t there is, built
+ * directly rather than through boot_anim_view()/the keyframe table, so
+ * these tests can check boot_anim_project()'s own arithmetic in isolation
+ * from whatever the CURRENT seed keyframes happen to say. */
+static boot_anim_view_t identity_view(S3L_Unit focal)
 {
-    const boot_anim_view_t v = boot_anim_view(PANEL_W, PANEL_H, 0);
-
-    TEST_ASSERT_INT32_WITHIN_MESSAGE(2, 3064, v.re_y,
-        "at t=0 the real axis' weight should match the original "
-        "sin(20) * Z_PX * 256");
-    TEST_ASSERT_INT32_WITHIN_MESSAGE(2, 6336, v.im_y,
-        "at t=0 the imaginary axis' weight should match the "
-        "original sin(45) * Z_PX * 256");
-    TEST_ASSERT_INT32_WITHIN_MESSAGE(2, -(BOOT_ANIM_T_PX << 8), v.t_y,
-        "at t=0 the t axis should still be at its full, unforeshortened "
-        "length - T_PX per unit, Q8");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_origin_y(PANEL_H), v.oy,
-        "at t=0 the origin should sit exactly where it always did");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(boot_anim_origin_x(PANEL_W), v.ox,
-        "at t=0 the origin should not have slid sideways yet");
+    boot_anim_view_t v;
+    S3L_mat4Init(v.matrix);
+    v.focal = focal;
+    return v;
 }
 
-/* Once the curve finishes, t must have foreshortened a long way from where
- * it started - the whole point of the first half of the orbit - while
- * staying short of collapsing to nothing, which is the "with a tilt to be
- * observable" half of the ask. */
-static void test_the_view_foreshortens_t_by_the_end_of_the_curve(void)
+/* The space's own local origin (0,0,0) has to land at the screen's centre
+ * under an identity transform and an orthographic projection - no camera
+ * offset, no rotation, no depth-dependent scale to reason about, just
+ * small3dlib's own S3L_mapProjectionPlaneToScreen() centring a (0,0) point.
+ * The most basic thing boot_anim_project() has to get right. */
+static void test_identity_transform_leaves_the_origin_at_screen_centre(void)
 {
-    const boot_anim_view_t v0 = boot_anim_view(PANEL_W, PANEL_H, 0);
-    const boot_anim_view_t v1 = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
+    const boot_anim_view_t view = identity_view(0);
+    int x, y;
+    boot_anim_project(0, 0, 0, &view, &x, &y);
 
-    const int32_t t0 = v0.t_y < 0 ? -v0.t_y : v0.t_y;
-    const int32_t t1 = v1.t_y < 0 ? -v1.t_y : v1.t_y;
-
-    TEST_ASSERT_TRUE_MESSAGE(t1 < t0 / 2,
-        "t should have foreshortened to well under half its starting length "
-        "by the end of the climb");
-    TEST_ASSERT_TRUE_MESSAGE(t1 > 0,
-        "t should not have foreshortened all the way to a point - some tilt "
-        "must stay observable");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_W / 2, x,
+        "the origin should land exactly on screen centre under an "
+        "identity transform");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_H / 2, y,
+        "the origin should land exactly on screen centre under an "
+        "identity transform");
 }
 
-/* THE FINALE'S turn, past where the curve-drawing phase alone stops: by the
- * time the last letter has landed, t must have grown back toward roughly
- * its STARTING magnitude - "the spiral ends up pointing up as it was from
- * start" - while its SIGN has flipped, since continuing past the point
- * where it fully foreshortens necessarily means passing through zero. */
-/* "By the end of the finale" now means BOOT_ANIM_MS, not
- * BOOT_ANIM_FINALE_END_MS - see BOOT_ANIM_COLLAPSE_MS's own comment: the
- * turn itself does not even START until FINALE_END_MS, once every letter
- * has landed, and runs for BOOT_ANIM_COLLAPSE_MS after that. */
-static void test_the_finale_turns_t_back_toward_vertical(void)
+/* The one property that actually distinguishes perspective from the old
+ * axonometric projection: a point further from the camera has to project
+ * SMALLER (closer to screen centre) than the same point nearer the camera,
+ * for a real focal length. re/im map to X/Z (see boot_anim_project()'s own
+ * comment on the axis mapping) - im is depth here, re is the offset being
+ * compared at two different depths. */
+static void test_a_point_further_from_the_camera_projects_smaller(void)
 {
-    const boot_anim_view_t v0 = boot_anim_view(PANEL_W, PANEL_H, 0);
-    const boot_anim_view_t vf = boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_MS);
+    const boot_anim_view_t view = identity_view(S3L_F);
+    const int32_t re = 2 * BOOT_ANIM_ONE;
+    const int32_t near_im = 1 * BOOT_ANIM_ONE;
+    const int32_t far_im  = 4 * BOOT_ANIM_ONE;
+    int x_near, y_near, x_far, y_far;
 
-    const int32_t t0 = v0.t_y < 0 ? -v0.t_y : v0.t_y;
-    const int32_t tf = vf.t_y < 0 ? -vf.t_y : vf.t_y;
+    boot_anim_project(re, near_im, 0, &view, &x_near, &y_near);
+    boot_anim_project(re, far_im, 0, &view, &x_far, &y_far);
 
-    TEST_ASSERT_TRUE_MESSAGE(tf > t0 / 2,
-        "by the end of the finale t should have grown back to at least half "
-        "its starting magnitude, not stayed foreshortened");
+    const int centre = PANEL_W / 2;
+    const int near_offset = (x_near > centre) ? x_near - centre : centre - x_near;
+    const int far_offset  = (x_far  > centre) ? x_far  - centre : centre - x_far;
+
+    TEST_ASSERT_TRUE_MESSAGE(far_offset < near_offset,
+        "a point further from the camera should project closer to screen "
+        "centre than the same point nearer the camera");
 }
 
-/* The finale settles the origin at the LAST keyframe's own pos - see
- * boot_anim_timeline.json and gen_boot_anim_timeline.py's own top comment
- * for what that keyframe is. Used to be checked against
- * BOOT_ANIM_FINALE_ORIGIN_VIEW_X/Y, a VIEW point translated into panel
- * pixels inside boot_anim_view() itself; the keyframe table now stores the
- * already-translated panel pixels directly (151, 138 - see the seed
- * table in gen_boot_anim_timeline.py's plan, or just read the last row of
- * boot_anim_keyframes[]), so this checks those literals rather than
- * re-deriving them from a VIEW-frame constant that no longer exists.
- *
- * Checked at BOOT_ANIM_MS, the last keyframe's own ms. */
-static void test_the_finale_settles_the_origin_at_its_view_target(void)
+/* "Scale renders as 1,1,1 for default values" - the exact ask this table
+ * exists to satisfy (see boot_anim_timeline.json's own comment): an
+ * untouched keyframe's space scale has to read back as S3L_F (small3dlib's
+ * own 1.0), on every axis, not some other number that happens to look
+ * right today. */
+static void test_an_untouched_keyframes_scale_reads_back_as_identity(void)
 {
-    const boot_anim_view_t before =
-        boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
-    const boot_anim_view_t after =
-        boot_anim_view(PANEL_W, PANEL_H, BOOT_ANIM_MS);
+    const boot_anim_timeline_state_t st =
+        boot_anim_timeline_sample(boot_anim_keyframes[0].ms);
 
-    TEST_ASSERT_TRUE_MESSAGE(after.ox != before.ox || after.oy != before.oy,
-        "the origin should have moved during the finale");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(138, after.oy,
-        "oy should land exactly on the last keyframe's target by the time "
-        "the finale ends");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(151, after.ox,
-        "ox should land exactly on the last keyframe's target by the time "
-        "the finale ends");
-}
-
-/* The mirror named in boot_anim.h's "THE CAMERA ORBITS": the origin ends up
- * (once the CURVE finishes, before the finale's own further slide) as far
- * below the top of the screen as it started above the bottom. */
-static void test_the_origin_ends_at_the_mirror_of_where_it_started(void)
-{
-    const int oy_start = boot_anim_view(PANEL_W, PANEL_H, 0).oy;
-    const int oy_end = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS).oy;
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(PANEL_H - oy_start, oy_end,
-        "the origin should finish exactly as far from the top as it began "
-        "from the bottom");
-    TEST_ASSERT_TRUE_MESSAGE(oy_end < oy_start,
-        "the origin should have drifted upward, not down or sideways only");
-}
-
-static void test_the_origin_drifts_upward_without_doubling_back(void)
-{
-    int last_oy = boot_anim_view(PANEL_W, PANEL_H, 0).oy;
-    for (uint32_t t = 0; t <= CURVE_DONE_MS; t += 40) {
-        const int oy = boot_anim_view(PANEL_W, PANEL_H, t).oy;
-        TEST_ASSERT_TRUE_MESSAGE(oy <= last_oy,
-            "the origin should drift steadily upward, never back down");
-        last_oy = oy;
-    }
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(S3L_F, st.space.scale.x,
+        "an unscaled keyframe's space.scale.x should read back as 1.0");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(S3L_F, st.space.scale.y,
+        "an unscaled keyframe's space.scale.y should read back as 1.0");
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(S3L_F, st.space.scale.z,
+        "an unscaled keyframe's space.scale.z should read back as 1.0");
 }
 
 /*---------------------------------------------------------------------------
- * The projection
+ * The seed keyframes
+ *
+ * Unlike the old fixed axonometric projection - three compile-time screen
+ * directions, provably fitting the panel for any camera angle - a real,
+ * freely keyframed 3D camera has no such blanket guarantee: point it the
+ * wrong way and the scene is off-panel, which is a legitimate thing a
+ * creative edit can do, not a bug in the projection. What is still worth
+ * protecting is the SEED this repo ships - a sanity sweep against the
+ * actual committed boot_anim_keyframes[], not a property of the projection
+ * in general. A generous margin, not a tight fit: this catches "the seed
+ * is now wildly broken", not "the seed could be tuned tighter".
  *-------------------------------------------------------------------------*/
 
-static void test_the_origin_maps_to_the_origin(void)
+#define BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE 3
+
+static void test_the_seeds_curve_stays_near_the_panel_throughout(void)
 {
-    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
-
-    TEST_ASSERT_EQUAL_INT(boot_anim_origin_x(PANEL_W),
-                          boot_anim_screen_x(0, 0, &view));
-    TEST_ASSERT_EQUAL_INT(boot_anim_origin_y(PANEL_H),
-                          boot_anim_screen_y(PANEL_H, 0, 0, 0, &view));
-}
-
-/* The three axes have to go in three different directions, and each of the
- * six signs below is one that would silently mirror the picture if it were
- * wrong. t especially: screen y grows downward and height does not.
- *
- * Checked at t=0, the camera's starting orientation - see the camera
- * section above for what changes as it orbits, and
- * test_the_view_foreshortens_t_by_the_end_of_the_curve() for the
- * corresponding claim once it has. */
-static void test_the_three_axes_point_the_way_they_are_supposed_to(void)
-{
-    const int32_t one = BOOT_ANIM_ONE;
-    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
-    const int ox = view.ox;
-    const int oy = boot_anim_origin_y(PANEL_H);
-
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(one, 0, &view) > ox,
-        "the real axis should run to the right");
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, one, 0, 0, &view) > oy,
-        "the real axis should run downward, into the floor");
-
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_x(0, one, &view) < ox,
-        "the imaginary axis should run to the left");
-    TEST_ASSERT_TRUE_MESSAGE(boot_anim_screen_y(PANEL_H, 0, one, 0, &view) > oy,
-        "the imaginary axis should run downward, into the floor");
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(ox, boot_anim_screen_x(0, 0, &view),
-        "t should not move a point sideways at all");
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_screen_y(PANEL_H, 0, 0, 1 << BOOT_ANIM_TQ, &view) < oy,
-        "t should run UP the screen, which is downward in y");
-}
-
-/* The imaginary axis at 45 degrees, which is what makes the floor read as a
- * floor: equal steps left and down. Checked at t=0, same reasoning as the
- * test above. */
-static void test_the_imaginary_axis_is_at_forty_five_degrees(void)
-{
-    const int32_t three = 3 * BOOT_ANIM_ONE;
-    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
-    const int ox = view.ox;
-    const int oy = boot_anim_origin_y(PANEL_H);
-
-    const int dx = ox - boot_anim_screen_x(0, three, &view);
-    const int dy = boot_anim_screen_y(PANEL_H, 0, three, 0, &view) - oy;
-
-    TEST_ASSERT_INT_WITHIN_MESSAGE(1, dx, dy,
-        "the imaginary axis should go as far left as it goes down");
-}
-
-/* The layout guard: the whole CURVE has to land on the panel, at every
- * moment from power-on up to where the motif starts growing, and again once
- * it has fully settled back down - not "always", any more. Swept across
- * time and, before the curve is fully drawn, restricted to the part
- * actually drawn by then, matching what boot_anim.c really shows: a point
- * at the far top of the curve is not on screen yet while the pen has not
- * reached it, so checking it there would be checking something the
- * animation never shows.
- *
- * This is the test that would have caught the sign error the fixed-point
- * derivation had during development - see boot_anim.h's derivation comment
- * on how thoroughly this was cross-checked before being trusted.
- *
- * GROW and SETTLE are deliberately NOT held to zero overflow here, the
- * same way the floor and the unbounded axes never were -
- * see boot_anim_motif_shrink_q8()'s own top comment and draw_floor()'s: a
- * motif big enough to swell past its own full size for a moment is going to
- * run off the panel a little at its peak, on purpose, the same "let clipping
- * do the work" reasoning the floor's own reach already leans on. What this
- * sweep still guards against is a MUCH larger blowout than that - a broken
- * projection running the curve off by hundreds of pixels rather than a
- * clipped loop tip - and it still demands EXACT fit before the grow starts
- * and after the settle finishes, which is the part that actually has to
- * look tidy. */
-/* The motif's own grow-then-settle window, from boot_anim_timeline.json's
- * seed keyframes: it starts growing at the keyframe holding it flat at 256
- * (ms 2700) and is back at its resting floor by the keyframe after the one
- * that peaks (ms 4200) - see boot_anim_keyframes[] in the generated
- * boot_anim_timeline.h for the literal table these mirror. */
-#define BOOT_ANIM_TEST_GROW_START_MS  2700
-#define BOOT_ANIM_TEST_SETTLED_MS     4200
-#define BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX 260
-
-static void test_the_whole_scene_fits_on_the_panel_throughout_the_orbit(void)
-{
-    for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 60) {
-        const bool settled = t <= BOOT_ANIM_TEST_GROW_START_MS ||
-                             t >= BOOT_ANIM_TEST_SETTLED_MS;
+    for (uint32_t t = 0; t <= BOOT_ANIM_MS; t += 100) {
         const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, t);
         const int32_t progress = boot_anim_pen(t);
         const int32_t span = (int32_t)(BOOT_ANIM_CURVE_POINTS - 1);
         const int last = (int)(((int64_t)progress * span) >> BOOT_ANIM_Q);
-        /* The finale shrinks the drawn curve toward the origin - see
-         * boot_anim_motif_shrink_q8()'s own comment - so what actually has
-         * to stay on panel is the SHRUNK picture boot_anim.c's csx()/csy()
-         * produce, not the raw projection alone. */
-        const int shrink_q8 = boot_anim_motif_shrink_q8(t);
 
-        for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
-            const boot_anim_pt_t p = boot_anim_sample(i);
-            const int rawx = boot_anim_screen_x(p.re, p.im, &view);
-            const int rawy = boot_anim_screen_y(PANEL_H, p.re, p.im, p.t, &view);
-            const int x = view.ox + (((rawx - view.ox) * shrink_q8) >> 8);
-            const int y = view.oy + (((rawy - view.oy) * shrink_q8) >> 8);
-
-            if (settled) {
-                TEST_ASSERT_TRUE_MESSAGE(x >= 0 && x < PANEL_W,
-                    "the drawn part of the curve ran off the side of the "
-                    "panel outside the grow/settle transition");
-                TEST_ASSERT_TRUE_MESSAGE(y >= 0 && y < PANEL_H,
-                    "the drawn part of the curve ran off the top or bottom "
-                    "of the panel outside the grow/settle transition");
-                continue;
-            }
-
-            const int over_x = x < 0 ? -x : (x >= PANEL_W ? x - PANEL_W + 1 : 0);
-            const int over_y = y < 0 ? -y : (y >= PANEL_H ? y - PANEL_H + 1 : 0);
-            TEST_ASSERT_TRUE_MESSAGE(
-                over_x <= BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX,
-                "the grown motif ran off the side of the panel by far more "
-                "than a clipped loop tip");
-            TEST_ASSERT_TRUE_MESSAGE(
-                over_y <= BOOT_ANIM_TEST_MAX_TRANSIENT_OVERFLOW_PX,
-                "the grown motif ran off the top or bottom of the panel by "
-                "far more than a clipped loop tip");
+        /* The head (furthest-drawn point) alone is enough to catch a
+         * camera pointed somewhere absurd - checking every sample every
+         * 100ms as well would be thousands of assertions for the same
+         * signal. */
+        if (last < 0 || last >= BOOT_ANIM_CURVE_POINTS) {
+            continue;
         }
+        const boot_anim_pt_t p = boot_anim_sample(last);
+        int x, y;
+        boot_anim_project(p.re, p.im, p.t, &view, &x, &y);
+
+        TEST_ASSERT_TRUE_MESSAGE(
+            x > -PANEL_W * BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE &&
+            x <  PANEL_W * (BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE + 1),
+            "the seed's camera has drifted wildly off in X - not just "
+            "off-panel, off by panel-widths");
+        TEST_ASSERT_TRUE_MESSAGE(
+            y > -PANEL_H * BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE &&
+            y <  PANEL_H * (BOOT_ANIM_TEST_MAX_PANEL_MULTIPLE + 1),
+            "the seed's camera has drifted wildly off in Y - not just "
+            "off-panel, off by panel-heights");
     }
 }
 
-/* The grid's own shrink rides boot_anim_motif_shrink_q8()'s own pulse on
- * top of a floor - see boot_anim_grid_shrink_q8()'s own comment for why:
- * the grid represents the very plane the curve and axes are drawn
- * against, so when the motif swells it should read as the same swell,
- * not a separate thing standing still next to it. What must never happen
- * is the floor's own corner coverage breaking, so the pulse only ever
- * multiplies UP from BOOT_ANIM_GRID_SHRINK_Q8, never down - checked here
- * at the motif's baseline (still exactly the base value), at its grown
- * PEAK (clearly bigger than the base), and at its settled, collapsed
- * FLOOR (clamped back to the base, not following it all the way down). */
-static void test_the_grid_shrink_pulses_with_the_motif_above_a_floor(void)
-{
-    /* The motif's own grown PEAK (380) and where it is reached (ms 3600) -
-     * see the same seed keyframes BOOT_ANIM_TEST_GROW_START_MS/SETTLED_MS
-     * above mirror. */
-    const int motif_peak_q8 = 380;
-    const uint32_t peak_ms = 3600;
-
-    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8, boot_anim_grid_shrink_q8(0));
-    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8,
-                          boot_anim_grid_shrink_q8(BOOT_ANIM_TEST_GROW_START_MS));
-
-    TEST_ASSERT_TRUE_MESSAGE(
-        boot_anim_grid_shrink_q8(peak_ms) > BOOT_ANIM_GRID_SHRINK_Q8,
-        "the grid should swell above its own base while the motif is at "
-        "its own grown PEAK, not sit still while everything else grows");
-
-    TEST_ASSERT_EQUAL_INT(BOOT_ANIM_GRID_SHRINK_Q8,
-                          boot_anim_grid_shrink_q8(BOOT_ANIM_MS));
-    TEST_ASSERT_TRUE_MESSAGE(
-        BOOT_ANIM_GRID_SHRINK_Q8 > motif_peak_q8,
-        "the grid's own base should be noticeably bigger than even the "
-        "motif's own grown PEAK, let alone its much smaller settled floor");
-}
-
-/* The axis labels, checked only at t=0: that is where the axes are drawn at
- * their short, labelled length (see boot_anim.c's draw_axes(), which only
- * labels them before the finale starts turning them into unbounded lines),
- * and it is also the widest the short arms ever are. */
-static void test_the_axis_labels_fit_on_the_panel(void)
+/* The three axes, projected from the seed's own first keyframe, must not
+ * collapse onto each other - a camera that happened to look straight down
+ * one of them would still "work" in the sense of not crashing, but the
+ * picture would read as two lines, not three. A weak, non-fragile check on
+ * purpose: it is not this test's job to say WHERE the axes should point
+ * (that is a creative choice made through the editor now), only that they
+ * are not degenerate. */
+static void test_the_seeds_three_axes_project_to_distinct_directions(void)
 {
     const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, 0);
-    const int32_t arm = 4 * BOOT_ANIM_ONE;
-    const int re_x = boot_anim_screen_x(arm, 0, &view);
-    const int re_y = boot_anim_screen_y(PANEL_H, arm, 0, 0, &view);
-    const int im_x = boot_anim_screen_x(0, arm, &view);
-    const int im_y = boot_anim_screen_y(PANEL_H, 0, arm, 0, &view);
+    const int32_t one = BOOT_ANIM_ONE;
+    int ox, oy, rx, ry, ix, iy, tx, ty;
 
-    TEST_ASSERT_TRUE_MESSAGE(re_x >= 0 && re_x < PANEL_W &&
-                             re_y >= 0 && re_y < PANEL_H,
-        "the end of the real axis is off the panel");
-    TEST_ASSERT_TRUE_MESSAGE(im_x >= 0 && im_x < PANEL_W &&
-                             im_y >= 0 && im_y < PANEL_H,
-        "the end of the imaginary axis is off the panel");
+    boot_anim_project(0, 0, 0, &view, &ox, &oy);
+    boot_anim_project(one, 0, 0, &view, &rx, &ry);
+    boot_anim_project(0, one, 0, &view, &ix, &iy);
+    boot_anim_project(0, 0, 1 << BOOT_ANIM_TQ, &view, &tx, &ty);
 
-    const int top = boot_anim_screen_y(
-        PANEL_H, 0, 0, (BOOT_ANIM_T_MAX_PHASE1 + 1) << BOOT_ANIM_TQ, &view);
-    TEST_ASSERT_TRUE_MESSAGE(top >= 0,
-        "the top of the t axis is off the top of the panel");
+    TEST_ASSERT_FALSE_MESSAGE(rx == ix && ry == iy,
+        "the real and imaginary axes should not project to the same point");
+    TEST_ASSERT_FALSE_MESSAGE(rx == tx && ry == ty,
+        "the real and t axes should not project to the same point");
+    TEST_ASSERT_FALSE_MESSAGE(ix == tx && iy == ty,
+        "the imaginary and t axes should not project to the same point");
+    TEST_ASSERT_FALSE_MESSAGE(rx == ox && ry == oy,
+        "the real axis should not collapse onto the origin");
 }
 
 /*---------------------------------------------------------------------------
@@ -1122,19 +951,11 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_quarter_wave_rises_all_the_way);
     RUN_TEST(test_sin_squared_plus_cos_squared_is_one);
     RUN_TEST(test_the_quarter_points_are_exact);
-    RUN_TEST(test_the_view_starts_at_the_original_fixed_camera);
-    RUN_TEST(test_the_view_foreshortens_t_by_the_end_of_the_curve);
-    RUN_TEST(test_the_finale_turns_t_back_toward_vertical);
-    RUN_TEST(test_the_finale_settles_the_origin_at_its_view_target);
-    RUN_TEST(test_the_origin_ends_at_the_mirror_of_where_it_started);
-    RUN_TEST(test_the_origin_drifts_upward_without_doubling_back);
-
-    RUN_TEST(test_the_origin_maps_to_the_origin);
-    RUN_TEST(test_the_three_axes_point_the_way_they_are_supposed_to);
-    RUN_TEST(test_the_imaginary_axis_is_at_forty_five_degrees);
-    RUN_TEST(test_the_whole_scene_fits_on_the_panel_throughout_the_orbit);
-    RUN_TEST(test_the_grid_shrink_pulses_with_the_motif_above_a_floor);
-    RUN_TEST(test_the_axis_labels_fit_on_the_panel);
+    RUN_TEST(test_identity_transform_leaves_the_origin_at_screen_centre);
+    RUN_TEST(test_a_point_further_from_the_camera_projects_smaller);
+    RUN_TEST(test_an_untouched_keyframes_scale_reads_back_as_identity);
+    RUN_TEST(test_the_seeds_curve_stays_near_the_panel_throughout);
+    RUN_TEST(test_the_seeds_three_axes_project_to_distinct_directions);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
     RUN_TEST(test_a_repeated_point_pins_the_end_of_the_curve);

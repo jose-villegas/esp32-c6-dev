@@ -116,9 +116,18 @@ OUT="$BUILD_DIR/host_tests"
 # mu_Rect and mu_Color, and those are plain declarations in microui.h with no
 # library behind them. Nothing here links microui.c - see suite_ui_style.c on
 # why a style's geometry was kept free of it.
+#
+# components/small3dlib/include is on the path for boot_anim.h's sake: its
+# camera/space transforms are small3dlib's own S3L_Transform3D/S3L_Mat4 - see
+# boot_anim.h's own top comment. Safe to include here alongside boot_anim.c's
+# own translation unit (which this test binary does NOT compile - only
+# suite_boot_anim.c, testing the pure math) because every small3dlib symbol
+# is `static inline` - see small3dlib.h's own "PATCHED" comment for why that
+# had to be true before this could work at all.
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
     -I "$TEST_DIR/../components/microui/include" \
+    -I "$TEST_DIR/../components/small3dlib/include" \
     $SOURCES -o "$OUT"
 
 # MinGW appends .exe; elsewhere the plain name is produced.
