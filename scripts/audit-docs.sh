@@ -22,10 +22,14 @@
 # Ollama directly (`ollama run`) for the tier-2 cross-check, so this makes
 # zero network calls to any cloud provider. See Model-Delegation-Workflow.md's
 # "Route local through the Ollama CLI directly, not OmniRoute" -- OmniRoute's
-# own ollama-local provider has no working connection pool. Uses gemma4:26b
-# by default (the same model docs-update-free itself falls back to as its
-# last, free, local tier); override with the LOCAL_MODEL env var if you have
-# something else pulled (`ollama list`).
+# own ollama-local provider has no working connection pool. Uses
+# mistral-nemo:latest by default (~7GB weights, fits a 16GB card easily);
+# override with the LOCAL_MODEL env var if you have something else pulled
+# (`ollama list`). If local Ollama runs are freezing the machine regardless
+# of model choice, that's very likely NOT this script -- see Model-
+# Delegation-Workflow.md's "A global Ollama setting can make picking a
+# 'small enough' model pointless" for a stuck 262144 Context Length setting
+# in the Ollama app itself that overrides every model's context.
 #
 # Usage: scripts/audit-docs.sh [--local] [doc-file ...]   (default: all tracked docs)
 set -euo pipefail
@@ -40,7 +44,7 @@ MAX_SRC_CHARS=40000
 MAX_REFS=8
 
 LOCAL_MODE=0
-LOCAL_MODEL="${LOCAL_MODEL:-gemma4:26b}"
+LOCAL_MODEL="${LOCAL_MODEL:-mistral-nemo:latest}"
 ARGS=()
 for a in "$@"; do
   case "$a" in
