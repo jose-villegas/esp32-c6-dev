@@ -2727,6 +2727,28 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             continue;
         }
 
+        /* DILUTION, not an eat - a water neighbour never vanishes the way
+         * sand or wood does below. The dissolves/dissolvable roll above
+         * already decided "this bite lands on water"; this decides which
+         * of the two cells the bite actually changes, biased toward water
+         * per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h). Either way the
+         * CELL_VARIANT (mass) of whichever cell flips carries over
+         * unchanged - a swap, not a creation - which is also why
+         * pay_quench_cost() below does not apply to this branch: nothing
+         * is being spent, so this returns before reaching it. */
+        if (CELL_MATERIAL(n) == MAT_WATER) {
+            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_TO_WATER_CHANCE) {
+                row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            } else {
+                s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
+                mark_rows(s, ny, ny);
+                wake_block_and_neighbors(s, nx, ny);
+            }
+            return true;
+        }
+
         /* The fizz. Placed in the cell that was just eaten, which is
          * about to be empty anyway, so it costs nothing extra and appears
          * exactly where the reaction happened.

@@ -10656,6 +10656,104 @@ static void test_the_fizz_rises_out_of_the_acid(void)
         "is what lets it climb out instead of being trapped underneath");
 }
 
+/* A dedicated, wide fixture for the two dilution tests below - one row of
+ * water directly above one row of acid, water on top because that is
+ * ALREADY the stable density ordering (acid's density is 38, water's is
+ * 30 - acid sinks through water on its own, see MAT_ACID's own comment in
+ * material.c), so nothing moves due to gravity/density before reactions
+ * runs and every column's water/acid pair stays put for a clean single-
+ * step measurement. Wide (400 columns) rather than deep: each column is
+ * an INDEPENDENT trial of the same roll (reaction_dirs tries "up" first,
+ * see sand_reactions.c, so an acid cell's water neighbour is always the
+ * first candidate checked, never skipped over), so width is what buys
+ * sample size here, not steps. */
+#define DILUTE_W 400
+#define DILUTE_H 2
+static uint8_t dilute_cells[DILUTE_W * DILUTE_H];
+static sand_t  dilute_sim;
+
+static void acid_water_dilute_fixture(void)
+{
+    sand_init(&dilute_sim, dilute_cells, DILUTE_W, DILUTE_H, 7u);
+    sand_set_evaporates(&dilute_sim, 0);   /* isolate dilution from the
+                                             * unrelated evaporates roll -
+                                             * same reasoning as the fizz
+                                             * fixture above */
+    for (int x = 0; x < DILUTE_W; x++) {
+        sand_set(&dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+}
+
+static void test_acid_and_water_dilute_each_other(void)
+{
+    acid_water_dilute_fixture();
+
+    /* Either direction counts: a diluted column either turned its acid
+     * cell to water, or turned its water cell to acid - see
+     * SAND_ACID_DILUTE_TO_WATER_CHANCE's own comment (sand.h) for why
+     * both are a valid outcome of the same roll. 400 independent columns
+     * at roughly 20% chance each per step makes waiting past one step
+     * essentially unnecessary, but a small loop keeps this from being
+     * sensitive to exactly which seed sand_init() above happens to use. */
+    bool diluted = false;
+    for (int i = 0; i < 10 && !diluted; i++) {
+        sand_step(&dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < DILUTE_W && !diluted; x++) {
+            const uint8_t top = CELL_MATERIAL(sand_at(&dilute_sim, x, 0));
+            const uint8_t bot = CELL_MATERIAL(sand_at(&dilute_sim, x, 1));
+            diluted = (top != MAT_WATER) || (bot != MAT_ACID);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(diluted,
+        "acid touching water must eventually dilute - either the acid "
+        "cell becoming water or the water cell becoming acid - or the "
+        "reaction is not firing at all");
+}
+
+/* The bias itself, not just that dilution happens at all - measured in a
+ * single step so the two outcome counts are independent per-column
+ * samples rather than counts that could keep compounding into each
+ * other across multiple steps. Expected counts at this fixture's width
+ * and the current constants (r->dissolves=60/256, water's
+ * dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=192/256): about
+ * 60 columns where the acid cell becomes water, about 20 where the water
+ * cell becomes acid instead - a wide enough gap that a loose assertion
+ * (water-wins strictly greater than acid-wins, both counts positive)
+ * will not flake on the RNG, without hard-coding the exact expected
+ * counts a future retune of any of those three constants would break. */
+static void test_water_wins_the_dilution_more_often_than_acid_does(void)
+{
+    acid_water_dilute_fixture();
+    sand_step(&dilute_sim, 0, 1000, 0);
+
+    int water_wins = 0;
+    int acid_wins  = 0;
+    for (int x = 0; x < DILUTE_W; x++) {
+        const uint8_t top = CELL_MATERIAL(sand_at(&dilute_sim, x, 0));
+        const uint8_t bot = CELL_MATERIAL(sand_at(&dilute_sim, x, 1));
+        if (bot == MAT_WATER) {
+            water_wins++;   /* the acid cell (row 1) became water */
+        }
+        if (top == MAT_ACID) {
+            acid_wins++;    /* the water cell (row 0) became acid */
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_wins,
+        "expected at least some acid-becomes-water dilutions in 400 "
+        "independent columns");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_wins,
+        "expected at least some water-becomes-acid dilutions in 400 "
+        "independent columns - SAND_ACID_DILUTE_TO_WATER_CHANCE biases "
+        "the outcome, it does not eliminate the other side entirely");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_wins, water_wins,
+        "SAND_ACID_DILUTE_TO_WATER_CHANCE is supposed to favour water - "
+        "acid becoming water should be clearly more common than water "
+        "becoming acid, not the other way round or a coin flip");
+}
+
 /* evaporates forced to 255 so this is a one-step, deterministic
  * assertion instead of waiting on the material's own low figure - the
  * same technique test_stone_conducts_heat_into_water_beyond_it uses for
@@ -18191,6 +18289,8 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
+    RUN_TEST(test_acid_and_water_dilute_each_other);
+    RUN_TEST(test_water_wins_the_dilution_more_often_than_acid_does);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);

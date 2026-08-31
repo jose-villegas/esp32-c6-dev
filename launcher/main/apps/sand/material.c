@@ -588,6 +588,19 @@ const reaction_t reactions[MATERIAL_MAX] = {
     [MAT_WATER] =
         {
             .wets = 1,
+
+            /* Lets acid's ordinary dissolve roll (step_one_dissolver_cell(),
+             * sand_reactions.c) land on water at all - the same field sand
+             * and wood already use, not a new mechanic. Nothing is EATEN
+             * here: the outcome for a water neighbour is a material swap
+             * (dilution), not a vanish - see
+             * SAND_ACID_DILUTE_TO_WATER_CHANCE's own comment in sand.h for
+             * that half. 220, the same tier as ash: water gives way to the
+             * interaction about as readily as the softest solids do,
+             * appropriate for something that is not being destroyed by it.
+             * Starting point, not final - tune on device like every other
+             * constant here. */
+            .dissolvable = 220,
         },
 
     [MAT_ACID] =
