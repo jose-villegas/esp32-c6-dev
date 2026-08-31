@@ -3412,14 +3412,28 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      *
      * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ONLY IN PER-MATERIAL MODE -
      * see that constant's own comment (sand.h) for the mechanism and why.
-     * Only a cell whose (x, y) both land on a multiple of SAND_VENT_CHUNK
-     * ever reaches covered_from_above() or draws a random number at all
-     * here IN PRODUCTION; every other covered lava cell only vents as a
-     * side effect of its own chunk's sampled cell succeeding (try_vent_
-     * chunk(), below). SKIPPED when overridden, same reasoning as the
-     * second roll just above: a test forcing this to 255 wants every
-     * covered cell it placed eligible to trigger on its own, not only
-     * the ones that happen to land on the sampling lattice.
+     * Only a cell whose x lands on a multiple of SAND_VENT_CHUNK ever
+     * reaches covered_from_above() or draws a random number at all here
+     * IN PRODUCTION; every other covered lava cell only vents as a side
+     * effect of its own chunk's sampled cell succeeding (try_vent_chunk(),
+     * below). SKIPPED when overridden, same reasoning as the second roll
+     * just above: a test forcing this to 255 wants every covered cell it
+     * placed eligible to trigger on its own, not only the ones that
+     * happen to land on the sampling lattice.
+     *
+     * X ONLY, NOT Y TOO - a measured fix, not the original design: this
+     * used to also require y % SAND_VENT_CHUNK == 0, but the only row of
+     * a lava pool that can ever BE covered_from_above() is its exposed
+     * top surface, and that row's absolute y is wherever the pool settled
+     * - not chosen by the player, not periodic, just whatever it is. Once
+     * SAND_VENT_CHUNK grew past 1-2 the odds of that one arbitrary y ever
+     * landing on the lattice got small enough (1 in SAND_VENT_CHUNK) that
+     * entire pools stopped venting for their whole lifetime, independent
+     * of vent_chance - a real on-device regression, not a rate this was
+     * meant to control. x alone still gives the same sampling win for a
+     * WIDE pool (the case the comment above and SAND_VENT_CHUNK's own in
+     * sand.h actually argue for), without ever gating on a coordinate the
+     * simulation has no way to arrange to be periodic.
      *
      * try_vent_chunk() ITSELF IS NOT SKIPPED UNDER OVERRIDE, THOUGH -
      * unlike the rate and the lattice sampling, GROUPING is not part of
@@ -3437,8 +3451,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     const bool vent_per_material = s->vent_chance < 0;
     const int vent_chance = vent_per_material ? rx->vent_chance : s->vent_chance;
     if (vent_chance != 0 &&
-        (!vent_per_material ||
-         ((x % SAND_VENT_CHUNK) == 0 && (y % SAND_VENT_CHUNK) == 0)) &&
+        (!vent_per_material || (x % SAND_VENT_CHUNK) == 0) &&
         covered_from_above(s, x, y, w, h, mat->density) &&
         (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
         (!vent_per_material || (rng_next(&s->rng) % 1) == 0)) {
