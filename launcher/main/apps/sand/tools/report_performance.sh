@@ -64,6 +64,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# A generated sdkconfig WINS over the defaults fragments: idf.py only applies
+# SDKCONFIG_DEFAULTS when it has to create the file, so editing a fragment
+# never reaches an existing build.diag/sdkconfig. That has now silently
+# defeated two separate flag changes - the diag watchdog, then
+# LAUNCHER_SELFTEST_AUTORUN - each time producing a build that looks right
+# and measures nothing. Removing it costs one reconfigure per run, which is
+# noise beside the build, and makes the fragments authoritative again.
+rm -f "$LAUNCHER_DIR/build.diag/sdkconfig"
+
 echo "=== Building and flashing build.diag to $COM_PORT ==="
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
@@ -95,6 +104,18 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     idf.py -B build.diag -p '$COM_PORT' flash
     exit \$LASTEXITCODE
 "
+
+# The generated config is the only honest witness that the fragments took:
+# check the flags the capture actually depends on, and fail loudly here
+# rather than after a 300-second timeout with an empty raw file.
+for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN; do
+    if ! grep -q "^${flag}=y" "$LAUNCHER_DIR/build.diag/sdkconfig"; then
+        echo "ERROR: ${flag} is not set in the generated build.diag/sdkconfig -"
+        echo "the flashed image would boot without running the suites, and the"
+        echo "capture below would time out with no measurements. Aborting."
+        exit 1
+    fi
+done
 
 echo "=== Capturing self-test output ==="
 python "$LAUNCHER_DIR/tools/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
