@@ -2394,7 +2394,7 @@ static void test_a_pool_settles_at_the_angle_it_is_tilted_to(void)
      * taken perpendicular to the NEAREST of the eight gravity directions,
      * so a settled surface could only ever be perpendicular to one of
      * those eight, and quantised to 0/45/90 degrees. It is worst at the
-     * app's VERY LOW quality setting, whose grid is 368/6 x 448/6 = 61x74 -
+     * app's LOW quality setting, whose grid is 368/6 x 448/6 = 61x74 -
      * which is why 61x74 is one of the fixtures below by name, not a round
      * number picked for convenience.
      *
@@ -17900,7 +17900,7 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
  * without repeating the regression above. */
 
 /* REAL_W*REAL_CELL_PX == GFX_WIDTH and REAL_H*REAL_CELL_PX == GFX_HEIGHT -
- * REAL_W/REAL_H are the grid size at cell=2, the finest ("HIGH") quality
+ * REAL_W/REAL_H are the grid size at cell=2, the finest ("ULTRA") quality
  * tier in app_sand.c's qualities[] table, which is what the pixel math in
  * mirror_app_sand_marking()'s gfx_mark_dirty() calls has to agree with. */
 #define REAL_CELL_PX 2
