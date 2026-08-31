@@ -202,8 +202,13 @@ comment of the one you need before running it, they're self-documenting.
 `scripts/resolve-conflicts-local.sh` auto-resolves git merge conflicts the
 same local-Ollama way, one hunk at a time with a reviewer second opinion,
 but only ever commits if this repo's real test gate (`run_tests.sh` +
-`check_app_sources.sh`) passes on the result -- see
-`docs/Model-Delegation-Workflow.md`'s "Related, narrower tooling" section.
+`check_app_sources.sh`) passes on the result. `scripts/write-test-local.sh`
+delegates writing one Unity test *body* the same way, from a spec you write
+(exact scene + exact assertions) -- the model only renders it into house
+style, and `--regression-commit <SHA>` can prove the test actually fails on
+the pre-fix code, automating this repo's own "watch it fail before it
+passes" rule. See `docs/Model-Delegation-Workflow.md`'s "Related, narrower
+tooling" section for both.
 
 ## Status
 
