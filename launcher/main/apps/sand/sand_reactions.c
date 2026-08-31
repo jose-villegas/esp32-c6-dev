@@ -2748,19 +2748,19 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
                  * into whatever empty cell is nearby, the same residue
                  * idiom emit_into_empty_neighbor() already gives ember's
                  * flame and wet dirt's steam (just a no-op if nothing
-                 * empty is adjacent, same as those), plus a small
-                 * impulse pop off the newly-diluted cell reusing
-                 * acid_bubble()'s own "against gravity, with a little
-                 * spread" direction math for a consistent look. Neither
-                 * is gated on exposure the way acid_bubble() itself is -
-                 * sand_impulse() already no-ops harmlessly into a
-                 * blocked destination, so there is nothing here worth
-                 * the extra check. */
+                 * empty is adjacent, same as those).
+                 *
+                 * An impulse pop was tried alongside this too (reusing
+                 * acid_bubble()'s own direction math), then dropped -
+                 * unlike a bubble breaking an exposed surface, dilution
+                 * mostly happens fully submerged, where a thrown grain
+                 * has nowhere open to actually go. Not gated on exposure
+                 * the way acid_bubble() itself is - it would have almost
+                 * always had nothing to do, which is exactly the "wasted
+                 * call" this session already flagged once for acid_bubble()
+                 * itself (see ACID_BUBBLE_INVESTIGATION.md) and is not
+                 * worth repeating here. */
                 emit_into_empty_neighbor(s, x, y, w, h, MAT_GAS);
-                const int dx = s->last_step_dx, dy = s->last_step_dy;
-                const int i_up = (ring_of(dx, dy) + 4) & 7;
-                const int spread = (int)(rng_next(&s->rng) % 3) - 1;
-                sand_impulse(s, x, y, (i_up + spread + 8) & 7, SAND_ACID_DILUTE_FIZZ_SPEED);
             } else {
                 s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
                 mark_rows(s, ny, ny);

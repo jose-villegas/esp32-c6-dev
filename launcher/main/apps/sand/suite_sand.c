@@ -10766,25 +10766,25 @@ static void test_water_wins_the_dilution_more_often_than_acid_does(void)
 }
 
 /* A third dedicated fixture, checking the "fizzle" water's win of the
- * roll spawns - a puff of gas into a nearby empty cell, plus a small
- * impulse pop off the newly-diluted cell, see step_one_dissolver_cell()'s
- * own comment for both. Alternating acid/empty columns in the acid row,
- * on purpose: the two dilution fixtures above are deliberately fully
- * packed (the right shape for measuring the material-swap outcome
- * itself), which leaves emit_into_empty_neighbor() nothing to ever
- * succeed into - this one gives every acid cell an empty neighbour to
- * puff into instead. */
+ * roll spawns - a puff of gas into a nearby empty cell, see
+ * step_one_dissolver_cell()'s own comment (an impulse pop was tried
+ * alongside this too, then dropped as a wasted call: dilution mostly
+ * happens fully submerged, where a thrown grain has nowhere open to go,
+ * unlike acid_bubble()'s own exposed-rim case). Alternating acid/empty
+ * columns in the acid row, on purpose: the two dilution fixtures above
+ * are deliberately fully packed (the right shape for measuring the
+ * material-swap outcome itself), which leaves emit_into_empty_neighbor()
+ * nothing to ever succeed into - this one gives every acid cell an empty
+ * neighbour to puff into instead. */
 #define FIZZLE_W 400
 #define FIZZLE_H 2
-static uint8_t   fizzle_cells[FIZZLE_W * FIZZLE_H];
-static sand_t    fizzle_sim;
-static impulse_t fizzle_impulse_buf[512];
+static uint8_t fizzle_cells[FIZZLE_W * FIZZLE_H];
+static sand_t  fizzle_sim;
 
 static void acid_water_fizzle_fixture(void)
 {
     sand_init(&fizzle_sim, fizzle_cells, FIZZLE_W, FIZZLE_H, 13u);
     sand_set_evaporates(&fizzle_sim, 0);
-    sand_enable_impulses(&fizzle_sim, fizzle_impulse_buf, 512);
     /* Water only over the SAME even columns as the acid below it -
      * leaving row 0 empty at the odd columns too, not just row 1, is
      * what keeps this stable. The first attempt left row 0 fully water
@@ -10800,14 +10800,6 @@ static void acid_water_fizzle_fixture(void)
     }
 }
 
-/* Only the gas puff is checked directly - impulse_count (sand.h) is
- * compacted down to just its cascade carry-over by the time a full
- * sand_step() returns (see step_impulses()'s own `kept`, sand.c), so it
- * cannot prove an impulse was queued mid-step the way a direct read
- * could. The gas puff and the impulse pop are queued right next to each
- * other with no guard between them (step_one_dissolver_cell(),
- * sand_reactions.c), so confirming the gas is strong evidence the whole
- * branch - impulse included - actually ran. */
 static void test_water_winning_dilution_spawns_a_gas_puff(void)
 {
     acid_water_fizzle_fixture();
