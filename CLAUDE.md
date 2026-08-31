@@ -199,6 +199,11 @@ app or the whole project) and their single-click launchers
 `fix-audited-docs-free.sh`, `-local.sh`, `-choose-app.sh`) — each pushes a
 branch for review rather than touching `main` directly; read the header
 comment of the one you need before running it, they're self-documenting.
+`scripts/resolve-conflicts-local.sh` auto-resolves git merge conflicts the
+same local-Ollama way, one hunk at a time with a reviewer second opinion,
+but only ever commits if this repo's real test gate (`run_tests.sh` +
+`check_app_sources.sh`) passes on the result -- see
+`docs/Model-Delegation-Workflow.md`'s "Related, narrower tooling" section.
 
 ## Status
 
