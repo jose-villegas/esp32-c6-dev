@@ -37,6 +37,7 @@ markdown report into their own `tools/results/`:
 
 ```sh
 ./launcher/tools/build_flash.sh                          # build + flash release firmware
+./launcher/tools/build_flash_select.sh                    # interactive: variant + any worktree/branch, creating one if needed
 ./launcher/tools/report_test_results.sh                  # every suite, pass/fail
 ./launcher/main/apps/sand/tools/report_performance.sh    # sand's frame-budget numbers
 ```
