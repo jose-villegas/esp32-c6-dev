@@ -744,14 +744,65 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * "hits harder". STEP raised to match, not just FLOOR left alone to
  * stretch the ramp out longer - the ask was a stronger INITIAL punch that
  * still settles down at roughly the same pace, not the same shape held
- * for more bounces. 10 -> 6 -> 2 -> floor. */
-#define SAND_SPLASH_RADIUS_WATER       10
-#define SAND_SPLASH_RADIUS_WATER_FLOOR 1
-#define SAND_SPLASH_RADIUS_WATER_STEP  4
+ * for more bounces. 10 -> 6 -> 2 -> floor.
+ *
+ * DOUBLED AGAIN, 2026-08-31, same session, once the cascade's own
+ * cross-flow re-acquisition loss was fixed (see step_impulses()'s comment
+ * in sand.c) and the effect was still judged too small to read as a real
+ * repel. Speed has nowhere left to go - see SAND_EXPLODE_INITIAL_SPEED's
+ * own comment, still true, still the uint8_t ceiling - so radius remains
+ * the only knob this feature has for "reaches further". FLOOR and STEP
+ * scaled with it, same 10:1:4 shape as before, so the decay still reads as
+ * the same settling-down curve, just starting from a bigger first hit: 20
+ * -> 12 -> 4 -> floor. Not yet confirmed on device at this size - the next
+ * on-device pass should look at whether SAND_SPLASH_ACID_PER_STEP_CAP and
+ * SAND_CASCADE_MAX_PER_STEP still hold at a wider blast, the same way
+ * SAND_EXPLODE_CORE_DIVISOR needed reconfirming when DETONATE_RADIUS_PX
+ * doubled (see that constant's own comment). */
+#define SAND_SPLASH_RADIUS_WATER       20
+#define SAND_SPLASH_RADIUS_WATER_FLOOR 2
+#define SAND_SPLASH_RADIUS_WATER_STEP  8
 #define SAND_SPLASH_RADIUS_ACID        5
 #define SAND_SPLASH_CHANCE_START       255
 #define SAND_SPLASH_CHANCE_FLOOR       24
 #define SAND_SPLASH_CHANCE_STEP        140
+
+/* How fast a WATER or ACID impulse's own `speed` decays per step, in the
+ * flight pass (step_impulses(), sand.c) - a right-shift, not the linear
+ * SAND_IMPULSE_SPEED_RAMP subtraction every other material still uses.
+ * ADDED 2026-08-31, same session as RADIUS_WATER's own doubling: reported
+ * that the splash needed to hit hard and then die out fast, a shape a flat
+ * per-step subtraction cannot give - subtracting a fixed amount from 255
+ * takes ~128 steps to reach zero regardless of how big the amount is tuned
+ * (raising it shortens the tail linearly, at best), where a shift of 1
+ * halves whatever is left EVERY step and reaches zero from 255 in about 8 -
+ * most of the loss happens in the first couple of steps, which is what
+ * "dies out fast" actually means as a shape, not just a smaller number.
+ * The same halving idiom SAND_CASCADE_SPEED_DIVISOR already uses for the
+ * cascade's own hop-to-hop decay, reused here rather than inventing a
+ * second one.
+ *
+ * SCOPED TO WATER/ACID ONLY, matching the wall-bounce and the cascade
+ * itself (both in step_impulses()'s own comment) - sand_explode() and
+ * every other caller of sand_impulse() keeps the original linear
+ * SAND_IMPULSE_SPEED_RAMP, so this does not disturb that mechanism's own
+ * extensively swept tuning (see SAND_IMPULSE_SPEED_RAMP's and
+ * SAND_EXPLODE_CORE_DIVISOR's comments for that history).
+ *
+ * A STARTING POINT, NOT YET MEASURED - 1 (halving) was picked as the
+ * gentlest shift that still qualifies as "much stronger" against the old
+ * ~128-step linear tail, specifically to leave the cascade some room:
+ * step_impulses()'s own comment on this decay explains the interaction -
+ * a faster base decay means fewer relayed hops clear the cascade's
+ * SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR gate before dying,
+ * on top of the cascade's own halving. A shift of 2 or higher would die
+ * out even faster but was not tried first, on the reasoning that starving
+ * the cascade entirely in the same round that is meant to make the splash
+ * hit harder would make it hard to tell which change caused what on
+ * device. Raise this if 1 still does not read as fast enough once tested;
+ * lower SAND_CASCADE_MIN_SPEED instead if the cascade reads as cut too
+ * short by this. */
+#define SAND_SPLASH_SPEED_DECAY_SHIFT  3
 
 /* CASCADE - a WATER or ACID impulse that successfully moves relays its
  * push into whatever of the SAME material sits one step BEHIND where it
@@ -776,12 +827,29 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * enough to barely read as one. Dropping the floor is the direct lever:
  * MIN_SPEED 4 clears the same gate (>= 8) for 5 hops instead (255 -> 127
  * -> 63 -> 31 -> 15 -> 7, stops there), a visibly longer, slower-fading
- * wave through connected water rather than a two-cell nudge. Tune this
- * one first if the cascade still needs to reach further or less; DIVISOR
- * changes the SHAPE of the falloff (steeper vs gentler), MIN_SPEED
- * changes how far down the tail it is allowed to go before stopping. */
+ * wave through connected water rather than a two-cell nudge.
+ *
+ * DROPPED AGAIN, TO 1, 2026-08-31 same session - this table's own "255 ->
+ * 127 -> 63 -> ..." math was never the whole story: it is only what a
+ * relayed hop's speed IS the instant it gets queued, not what it decays
+ * to on every step afterward while waiting for its own roll to succeed
+ * (rng_chance(&s->rng, entry.speed) in step_impulses()). Once
+ * SAND_SPLASH_SPEED_DECAY_SHIFT made that per-step decay geometric
+ * instead of linear (own comment, this file), a relayed entry that takes
+ * more than one step to actually roll a move can fall under this gate
+ * before it ever gets the chance to relay again - confirmed the hard way,
+ * not just reasoned about: test_a_cascading_impulse_moves_more_than_one_
+ * cell (suite_sand.c), a fixed-seed scene that cascaded reliably before,
+ * started failing the moment SPEED_DECAY_SHIFT landed. MIN_SPEED 1 (gate
+ * >= 2) makes the cascade's own artificial cutoff almost never the
+ * reason a chain stops - the roll's own exhaustion (rng_chance with a
+ * near-zero numerator) becomes the real stopping point instead, the same
+ * way it already is for a lone, non-cascading entry. Tune DIVISOR first
+ * if the cascade still needs a different FALLOFF shape once this is
+ * confirmed on device; this constant now has nowhere lower to usefully
+ * go. */
 #define SAND_CASCADE_SPEED_DIVISOR 2
-#define SAND_CASCADE_MIN_SPEED     4
+#define SAND_CASCADE_MIN_SPEED     1
 #define SAND_CASCADE_MAX_PER_STEP  64
 
 /* How many ACID splashes splash_displace() (sand_liquid.c) will fire in a

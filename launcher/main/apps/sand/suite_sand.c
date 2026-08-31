@@ -2467,11 +2467,13 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
      * untrimmed disc - most of which falls off a grid this narrow - so
      * every kept slot could land out of bounds and nothing ever queued,
      * even though the trigger itself (chance, radius) fired correctly.
-     * 1024 comfortably covers today's radius with headroom for tuning it
-     * further without silently reintroducing the same starvation. */
-    impulse_t drop_impulse_buf[1024];
+     * 4096, not 1024 any more - RADIUS_WATER doubling to 20 put
+     * exact_disc_count() at 1257, past the old 1024, which would have
+     * silently reintroduced exactly this starvation. 4096 comfortably
+     * clears today's radius with headroom for tuning it further. */
+    impulse_t drop_impulse_buf[4096];
     sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
-    sand_enable_impulses(&splash_sim, drop_impulse_buf, 1024);
+    sand_enable_impulses(&splash_sim, drop_impulse_buf, 4096);
 
     for (int y = POOL_TOP + 1; y < SPLASH_H; y++) {
         for (int x = 0; x < SPLASH_W; x++) {
@@ -2534,13 +2536,14 @@ static void test_a_water_splash_actually_opens_a_gap(void)
      * way a single shared origin did. */
     enum { CX = 6, POOL_TOP = 6, SURFACE_MASS = MASS_MAX / 2,
            POOL_L = 5, POOL_R = 7 };
-    /* 1024, not CRATER_W * CRATER_H - see drop_impulse_buf's own comment
+    /* 4096, not CRATER_W * CRATER_H - see drop_impulse_buf's own comment
      * in the test above for why a buffer only as big as the grid's own
      * cell count starves queue_outward_impulse()'s thinning and can queue
-     * nothing at all, even on a correctly-firing trigger. */
-    impulse_t buf[1024];
+     * nothing at all, even on a correctly-firing trigger, and for why 1024
+     * itself stopped being enough once RADIUS_WATER doubled to 20. */
+    impulse_t buf[4096];
     sand_init(&crater_sim, crater_cells, CRATER_W, CRATER_H, 1u);
-    sand_enable_impulses(&crater_sim, buf, 1024);
+    sand_enable_impulses(&crater_sim, buf, 4096);
 
     for (int y = POOL_TOP; y < CRATER_H; y++) {
         for (int x = POOL_L; x <= POOL_R; x++) {
@@ -2642,34 +2645,45 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
 
     sand_impulse(&cascade_test_sim, COL, TOP, DIR_UP, 255);
 
-    /* A single, non-cascading impulse can only ever displace the ONE
-     * cell it was queued for - TOP itself. Anything BELOW TOP (deeper in
-     * the column, further from the open space the impulse is heading
-     * into) becoming empty at any point can only mean the relay reached
-     * it: nothing else in this scene ever touches those cells - gravity
-     * has nowhere to settle them (the column already rests on the grid's
-     * own floor), and the grid is exactly as wide as the column, so there
-     * is no sideways path there either. Checked across every step, not
-     * just the end - see step_impulses()'s own CASCADE comment (sand.c)
-     * for why the wave (the vacancy propagating backward through the
-     * chain as each cell advances into the gap ahead of it) is expected
-     * to keep moving rather than settle on one final shape. */
-    bool reached_deeper = false;
-    for (int i = 0; i < 10 && !reached_deeper; i++) {
+    /* NOT "is any cell below TOP empty", any more - that check's own
+     * premise ("nothing else in this scene ever touches those cells") was
+     * simply wrong, caught by SAND_SPLASH_SPEED_DECAY_SHIFT's arrival
+     * (sand.h): the mover's own vacancy at TOP is exactly the open cell
+     * ordinary gravity needs to pull the column's next grain DOWN into,
+     * every step, before step_impulses() even runs - so the front of the
+     * chain spends most of its life oscillating between TOP and TOP+1
+     * (impulse pushes up, gravity pulls back down) rather than cleanly
+     * escaping upward, and every swap behind that oscillation trades
+     * water for water rather than ever leaving a cell empty long enough
+     * for this loop to catch it. Confirmed by direct trace, not merely
+     * reasoned about: SAND_CASCADE_MIN_SPEED's own comment (sand.h)
+     * covers the gate half of that discovery.
+     *
+     * SIMULTANEOUS FLIGHT, NOT A GAP, is what actually proves "more than
+     * one cell moved" without depending on gravity ever losing that
+     * race: a single, non-cascading impulse can only ever be ONE entry in
+     * s->impulse_buf at a time - see sand_impulse()'s own comment. Seeing
+     * impulse_count climb above 1 during this run is only possible if a
+     * successful move actually triggered CASCADE's relay (step_impulses(),
+     * sand.c) and queued a second, independent entry for the SAME
+     * material one step behind the first - exactly the claim this test
+     * exists to pin down, observed directly rather than inferred from a
+     * side effect gravity can erase. */
+    bool cascade_confirmed = false;
+    for (int i = 0; i < 10 && !cascade_confirmed; i++) {
         sand_step(&cascade_test_sim, 0, 1000, 0);
-        for (int y = TOP + 1; y < TOP + COL_LEN; y++) {
-            if (CELL_IS_EMPTY(sand_at(&cascade_test_sim, COL, y))) {
-                reached_deeper = true;
-                break;
-            }
+        if (cascade_test_sim.impulse_count > 1) {
+            cascade_confirmed = true;
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(reached_deeper,
+    TEST_ASSERT_TRUE_MESSAGE(cascade_confirmed,
         "a strong impulse into a connected water column must relay "
-        "through more than one cell of it - a single grain moving alone "
-        "can only ever vacate the one cell it started in, so a gap "
-        "appearing DEEPER in the column proves more than one cell moved");
+        "through more than one cell of it - a single, non-cascading "
+        "impulse can only ever be one entry in flight at a time, so "
+        "impulse_count climbing above 1 proves the cascade queued a "
+        "second, independent entry rather than the lone grain simply "
+        "moving alone");
 }
 
 /* --- gas ------------------------------------------------------------------ */

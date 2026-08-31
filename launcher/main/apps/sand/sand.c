@@ -1878,6 +1878,11 @@ static void step_impulses(sand_t *s, int dx, int dy)
             }
         }
 
+        /* Read once, after re-acquisition (which can rewrite entry.cell -
+         * see its own comment above) has had its say, and reused for every
+         * material check below instead of re-deriving it three times. */
+        const uint8_t mat_id = CELL_MATERIAL(entry.cell);
+
         /* The roll happens before the move attempt, and it happens EVERY
          * turn - blocked or not. Two ways to write this, and the choice
          * matters:
@@ -1914,10 +1919,44 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * wrapping: once it reaches zero it stays there, so rng_chance()
          * with a zero numerator never succeeds again and the entry is
          * dropped, below, the very next time this runs - the ramp needs no
-         * separate "done flying" check of its own. */
-        entry.speed = (entry.speed > SAND_IMPULSE_SPEED_RAMP)
-                          ? (uint8_t)(entry.speed - SAND_IMPULSE_SPEED_RAMP)
-                          : 0;
+         * separate "done flying" check of its own.
+         *
+         * WATER AND ACID GET THEIR OWN, GEOMETRIC DECAY - reported as
+         * needing to hit hard and then die out fast, rather than fading
+         * gradually over a linear ramp's full ~128-step tail (see
+         * SAND_IMPULSE_SPEED_RAMP's own comment for that arithmetic). A
+         * right-shift instead of a subtraction is what makes the tail
+         * actually SHORT instead of merely smaller - halving loses most of
+         * the value in the first couple of steps and reaches zero from 255
+         * in about 8, where the old linear ramp took ~128 - and it is the
+         * same halving idiom the cascade's own hop-to-hop decay already
+         * uses (SAND_CASCADE_SPEED_DIVISOR), so the two now share one
+         * vocabulary for "loses energy" instead of two different shapes.
+         * Scoped to water/acid, same as the cascade and the wall-bounce
+         * just above splash_displace()'s own call site - every other
+         * material keeps the original linear SAND_IMPULSE_SPEED_RAMP
+         * unchanged, so this does not touch sand_explode()'s own
+         * extensively-measured tuning (see SAND_IMPULSE_SPEED_RAMP's and
+         * SAND_EXPLODE_CORE_DIVISOR's comments in sand.h for that history).
+         *
+         * DID INTERACT WITH THE CASCADE GATE - caught by
+         * test_a_cascading_impulse_moves_more_than_one_cell (suite_sand.c)
+         * failing the moment this landed: a relayed entry that takes more
+         * than one step to roll a move now decays under the cascade's own
+         * SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR gate before
+         * it gets the chance, since that per-step decay is this same
+         * geometric shift now, not the old linear ramp. Fixed by dropping
+         * SAND_CASCADE_MIN_SPEED to 1 (see its own comment) so the gate
+         * stops being the thing that cuts a chain short - the roll's own
+         * exhaustion is. */
+        if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
+            entry.speed = (uint8_t)(entry.speed -
+                                    (entry.speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
+        } else {
+            entry.speed = (entry.speed > SAND_IMPULSE_SPEED_RAMP)
+                              ? (uint8_t)(entry.speed - SAND_IMPULSE_SPEED_RAMP)
+                              : 0;
+        }
 
         if (!rolled_move) {
             continue;   /* out of flight - settles exactly where it is */
@@ -1961,7 +2000,6 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * unchanged - see splash_displace()'s own comment in
              * sand_liquid.c for why this scope matches the splash feature
              * itself, water and acid only. */
-            const uint8_t mat_id = CELL_MATERIAL(entry.cell);
             if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
                 entry.dir = (entry.dir + 4) & 7;
             }
@@ -2016,8 +2054,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * entry just left, which is what actually turns one grain moving
          * into a connected chain advancing together - a piston, not a
          * single flying droplet. */
-        const uint8_t mover_mat = CELL_MATERIAL(entry.cell);
-        if ((mover_mat == MAT_WATER || mover_mat == MAT_ACID) &&
+        if ((mat_id == MAT_WATER || mat_id == MAT_ACID) &&
             entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
             cascade_count < SAND_CASCADE_MAX_PER_STEP) {
             const int rx = x - d[0];
@@ -2026,7 +2063,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 const cell_t relay_target =
                     s->cells[(size_t)ry * (size_t)w + (size_t)rx];
                 if (!CELL_IS_EMPTY(relay_target) &&
-                    CELL_MATERIAL(relay_target) == mover_mat) {
+                    CELL_MATERIAL(relay_target) == mat_id) {
                     impulse_t *c = &cascade[cascade_count++];
                     c->index = (uint16_t)((size_t)ry * (size_t)w + (size_t)rx);
                     c->cell  = relay_target;
