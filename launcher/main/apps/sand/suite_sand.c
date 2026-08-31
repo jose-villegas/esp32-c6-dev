@@ -16720,6 +16720,21 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
      * has nothing to do with what this test exists to measure. Forced
      * off here; condensation gets its own dedicated test instead. */
     sand_set_condenses(&s, 0);
+    /* Vent_chance is the same kind of orthogonal mechanic, for the same
+     * reason: this scene's lava burner sits directly under the stone
+     * slab that traps the water above it (build_boiler_scene(), above),
+     * which is exactly a sealed pool as far as reaction_t.vent_chance is
+     * concerned. Left at its real figure, a vent firing partway through
+     * the measured window disrupts the slab that is supposed to hold
+     * steady for the whole test - measured directly: this scene passed
+     * with vent_chance briefly at its own maximum (255) only because the
+     * disruption finished during the 20-step settle phase, before
+     * measurement even starts; at a moderate figure the same disruption
+     * can land inside the measured window instead and pull a quarter's
+     * water loss below the steady-state floor below. What this test
+     * exists to measure is boiling, not venting; forced off here for the
+     * same reason condensation is, just above. */
+    sand_set_vent_chance(&s, 0);
 
     build_boiler_scene(&s);
 
