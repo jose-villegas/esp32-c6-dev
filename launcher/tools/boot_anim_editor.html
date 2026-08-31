@@ -95,9 +95,16 @@
     overflow: hidden;
   }
   /* The rendered BMP is the panel's own native 368x448 PORTRAIT
-   * framebuffer - same as the real device. Rotated 90deg here purely for
+   * framebuffer - same as the real device. Rotated here purely for
    * display, the way holding the device sideways does physically; nothing
-   * about the render itself is rotated. */
+   * about the render itself is rotated.
+   *
+   * -90deg (counterclockwise), not 90: phase 1's canvas render used
+   * `ctx.rotate(-Math.PI / 2)` for the same panel->viewer mapping (derived
+   * from boot_anim.c's title_glyph_origin(): panel_x = W - view_y,
+   * panel_y = view_x), confirmed correct there by eye. +90 here was a
+   * 180-degree mismatch - looks like both axes flipped, which is exactly
+   * what a rotation off by 180 does to a rectangle. */
   /* Box sized to the SOURCE bitmap's own portrait dimensions (368x448 -
    * the real panel's raw framebuffer), not the landscape footprint it
    * ends up with after rotating - sizing the box to the rotated
@@ -107,7 +114,7 @@
     position: absolute;
     width: 368px; height: 448px;
     top: 50%; left: 50%;
-    transform: translate(-50%, -50%) rotate(90deg);
+    transform: translate(-50%, -50%) rotate(-90deg);
     transform-origin: center;
     image-rendering: pixelated;
   }
