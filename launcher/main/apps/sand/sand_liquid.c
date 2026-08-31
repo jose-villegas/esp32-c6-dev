@@ -22,10 +22,11 @@
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
 /* A liquid splash: sand_displace_material() at a per-material radius,
- * called whenever a WATER or ACID grain lands hard, falling onto an
- * already-occupied surface (move_liquid_grain() below). Water and acid
- * only, for now - oil and lava are not gated in here, see
- * SAND_SPLASH_RADIUS_WATER's own comment in sand.h.
+ * called whenever a WATER grain lands hard, falling onto an already-
+ * occupied surface (move_liquid_grain() below). WATER ONLY - acid used to
+ * share this trigger too, and no longer does; see acid_bubble()'s own
+ * comment in sand_reactions.c for what replaced it and why it lives there
+ * instead of here.
  *
  * A per-grain trigger for hitting a wall or the grid edge directly (not
  * landing on other liquid) existed too, briefly - removed 2026-08-30
@@ -36,7 +37,7 @@
  * MASKED TO `mat_id`, not a plain sand_displace() - an unmasked
  * displacement throws whatever it finds within the radius, which meant
  * pouring water over water sitting on dirt flung the dirt around too.
- * This is meant to be water/acid splashing itself, nothing else.
+ * This is meant to be water splashing itself, nothing else.
  *
  * WATER DECAYS TWO WAYS, INDEPENDENTLY - see SAND_SPLASH_RADIUS_WATER's
  * own comment in sand.h for the full account. Gated by a chance-in-256
@@ -47,23 +48,6 @@
  * radius each time (sand_t::splash_radius_water) rather than all landing
  * at the same fixed size, so a chain that keeps bouncing reads as
  * genuinely settling down, not as a string of identical pops.
- *
- * ACID DOES NOT DECAY OVER TIME - it always splashes at its own full
- * radius, at full intensity, and never touches `splash_chance` at all (so
- * it cannot spend down water's own budget either). A balance choice, not
- * a bounce-suppression gap: acid's splash is part of its dissolve-vs-metal
- * balance (see docs/Sand/Metal-Smelting-Plan.md), and a decaying trigger
- * would make that balance depend on how many OTHER acid splashes already
- * happened this simulation, not on the material stats alone.
- *
- * ACID IS CAPPED PER STEP INSTEAD (sand_t::acid_splashes_this_step,
- * sand.h) - a bulk pour lands many columns hard on the same step or two,
- * and each one is a genuinely fresh trigger by the rule above, so without
- * this a wide pour queued a full SAND_SPLASH_RADIUS_ACID displacement per
- * column - dozens at once, reading as one chaotic explosion instead of a
- * splash. The cap forgets itself every step (sand_step(), sand.c), so it
- * throttles simultaneous triggers without making acid's splash depend on
- * history the way a decaying chance would.
  *
  * WATER ALSO GETS A DIRECTED KICK toward whichever of its 8 immediate
  * neighbours are actually EMPTY - not just the radial sand_displace_
@@ -111,14 +95,6 @@
  * was never proof anything became visible. */
 static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
 {
-    if (mat_id == MAT_ACID) {
-        if (s->acid_splashes_this_step >= SAND_SPLASH_ACID_PER_STEP_CAP) {
-            return;
-        }
-        s->acid_splashes_this_step++;
-        sand_displace_material(s, x, y, SAND_SPLASH_RADIUS_ACID, mat_id);
-        return;
-    }
     if (mat_id != MAT_WATER) {
         return;
     }

@@ -23,13 +23,21 @@
 #
 # --pool picks which combo of models does the bulk fixing (--combo <name>
 # overrides it with any combo by name, for one-off experiments):
-#   local        (default) local-coding -- this workspace's Ollama models,
-#                free and unlimited. MISRA/cppcheck backlogs run into the
-#                hundreds of findings (see misra_check.sh's own comment), and
-#                firing that many fixer calls at a paid cloud model in
-#                parallel is exactly the kind of bulk load local models exist
-#                to absorb -- the --review model only ever sees a handful of
-#                proposed diffs, not the whole backlog.
+#   local        (default) local-coding -- this workspace's Ollama models via
+#                OmniRoute, free and unlimited. MISRA/cppcheck backlogs run
+#                into the hundreds of findings (see misra_check.sh's own
+#                comment), and firing that many fixer calls at a paid cloud
+#                model in parallel is exactly the kind of bulk load local
+#                models exist to absorb -- the --review model only ever sees
+#                a handful of proposed diffs, not the whole backlog.
+#                WARNING: OmniRoute's own ollama-local provider has no
+#                working connection pool as of 2026-08-31 (confirmed: every
+#                model in it times out at 30s regardless of prompt) -- this
+#                pool is likely to just fail right now. Use --local instead
+#                (below), which bypasses OmniRoute for local models entirely
+#                and calls the Ollama CLI directly; re-test with a trivial
+#                `ollama run` / `omniroute_pool_status` before trusting this
+#                pool again if OmniRoute's own config has since changed.
 #   free         code-fix-free -- zero-marginal-cost API-key providers
 #                (ollama-cloud, deepseek, gemini, nvidia free tiers), local
 #                as final fallback. Higher quality than local alone, but
@@ -53,12 +61,18 @@
 # prior `idf.py build`, which lives in a gitignored build directory a fresh
 # worktree won't have of its own -- rather than requiring you to run
 # misra_check.sh in your real checkout first (which would mean "isolated"
-# still touched it), the worktree's launcher/<build_dir> gets symlinked to
-# the main checkout's, so misra_check.sh runs entirely inside the worktree
-# same as everything else. (--report bypasses this: if you already have a
-# report, its path is just read directly, worktree or not.) If nothing ends
-# up changing, the worktree and its branch are removed automatically; if
-# something does, both are left behind for you to inspect before opening
+# still touched it), everything in the main checkout's launcher/<build_dir>
+# gets symlinked into the worktree EXCEPT compile_commands.json, which gets
+# rewritten instead: its absolute paths point at the main checkout's source
+# no matter where cppcheck runs from, so a plain symlink would have cppcheck
+# silently analyze (and write its *.dump crash files into) the main
+# checkout regardless of the worktree -- the rewritten copy points those
+# paths at the worktree's own source instead, so misra_check.sh genuinely
+# runs entirely inside the worktree, same as everything else. (--report
+# bypasses this: if you already have a report, its path is just read
+# directly, worktree or not.) If nothing ends up changing, the worktree and
+# its branch are removed automatically; if something does, both are left
+# behind for you to inspect before opening
 # the PR.
 #
 # --exclude <prefix> drops any finding whose main/-relative path starts with
@@ -77,11 +91,31 @@
 # being killed by hand. "*/main/*" scopes cppcheck's own analysis to the ~28
 # real translation units instead, which is what was actually wanted.
 #
+# --no-push commits on the branch (worktree or not) but stops short of
+# `git push` -- the branch/worktree is left for you to inspect and push
+# yourself when ready.
+#
+# --local bypasses --pool/--combo/OmniRoute entirely (for both the fixer and
+# the reviewer) and calls Ollama directly (`ollama run`) instead, so the
+# whole run makes zero network calls to any cloud provider. This is
+# deliberately a different path from --pool local's "local-coding" combo:
+# that one still goes through OmniRoute's own ollama-local provider, which
+# has no working connection pool (every model in it timed out identically at
+# 30s on a trivial prompt -- see Model-Delegation-Workflow.md's "Route local
+# through the Ollama CLI directly, not OmniRoute"). Fixer defaults to
+# qwen2.5:14b, reviewer to gemma4:26b (LOCAL_FIXER_MODEL / LOCAL_REVIEW_MODEL
+# env vars to override with anything else pulled -- see `ollama list`); two
+# different model families so the review step is a real second opinion, not
+# the same model checking its own work. --review is not required when
+# --local is set (defaults to LOCAL_REVIEW_MODEL); passing --review together
+# with --local overrides just the reviewer's model tag.
+#
 # Usage:
 #   scripts/fix-audited-code.sh --review <model-id>
 #       [--pool local|free|subscription|all | --combo <name>]
 #       [--report <path>] [--exclude <prefix>]... [--worktree]
-#       [--parallel N] [--rounds N] [build_dir] [file_filter]
+#       [--local] [--no-push] [--parallel N] [--rounds N]
+#       [build_dir] [file_filter]
 #
 # Examples:
 #   scripts/fix-audited-code.sh --review claude/claude-sonnet-5
@@ -90,10 +124,12 @@
 #       --exclude main/apps/ --worktree build.dev "*/main/*"
 #   scripts/fix-audited-code.sh --review claude/claude-sonnet-5 --worktree \
 #       --report launcher/tools/results/misra___apps_sand___.txt
+#   scripts/fix-audited-code.sh --local --worktree --no-push
 #
-# --review is mandatory here (unlike fix-audited-docs.sh's optional
-# --review): the reviewer is not a bonus quality gate on this script, it's
-# the thing that makes trusting a bulk-parallel free-model fixer sane.
+# --review is mandatory here unless --local is set (unlike fix-audited-
+# docs.sh's optional --review): the reviewer is not a bonus quality gate on
+# this script, it's the thing that makes trusting a bulk-parallel free-model
+# fixer sane.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -104,6 +140,10 @@ COMBO=""
 REVIEW_MODEL=""
 REPORT=""
 USE_WORKTREE=0
+LOCAL_MODE=0
+LOCAL_FIXER_MODEL="${LOCAL_FIXER_MODEL:-qwen2.5:14b}"
+LOCAL_REVIEW_MODEL="${LOCAL_REVIEW_MODEL:-gemma4:26b}"
+NO_PUSH=0
 MAX_PARALLEL=3
 MAX_ROUNDS=2
 POSITIONAL=()
@@ -135,6 +175,14 @@ while [ "$#" -gt 0 ]; do
       USE_WORKTREE=1
       shift
       ;;
+    --local)
+      LOCAL_MODE=1
+      shift
+      ;;
+    --no-push)
+      NO_PUSH=1
+      shift
+      ;;
     --parallel)
       MAX_PARALLEL="$2"
       shift 2
@@ -151,22 +199,30 @@ while [ "$#" -gt 0 ]; do
 done
 
 if [ -z "$REVIEW_MODEL" ]; then
-  echo "Usage: $0 --review <model-id> [--pool local|free|subscription|all | --combo <name>] [--report <path>] [--exclude <prefix>]... [--worktree] [--parallel N] [--rounds N] [build_dir] [file_filter]" >&2
-  echo "--review is required -- the fixer/reviewer loop is the point of this script." >&2
-  exit 1
+  if [ "$LOCAL_MODE" = "1" ]; then
+    REVIEW_MODEL="$LOCAL_REVIEW_MODEL"
+  else
+    echo "Usage: $0 --review <model-id> [--pool local|free|subscription|all | --combo <name>] [--report <path>] [--exclude <prefix>]... [--worktree] [--local] [--no-push] [--parallel N] [--rounds N] [build_dir] [file_filter]" >&2
+    echo "--review is required unless --local is set (defaults fixer/reviewer to $LOCAL_FIXER_MODEL / $LOCAL_REVIEW_MODEL via Ollama)." >&2
+    exit 1
+  fi
 fi
 
 if [ -z "$COMBO" ]; then
-  case "$POOL" in
-    local) COMBO="local-coding" ;;
-    free) COMBO="code-fix-free" ;;
-    subscription) COMBO="code-fix-subscription" ;;
-    all) COMBO="code-fix-all" ;;
-    *)
-      echo "Unknown --pool '$POOL' (expected local|free|subscription|all), or pass --combo <name> directly." >&2
-      exit 1
-      ;;
-  esac
+  if [ "$LOCAL_MODE" = "1" ]; then
+    COMBO="$LOCAL_FIXER_MODEL"
+  else
+    case "$POOL" in
+      local) COMBO="local-coding" ;;
+      free) COMBO="code-fix-free" ;;
+      subscription) COMBO="code-fix-subscription" ;;
+      all) COMBO="code-fix-all" ;;
+      *)
+        echo "Unknown --pool '$POOL' (expected local|free|subscription|all), or pass --combo <name> directly." >&2
+        exit 1
+        ;;
+    esac
+  fi
 fi
 
 BUILD_DIR="${POSITIONAL[0]:-build.dev}"
@@ -204,14 +260,51 @@ if [ "$USE_WORKTREE" = "1" ]; then
 
   # compile_commands.json lives in a gitignored build dir, so a fresh
   # worktree never has one of its own even though the main checkout does.
-  # Symlink the main checkout's build dir in rather than requiring the
-  # caller to pre-generate a report outside the worktree -- that would mean
-  # "isolated" still needed a step in the real checkout first. Only when
-  # --report wasn't already given (that path is read directly, see above)
-  # and only if the worktree doesn't already have something at that name.
+  # A plain symlink of the whole build dir is NOT enough here (an earlier
+  # version of this did exactly that, and it silently analyzed the wrong
+  # tree): compile_commands.json bakes in ABSOLUTE paths to the main
+  # checkout's source -- "file", "directory", and every -I/-o argument in
+  # "command" -- which don't change no matter which directory cppcheck is
+  # actually invoked from. Symlinking only makes the file reachable; cppcheck
+  # still reads and reports on the main checkout's real files regardless
+  # (and writes its *.dump crash artifacts there too, which is what actually
+  # surfaced this: they kept landing outside the worktree).
+  #
+  # Fix: symlink everything in the build dir EXCEPT compile_commands.json
+  # (so the config headers and toolchain response file .cflags reference
+  # via absolute path still resolve, unchanged, to the one real shared
+  # build), then write a REWRITTEN compile_commands.json as a real file
+  # (never through the symlink, which would edit the main checkout's copy)
+  # with every occurrence of the main checkout's absolute launcher path
+  # replaced by the worktree's own -- so cppcheck genuinely analyzes this
+  # worktree's source. Only when --report wasn't already given (that path
+  # is read directly, see above) and only if the worktree doesn't already
+  # have something at that name.
   if [ -z "$REPORT" ] && [ ! -e "launcher/$BUILD_DIR" ] && [ -d "$REPO_ROOT/launcher/$BUILD_DIR" ]; then
-    echo "Linking launcher/$BUILD_DIR to the main checkout's build (not tracked by git)..."
-    ln -s "$REPO_ROOT/launcher/$BUILD_DIR" "launcher/$BUILD_DIR"
+    echo "Rewriting launcher/$BUILD_DIR/compile_commands.json for this worktree's own source..."
+    REPO_ROOT_WIN="$(cd "$REPO_ROOT" && pwd -W)"
+    WORKTREE_DIR_WIN="$(pwd -W)"
+    mkdir -p "launcher/$BUILD_DIR"
+    for entry in "$REPO_ROOT/launcher/$BUILD_DIR"/*; do
+      name="$(basename "$entry")"
+      [ "$name" = "compile_commands.json" ] && continue
+      ln -s "$entry" "launcher/$BUILD_DIR/$name"
+    done
+    node -e '
+      const fs = require("fs");
+      const [, , srcPath, dstPath, mainRoot, worktreeRoot] = process.argv;
+      const replaceAllLiteral = (str, find, repl) => str.split(find).join(repl);
+      let content = fs.readFileSync(srcPath, "utf8");
+      // Forward-slash form: "directory", and every -I/-D in "command".
+      content = replaceAllLiteral(content, mainRoot, worktreeRoot);
+      // Backslash form: "file" and -o path in "command", JSON-escaped as
+      // double-backslash in the raw text (one real \ is written as \\).
+      const bs = (s) => s.split("/").join("\\\\");
+      content = replaceAllLiteral(content, bs(mainRoot), bs(worktreeRoot));
+      fs.writeFileSync(dstPath, content);
+    ' "$REPO_ROOT/launcher/$BUILD_DIR/compile_commands.json" \
+      "launcher/$BUILD_DIR/compile_commands.json" \
+      "$REPO_ROOT_WIN" "$WORKTREE_DIR_WIN"
   fi
 else
   if [ -n "$(git status --porcelain)" ]; then
@@ -335,6 +428,44 @@ function extractJsonArray(text) {
 module.exports = { extractJsonArray };
 JSEOF
 
+# chat_call PROMPT_FILE OUT_FILE MODEL_ID MAX_TOKENS [REASONING_EFFORT] LOG_FILE
+# Writes the model's raw text response (unwrapped from any provider
+# envelope) to OUT_FILE, appending any failure detail to LOG_FILE.
+# LOCAL_MODE=1 calls Ollama directly instead of OmniRoute -- see the --local
+# comment near the top of this file. Returns nonzero on failure. Runs inside
+# fix_one_file's subshells same as everything else there, so it's defined
+# once here rather than per call site.
+#
+# --think=false is not optional: confirmed live on this machine that
+# reasoning-capable models (gemma4:26b, qwen3.8:27b -- not just the
+# obviously-named deepseek-r1 ones) print a full "Thinking... ...done
+# thinking." preamble to stdout by default, plain text, no <think> tags to
+# regex out. Left in, that preamble becomes part of what extract-array.js
+# scans for a JSON array, and since it scans from the FIRST "[" in the
+# whole text, any "[" the reasoning text happens to contain (a MISRA rule
+# ID, a markdown link, a quoted example) before the real answer would win
+# out over the real array. --think=false suppresses this cleanly for every
+# locally-pulled model tested (reasoning and non-reasoning alike).
+chat_call() {
+  local prompt_file="$1" out_file="$2" model_id="$3" max_tokens="$4" effort="$5" log_file="$6"
+  if [ "$LOCAL_MODE" = "1" ]; then
+    if ! ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>>"$log_file"; then
+      echo "  ollama run $model_id failed" >> "$log_file"
+      return 1
+    fi
+    return 0
+  fi
+  local envelope="$out_file.envelope"
+  local effort_args=()
+  [ -n "$effort" ] && effort_args=(--reasoning-effort "$effort")
+  if ! omniroute --output json chat -m "$model_id" "${effort_args[@]}" --max-tokens "$max_tokens" \
+        --file "$prompt_file" --no-history > "$envelope" 2>>"$log_file"; then
+    echo "  omniroute call failed" >> "$log_file"
+    return 1
+  fi
+  node "$TMPDIR/extract-content.js" "$envelope" > "$out_file" 2>>"$log_file"
+}
+
 fix_one_file() {
   local key="$1" file="$2" workdir="$3"
   mkdir -p "$workdir"
@@ -372,16 +503,11 @@ fix_one_file() {
   } > "$workdir/fix_prompt.txt"
 
   echo "fixing $file" >> "$log"
-  if ! omniroute --output json chat -m "$COMBO" --reasoning-effort low --max-tokens 3000 \
-        --file "$workdir/fix_prompt.txt" --no-history > "$workdir/fix_response.txt" 2>> "$log"; then
-    echo "  omniroute fixer call failed" >> "$log"
+  if ! chat_call "$workdir/fix_prompt.txt" "$workdir/fix_content.txt" "$COMBO" 3000 low "$log"; then
+    echo "  fixer call failed" >> "$log"
     echo "[]" > "$workdir/patches.json"
     return 0
   fi
-
-  local content
-  content=$(node "$TMPDIR/extract-content.js" "$workdir/fix_response.txt" 2>>"$log") || { echo "  no response envelope" >> "$log"; echo "[]" > "$workdir/patches.json"; return 0; }
-  echo "$content" > "$workdir/fix_content.txt"
 
   node -e '
     const fs = require("fs");
@@ -451,15 +577,10 @@ fix_one_file() {
     } > "$workdir/review_prompt_r$round.txt"
 
     echo "  round $round: sending to $REVIEW_MODEL for review" >> "$log"
-    if ! omniroute --output json chat -m "$REVIEW_MODEL" --max-tokens 4000 \
-          --file "$workdir/review_prompt_r$round.txt" --no-history > "$workdir/review_response_r$round.txt" 2>> "$log"; then
+    if ! chat_call "$workdir/review_prompt_r$round.txt" "$workdir/review_content_r$round.txt" "$REVIEW_MODEL" 4000 "" "$log"; then
       echo "  review call failed -- keeping patches unreviewed" >> "$log"
       return 0
     fi
-
-    local review_content
-    review_content=$(node "$TMPDIR/extract-content.js" "$workdir/review_response_r$round.txt" 2>>"$log") || review_content="[]"
-    echo "$review_content" > "$workdir/review_content_r$round.txt"
 
     node -e '
       const fs = require("fs");
@@ -517,15 +638,10 @@ fix_one_file() {
     } > "$workdir/revise_prompt.txt"
 
     echo "  round $round: sending rejected patch(es) back to $COMBO for revision" >> "$log"
-    if ! omniroute --output json chat -m "$COMBO" --reasoning-effort low --max-tokens 3000 \
-          --file "$workdir/revise_prompt.txt" --no-history > "$workdir/revise_response.txt" 2>> "$log"; then
+    if ! chat_call "$workdir/revise_prompt.txt" "$workdir/revise_content.txt" "$COMBO" 3000 low "$log"; then
       echo "  revise call failed -- keeping already-approved patches only" >> "$log"
       return 0
     fi
-
-    local revise_content
-    revise_content=$(node "$TMPDIR/extract-content.js" "$workdir/revise_response.txt" 2>>"$log") || revise_content="[]"
-    echo "$revise_content" > "$workdir/revise_content.txt"
 
     node -e '
       const fs = require("fs");
@@ -649,14 +765,27 @@ if [ "$USE_WORKTREE" != "1" ]; then
 fi
 git add $CHANGED_FILES
 git commit -m "fix: resolve static-analysis findings (via $COMBO, reviewed by $REVIEW_MODEL)"
-git push -u origin "$BRANCH"
 
-REMOTE_URL=$(git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##')
-echo ""
-echo "Pushed $BRANCH. Open a PR here:"
-echo "$REMOTE_URL/compare/main...$BRANCH?expand=1"
-if [ -n "$WORKTREE_DIR" ]; then
+if [ "$NO_PUSH" = "1" ]; then
   echo ""
-  echo "Worktree left at $WORKTREE_DIR for inspection -- remove when done:"
-  echo "  git worktree remove \"$WORKTREE_DIR\""
+  echo "Committed on branch $BRANCH (--no-push: not pushed)."
+  if [ -n "$WORKTREE_DIR" ]; then
+    echo "Worktree left at $WORKTREE_DIR for inspection. When ready:"
+    echo "  cd \"$WORKTREE_DIR\" && git push -u origin $BRANCH"
+    echo "  git worktree remove \"$WORKTREE_DIR\"   # when done with it"
+  else
+    echo "Push it yourself when ready: git push -u origin $BRANCH"
+  fi
+else
+  git push -u origin "$BRANCH"
+
+  REMOTE_URL=$(git remote get-url origin | sed -E 's#git@github.com:#https://github.com/#; s#\.git$##')
+  echo ""
+  echo "Pushed $BRANCH. Open a PR here:"
+  echo "$REMOTE_URL/compare/main...$BRANCH?expand=1"
+  if [ -n "$WORKTREE_DIR" ]; then
+    echo ""
+    echo "Worktree left at $WORKTREE_DIR for inspection -- remove when done:"
+    echo "  git worktree remove \"$WORKTREE_DIR\""
+  fi
 fi

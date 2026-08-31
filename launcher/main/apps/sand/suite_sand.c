@@ -10562,19 +10562,60 @@ static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
  * MAT_SMOKE and not MAT_STEAM: steam here means water that got hot, and
  * acid fumes are not that - the same distinction that made smoke its own
  * material in the first place. */
+/* A dedicated, larger fixture for the two fizz tests below, separate from
+ * the shared 8x8 `s`/`cells` acid_tank() itself uses - see its own comment
+ * for why. reaction_t.fizz dropped sharply (2026-09-01, see its own
+ * comment in material.c) from "about one bite in six" to 6-in-256, and
+ * the 8x8 tank's own acid_rows/sand_rows only ever offer a HANDFUL of
+ * cells to dissolve in total (acid_tank(2,2)'s 4-wide, 2-row sand supply
+ * is 8 cells, ever - once eaten, no more dissolve events can happen no
+ * matter how many further steps run). 8 total tries at a 6-in-256 chance
+ * has better than an 80% chance of landing ZERO fizzes for any ONE fixed
+ * seed - not a step-budget problem, a TRIALS problem, which is why
+ * raising the step count alone (tried first) did not fix it. A wide,
+ * deep sand floor with acid poured over the whole top gives hundreds of
+ * independent dissolve events instead of a handful, which is what
+ * actually needs to change. */
+#define FIZZ_W 40
+#define FIZZ_H 12
+static uint8_t fizz_cells[FIZZ_W * FIZZ_H];
+static sand_t  fizz_sim;
+
+static void acid_fizz_fixture(void)
+{
+    sand_init(&fizz_sim, fizz_cells, FIZZ_W, FIZZ_H, 5u);
+    sand_set_evaporates(&fizz_sim, 0);   /* isolate fizz - see the tests'
+                                          * own comments for why */
+    for (int y = 4; y < FIZZ_H; y++) {
+        for (int x = 0; x < FIZZ_W; x++) {
+            sand_set(&fizz_sim, x, y, CELL_MAKE(MAT_SAND, 8));
+        }
+    }
+    for (int y = 0; y < 3; y++) {
+        for (int x = 0; x < FIZZ_W; x++) {
+            sand_set(&fizz_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+        }
+    }
+}
+
 static void test_acid_fizzes_while_it_eats(void)
 {
-    acid_tank(2, 2);
+    acid_fizz_fixture();
 
     /* Smoke OR gas: the fizz coin-flips between the two (see
      * step_one_dissolver_cell()), so either one is proof the fizz fired -
      * a single deterministic run can land entirely on one side of that
-     * flip. evaporates is off by default (sand_set_evaporates()), so any
-     * gas seen here can only have come from the fizz. */
+     * flip. evaporates is forced off above, so any gas seen here can
+     * only have come from the fizz. */
     bool fizzed = false;
-    for (int i = 0; i < 400 && !fizzed; i++) {
-        sand_step(&s, 0, 1000, 0);
-        fizzed = count_cells_of(MAT_SMOKE) > 0 || count_cells_of(MAT_GAS) > 0;
+    for (int i = 0; i < 300 && !fizzed; i++) {
+        sand_step(&fizz_sim, 0, 1000, 0);
+        for (int y = 0; y < FIZZ_H && !fizzed; y++) {
+            for (int x = 0; x < FIZZ_W && !fizzed; x++) {
+                const uint8_t m = CELL_MATERIAL(sand_at(&fizz_sim, x, y));
+                fizzed = (m == MAT_SMOKE || m == MAT_GAS);
+            }
+        }
     }
 
     TEST_ASSERT_TRUE_MESSAGE(fizzed,
@@ -10589,19 +10630,19 @@ static void test_acid_fizzes_while_it_eats(void)
  * bottom, invisible under the acid. */
 static void test_the_fizz_rises_out_of_the_acid(void)
 {
-    const int surface = 1;      /* acid_tank() fills from row 1 down */
-    acid_tank(2, 2);
+    const int surface = 0;      /* acid_fizz_fixture() fills from row 0 */
+    acid_fizz_fixture();
 
     /* Smoke OR gas: the fizz coin-flips between the two (see
      * step_one_dissolver_cell()), and both rise through try_bubble() the
      * same way - the coin flip only picks which material, not whether it
      * floats. */
-    int highest = H;
-    for (int i = 0; i < 400; i++) {
-        sand_step(&s, 0, 1000, 0);
-        for (int y = 0; y < H; y++) {
-            for (int x = 0; x < W; x++) {
-                const uint8_t m = CELL_MATERIAL(sand_at(&s, x, y));
+    int highest = FIZZ_H;
+    for (int i = 0; i < 300; i++) {
+        sand_step(&fizz_sim, 0, 1000, 0);
+        for (int y = 0; y < FIZZ_H; y++) {
+            for (int x = 0; x < FIZZ_W; x++) {
+                const uint8_t m = CELL_MATERIAL(sand_at(&fizz_sim, x, y));
                 if ((m == MAT_SMOKE || m == MAT_GAS) && y < highest) {
                     highest = y;
                 }
@@ -10613,6 +10654,244 @@ static void test_the_fizz_rises_out_of_the_acid(void)
         "smoke or gas made at the bottom of an acid pool must reach the "
         "top of it - a gas is lighter than any liquid, and try_bubble() "
         "is what lets it climb out instead of being trapped underneath");
+}
+
+/* A dedicated, wide fixture for the two dilution tests below - one row of
+ * water directly above one row of acid, water on top because that is
+ * ALREADY the stable density ordering (acid's density is 38, water's is
+ * 30 - acid sinks through water on its own, see MAT_ACID's own comment in
+ * material.c), so nothing moves due to gravity/density before reactions
+ * runs and every column's water/acid pair stays put for a clean single-
+ * step measurement. Wide rather than deep: each column is an INDEPENDENT
+ * trial of the same roll (reaction_dirs tries "up" first, see
+ * sand_reactions.c, so an acid cell's water neighbour is always the first
+ * candidate checked, never skipped over), so width is what buys sample
+ * size here, not steps.
+ *
+ * 4000, not the original 400 - SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h)
+ * was tightened from a 3-in-4 split down to 55/45, and the fixed seed
+ * below is deterministic, not flaky, but a narrow bias needs a
+ * proportionally wider sample for the water/acid gap to clear the
+ * count's own statistical noise reliably - 400 columns at 55/45 leaves
+ * the two counts within roughly one standard deviation of each other,
+ * which is not a safe margin for a fixed-seed assertion to depend on. */
+#define DILUTE_W 4000
+#define DILUTE_H 2
+static uint8_t dilute_cells[DILUTE_W * DILUTE_H];
+static sand_t  dilute_sim;
+
+static void acid_water_dilute_fixture(void)
+{
+    sand_init(&dilute_sim, dilute_cells, DILUTE_W, DILUTE_H, 7u);
+    sand_set_evaporates(&dilute_sim, 0);   /* isolate dilution from the
+                                             * unrelated evaporates roll -
+                                             * same reasoning as the fizz
+                                             * fixture above */
+    for (int x = 0; x < DILUTE_W; x++) {
+        sand_set(&dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+}
+
+static void test_acid_and_water_dilute_each_other(void)
+{
+    acid_water_dilute_fixture();
+
+    /* Either direction counts: a diluted column either turned its acid
+     * cell to water, or turned its water cell to acid - see
+     * SAND_ACID_DILUTE_TO_WATER_CHANCE's own comment (sand.h) for why
+     * both are a valid outcome of the same roll. 4000 independent columns
+     * at roughly 20% chance each per step makes waiting past one step
+     * essentially unnecessary, but a small loop keeps this from being
+     * sensitive to exactly which seed sand_init() above happens to use. */
+    bool diluted = false;
+    for (int i = 0; i < 10 && !diluted; i++) {
+        sand_step(&dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < DILUTE_W && !diluted; x++) {
+            const uint8_t top = CELL_MATERIAL(sand_at(&dilute_sim, x, 0));
+            const uint8_t bot = CELL_MATERIAL(sand_at(&dilute_sim, x, 1));
+            diluted = (top != MAT_WATER) || (bot != MAT_ACID);
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(diluted,
+        "acid touching water must eventually dilute - either the acid "
+        "cell becoming water or the water cell becoming acid - or the "
+        "reaction is not firing at all");
+}
+
+/* The bias itself, not just that dilution happens at all - measured in a
+ * single step so the two outcome counts are independent per-column
+ * samples rather than counts that could keep compounding into each
+ * other across multiple steps. Expected counts at this fixture's width
+ * and the current constants (r->dissolves=60/256, water's
+ * dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=141/256, a
+ * tight 55/45 split): roughly 440 columns where the acid cell becomes
+ * water, roughly 360 where the water cell becomes acid instead - a
+ * narrow bias, which is exactly why this fixture is 4000 columns wide
+ * rather than the 400 it started at (see the fixture's own comment) -
+ * a loose assertion (water-wins strictly greater than acid-wins, both
+ * counts positive) needs that much sample size to clear the gap
+ * reliably at this bias, without hard-coding the exact expected counts
+ * a future retune of any of those three constants would break. */
+static void test_water_wins_the_dilution_more_often_than_acid_does(void)
+{
+    acid_water_dilute_fixture();
+    sand_step(&dilute_sim, 0, 1000, 0);
+
+    int water_wins = 0;
+    int acid_wins  = 0;
+    for (int x = 0; x < DILUTE_W; x++) {
+        const uint8_t top = CELL_MATERIAL(sand_at(&dilute_sim, x, 0));
+        const uint8_t bot = CELL_MATERIAL(sand_at(&dilute_sim, x, 1));
+        if (bot == MAT_WATER) {
+            water_wins++;   /* the acid cell (row 1) became water */
+        }
+        if (top == MAT_ACID) {
+            acid_wins++;    /* the water cell (row 0) became acid */
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_wins,
+        "expected at least some acid-becomes-water dilutions in 4000 "
+        "independent columns");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_wins,
+        "expected at least some water-becomes-acid dilutions in 4000 "
+        "independent columns - SAND_ACID_DILUTE_TO_WATER_CHANCE biases "
+        "the outcome, it does not eliminate the other side entirely");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_wins, water_wins,
+        "SAND_ACID_DILUTE_TO_WATER_CHANCE is supposed to favour water - "
+        "acid becoming water should be clearly more common than water "
+        "becoming acid, not the other way round or a coin flip");
+}
+
+/* A third dedicated fixture, checking the "fizzle" water's win of the
+ * roll spawns - a puff of gas into a nearby empty cell, see
+ * step_one_dissolver_cell()'s own comment (an impulse pop was tried
+ * alongside this too, then dropped as a wasted call: dilution mostly
+ * happens fully submerged, where a thrown grain has nowhere open to go,
+ * unlike acid_bubble()'s own exposed-rim case). Alternating acid/empty
+ * columns in the acid row, on purpose: the two dilution fixtures above
+ * are deliberately fully packed (the right shape for measuring the
+ * material-swap outcome itself), which leaves emit_into_empty_neighbor()
+ * nothing to ever succeed into - this one gives every acid cell an empty
+ * neighbour to puff into instead. */
+#define FIZZLE_W 400
+#define FIZZLE_H 2
+static uint8_t fizzle_cells[FIZZLE_W * FIZZLE_H];
+static sand_t  fizzle_sim;
+
+static void acid_water_fizzle_fixture(void)
+{
+    sand_init(&fizzle_sim, fizzle_cells, FIZZLE_W, FIZZLE_H, 13u);
+    sand_set_evaporates(&fizzle_sim, 0);
+    /* Water only over the SAME even columns as the acid below it -
+     * leaving row 0 empty at the odd columns too, not just row 1, is
+     * what keeps this stable. The first attempt left row 0 fully water
+     * with only row 1 gapped, and every odd-column water cell fell
+     * straight down into the empty acid-row cell below it before
+     * reactions ever ran, scrambling the water-above-acid pairing this
+     * fixture depends on - gravity runs in the main sweep, before
+     * step_reactions() gets a turn. An empty column with nothing above
+     * it has nothing left to fall. */
+    for (int x = 0; x < FIZZLE_W; x += 2) {
+        sand_set(&fizzle_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_set(&fizzle_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+}
+
+static void test_water_winning_dilution_spawns_a_gas_puff(void)
+{
+    acid_water_fizzle_fixture();
+
+    bool gas_seen = false;
+    for (int i = 0; i < 10 && !gas_seen; i++) {
+        sand_step(&fizzle_sim, 0, 1000, 0);
+        for (int x = 0; x < FIZZLE_W && !gas_seen; x++) {
+            for (int y = 0; y < FIZZLE_H && !gas_seen; y++) {
+                gas_seen = (CELL_MATERIAL(sand_at(&fizzle_sim, x, y)) == MAT_GAS);
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(gas_seen,
+        "water winning a dilution must leave a puff of gas behind - the "
+        "only source of MAT_GAS in this fixture (evaporates disabled, no "
+        "sand/wood/oil for a normal dissolve to fizz off of)");
+}
+
+/* A dedicated fixture for oil's own dilution - oil directly above acid,
+ * oil on top because that is ALREADY the stable density ordering (oil's
+ * density is 22, acid's is 38 - oil floats on acid on its own, see
+ * MAT_OIL's own comment in material.c), so nothing moves due to
+ * gravity/density before reactions runs. Oil's dissolvable (40) is much
+ * lower than water's (220) - "slowly dilutes", not readily - so this
+ * needs more columns than the water fixture to land a comfortable
+ * sample in one step: expected conversions at 400 columns and the
+ * current constants (r->dissolves=60/256, oil's dissolvable=40/256) is
+ * about 15. */
+#define OIL_DILUTE_W 400
+#define OIL_DILUTE_H 2
+static uint8_t oil_dilute_cells[OIL_DILUTE_W * OIL_DILUTE_H];
+static sand_t  oil_dilute_sim;
+
+static void acid_oil_dilute_fixture(void)
+{
+    sand_init(&oil_dilute_sim, oil_dilute_cells, OIL_DILUTE_W, OIL_DILUTE_H, 11u);
+    sand_set_evaporates(&oil_dilute_sim, 0);
+    for (int x = 0; x < OIL_DILUTE_W; x++) {
+        sand_set(&oil_dilute_sim, x, 0, CELL_MAKE(MAT_OIL, MASS_MAX));
+        sand_set(&oil_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    }
+}
+
+/* Unlike water's free swap, oil converting into acid is explicitly
+ * supposed to cost the eating acid a unit of its own mass too - "it
+ * should also dissolve while doing so, so we end with a bit less of
+ * acid" was the ask. Checked directly: for every column where the oil
+ * cell became acid this step, the acid cell right below it must have
+ * lost exactly the one unit pay_quench_cost() always takes, the same
+ * bite cost eating sand or wood pays. */
+static void test_oil_dilutes_into_acid_but_the_acid_pays_for_it(void)
+{
+    acid_oil_dilute_fixture();
+
+    /* dissolvable=1 (material.c) is the rarest a single byte-wide roll
+     * can express, so a single step is no longer a safe bet at 400
+     * columns the way it was before that field got tuned down - see its
+     * own comment for the earlier 40. Instead, step until the FIRST
+     * conversion appears anywhere on the (still perfectly uniform, so no
+     * ordinary liquid mass-flow to confuse the reading) board, and check
+     * only that one - one clean sample is enough to prove the invariant,
+     * and every column stays independent right up until the moment it
+     * flips. 300 steps at 400 columns is comfortably past the point
+     * where a first conversion is virtually certain to have landed. */
+    int mass_before[OIL_DILUTE_W];
+    for (int x = 0; x < OIL_DILUTE_W; x++) {
+        mass_before[x] = CELL_VARIANT(sand_at(&oil_dilute_sim, x, 1));
+    }
+
+    int converted_x = -1;
+    for (int i = 0; i < 300 && converted_x < 0; i++) {
+        sand_step(&oil_dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < OIL_DILUTE_W; x++) {
+            if (CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0)) == MAT_ACID) {
+                converted_x = x;
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(converted_x >= 0,
+        "expected at least one oil-to-acid conversion within 300 steps "
+        "across 400 independent columns");
+
+    const int mass_after = CELL_VARIANT(sand_at(&oil_dilute_sim, converted_x, 1));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(mass_before[converted_x] - 1, mass_after,
+        "the acid that converted an oil neighbour into acid must still "
+        "pay pay_quench_cost()'s usual one unit of mass for the bite, "
+        "the same as eating sand or wood would - the conversion is not "
+        "supposed to be free the way water's own swap is");
 }
 
 /* evaporates forced to 255 so this is a one-step, deterministic
@@ -18028,10 +18307,205 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
 }
 #endif /* DEVICE_BUILD */
 
+#define BUBBLE_W 41
+#define BUBBLE_H 30
+static uint8_t bubble_cells[BUBBLE_W * BUBBLE_H];
+static sand_t  bubble_sim;
+static impulse_t bubble_buf[512];
+
+/* acid_bubble() (sand_reactions.c) replaced splash_displace()'s old "landed
+ * hard on already-occupied liquid" trigger for acid, specifically because
+ * that trigger's location was wherever a landing event happened to occur -
+ * and a real-scene reproduction (a symmetric pool, poured continuously into
+ * its own centre) found those events concentrating hard against whichever
+ * wall ordinary cross-flow levelling happened to reach first, an emergent,
+ * self-reinforcing bias with no single buggy line behind it (ruled out one
+ * at a time: the disc-seeding math, the diagonal-slide try-order, block
+ * alignment, the liquid_flip/sweep_flip alternation, exact pool/pour
+ * centring all still reproduced it). acid_bubble()'s flat, independent,
+ * per-cell roll has no such feedback loop to fall into.
+ *
+ * NO POUR NEEDED to exercise this - acid_bubble() checks every acid cell
+ * the REACTIONS pass visits, every step that pass runs, for open space
+ * directly against gravity from it, regardless of whether anything is
+ * actively landing. A flat, static, fully-settled pool's own surface row
+ * stays exposed forever, so it alone is enough to keep rolling.
+ *
+ * NOT sleeping-enabled here, deliberately, unlike test_acid_bubbles_still_
+ * bubble_once_the_block_is_asleep below - this test's own job is the
+ * SPATIAL claim (no wall favoured), which does not need sleeping in the
+ * picture at all; that test's job is the SLEEPING claim on its own.
+ *
+ * FULL GRID WIDTH, NO MARGIN - tried first with open columns either side
+ * of the pool (room for it to spread into) and found NO pops ever counted,
+ * despite direct tracing showing bubbles firing and moving: cross-flow
+ * spreads a pool with room to spread into, which LOWERS its own surface
+ * over hundreds of steps (same total mass, wider footprint), so a fixed
+ * "above POOL_TOP" check ends up looking above where the surface USED to
+ * be, not where it actually is by the time a bubble pops. A pool exactly
+ * as wide as the grid has nowhere to spread, so its surface stays put. */
+static void test_acid_bubbles_do_not_favour_one_wall(void)
+{
+    enum { POOL_TOP = 15 };
+    sand_init(&bubble_sim, bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
+    sand_enable_impulses(&bubble_sim, bubble_buf, 512);
+
+    for (int y = POOL_TOP; y < BUBBLE_H; y++) {
+        for (int x = 0; x < BUBBLE_W; x++) {
+            sand_set(&bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+        }
+    }
+
+    /* Checked EVERY step, not just at the end - a popped grain falls back
+     * under ordinary gravity within a few steps of landing (finalize_
+     * settling() runs after step_impulses(), so the very next step's own
+     * sweep pulls it straight back down), so a snapshot taken only after
+     * all 300 steps would see nothing but the fully-resettled pool, even
+     * on a run where bubbles popped constantly throughout. */
+    int left_pops = 0, right_pops = 0;
+    const int mid = BUBBLE_W / 2;
+    for (int i = 0; i < 300; i++) {
+        sand_step(&bubble_sim, 0, 1000, 0);
+        for (int y = 0; y < POOL_TOP; y++) {
+            for (int x = 0; x < BUBBLE_W; x++) {
+                if (CELL_MATERIAL(sand_at(&bubble_sim, x, y)) == MAT_ACID) {
+                    if (x < mid) {
+                        left_pops++;
+                    } else if (x > mid) {
+                        right_pops++;
+                    }
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, left_pops + right_pops,
+        "acid_bubble() must actually pop grains above an exposed surface "
+        "over time - none appeared at all");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, left_pops,
+        "bubbles must reach the left half of the surface, not just the "
+        "right - see this test's own top comment for the exact regression "
+        "this guards against");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, right_pops,
+        "bubbles must reach the right half of the surface, not just the "
+        "left - see this test's own top comment for the exact regression "
+        "this guards against");
+}
+
+#define SLEEPY_BLOCK_COLS ((BUBBLE_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
+#define SLEEPY_BLOCK_ROWS ((BUBBLE_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
+static uint8_t sleepy_bubble_cells[BUBBLE_W * BUBBLE_H];
+static uint8_t sleepy_bubble_blocks[SLEEPY_BLOCK_COLS * SLEEPY_BLOCK_ROWS];
+static sand_t  sleepy_bubble_sim;
+static impulse_t sleepy_bubble_buf[512];
+
+/* THE ACTUAL BUG A REAL DEVICE HIT, reported after acid_bubble() first
+ * shipped living in move_liquid_grain() (sand_liquid.c): a real, calm
+ * puddle of acid on device never bubbled at all, though the exact same
+ * mechanism visibly worked in the test above. The difference is
+ * sand_enable_sleeping() (see app_sand.c, which does enable it with a
+ * real buffer) - move_liquid_grain() only runs for cells the MAIN SWEEP
+ * visits, and step_one_row() (sand.c) skips any block marked settled
+ * under block-sleeping entirely, never calling move_liquid_grain() for
+ * its cells at all. A calm, undisturbed puddle earns that settled mark
+ * within a handful of quiet steps - which is exactly what "calm" means -
+ * so the trigger stopped firing the moment the puddle stopped visibly
+ * moving, precisely when bubbling was supposed to prove it was still
+ * "alive". The test above never caught this because it never enables
+ * sleeping, so it always visits every cell regardless of settled state -
+ * a blind spot in the test, not evidence the mechanism worked on device.
+ *
+ * FIXED by moving acid_bubble() into sand_reactions.c, called from
+ * step_one_reacting_row()'s own `r->dissolves` branch - that pass is not
+ * gated by block-sleeping at all (see acid_bubble()'s own comment there),
+ * for the same reason dissolving and cooling already were not: they have
+ * to keep happening on a board with nothing else moving.
+ *
+ * THIS TEST is the one that would have caught it: same flat pool as
+ * above, but with sand_enable_sleeping() on, and a quiet settle period
+ * BEFORE the check loop starts, so the pool's own block is genuinely
+ * asleep (confirmed via sand_block_settled(), not merely assumed) before
+ * a single bubble is allowed to count. */
+static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
+{
+    enum { POOL_TOP = 15 };
+    sand_init(&sleepy_bubble_sim, sleepy_bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
+    sand_enable_sleeping(&sleepy_bubble_sim, sleepy_bubble_blocks);
+    sand_enable_impulses(&sleepy_bubble_sim, sleepy_bubble_buf, 512);
+
+    for (int y = POOL_TOP; y < BUBBLE_H; y++) {
+        for (int x = 0; x < BUBBLE_W; x++) {
+            sand_set(&sleepy_bubble_sim, x, y, CELL_MAKE(MAT_ACID, MASS_MAX));
+        }
+    }
+    /* A GLASS LID over the whole surface while it settles - not load-
+     * bearing for the claim itself, but for keeping this test's own
+     * "must fall asleep" setup check independent of SAND_ACID_BUBBLE_
+     * CHANCE's exact value. acid_bubble() only ever rolls for a cell with
+     * open space against gravity from it (see its own comment in
+     * sand_reactions.c) - a lid means no acid cell is ever exposed during
+     * the settle phase, so nothing can roll a bubble regardless of how
+     * high that chance is currently tuned, and the pool settles on
+     * physics alone. Removed once asleep is confirmed, below - a covered
+     * pool bubbling once uncovered is exactly the same claim the old,
+     * chance-sensitive version of this test was after. */
+    for (int x = 0; x < BUBBLE_W; x++) {
+        sand_set(&sleepy_bubble_sim, x, POOL_TOP - 1, GLASS);
+    }
+
+    bool asleep = false;
+    for (int i = 0; i < 40 && !asleep; i++) {
+        sand_step(&sleepy_bubble_sim, 0, 1000, 0);
+        asleep = true;
+        for (int bx = 0; bx < SLEEPY_BLOCK_COLS && asleep; bx++) {
+            for (int by = 0; by < SLEEPY_BLOCK_ROWS && asleep; by++) {
+                if (!sand_block_settled(&sleepy_bubble_sim, bx, by)) {
+                    asleep = false;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(asleep,
+        "setup: the pool must actually fall asleep within 40 quiet steps, "
+        "or this test is not exercising the sleeping path it exists to "
+        "check at all");
+
+    /* Lift the lid now that the pool is confirmed asleep. Whether erasing
+     * it also wakes the block is beside the point either way: acid_
+     * bubble() lives in the reactions pass now (sand_reactions.c), which
+     * never consults block-sleeping at all - see its own comment - so
+     * this test's claim holds regardless of whether the lid's removal
+     * happens to wake the block or not. */
+    for (int x = 0; x < BUBBLE_W; x++) {
+        sand_erase(&sleepy_bubble_sim, x, POOL_TOP - 1, 0);
+    }
+
+    int pops = 0;
+    for (int i = 0; i < 300 && pops == 0; i++) {
+        sand_step(&sleepy_bubble_sim, 0, 1000, 0);
+        for (int y = 0; y < POOL_TOP && pops == 0; y++) {
+            for (int x = 0; x < BUBBLE_W; x++) {
+                if (CELL_MATERIAL(sand_at(&sleepy_bubble_sim, x, y)) == MAT_ACID) {
+                    pops++;
+                    break;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, pops,
+        "acid_bubble() must keep firing even after its block has gone to "
+        "sleep - see this test's own top comment for the exact bug this "
+        "guards against (a real, calm puddle on device that never bubbled "
+        "at all)");
+}
+
 /* --- suite -------------------------------------------------------------- */
 
 void run_sand_suite(void)
 {
+    RUN_TEST(test_acid_bubbles_do_not_favour_one_wall);
+    RUN_TEST(test_acid_bubbles_still_fire_once_the_block_is_asleep);
     RUN_TEST(test_gravity_quantises_to_eight_directions);
     RUN_TEST(test_a_slight_tilt_still_reads_as_straight_down);
     RUN_TEST(test_no_gravity_has_no_direction);
@@ -18288,6 +18762,10 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
+    RUN_TEST(test_acid_and_water_dilute_each_other);
+    RUN_TEST(test_water_wins_the_dilution_more_often_than_acid_does);
+    RUN_TEST(test_water_winning_dilution_spawns_a_gas_puff);
+    RUN_TEST(test_oil_dilutes_into_acid_but_the_acid_pays_for_it);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
