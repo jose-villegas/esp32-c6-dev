@@ -85,13 +85,37 @@ class Renderer:
 
     def __init__(self, cc):
         self.cc = cc
-        self.scratch = tempfile.mkdtemp(prefix="boot_anim_editor_")
+        # A FIXED name/location, not tempfile.mkdtemp()'s random one each
+        # run: a stray .exe freshly written under a Windows Defender-watched
+        # path (the whole system temp dir is) gets scanned on execution,
+        # sometimes costing the better part of a second - a real-world
+        # measurement, not a guess (see this script's own commit message).
+        # A stable path is what makes a ONE-TIME exclusion
+        # (Add-MpPreference -ExclusionPath, run by the user, never this
+        # script - that is a system security setting) actually pay off
+        # across restarts instead of needing to be redone every time.
+        self.scratch = os.path.join(tempfile.gettempdir(), "boot_anim_editor_scratch")
+        # Cleared and recreated on every server start - stale contents from
+        # a previous run (or, worse, a previous run's still-running process
+        # that got killed uncleanly) are exactly what produced the
+        # FileNotFoundError this replaces: a fresh start means nothing here
+        # can be stale.
+        shutil.rmtree(self.scratch, ignore_errors=True)
         os.makedirs(os.path.join(self.scratch, "boot"), exist_ok=True)
         self.binary = os.path.join(
             self.scratch, "boot_anim_render_host.exe"
             if os.name == "nt" else "boot_anim_render_host")
         self.built_hash = None
         print("scratch dir:", self.scratch, file=sys.stderr)
+        if os.name == "nt":
+            print(
+                "  Windows Defender scans a freshly-run .exe here on every "
+                "launch, which can cost the better part of a second per "
+                "frame. For faster playback, run this once in an elevated "
+                "PowerShell (admin - a system security setting, so it's "
+                "yours to run, not this script's):\n"
+                '    Add-MpPreference -ExclusionPath "%s"' % self.scratch,
+                file=sys.stderr)
 
     def _regenerate_and_compile(self, payload_hash, timing, keyframes):
         scratch_json = os.path.join(self.scratch, "boot_anim_timeline.json")

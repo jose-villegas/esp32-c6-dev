@@ -479,11 +479,17 @@ function kfSummary(kf) {
   return `pos ${kf.pos[0]},${kf.pos[1]}  rot ${kf.rot[0]}  scale ${kf.scale[0]}  ${kf.ease}`;
 }
 
+/* Selecting a keyframe moves the playhead to it and re-renders, same as
+ * dragging one already did - so the render view always shows the thing
+ * you just clicked on, not wherever the playhead happened to be left. */
 function selectKf(i) {
   selectedKf = i;
-  renderKfTrack();
+  playhead = state.keyframes[i].ms;
+  playing = false;
+  document.getElementById('btnPlay').textContent = 'Play';
   renderKfList();
   renderKfDetail();
+  renderFrame();
 }
 
 function renderKfTrack() {
@@ -730,11 +736,13 @@ btnPlay.addEventListener('click', () => {
   }
 });
 
-/* Capped well under real playback speed: each frame is a network round
- * trip to a freshly spawned native process, not a canvas repaint - see
- * boot_anim_editor_server.py's own top comment. ~12fps is plenty to judge
- * timing and motion by eye without flooding the server. */
-const PLAYBACK_FPS = 12;
+/* Each frame is a network round trip to a freshly spawned native process,
+ * not a canvas repaint - see boot_anim_editor_server.py's own top comment.
+ * 30fps assumes a Defender exclusion on the scratch dir it prints on
+ * startup - without one, a fresh .exe gets scanned on every launch and
+ * this will visibly lag behind 30fps rather than match it, since the
+ * server is still capped at one render in flight at a time either way. */
+const PLAYBACK_FPS = 30;
 
 function tick(now) {
   if (!playing) return;
