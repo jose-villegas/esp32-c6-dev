@@ -886,10 +886,22 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
  * not equal to it - a bubble should still read as smaller than a splash)
  * so a fired bubble is very likely to actually move, more than once,
  * before its geometric decay catches it - an actual multi-cell arc rather
- * than a single-frame flicker easy to miss. Not yet confirmed on device at
- * these values. */
-#define SAND_ACID_BUBBLE_CHANCE 20
-#define SAND_ACID_BUBBLE_SPEED  120
+ * than a single-frame flicker easy to miss.
+ *
+ * THE RAISE DESCRIBED ABOVE NEVER ACTUALLY LANDED - caught 2026-08-31 while
+ * chasing a device report of "no upward shots at all": this comment already
+ * argued for CHANCE 40 / SPEED 220, but the #defines below still held 20/120,
+ * the exact starting values the paragraph above says were already confirmed
+ * invisible on device. One commit, one omission - the write-up shipped, the
+ * numbers it describes did not. Ruled out first with temporary per-call
+ * counters (exposure-check passes, chance-roll passes, successful
+ * impulse_buf enqueues - since removed, see ACID_BUBBLE_INVESTIGATION.md)
+ * read back over screenshot.sh's device-state JSON: the roll rate matched
+ * CHANCE=20 to within rounding and every fired roll reached impulse_buf, so
+ * the mechanism itself was never broken - it was only ever running at the
+ * values this same comment already knew were too subtle to see. */
+#define SAND_ACID_BUBBLE_CHANCE 40
+#define SAND_ACID_BUBBLE_SPEED  220
 
 /* DILUTION - water touching acid rolls a chance to become one or the
  * other, biased toward water, reusing the same trigger acid's ordinary
