@@ -322,16 +322,27 @@ process.exit(1);
 JSEOF
 
 # chat_call PROMPT_FILE OUT_FILE MODEL_ID LOG_FILE
-# --think=false and stderr routed to a log (never merged into stdout) --
-# see this file's own top comment and Model-Delegation-Workflow.md step 4
-# for why both are load-bearing, not stylistic: without --think=false a
-# reasoning-capable model's "Thinking... ...done thinking." preamble lands
-# on stdout ahead of the real answer, and merging stderr in adds the
-# spinner's raw ANSI cursor-control bytes on top of that -- both would
-# corrupt the "=== RESOLVED ===" extraction below.
+# Three flags/redirects here are each load-bearing, not stylistic -- see
+# Model-Delegation-Workflow.md step 4 for the first two, and this repo's
+# own resolve-conflicts-local.sh history for the third:
+#   --think=false   without it, a reasoning-capable model's "Thinking...
+#                   ...done thinking." preamble lands on stdout ahead of
+#                   the real answer.
+#   2>>"$log_file"  never merge stderr into stdout -- it carries the
+#                   spinner's own ANSI cursor-control bytes.
+#   --nowordwrap    found live: even with both of the above, ollama's own
+#                   client-side word-wrap redraw still writes raw ANSI
+#                   (cursor-back-N + clear-to-EOL) into STDOUT itself
+#                   whenever a streamed line is long enough to soft-wrap --
+#                   neither piping through `cat` nor TERM=dumb suppressed
+#                   it, only this flag does. Left uncaught, it silently
+#                   truncates and duplicates whatever word happened to sit
+#                   at the wrap column (confirmed: "written" came back as
+#                   "wri" + escape bytes + "written"). Any of the three
+#                   missing corrupts the "=== RESOLVED ===" extraction below.
 chat_call() {
   local prompt_file="$1" out_file="$2" model_id="$3" log_file="$4"
-  ollama run "$model_id" --think=false < "$prompt_file" > "$out_file" 2>>"$log_file"
+  ollama run "$model_id" --think=false --nowordwrap < "$prompt_file" > "$out_file" 2>>"$log_file"
 }
 
 # extract_marked FILE START_MARKER END_MARKER -- prints whatever text sits
