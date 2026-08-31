@@ -419,7 +419,7 @@ static void test_label_centred_in_rect_at_every_turn(void)
         {   0,  40,  92,  92, 5 },   /* a real tile: 5-char name, 92x92 */
         {   0,  40,  92,  92, 1 },   /* shortest real name */
         { 100, 200, 120,  80, 3 },   /* non-square rect */
-        {  10,  10,  61,  74, 4 },   /* odd dimensions - VERY LOW quality's cell math shows up elsewhere as odd numbers too */
+        {  10,  10,  61,  74, 4 },   /* odd dimensions - LOW quality's cell math shows up elsewhere as odd numbers too */
     };
 
     for (size_t c = 0; c < sizeof(cases) / sizeof(cases[0]); c++) {

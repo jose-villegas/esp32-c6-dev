@@ -11,12 +11,12 @@
  * A cell per pixel would be 368 x 448 = 165 KB of grid. After the framebuffer
  * takes 322 KB of the chip's ~424 KB there is nowhere near that left, so a
  * cell is a square block of `cell` x `cell` pixels, and `cell` is chosen from
- * the boot menu rather than fixed: HIGH (2 px) gives a 184 x 224 grid, or
- * 41 KB; MEDIUM (3 px, the default) gives 122 x 149, or 18 KB; LOW (4 px)
- * gives 92 x 112, or 10 KB; VERY LOW (6 px) gives 61 x 74, or about 4.5 KB.
- * All four still read as grains rather than bricks - the choice trades
- * fineness for the step budget a finer grid costs, not for whether it looks
- * right.
+ * the boot menu rather than fixed: ULTRA (2 px) gives a 184 x 224 grid, or
+ * 41 KB; HIGH (3 px) gives 122 x 149, or 18 KB; NORMAL (4 px, the default)
+ * gives 92 x 112, or 10 KB; LOW (6 px) gives 61 x 74, or about 4.5 KB;
+ * VERY LOW (8 px) gives 46 x 56, or about 2.5 KB. All five still read as
+ * grains rather than bricks - the choice trades fineness for the step budget
+ * a finer grid costs, not for whether it looks right.
  *
  * Every allocation below is sized for the finest quality (2 px) regardless of
  * which one is active, so switching quality on the menu never reallocates
@@ -75,13 +75,14 @@ static const char *TAG = "sand";
  * see the comment on `quality` itself. */
 typedef struct { const char *name; int cell; } quality_t;
 static const quality_t qualities[] = {
-    { "HIGH",     2 },
-    { "MEDIUM",   3 },
-    { "LOW",      4 },
-    { "VERY LOW", 6 },
+    { "ULTRA",    2 },
+    { "HIGH",     3 },
+    { "NORMAL",   4 },
+    { "LOW",      6 },
+    { "VERY LOW", 8 },
 };
 #define QUALITY_COUNT ((int)(sizeof(qualities) / sizeof(qualities[0])))
-#define QUALITY_DEFAULT 1        /* MEDIUM */
+#define QUALITY_DEFAULT 2        /* NORMAL */
 
 /* Persists across app visits by design - only a device reboot resets this to
  * QUALITY_DEFAULT. Reset in sand_enter() would mean picking LOW, backing out
@@ -479,7 +480,7 @@ static sand_ui_t ui = {
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
                                    * only the first grid_h are in use at any
-                                   * quality below HIGH */
+                                   * quality below ULTRA */
 static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * settled blocks to skip - see
                                    * sand_enable_sleeping() */
@@ -495,7 +496,7 @@ static impulse_t  *impulse_buf;  /* APP_IMPULSE_MAX entries: grains in
  * genuinely separate blobs in one row keep being sent separately instead
  * of one box spanning the gap between them. See row_runs.h. GRID_H_MAX *
  * ROW_MAX_RUNS entries each - only the first grid_h rows are in use at any
- * quality below HIGH; row_run_n[cy] says how many of a row's ROW_MAX_RUNS
+ * quality below ULTRA; row_run_n[cy] says how many of a row's ROW_MAX_RUNS
  * slots are actually in use. */
 static uint16_t   *row_run_x0;
 static uint16_t   *row_run_x1;
@@ -1650,6 +1651,7 @@ static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     case 3:  paint_row_n(fb, pal, cy, row, 3); break;
     case 4:  paint_row_n(fb, pal, cy, row, 4); break;
     case 6:  paint_row_n(fb, pal, cy, row, 6); break;
+    case 8:  paint_row_n(fb, pal, cy, row, 8); break;
     /* Not reachable for any cell size in qualities[] above - if it is ever
      * hit, that table grew an entry this switch does not know about, which
      * is a bug there, not here. Falls back to the finest size (2) rather
@@ -1809,15 +1811,15 @@ static void draw_dirty_rows(bool shine_moved)
 
 /* The marker's fixed on-screen size, in pixels rather than cells - the same
  * reasoning POUR_RADIUS_PX's comment above gives for the pour/erase
- * brushes: a cell is not a physical size, it is 2 px at HIGH and 6 px at
+ * brushes: a cell is not a physical size, it is 2 px at ULTRA and 8 px at
  * VERY LOW for the same object, so a marker drawn "one cell wide" would be
  * a different physical mark at every quality setting, and it would shrink
- * to nearly nothing at HIGH specifically - the opposite of what a marker
+ * to nearly nothing at ULTRA specifically - the opposite of what a marker
  * that has to be findable by a finger needs. Findability is a property of
  * the finger, not of the grid, so the marker gets a size the grid has no
  * say over.
  *
- * Tuned by eye. At MEDIUM's 3 px cells this spans about four cells across,
+ * Tuned by eye. At HIGH's 3 px cells this spans about four cells across,
  * so it does sit over a little of what the source underneath is actually
  * producing - an accepted trade for being visible at all, not an
  * oversight. */
@@ -2484,8 +2486,8 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
     /* The radii are defined in pixels and divided down here rather than
      * defined in cells, so a finger's-width brush stays a finger's width on
      * screen at every quality - a cell-based radius would instead have
-     * covered twice the physical area at LOW that it does at HIGH, since a
-     * LOW cell is twice as many pixels across.
+     * covered twice the physical area at NORMAL that it does at ULTRA, since
+     * a NORMAL cell is twice as many pixels across.
      *
      * Rounded to nearest (+ cell / 2 before dividing) rather than truncated,
      * because this is a physical size in pixels being converted to a count
@@ -2494,7 +2496,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * 3 or 4 px, and a 40% shrink at 6 px, where 10 / 6 truncates to 1
      * instead of rounding to 2. Never rounds to 0 for any quality in the
      * table: the smallest result is POUR_RADIUS_PX at the coarsest cell,
-     * (10 + 3) / 6 = 2. */
+     * (10 + 4) / 8 = 1. */
     for (int i = 0; i < applications; i++) {
         if (ui.mode == SAND_MODE_ERASE) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
@@ -2667,9 +2669,10 @@ static void track_pour_split(const input_t *input, int64_t step_us,
 #endif
 
 /* The boot menu: START begins the simulation at the current quality, and the
- * quality button cycles HIGH/MEDIUM/LOW and stays on the menu. Modeled on
- * ui_launcher.c's own frame - same ui_begin()/ui_begin_screen()/
- * mu_end_window()/ui_end() shape, one full-screen window with no chrome.
+ * quality button cycles ULTRA/HIGH/NORMAL/LOW/VERY LOW and stays on the
+ * menu. Modeled on ui_launcher.c's own frame - same ui_begin()/
+ * ui_begin_screen()/mu_end_window()/ui_end() shape, one full-screen window
+ * with no chrome.
  *
  * The shell (main.c) draws the home-swipe hint over whatever the app drew
  * and owns the swipe-up-to-exit gesture itself, so this menu needs no back
