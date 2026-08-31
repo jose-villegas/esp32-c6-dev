@@ -10566,15 +10566,20 @@ static void test_acid_fizzes_while_it_eats(void)
 {
     acid_tank(2, 2);
 
+    /* Smoke OR gas: the fizz coin-flips between the two (see
+     * step_one_dissolver_cell()), so either one is proof the fizz fired -
+     * a single deterministic run can land entirely on one side of that
+     * flip. evaporates is off by default (sand_set_evaporates()), so any
+     * gas seen here can only have come from the fizz. */
     bool fizzed = false;
     for (int i = 0; i < 400 && !fizzed; i++) {
         sand_step(&s, 0, 1000, 0);
-        fizzed = count_cells_of(MAT_SMOKE) > 0;
+        fizzed = count_cells_of(MAT_SMOKE) > 0 || count_cells_of(MAT_GAS) > 0;
     }
 
     TEST_ASSERT_TRUE_MESSAGE(fizzed,
-        "acid eating a pile of sand must leave some smoke behind - it is "
-        "the only sign on screen that the acid is working");
+        "acid eating a pile of sand must leave some smoke or gas behind - "
+        "it is the only sign on screen that the acid is working");
 }
 
 /* And the fizz has to be able to get OUT of the acid, which it does for
@@ -10587,12 +10592,17 @@ static void test_the_fizz_rises_out_of_the_acid(void)
     const int surface = 1;      /* acid_tank() fills from row 1 down */
     acid_tank(2, 2);
 
+    /* Smoke OR gas: the fizz coin-flips between the two (see
+     * step_one_dissolver_cell()), and both rise through try_bubble() the
+     * same way - the coin flip only picks which material, not whether it
+     * floats. */
     int highest = H;
     for (int i = 0; i < 400; i++) {
         sand_step(&s, 0, 1000, 0);
         for (int y = 0; y < H; y++) {
             for (int x = 0; x < W; x++) {
-                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_SMOKE && y < highest) {
+                const uint8_t m = CELL_MATERIAL(sand_at(&s, x, y));
+                if ((m == MAT_SMOKE || m == MAT_GAS) && y < highest) {
                     highest = y;
                 }
             }
@@ -10600,9 +10610,35 @@ static void test_the_fizz_rises_out_of_the_acid(void)
     }
 
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(surface, highest,
-        "smoke made at the bottom of an acid pool must reach the top of "
-        "it - a gas is lighter than any liquid, and try_bubble() is what "
-        "lets it climb out instead of being trapped underneath");
+        "smoke or gas made at the bottom of an acid pool must reach the "
+        "top of it - a gas is lighter than any liquid, and try_bubble() "
+        "is what lets it climb out instead of being trapped underneath");
+}
+
+/* evaporates forced to 255 so this is a one-step, deterministic
+ * assertion instead of waiting on the material's own low figure - the
+ * same technique test_stone_conducts_heat_into_water_beyond_it uses for
+ * sand_set_conduction(). */
+static void test_acid_evaporates_into_gas_when_forced(void)
+{
+    fixture();
+    /* Boxed in on every side it could move to - a liquid's fall and
+     * spread are not gated by mobility the way a gas grain's rise is
+     * (see move_liquid_grain(), sand_liquid.c), so nothing short of
+     * actually walling the cell in keeps it in place for its one step. */
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 4, 3, STONE);
+    sand_set(&s, 2, 4, STONE);
+    sand_set(&s, 3, 4, STONE);
+    sand_set(&s, 4, 4, STONE);
+    sand_set_evaporates(&s, 255);
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_ACID, MASS_MAX));
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "a cell of acid with evaporates forced to 255 must turn to gas "
+        "in a single step");
 }
 
 static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)
@@ -17919,6 +17955,7 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
+    RUN_TEST(test_acid_evaporates_into_gas_when_forced);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
     RUN_TEST(test_water_does_not_drill_into_oil_when_tilted);

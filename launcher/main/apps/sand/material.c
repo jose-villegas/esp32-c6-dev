@@ -601,6 +601,16 @@ const reaction_t reactions[MATERIAL_MAX] = {
                          * thing being eaten rather than instead of it.
                          * Starting point, not final - tune on device like
                          * every other constant here. */
+
+        .evaporates = 1,    /* the rarest this field can express - 1 in
+                             * 256 per cell per step still means a
+                             * standing puddle left untouched for a long
+                             * while will visibly thin, since every one
+                             * of its cells keeps rolling. That is the
+                             * point: a rare wisp now and then, not a
+                             * clock on the puddle. Starting point, not
+                             * final - tune on device like every other
+                             * constant here. */
     },
 
     [MAT_OIL] = {

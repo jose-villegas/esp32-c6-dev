@@ -820,6 +820,10 @@ static void start_sim(void)
      * material (currently just gas) has a nonzero figure in the table, so
      * this is a no-op for sand, water and stone. */
     sand_set_decay(&sim, SAND_DECAY_PER_MATERIAL);
+    /* Per-material, same reasoning as decay above - only acid has a
+     * nonzero figure in the table, so this is a no-op for everything
+     * else. */
+    sand_set_evaporates(&sim, SAND_EVAPORATES_PER_MATERIAL);
     sand_set_soak(&sim, SAND_SOAK_PER_MATERIAL);
     /* Per-material too - only gas has a figure below full speed, so this
      * is a no-op for sand, water and stone. */

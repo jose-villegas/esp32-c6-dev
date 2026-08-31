@@ -2663,7 +2663,12 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
     return acted;
 }
 
-/* One dissolver cell's turn: eat one cardinal neighbour, and pay for it.
+/* One dissolver cell's turn: evaporate on a low roll, or else eat one
+ * cardinal neighbour and pay for it.
+ *
+ * Evaporation is checked first and returns immediately - unconditional,
+ * with no dissolve roll or neighbour involved, so a cell that evaporates
+ * this step does not also get a free bite the same step.
  *
  * Two rolls, on two different materials, and both have to pass: this
  * cell's `dissolves` (how hard the acid tries) and the neighbour's
@@ -2687,6 +2692,14 @@ static inline bool conduct_heat(sand_t *s, int x, int y, int w, int h)
 static bool step_one_dissolver_cell(sand_t *s, uint8_t *row, int x, int y,
                                     int w, int h, const reaction_t *r)
 {
+    const int evaporates = (s->evaporates >= 0) ? s->evaporates
+                                                : r->evaporates;
+    if (evaporates != 0 && (int)(rng_next(&s->rng) & 0xFF) < evaporates) {
+        const size_t at = (size_t)y * (size_t)w + (size_t)x;
+        place_reacted(s, x, y, at, MAT_GAS);
+        return true;
+    }
+
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->dissolves) {
         return false;
     }
@@ -2714,9 +2727,13 @@ static bool step_one_dissolver_cell(sand_t *s, uint8_t *row, int x, int y,
          * It reads properly without any help from this code: smoke is
          * lighter than every liquid, so try_bubble() (sand_gas.c) walks it
          * up and out of the acid rather than leaving it stranded at the
-         * bottom of the pool. */
+         * bottom of the pool. Smoke or gas on a coin flip, not always
+         * smoke - the same "acid breathes gas sometimes" reading the
+         * `evaporates` roll above gives the puddle itself. */
         if (r->fizz != 0 && (int)(rng_next(&s->rng) & 0xFF) < r->fizz) {
-            place_reacted(s, nx, ny, at, MAT_SMOKE);
+            const uint8_t residue = (rng_next(&s->rng) & 1) ? MAT_GAS
+                                                             : MAT_SMOKE;
+            place_reacted(s, nx, ny, at, residue);
         } else {
             s->cells[at] = CELL_EMPTY;
             mark_rows(s, ny, ny);
