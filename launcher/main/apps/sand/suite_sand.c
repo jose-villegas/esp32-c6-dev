@@ -15874,6 +15874,322 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
         "flag is not redundant with the first");
 }
 
+/* Sand and dirt poured in equal amounts, then water dropped over both until
+ * it settles - the first benchmark in this file to exercise the wet-earth
+ * path at all. Sand slowly BECOMES dirt (material.c's MAT_SAND row:
+ * `.soaks = 8, .soaks_to = MAT_DIRT`) while the dirt it becomes goes on
+ * drinking, far faster (MAT_DIRT: `.soaks = 60`) and only slowly gives that
+ * moisture back up (`.dries = 5`, a twelfth of its own soak rate). Dirt has
+ * nowhere else to put what it absorbs - its variant nibble IS the moisture
+ * level (material.h's CELL_MOISTURE()/SOIL_MOISTURE_MAX, 0 dry to 7
+ * saturated) - so this scene's own composition keeps changing while it
+ * runs: the sand/dirt split at the end is not the split it was poured
+ * with.
+ *
+ * REACTION DISPATCH UNDER SUSTAINED LOAD is the thing this scene exists to
+ * measure, not just liquid movement, and getting that to actually happen
+ * turned out to be less obvious than it sounds. sand_step_reactions()
+ * (sand_reactions.c) gates its whole pass behind six content flags and
+ * clears each one the moment a pass finds nothing for it to do; a flag is
+ * re-armed only by a cell WRITE (sand_priv.h's latch_content_flags(),
+ * called from sand_set() and from a handful of reaction outcomes) - NEVER
+ * by ordinary liquid movement in sand_liquid.c. A board of nothing but
+ * water arms may_have_moisture once, at paint time, because water is
+ * KIND_LIQUID - and the very first reactions pass clears it straight back
+ * off, since nothing wet is touching anything that soaks. Nothing in
+ * plain liquid movement ever re-arms it after that. Dirt is what breaks
+ * the silence: a soil cell holding any moisture keeps re-arming the flag
+ * on every write that touches it (sand_priv.h: `r->dries != 0 &&
+ * CELL_VARIANT(cell) != 0`), so once this scene is wet, the reactions
+ * pass keeps running every step for as long as any dirt anywhere is damp
+ * - which, measured, is the whole window below.
+ *
+ * EQUAL, AND MIXED DOWN TO ONE CELL. Sand and dirt are painted as a
+ * single-cell checkerboard - material = (x + y) & 1 - rather than as two
+ * stacked halves or even column-wide stripes, so the water above meets
+ * both in exactly the same proportion at every column and every depth it
+ * reaches, instead of one material happening to sit nearer the surface
+ * and racing the other's soak rate by geometry rather than by the
+ * materials' own numbers. Fully packed, no gaps, so the bed is exactly as
+ * stable a floor as the other builders' solid blocks above - 12,420 cells
+ * of each, verified by the host test below.
+ *
+ * WHY THE WATER IS PAINTED RESTING DIRECTLY ON THE EARTH, WITH NO GAP.
+ * The obvious way to write "drop water over them" is to leave headroom
+ * above the bed and let it fall - and an early draft of this scene did
+ * exactly that, with a ten-row gap between the water and the earth's
+ * surface. It measured nothing at all: see the may_have_moisture
+ * reasoning above - the flag is armed once, at paint time, and with a
+ * gap to fall through first it is cleared again by the very first
+ * reactions pass, ten-odd steps before the water actually reaches the
+ * earth, and nothing in ordinary liquid movement ever re-arms it after
+ * that. Four hundred steps of that draft produced not one wet dirt cell.
+ * Painting the water already flush against the earth's surface keeps
+ * real contact present from step one, while the flag is still armed from
+ * painting it, so the very first reactions pass finds moisture and keeps
+ * the flag alive for the ones that follow.
+ *
+ * NOT A FULL-WIDTH SLAB, EITHER. A slab already spanning the whole 184
+ * columns at a uniform depth is already at rest - flat on a flat floor,
+ * with nothing for gravity or the liquid's own mass-diffusion to do -
+ * which would leave nothing for "until the water settles" to describe.
+ * Painted instead over the CENTER HALF of the width only (x in [46,
+ * 138)), it has to spread sideways to reach the flanks, which is the
+ * active settling this benchmark is named for: measured (three seeds),
+ * the water first touches earth across the full 184-column width
+ * somewhere between step 30 and step 31, having started touching only
+ * the center 92 columns.
+ *
+ * ENOUGH TO PERCOLATE, NOT JUST WET A CRUST. Percolation depth - the
+ * deepest row below the earth's surface holding any dirt moisture at all
+ * - reaches row 13 by the time the water has finished spreading (step
+ * 35, the settle allowance below) and keeps climbing through the whole
+ * measured window, to row 17-22 by step 65 (measured, three seeds). The
+ * earth bed is 135 rows deep, so this is a front still advancing into a
+ * bed nowhere near saturated, not a shallow soak that stalls at the
+ * surface.
+ *
+ * sand_set_soak() is OFF by default, unlike scatter, decay and mobility -
+ * see its own comment in sand.h: "half the tests in the suite put sand in
+ * water to check that sand SINKS", and a mechanic that arrived switched
+ * on would have rewritten every one of them. None of the other builders
+ * in this section call it, because none of them need to; this one does,
+ * and is the only one that does. Left off, this whole scene would
+ * silently measure nothing but liquid movement. Runs at
+ * SAND_SOAK_PER_MATERIAL alongside the app's own scatter, decay and
+ * mobility settings - app_sand.c calls all four. */
+static void build_wet_earth_scene(sand_t *s)
+{
+    const int earth_top = (REAL_H * 2) / 5;    /* bottom three fifths,
+                                                 * 135 rows */
+    for (int y = earth_top; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const material_id_t m = ((x + y) & 1) ? MAT_SAND : MAT_DIRT;
+            sand_set(s, x, y, CELL_MAKE(m, 0));
+        }
+    }
+
+    /* Water over the center half only, resting flush on the earth - see
+     * the comment above for why neither a headroom gap nor a full-width
+     * slab would measure the scene this claims to. */
+    const int water_h = earth_top / 2;
+    const int water_top = earth_top - water_h;
+    const int cx0 = REAL_W / 4, cx1 = (REAL_W * 3) / 4;
+    for (int y = water_top; y < earth_top; y++) {
+        for (int x = cx0; x < cx1; x++) {
+            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+}
+
+/* One scan, reused for the window's start, its four checkpoints and its
+ * end - the water mass still held (summed variant, not cell count: a cell
+ * count only moves when a WHOLE unit is used up, see pay_quench_cost()'s
+ * "written as CELL_EMPTY rather than a zero variant" reasoning in
+ * sand_reactions.c, so it steps in noisy jumps; the mass sum falls by
+ * exactly what soaking took, every single step, with no such noise - see
+ * the host test below for the seed-to-seed numbers that made this the
+ * quantity to grade on), how many cells are dirt, and how much moisture
+ * they hold between them. */
+static void wet_earth_scan(const sand_t *s, int *water_mass, int *dirt_count,
+                            int *moisture_sum, int *extended_count)
+{
+    int wm = 0, dirt = 0, moist = 0, ext = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = sand_at(s, x, y);
+            const int m = CELL_MATERIAL(c);
+            if (m == MAT_WATER) {
+                wm += CELL_VARIANT(c);
+            } else if (m == MAT_DIRT) {
+                dirt++;
+                moist += CELL_MOISTURE(c);
+            }
+            if (cell_is_extended(c)) {
+                ext++;
+            }
+        }
+    }
+    *water_mass = wm;
+    *dirt_count = dirt;
+    *moisture_sum = moist;
+    *extended_count = ext;
+}
+
+/* The scene above really does keep percolating for the whole measured
+ * window, checked with counters taken MID-FLIGHT rather than on the
+ * freshly built scene - enumerating what a scene is BUILT from is not the
+ * same as what it CONTAINS once running, the round-16 finding that let 300
+ * metal cells hide inside an earlier benchmark unnoticed.
+ *
+ * 35 SETTLE STEPS, not the 20-30 the boiler and lava stress scenes use.
+ * The number here is not a "let it get going" allowance in the usual
+ * sense - it is chosen against the one concrete milestone
+ * build_wet_earth_scene()'s comment names: full-width contact, which
+ * measured (three seeds) lands at step 30 for one seed and step 31 for
+ * the other two. 35 is that milestone plus a margin, not a round number
+ * picked first and checked after - the host test below asserts the
+ * milestone directly (touching every column) rather than trusting the
+ * step count alone to have reached it, for the same reason the mixed
+ * scene's own coverage test above does not trust geometry to imply
+ * contact either.
+ *
+ * Unlike the boiler or the thermal shock lattice, this scene has no tail
+ * to avoid measuring past - watched out to 1200 steps on the host (40x
+ * this benchmark's own window), water mass keeps falling and dirt keeps
+ * gaining at close to the same rate the whole way, because the earth bed
+ * is 135 rows deep and nowhere near saturated by the time any budget this
+ * suite can afford would stop. The only transient here is the SPREADING
+ * one the settle allowance exists to clear - once the water has reached
+ * every column, the scene does not go quiet again within any window this
+ * file has time to run.
+ *
+ * FOUR CHECKPOINTS across the 30 measured steps - at +7, +15, +22 and +30,
+ * the same spacing test_the_boiler_scene_keeps_boiling_across_the_window
+ * uses for the same reason: a single before/after comparison cannot catch
+ * a scene that is active at first and stalls partway through. Measured
+ * (three seeds, water mass lost per quarter): 274-373 units, comfortably
+ * clear of the 150 floor below; dirt gained per quarter: 83-115 against a
+ * floor of 50; moisture gained per quarter: 190-271 against a floor of
+ * 100. All three floors sit at roughly half the worst-case measured
+ * value, the same margin the rest of this file's coverage assertions
+ * use. */
+static void test_the_wet_earth_scene_keeps_percolating_across_the_window(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    const bool have_all = (big != NULL && blocks != NULL);
+    if (!have_all) {
+        free(big);
+        free(blocks);
+        TEST_FAIL_MESSAGE("need a grid and a block map for the wet earth "
+                           "scene, and at least one of the two failed to "
+                           "allocate");
+    }
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 53u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+
+    build_wet_earth_scene(&s);
+
+    int painted_sand = 0, painted_dirt = 0, painted_water = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_SAND)       painted_sand++;
+            else if (m == MAT_DIRT)  painted_dirt++;
+            else if (m == MAT_WATER) painted_water++;
+        }
+    }
+
+    for (int i = 0; i < 35; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    /* The milestone the settle allowance is chosen against - see this
+     * scene's own comment above. Every column that has water resting
+     * directly on earth counts, the same adjacency the mixed scene's own
+     * coverage test uses above. */
+    int touching_columns = 0;
+    for (int x = 0; x < REAL_W; x++) {
+        for (int y = 0; y < REAL_H - 1; y++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) != MAT_WATER) {
+                continue;
+            }
+            const int below = CELL_MATERIAL(sand_at(&s, x, y + 1));
+            if (below == MAT_SAND || below == MAT_DIRT) {
+                touching_columns++;
+                break;
+            }
+        }
+    }
+
+    int water_mass[5], dirt_count[5], moisture_sum[5], extended_unused;
+    wet_earth_scan(&s, &water_mass[0], &dirt_count[0], &moisture_sum[0],
+                   &extended_unused);
+
+    const int checkpoints[4] = { 7, 15, 22, 30 };
+    int next_checkpoint = 0;
+    for (int i = 1; i <= 30; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (next_checkpoint < 4 && i == checkpoints[next_checkpoint]) {
+            wet_earth_scan(&s, &water_mass[next_checkpoint + 1],
+                           &dirt_count[next_checkpoint + 1],
+                           &moisture_sum[next_checkpoint + 1],
+                           &extended_unused);
+            next_checkpoint++;
+        }
+    }
+
+    int extended_final;
+    int water_mass_final, dirt_count_final, moisture_sum_final;
+    wet_earth_scan(&s, &water_mass_final, &dirt_count_final,
+                   &moisture_sum_final, &extended_final);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(painted_dirt, painted_sand,
+        "sand and dirt must be painted in exactly equal amounts, or the "
+        "\"equal contact\" claim in build_wet_earth_scene()'s comment is "
+        "not actually what this scene does");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(4000, painted_water,
+        "enough water must be painted to percolate through the bed, not "
+        "merely wet its surface");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(REAL_W, touching_columns,
+        "the water must have finished spreading to touch earth across the "
+        "full width by the end of the 35-step settle allowance - see "
+        "build_wet_earth_scene()'s comment: measured, full-width contact "
+        "lands at step 30 or 31, well inside this allowance");
+
+    for (int q = 0; q < 4; q++) {
+        const int mass_lost     = water_mass[q] - water_mass[q + 1];
+        const int dirt_gained   = dirt_count[q + 1] - dirt_count[q];
+        const int moist_gained  = moisture_sum[q + 1] - moisture_sum[q];
+
+        char why[224];
+        snprintf(why, sizeof why,
+                 "quarter %d of the measured window must still show water "
+                 "being consumed by soaking (lost %d units of mass there) "
+                 "- a quiet quarter means the percolation this scene "
+                 "exists to measure has stalled", q, mass_lost);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(150, mass_lost, why);
+
+        snprintf(why, sizeof why,
+                 "quarter %d must still be converting sand to dirt (gained "
+                 "%d dirt cells there) - the sand-to-soil claim this scene "
+                 "makes only holds if it keeps happening for the whole "
+                 "window, not just at the start", q, dirt_gained);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, dirt_gained, why);
+
+        snprintf(why, sizeof why,
+                 "quarter %d must still be raising dirt's own moisture "
+                 "(gained %d units of it there), not merely converting "
+                 "fresh sand in at the minimum starting level", q,
+                 moist_gained);
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(100, moist_gained, why);
+    }
+
+    /* Same reasoning as the lava stress, thermal shock and boiler scenes'
+     * own plant pins above: the plant materials are under active
+     * development, and if growth ever starts happening inside this
+     * measured window, the device benchmark beside this test would
+     * quietly stop measuring the scene it claims to. This scene paints no
+     * wood or seed anywhere, so it should hold at zero more easily than
+     * any of the three it borrows the reasoning from. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, extended_final,
+        "the wet earth scene should not contain any extended cells - if "
+        "it does, either something is growing that this benchmark was "
+        "never meant to measure, or the scene changed to paint one on "
+        "purpose (update this test)");
+}
+
 /* =========================================================================
  * BLAST SCENES - a settled dune and a detonation at its centre, following
  * the same builder / host-guard-test / device-log-lines shape as
@@ -17870,6 +18186,91 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
         "done, not that something broke");
 }
 
+/* Sand and dirt poured in equal amounts, water dropped over both until it
+ * settles (build_wet_earth_scene() above, shared with
+ * test_the_wet_earth_scene_keeps_percolating_across_the_window, which
+ * proves - with counters taken mid-flight, not on the freshly built scene
+ * - that the water is still being consumed by soaking, dirt's own
+ * moisture is still rising and sand is still converting to dirt across
+ * every quarter of the measured window). This is the first benchmark in
+ * the file to put sustained load through sand_step_reactions() by way of
+ * moisture rather than fire or heat - see the builder's own comment for
+ * why may_have_moisture, unlike the other five content flags the
+ * reactions pass gates on, needs a cell already holding moisture to stay
+ * armed, and why that makes this scene run the reactions pass every
+ * single step rather than the rare pass a plain water scene would.
+ *
+ * 35 settle steps, then 30 measured - matching the host test's own window
+ * exactly (see that test's comment for why 35 rather than the 20-30 the
+ * boiler and lava stress scenes use), so what this times is what that one
+ * already proved really is sustained percolation rather than a spreading
+ * transient that has not yet reached every column.
+ *
+ * NO DEVICE MEASUREMENT YET. Every ceiling above this one in the file was
+ * retired to a measured-times-0.9 reduction target the same day it was
+ * captured - this row has not been captured at all, so the number below
+ * is a PROVISIONAL ceiling in the sense the four-liquids, lava-stress and
+ * thermal-shock tests shipped with when they were new: deliberately loose
+ * so it does not fail before a real capture exists, not a claim about
+ * what this scene actually costs. 300000 us is sized against the two
+ * scenes nearest this one in shape - a full 184x224 grid with the
+ * reactions pass genuinely active - which measured 121377 us for 20 steps
+ * (lava stress) and 31529 us for 30 steps (the boiler) on their first
+ * capture; this scene touches close to the whole grid's earth every step
+ * the way the lava stress scene does, so 300000 us for 30 steps is
+ * chosen to sit comfortably above that end of the range rather than
+ * anywhere close to a tight guess.
+ *
+ * ONCE MEASURED, THIS ROW BECOMES MEASURED x 0.8, NOT x 0.9. Every other
+ * reduction target among this file's other thirteen device budgets uses
+ * the 10%-below-first-measurement rule; this one has been specified,
+ * deliberately, to become a 20% reduction target instead. That is an
+ * instruction from the person pegging this benchmark, not a number this
+ * file's own convention derived - so when this ceiling is next re-pegged
+ * from a real capture, the replacement is measured * 0.8 rounded, and
+ * should NOT be "corrected" to the usual * 0.9 for consistency with the
+ * rest of the file. */
+static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t *big    = malloc(REAL_W * REAL_H);
+    uint8_t *blocks = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 53u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_soak(&real, SAND_SOAK_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+
+    build_wet_earth_scene(&real);
+
+    for (int i = 0; i < 35; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 30;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "wet earth scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(300000, (int)per_step,
+        "PROVISIONAL ceiling, not yet re-pegged from a device capture - "
+        "see this test's own comment. Once measured this row becomes "
+        "measured x 0.8 (a deliberately tighter reduction target than "
+        "the rest of the file's x 0.9), not a loosened guard");
+}
+
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing at
@@ -18748,6 +19149,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_smoke_and_steam_scene_stays_a_gas_screen);
     RUN_TEST(test_the_thermal_shock_scene_shatters_in_both_directions);
     RUN_TEST(test_the_boiler_scene_keeps_boiling_across_the_window);
+    RUN_TEST(test_the_wet_earth_scene_keeps_percolating_across_the_window);
     RUN_TEST(test_the_sand_dune_scene_throws_grains_beyond_its_own_footprint);
     RUN_TEST(test_the_water_pool_scene_refills_its_own_cavity);
     RUN_TEST(test_the_vessel_scene_lets_nothing_reach_outside_it);
@@ -18872,6 +19274,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget);
     RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);
