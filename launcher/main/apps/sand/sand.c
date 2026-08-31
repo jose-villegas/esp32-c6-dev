@@ -1754,6 +1754,20 @@ static void step_impulses(sand_t *s, int dx, int dy)
     const int h = s->h;
     int kept = 0;
 
+    /* CASCADE candidates, collected here and appended only AFTER the main
+     * loop below finishes - see SAND_CASCADE_SPEED_DIVISOR's own comment
+     * in sand.h for why. Queuing into s->impulse_buf mid-loop would grow
+     * s->impulse_count while this same loop's own bound (`i <
+     * s->impulse_count`) is still reading it, so a freshly-queued relay
+     * could be revisited in this SAME pass - an unbounded same-step chain
+     * through however much connected liquid happens to be there, not the
+     * one-ring-per-step ripple this is meant to be. Collecting here and
+     * queuing once the loop's own compaction (`kept`) has already
+     * finished keeps every relay exactly one step behind the hop that
+     * caused it. */
+    impulse_t cascade[SAND_CASCADE_MAX_PER_STEP];
+    int cascade_count = 0;
+
     for (int i = 0; i < s->impulse_count; i++) {
         impulse_t entry = s->impulse_buf[i];
 
@@ -1786,13 +1800,23 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * dropped exactly as before - see
          * test_a_dropped_entry_never_moves_someone_elses_cell.
          *
-         * Liquids are the one honest gap this leaves. A flying liquid cell
-         * that the cross-flow pass (sand_step_liquids(), which also runs
-         * before this one) redistributes sideways is not one of these three
-         * candidates, so it is simply lost, same as before this fix -
-         * accepted for now rather than chased, since a liquid's own amount-
-         * based movement does not preserve a single grain's identity the
-         * way a solid's swap does. */
+         * LIQUIDS GET A SECOND CHANCE, MATCHED ON MATERIAL - measured, not
+         * theoretical: tracing a water-settling scene showed 44.5% of
+         * queued water entries lost to exactly this gap, which is coin-flip
+         * odds against a splash/cascade entry surviving even one step. The
+         * fix stays scoped to water/acid - the only materials that ever
+         * carry a cascade - so the solid path above, and its byte-exact
+         * identity guarantee, is untouched. A material-only match is the
+         * right test here specifically because cross-flow moves MASS, not
+         * grains: it can drain or refill a cell's amount without moving it
+         * to one of the three swap-shaped candidates above, and it can
+         * change the variant byte (mass amount) without changing the
+         * material at all. Checked at the original cell first (cross-flow
+         * often leaves mass sitting right where it was, just a different
+         * amount), then its 8 neighbours (equalise_liquids() moves mass by
+         * at most one cell per step - sand_liquid.c). Re-anchoring
+         * entry.cell to whatever byte is actually found keeps its stored
+         * mass/variant truthful for every check after this one. */
         if (s->cells[entry.index] != entry.cell) {
             const int ox = (int)((unsigned)entry.index % (unsigned)w);
             const int oy = (int)((unsigned)entry.index / (unsigned)w);
@@ -1819,6 +1843,36 @@ static void step_impulses(sand_t *s, int dx, int dy)
                     reacquired = true;
                 }
             }
+
+            if (!reacquired) {
+                const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
+                if (lost_mat == MAT_WATER || lost_mat == MAT_ACID) {
+                    const cell_t here = s->cells[entry.index];
+                    if (!CELL_IS_EMPTY(here) &&
+                        CELL_MATERIAL(here) == lost_mat) {
+                        entry.cell = here;
+                        reacquired = true;
+                    }
+                    for (int c = 0; c < 8 && !reacquired; c++) {
+                        const int *rd = ring_dir(c);
+                        const int cx = ox + rd[0];
+                        const int cy = oy + rd[1];
+                        if ((unsigned)cx >= (unsigned)w ||
+                            (unsigned)cy >= (unsigned)h) {
+                            continue;
+                        }
+                        const size_t cat = (size_t)cy * (size_t)w + (size_t)cx;
+                        const cell_t found = s->cells[cat];
+                        if (!CELL_IS_EMPTY(found) &&
+                            CELL_MATERIAL(found) == lost_mat) {
+                            entry.index = (uint16_t)cat;
+                            entry.cell  = found;
+                            reacquired = true;
+                        }
+                    }
+                }
+            }
+
             if (!reacquired) {
                 continue;
             }
@@ -1941,6 +1995,47 @@ static void step_impulses(sand_t *s, int dx, int dy)
         }
         mark_move(s, x, y, nx, ny);
 
+        /* CASCADE - see its own comment above this loop for why this only
+         * COLLECTS a candidate rather than queuing one directly. WATER
+         * and ACID only, matching splash_displace()'s own scope
+         * (sand_liquid.c) - this exists to serve that feature, not as a
+         * general property of every impulse.
+         *
+         * RELAYS BACKWARD, NOT FORWARD - checked one step BEHIND where
+         * this entry started (x, y - the position it just vacated - minus
+         * one more step in `d`, its own direction of travel), not one
+         * step past where it landed. The cell AHEAD of a mover is close
+         * to definitionally open (that is why the move just succeeded),
+         * so checking there almost never finds anything to relay into -
+         * tried first, and a straight test column pushed upward showed
+         * exactly that: the lone entry moved once into open space and the
+         * cascade never fired again, because there was never more of the
+         * same material further along ITS OWN path to find. What should
+         * relay is whatever water was FEEDING this move from behind: if
+         * it is the same material, it can now advance into the gap this
+         * entry just left, which is what actually turns one grain moving
+         * into a connected chain advancing together - a piston, not a
+         * single flying droplet. */
+        const uint8_t mover_mat = CELL_MATERIAL(entry.cell);
+        if ((mover_mat == MAT_WATER || mover_mat == MAT_ACID) &&
+            entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
+            cascade_count < SAND_CASCADE_MAX_PER_STEP) {
+            const int rx = x - d[0];
+            const int ry = y - d[1];
+            if ((unsigned)rx < (unsigned)w && (unsigned)ry < (unsigned)h) {
+                const cell_t relay_target =
+                    s->cells[(size_t)ry * (size_t)w + (size_t)rx];
+                if (!CELL_IS_EMPTY(relay_target) &&
+                    CELL_MATERIAL(relay_target) == mover_mat) {
+                    impulse_t *c = &cascade[cascade_count++];
+                    c->index = (uint16_t)((size_t)ry * (size_t)w + (size_t)rx);
+                    c->cell  = relay_target;
+                    c->dir   = entry.dir;
+                    c->speed = (uint8_t)(entry.speed / SAND_CASCADE_SPEED_DIVISOR);
+                }
+            }
+        }
+
         s->impulse_buf[kept].index = (uint16_t)nat;
         s->impulse_buf[kept].cell  = entry.cell;
         s->impulse_buf[kept].dir   = entry.dir;
@@ -1949,6 +2044,17 @@ static void step_impulses(sand_t *s, int dx, int dy)
     }
 
     s->impulse_count = kept;
+
+    /* Appended only now that `kept` (and so s->impulse_count, set just
+     * above) is final - see this function's own top comment for why
+     * mid-loop queuing was not safe here. Each entry is queued exactly
+     * the way sand_impulse() itself would, just batched: this is not a
+     * new primitive, only a deferred, bounded set of ordinary impulses. */
+    for (int i = 0; i < cascade_count; i++) {
+        sand_impulse(s, (int)((unsigned)cascade[i].index % (unsigned)w),
+                    (int)((unsigned)cascade[i].index / (unsigned)w),
+                    cascade[i].dir, cascade[i].speed);
+    }
 }
 
 void sand_step(sand_t *s, int gx, int gy, int jostle)

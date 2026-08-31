@@ -2584,6 +2584,94 @@ static void test_a_water_splash_actually_opens_a_gap(void)
         "whatever the radius or chance settings claim to allow");
 }
 
+#define CASCADE_TEST_W 1
+#define CASCADE_TEST_H 16
+static uint8_t cascade_test_cells[CASCADE_TEST_W * CASCADE_TEST_H];
+static sand_t  cascade_test_sim;
+
+static void test_a_cascading_impulse_moves_more_than_one_cell(void)
+{
+    /* An ordinary impulse only ever moves the ONE grain it was queued
+     * for. See step_impulses()'s own CASCADE comment (sand.c) for the
+     * fix: a successful WATER or ACID move relays its push into whatever
+     * of the SAME material sits one step BEHIND where it started (so
+     * that cell can advance into the gap this one just left), queued for
+     * the NEXT step's pass rather than this one's - the speed halves
+     * each hop (SAND_CASCADE_SPEED_DIVISOR), so the wave loses energy and
+     * dies out on its own, but a chain of connected liquid should still
+     * move as a group for a few hops, not as one grain stepping aside
+     * while the rest of the chain stays exactly put.
+     *
+     * A VERTICAL column, pushed UP (against gravity), not a horizontal
+     * row pushed sideways - tried first, and confounded by something
+     * unrelated to the cascade entirely: cross-flow (equalise_liquids(),
+     * sand_liquid.c) runs every step PERPENDICULAR to gravity, and with
+     * gravity straight down that perpendicular axis is horizontal - the
+     * exact axis the impulse was also pushing along. The row filled
+     * itself completely within three steps through perfectly ordinary
+     * levelling, with or without any impulse, so "is any cell in the row
+     * empty" could never isolate the cascade's own contribution. Gravity
+     * can never move water UP on its own, so a column pushed upward has
+     * no such confound: any water found above where the column originally
+     * ended must have arrived via the impulse system, and specifically
+     * MORE THAN ONE cell up there at once (checked at a single instant,
+     * after the loop below) is only possible if more than one entry was
+     * in flight together - a lone, non-cascading impulse can only ever
+     * occupy one cell at a time, however far it travels alone over
+     * however many steps.
+     *
+     * EXACTLY ONE CELL WIDE, not merely narrow - a 3-wide version of
+     * this same scene was tried first and had a THIRD confound: the
+     * "down the slope" diagonal slides in move_liquid_grain()
+     * (sand_liquid.c) let the column leak sideways into the empty
+     * flanking columns even though it was already fully settled
+     * vertically, corrupting the column's own mass distribution over
+     * time for reasons that had nothing to do with any impulse. A grid
+     * exactly as wide as the column leaves no adjacent column to leak
+     * into at all - both sides read as solid via sand_at()'s own
+     * off-grid convention, the same guarantee a real wall would give. */
+    enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
+    impulse_t buf[64];
+    sand_init(&cascade_test_sim, cascade_test_cells, CASCADE_TEST_W,
+             CASCADE_TEST_H, 1u);
+    sand_enable_impulses(&cascade_test_sim, buf, 64);
+
+    for (int y = TOP; y < TOP + COL_LEN; y++) {
+        sand_set(&cascade_test_sim, COL, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    sand_impulse(&cascade_test_sim, COL, TOP, DIR_UP, 255);
+
+    /* A single, non-cascading impulse can only ever displace the ONE
+     * cell it was queued for - TOP itself. Anything BELOW TOP (deeper in
+     * the column, further from the open space the impulse is heading
+     * into) becoming empty at any point can only mean the relay reached
+     * it: nothing else in this scene ever touches those cells - gravity
+     * has nowhere to settle them (the column already rests on the grid's
+     * own floor), and the grid is exactly as wide as the column, so there
+     * is no sideways path there either. Checked across every step, not
+     * just the end - see step_impulses()'s own CASCADE comment (sand.c)
+     * for why the wave (the vacancy propagating backward through the
+     * chain as each cell advances into the gap ahead of it) is expected
+     * to keep moving rather than settle on one final shape. */
+    bool reached_deeper = false;
+    for (int i = 0; i < 10 && !reached_deeper; i++) {
+        sand_step(&cascade_test_sim, 0, 1000, 0);
+        for (int y = TOP + 1; y < TOP + COL_LEN; y++) {
+            if (CELL_IS_EMPTY(sand_at(&cascade_test_sim, COL, y))) {
+                reached_deeper = true;
+                break;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(reached_deeper,
+        "a strong impulse into a connected water column must relay "
+        "through more than one cell of it - a single grain moving alone "
+        "can only ever vacate the one cell it started in, so a gap "
+        "appearing DEEPER in the column proves more than one cell moved");
+}
+
 /* --- gas ------------------------------------------------------------------ */
 
 static void test_gas_rises_straight_up_under_ordinary_gravity(void)
@@ -17584,6 +17672,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_pool_settles_at_the_angle_it_is_tilted_to);
     RUN_TEST(test_water_falling_onto_water_also_queues_a_small_displacement);
     RUN_TEST(test_a_water_splash_actually_opens_a_gap);
+    RUN_TEST(test_a_cascading_impulse_moves_more_than_one_cell);
 
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
     RUN_TEST(test_gas_falls_when_the_board_is_inverted);

@@ -753,6 +753,37 @@ void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 #define SAND_SPLASH_CHANCE_FLOOR       24
 #define SAND_SPLASH_CHANCE_STEP        140
 
+/* CASCADE - a WATER or ACID impulse that successfully moves relays its
+ * push into whatever of the SAME material sits one step BEHIND where it
+ * started (opposite its own direction of travel), so that cell can now
+ * advance into the gap this one just left - a chain of connected liquid
+ * moves together, one advancing into the last one's vacancy, rather than
+ * just the one grain that happened to be queued flying off alone. See
+ * step_impulses()'s own comment (sand.c) for why this queues into NEXT
+ * step's pass rather than this one's, and for why "behind", not "one
+ * further step ahead" (the first version of this checked ahead, and
+ * found almost nothing - the cell ahead of a mover is close to
+ * definitionally open, that is why the move just succeeded).
+ *
+ * The ramp lives here, not in a separate mechanism: each relay hop's
+ * speed is the previous hop's speed divided by DIVISOR, so the wave loses
+ * energy geometrically as it travels and dies out on its own.
+ *
+ * EXAGGERATED, 2026-08-31 - reported as "there but extremely subtle" at
+ * the previous MIN_SPEED (32): from a full 255 push, DIVISOR 2 only
+ * cleared the `speed >= MIN_SPEED * DIVISOR` gate for 2 hops (255 -> 127
+ * -> 63, stopped there since 63 < 64) - a genuine cascade, but short
+ * enough to barely read as one. Dropping the floor is the direct lever:
+ * MIN_SPEED 4 clears the same gate (>= 8) for 5 hops instead (255 -> 127
+ * -> 63 -> 31 -> 15 -> 7, stops there), a visibly longer, slower-fading
+ * wave through connected water rather than a two-cell nudge. Tune this
+ * one first if the cascade still needs to reach further or less; DIVISOR
+ * changes the SHAPE of the falloff (steeper vs gentler), MIN_SPEED
+ * changes how far down the tail it is allowed to go before stopping. */
+#define SAND_CASCADE_SPEED_DIVISOR 2
+#define SAND_CASCADE_MIN_SPEED     4
+#define SAND_CASCADE_MAX_PER_STEP  64
+
 /* How many ACID splashes splash_displace() (sand_liquid.c) will fire in a
  * single sand_step() - see sand_t::acid_splashes_this_step's own comment
  * above for why this is a per-step cap rather than the decaying budget
