@@ -2471,7 +2471,18 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
      * exact_disc_count() at 1257, past the old 1024, which would have
      * silently reintroduced exactly this starvation. 4096 comfortably
      * clears today's radius with headroom for tuning it further. */
-    impulse_t drop_impulse_buf[4096];
+    /* HEAP, not the stack: impulse_t is 6 bytes, so 4096 of them is 24 KB
+     * against this device's 3,584-byte main task stack
+     * (CONFIG_ESP_MAIN_TASK_STACK_SIZE). On the host, with megabytes of
+     * stack, the array was invisible; on the board it panicked with a
+     * Stack protection fault and reboot-looped the whole self-test before
+     * it could reach any frame-budget test. That is the same bug, in this
+     * same file, that the sixth tuning attempt fixed once already - see
+     * docs/Sand/Performance-Tuning-Attempts.md - and the same fix: every
+     * other fixture here mallocs, and so must this one. */
+    impulse_t *drop_impulse_buf = malloc(4096 * sizeof *drop_impulse_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(drop_impulse_buf,
+        "the splash impulse queue must fit in what the framebuffer leaves");
     sand_init(&splash_sim, splash_cells, SPLASH_W, SPLASH_H, 1u);
     sand_enable_impulses(&splash_sim, drop_impulse_buf, 4096);
 
@@ -2498,6 +2509,11 @@ static void test_water_falling_onto_water_also_queues_a_small_displacement(void)
         sand_step(&splash_sim, 0, 1000, 0);
         queued = splash_sim.impulse_count > 0;
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs, and this file has already had one such
+     * leak starve every later malloc()-based test on this no-PSRAM heap. */
+    free(drop_impulse_buf);
 
     TEST_ASSERT_TRUE_MESSAGE(queued,
         "a drop that fell through open space and landed on an existing "
@@ -2541,7 +2557,18 @@ static void test_a_water_splash_actually_opens_a_gap(void)
      * cell count starves queue_outward_impulse()'s thinning and can queue
      * nothing at all, even on a correctly-firing trigger, and for why 1024
      * itself stopped being enough once RADIUS_WATER doubled to 20. */
-    impulse_t buf[4096];
+    /* HEAP, not the stack: impulse_t is 6 bytes, so 4096 of them is 24 KB
+     * against this device's 3,584-byte main task stack
+     * (CONFIG_ESP_MAIN_TASK_STACK_SIZE). On the host, with megabytes of
+     * stack, the array was invisible; on the board it panicked with a
+     * Stack protection fault and reboot-looped the whole self-test before
+     * it could reach any frame-budget test. That is the same bug, in this
+     * same file, that the sixth tuning attempt fixed once already - see
+     * docs/Sand/Performance-Tuning-Attempts.md - and the same fix: every
+     * other fixture here mallocs, and so must this one. */
+    impulse_t *buf = malloc(4096 * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "the crater impulse queue must fit in what the framebuffer leaves");
     sand_init(&crater_sim, crater_cells, CRATER_W, CRATER_H, 1u);
     sand_enable_impulses(&crater_sim, buf, 4096);
 
@@ -2579,6 +2606,9 @@ static void test_a_water_splash_actually_opens_a_gap(void)
             cleared++;
         }
     }
+
+    /* Freed before the assertion, for the same reason drop_impulse_buf is. */
+    free(buf);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(1, cleared,
         "a water splash landing with real room on multiple sides must "
