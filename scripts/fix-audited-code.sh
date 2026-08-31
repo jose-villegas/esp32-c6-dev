@@ -53,12 +53,18 @@
 # prior `idf.py build`, which lives in a gitignored build directory a fresh
 # worktree won't have of its own -- rather than requiring you to run
 # misra_check.sh in your real checkout first (which would mean "isolated"
-# still touched it), the worktree's launcher/<build_dir> gets symlinked to
-# the main checkout's, so misra_check.sh runs entirely inside the worktree
-# same as everything else. (--report bypasses this: if you already have a
-# report, its path is just read directly, worktree or not.) If nothing ends
-# up changing, the worktree and its branch are removed automatically; if
-# something does, both are left behind for you to inspect before opening
+# still touched it), everything in the main checkout's launcher/<build_dir>
+# gets symlinked into the worktree EXCEPT compile_commands.json, which gets
+# rewritten instead: its absolute paths point at the main checkout's source
+# no matter where cppcheck runs from, so a plain symlink would have cppcheck
+# silently analyze (and write its *.dump crash files into) the main
+# checkout regardless of the worktree -- the rewritten copy points those
+# paths at the worktree's own source instead, so misra_check.sh genuinely
+# runs entirely inside the worktree, same as everything else. (--report
+# bypasses this: if you already have a report, its path is just read
+# directly, worktree or not.) If nothing ends up changing, the worktree and
+# its branch are removed automatically; if something does, both are left
+# behind for you to inspect before opening
 # the PR.
 #
 # --exclude <prefix> drops any finding whose main/-relative path starts with
@@ -204,14 +210,51 @@ if [ "$USE_WORKTREE" = "1" ]; then
 
   # compile_commands.json lives in a gitignored build dir, so a fresh
   # worktree never has one of its own even though the main checkout does.
-  # Symlink the main checkout's build dir in rather than requiring the
-  # caller to pre-generate a report outside the worktree -- that would mean
-  # "isolated" still needed a step in the real checkout first. Only when
-  # --report wasn't already given (that path is read directly, see above)
-  # and only if the worktree doesn't already have something at that name.
+  # A plain symlink of the whole build dir is NOT enough here (an earlier
+  # version of this did exactly that, and it silently analyzed the wrong
+  # tree): compile_commands.json bakes in ABSOLUTE paths to the main
+  # checkout's source -- "file", "directory", and every -I/-o argument in
+  # "command" -- which don't change no matter which directory cppcheck is
+  # actually invoked from. Symlinking only makes the file reachable; cppcheck
+  # still reads and reports on the main checkout's real files regardless
+  # (and writes its *.dump crash artifacts there too, which is what actually
+  # surfaced this: they kept landing outside the worktree).
+  #
+  # Fix: symlink everything in the build dir EXCEPT compile_commands.json
+  # (so the config headers and toolchain response file .cflags reference
+  # via absolute path still resolve, unchanged, to the one real shared
+  # build), then write a REWRITTEN compile_commands.json as a real file
+  # (never through the symlink, which would edit the main checkout's copy)
+  # with every occurrence of the main checkout's absolute launcher path
+  # replaced by the worktree's own -- so cppcheck genuinely analyzes this
+  # worktree's source. Only when --report wasn't already given (that path
+  # is read directly, see above) and only if the worktree doesn't already
+  # have something at that name.
   if [ -z "$REPORT" ] && [ ! -e "launcher/$BUILD_DIR" ] && [ -d "$REPO_ROOT/launcher/$BUILD_DIR" ]; then
-    echo "Linking launcher/$BUILD_DIR to the main checkout's build (not tracked by git)..."
-    ln -s "$REPO_ROOT/launcher/$BUILD_DIR" "launcher/$BUILD_DIR"
+    echo "Rewriting launcher/$BUILD_DIR/compile_commands.json for this worktree's own source..."
+    REPO_ROOT_WIN="$(cd "$REPO_ROOT" && pwd -W)"
+    WORKTREE_DIR_WIN="$(pwd -W)"
+    mkdir -p "launcher/$BUILD_DIR"
+    for entry in "$REPO_ROOT/launcher/$BUILD_DIR"/*; do
+      name="$(basename "$entry")"
+      [ "$name" = "compile_commands.json" ] && continue
+      ln -s "$entry" "launcher/$BUILD_DIR/$name"
+    done
+    node -e '
+      const fs = require("fs");
+      const [, , srcPath, dstPath, mainRoot, worktreeRoot] = process.argv;
+      const replaceAllLiteral = (str, find, repl) => str.split(find).join(repl);
+      let content = fs.readFileSync(srcPath, "utf8");
+      // Forward-slash form: "directory", and every -I/-D in "command".
+      content = replaceAllLiteral(content, mainRoot, worktreeRoot);
+      // Backslash form: "file" and -o path in "command", JSON-escaped as
+      // double-backslash in the raw text (one real \ is written as \\).
+      const bs = (s) => s.split("/").join("\\\\");
+      content = replaceAllLiteral(content, bs(mainRoot), bs(worktreeRoot));
+      fs.writeFileSync(dstPath, content);
+    ' "$REPO_ROOT/launcher/$BUILD_DIR/compile_commands.json" \
+      "launcher/$BUILD_DIR/compile_commands.json" \
+      "$REPO_ROOT_WIN" "$WORKTREE_DIR_WIN"
   fi
 else
   if [ -n "$(git status --porcelain)" ]; then
