@@ -356,6 +356,7 @@ typedef struct {
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
     int      vent_chance;  /* see sand_set_vent_chance() */
+    int      vent_spread;  /* see sand_set_vent_spread() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1593,6 +1594,29 @@ void sand_set_conduction(sand_t *s, int chance);
  * not two compounded ones. */
 void sand_set_vent_chance(sand_t *s, int chance);
 #define SAND_VENT_CHANCE_PER_MATERIAL (-1)
+
+/* Forces every vent throw's angle spread (try_vent()'s and try_vent_
+ * chunk()'s own comments, sand_reactions.c - the -1/0/+1 ring-step
+ * jitter around gravity-relative up) to an EXACT value instead of the
+ * real, randomly rolled one - -1 for a lean toward one corner, 0 for
+ * dead straight up (an EXACT axis, not merely close to it), +1 for a
+ * lean toward the other. Not exercised by any test today - the one
+ * that tried to use it (asserting several chunk-mates land at an
+ * EXACT, predicted height in lock-step, not merely the same height as
+ * each other) ran into a real, separate confound with the scene it
+ * built (a multi-layer pool re-quenching itself as venting exposed
+ * each layer in turn) and was pulled rather than shipped half-verified
+ * - see the git history around this comment's own change for the full
+ * account. Left in as a small, cheap, already-integrated piece of
+ * infrastructure (every real firing already routes through this same
+ * resolve step, sand_reactions.c's resolve_vent_spread()) for a future
+ * attempt at that test to build on, not because anything calls it yet.
+ * Pass SAND_VENT_SPREAD_RANDOM (the default) to restore the real
+ * per-firing roll; any value outside -1..1 is treated the same as that
+ * sentinel rather than silently clamped into range, so a typo cannot
+ * masquerade as a real angle. */
+void sand_set_vent_spread(sand_t *s, int spread);
+#define SAND_VENT_SPREAD_RANDOM  2
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,

@@ -497,6 +497,22 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
     }
 }
 
+/* A fresh -1/0/+1 ring-step roll, unless sand_set_vent_spread() has
+ * pinned this sand_t to an exact one - see that function's own comment
+ * (sand.h) for the one kind of test this exists for. Every site that
+ * would otherwise roll its own spread inline (try_vent()'s two corner
+ * columns, try_vent_chunk()'s shared ceiling roll, and the single-cell
+ * override path in step_one_burning_cell()) goes through this instead,
+ * so a pinned spread reaches all of them uniformly rather than needing
+ * each site to remember to check it separately. */
+static inline int resolve_vent_spread(sand_t *s)
+{
+    if (s->vent_spread != SAND_VENT_SPREAD_RANDOM) {
+        return s->vent_spread;
+    }
+    return (int)(rng_next(&s->rng) % 3) - 1;
+}
+
 /* TRAPPED HEAT VENTS UPWARD - see reaction_t.vent_chance's own comment
  * (material.h) for the design this implements. Called only once (x, y) is
  * already known to be covered_from_above() and to have rolled its
@@ -544,9 +560,9 @@ static void try_vent(sand_t *s, int x, int y, int w, int h,
 {
     const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
 
-    vent_column(s, x, y, w, h, up - 1, up, (int)(rng_next(&s->rng) % 3) - 1);
+    vent_column(s, x, y, w, h, up - 1, up, resolve_vent_spread(s));
     vent_column(s, x, y, w, h, up,     up, ceiling_spread);
-    vent_column(s, x, y, w, h, up + 1, up, (int)(rng_next(&s->rng) % 3) - 1);
+    vent_column(s, x, y, w, h, up + 1, up, resolve_vent_spread(s));
 }
 
 /* THE CHUNK reaction_t.vent_chance's own gate (step_one_burning_cell(),
@@ -595,7 +611,7 @@ static void try_vent_chunk(sand_t *s, int x, int y, int w, int h,
     const int cy0 = (y / SAND_VENT_CHUNK) * SAND_VENT_CHUNK;
     const int cx1 = cx0 + SAND_VENT_CHUNK;
     const int cy1 = cy0 + SAND_VENT_CHUNK;
-    const int ceiling_spread = (int)(rng_next(&s->rng) % 3) - 1;
+    const int ceiling_spread = resolve_vent_spread(s);
 
     for (int cy = cy0; cy < cy1 && cy < h; cy++) {
         for (int cx = cx0; cx < cx1 && cx < w; cx++) {
@@ -3391,20 +3407,30 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * this to 255 for a test still gets a single, deterministic roll,
      * exactly as sand_set_evaporates(s, 255) does for acid.
      *
-     * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ALSO ONLY IN PER-MATERIAL
-     * MODE - see that constant's own comment (sand.h) for the mechanism
-     * and why. Only a cell whose (x, y) both land on a multiple of
-     * SAND_VENT_CHUNK ever reaches covered_from_above() or draws a
-     * random number at all here; every other covered lava cell only
-     * vents as a side effect of its own chunk's sampled cell succeeding
-     * (try_vent_chunk(), below). SKIPPED ENTIRELY when overridden, same
-     * reasoning as the second roll just above: a test forcing this to
-     * 255 wants a single, deterministic trigger for the exact cell it
-     * placed, not one that silently depends on whether that cell happens
-     * to land on the sampling lattice - sand_set_vent_chance()'s whole
-     * contract is "ignore the real, deliberately rare production
-     * shape", and the chunk grid is as much a part of that shape as the
-     * rate itself. */
+     * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ONLY IN PER-MATERIAL MODE -
+     * see that constant's own comment (sand.h) for the mechanism and why.
+     * Only a cell whose (x, y) both land on a multiple of SAND_VENT_CHUNK
+     * ever reaches covered_from_above() or draws a random number at all
+     * here IN PRODUCTION; every other covered lava cell only vents as a
+     * side effect of its own chunk's sampled cell succeeding (try_vent_
+     * chunk(), below). SKIPPED when overridden, same reasoning as the
+     * second roll just above: a test forcing this to 255 wants every
+     * covered cell it placed eligible to trigger on its own, not only
+     * the ones that happen to land on the sampling lattice.
+     *
+     * try_vent_chunk() ITSELF IS NOT SKIPPED UNDER OVERRIDE, THOUGH -
+     * unlike the rate and the lattice sampling, GROUPING is not part of
+     * "how rare is this", it is part of "what happens once it fires",
+     * and a test forcing the rate has no more reason to want that
+     * changed than it has reason to want covered_from_above() itself
+     * swapped for something simpler. This costs nothing for the many
+     * existing single-cell scenes: try_vent_chunk() called on a lava
+     * cell with no OTHER covered lava sharing its chunk finds only
+     * itself and behaves exactly like the plain try_vent() this
+     * replaced. It only starts to matter - correctly - for a scene
+     * placing more than one covered cell inside the same chunk, where
+     * whichever one rolls first now brings its chunk-mates along
+     * immediately rather than leaving them to roll independently. */
     const bool vent_per_material = s->vent_chance < 0;
     const int vent_chance = vent_per_material ? rx->vent_chance : s->vent_chance;
     if (vent_chance != 0 &&
@@ -3413,11 +3439,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         covered_from_above(s, x, y, w, h, mat->density) &&
         (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
         (!vent_per_material || (rng_next(&s->rng) % 60) == 0)) {
-        if (vent_per_material) {
-            try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
-        } else {
-            try_vent(s, x, y, w, h, (int)(rng_next(&s->rng) % 3) - 1);
-        }
+        try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
         acted = true;
     }
 
