@@ -584,7 +584,7 @@ exactly where `sand_explode()`'s own core fill would have ignited it.)*
 
 ### The quantitative half
 
-`launcher/tools/report_performance.sh` for frame-budget numbers, before
+`launcher/main/apps/sand/tools/report_performance.sh` for frame-budget numbers, before
 and after on the same build. This matters more than usual: a blast is a
 **burst** cost, and no existing benchmark scene measures one. The perf
 round is open.

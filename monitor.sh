@@ -3,9 +3,9 @@
 # Attach to the device's serial console, skipping idf.py's ~90 s environment
 # activation.
 #
-#   ./monitor.sh                       # launcher build, auto-detected port
+#   ./monitor.sh                       # most recently built ELF, auto-detected port
 #   ./monitor.sh -p /dev/ttyACM0       # explicit port
-#   ./monitor.sh -e path/to/other.elf  # a different build
+#   ./monitor.sh -e path/to/other.elf  # a specific build
 #
 # Passing the .elf matters: it carries the debug symbols that turn a crash
 # address into a file and line number. Ctrl+] quits.
@@ -17,7 +17,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-ELF="$ROOT/launcher/build/launcher.elf"
+ELF=""
 PORT="${ESPPORT:-}"
 
 while [ $# -gt 0 ]; do
@@ -28,6 +28,25 @@ while [ $# -gt 0 ]; do
         *)         echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
+
+# --- find the ELF, if -e didn't already say -------------------------------
+# There is no one build directory: plain `idf.py build` (the README's own
+# Quick Start) uses build/, tools/build_flash.sh uses build.release/ or
+# build.diag/, and test/run_device_tests.sh always uses build.diag/. A fixed
+# default can only match one of those - it used to be build/, which silently
+# broke `./monitor.sh` for anyone who had only ever built through
+# build_flash.sh, with an error that gave no hint the ELF existed one
+# directory over.
+#
+# So: discover it, the same way main/CMakeLists.txt discovers apps rather
+# than listing them (see that file's own comment on why). `ls -t` sorts by
+# modification time, newest first, and needs no non-POSIX stat(1) flags that
+# differ between GNU and BSD/macOS - picking the newest is also just the
+# right tiebreak when more than one build directory exists, since that is
+# almost always the one whoever ran this actually means to look at.
+if [ -z "$ELF" ]; then
+    ELF=$(ls -t "$ROOT"/launcher/build*/launcher.elf 2>/dev/null | head -n 1 || true)
+fi
 
 # --- locate ESP-IDF --------------------------------------------------------
 if [ -z "${IDF_PATH:-}" ]; then
@@ -69,9 +88,10 @@ if [ -z "$PORT" ]; then
     [ -z "$PORT" ] && PORT="COM3"
 fi
 
-if [ ! -f "$ELF" ]; then
-    echo "No ELF at $ELF" >&2
+if [ -z "$ELF" ] || [ ! -f "$ELF" ]; then
+    echo "No launcher.elf found under $ROOT/launcher/build*/" >&2
     echo "Build it first: cd launcher && idf.py build" >&2
+    echo "  (or tools/build_flash.sh, which builds into build.release/ or build.diag/)" >&2
     exit 1
 fi
 

@@ -22,3 +22,19 @@
 # so this holds however any one clone is configured.
 *.c text eol=lf
 *.h text eol=lf
+
+# Docs, for the same reason as the scripts above, not the C sources: a doc
+# built by a host tool - report_reactions.sh (main/apps/sand/tools/) is the
+# first, and the only one so far - gets diffed byte-for-byte against a
+# freshly generated copy in CI (`report_reactions.sh --check`). The
+# generator's stdout is plain \n on every platform it runs on, but a doc
+# committed from a Windows checkout carries \r\n unless something stops it -
+# MinGW-built host tools leave stdout in text mode, which rewrites every \n
+# to \r\n on the way out - so a doc generated and committed on Windows is
+# CRLF while the same generator's output on the ubuntu-latest CI runner is
+# LF, and the check fails on every line of every run, forever, independent
+# of whatever the commit actually changed. (docs/Sand/Reaction-Table.md hit
+# exactly this.) eol=lf overrides the checking-out machine's own
+# core.autocrlf, so this holds regardless of how any one clone is
+# configured, the same as the two rules above.
+*.md text eol=lf

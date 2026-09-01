@@ -293,7 +293,7 @@ effect will silently stripe in blocks with no test catching why. Nothing
 enforces this today; it is a fact about the file, not a type, which is
 exactly why it needs saying here.
 
-### Gravity-oriented specular already works here - a reusable reference
+### Gravity-oriented specular - two working implementations now
 
 Water's rim gets a genuine gravity-driven highlight: `liquid_spec[]`, a
 16-entry table (indexed by the 4-bit cardinal mask) filled once a frame by
@@ -301,11 +301,19 @@ Water's rim gets a genuine gravity-driven highlight: `liquid_spec[]`, a
 the rim's fill index. It reads well enough on the device that it was
 described as "almost like platinum" (in a context where that was a
 compliment, before the interior blend fix above addressed the actual
-complaint). **The project has separately wanted a gravity-oriented shine
-for glass and not managed to land one.** This is a working example of
-exactly that mechanism, at a known, modest cost - start here rather than
-re-deriving a specular approach from nothing, if glass's shine comes up
-again.
+complaint).
+
+The project had separately wanted a gravity-oriented shine for glass and,
+for a while, had not managed to land one - **that has since shipped**,
+independently, as `material_shine_direction()`: a pure, stateless function
+returning a Q8 unit vector (minus gravity, the same convention
+`liquid_spec[]` uses) that turns glass and metal's `MATERIAL_HATCHED`
+band from a fixed diagonal into one that sweeps with the tilt. Two
+different mechanisms solving related problems - `liquid_spec[]` is a
+precomputed per-mask table read by index, this is two numbers computed
+once a frame and carried straight into the hatch's own per-pixel walk -
+worth comparing both before reaching for either as a template for a third
+material's shine.
 
 ---
 

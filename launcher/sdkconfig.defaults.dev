@@ -1,0 +1,12 @@
+# Development variant: development-only logging and instrumentation (frame
+# timings, the screenshot listener - see docs/Testing-Guide.md's
+# "Development-only instrumentation" section), WITHOUT the on-device test
+# suites or the Diagnostics app. See sdkconfig.defaults.diag for that
+# combination - CONFIG_LAUNCHER_SELFTEST there `select`s this same flag on
+# (main/Kconfig.projbuild), so a diag build carries everything this one
+# does plus the test harness; this file is what gets just the first half.
+#
+# Used by tools/build_flash_dev.sh (or `build_flash.sh --dev`), which builds
+# this into its own build.dev/ so it never overwrites build/ or
+# build.release/.
+CONFIG_LAUNCHER_DEVELOPMENT=y

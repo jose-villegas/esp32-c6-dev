@@ -64,6 +64,15 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# A generated sdkconfig WINS over the defaults fragments: idf.py only applies
+# SDKCONFIG_DEFAULTS when it has to create the file, so editing a fragment
+# never reaches an existing build.diag/sdkconfig. That has now silently
+# defeated two separate flag changes - the diag watchdog, then
+# LAUNCHER_SELFTEST_AUTORUN - each time producing a build that looks right
+# and measures nothing. Removing it costs one reconfigure per run, which is
+# noise beside the build, and makes the fragments authoritative again.
+rm -f "$LAUNCHER_DIR/build.diag/sdkconfig"
+
 echo "=== Building and flashing build.diag to $COM_PORT ==="
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
@@ -81,14 +90,43 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
     # build.diag/sdkconfig. Kept to ONE line on purpose: this PowerShell
     # block is a bash double-quoted string, where PowerShell backtick
     # line-continuations are bash command substitution - a parse error.
-    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag\" -D SDKCONFIG=build.diag/sdkconfig build
+    # A THIRD fragment, sdkconfig.defaults.diag_autorun, is layered on top:
+    # CONFIG_LAUNCHER_SELFTEST_AUTORUN defaults to n, so without it the
+    # suites compile in but never run at boot, the device just sits in the
+    # launcher, and the capture below waits out its full timeout with no
+    # SELFTEST_COMPLETE and no measurements. That is exactly what happened
+    # on 2026-08-31: c4979fa made the suites opt-in and taught
+    # tools/report_test_results.sh to layer this file, but not this script,
+    # which a2daa87 had already moved into the sand app's own tools folder.
+    # The two scripts do the same job and must be changed together.
+    idf.py -B build.diag -D SDKCONFIG_DEFAULTS=\"sdkconfig.defaults;sdkconfig.defaults.diag;sdkconfig.defaults.diag_autorun\" -D SDKCONFIG=build.diag/sdkconfig build
     if (\$LASTEXITCODE -ne 0) { exit \$LASTEXITCODE }
     idf.py -B build.diag -p '$COM_PORT' flash
     exit \$LASTEXITCODE
 "
 
+# The generated config is the only honest witness that the fragments took:
+# check the flags the capture actually depends on, and fail loudly here
+# rather than after a 300-second timeout with an empty raw file.
+for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN; do
+    if ! grep -q "^${flag}=y" "$LAUNCHER_DIR/build.diag/sdkconfig"; then
+        echo "ERROR: ${flag} is not set in the generated build.diag/sdkconfig -"
+        echo "the flashed image would boot without running the suites, and the"
+        echo "capture below would time out with no measurements. Aborting."
+        exit 1
+    fi
+done
+
 echo "=== Capturing self-test output ==="
 python "$LAUNCHER_DIR/tools/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
+
+# A capture that never finished, crashed, or measured nothing (wrong image,
+# suites compiled in but not running) still produces a plausible-looking
+# report if fed straight to report_performance.py below - that has already
+# cost two full capture cycles and once got mistaken for a fresh result.
+# Fail loudly here, before spending any time generating a table from it.
+echo "=== Validating capture ==="
+python "$LAUNCHER_DIR/tools/sweeps/validate_capture.py" "$RAW_CAPTURE"
 
 echo "=== Generating performance report ==="
 # Both halves of a frame: the simulation's budgets live in the sand suite,

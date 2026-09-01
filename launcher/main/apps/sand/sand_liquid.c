@@ -10,8 +10,7 @@
  * Everything else in a liquid's behaviour is NOT gravity-ward, and so cannot
  * safely live in that sweep at all - see the comment above equalise_liquids()
  * for why. sand_step_liquids() is the one thing sand_step() calls after its
- * sweep finishes: cross-flow levelling, and the wall-rebound splash on top of
- * it.
+ * sweep finishes: cross-flow levelling.
  *===========================================================================*/
 
 #include "sand_priv.h"
@@ -22,14 +21,133 @@
  * moved to sand_priv.h (still static inline) now that sand.c's own sweep needs
  * it too, to maintain BLOCK_HAS_LIQUID. See its comment there. */
 
+/* A liquid splash: sand_displace_material() at a per-material radius,
+ * called whenever a WATER grain lands hard, falling onto an already-
+ * occupied surface (move_liquid_grain() below). WATER ONLY - acid used to
+ * share this trigger too, and no longer does; see acid_bubble()'s own
+ * comment in sand_reactions.c for what replaced it and why it lives there
+ * instead of here.
+ *
+ * A per-grain trigger for hitting a wall or the grid edge directly (not
+ * landing on other liquid) existed too, briefly - removed 2026-08-30
+ * alongside the separate flick-driven wall-momentum mechanism, after
+ * on-device testing found neither one perceptible (see git history for
+ * "wall_splash" if this is ever worth revisiting).
+ *
+ * MASKED TO `mat_id`, not a plain sand_displace() - an unmasked
+ * displacement throws whatever it finds within the radius, which meant
+ * pouring water over water sitting on dirt flung the dirt around too.
+ * This is meant to be water splashing itself, nothing else.
+ *
+ * WATER DECAYS TWO WAYS, INDEPENDENTLY - see SAND_SPLASH_RADIUS_WATER's
+ * own comment in sand.h for the full account. Gated by a chance-in-256
+ * roll against this sand_t's own decaying budget (sand_t::splash_chance),
+ * so a displaced grain landing again does not just re-splash itself
+ * indefinitely - a real splash does not keep re-triggering off its own
+ * spray. And, separately, whichever echoes DO still land shrink their own
+ * radius each time (sand_t::splash_radius_water) rather than all landing
+ * at the same fixed size, so a chain that keeps bouncing reads as
+ * genuinely settling down, not as a string of identical pops.
+ *
+ * WATER ALSO GETS A DIRECTED KICK toward whichever of its 8 immediate
+ * neighbours are actually EMPTY - not just the radial sand_displace_
+ * material() spray above. Measured on a settled pool: a radial disc
+ * mostly throws water AT OTHER WATER, which is invisible (two identical,
+ * fully-packed cells swapping positions changes nothing on screen), so a
+ * bigger radius bought more wasted interior churn, not a bigger-looking
+ * splash - and the one cell that actually took the hit (the centre) is
+ * skipped by design (see queue_outward_impulse()'s own comment in
+ * sand.c).
+ *
+ * CHECKED, NOT GUESSED - a fixed "away from gravity" direction was tried
+ * first and reverted back to here the same day: can_impulse_enter()
+ * (step_impulses(), sand.c) lets a flying grain swap into ANY non-static
+ * occupant, not only an empty one, so a fixed guess "succeeds" exactly as
+ * often whether its target is open air or more water - and during a
+ * sustained pour, straight opposite gravity from the contact point is
+ * usually more INCOMING water (the rest of the stream), not open air, so
+ * the fixed guess kept swapping two identical cells and producing no
+ * visible gap at all - reported as "still just merging, not a repel".
+ * Checking each neighbour's own emptiness before firing is what actually
+ * guarantees a swap changes anything on screen; it is also what makes the
+ * spray follow the puddle's own local shape for free (a narrow gap gets a
+ * thin jet, a wide open surface gets a broad splash, a buried pocket gets
+ * nothing because there is genuinely nowhere for it to go), which was the
+ * original motivation the first time this was tried.
+ *
+ * PUSHES THE RING OF NEIGHBOURS OUTWARD, NOT THE CONTACT POINT ITSELF -
+ * an earlier version of this loop fired every sand_impulse() FROM (x, y),
+ * one per open direction found. That reads as several pushes but is
+ * really several ENTRIES competing for the SAME one grain: step_impulses()
+ * resolves them in order, the first to succeed swaps (x, y)'s real water
+ * out and leaves it empty, and every OTHER entry queued against that same
+ * index then fails its own re-acquisition check (the byte it was queued
+ * with no longer matches) and is silently dropped - one open direction
+ * ever actually fired, whichever the roll favoured, however many the scan
+ * found. Sourcing each push from the NEIGHBOUR itself instead - pushing
+ * it one further step outward, into a SEPARATE cell checked empty too -
+ * gives every fired push its own distinct origin, so they cannot collide
+ * this way, and several can genuinely resolve in the same step: the ring
+ * immediately around the point of impact clears out together, which is
+ * what makes this actually look like a crater opening rather than one
+ * cell politely stepping aside. See test_a_water_splash_actually_opens_a_
+ * gap in suite_sand.c, added specifically because "something got queued"
+ * was never proof anything became visible. */
+static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
+{
+    if (mat_id != MAT_WATER) {
+        return;
+    }
+    if ((rng_next(&s->rng) & 0xFF) > s->splash_chance) {
+        return;   /* this echo lost the roll - let the bounce die here */
+    }
+    sand_displace_material(s, x, y, s->splash_radius_water, mat_id);
+    for (int dir = 0; dir < 8; dir++) {
+        const int *d = ring_dir(dir);
+        const int nx = x + d[0], ny = y + d[1];
+        const int fx = x + 2 * d[0], fy = y + 2 * d[1];
+        if ((unsigned)nx >= (unsigned)s->w || (unsigned)ny >= (unsigned)s->h ||
+            (unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
+            continue;
+        }
+        if (CELL_IS_EMPTY(s->cells[(size_t)ny * (size_t)s->w + (size_t)nx])) {
+            continue;   /* nothing there to push outward */
+        }
+        if (!CELL_IS_EMPTY(s->cells[(size_t)fy * (size_t)s->w + (size_t)fx])) {
+            continue;   /* no room one further out to push it into */
+        }
+        sand_impulse(s, nx, ny, dir, SAND_EXPLODE_INITIAL_SPEED);
+    }
+    s->splash_chance =
+        s->splash_chance > SAND_SPLASH_CHANCE_FLOOR + SAND_SPLASH_CHANCE_STEP
+            ? (uint8_t)(s->splash_chance - SAND_SPLASH_CHANCE_STEP)
+            : SAND_SPLASH_CHANCE_FLOOR;
+    s->splash_radius_water =
+        s->splash_radius_water
+                > SAND_SPLASH_RADIUS_WATER_FLOOR + SAND_SPLASH_RADIUS_WATER_STEP
+            ? (uint8_t)(s->splash_radius_water - SAND_SPLASH_RADIUS_WATER_STEP)
+            : SAND_SPLASH_RADIUS_WATER_FLOOR;
+}
+
 /* Add `amount` of `id` to a cell that is either empty or already that same
  * material. Mass is only ever moved, never made: every caller subtracts the
- * same figure from somewhere else in the same breath. */
-static inline void pour_into(cell_t *dst, uint8_t id, int amount)
+ * same figure from somewhere else in the same breath.
+ *
+ * Returns whether `dst` was empty beforehand - true exactly when this pour
+ * just turned a non-liquid cell into a liquid one, which is the only case
+ * that can move where a puddle's surface sits. Every caller already computed
+ * this internally before the change that added the return value; callers
+ * that care feed it straight to mark_depth_band() (sand_priv.h) to catch
+ * app_sand.c's LOCAL DEPTH render up on the newly-claimed cell without
+ * re-marking anything for the far more common case of mass moving between
+ * two cells that were already liquid. */
+static inline bool pour_into(cell_t *dst, uint8_t id, int amount)
 {
-    const int had = CELL_IS_EMPTY(*dst) ? 0 : CELL_VARIANT(*dst);
+    const bool was_empty = CELL_IS_EMPTY(*dst);
+    const int had = was_empty ? 0 : CELL_VARIANT(*dst);
 
     *dst = CELL_MAKE(id, had + amount);
+    return was_empty;
 }
 
 /* How much of `id` a cell will accept, 0 if it holds something else. */
@@ -74,6 +192,20 @@ static inline int give_mass(sand_t *s, uint8_t *to_row, int tx, int w,
     const int room = room_in(to_row[tx], mat_id);
     const int give = mass < room ? mass : room;
     if (give > 0) {
+        /* pour_into()'s was_empty is deliberately IGNORED here, unlike at
+         * equalise_one_cell()'s call site - this is move_liquid_grain()'s
+         * per-grain fall, the hottest path in the simulation (11,130 of
+         * 11,142 mark_rows() calls on a screen of water, per this
+         * function's own comment above), and a grain falling into empty
+         * space below it is the ORDINARY case, not the rare one equalise's
+         * mark_depth_band() call exists to catch. Gating on was_empty here
+         * would fire on nearly every one of those calls, reintroducing the
+         * same shape of per-transfer cost
+         * this function's own history (mark_rows() cut to two byte writes)
+         * exists to avoid. A settled reservoir's surface only actually
+         * moves once mass reaches it and levels out sideways, which is
+         * equalise_one_cell()'s job, not this one's - see that call site's
+         * own comment for where the real invalidation happens. */
         pour_into(&to_row[tx], mat_id, give);
         mark_rows(s, y, ty);
     }
@@ -364,10 +496,39 @@ bool move_liquid_grain(sand_t *s, uint8_t *row, uint8_t *prow,
         return true;
     }
 
+    /* Checked BEFORE give_mass() writes into the target - afterward it
+     * never reads as empty again. */
+    const bool target_occupied = (unsigned)tx0 < (unsigned)w && prow != NULL
+        && !CELL_IS_EMPTY(prow[tx0]);
+
     const int down = give_mass(s, prow, tx0, w, mass, mat_id, y, ty0);
     mass -= down;
     if (down > 0) {
         moved = true;
+
+        /* Mass landing on an already-occupied liquid surface throws a
+         * small splash - see splash_displace()'s own comment above.
+         *
+         * NO LONGER GATED ON "exposed to open space one step above" -
+         * that check was meant to tell a genuine fall apart from ordinary
+         * internal levelling, but it reads the SOURCE grain's own
+         * neighbour, and a sustained pour is a continuous column of
+         * falling water: every grain in the stream except (maybe) the
+         * very first has more incoming water above it, not open air, so
+         * the gate was false for the entire rest of the pour and the
+         * splash only ever fired once, right at the start - easy to
+         * mistake for "no splash at all", which is exactly what got
+         * reported. A fully-settled, level pool does not need this gate
+         * either: give_mass()'s own room_in() check already returns 0
+         * once a column has nowhere left to give, so down stays 0 and
+         * this branch is never reached - the only remaining risk is
+         * ordinary re-settling after a tilt genuinely triggering more
+         * often, which splash_chance's own decay (guaranteed first, sharp
+         * falloff after) already keeps rare and self-limiting, the same
+         * safety net a pour's own repeated triggers rely on. */
+        if (target_occupied) {
+            splash_displace(s, tx0, ty0, mat_id);
+        }
     }
 
     /* Then DOWN THE SLOPE, both ways.
@@ -596,8 +757,19 @@ static inline bool equalise_one_cell(sand_t *s, uint8_t *row, int x, int y,
     const int ty = y + py * at;
     const int w  = s->w;
 
-    pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
+    /* was_empty gates mark_depth_band() below: this transfer just moved
+     * mass ONTO a cell that had none, which is the only case that can shift
+     * a puddle's surface - see mark_depth_band()'s own comment
+     * (sand_priv.h). The far commoner case here, topping up a neighbour
+     * that already held some of the same liquid, leaves the depth topology
+     * untouched, so it stays exactly as cheap as it always was: only
+     * mark_rows()'s ordinary two-row mark. */
+    const bool was_empty =
+        pour_into(&s->cells[(size_t)ty * (size_t)w + (size_t)tx], id, give);
     row[x] = (mass - give > 0) ? CELL_MAKE(id, mass - give) : CELL_EMPTY;
+    if (was_empty) {
+        mark_depth_band(s, ty);
+    }
 
     *stayed_in_row = (ty == y);
     if (*stayed_in_row) {
@@ -869,89 +1041,6 @@ static void equalise_liquids(sand_t *s, const xflow_t *f, int sight,
     }
 }
 
-/* One wall's share of the rebound splash - see SAND_REBOUND_GAIN.
- *
- * `edge` is the column (for a left/right wall) or row (top/bottom) that
- * touches the wall; `count` is how many cells run along it; `to` is the
- * one-cell step into the grid, away from the wall. `push_q8` is how hard
- * momentum is currently driving INTO this particular wall - already resolved
- * to a single non-negative number by the caller, since each wall only cares
- * about one sign of one axis.
- *
- * Every source cell here is unique to this wall and every destination is one
- * fixed step inward, so no two transfers this call can ever touch the same
- * cell - unlike equalise_liquids, this needs no sweep order at all. */
-/* How much mass one cell's share of the splash moves, or 0 if the push is
- * not hard enough to count as a flick at all. */
-static inline int rebound_kick(int push_q8)
-{
-    if (push_q8 <= SAND_REBOUND_THRESHOLD) {
-        return 0;
-    }
-    /* push_q8 > SAND_REBOUND_THRESHOLD is already established above, so this
-     * operand is non-negative and fx_mul_floor()'s floor agrees with a plain
-     * truncation here - migrated for consistency with the rest of the
-     * simulation's fixed-point math, not because the rounding choice
-     * matters at this particular call site. */
-    const int raw = fx_mul_floor(push_q8 - SAND_REBOUND_THRESHOLD,
-                                  SAND_REBOUND_GAIN, 8);
-    return raw < SAND_REBOUND_MAX ? raw : SAND_REBOUND_MAX;
-}
-
-/* One cell's share of the splash: kick up to `kick` mass from (x, y) into
- * the cell `to` steps away from the wall, if (x, y) holds a liquid and that
- * destination exists. */
-static inline void rebound_one_cell(sand_t *s, int x, int y, int to,
-                                    bool vertical, int kick,
-                                    uint16_t is_liquid)
-{
-    const int w = s->w;
-    const size_t at = (size_t)y * (size_t)w + (size_t)x;
-    const cell_t c = s->cells[at];
-    if (CELL_IS_EMPTY(c)) {
-        return;
-    }
-    const uint8_t id = CELL_MATERIAL(c);
-    if (((is_liquid >> id) & 1u) == 0) {
-        return;
-    }
-
-    const int nx = vertical ? x + to : x;
-    const int ny = vertical ? y      : y + to;
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)s->h) {
-        return;
-    }
-
-    const int mass = CELL_VARIANT(c);
-    const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-    const int room = room_in(s->cells[nat], id);
-    const int give = kick < mass ? kick : mass;
-    const int moved = give < room ? give : room;
-    if (moved <= 0) {
-        return;
-    }
-
-    pour_into(&s->cells[nat], id, moved);
-    s->cells[at] = (mass - moved > 0) ? CELL_MAKE(id, mass - moved)
-                                      : CELL_EMPTY;
-    mark_move(s, x, y, nx, ny);
-}
-
-static void rebound_wall(sand_t *s, int edge, int count, int to,
-                         bool vertical, int push_q8, uint16_t is_liquid)
-{
-    const int kick = rebound_kick(push_q8);
-    if (kick <= 0) {
-        return;
-    }
-
-    for (int i = 0; i < count; i++) {
-        const int x = vertical ? edge : i;
-        const int y = vertical ? i : edge;
-        rebound_one_cell(s, x, y, to, vertical, kick, is_liquid);
-    }
-}
-
 void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
 {
     if (!s->may_have_liquid) {
@@ -980,36 +1069,4 @@ void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy)
      * equalise_liquids(). */
     equalise_liquids(s, &run, SAND_LIQUID_SIGHT, dx, dy);
     s->liquid_flip = !s->liquid_flip;
-
-    /* And let a hard flick splash liquid back off whichever wall it just
-     * turned into. Four walls, but each is a no-op below its own threshold,
-     * so this costs nothing on the vastly more common calm step - see
-     * SAND_REBOUND_GAIN. */
-    if (SAND_REBOUND_GAIN != 0) {
-        const uint16_t is_liquid = liquid_mask();
-
-        rebound_wall(s, 0,        s->h, 1,  true,
-                    (int)-s->mom_x_q8, is_liquid);   /* left wall   */
-        rebound_wall(s, s->w - 1, s->h, -1, true,
-                    (int) s->mom_x_q8, is_liquid);   /* right wall  */
-        rebound_wall(s, 0,        s->w, 1,  false,
-                    (int)-s->mom_y_q8, is_liquid);   /* top wall    */
-        rebound_wall(s, s->h - 1, s->w, -1, false,
-                    (int) s->mom_y_q8, is_liquid);   /* bottom wall */
-    }
-}
-
-/*---------------------------------------------------------------------------
- * Momentum accessors - see SAND_REBOUND_GAIN.
- *-------------------------------------------------------------------------*/
-
-void sand_momentum(const sand_t *s, int32_t *mx_q8, int32_t *my_q8)
-{
-    *mx_q8 = s->mom_x_q8;
-    *my_q8 = s->mom_y_q8;
-}
-
-void sand_set_flick(sand_t *s, int flick)
-{
-    s->flick = flick < 0 ? 0 : (flick > 255 ? 255 : flick);
 }

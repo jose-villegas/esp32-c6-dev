@@ -29,7 +29,7 @@ removing one touches no other file. Currently:
   the diagnostics build, the same one that carries the test suites, never
   in release.
 
-A power-on self-test (`main/post.c`) runs in every build, release included,
+A power-on self-test (`launcher/main/boot/post.c`) runs in every build, release included,
 and checks storage, memory, sensors and the display on every boot.
 
 ## Quick start
@@ -58,6 +58,15 @@ their own `tools/results/`:
 `./monitor.sh` (repo root) attaches to the console without paying ESP-IDF's
 ~90s environment-activation cost on every call.
 
+`./launcher/tools/screenshot.sh` captures whatever the device currently has
+on screen to an uncompressed `.bmp`, plus a same-named `.json` snapshot of
+device state at that exact frame (sensors, memory, clock), over that same
+serial connection - no SD card, no button on the device, just the running
+firmware and a cable already plugged in. Needs neither `idf.py` nor
+PowerShell. Development-only (`build_flash_dev.sh` / `build_flash.sh --diag`)
+- a release build carries none of it, see
+[`docs/Testing-Guide.md`](docs/Testing-Guide.md).
+
 ## Documentation
 
 Each doc earns its length — these are working notes from actually building
@@ -69,6 +78,7 @@ this, not a tour. Start wherever your question is:
 | [`docs/Sand/Sand-Simulation.md`](docs/Sand/Sand-Simulation.md) | The falling-sand app in depth: materials, the water model, momentum, and the performance numbers behind every design choice. |
 | [`docs/Notes/`](docs/Notes/README.md) | Board-specific hardware notes: the memory budget, panel and touch gotchas, flashing and recovery. Split by topic - start at the index. |
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | How the host and on-device test suites work, and why release builds carry none of the test code. |
+| [`docs/Model-Delegation-Workflow.md`](docs/Model-Delegation-Workflow.md) | Delegating feature implementation to local Ollama models or free-tier models through OmniRoute, with review and verification kept on the driving session. |
 
 ## Status
 
