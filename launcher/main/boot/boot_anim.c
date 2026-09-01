@@ -191,15 +191,22 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
 
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
-            screen_pt_t a, b;
+            int ax, ay, bx, by;
 
-            a = project(off, -far, 0, view);
-            b = project(off,  far, 0, view);
-            gfx_line_ex(a.x, a.y, b.x, b.y, c, 0u);
-
-            a = project(-far, off, 0, view);
-            b = project( far, off, 0, view);
-            gfx_line_ex(a.x, a.y, b.x, b.y, c, 0u);
+            /* Each ring line runs the grid's full reach - see draw_floor()'s
+             * own top comment - which is exactly what makes a wide reach
+             * more likely to send one end of it behind the camera: not
+             * drawn at all if boot_anim_project_segment() says so, rather
+             * than connected anyway (see its own comment for what that
+             * used to draw). */
+            if (boot_anim_project_segment(off, -far, 0, off, far, 0, view,
+                                          &ax, &ay, &bx, &by)) {
+                gfx_line_ex(ax, ay, bx, by, c, 0u);
+            }
+            if (boot_anim_project_segment(-far, off, 0, far, off, 0, view,
+                                          &ax, &ay, &bx, &by)) {
+                gfx_line_ex(ax, ay, bx, by, c, 0u);
+            }
         }
     }
 }
@@ -219,10 +226,14 @@ static void draw_arm(int32_t re, int32_t im, int32_t t, uint8_t reach,
     const int32_t fim = tween_lerp_i32(0, im, reach);
     const int32_t ft  = tween_lerp_i32(0, t,  reach);
 
-    const screen_pt_t origin = project(0, 0, 0, view);
-    const screen_pt_t tip = project(fre, fim, ft, view);
-
-    gfx_line_ex(origin.x, origin.y, tip.x, tip.y, lit(COL_AXIS, ink), 0u);
+    /* An unbounded axis (see BOOT_ANIM_AXIS_FAR_UNITS) reaches just as far
+     * behind the origin's plane as the grid's own rings do, once the
+     * finale starts turning the camera - same near-plane risk, same fix. */
+    int ax, ay, bx, by;
+    if (boot_anim_project_segment(0, 0, 0, fre, fim, ft, view,
+                                  &ax, &ay, &bx, &by)) {
+        gfx_line_ex(ax, ay, bx, by, lit(COL_AXIS, ink), 0u);
+    }
 }
 
 static void draw_label(int x, int y, const char *text, uint8_t ink)
@@ -458,8 +469,20 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     const int32_t phase1_span = (int32_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1);
 
     boot_anim_pt_t head = boot_anim_sample(0);
-    screen_pt_t cur = project(head.re, head.im, head.t, view);
-    bool drawn = false;      /* has any segment been laid down yet? */
+    /* Kept in CAMERA space across the loop, not re-derived from `head`'s
+     * re/im/t each time a segment is drawn - see boot_anim_project_segment()
+     * in boot_anim.h for why: every interior point is both the end of one
+     * segment and the start of the next, and transforming it twice would
+     * double the per-point matrix work over a curve of several hundred
+     * segments. */
+    S3L_Vec4 prev_cs = boot_anim_to_camera_space(head.re, head.im, head.t, view);
+    /* Whether the immediately PRECEDING segment was actually drawn, not
+     * merely whether anything has ever been drawn - see GFX_LINE_OPEN's own
+     * comment on `joined`: a segment skipped by the near-plane clip below
+     * (boot_anim_project_segment_cs() returning false) leaves a gap, so the
+     * next segment that IS drawn must not claim its start pixel already
+     * landed there. */
+    bool joined = false;
 
     for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
         /* The span centred on sample i, cutting the corner there. Clamped
@@ -482,13 +505,20 @@ static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
             const int32_t t = (limit * step) / BOOT_ANIM_SPLINE_STEPS;
 
             head = boot_anim_spline(c0, c1, c2, t);
-            const screen_pt_t next = project(head.re, head.im, head.t, view);
+            const S3L_Vec4 next_cs =
+                boot_anim_to_camera_space(head.re, head.im, head.t, view);
             const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
 
-            draw_stroke(cur.x, cur.y, next.x, next.y,
-                        boot_anim_stroke(along, colour), ink, drawn);
-            drawn = true;
-            cur = next;
+            int ax, ay, bx, by;
+            if (boot_anim_project_segment_cs(prev_cs, next_cs, view,
+                                             &ax, &ay, &bx, &by)) {
+                draw_stroke(ax, ay, bx, by,
+                            boot_anim_stroke(along, colour), ink, joined);
+                joined = true;
+            } else {
+                joined = false;
+            }
+            prev_cs = next_cs;
         }
     }
 

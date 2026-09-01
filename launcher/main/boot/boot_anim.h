@@ -64,6 +64,7 @@
  *===========================================================================*/
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* small3dlib - the same header-only fixed-point 3D library apps/cube already
@@ -444,19 +445,22 @@ static inline boot_anim_view_t boot_anim_view(int w, int h, uint32_t now_ms)
     return v;
 }
 
-/* value -> screen (x, y), for the CURRENT frame's view: one matrix-vector
- * multiply by the composed space-then-camera transform, then one
- * perspective divide - see this section's own top comment for the
- * swap-to-orthographic note.
+/* value -> CAMERA space, for the CURRENT frame's view: one matrix-vector
+ * multiply by the composed space-then-camera transform - everything
+ * boot_anim_project() below does up to (but not including) the perspective
+ * divide, factored out so boot_anim_project_segment_cs() can look at a
+ * point's camera-space z (which side of the camera it is actually on)
+ * before deciding how - or whether - to divide and project it at all; a
+ * fully-projected screen point cannot answer that question in reverse.
  *
  * re/im are Q12 "zeta value" units, t is Q8 "t" units - the exact table
  * this file has always sampled boot_anim_curve[] in, converted to
  * small3dlib's own fixed point right here rather than carrying a second,
  * pre-converted copy of the curve anywhere. */
-static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
-                                     int32_t t_q8,
-                                     const boot_anim_view_t *view,
-                                     int *screen_x, int *screen_y)
+static inline S3L_Vec4 boot_anim_to_camera_space(int32_t re_q12,
+                                                  int32_t im_q12,
+                                                  int32_t t_q8,
+                                                  const boot_anim_view_t *view)
 {
     S3L_Vec4 p;
     p.x = BOOT_ANIM_ZETA_TO_S3L(re_q12);
@@ -467,16 +471,132 @@ static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
     /* Cast away const: S3L_vec3Xmat4() only ever reads its matrix argument
      * (see its own body in small3dlib.h - it takes a copy of `v` before
      * touching anything), the parameter is just typed non-const upstream.
-     * `view` stays const from boot_anim_project()'s own caller's point of
-     * view; nothing here writes through it. */
+     * `view` stays const from this function's own caller's point of view;
+     * nothing here writes through it. */
     S3L_vec3Xmat4(&p, (S3L_Unit (*)[4])view->matrix);
-    p.z = S3L_nonZero(p.z);
-    S3L_perspectiveDivide(&p, view->focal);
+    return p;
+}
 
-    S3L_ScreenCoord sx, sy;
-    S3L_mapProjectionPlaneToScreen(p, &sx, &sy);
-    *screen_x = sx;
-    *screen_y = sy;
+/* CAMERA space -> screen (x, y): the perspective divide and the mapping
+ * onto the panel, for a point already known to be worth projecting (in
+ * front of the near plane - see boot_anim_project_segment_cs() below for
+ * the one place that matters). */
+static inline void boot_anim_camera_to_screen(S3L_Vec4 p, S3L_Unit focal,
+                                              int *screen_x, int *screen_y)
+{
+    p.z = S3L_nonZero(p.z);
+    S3L_perspectiveDivide(&p, focal);
+
+    /* NOT S3L_mapProjectionPlaneToScreen(): that writes through
+     * S3L_ScreenCoord, which defaults to int16_t (see small3dlib.h's own
+     * S3L_USE_WIDER_TYPES comment - "will largely suppress many rendering
+     * bugs ... due to overflows"). `S3L_USE_WIDER_TYPES` would fix that by
+     * also widening S3L_Unit itself to int64_t everywhere, which is a real
+     * cost on hardware with no native 64-bit ALU - this repeats
+     * S3L_mapProjectionPlaneToScreen()'s own two-line formula (same
+     * S3L_HALF_RESOLUTION_X used for both axes, matching the library
+     * exactly), but with the multiply itself done in int64_t: `p.x`/`p.y`
+     * are already the POST-DIVIDE values here, which for a near-camera
+     * point can themselves be large, and multiplying one of those by
+     * S3L_HALF_RESOLUTION_X before dividing back down by S3L_F is exactly
+     * the kind of intermediate that overflows a 32-bit product even though
+     * the final on/off-panel result never needs to - gfx.c's own
+     * clip_line() leans on the same int64_t-intermediate trick for the
+     * same reason. This matters more now that near-plane crossings are
+     * actually clipped (see boot_anim_project_segment_cs()) rather than
+     * left to divide by whatever z happened to come out, but it is cheap
+     * insurance either way. */
+    *screen_x = (int)(S3L_HALF_RESOLUTION_X +
+        ((int64_t)p.x * S3L_HALF_RESOLUTION_X) / S3L_F);
+    *screen_y = (int)(S3L_HALF_RESOLUTION_Y -
+        ((int64_t)p.y * S3L_HALF_RESOLUTION_X) / S3L_F);
+}
+
+static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
+                                     int32_t t_q8,
+                                     const boot_anim_view_t *view,
+                                     int *screen_x, int *screen_y)
+{
+    const S3L_Vec4 p = boot_anim_to_camera_space(re_q12, im_q12, t_q8, view);
+    boot_anim_camera_to_screen(p, view->focal, screen_x, screen_y);
+}
+
+/* How far in front of the camera counts as "actually in front of it" for
+ * near-plane clipping - see boot_anim_project_segment_cs() below. A small
+ * fraction of a meter: nothing this animation draws is meant to come
+ * anywhere near the camera on purpose, so this only ever engages for a
+ * point that is genuinely behind the camera or right on top of it. */
+#define BOOT_ANIM_NEAR_Z (S3L_F / 10)
+
+/* A line segment between two points ALREADY IN CAMERA SPACE (see
+ * boot_anim_to_camera_space() above), clipped to the near plane before
+ * projecting - unlike projecting each endpoint independently (what calling
+ * boot_anim_project() twice and connecting the results does), which is
+ * wrong for a segment that crosses in front of the camera: dividing by a
+ * z on the wrong side of it flips the sign, so the behind-camera endpoint
+ * projects to an ordinary-looking but geometrically nonsense point, and a
+ * line drawn to it cuts straight across the visible frustum instead of
+ * stopping where it should. This is exactly the "wraps around the screen"
+ * artifact a wide grid reach makes far more likely to actually show up:
+ * the longer a line is, the more likely one end is in front of the camera
+ * and the other behind it.
+ *
+ * Returns false (nothing written) if the whole segment is at or behind the
+ * near plane - not worth drawing at all - true otherwise, with `(ax,ay)`-
+ * `(bx,by)` the segment's own two endpoints, clipped if it needed it. */
+static inline bool boot_anim_project_segment_cs(
+    S3L_Vec4 p0, S3L_Vec4 p1, const boot_anim_view_t *view,
+    int *ax, int *ay, int *bx, int *by)
+{
+    const bool front0 = p0.z > BOOT_ANIM_NEAR_Z;
+    const bool front1 = p1.z > BOOT_ANIM_NEAR_Z;
+
+    if (!front0 && !front1) {
+        return false;
+    }
+
+    if (front0 != front1) {
+        /* Exactly one endpoint is behind the near plane - replace it with
+         * where the segment actually crosses z = NEAR, found by linearly
+         * interpolating in camera space: a straight line stays straight
+         * under the affine transform already applied to get here, so
+         * lerping before the perspective divide lands exactly on the
+         * crossing point rather than approximating it. */
+        S3L_Vec4 *behind = front0 ? &p1 : &p0;
+        const S3L_Vec4 *front = front0 ? &p0 : &p1;
+        /* front->z > NEAR_Z >= behind->z (that is what front0 != front1
+         * means), so this denominator is always strictly positive. */
+        const int32_t frac =
+            ((BOOT_ANIM_NEAR_Z - behind->z) * S3L_F) / (front->z - behind->z);
+
+        behind->x += ((front->x - behind->x) * frac) / S3L_F;
+        behind->y += ((front->y - behind->y) * frac) / S3L_F;
+        behind->z = BOOT_ANIM_NEAR_Z;
+    }
+
+    boot_anim_camera_to_screen(p0, view->focal, ax, ay);
+    boot_anim_camera_to_screen(p1, view->focal, bx, by);
+    return true;
+}
+
+/* The re/im/t-in, screen-out convenience shape every draw_* call site
+ * except the curve itself wants - see boot_anim_project_segment_cs() above
+ * for the actual clipping, and draw_curve() in boot_anim.c for why the
+ * curve keeps its points in camera space across the loop instead of
+ * calling this: re-deriving both endpoints' camera space from scratch for
+ * every one of a curve's several hundred segments would transform most
+ * points twice (each is both the end of one segment and the start of the
+ * next). */
+static inline bool boot_anim_project_segment(
+    int32_t re0, int32_t im0, int32_t t0,
+    int32_t re1, int32_t im1, int32_t t1,
+    const boot_anim_view_t *view,
+    int *ax, int *ay, int *bx, int *by)
+{
+    return boot_anim_project_segment_cs(
+        boot_anim_to_camera_space(re0, im0, t0, view),
+        boot_anim_to_camera_space(re1, im1, t1, view),
+        view, ax, ay, bx, by);
 }
 
 /*---------------------------------------------------------------------------
