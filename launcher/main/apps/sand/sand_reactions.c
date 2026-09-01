@@ -2865,15 +2865,16 @@ pay_quench_cost(sand_t* s, int nx, int ny, int w) {
  * anything about how far heat can really travel. */
 #define CONDUCT_REACH 32
 
-/* The starting life a cell gets from boiling (steam for water, gas for
- * acid - reaction_t.boils_to), below the full MATERIAL_VARIANTS - 1
- * place_reacted() would otherwise hand it - see conduct_heat()'s own use
- * of this, just below, for why boiling deliberately makes less of its
- * product to look at now rather than only making it slower. Started at
- * 20% below full (a cut of 3), reported as too drastic - the cut is
- * roughly 30% smaller now (2 instead of 3), landing at 13 rather than
- * 12. */
-#define BOILED_LIFE ((MATERIAL_VARIANTS - 1) - 2)
+/* Boiling used to hand its product (steam for water, gas for acid -
+ * reaction_t.boils_to) a starting life shaved below the full MATERIAL_
+ * VARIANTS - 1 place_reacted() otherwise gives a fresh, non-ramping
+ * material - a deliberate cut (tuned down from 3 to 2 over two earlier
+ * rounds) meant to make a boiler read as producing a bit less to look
+ * at. Removed: asked to make steam last LONGER, not shorter, which is
+ * the direct opposite of what a below-full starting life does. Boiling
+ * now just calls place_reacted() like everything else that creates a
+ * fresh cell, so its product gets the same full life any other newly
+ * made material would - see conduct_heat()'s own use, just below. */
 
 /* Heat crossing a run of conductor cells - the boiler. See this file's
  * own top comment ("THE BOILER") for the two problems this and
@@ -3019,16 +3020,15 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
                  * evaporates. 0 (water's default) still means MAT_STEAM,
                  * so water's own behaviour is unchanged.
                  *
-                 * Less than a full cell of life, not the usual
-                 * place_reacted() default (MATERIAL_VARIANTS - 1) - see
-                 * BOILED_LIFE's own comment above for the figure - so
-                 * boiling now makes noticeably less of its product than
-                 * it used to, a boiler reading as producing a bit less
-                 * to look at rather than just producing it slower.
-                 * place_cell() directly, since place_reacted() always
-                 * hands a fresh non-ramping material its full life. */
+                 * place_reacted(), not place_cell() - see the comment
+                 * just above conduct_heat() for the account of why this
+                 * used to hand its product a shortened starting life and
+                 * why that was removed: asked to make steam last longer,
+                 * not shorter, so it now gets the same full life
+                 * place_reacted() hands any other fresh, non-ramping
+                 * material. */
                 const uint8_t boils_to = reaction_of(bc)->boils_to ? reaction_of(bc)->boils_to : MAT_STEAM;
-                place_cell(s, rx, ry, bat, CELL_MAKE(boils_to, BOILED_LIFE));
+                place_reacted(s, rx, ry, bat, boils_to);
                 acted = true;
             }
         } else {

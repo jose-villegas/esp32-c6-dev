@@ -12003,11 +12003,14 @@ static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
 }
 
 /* And boiling a liquid that DOES pass its `boils` roll must hand the new
- * steam less than a full cell's own worth of life - see
- * BOILED_STEAM_LIFE's own comment in sand_reactions.c. The point of the
- * reduction is a boiler that visibly makes less steam to look at, not
- * merely the same amount arriving slower. */
-static void test_boiled_steam_starts_below_full_life(void)
+ * steam a FULL cell's own worth of life, the same place_reacted() default
+ * any other fresh, non-ramping material gets - see conduct_heat()'s own
+ * comment (sand_reactions.c) for the account. This used to assert the
+ * opposite (a deliberately shortened life, so a boiler visibly made less
+ * steam to look at); asked to make steam last LONGER instead, the cut was
+ * removed rather than tuned, so this test now checks the plain
+ * place_reacted() guarantee holds for boiling too. */
+static void test_boiled_steam_starts_at_full_life(void)
 {
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
@@ -12031,9 +12034,10 @@ static void test_boiled_steam_starts_below_full_life(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(c),
         "sand_set_boils(255) must still boil deterministically in one "
         "step, exactly as boiling always has");
-    TEST_ASSERT_LESS_THAN_INT_MESSAGE(MATERIAL_VARIANTS - 1, CELL_VARIANT(c),
-        "boiling must hand the new steam cell less than a full cell's "
-        "worth of life");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1, CELL_VARIANT(c),
+        "boiling must hand the new steam cell a full cell's worth of "
+        "life, same as place_reacted() gives any other fresh material - "
+        "asked to make steam last longer, not shorter");
 }
 
 /* conduct_heat()'s boiling branch used to hand every liquid MAT_STEAM
@@ -12041,7 +12045,7 @@ static void test_boiled_steam_starts_below_full_life(void)
  * a wall came out as the same white kettle-steam water does, instead of
  * the MAT_GAS acid produces everywhere else it evaporates (`evaporates`,
  * `fizz` - see reaction_t.boils_to's own comment in material.h). Same
- * scene as test_boiled_steam_starts_below_full_life just above, water
+ * scene as test_boiled_steam_starts_at_full_life just above, water
  * swapped for acid, MAT_STEAM swapped for MAT_GAS. */
 static void test_boiling_acid_produces_gas_not_steam(void)
 {
@@ -20219,7 +20223,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thick_wall_conducts_more_slowly_than_a_thin_one);
     RUN_TEST(test_boiling_converts_the_cell_nearest_the_heat);
     RUN_TEST(test_sand_set_boils_zero_disables_conducted_heat_boiling);
-    RUN_TEST(test_boiled_steam_starts_below_full_life);
+    RUN_TEST(test_boiled_steam_starts_at_full_life);
     RUN_TEST(test_boiling_acid_produces_gas_not_steam);
     RUN_TEST(test_the_boiler_end_to_end);
     RUN_TEST(test_dry_dirt_beside_lava_smelts_into_metal_or_stone);
