@@ -130,8 +130,13 @@ def main() -> int:
     for name, old_v, new_v, _delta, _pct in control_rows:
         print(format_row(name, old_v, new_v))
     print()
-    print(f"Noise floor for this comparison: **{floor_pct:.1f}%** "
-          "(the larger of the two control moves above).")
+    measured_floor = max(abs(row[4]) for row in control_rows)
+    origin = ("the larger of the two control moves above"
+              if measured_floor >= 0.5
+              else f"the 0.5% minimum - the controls themselves moved only "
+                   f"{measured_floor:.1f}%, which is too little to measure a "
+                   f"floor from")
+    print(f"Noise floor for this comparison: **{floor_pct:.1f}%** ({origin}).")
     # Worth printing raw, not just the floor: across this campaign the
     # controls were observed landing on one of two specific value pairs -
     # an observation worth a reader's attention, not worth hardcoding as a
