@@ -470,6 +470,36 @@ static void test_the_seeds_wave_is_off_by_default(void)
     TEST_ASSERT_EQUAL_INT32(0, BOOT_ANIM_WAVE_HEIGHT_Q12);
 }
 
+/* boot_anim_wave_envelope() takes no parameters of its own to fabricate -
+ * unlike boot_anim_wave_height() above, IT is the timeline, the same
+ * reason boot_anim_grid_alpha() reads BOOT_ANIM_GRID_START_MS/RING_MS/
+ * FADE_MS directly rather than taking them as arguments - so these test
+ * against the seed's own real generated values (BOOT_ANIM_WAVE_IN_MS,
+ * BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_MS), the same way
+ * test_wave_front_starts_at_the_origin... used to before this rewrite. */
+static void test_wave_envelope_is_zero_at_the_very_start(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(0));
+}
+
+static void test_wave_envelope_reaches_full_strength_by_wave_in_ms(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(BOOT_ANIM_WAVE_IN_MS));
+}
+
+static void test_wave_envelope_plateaus_between_in_and_out(void)
+{
+    const uint32_t midpoint =
+        (BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_OUT_MS) / 2;
+
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(midpoint));
+}
+
+static void test_wave_envelope_fades_back_to_zero_by_the_end(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(BOOT_ANIM_MS));
+}
+
 /* The seed ships with grid_spoke_start_ms/grid_spoke_draw_ms both 0 - see
  * gen_boot_anim_timeline.py's own comment on why that reproduces "every
  * spoke drawn at full length instantly", the behaviour before either field
@@ -1107,6 +1137,10 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_wave_height_travels_outward_with_time);
     RUN_TEST(test_wave_height_is_frozen_when_the_period_is_zero);
     RUN_TEST(test_the_seeds_wave_is_off_by_default);
+    RUN_TEST(test_wave_envelope_is_zero_at_the_very_start);
+    RUN_TEST(test_wave_envelope_reaches_full_strength_by_wave_in_ms);
+    RUN_TEST(test_wave_envelope_plateaus_between_in_and_out);
+    RUN_TEST(test_wave_envelope_fades_back_to_zero_by_the_end);
     RUN_TEST(test_the_seeds_spokes_reach_full_length_instantly);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);

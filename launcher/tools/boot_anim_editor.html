@@ -412,6 +412,7 @@ const DEFAULT_STATE = {
     grid_rings: 28, grid_spokes: 8, grid_spoke_dash: 0,
     grid_spoke_start_ms: 0, grid_spoke_draw_ms: 0,
     grid_fade_ms: 300,
+    wave_in_ms: 1000, wave_out_ms: 4300,
     pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
     title_start_ms: 2700,
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
@@ -484,7 +485,7 @@ const FIELD_GROUPS = [
       'grid_ceiling_max', 'grid_max'] },
   { title: 'Spokes', keys: ['grid_spokes', 'grid_spoke_dash',
       'grid_spoke_start_ms', 'grid_spoke_draw_ms'] },
-  { title: 'Wave', keys: [] },
+  { title: 'Wave', keys: ['wave_in_ms', 'wave_out_ms'] },
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
@@ -515,6 +516,8 @@ const FIELD_LABELS = {
   grid_spoke_dash: 'dashed instead of solid (0 solid, 1 dashed)',
   grid_spoke_start_ms: 'spokes start drawing outward from the origin',
   grid_spoke_draw_ms: 'time to reach full length (0 = instant)',
+  wave_in_ms: 'time to arrive at full strength, from nothing',
+  wave_out_ms: 'starts fading back to nothing, over what’s left after this',
   pen_start_ms: 'curve starts drawing',
   pen_ms: 'how long the curve’s first phase takes',
   pen_finish_ms: 'when the curve reaches its true end',
@@ -1220,6 +1223,17 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       }
       if (loaded.wave_period_ms === undefined) {
         loaded.wave_period_ms = 3000;
+      }
+      /* wave_in_ms/wave_out_ms are newer again - fading in over the first
+       * second and starting to fade out a second before the end are the
+       * same reasonable-starting-point defaults the generator itself
+       * falls back to. */
+      if (loaded.timing.wave_in_ms === undefined) {
+        loaded.timing.wave_in_ms = 1000;
+      }
+      if (loaded.timing.wave_out_ms === undefined) {
+        loaded.timing.wave_out_ms =
+          Math.max(1000, (loaded.timing.total_ms || 5800) - 1000);
       }
       /* grid_spokes is newer than grid_rings itself - same default
        * gen_boot_anim_timeline.py falls back to (the old, unconditional

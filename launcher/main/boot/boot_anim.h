@@ -644,6 +644,33 @@ static inline bool boot_anim_project_segment(
  * draw_grid_circle()/draw_grid_spoke() in boot_anim.c for why a circle
  * gets away with one lookup where a spoke cannot. */
 
+/* How much of the wave's own peak amplitude is actually in effect right
+ * now - two timers, not one window: BOOT_ANIM_WAVE_IN_MS is how long the
+ * ripple takes to arrive at full strength from nothing, starting at the
+ * very beginning of the animation; BOOT_ANIM_WAVE_OUT_MS is when it starts
+ * fading back to nothing again, over whatever's left of the animation
+ * after that. Whichever of the two ramps is currently the LOWER one wins -
+ * the standard attack/release envelope shape, nothing special-cased for
+ * the two overlapping badly (a window with no time left to plateau at
+ * full strength is still a perfectly well-defined curve, just without a
+ * flat middle).
+ *
+ * Q0 (0..255), the same scale scale8() in boot_anim.c already multiplies
+ * against - draw_floor() scales BOOT_ANIM_WAVE_HEIGHT_Q12 by this BEFORE
+ * it ever reaches boot_anim_wave_height() below, which stays pure sine
+ * math with no timing of its own - the ripple's own SHAPE (crests,
+ * troughs, how they travel) and its own STRENGTH-OVER-TIME are two
+ * separate concerns, each with exactly the parameters it needs and no
+ * others. */
+static inline uint8_t boot_anim_wave_envelope(uint32_t now_ms)
+{
+    const uint8_t in = tween_ramp(now_ms, 0, BOOT_ANIM_WAVE_IN_MS);
+    const uint8_t out = (uint8_t)(255u - tween_ramp(now_ms,
+        BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_MS - BOOT_ANIM_WAVE_OUT_MS));
+
+    return (in < out) ? in : out;
+}
+
 /* A zeta-value unit (meters, like every other authored length here - see
  * "The timeline"'s own UNITS comment) turned into the t_q8 that would
  * displace a vertex by that same S3L distance along t as it would along
