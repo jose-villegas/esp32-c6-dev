@@ -469,7 +469,18 @@ covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density)
  * try_vent_chunk() calls this for several cells at once, which is
  * exactly why the decision moved up to whichever caller already knows
  * how many cells it is calling this for, rather than staying a decision
- * this function makes for itself every time. */
+ * this function makes for itself every time.
+ *
+ * ONLY THE OUTER SAND_VENT_LAYER CELLS THROW, NOT THE WHOLE DEPTH FOUND -
+ * see that constant's own comment (sand.h) for the account of why a
+ * single firing stopped emptying the entire reachable stack. `depth` is
+ * still the SCAN result (how far covering material genuinely reaches,
+ * capped at SAND_VENT_REACH); `throw_from` narrows that down to at most
+ * SAND_VENT_LAYER cells, farthest-first, same as before. A stack shallower
+ * than SAND_VENT_LAYER still empties completely, unchanged from the
+ * original single-shot behaviour; a deeper one keeps its innermost cells
+ * in place, still covering the lava, so covered_from_above() stays true
+ * and a later firing works on what is left. */
 static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
                         int up, int spread)
 {
@@ -490,8 +501,9 @@ static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
     }
 
     const int throw_dir = (up + spread + 8) & 7;
+    const int throw_from = depth > SAND_VENT_LAYER ? depth - SAND_VENT_LAYER + 1 : 1;
 
-    for (int i = depth; i >= 1; i--) {
+    for (int i = depth; i >= throw_from; i--) {
         sand_impulse_dislodge(s, x + ud[0] * i, y + ud[1] * i, throw_dir,
                               SAND_VENT_SPEED, SAND_VENT_IMPULSE_RAMP);
     }

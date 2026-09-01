@@ -751,30 +751,68 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * that either. */
 #define SAND_EXPLODE_INITIAL_SPEED  255
 
-/* The DEPTH, in cells, vent_column() (sand_reactions.c) scans and throws
- * along each of the three gravity-relative "up" directions (up-left, up,
- * up-right) when reaction_t.vent_chance fires (try_vent(), same file) -
- * how far a covering wall gets thrown, not how wide the trigger's own
- * reach is (that is covered_from_above()'s job, checking only the
- * immediate neighbour in each of those three directions).
+/* The DEPTH, in cells, vent_column() (sand_reactions.c) SCANS along each
+ * of the three gravity-relative "up" directions (up-left, up, up-right)
+ * when reaction_t.vent_chance fires (try_vent(), same file) - how far a
+ * covering wall can EVER be found and eventually cleared from, not how
+ * wide the trigger's own reach is (that is covered_from_above()'s job,
+ * checking only the immediate neighbour in each of those three
+ * directions), and, since SAND_VENT_LAYER split off below, not how much
+ * gets thrown in any ONE firing either - see that constant's own comment
+ * for why a single covering can now take several separate firings to
+ * fully clear rather than emptying in one shot.
  *
- * SET HIGH ON PURPOSE, paired with vent_chance's own rate being set LOW
- * (material.c, plus a second, rarer-still roll at the trigger site - see
- * that field's own comment) - the two are one dial, not two independent
- * ones: a rare roll that throws far when it finally lands reads as a
- * held-in eruption, where a frequent roll that throws only a little would
- * read as a constant hiss instead. Raising this without also keeping
- * vent_chance low would turn "occasional dramatic pulse" back into
- * "frequent small leak" - see reaction_t.vent_chance's own comment
- * (material.h) for the other half of this pairing.
+ * THREE DIALS, NOW, NOT TWO PAIRED TOGETHER - this used to be paired
+ * directly with vent_chance's own rate (raise this, lower that, so a rare
+ * roll that throws far reads as a held-in eruption): that pairing broke
+ * down once a single firing stopped clearing the whole reachable stack at
+ * once (SAND_VENT_LAYER's own comment has the account). The three are now
+ * independent: vent_chance decides how OFTEN a firing happens at all,
+ * SAND_VENT_LAYER decides how MUCH comes off in any one firing, and this
+ * decides how DEEP a covering can be before some of it becomes
+ * permanently out of reach no matter how many firings occur.
  *
- * RAISED FROM 10 TO 30 alongside the rate dropping further (material.h) -
- * on device, a reach of 10 against a still-frequent-feeling rate read as
- * barely a nudge; tripling the reach is what actually makes the rare
- * moment vent_chance now allows read as violent rather than incidental.
- * Not yet re-measured on device at this figure - a starting point for the
- * next round, not a number pinned against an observed result. */
+ * RAISED FROM 10 TO 30, back when a firing still cleared everything in
+ * one shot - on device, a reach of 10 against a still-frequent-feeling
+ * rate read as barely a nudge; tripling the reach is what actually made
+ * the moment read as violent rather than incidental. Not yet re-measured
+ * on device since SAND_VENT_LAYER split the throw into stages - a
+ * starting point still, not a number pinned against an observed result
+ * under the new design. */
 #define SAND_VENT_REACH  30
+
+/* HOW MUCH OF A COVERING COMES OFF IN ANY ONE FIRING, in cells, along
+ * each of the three columns vent_column() (sand_reactions.c) throws -
+ * split off from SAND_VENT_REACH (that constant's own comment has the
+ * full account) once maxing vent_chance exposed what "one firing clears
+ * the WHOLE reachable stack" actually means for a static, unreplenished
+ * covering: exactly one eruption, ever, then nothing, because there is
+ * nothing left above the lava afterward. A covering shallower than this
+ * still empties in a single firing, same as before; a covering DEEPER
+ * than this only loses its outermost layer each time, leaving the rest
+ * in place still sealing the pool - covered_from_above() stays true,
+ * so a later firing (at whatever rate vent_chance is tuned to) peels the
+ * next layer, and so on down to the lava - a thick, static, never-
+ * touched-again covering erodes away over several separate eruptions
+ * instead of vanishing in one, the "random over time, not only as a
+ * byproduct of pouring water" behaviour asked for once the single-shot
+ * design turned out to only ever look quench-triggered.
+ *
+ * THE OUTER LAYER GOES FIRST, NOT THE INNER ONE - vent_column() throws
+ * from the farthest cell inward, same ordering "QUEUED FARTHEST-FIRST"
+ * already used for a full-depth throw, just now stopping short of the
+ * cells nearest the lava when the stack is deeper than this. Peeling
+ * from the outside is also the physically legible direction: a lid
+ * erodes from its exposed face inward, not from its hidden underside
+ * outward.
+ *
+ * SET TO 3, matching SAND_VENT_CHUNK's own original width - big enough
+ * that a single peel still reads as "a real piece breaking off," small
+ * enough that anything a player would actually stack up (a hand-drawn
+ * wall many cells thick) needs several visibly separate eruptions to
+ * fully clear rather than one. Not yet measured on device at this
+ * figure - a starting point for the next round. */
+#define SAND_VENT_LAYER  3
 
 /* The initial speed vent_column() (sand_reactions.c) hands to sand_
  * impulse_dislodge() for each cell it throws - see SAND_EXPLODE_INITIAL_
