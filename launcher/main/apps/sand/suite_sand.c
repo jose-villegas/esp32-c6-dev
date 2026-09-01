@@ -5836,6 +5836,95 @@ static void test_a_liquid_rim_catches_the_light_from_above(void)
         "light now");
 }
 
+/* material_shine_direction()'s degenerate case: no gravity to sweep toward,
+ * so it must hand back the plain (1, 1) diagonal the shine always travelled
+ * before gravity had any say in it - not (0, 0), which would collapse the
+ * whole band to a single unmoving phase across every pixel of a cell. */
+static void test_shine_direction_holds_the_old_diagonal_with_no_gravity(void)
+{
+    int ux_q8 = 0, uy_q8 = 0;
+    material_shine_direction(0, 0, &ux_q8, &uy_q8);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(181, ux_q8,
+        "flat or free fall must fall back to the original diagonal, not "
+        "collapse the shine's direction to nothing");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(181, uy_q8, "same for the y half of it");
+}
+
+/* The shine sweeps AWAY from gravity, the same MINUS-gravity convention
+ * liquid_spec's rim highlight uses (test_a_liquid_rim_catches_the_light_
+ * from_above just above pins that one's sign) - light comes from "up",
+ * whichever way up currently is. */
+static void test_shine_direction_points_opposite_gravity(void)
+{
+    int ux_q8 = 999, uy_q8 = 999;
+
+    material_shine_direction(0, 1000, &ux_q8, &uy_q8);
+    TEST_ASSERT_TRUE_MESSAGE(uy_q8 < -200,
+        "gravity straight down must sweep the shine straight up");
+    TEST_ASSERT_TRUE_MESSAGE(ux_q8 > -20 && ux_q8 < 20,
+        "and put none of that sweep sideways");
+
+    material_shine_direction(1000, 0, &ux_q8, &uy_q8);
+    TEST_ASSERT_TRUE_MESSAGE(ux_q8 < -200,
+        "gravity pointing right must sweep the shine left");
+    TEST_ASSERT_TRUE_MESSAGE(uy_q8 > -20 && uy_q8 < 20,
+        "and put none of that sweep vertically");
+}
+
+/* A genuine ANGLE, not a choice between a couple of fixed diagonals - the
+ * one thing an earlier, abandoned attempt at gravity-linked shine never
+ * had (see paint_row_n()'s own comment on why that version was dropped).
+ * A gravity vector halfway between two axes must sweep the shine halfway
+ * between them too, not snap to whichever axis is closer. */
+static void test_shine_direction_is_a_genuine_angle_not_a_snap(void)
+{
+    int axis_ux_q8, axis_uy_q8, diag_ux_q8, diag_uy_q8;
+
+    material_shine_direction(1000, 0, &axis_ux_q8, &axis_uy_q8);
+    material_shine_direction(1000, 1000, &diag_ux_q8, &diag_uy_q8);
+
+    TEST_ASSERT_TRUE_MESSAGE(diag_uy_q8 < -20,
+        "gravity split evenly between right and down must still sweep the "
+        "shine somewhat upward, not only leftward like the pure-right case "
+        "above - a snap-to-nearest-axis implementation would leave this at "
+        "zero");
+    TEST_ASSERT_TRUE_MESSAGE(diag_ux_q8 != axis_ux_q8,
+        "and the sideways component must differ from the pure-axis case - "
+        "splitting gravity's magnitude across two axes weakens each");
+}
+
+/* Whatever direction comes out must actually be a unit vector - im_len()'s
+ * own ~4% approximation (material_set_gravity() trusts the same thing for
+ * the same reason) is the only slack allowed, not an arbitrary scale that
+ * would make the shine sweep faster or slower depending on which way the
+ * board happens to be tilted. */
+static void test_shine_direction_is_unit_length(void)
+{
+    static const int gxs[] = { 1000, 1000, 0, -700, 300 };
+    static const int gys[] = { 0, 1000, -1000, 400, -900 };
+
+    for (unsigned i = 0; i < sizeof gxs / sizeof gxs[0]; i++) {
+        int ux_q8, uy_q8;
+        material_shine_direction(gxs[i], gys[i], &ux_q8, &uy_q8);
+
+        /* im_len()'s error swings both ways with angle - it UNDERSHOOTS
+         * the true length by about 1% on an exact diagonal and OVERSHOOTS
+         * it by close to 8% around a 2:1 ratio (r=0.4 is this shape's own
+         * worst case; see im_len()'s own comment in intmath.h for the
+         * formula). Dividing 256 by an over-long len under-shoots this
+         * vector's own magnitude and vice versa, so the honest tolerance
+         * this test can hold it to is [256/1.08, 256/0.99], not a tight
+         * band around 256 - anything outside THAT is a real bug (wrong
+         * scale, or gx/gy swapped for x/y). */
+        const long mag_sq = (long)ux_q8 * ux_q8 + (long)uy_q8 * uy_q8;
+        char why[64];
+        snprintf(why, sizeof why, "gravity (%d, %d)", gxs[i], gys[i]);
+        TEST_ASSERT_TRUE_MESSAGE(mag_sq > 230L * 230L && mag_sq < 265L * 265L,
+            why);
+    }
+}
+
 /*=============================================================================
  * LOCAL DEPTH - the depth signal now follows each puddle's own shape
  * rather than a fixed screen-position gradient. See LOCAL DEPTH's own long
@@ -9912,8 +10001,11 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
 }
 
 
-/* Plant, leaf, ice and metal are speckled, and everything else extended is
- * not.
+/* Plant, leaf, ice and metal all take their texture from the position hash,
+ * and everything else extended does not. Metal alone is HATCHED rather than
+ * SPECKLED - it is the only one of the four with a travelling shine on top
+ * of its grain (see metal_dither/metal_shine's own comment in material.c) -
+ * so it gets its own pattern check instead of sharing the other three's.
  *
  * An extended material's variant IS which one it is, so neither can carry
  * a shade and the position hash is the only variation available - the same
@@ -9925,14 +10017,14 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
  * a mistake there does not fail to build - it paints some other extended
  * material in leaf green, which is the sort of thing nobody notices until
  * a fourteenth material arrives and comes out looking like a hedge. */
-static void test_the_right_extended_materials_are_speckled(void)
+static void test_the_right_extended_materials_are_grained(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
 
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const cell_t c = MATX(k);
-        const bool grained = (k == MATX_PLANT || k == MATX_LEAF ||
-                              k == MATX_ICE || k == MATX_METAL);
+        const bool speckled = (k == MATX_PLANT || k == MATX_LEAF || k == MATX_ICE);
+        const bool hatched = (k == MATX_METAL);
 
         int distinct = 0;
         gfx_color_t seen[8];
@@ -9943,7 +10035,9 @@ static void test_the_right_extended_materials_are_speckled(void)
             char why[96];
             snprintf(why, sizeof why, "extended material %d", k);
             TEST_ASSERT_EQUAL_MESSAGE(
-                grained ? MATERIAL_SPECKLED : MATERIAL_FLAT, pat, why);
+                hatched ? MATERIAL_HATCHED
+                        : (speckled ? MATERIAL_SPECKLED : MATERIAL_FLAT),
+                pat, why);
 
             bool known = false;
             for (int i = 0; i < distinct; i++) {
@@ -9954,9 +10048,9 @@ static void test_the_right_extended_materials_are_speckled(void)
             }
         }
 
-        if (grained) {
+        if (speckled || hatched) {
             TEST_ASSERT_GREATER_THAN_MESSAGE(4, distinct,
-                "a speckled material must actually use its grain - a table "
+                "a grained material must actually use its grain - a table "
                 "of eight identical colours is a flat fill with extra steps");
         } else {
             TEST_ASSERT_EQUAL_INT_MESSAGE(1, distinct,
@@ -9965,6 +10059,40 @@ static void test_the_right_extended_materials_are_speckled(void)
                 "through the wrong branch");
         }
     }
+}
+
+/* Metal's body, its lines and their crossings must all differ - the same
+ * requirement glass's own painted-the-way-it-should-be check makes, just
+ * asserted here instead since metal is extended rather than a top-level
+ * MAT_* the other test's loop reaches (see MAT_COUNT <= MAT_EXTENDED in
+ * material.h). Equal ones would paint a flat block and the shine would
+ * never be seen. */
+static void test_metal_hatched_body_lines_and_shine_differ(void)
+{
+    gfx_color_t col[3] = { 0, 0, 0 };
+    material_colours(MATX(MATX_METAL), 0u, 0u, 255u, col);
+
+    TEST_ASSERT_TRUE_MESSAGE(col[0] != col[1] && col[1] != col[2],
+        "metal is hatched, so its body, its lines and their crossings "
+        "must all differ - equal ones paint a flat block and the shine "
+        "vanishes");
+}
+
+/* Metal's lines and shine do NOT vary from cell to cell, same reasoning as
+ * test_the_shine_does_not_vary_between_cells for glass: they are light
+ * landing on the surface, not the surface itself, and a highlight that
+ * wobbled per cell would look chewed rather than reflective. Unlike
+ * glass's version this has no variant loop to run - metal has none. */
+static void test_metal_shine_does_not_vary_between_cells(void)
+{
+    gfx_color_t a[3], b[3];
+    material_colours(MATX(MATX_METAL), 0u, 0u, 255u, a);
+    material_colours(MATX(MATX_METAL), 5u, 0u, 255u, b);
+
+    TEST_ASSERT_EQUAL_MESSAGE(a[1], b[1],
+        "metal's line colour must be identical in every cell");
+    TEST_ASSERT_EQUAL_MESSAGE(a[2], b[2],
+        "metal's shine colour must be identical in every cell");
 }
 
 
@@ -20108,7 +20236,9 @@ void run_sand_suite(void)
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
     RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
-    RUN_TEST(test_the_right_extended_materials_are_speckled);
+    RUN_TEST(test_the_right_extended_materials_are_grained);
+    RUN_TEST(test_metal_hatched_body_lines_and_shine_differ);
+    RUN_TEST(test_metal_shine_does_not_vary_between_cells);
     RUN_TEST(test_a_tilt_between_two_directions_is_dithered_not_snapped);
     RUN_TEST(test_water_percolates_to_the_bottom_of_a_submerged_pile);
     RUN_TEST(test_water_percolates_diagonally_as_well_as_straight_down);
@@ -20164,6 +20294,10 @@ void run_sand_suite(void)
     RUN_TEST(test_only_a_liquid_interior_reads_depth);
     RUN_TEST(test_a_liquid_rim_still_shows_its_fill);
     RUN_TEST(test_a_liquid_rim_catches_the_light_from_above);
+    RUN_TEST(test_shine_direction_holds_the_old_diagonal_with_no_gravity);
+    RUN_TEST(test_shine_direction_points_opposite_gravity);
+    RUN_TEST(test_shine_direction_is_a_genuine_angle_not_a_snap);
+    RUN_TEST(test_shine_direction_is_unit_length);
     RUN_TEST(test_local_depth_follows_the_puddles_own_shape);
     RUN_TEST(test_local_depth_resets_when_gravitys_axis_flips);
     RUN_TEST(test_a_same_row_reset_commits_but_a_different_row_does_not);

@@ -264,9 +264,13 @@ the cost is zero.
   revision 2026-08-30 - metal now resists acid rather than being its
   counter, see the `dissolvable` row above)
 - add `MATX_METAL` to the grained set in
-  `test_the_right_extended_materials_are_speckled` - it asserts the
+  `test_the_right_extended_materials_are_grained` - it asserts the
   negative half too, so it fails loudly if the grain table and the palette
-  entry disagree
+  entry disagree. Metal was later given its own travelling shine (the same
+  HATCHED mechanism glass uses in `paint_row_n()`), so it is asserted
+  HATCHED there rather than SPECKLED like the other three grained extended
+  materials - see `test_metal_hatched_body_lines_and_shine_differ` and
+  `test_metal_shine_does_not_vary_between_cells`
 - `test_every_material_has_a_palette_block` covers the new entry for free
 
 ---
