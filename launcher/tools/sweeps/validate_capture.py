@@ -109,7 +109,7 @@ def validate(capture_path: str):
         msg = f"panic detected: {panic_type}"
         context = _panic_context(lines, panic_index)
         if context:
-            msg += "\n    last test results before the panic:\n      " + \
+            msg += "\n    last tests that PASSED before the panic - the crashing test is the NEXT one registered after these, it died before printing a result:\n      " + \
                 "\n      ".join(context)
         failures.append(msg)
 
