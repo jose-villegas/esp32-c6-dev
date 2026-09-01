@@ -44,6 +44,7 @@ that won.
 | 15 | Pin a stale capture to its commit; attribute two flash-layout regressions; turn off the diag watchdog | `1c4413f`, `741846e`, `e55f334`, `deb340f`, `a60b5e9` | mixed |
 | 16 | Fix a wet-earth inlining cliff (4th occurrence); add a full-width dirty-region present path | `723fac6`, `3cf88c3`, `142b2f8`, `127037a`, `dc9e7d2` | shipped |
 | 17 | Clear three named suspects; ship a sequential memo for the gas sight scan | `e07081f`, `468a53f`, `0cfc087` | shipped |
+| 18 | Counter-driven decomposition of both hot passes; mask the reaction probes' pre-roll rejects; pin `sand_step` to the cache line | `8a20c86`, `66a1e9b` | shipped |
 
 A sha marked "not on main" lives on a feature/exploration branch that was
 never merged; `git show` still works once that branch is fetched, or
@@ -95,6 +96,22 @@ never merged; `git show` still works once that branch is fetched, or
   for different reasons each time. The second sweep found a send path
   that reaches the same pixel totals as raising the cap, for zero extra
   memory and zero copying.
+- **Cold-hinting `move_liquid_grain`'s dead-for-water branches** (18) —
+  counters proved the drag/foreign/splash machinery executes zero times
+  in the water and mixed-flip windows, and hinting it to the tail did
+  tighten the hot span 22 → 16 cache lines — and the host showed no win
+  anywhere, baseline fastest in every trial. The function's layout was
+  already close enough to its ceiling; water's gap is call volume, not
+  code shape. Don't re-run the hints; the next water idea has to reduce
+  the ~11k grains × 2 passes per step, not rearrange their bytes.
+- **Interior bounds-check skip in `step_one_soaking_cell`** (18, cand. B)
+  — provably removes redundant comparisons on ~98% of cells and measured
+  consistently *slower* than the mask alone on the very scene it targets,
+  across three capture sizes, with no inlining cliff to blame.
+- **`aligned(64)` on a flash-resident function** (18) — does not link:
+  it raises `.flash.text`'s section alignment past the `0x...20` start
+  ESP-IDF's script pairs with `.flash_rodata_dummy`, and ld refuses the
+  overlap. 32 (this chip's actual i-cache line) links and works.
 - **Raising a budget to make it pass.** Never done, even under pressure
   to close a gap — a budget moved to fit the code it guards has stopped
   guarding anything. When a feature genuinely earns a higher cost,
@@ -160,11 +177,16 @@ never merged; `git show` still works once that branch is fetched, or
   host build's stack is megabytes and cannot reproduce an overflow here.
 - ~66–68 KB of heap is free once the display framebuffer is carved out;
   a full sand grid alone is ~41 KB.
-- The flash-layout lottery may be quantised rather than continuous: six
-  observations across two builds, on two different compilers (device and
-  host), land on one of exactly two value-pairs and never in between.
-  Reading *which pair* the controls landed in is a sharper diagnostic
-  than asking whether a delta is inside the noise floor.
+- The flash-layout lottery is quantised, but not two-state: attempt 18's
+  bisect found the mechanism (a hot function's compiled bytes stay
+  byte-identical while unrelated size changes earlier in its file move
+  its address across cache-line boundaries), observed four distinct
+  control value-pairs in one day, and saw two *different* binaries land
+  the same pair to the microsecond. Reading *which pair* the controls
+  landed in remains the sharp diagnostic. `sand_step` is pinned
+  (`aligned(32)`, commit `66a1e9b`) so its own ticket is no longer drawn;
+  other hot functions still play the lottery, and the pin's padding
+  re-rolls everything downstream of it exactly once.
 - The diagnostics image no longer runs a task watchdog. It used to charge
   its own periodic console dump to whatever benchmark's timed loop it
   landed inside — deterministically, up to 2.6× inflation, with nothing

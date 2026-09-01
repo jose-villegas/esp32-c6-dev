@@ -749,6 +749,19 @@ try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
     if (CELL_IS_EMPTY(n)) {
         return false;
     }
+    /* s->heat_mask (sand_step_reactions()'s own comment): a neighbour whose
+     * material bit is clear could never pass either of the two gates below
+     * even in principle, so this rejects it before ever loading reaction_of
+     * (n) - a whole cache line off the reaction table's own row - or
+     * touching the RNG. Bit-identical to falling through to "if (r->heat_
+     * ramp != 0) {...} if (r->heats_to == 0 || r->heat_chance == 0) return
+     * false;" below and taking the same false, for every material in the
+     * table today; see this file's own top comment for the device counters
+     * this exists to cheapen and sand_step_reactions()'s comment for why the
+     * mask can never go stale or misjudge an extended material. */
+    if ((s->heat_mask & (1u << CELL_MATERIAL(n))) == 0) {
+        return false;
+    }
     const reaction_t* r = reaction_of(n);
 
     /* A material that BANKS heat climbs one level instead of transforming,
@@ -1014,8 +1027,16 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             const cell_t n = s->cells[nat];
             /* A liquid that WETS things, which is water and nothing
              * else. Taking a unit of any KIND_LIQUID is the obvious rule
-             * and it soaked oil, acid and lava into the ground alike. */
-            if (CELL_IS_EMPTY(n) || materials[CELL_MATERIAL(n)].kind != KIND_LIQUID || reaction_of(n)->wets == 0) {
+             * and it soaked oil, acid and lava into the ground alike.
+             *
+             * s->wet_mask (sand_step_reactions()'s own comment) folds the
+             * old three-part test - empty, not KIND_LIQUID, wets == 0 -
+             * into one shift-and-test: bit 0 (empty) is never set, since
+             * materials[MAT_EMPTY].kind is KIND_NONE, so this single test
+             * covers CELL_IS_EMPTY() for free and never has to load
+             * materials[] or reaction_of(n) - two separate cache lines -
+             * for a neighbour that was never going to wet anything. */
+            if ((s->wet_mask & (1u << CELL_MATERIAL(n))) == 0) {
                 continue;
             }
             beside_liquid = true;
@@ -3893,6 +3914,93 @@ sand_step_reactions(sand_t* s) {
         && !s->may_have_faller && !s->may_have_withering && !s->may_have_condenser) {
         return;
     }
+
+    /* s->heat_mask/s->wet_mask, REBUILT HERE, EVERY PASS. Two 16-bit
+     * material-id-indexed masks that let try_heat_transform() and
+     * step_one_soaking_cell() reject a neighbour that could not possibly
+     * react with one shift-and-test against a small table already sitting
+     * in a register, instead of loading reaction_of(n) (a whole cache
+     * line, off the material table's own row) and walking its field chain,
+     * for every one of the many neighbours that turn out to be lava, fire,
+     * or another non-reacting material - see this file's own top comment
+     * and docs/Sand/Performance-Tuning-Attempts.md for the device
+     * counters that motivated this (a lava-heavy scene rejects 99.6% of
+     * try_heat_transform()'s probes and 99.65% of step_one_soaking_cell()'s
+     * wetness probes before any of them would have drawn a random number).
+     *
+     * O(16) work, done here rather than cached on sand_t across steps -
+     * this is NOT the retired per-cell "can this material react at all"
+     * mask (docs/Sand/Performance-Tuning-Attempts.md, "Never retry", attempt
+     * 12), and the difference is exactly what makes this one safe where
+     * that one was not. That mask was written once per CELL and read again
+     * later in the SAME pass, so a cell created behind the scan pointer
+     * (place_reacted() promoting sand to glass, say) could be tested
+     * against a decision computed before it existed. This mask is written
+     * once per PASS, from the live tables, and read only by neighbour
+     * probes inside that same pass - it never survives from one
+     * sand_step_reactions() call to the next, so a sand_set_* table
+     * override between steps is picked up on the very next entry with
+     * nothing to invalidate. At sixteen materials the rebuild is between
+     * one and two cache lines of reactions[]/materials[], read once per
+     * pass rather than once per PROBE - cheaper than the single reaction_of()
+     * load it replaces on the very first neighbour it is asked about.
+     *
+     * heat_mask: bit m set iff material m's reaction row could ever do
+     * anything at try_heat_transform()'s first two gates - heat_ramp != 0
+     * (banks heat) or heats_to != 0 && heat_chance != 0 (the memoryless
+     * form). Every heat_ramp material is kept by construction, which is
+     * what keeps the shock-crack test at that function's line "r->shatters_
+     * to != 0 && CELL_VARIANT(n) <= SAND_SHOCK_COLD" reachable - shock only
+     * ever fires from inside the heat_ramp != 0 branch, and this mask never
+     * excludes a heat_ramp material, so a frosted pane meeting lava still
+     * cracks on contact exactly as before; see the fingerprint check this
+     * change is gated on for the proof, not just the argument.
+     *
+     * Ordinary materials (ids 1..MAT_COUNT-1) are read straight out of
+     * reactions[]. MAT_EXTENDED (id 15) is special: CELL_MATERIAL()
+     * collapses all sixteen extended materials (ice, plant, leaf, metal)
+     * onto that one nibble value, so no single reactions[] row can answer
+     * for the extended range the way it can for an ordinary material -
+     * reaction_of() only gets the right per-extended-material answer by
+     * decoding the low nibble through extended_reactions[]. So bit 15 is
+     * set the moment ANY extended material would pass the same test (ice
+     * does: heats_to = MAT_WATER, heat_chance = 90 - see material.c) -
+     * which means every extended cell reaches the real reaction_of() check
+     * unconditionally, exactly as it did before this mask existed. The
+     * mask only ever cheapens rejecting an ORDINARY material's neighbour;
+     * it can never reject an extended one, so it cannot desync from what
+     * extended_reactions[] actually contains.
+     *
+     * wet_mask: bit m set iff material m is KIND_LIQUID and its reaction
+     * row's wets != 0 - step_one_soaking_cell()'s "does this neighbour
+     * actually wet things" test. No extended-material special case is
+     * needed here: every extended material shares materials[MAT_EXTENDED]
+     * .kind == KIND_STATIC (material.c; see material.h's own comment on
+     * the one shared physics row), so bit 15 comes out clear on its own -
+     * never liquid, so never wet, exactly what the four-line test this
+     * replaces already decided for every extended cell. */
+    uint16_t heat_mask = 0;
+    for (int m = 1; m < MAT_COUNT; m++) {
+        const reaction_t* r = &reactions[m];
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+            heat_mask |= (uint16_t)(1u << m);
+        }
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        const reaction_t* r = &extended_reactions[k];
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+            heat_mask |= (uint16_t)(1u << MAT_EXTENDED);
+            break;
+        }
+    }
+    uint16_t wet_mask = 0;
+    for (int m = 1; m < MATERIAL_MAX; m++) {
+        if (materials[m].kind == KIND_LIQUID && reactions[m].wets != 0) {
+            wet_mask |= (uint16_t)(1u << m);
+        }
+    }
+    s->heat_mask = heat_mask;
+    s->wet_mask = wet_mask;
 
     const int w = s->w;
     const int h = s->h;

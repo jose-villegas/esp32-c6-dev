@@ -61,6 +61,11 @@ def parse_report(path: str) -> dict:
     return measured
 
 
+# Smallest absolute movement, in microseconds, that --verdict will treat as
+# real regardless of how large it looks as a percentage. See its use below.
+MIN_ABS_DELTA_US = 20
+
+
 def pct_delta(old: int, new: int) -> float:
     if old == 0:
         return float("inf") if new else 0.0
@@ -79,6 +84,17 @@ def classify(old_report: dict, new_report: dict):
         old_v, new_v = old_report[name], new_report[name]
         control_rows.append((name, old_v, new_v, new_v - old_v, pct_delta(old_v, new_v)))
     floor_pct = max(abs(row[4]) for row in control_rows)
+
+    # A floor of exactly zero is not a claim that 1us is meaningful - it
+    # means both controls happened to land on identical values, which does
+    # happen here: the flash layout lottery on this device is quantised
+    # (controls come back on one of a small number of value-pairs, never
+    # between), so two different builds can produce byte-identical control
+    # rows. Taking 0.0% literally labels a +1us move "signal" and invites
+    # chasing noise, which is the exact failure this tool exists to prevent.
+    # 0.5% is the smallest move this campaign has ever attributed to a real
+    # cause; below that, a single capture cannot tell you anything.
+    floor_pct = max(floor_pct, 0.5)
     return floor_pct, control_rows, None
 
 
@@ -95,6 +111,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("old_report", help="Earlier performance_*.md")
     parser.add_argument("new_report", help="Later performance_*.md")
+    parser.add_argument("--verdict", action="store_true",
+                        help="Print one machine-readable line instead of the "
+                             "tables, and exit 0 only if this is a win: at "
+                             "least one row improved beyond the noise floor "
+                             "and none regressed beyond it. For the "
+                             "optimisation loop, which cannot read a table.")
     args = parser.parse_args()
 
     old_report = parse_report(args.old_report)
@@ -104,6 +126,44 @@ def main() -> int:
     if error:
         print(f"ERROR: {error}")
         return 1
+
+    if args.verdict:
+        # A row is only counted when BOTH reports measured it, so a newly
+        # added or newly failing-to-run row can never be read as a win.
+        improved, regressed, best, worst = [], [], 0.0, 0.0
+        for name, new_v in sorted(new_report.items()):
+            if name not in old_report:
+                continue
+            d = pct_delta(old_report[name], new_v)
+            if abs(d) <= floor_pct:
+                continue
+            # A percentage floor alone is not enough on the very small rows.
+            # test_an_unchanged_frame_costs_almost_nothing measures 3 us, so
+            # one microsecond of timer quantisation reads as 33% and would
+            # be banked as a large win by a loop that only checked percent.
+            # Requiring an absolute movement too makes the tiny rows
+            # unwinnable rather than wildly noisy, which is correct: nothing
+            # worth finding hides in a 1 us move.
+            if abs(new_v - old_report[name]) < MIN_ABS_DELTA_US:
+                continue
+            if d < 0:
+                improved.append(name)
+                best = min(best, d)
+            else:
+                regressed.append(name)
+                worst = max(worst, d)
+        # A regression beyond the floor disqualifies the candidate outright,
+        # however large the win elsewhere: this loop is not authorised to
+        # trade one budget against another. A human decides that.
+        win = bool(improved) and not regressed
+        print(f"VERDICT {'WIN' if win else 'NO'} floor={floor_pct:.1f}% "
+              f"improved={len(improved)} regressed={len(regressed)} "
+              f"best={best:.1f}% worst={worst:.1f}%")
+        for name in improved:
+            print(f"  improved {name} {pct_delta(old_report[name], new_report[name]):.1f}%")
+        for name in regressed:
+            print(f"  REGRESSED {name} {pct_delta(old_report[name], new_report[name]):.1f}%")
+        return 0 if win else 1
 
     print(f"# Comparing `{args.old_report}` -> `{args.new_report}`")
     print()
@@ -119,8 +179,13 @@ def main() -> int:
     for name, old_v, new_v, _delta, _pct in control_rows:
         print(format_row(name, old_v, new_v))
     print()
-    print(f"Noise floor for this comparison: **{floor_pct:.1f}%** "
-          "(the larger of the two control moves above).")
+    measured_floor = max(abs(row[4]) for row in control_rows)
+    origin = ("the larger of the two control moves above"
+              if measured_floor >= 0.5
+              else f"the 0.5% minimum - the controls themselves moved only "
+                   f"{measured_floor:.1f}%, which is too little to measure a "
+                   f"floor from")
+    print(f"Noise floor for this comparison: **{floor_pct:.1f}%** ({origin}).")
     # Worth printing raw, not just the floor: across this campaign the
     # controls were observed landing on one of two specific value pairs -
     # an observation worth a reader's attention, not worth hardcoding as a

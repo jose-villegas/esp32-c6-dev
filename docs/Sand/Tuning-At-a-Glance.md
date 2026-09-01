@@ -14,8 +14,16 @@ See [`Perf-Round-Guide.md`](Perf-Round-Guide.md) to run a new round.
 
 **All thirteen of the original budgets are uniform reduction targets —
 measured × 0.9, rounded — and, by design, all fail until their own tenth is
-won.** A fourteenth row (wet earth) has since been added and is still
-unpegged — see [`Perf-Round-Guide.md`](Perf-Round-Guide.md)'s open items.
+won.** The fourteenth row, wet earth, was pegged on 2026-09-01 from its
+first real capture: measured 100,367 µs for 30 steps → **80,000**. That row
+alone is measured × **0.8**, a deliberate 20% target set by the person
+pegging it — do not "correct" it to × 0.9 for consistency.
+
+Its previous 300,000 ceiling was extrapolated with no hardware and proved
+3× looser than the truth (+66.5% headroom), so it never constrained
+anything. Three device rounds could not measure this row at all, because
+static test fixtures had eaten the heap the scene needed to allocate its
+grid.
 
 | Test | Measured (2026-08-26 clean) | Target | To close |
 |---|---:|---:|---:|
@@ -45,6 +53,14 @@ unpegged — see [`Perf-Round-Guide.md`](Perf-Round-Guide.md)'s open items.
   sight-scan carry, host-measured at fire cascade −13.9% and full screen
   of fire −7.3%, byte-identical simulation. If confirmed, both close —
   the first since the tenth attempt.
+- **2026-09-01, attempt 18:** reaction masks took wet earth 100,367 →
+  **93,486 µs** (past a controls-derived 3.2% floor; simulation
+  byte-identical) and the `sand_step` pin put the controls at
+  **5,907/6,003 µs** — −1.8%/−1.7% from their budgets, the closest any
+  row has been. The present-cost falling-sand guard flipped to PASS on
+  the same day's layout roll; left un-repegged deliberately, since a
+  guard tightened onto a lottery ticket would fail spuriously on the
+  next roll.
 - Fixed RNG seeds reproduce these numbers to the microsecond on an
   identical build; what moves them *between* builds is flash layout — see
   [the layout lottery](#the-layout-lottery), now six observations deep
@@ -70,6 +86,8 @@ one experiment in the wrong pass.
 |---|---:|---:|---:|---:|
 | Screen of water collapsing | −2.2% | **−39.1%** | −0.7% | −98.7% |
 | Mixed scene flip | +0.6% | **−32.5%** | +1.8% | −99.9% |
+| Wet earth | **−44.4%** | −8.9% | −7.8% | −100.0%¹ |
+| Vent spam | **−92.9%** | −9.0% | 0.0% | −16.8% |
 | Four liquids reacting | −33.8% | −16.1% | −6.1% | −72.7% |
 | Lava stress scene | −58.2% | −17.7% | −16.5% | −73.3% |
 | Every material at once | −44.3% | −14.7% | −33.8% | −25.5% |
@@ -84,6 +102,13 @@ boiler are the reactions pass, almost entirely. The three gas-heavy scenes
 are the gas pass**, which is where the seventeenth attempt's win came from.
 The every-material flip is genuinely diffuse: no pass owns more than 44%
 of it.
+
+The wet-earth and vent-spam rows were added by attempt 18 (host, best of
+10, same stub method, validated by reproducing the water/mixed columns
+above first). Both are reactions-owned. ¹ Wet earth's −100% main-sweep
+column is a settle-phase confound — its 35 pre-window settle steps use
+the same stubbed `sand_step`, so nothing ever gains the adjacency its
+reactions need — read the reactions column, which has no such confound.
 
 ---
 
@@ -138,6 +163,7 @@ own table.
 | 15 | 🟠 | Two loose ends closed, and a watchdog counting itself in | An attribution round — no simulation code shipped. Pinned a stale capture to its exact commit by matching its 272 self-test names against `RUN_TEST()` declarations, then validated the method by rebuilding that commit fresh a day later: four rows exact, one off by **1 µs**. The liquid-free controls' **+9.6%**: byte-identical simulation and unchanged instruction count end to end, then isolated by device bisect to one commit — a line that **never executes** in either control, costing **~5%** purely from how GCC rescheduled `sand_step` around it once it existed. Round eleven's 28% host win: real on device too — but only **20%** of the gate's cost there, because the device's real water regression was `move_liquid_grain` **nearly tripling** across four separate commits, not the gate. Underneath both: a task watchdog silently charging its own console dump to the benchmark loop it shares a UART with, **up to 2.6×**, deterministically. |
 | 16 | 🟢 | A function that fell out of its callers, and a heuristic at its ceiling | An unattributed drift, bisected over 45 commits on the host by compiling the repo's **own** `suite_sand.c` with `-DDEVICE_BUILD` against Unity/timer shims — no hand-copied scenes to drift. One step, controls flat across it: a commit grew `try_heat_transform()` past GCC's size heuristic and knocked it **out of four call sites at once**. Forcing it back in: device **fire −10.4%, lava −6.5%, thermal −4.9%, four liquids −3.6%**, two captures agreeing to 4 µs, and the host predicted every one including the null. Attempts 07/08's i-cache trap did not fire because the object got *smaller* — the compiler had been paying more to keep the call. Also retired this page's own metal hypothesis (`conducts` 248→220 measures **−0.0%**) after a mid-flight counter found **311 cells of metal** in a scene that paints none. Second half: `ROW_MAX_RUNS` × `LEAF_REFINE_MAX_RUNS`, fifteen builds, **byte-identical counters** — both inert; and an **oracle** marking the exact changed cells, uncapped, sends the same pixels as the shipped marking, so the gather path is at its ceiling, not failing. The win was a **third send path** nobody had written: a full-width box is contiguous in the framebuffer, so it goes out at its own height — **−10% pixels a frame**, no memory, no copy. |
 | 17 | 🟢 | Three named suspects, all innocent, and a scan that pays | Convened against three simulation suspects with evidence already gathered. Mid-flight counters cleared all three: `anchored()` — a linear-scan flood fill, O(n²) worst case — is called **zero times by all thirteen benchmarks**; `find_water()` is 0.5% of cell visits at worst; and the dead reaction tail, which **99.998% of cells on the smoke screen walk without taking a single branch of**, is worth **2%** when deleted outright. Then stubbed each of the four passes in turn, which sorted the board into three clean groups — water and the mixed flip are **cross-flow**, thermal and boiler are **reactions**, the three gas scenes are **gas**. The win was the twelfth attempt's parked finding, re-run and still there: its "no cheap early-out exists" was right about a *spatial* index and wrong about the problem. The sweep advances by exactly `-px`, so the next cell's ray is this cell's ray shifted by one — three integers on the stack replace a `sight`-length walk per cell. **Cascade −13.9%, fire −7.3%**, simulation byte-identical (probe validated by failing first). A first spelling that armed the memo from every cell cost **+4.4%** on the alternating smoke/steam screen and is named in the code so nobody re-adds it. |
+| 18 | 🟢 | Count both hot passes down to their functions, then reject before the roll | Five attribution agents, every counter re-run and verified before use. The reactions pass, never split below pass level, decomposed cleanly: lava and four-liquids are `step_one_burning_cell`'s neighbour probes (**~50k `try_heat_transform` calls/step at a 0.43% fire rate**), wet earth is a **96%-miss soaking scan** with a heat path counting exactly zero, vent spam is genuinely fired vent work. Water's counters killed two suspects (drag/foreign/splash: **zero calls** in both failing windows) and its null killed a third — cold-hinting proven-dead branches tightened the hot span 22→16 cache lines and won nothing, so **water's gap is call volume, not layout**. What shipped: two table-derived 16-bit masks, recomputed each pass entry, rejecting probes that fail *before* any RNG draw — fingerprint byte-identical, device **wet earth −6.9%** past a controls-derived 3.2% floor. And the lottery finally gave up its mechanism: a hot function's bytes stay identical while unrelated size changes move its address, so `sand_step` is pinned to the 32-byte line it fetches by (**64 does not link** on this script), landing the controls at **5,907/6,003 µs** — microsecond-identical across two different binaries — and closing attempt 15's finding-A file: the residual was placement plus `0dac86a`'s two real stores, which the guide had wrongly cleared. |
 
 ---
 
@@ -172,17 +198,21 @@ the 32 KB cache was never missing on either.
 Same code, **3.2 ms vs 3.9 ms** — two builds that never touched the hot
 function, 20% apart, purely because unrelated code shifted where things
 landed in flash. Differences under a few percent are layout until they
-reproduce. **It may not be a continuum**: across four device captures of
-three builds the two liquid-free controls take one of exactly two
-value-pairs — (6,005, 6,100) three times and (6,263, 6,356) once — never
-anything between, and the sixteenth attempt's 46-build host sweep shows
-the same two-level shape on a different machine with a different
-compiler. If that holds, the useful test is not "is the delta inside the
-floor" but "which state did the control land in." Four captures and one
-sweep is an observation, not a proof. The antidote (attempt 10): **keep
-control benchmarks in every capture** — three of the seven tests never
-touch liquid, so when only the liquid numbers moved, the cause had to be
-in the liquid path.
+reproduce. **Attempt 18 found the mechanism and retired the two-ticket
+guess in the same day**: the hot function's compiled bytes are identical
+build to build — only its *address* moves, pushed across cache-line
+boundaries by unrelated functions earlier in its file growing or
+shrinking — and 2026-09-01 alone produced four distinct control
+value-pairs, two of them landed by *different binaries* to the exact
+microsecond (5,907/6,002-3). Quantised, yes; two states, no. The useful
+test is still "which pair did the controls land in", and `sand_step` no
+longer draws a ticket at all: it is pinned to the 32-byte line it
+fetches by (`aligned(32)`, commit `66a1e9b` — 64 does not link against
+ESP-IDF's `.flash_rodata_dummy` overlay). The pin's padding re-rolled
+everything downstream exactly once; other hot functions still play. The
+antidote (attempt 10) stands: **keep control benchmarks in every
+capture** — when only the liquid numbers move, the cause is in the
+liquid path.
 
 ### The inlining cliff
 

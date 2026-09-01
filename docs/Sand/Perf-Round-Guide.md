@@ -9,6 +9,18 @@ map). This page is instructions, not narrative.
 
 ## The loop
 
+0. **Start every round from a capture you took yourself.** Do not open the
+   newest `.md` in `results/` and read its numbers as current, and do not
+   carry a previous round's table forward as the baseline. Those files are
+   an archive, not a state - they are timestamped, never overwritten, and
+   several of them were generated from captures that turned out to have
+   measured nothing. This has already gone wrong twice: once a stale report
+   was quoted as a fresh result because it was simply the most recent file
+   on disk, and once a whole round's budgets were read from a capture whose
+   fixtures had all failed to allocate. A capture is cheap next to a wrong
+   conclusion drawn from an old one - and if a fresh capture and an archived
+   table disagree, the fresh capture wins every time.
+
 1. **Attribute before optimising.** Host counters first: which pass, which
    function, does the suspect code even run in the failing benchmark's
    window (`git log --all --grep attempt` for prior instances of this
@@ -85,14 +97,24 @@ prints `SELFTEST_COMPLETE`, and still produces a report-shaped capture -
 with no timings in it at all. Grep the capture for
 `free heap after framebuffer` before reading anything else:
 
-| Free heap | What you get |
-|---|---|
-| ~66,600 B | every scene allocates; measurements are real |
-| ~42,900 B | all 34 fixture-based tests fail to allocate; zero timings |
+| Free heap | What you get | |
+|---|---|---|
+| 66,632 B | every scene allocates | measured 2026-08-28 |
+| 63,952 B | every scene allocates | measured 2026-09-01 |
+| 42,880 B | all 34 fixture tests fail to allocate; zero timings | measured 2026-09-01 |
+| 28,480 B | same, worse | measured 2026-08-31 |
 
 One grid is ~41 KB on its own. If a round suddenly reports nothing, suspect
 a static test fixture added since the last good capture before suspecting
 the device - that has now been the cause twice.
+
+**A healthy suite is SLOW, and that is the correct sign.** While the
+fixtures were failing to allocate, the whole device run finished in ~168
+seconds, because failing a malloc is instant. With the heap freed and every
+scene actually simulating, a full pass measured 1,125,726 ms - 18.8
+minutes. Both report scripts capture with a 1500-second window for this
+reason. If a run finishes in a couple of minutes, that is not a fast
+device: it is a suite that measured nothing, and the validator will say so.
 
 ### Comparing two rounds
 
@@ -103,6 +125,38 @@ python launcher/main/apps/sand/tools/compare_reports.py <before>.md <after>.md
 It derives the noise floor from the two control rows in the reports being
 compared rather than hardcoding one, so a run that was noisier than usual
 does not get read as a win.
+
+### Unattended candidate evaluation
+
+`scripts/perf-loop.sh` evaluates optimisation candidates without a human,
+and is built so a candidate cannot be accepted for the wrong reason:
+
+```sh
+sh scripts/perf-loop.sh --baseline <report>.md --candidates <file>
+sh scripts/perf-loop.sh --host-only --candidate "sed -i ... sand.c"
+```
+
+Five gates, cheapest first - allowlist, host suite, fingerprint, device
+capture, measured verdict - then one of three outcomes: ACCEPT (won, and
+behaviour byte-identical, committed to a branch), QUARANTINE (won, but
+behaviour changed - patch kept for review), REJECT.
+
+The allowlist runs FIRST and matters most. The cheapest way to make a
+deliberately-failing budget pass is to raise the budget, and the next
+cheapest is to weaken the scene; both live in files a candidate may not
+open, so neither is discouraged - both are unreachable.
+
+`main/apps/sand/tools/report_fingerprint.sh --check` is the behavioural
+gate and is worth running by hand during any perf round. It hashes the
+grid after a fixed number of steps across five scenes and prints the
+per-material histogram beside each hash. Proven necessary: setting
+`SAND_VENT_LAYER` from 3 to 5 passes all 680 tests and changes the
+simulation - the suite cannot see it, this does. Read a failure by the
+histogram, not the hash: identical counts with a different hash is a
+reordering, changed counts mean material was created or destroyed.
+
+`--update` re-records the baseline and is deliberately a human act. A loop
+that can re-record its own baseline has no baseline.
 
 ## Reading a capture
 
@@ -176,11 +230,9 @@ skipped.
 
 Open items, as of this file's writing:
 
-- **The wet-earth scene's budget is unpegged.** It ships with a
-  deliberately loose 300,000 µs provisional ceiling
-  (`test_the_wet_earth_scene_fits_in_the_frame_budget`, `suite_sand.c`) and
-  awaits its first device capture. Re-peg at `measured × 0.8` per the rule
-  above, not ×0.9.
+- ~~**The wet-earth scene's budget is unpegged.**~~ Pegged 2026-09-01 at
+  80,000 (measured × 0.8 per the rule above). Attempt 18's reaction masks
+  then took the row 100,367 → 93,486 µs on device; the budget stands.
 - **Five blast-scene tests currently fail on device with allocation
   errors** — the device has ~66–68 KB free after the framebuffer and one
   grid alone is ~41 KB; several blast/dune/vessel fixtures allocate a grid
@@ -195,13 +247,16 @@ Open items, as of this file's writing:
   current free-heap number before adding any new device fixture; this is
   likely the most valuable single fix available right now, not a new
   optimisation.
-- **Attempt 15's "finding A" residual (~267–269 µs on the two liquid-free
-  controls) is unbisected** between two commits that both touch
-  `sand_step`'s compiled object — `30bfba7` ("Grow the plant, and fix the
-  two things that stopped it") and `0dac86a` ("Let trees lean with the
-  tilt, and fix the fan that made them jump"). Neither commit's source
-  touches anything either control benchmark executes; the residual is
-  believed to be the same "same instructions, different schedule" effect
-  attempt 15 found for `e03aabd`, just not run to ground. A host bisect
-  the way attempt 16 did it (compile `suite_sand.c` itself against shims,
-  not a hand-copied scene) is the cheap way to close it.
+- ~~**Attempt 15's "finding A" residual is unbisected.**~~ **Closed by
+  attempt 18 (2026-09-01).** The host bisect found two separable causes:
+  five of six commit transitions were pure placement — `sand_step`'s
+  compiled bytes byte-identical across the whole window, only its address
+  moving with unrelated functions' size changes earlier in the file — and
+  `0dac86a` alone added real work (two unconditional `last_step_dx/dy`
+  stores per call). This file's earlier claim that "neither commit's
+  source touches anything either control benchmark executes" was wrong
+  for `0dac86a`, directly and unconditionally. The placement half is now
+  pinned: `sand_step` carries `aligned(32)` (commit `66a1e9b`; 64 does
+  not link — it collides with ESP-IDF's `.flash_rodata_dummy` overlay),
+  and the device controls sit at 5,907/6,003 µs, −1.8%/−1.7% from their
+  budgets.
