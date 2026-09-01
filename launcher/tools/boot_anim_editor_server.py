@@ -12,14 +12,17 @@ JS reimplementation of it.
 HOW A REQUEST IS HANDLED
 
 POST /render body is {"timing": {...}, "camera_focal": 512, "grid_step_m":
-0.25, "wave_height_m": 0, "wave_ease": "linear", "keyframes": [...],
-"ms": 1234} - boot_anim_timeline.json's own shape, plus which millisecond
-to show.
+0.25, "wave_height_m": 0, "wave_decay_m": 1, "wave_ease": "linear",
+"keyframes": [...], "ms": 1234} - boot_anim_timeline.json's own shape
+(PAYLOAD_KEYS below), plus which millisecond to show. Handled and passed
+around as one `payload` dict throughout this file, not one parameter per
+field - adding a field to the JSON means adding it to PAYLOAD_KEYS, nothing
+else here.
 
-  1. Hash {timing, camera_focal, grid_step_m, wave_height_m, wave_ease,
-     keyframes}. If it matches the last build, skip straight to step 4 -
-     scrubbing/playback (ms alone changing) never recompiles, it is one
-     process spawn of an already-built binary.
+  1. Hash `payload` (PAYLOAD_KEYS only - not `ms`). If it matches the last
+     build, skip straight to step 4 - scrubbing/playback (ms alone
+     changing) never recompiles, it is one process spawn of an
+     already-built binary.
   2. Otherwise: write that JSON to a SCRATCH copy of boot_anim_timeline.json
      (never the real, committed one - see build_and_flash() below for the
      one thing here that does write it) and run
@@ -82,6 +85,13 @@ BUILD_FLASH_TIMEOUT_S = 300
 
 DEFAULT_PORT = 8934
 
+# boot_anim_timeline.json's own top-level keys, minus "ms"/"port" which are
+# per-request rather than per-timeline. The one place a new top-level field
+# (wave_decay_m, grid_spokes's own parent "timing", ...) needs to be added
+# for it to reach the renderer at all.
+PAYLOAD_KEYS = ("timing", "camera_focal", "grid_step_m", "wave_height_m",
+               "wave_decay_m", "wave_ease", "keyframes")
+
 
 def find_cc():
     """Mirrors tools/find_cc.sh's own search order - see its top comment."""
@@ -129,18 +139,26 @@ class RenderError(Exception):
 class Renderer:
     """Owns the scratch directory and the cached compiled binary."""
 
-    def __init__(self, cc):
+    def __init__(self, cc, port):
         self.cc = cc
-        # A FIXED name/location, not tempfile.mkdtemp()'s random one each
-        # run: a stray .exe freshly written under a Windows Defender-watched
-        # path (the whole system temp dir is) gets scanned on execution,
-        # sometimes costing the better part of a second - a real-world
-        # measurement, not a guess (see this script's own commit message).
-        # A stable path is what makes a ONE-TIME exclusion
+        # A FIXED name/location per PORT, not tempfile.mkdtemp()'s random
+        # one each run: a stray .exe freshly written under a Windows
+        # Defender-watched path (the whole system temp dir is) gets scanned
+        # on execution, sometimes costing the better part of a second - a
+        # real-world measurement, not a guess (see this script's own commit
+        # message). A stable path is what makes a ONE-TIME exclusion
         # (Add-MpPreference -ExclusionPath, run by the user, never this
         # script - that is a system security setting) actually pay off
         # across restarts instead of needing to be redone every time.
-        self.scratch = os.path.join(tempfile.gettempdir(), "boot_anim_editor_scratch")
+        # Keyed by port, not shared across every instance: two servers
+        # running at once (e.g. verifying a change on an alternate port
+        # without disturbing a live session on the default one) used to
+        # both point at the SAME directory - the second one's startup
+        # rmtree() below would delete the first one's already-compiled
+        # binary out from under it mid-session, breaking its very next
+        # render with a plain FileNotFoundError.
+        self.scratch = os.path.join(
+            tempfile.gettempdir(), "boot_anim_editor_scratch_%d" % port)
         # Cleared and recreated on every server start - stale contents from
         # a previous run (or, worse, a previous run's still-running process
         # that got killed uncleanly) are exactly what produced the
@@ -163,15 +181,12 @@ class Renderer:
                 '    Add-MpPreference -ExclusionPath "%s"' % self.scratch,
                 file=sys.stderr)
 
-    def _regenerate_and_compile(self, payload_hash, timing, camera_focal,
-                                grid_step_m, wave_height_m, wave_ease, keyframes):
+    def _regenerate_and_compile(self, payload_hash, payload):
         scratch_json = os.path.join(self.scratch, "boot_anim_timeline.json")
         scratch_header = os.path.join(self.scratch, "boot", "boot_anim_timeline.h")
 
         with open(scratch_json, "w", encoding="utf-8") as f:
-            json.dump({"timing": timing, "camera_focal": camera_focal,
-                      "grid_step_m": grid_step_m, "wave_height_m": wave_height_m,
-                      "wave_ease": wave_ease, "keyframes": keyframes}, f)
+            json.dump(payload, f)
 
         gen = subprocess.run(
             [sys.executable, GENERATOR, scratch_json],
@@ -201,19 +216,17 @@ class Renderer:
 
         self.built_hash = payload_hash
 
-    def render(self, timing, camera_focal, grid_step_m, wave_height_m,
-              wave_ease, keyframes, ms):
-        """Returns (bmp_bytes, (origin_x, origin_y) or None)."""
+    def render(self, payload, ms):
+        """`payload` is exactly boot_anim_timeline.json's own shape (see
+        PAYLOAD_KEYS) - one dict, not one parameter per top-level field, so
+        a new one of those (wave_decay_m, say) never means touching this
+        signature again. Returns (bmp_bytes, (origin_x, origin_y) or
+        None)."""
         payload_hash = hashlib.sha256(
-            json.dumps({"timing": timing, "camera_focal": camera_focal,
-                      "grid_step_m": grid_step_m, "wave_height_m": wave_height_m,
-                      "wave_ease": wave_ease, "keyframes": keyframes},
-                      sort_keys=True).encode("utf-8")).hexdigest()
+            json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
 
         if payload_hash != self.built_hash:
-            self._regenerate_and_compile(payload_hash, timing, camera_focal,
-                                         grid_step_m, wave_height_m, wave_ease,
-                                         keyframes)
+            self._regenerate_and_compile(payload_hash, payload)
 
         run = subprocess.run([self.binary, str(int(ms))], capture_output=True)
         if run.returncode != 0:
@@ -231,8 +244,7 @@ class Renderer:
                 break
         return run.stdout, origin
 
-    def build_and_flash(self, timing, camera_focal, grid_step_m, wave_height_m,
-                        wave_ease, keyframes, port):
+    def build_and_flash(self, payload, port):
         """Overwrites the REAL main/boot/boot_anim_timeline.json and
         boot_anim_timeline.h - unlike render()'s scratch copy, not
         disposable - then builds and flashes the development image. Returns
@@ -242,10 +254,6 @@ class Renderer:
         validates into the scratch directory - a bad edit (the curve still
         drawing when the fade starts, say) must never leave the committed
         json/header half-written."""
-        payload = {"timing": timing, "camera_focal": camera_focal,
-                  "grid_step_m": grid_step_m, "wave_height_m": wave_height_m,
-                  "wave_ease": wave_ease, "keyframes": keyframes}
-
         fd, scratch_json = tempfile.mkstemp(suffix=".json",
                                             prefix="boot_anim_timeline_")
         try:
@@ -315,21 +323,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
-            timing = body["timing"]
-            camera_focal = body["camera_focal"]
-            grid_step_m = body["grid_step_m"]
-            wave_height_m = body["wave_height_m"]
-            wave_ease = body["wave_ease"]
-            keyframes = body["keyframes"]
+            payload = {key: body[key] for key in PAYLOAD_KEYS}
             ms = body["ms"]
         except (ValueError, KeyError) as exc:
             self._send_json_error(400, "bad request body: %s" % exc)
             return
 
         try:
-            bmp, origin = self.renderer.render(timing, camera_focal, grid_step_m,
-                                               wave_height_m, wave_ease,
-                                               keyframes, ms)
+            bmp, origin = self.renderer.render(payload, ms)
         except RenderError as exc:
             self._send_json_error(exc.status, exc.message)
             return
@@ -349,21 +350,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", "0"))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
-            timing = body["timing"]
-            camera_focal = body["camera_focal"]
-            grid_step_m = body["grid_step_m"]
-            wave_height_m = body["wave_height_m"]
-            wave_ease = body["wave_ease"]
-            keyframes = body["keyframes"]
+            payload = {key: body[key] for key in PAYLOAD_KEYS}
             port = body.get("port") or "COM3"
         except (ValueError, KeyError) as exc:
             self._send_json_error(400, "bad request body: %s" % exc)
             return
 
         try:
-            log = self.renderer.build_and_flash(
-                timing, camera_focal, grid_step_m, wave_height_m, wave_ease,
-                keyframes, port)
+            log = self.renderer.build_and_flash(payload, port)
         except RenderError as exc:
             self._send_json_error(exc.status, exc.message)
             return
@@ -413,7 +407,7 @@ def main():
             "  macOS:   xcode-select --install")
     print("using compiler:", cc, file=sys.stderr)
 
-    Handler.renderer = Renderer(cc)
+    Handler.renderer = Renderer(cc, port)
 
     server = http.server.HTTPServer(("127.0.0.1", port), Handler)
     print("boot_anim_editor_server: http://127.0.0.1:%d/" % port, file=sys.stderr)
