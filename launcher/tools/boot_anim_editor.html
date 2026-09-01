@@ -1034,6 +1034,15 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
           loaded.grid_step_m === undefined) {
         throw new Error('missing timing/camera_focal/grid_step_m/keyframes');
       }
+      /* pen_finish_ms is newer than fade_start_ms - a file baked before it
+       * existed has no way to carry it. Same default the generator itself
+       * falls back to (gen_boot_anim_timeline.py's own comment on why
+       * fade_start_ms reproduces the old, coupled behaviour exactly) - done
+       * here too so the field shows the value actually in effect rather
+       * than sitting blank until the next edit touches it. */
+      if (loaded.timing.pen_finish_ms === undefined) {
+        loaded.timing.pen_finish_ms = loaded.timing.fade_start_ms;
+      }
       state = loaded;
       selectedKf = 0;
       playhead = 0;

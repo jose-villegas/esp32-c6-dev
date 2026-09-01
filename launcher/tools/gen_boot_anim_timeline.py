@@ -237,6 +237,15 @@ def main():
     with open(sys.argv[1], "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
+    # pen_finish_ms is newer than fade_start_ms - a file baked before it
+    # existed has no way to carry it. Defaulting it to fade_start_ms
+    # reproduces exactly what boot_anim_pen() always did before the two
+    # were split apart (see its own "TWO PHASES" comment), so an old
+    # timeline keeps behaving the way it always did rather than failing to
+    # load at all over a field its author never had reason to set.
+    timing = cfg.get("timing", {})
+    timing.setdefault("pen_finish_ms", timing.get("fade_start_ms"))
+
     validate(cfg)
 
     # See gen_zeta_curve.py's own comment on this - LF only, so regenerating
