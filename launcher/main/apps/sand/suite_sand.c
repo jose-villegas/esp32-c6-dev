@@ -11014,12 +11014,16 @@ static void test_the_fizz_rises_out_of_the_acid(void)
  * which is not a safe margin for a fixed-seed assertion to depend on. */
 #define DILUTE_W 4000
 #define DILUTE_H 2
-static uint8_t dilute_cells[DILUTE_W * DILUTE_H];
 static sand_t  dilute_sim;
 
-static void acid_water_dilute_fixture(void)
+/* cells is HEAP, not static file scope - each caller mallocs its own
+ * DILUTE_W * DILUTE_H (8000 byte) grid and frees it before its own
+ * assertions can fail; see drop_impulse_buf's own comment above for why
+ * this file's static test fixtures cannot share the framebuffer's
+ * memory budget. */
+static void acid_water_dilute_fixture(uint8_t *cells)
 {
-    sand_init(&dilute_sim, dilute_cells, DILUTE_W, DILUTE_H, 7u);
+    sand_init(&dilute_sim, cells, DILUTE_W, DILUTE_H, 7u);
     sand_set_evaporates(&dilute_sim, 0);   /* isolate dilution from the
                                              * unrelated evaporates roll -
                                              * same reasoning as the fizz
@@ -11032,7 +11036,10 @@ static void acid_water_dilute_fixture(void)
 
 static void test_acid_and_water_dilute_each_other(void)
 {
-    acid_water_dilute_fixture();
+    uint8_t *dilute_cells = malloc((size_t)DILUTE_W * DILUTE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(dilute_cells,
+        "acid/water dilution grid must fit in what the framebuffer leaves");
+    acid_water_dilute_fixture(dilute_cells);
 
     /* Either direction counts: a diluted column either turned its acid
      * cell to water, or turned its water cell to acid - see
@@ -11050,6 +11057,11 @@ static void test_acid_and_water_dilute_each_other(void)
             diluted = (top != MAT_WATER) || (bot != MAT_ACID);
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(dilute_cells);
 
     TEST_ASSERT_TRUE_MESSAGE(diluted,
         "acid touching water must eventually dilute - either the acid "
@@ -11073,7 +11085,10 @@ static void test_acid_and_water_dilute_each_other(void)
  * a future retune of any of those three constants would break. */
 static void test_water_wins_the_dilution_more_often_than_acid_does(void)
 {
-    acid_water_dilute_fixture();
+    uint8_t *dilute_cells = malloc((size_t)DILUTE_W * DILUTE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(dilute_cells,
+        "acid/water dilution grid must fit in what the framebuffer leaves");
+    acid_water_dilute_fixture(dilute_cells);
     sand_step(&dilute_sim, 0, 1000, 0);
 
     int water_wins = 0;
@@ -11088,6 +11103,11 @@ static void test_water_wins_the_dilution_more_often_than_acid_does(void)
             acid_wins++;    /* the water cell (row 0) became acid */
         }
     }
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(dilute_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_wins,
         "expected at least some acid-becomes-water dilutions in 4000 "
@@ -11115,12 +11135,13 @@ static void test_water_wins_the_dilution_more_often_than_acid_does(void)
  * neighbour to puff into instead. */
 #define FIZZLE_W 400
 #define FIZZLE_H 2
-static uint8_t fizzle_cells[FIZZLE_W * FIZZLE_H];
 static sand_t  fizzle_sim;
 
-static void acid_water_fizzle_fixture(void)
+/* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
+ * own comment above for why. */
+static void acid_water_fizzle_fixture(uint8_t *cells)
 {
-    sand_init(&fizzle_sim, fizzle_cells, FIZZLE_W, FIZZLE_H, 13u);
+    sand_init(&fizzle_sim, cells, FIZZLE_W, FIZZLE_H, 13u);
     sand_set_evaporates(&fizzle_sim, 0);
     /* Water only over the SAME even columns as the acid below it -
      * leaving row 0 empty at the odd columns too, not just row 1, is
@@ -11139,7 +11160,10 @@ static void acid_water_fizzle_fixture(void)
 
 static void test_water_winning_dilution_spawns_a_gas_puff(void)
 {
-    acid_water_fizzle_fixture();
+    uint8_t *fizzle_cells = malloc((size_t)FIZZLE_W * FIZZLE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(fizzle_cells,
+        "acid/water fizzle grid must fit in what the framebuffer leaves");
+    acid_water_fizzle_fixture(fizzle_cells);
 
     bool gas_seen = false;
     for (int i = 0; i < 10 && !gas_seen; i++) {
@@ -11150,6 +11174,11 @@ static void test_water_winning_dilution_spawns_a_gas_puff(void)
             }
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(fizzle_cells);
 
     TEST_ASSERT_TRUE_MESSAGE(gas_seen,
         "water winning a dilution must leave a puff of gas behind - the "
@@ -11169,12 +11198,13 @@ static void test_water_winning_dilution_spawns_a_gas_puff(void)
  * about 15. */
 #define OIL_DILUTE_W 400
 #define OIL_DILUTE_H 2
-static uint8_t oil_dilute_cells[OIL_DILUTE_W * OIL_DILUTE_H];
 static sand_t  oil_dilute_sim;
 
-static void acid_oil_dilute_fixture(void)
+/* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
+ * own comment above for why. */
+static void acid_oil_dilute_fixture(uint8_t *cells)
 {
-    sand_init(&oil_dilute_sim, oil_dilute_cells, OIL_DILUTE_W, OIL_DILUTE_H, 11u);
+    sand_init(&oil_dilute_sim, cells, OIL_DILUTE_W, OIL_DILUTE_H, 11u);
     sand_set_evaporates(&oil_dilute_sim, 0);
     for (int x = 0; x < OIL_DILUTE_W; x++) {
         sand_set(&oil_dilute_sim, x, 0, CELL_MAKE(MAT_OIL, MASS_MAX));
@@ -11191,7 +11221,10 @@ static void acid_oil_dilute_fixture(void)
  * bite cost eating sand or wood pays. */
 static void test_oil_dilutes_into_acid_but_the_acid_pays_for_it(void)
 {
-    acid_oil_dilute_fixture();
+    uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
+        "acid/oil dilution grid must fit in what the framebuffer leaves");
+    acid_oil_dilute_fixture(oil_dilute_cells);
 
     /* dissolvable=1 (material.c) is the rarest a single byte-wide roll
      * can express, so a single step is no longer a safe bet at 400
@@ -11219,11 +11252,25 @@ static void test_oil_dilutes_into_acid_but_the_acid_pays_for_it(void)
         }
     }
 
+    /* Not freed here, ahead of this assertion, the way the rest of this
+     * file's converted fixtures are - oil_dilute_sim still points into
+     * oil_dilute_cells and the mass_after read just below still needs
+     * it live. If this assertion itself fails, the buffer leaks, same
+     * as any other test failure in this run; the freed-before-assert
+     * rule this file otherwise follows is about avoiding a leak on the
+     * COMMON path, not eliminating every failure-path leak. */
     TEST_ASSERT_TRUE_MESSAGE(converted_x >= 0,
         "expected at least one oil-to-acid conversion within 300 steps "
         "across 400 independent columns");
 
     const int mass_after = CELL_VARIANT(sand_at(&oil_dilute_sim, converted_x, 1));
+
+    /* Freed BEFORE the final assertion: Unity longjmps out of a failure,
+     * so a free() after one never runs - see drop_impulse_buf's own
+     * comment above. All reads of oil_dilute_cells are done by this
+     * point. */
+    free(oil_dilute_cells);
+
     TEST_ASSERT_EQUAL_INT_MESSAGE(mass_before[converted_x] - 1, mass_after,
         "the acid that converted an oil neighbour into acid must still "
         "pay pay_quench_cost()'s usual one unit of mass for the bite, "
@@ -12653,7 +12700,12 @@ static void test_watered_dirt_steaming_precedes_resolving_when_it_happens(void)
 #define STEAM_TEST_H 6
 static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(void)
 {
-    static uint8_t steam_cells[STEAM_TEST_W * STEAM_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *steam_cells = malloc((size_t)STEAM_TEST_W * STEAM_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(steam_cells,
+        "wet-dirt steam-pods grid must fit in what the framebuffer leaves");
     sand_t st;
     sand_init(&st, steam_cells, STEAM_TEST_W, STEAM_TEST_H, 3u);
     sand_set_mobility(&st, 0);
@@ -12691,6 +12743,11 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
             }
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(steam_cells);
 
     TEST_ASSERT_TRUE_MESSAGE(steamed_any,
         "at least one of many saturated dirt cells against lava must "
@@ -12782,7 +12839,12 @@ static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
 #define FLAW_TEST_H 6
 static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
 {
-    static uint8_t flaw_cells[FLAW_TEST_W * FLAW_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *flaw_cells = malloc((size_t)FLAW_TEST_W * FLAW_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(flaw_cells,
+        "dry-dirt flaw-pods grid must fit in what the framebuffer leaves");
     sand_t flaw;
     sand_init(&flaw, flaw_cells, FLAW_TEST_W, FLAW_TEST_H, 3u);
     sand_set_mobility(&flaw, 0);
@@ -12813,6 +12875,11 @@ static void test_dry_dirt_smelting_reaches_both_metal_and_stone(void)
             metal_count++;
         }
     }
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of flaw_cells are done by this point. */
+    free(flaw_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, stone_count,
         "at least one of many bone-dry dirt cells against lava must come "
@@ -13442,8 +13509,26 @@ static void test_sealed_lava_vents_through_a_thin_cap(void)
 #define CAP_TEST_H (SAND_VENT_REACH + 6)
 static void test_sealed_lava_vent_caps_at_three_cells(void)
 {
-    static uint8_t cells[CAP_TEST_W * CAP_TEST_H];
-    static impulse_t impulses[CAP_TEST_W * CAP_TEST_H];
+    /* HEAP, not static file scope - CAP_TEST_W/H scale with
+     * SAND_VENT_REACH (sand.h), which grew from 10 to 30 after this
+     * fixture was written; at the current value the pair is 69,336 +
+     * 416,016 = 485,352 bytes, on its own dwarfing this device's whole
+     * no-PSRAM heap budget. A static pair that size does not merely
+     * cost heap the way the rest of this file's converted fixtures did -
+     * it fails the FIRMWARE LINK outright (`region 'sram_seg' overflowed`),
+     * taking every other device test down with it. Heap-allocating it
+     * turns that into an honest, isolated TEST_ASSERT_NOT_NULL_MESSAGE
+     * failure on hardware too small to run this specific scene, instead
+     * of a build that cannot boot at all - the same trade this file's
+     * other conversions make, just at a size where the difference is
+     * between "one failing test" and "no device tests ever run again". */
+    uint8_t *cells = malloc((size_t)CAP_TEST_W * CAP_TEST_H);
+    impulse_t *impulses = malloc((size_t)CAP_TEST_W * CAP_TEST_H * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "sealed-lava vent-cap grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+        "sealed-lava vent-cap impulse queue must fit in what the "
+        "framebuffer leaves");
     sand_t c;
     sand_init(&c, cells, CAP_TEST_W, CAP_TEST_H, 3u);
     sand_enable_impulses(&c, impulses, CAP_TEST_W * CAP_TEST_H);
@@ -13549,6 +13634,13 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
             }
         }
     }
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of cells/impulses (via `c`) are done by this
+     * point; both remaining assertions read only the local counts. */
+    free(cells);
+    free(impulses);
 
     TEST_ASSERT_LESS_THAN_MESSAGE(CAP_TEST_PODS / 4, exact_still_sealed,
         "a cap exactly SAND_VENT_REACH cells deep, with open air right "
@@ -19955,9 +20047,7 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
 
 #define BUBBLE_W 41
 #define BUBBLE_H 30
-static uint8_t bubble_cells[BUBBLE_W * BUBBLE_H];
 static sand_t  bubble_sim;
-static impulse_t bubble_buf[512];
 
 /* acid_bubble() (sand_reactions.c) replaced splash_displace()'s old "landed
  * hard on already-occupied liquid" trigger for acid, specifically because
@@ -19993,6 +20083,15 @@ static impulse_t bubble_buf[512];
 static void test_acid_bubbles_do_not_favour_one_wall(void)
 {
     enum { POOL_TOP = 15 };
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *bubble_cells = malloc((size_t)BUBBLE_W * BUBBLE_H);
+    impulse_t *bubble_buf = malloc(512 * sizeof *bubble_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(bubble_cells,
+        "acid-bubble pool grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(bubble_buf,
+        "acid-bubble impulse queue must fit in what the framebuffer leaves");
     sand_init(&bubble_sim, bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
     sand_enable_impulses(&bubble_sim, bubble_buf, 512);
 
@@ -20025,6 +20124,12 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
         }
     }
 
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(bubble_cells);
+    free(bubble_buf);
+
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, left_pops + right_pops,
         "acid_bubble() must actually pop grains above an exposed surface "
         "over time - none appeared at all");
@@ -20040,10 +20145,8 @@ static void test_acid_bubbles_do_not_favour_one_wall(void)
 
 #define SLEEPY_BLOCK_COLS ((BUBBLE_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W)
 #define SLEEPY_BLOCK_ROWS ((BUBBLE_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)
-static uint8_t sleepy_bubble_cells[BUBBLE_W * BUBBLE_H];
 static uint8_t sleepy_bubble_blocks[SLEEPY_BLOCK_COLS * SLEEPY_BLOCK_ROWS];
 static sand_t  sleepy_bubble_sim;
-static impulse_t sleepy_bubble_buf[512];
 
 /* THE ACTUAL BUG A REAL DEVICE HIT, reported after acid_bubble() first
  * shipped living in move_liquid_grain() (sand_liquid.c): a real, calm
@@ -20075,6 +20178,19 @@ static impulse_t sleepy_bubble_buf[512];
 static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
 {
     enum { POOL_TOP = 15 };
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. sleepy_bubble_blocks stays static -
+     * it is a tiny sleep-state bitmap, not one of the buffers that
+     * starved the device heap. */
+    uint8_t *sleepy_bubble_cells = malloc((size_t)BUBBLE_W * BUBBLE_H);
+    impulse_t *sleepy_bubble_buf = malloc(512 * sizeof *sleepy_bubble_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_cells,
+        "sleepy acid-bubble pool grid must fit in what the framebuffer "
+        "leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(sleepy_bubble_buf,
+        "sleepy acid-bubble impulse queue must fit in what the "
+        "framebuffer leaves");
     sand_init(&sleepy_bubble_sim, sleepy_bubble_cells, BUBBLE_W, BUBBLE_H, 3u);
     sand_enable_sleeping(&sleepy_bubble_sim, sleepy_bubble_blocks);
     sand_enable_impulses(&sleepy_bubble_sim, sleepy_bubble_buf, 512);
@@ -20111,6 +20227,12 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
             }
         }
     }
+    /* Not freed ahead of this assertion, unlike this file's other
+     * converted fixtures - sleepy_bubble_sim still points into
+     * sleepy_bubble_cells/sleepy_bubble_buf and the lid-lift plus pop
+     * check below still need them live. If this setup assertion itself
+     * fails, the buffers leak, same as any other test failure in this
+     * run. */
     TEST_ASSERT_TRUE_MESSAGE(asleep,
         "setup: the pool must actually fall asleep within 40 quiet steps, "
         "or this test is not exercising the sleeping path it exists to "
@@ -20138,6 +20260,13 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
             }
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of sleepy_bubble_cells/sleepy_bubble_buf are done
+     * by this point. */
+    free(sleepy_bubble_cells);
+    free(sleepy_bubble_buf);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, pops,
         "acid_bubble() must keep firing even after its block has gone to "
