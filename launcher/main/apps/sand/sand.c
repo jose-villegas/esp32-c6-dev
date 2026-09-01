@@ -183,6 +183,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->flammability = SAND_FLAMMABILITY_PER_MATERIAL;  /* see sand_set_flammability() */
     s->conduction   = SAND_CONDUCTION_PER_MATERIAL;    /* see sand_set_conduction() */
     s->vent_chance  = SAND_VENT_CHANCE_PER_MATERIAL;   /* see sand_set_vent_chance() */
+    s->vent_spread  = SAND_VENT_SPREAD_RANDOM;         /* see sand_set_vent_spread() */
     s->boils        = SAND_BOILS_PER_MATERIAL;         /* see sand_set_boils() */
     s->condenses    = SAND_CONDENSES_PER_MATERIAL;     /* see sand_set_condenses() */
     /* The array itself need not be touched - every reader below goes
@@ -432,7 +433,8 @@ static int exact_disc_count(int radius)
  * itself, further down, not up here next to its other caller - see that
  * function's own comment for why one body serves both. */
 static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
-                               bool allow_dislodge_static, int mat_filter);
+                               bool allow_dislodge_static, int mat_filter,
+                               bool guaranteed_dislodge, int ramp);
 
 /* One candidate cell of sand_explode()'s own annulus scan, below - split
  * out so the ring-order loop that calls it (see that function's own
@@ -530,7 +532,8 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
      * identical to any other entry; the toughness lives entirely in this
      * one boolean and the roll behind it. */
     queue_flying_grain(s, cx + dx, cy + dy, ring_of(qdx, qdy),
-                       SAND_EXPLODE_INITIAL_SPEED, true, mat_filter);
+                       SAND_EXPLODE_INITIAL_SPEED, true, mat_filter, false,
+                       SAND_IMPULSE_SPEED_RAMP);
 }
 
 /* THE SHARED IMPLEMENTATION BEHIND sand_impulse() AND sand_explode()'s OWN
@@ -545,9 +548,20 @@ static void queue_outward_impulse(sand_t *s, int cx, int cy, int dx, int dy,
  * one caller that has, and passes true. A future caller of sand_impulse()
  * itself (gunpowder, gas, whatever comes next) inherits the SAFE default
  * automatically, the same as today - it does not inherit wall-breaking
- * just because this function grew the capability somewhere inside it. */
+ * just because this function grew the capability somewhere inside it.
+ *
+ * `ramp` is impulse_t's own per-entry speed decay (see that struct's own
+ * comment) - threaded straight through rather than hardcoded so a caller
+ * wanting a throw to travel farther (or less far) than SAND_IMPULSE_
+ * SPEED_RAMP's own, already-measured figure can ask for that WITHOUT
+ * retuning every other caller of this same shared mechanism. sand_
+ * impulse() and queue_outward_impulse() (sand_explode()'s own seeding,
+ * above) both pass SAND_IMPULSE_SPEED_RAMP unchanged; sand_impulse_
+ * dislodge() is the one caller that passes something else - see its own
+ * comment in sand.h for why reaction_t.vent_chance's throw wants to. */
 static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
-                               bool allow_dislodge_static, int mat_filter)
+                               bool allow_dislodge_static, int mat_filter,
+                               bool guaranteed_dislodge, int ramp)
 {
     /* Disabled, or already full - see sand_impulse()'s own comment in
      * sand.h on why both are silent no-ops rather than something a caller
@@ -631,9 +645,29 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
         if (!allow_dislodge_static) {
             return;
         }
-        const int chance = 255 - (int)material_of(cell)->density;
-        if ((int)(rng_next(&s->rng) & 0xFF) >= chance) {
-            return;   /* the roll failed - the wall holds, same as always */
+        /* `guaranteed_dislodge` SKIPS THE ROLL ENTIRELY, rather than
+         * every other detail of a dislodged wall's flight staying
+         * shared - for reaction_t.vent_chance's own push (sand_impulse_
+         * dislodge(), below) specifically: the density-scaled toughness
+         * roll exists to make an ORDINARY explosion read as tougher
+         * against stone than sand, a real but RANDOM resistance to
+         * arbitrary shrapnel reaching an arbitrary wall. A vent's push is
+         * not that - it is pressure from directly beneath the exact
+         * material sealing it in, not a stray annulus cell that happens
+         * to graze a wall a few cells away. Leaving that same ~21%-per-
+         * cell coin flip on a THIN, single-cell-deep crust (the realistic
+         * result of water quenching lava, and the case this feature is
+         * actually judged against) meant most of a covering barely moved
+         * even when vent_chance itself finally rolled true - a rare event
+         * that then MOSTLY DID NOTHING was the worst of both. The seal a
+         * vent is relieving should give way every time the vent fires,
+         * the same way covered_from_above() already guarantees IT fires
+         * rather than leaving that to chance too. */
+        if (!guaranteed_dislodge) {
+            const int chance = 255 - (int)material_of(cell)->density;
+            if ((int)(rng_next(&s->rng) & 0xFF) >= chance) {
+                return;   /* the roll failed - the wall holds, same as always */
+            }
         }
     }
 
@@ -689,29 +723,27 @@ static void queue_flying_grain(sand_t *s, int x, int y, int dir, int speed,
     entry->cell  = cell;
     entry->dir   = (uint8_t)dir;
     entry->speed = (uint8_t)speed;
+    entry->ramp  = (uint8_t)ramp;
 }
 
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed)
 {
-    queue_flying_grain(s, x, y, dir, speed, false, -1);
+    queue_flying_grain(s, x, y, dir, speed, false, -1, false,
+                       SAND_IMPULSE_SPEED_RAMP);
 }
 
-/* sand_impulse()'s sibling for the one thing it deliberately never does -
- * see queue_flying_grain()'s own comment on why THIS PRIMITIVE'S OWN
- * KIND_STATIC REFUSAL HAS NO EXCEPTIONS for the safe default every other
- * caller inherits automatically. A single targeted push (reaction_t.
- * vent_chance's try_vent(), sand_reactions.c) needs the opt-in queue_
- * outward_impulse() already has for a blast - the same density-scaled
- * chance to dislodge a wall rather than an unconditional refusal - without
- * pulling in a whole disc's worth of ring/thinning machinery for what is
- * a fixed, short, straight line of cells. Exists as its own name rather
- * than a bool parameter on sand_impulse() itself so that every EXISTING
- * caller of sand_impulse() keeps getting the safe refusal with no risk of
- * a stray `true` at some future call site quietly making sand able to
- * throw a wall through the air. */
-void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed)
+/* reaction_t.vent_chance's (material.h) own single-cell dislodge - the
+ * static-wall equivalent of sand_impulse() itself, with `allow_dislodge_
+ * static` forced true and `guaranteed_dislodge` set - see queue_flying_
+ * grain()'s own comment on why a vent's push skips the density-scaled
+ * toughness roll every other wall-dislodging caller keeps. `ramp` is
+ * threaded straight through to impulse_t's own field - see sand.h's own
+ * comment on SAND_VENT_IMPULSE_RAMP for why a vent's own throw wants a
+ * different one from every other caller of this mechanism. */
+void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
+                           int ramp)
 {
-    queue_flying_grain(s, x, y, dir, speed, true, -1);
+    queue_flying_grain(s, x, y, dir, speed, true, -1, true, ramp);
 }
 
 /* THE SHARED IMPLEMENTATION BEHIND sand_displace() AND sand_displace_
@@ -722,10 +754,13 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed)
  * one material, and duplicating all of that just to add a filter would be
  * exactly the kind of second copy this file already avoids elsewhere.
  * `mat_filter` is threaded straight through to queue_outward_impulse() and,
- * ultimately, queue_flying_grain() - see its own comment for what -1 means
- * versus a real material id. */
+ * ultimately, queue_flying_grain() - see its own comment for what -1 means.
+ * `guaranteed_dislodge` is the same kind of pass-through - see queue_
+ * flying_grain()'s own comment on why sand_impulse_dislodge() (below) skips
+ * the usual density-scaled toughness roll entirely rather than sharing it
+ * with an ordinary explosion's random resistance. */
 static void displace_disc(sand_t *s, int cx, int cy, int radius,
-                          int mat_filter)
+                          int mat_filter, bool guaranteed_dislodge)
 {
     if (s->impulse_buf == NULL) {
         return;   /* sand_enable_impulses() was never called - see its comment */
@@ -866,7 +901,7 @@ static void displace_disc(sand_t *s, int cx, int cy, int radius,
 
 void sand_displace(sand_t *s, int cx, int cy, int radius)
 {
-    displace_disc(s, cx, cy, radius, -1);
+    displace_disc(s, cx, cy, radius, -1, false);
 }
 
 /* Same as sand_displace(), but only cells whose material is exactly
@@ -877,7 +912,7 @@ void sand_displace(sand_t *s, int cx, int cy, int radius)
 void sand_displace_material(sand_t *s, int cx, int cy, int radius,
                             uint8_t mat_id)
 {
-    displace_disc(s, cx, cy, radius, (int)mat_id);
+    displace_disc(s, cx, cy, radius, (int)mat_id, false);
 }
 
 void sand_explode(sand_t *s, int cx, int cy, int radius)
@@ -1313,6 +1348,13 @@ void sand_set_vent_chance(sand_t *s, int chance)
     } else {
         s->vent_chance = chance > 255 ? 255 : chance;
     }
+}
+
+void sand_set_vent_spread(sand_t *s, int spread)
+{
+    s->vent_spread = (spread < -1 || spread > 1)
+                         ? SAND_VENT_SPREAD_RANDOM
+                         : spread;
 }
 
 void sand_set_boils(sand_t *s, int chance)
@@ -1944,12 +1986,13 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * exact same stale byte by coincidence, and the byte-exact
              * candidate check below cannot tell that apart from a real
              * move - silently handing the entry a neighbouring wall
-             * cell's identity instead of its own. Exactly the case
-             * sand_impulse_dislodge()'s callers hit hardest: the stone
-             * try_vent() (sand_reactions.c) throws is, by definition,
-             * touching the lava it was sealing in, so it is ALWAYS
-             * actively ramping while it waits for a turn to actually
-             * move. */
+             * cell's identity instead of its own. Exactly the case a
+             * blast's own wall-dislodge roll (queue_outward_impulse(),
+             * this file) hits hardest via reaction_t.vent_chance
+             * (material.h): the stone try_vent() (sand_reactions.c)
+             * blasts is, by definition, touching the lava it was sealing
+             * in, so it is ALWAYS actively ramping while it waits for a
+             * turn to actually move. */
             const uint8_t lost_mat = CELL_MATERIAL(entry.cell);
             if (reactions[lost_mat].heat_ramp != 0) {
                 const cell_t here = s->cells[entry.index];
@@ -2133,7 +2176,34 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * carries both "chance this turn's move happens" and "how much
          * flight is left" instead of a separate step counter alongside a
          * fixed rate, and for why that is what turns the arc into an
-         * actual curve instead of a bent line. */
+         * actual curve instead of a bent line.
+         *
+         * A DETERMINISTIC, NEVER-ROLLED VARIANT OF THIS WAS TRIED FOR
+         * entry.ramp == SAND_VENT_IMPULSE_RAMP (vent's own throw) AND
+         * REVERTED - the reasoning was sound (several entries queued in
+         * the same chunk-wide firing, already sharing a throw angle via
+         * try_vent_chunk(), still drift out of step if each ALSO
+         * independently rolls whether this turn is the one it moves),
+         * and a first attempt keying "should this move" off `speed > 0`
+         * alone measured a real regression: an entry occupies this loop
+         * for its full ~255-step budget even after landing, since
+         * nothing ever asks it to check. A second attempt kept the
+         * roll gated on genuine support (excluding liquid, since a
+         * covering cell starts out resting on the very lava it seals,
+         * which is the problem state to escape, not a landing) fixed
+         * that regression, but introduced a DIFFERENT one, measured
+         * against test_sealed_lava_vent_caps_at_three_cells: pieces
+         * that refuse to settle while merely near a liquid can end up
+         * bouncing in place - thrown up, pulled back down by gravity-
+         * drift, refusing to call that a landing, thrown again - for
+         * long enough that fewer pods cleared within the same step
+         * budget than the plain probabilistic roll already reliably
+         * clears. Left as the ordinary roll for every caller, vent
+         * included - at speed 255 that is a ~99.6% per-turn chance,
+         * close enough to deterministic in practice that a shared angle
+         * alone keeps several identically-queued entries moving
+         * together far more often than not, without the settle-timing
+         * regressions a fully deterministic version measured. */
         const bool rolled_move = rng_chance(&s->rng, entry.speed);
 
         /* Ramps down every turn, for exactly the same "no exceptions"
@@ -2157,10 +2227,10 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * vocabulary for "loses energy" instead of two different shapes.
          * Scoped to water/acid, same as the cascade and the wall-bounce
          * just above splash_displace()'s own call site - every other
-         * material keeps the original linear SAND_IMPULSE_SPEED_RAMP
-         * unchanged, so this does not touch sand_explode()'s own
-         * extensively-measured tuning (see SAND_IMPULSE_SPEED_RAMP's and
-         * SAND_EXPLODE_CORE_DIVISOR's comments in sand.h for that history).
+         * material keeps the original linear ramp unchanged, so this does
+         * not touch sand_explode()'s own extensively-measured tuning (see
+         * SAND_IMPULSE_SPEED_RAMP's and SAND_EXPLODE_CORE_DIVISOR's
+         * comments in sand.h for that history).
          *
          * DID INTERACT WITH THE CASCADE GATE - caught by
          * test_a_cascading_impulse_moves_more_than_one_cell (suite_sand.c)
@@ -2171,18 +2241,73 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * geometric shift now, not the old linear ramp. Fixed by dropping
          * SAND_CASCADE_MIN_SPEED to 1 (see its own comment) so the gate
          * stops being the thing that cuts a chain short - the roll's own
-         * exhaustion is. */
+         * exhaustion is.
+         *
+         * entry.ramp, NOT A HARDCODED SAND_IMPULSE_SPEED_RAMP - see
+         * impulse_t's own comment for why this is now per-entry rather
+         * than one constant every caller shares. sand_impulse() and
+         * queue_outward_impulse() both queue with entry.ramp ==
+         * SAND_IMPULSE_SPEED_RAMP, so this line does exactly what it
+         * always did for them; only sand_impulse_dislodge() (reaction_t.
+         * vent_chance's own throw) ever queues a different figure. */
         if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
             entry.speed = (uint8_t)(entry.speed -
                                     (entry.speed >> SAND_SPLASH_SPEED_DECAY_SHIFT));
         } else {
-            entry.speed = (entry.speed > SAND_IMPULSE_SPEED_RAMP)
-                              ? (uint8_t)(entry.speed - SAND_IMPULSE_SPEED_RAMP)
+            entry.speed = (entry.speed > entry.ramp)
+                              ? (uint8_t)(entry.speed - entry.ramp)
                               : 0;
         }
 
+        /* "OUT OF FLIGHT" USED TO MEAN "SETTLES EXACTLY WHERE IT IS" -
+         * dropped from tracking (not re-added to kept, below) the instant
+         * a single per-turn roll failed, regardless of whether the entry
+         * had actually landed on anything. Harmless for every kind except
+         * KIND_STATIC: a liquid or powder entry keeps falling under the
+         * ordinary sweep whether or not this loop is still tracking it,
+         * so ending the outward push the moment the roll fails costs it
+         * nothing it was not about to lose anyway. KIND_STATIC has no
+         * such fallback - the "AIRBORNE SOLIDS FALL TOO" gravity-drift
+         * just above is the ONLY thing that ever moves it once thrown,
+         * and it only runs "while an entry is tracked here at all" (that
+         * block's own comment). A roll can fail at essentially any point
+         * in the flight - even early, with plenty of `speed` left, this
+         * is a per-turn coin flip, not a threshold - so a dislodged wall
+         * chunk still hanging over open space, nowhere near anything to
+         * rest on, could lose tracking on an ordinary unlucky roll and be
+         * left floating there permanently: nothing else in this engine
+         * ever revisits a KIND_STATIC cell to ask whether it should
+         * still be falling.
+         *
+         * SUPPORTED, NOT MERELY ROLLED, IS WHAT DECIDES "SETTLED" NOW,
+         * for KIND_STATIC specifically - the same gravity-relative
+         * "is there something under it" question covered_from_above()'s
+         * neighbours and try_flare()'s own falling check both already
+         * ask elsewhere in this feature, applied here to the entry's
+         * OWN cell rather than a lava cell it might be covering. Still
+         * airborne (empty beneath, gravity-relative) keeps the entry
+         * tracked - re-added to kept exactly as the blocked branch below
+         * already does - so next step gets another unconditional
+         * gravity-drift attempt AND another chance at the outward-push
+         * roll, however small `speed` has decayed to; the roll failing
+         * no longer ends the entry's only route to eventually landing.
+         * Genuinely supported (or, for every OTHER kind, any roll
+         * failure at all) still drops it exactly as before - this only
+         * closes the gap for a KIND_STATIC entry that has not actually
+         * come to rest. Bounded the same way an ordinary fall already
+         * is: the grid has a finite height, and sand_at()'s own off-grid-
+         * is-STONE convention means even a chunk thrown off the visible
+         * edge reads as supported once it would otherwise fall forever. */
         if (!rolled_move) {
-            continue;   /* out of flight - settles exactly where it is */
+            if (materials[mat_id].kind == KIND_STATIC) {
+                const int rx = (int)((unsigned)entry.index % (unsigned)w);
+                const int ry = (int)((unsigned)entry.index / (unsigned)w);
+                if (CELL_IS_EMPTY(sand_at(s, rx + dx, ry + dy))) {
+                    s->impulse_buf[kept++] = entry;
+                    continue;   /* still airborne - keep falling */
+                }
+            }
+            continue;   /* settled - out of flight for good */
         }
 
         const int x = (int)((unsigned)entry.index % (unsigned)w);
@@ -2207,7 +2332,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * position, same direction, already-ramped speed and all - so
              * it gets another turn next step rather than being dropped for
              * something that may clear a moment later. Reached only for a
-             * true wall now, or the grid edge - see can_impulse_enter().
+             * true wall now, an excluded target, or the grid edge - see
+             * can_impulse_enter().
              *
              * WATER AND ACID BOUNCE INSTEAD OF JUST WAITING - a splash
              * hitting a wall mid-flight should kick back off it, not stall
@@ -2300,6 +2426,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
         s->impulse_buf[kept].cell  = entry.cell;
         s->impulse_buf[kept].dir   = entry.dir;
         s->impulse_buf[kept].speed = entry.speed;
+        s->impulse_buf[kept].ramp  = entry.ramp;
         kept++;
     }
 

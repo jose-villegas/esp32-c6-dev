@@ -284,12 +284,39 @@ const material_t materials[MATERIAL_MAX] = {
                                      * tune on device like every other
                                      * constant here. */
 
-            .decay = 24,     /* matches ember's own figure as a
-                                     * starting point, tune independently
-                                     * later - roughly 160 steps, ~2.7s
-                                     * at ~60fps, so a wisp of steam
-                                     * visibly fades rather than either
-                                     * lingering or vanishing at once. */
+            .decay = 16,     /* NOW DELIBERATELY MATCHES SMOKE'S OWN 16 -
+                                     * this went through several rounds
+                                     * (24 to 18 for "at least 30% longer",
+                                     * then 18 to 16 for "another 10% on
+                                     * top") before landing exactly on
+                                     * smoke's own figure, which used to be
+                                     * a problem: a test asserted steam
+                                     * must fade SOONER than smoke ("it
+                                     * condenses, it does not linger"),
+                                     * and tying smoke's rate broke that
+                                     * claim. Explicitly settled, not an
+                                     * accident of rounding - asked to let
+                                     * steam's lifespan match smoke's much
+                                     * more closely, so the two now share
+                                     * this figure on purpose; see
+                                     * test_the_air_agrees_about_weight_
+                                     * speed_and_lifetime's own updated
+                                     * comment (suite_sand.c) for the
+                                     * matching test change. The starting
+                                     * life it decays FROM is also already
+                                     * at its own ceiling - conduct_heat()'s
+                                     * boiling branch calls place_reacted(),
+                                     * giving a full MATERIAL_VARIANTS - 1
+                                     * = 15 rather than a shortened figure,
+                                     * see that function's own comment -
+                                     * so decay chance was the only dial
+                                     * left to extend duration at all.
+                                     * ~240 steps (~4s at ~60fps) to fully
+                                     * decay from full life, against the
+                                     * original 24's ~160 steps (~2.7s) -
+                                     * 50% longer overall. Not yet
+                                     * measured on device at this exact
+                                     * figure. */
             .mobility = 160, /* noticeably faster than gas's 96 or
                                      * fire's 96 - steam should read as
                                      * rising eagerly off a boiling pot,
@@ -738,26 +765,43 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
-            /* SEALED IN IS NOT SAFE, BUT A PULSE SHOULD BE RARE - 1 in 256
-             * (~0.4%), per step, once a pool is COVERED FROM ABOVE - see
-             * reaction_t.vent_chance's own comment for the design and
-             * try_vent()/covered_from_above() (sand_reactions.c) for the
-             * mechanism. The rarest a single byte-wide roll can express
-             * (same floor sand_set_evaporates()'s own per-material figure
-             * starts from, material.c's MAT_ACID row), deliberate: this
-             * rolls every step a cell STAYS covered, not once per pool, so
-             * even this floor still fires roughly once every 256 steps per
-             * covered cell - frequent enough that a sealed pool is not
-             * permanently inert, rare enough that a vent reads as an
-             * occasional, dramatic pulse rather than a constant leak.
-             * Paired with SAND_VENT_REACH set high (sand.h) so that rare
-             * pulse throws a lot of material when it does fire, instead of
-             * a small, frequent trickle - a held-in eruption rather than a
-             * hiss. sand_set_vent_chance() (sand.h) overrides this for
-             * tests that need a fast, deterministic pulse instead of
-             * waiting on this real figure. Starting point, not measured on
-             * device. */
-            .vent_chance = 1,
+            /* A MODERATE FIGURE, MEASURED ON DEVICE TWICE NOW -
+             * 24 in 256 (~9.4%), per step, once a pool is COVERED FROM
+             * ABOVE - see reaction_t.vent_chance's own comment for the
+             * design and try_vent()/covered_from_above() (sand_
+             * reactions.c) for the mechanism. This briefly sat at 255
+             * (the maximum this roll can express) and, combined with the
+             * second roll below also being maxed, produced a real,
+             * observed-on-device problem: a stream of water quenching
+             * lava creates a covered cell (fresh stone, covered by
+             * nothing yet but itself sitting over more lava) that then
+             * gets thrown away the very next step, before any more crust
+             * can build on top of it - "material pops the instant water
+             * touches lava", not "a sealed slab breaks free". Pulled back
+             * to this figure, then watched live over the serial console
+             * again (REACT_DBG instrumentation, since removed) once
+             * vent_column() started peeling layers instead of clearing a
+             * whole covering in one shot (SAND_VENT_LAYER, sand.h): the
+             * same covered cell now genuinely gets re-checked and re-fires
+             * repeatedly over time, confirmed by a climbing "still covered,
+             * seen N times" counter and the same (x, y) firing again and
+             * again - the ambient, ongoing behaviour this whole feature was
+             * asked for, working. Left AT this figure; the second roll
+             * below is what moved instead (1-in-8 down to 1-in-12, this
+             * round) after a wide active pour - many covered cells at
+             * once - read as firing a bit too often in aggregate, even
+             * though any single cell's own rate did not change.
+             * SAND_VENT_REACH and SAND_VENT_CHUNK (sand.h) are unaffected
+             * - how FAR a pulse
+             * throws and how WIDE a slab it grabs are separate dials from
+             * how OFTEN one happens, and stay exactly as tuned.
+             * sand_set_vent_chance() (sand.h) still overrides this for
+             * tests that need an exact, pinned value regardless of what
+             * production is currently tuned to. A living balance number,
+             * not a protected constant - see this project's own convention
+             * of revising these on request rather than treating a shipped
+             * figure as fixed. */
+            .vent_chance = 24,
 
             /* No residue: lava never burns out (decay 0 above), so nothing
          * here would ever fire. No conducts either - lava IS the heat,
@@ -981,10 +1025,17 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * (no cold surface checked, no heat reading involved - see
              * reaction_t.condenses's own comment in material.h). Started
              * at 3 (roughly 1 in 85), halved to roughly 1 in 128 once
-             * reported as happening more than a "small chance" should.
-             * Starting point, not final - tune on device like every
-             * other constant here. */
-            .condenses = 2,
+             * reported as happening more than a "small chance" should,
+             * then halved again to 1 (the rarest a byte-wide chance-in-
+             * 256 roll can express short of disabling it outright) once
+             * steam's own decay was lowered to make it last much longer
+             * (see reaction_t.decay's own row above) - a wisp that now
+             * lingers for roughly 4 seconds has that much more time to
+             * roll condensation, so the per-step chance needed to drop
+             * to keep the OVERALL odds of condensing before fading away
+             * from climbing right back up. Starting point, not final -
+             * tune on device like every other constant here. */
+            .condenses = 1,
             .condenses_to = MAT_WATER,
         },
 

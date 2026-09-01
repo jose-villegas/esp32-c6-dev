@@ -9971,12 +9971,19 @@ static void test_the_right_extended_materials_are_speckled(void)
 /* The three airborne materials agree with themselves about weight, speed
  * and lifetime.
  *
- * Steam is the lightest and quickest and should be the first to go; a
- * heavy flammable gas should pool and wait. For a long time it was the
- * other way round on the last of those three - gas faded in about 120
+ * Steam is the lightest and quickest; a heavy flammable gas should pool
+ * and wait. For a long time gas outlived both - gas faded in about 120
  * steps, steam in 160, smoke in 240 - so the heaviest, slowest thing in
  * the air was also the first to disappear, and a pocket of gas could not
  * be built with.
+ *
+ * STEAM AND SMOKE NOW SHARE THE SAME DECAY FIGURE, ON PURPOSE - steam's
+ * own decay was lowered twice (24 to 18, then 18 to 16) to make it last
+ * noticeably longer, landing exactly on smoke's already-tuned 16; asked
+ * to let steam's lifespan match smoke's much more closely, not asked to
+ * keep it strictly shorter, so the two being equal is the settled result,
+ * not a regression - the ordering that still matters is gas outlasting
+ * both of the lighter, quicker-fading ones.
  *
  * Asserted on the TABLE rather than by watching cells fade. Three
  * populations decaying past each other is a slow and noisy way to check a
@@ -9998,10 +10005,11 @@ static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
 
     /* And the lighter it is, the sooner it is gone: decay is a chance to
      * tick DOWN, so a bigger figure is a shorter life. */
-    TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_SMOKE].decay,
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(materials[MAT_SMOKE].decay,
         materials[MAT_STEAM].decay,
-        "steam must fade sooner than smoke - it condenses, it does not "
-        "linger");
+        "steam must not fade FASTER than smoke - the two are allowed to "
+        "match now (asked to let steam's lifespan close in on smoke's), "
+        "just not reverse past it entirely");
     TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_GAS].decay,
         materials[MAT_SMOKE].decay,
         "and smoke sooner than gas - the heaviest, slowest thing in the "
@@ -11515,6 +11523,64 @@ static void test_lava_does_not_put_fire_out(void)
         "fuel nor burning itself");
 }
 
+/* reaction_t.flare (material.h) exists to look like a heat source licking
+ * a flame upward while staying PUT itself - see try_flare()'s own comment
+ * (sand_reactions.c) for the mechanic's original, ember-shaped case and
+ * why it does the wrong thing, over and over, for a material that
+ * actually moves: a poured stream of lava lands as many single-cell
+ * grains each free-falling for several steps before settling, and every
+ * one of those falling steps used to roll flare exactly as if the grain
+ * were a settled pool. Two halves in one test, same grain: it must never
+ * flare while genuinely airborne, and must still flare normally once it
+ * lands - the falling check is a temporary skip, not a permanent one. */
+static void test_falling_lava_does_not_flare(void)
+{
+    fixture();
+    sand_set(&s, 3, 0, LAVA);
+
+    bool found_fire = false;
+    for (int i = 0; i < H - 1 && !found_fire; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_fire; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_FIRE) {
+                    found_fire = true;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_FALSE_MESSAGE(found_fire,
+        "a lava grain in free fall (nothing beneath it, gravity-relative) "
+        "must not flare - try_flare() skips the roll entirely while a "
+        "non-KIND_STATIC material is still falling, which is what keeps "
+        "a long pour from rolling (and, on a hit, spawning a fresh "
+        "MAT_FIRE cell for) flare on every single step of its fall");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_LAVA),
+        "setup check: the grain must actually have reached the grid's "
+        "own floor (off-grid reads as STONE, sand_at()'s own convention) "
+        "by now, or the loop above proved nothing about landing, only "
+        "about a fixed number of steps");
+
+    for (int i = 0; i < 200 && !found_fire; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int y = 0; y < H && !found_fire; y++) {
+            for (int x = 0; x < W; x++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_FIRE) {
+                    found_fire = true;
+                }
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(found_fire,
+        "once the same grain has settled on the floor, it must eventually "
+        "flare like any other supported lava cell - the falling check "
+        "must only ever suppress flare while genuinely airborne, not "
+        "disable it for the rest of that cell's life");
+}
+
 static void test_steam_bubbles_up_through_standing_water(void)
 {
     water_column();
@@ -11945,11 +12011,14 @@ static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
 }
 
 /* And boiling a liquid that DOES pass its `boils` roll must hand the new
- * steam less than a full cell's own worth of life - see
- * BOILED_STEAM_LIFE's own comment in sand_reactions.c. The point of the
- * reduction is a boiler that visibly makes less steam to look at, not
- * merely the same amount arriving slower. */
-static void test_boiled_steam_starts_below_full_life(void)
+ * steam a FULL cell's own worth of life, the same place_reacted() default
+ * any other fresh, non-ramping material gets - see conduct_heat()'s own
+ * comment (sand_reactions.c) for the account. This used to assert the
+ * opposite (a deliberately shortened life, so a boiler visibly made less
+ * steam to look at); asked to make steam last LONGER instead, the cut was
+ * removed rather than tuned, so this test now checks the plain
+ * place_reacted() guarantee holds for boiling too. */
+static void test_boiled_steam_starts_at_full_life(void)
 {
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
@@ -11973,9 +12042,10 @@ static void test_boiled_steam_starts_below_full_life(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(c),
         "sand_set_boils(255) must still boil deterministically in one "
         "step, exactly as boiling always has");
-    TEST_ASSERT_LESS_THAN_INT_MESSAGE(MATERIAL_VARIANTS - 1, CELL_VARIANT(c),
-        "boiling must hand the new steam cell less than a full cell's "
-        "worth of life");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATERIAL_VARIANTS - 1, CELL_VARIANT(c),
+        "boiling must hand the new steam cell a full cell's worth of "
+        "life, same as place_reacted() gives any other fresh material - "
+        "asked to make steam last longer, not shorter");
 }
 
 /* conduct_heat()'s boiling branch used to hand every liquid MAT_STEAM
@@ -11983,7 +12053,7 @@ static void test_boiled_steam_starts_below_full_life(void)
  * a wall came out as the same white kettle-steam water does, instead of
  * the MAT_GAS acid produces everywhere else it evaporates (`evaporates`,
  * `fizz` - see reaction_t.boils_to's own comment in material.h). Same
- * scene as test_boiled_steam_starts_below_full_life just above, water
+ * scene as test_boiled_steam_starts_at_full_life just above, water
  * swapped for acid, MAT_STEAM swapped for MAT_GAS. */
 static void test_boiling_acid_produces_gas_not_steam(void)
 {
@@ -13408,6 +13478,171 @@ static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
         "wider than one column (see this test's own top comment)");
 }
 
+/* reaction_t.vent_chance's own trigger now samples SAND_VENT_CHUNK-
+ * aligned cells rather than rolling every covered lava cell
+ * independently (see that constant's own comment, sand.h, and try_vent_
+ * chunk()'s, sand_reactions.c) - and when a sampled cell succeeds, it
+ * throws EVERY covered lava cell in its own chunk together, not just
+ * itself. This is the one behaviour sand_set_vent_chance()'s override
+ * deliberately does NOT exercise (see the vent_chance gate's own
+ * comment for why forcing the rate skips chunk sampling entirely, the
+ * same as it already skips the second roll) - so this test runs
+ * against the REAL per-material rate instead, the only way to actually
+ * reach try_vent_chunk().
+ *
+ * COORDINATES DERIVED FROM SAND_VENT_CHUNK, not hardcoded, so changing
+ * that constant (already done once, 3 -> 8) never needs this geometry
+ * re-derived by hand again. The pool fills its own chunk's ENTIRE
+ * width, CHUNK_TEST_X0 (== SAND_VENT_CHUNK, so it also lands exactly on
+ * the lattice: X0 % SAND_VENT_CHUNK == 0) through CHUNK_TEST_X1
+ * (X0 + SAND_VENT_CHUNK - 1, the chunk's own last column) - one lava
+ * cell per column, all in the same row, all inside the SAME chunk
+ * (x in [X0, X0 + SAND_VENT_CHUNK), y in [6, 6 + SAND_VENT_CHUNK)).
+ *
+ * WATCHING THE FAR CRUST CELL SPECIFICALLY, NOT ANY CRUST CELL -
+ * try_vent()'s own three columns (up-left/up/up-right, try_vent()'s own
+ * comment) already let a SINGLE lava cell's own throw reach more than
+ * one crust cell at once (from X0: up-left=X0-1, up=X0, up-right=X0+1),
+ * which would make a naive "did at least two crust cells clear" check
+ * pass even WITHOUT chunk grouping, proving nothing about it - confirmed
+ * by actually trying that check first and watching it pass regardless.
+ * CHUNK_TEST_X1's own crust is deliberately OUTSIDE X0's own three-
+ * column reach for any SAND_VENT_CHUNK >= 4 (X0's reach tops out at
+ * X0+1) - it is only reachable via some OTHER column's own up/up-right
+ * throw, and no column but X0 itself is chunk-aligned, so none of them
+ * can ever roll vent_chance on its own. CHUNK_TEST_X1's crust clearing
+ * is therefore unambiguous proof that try_vent_chunk() reached a
+ * DIFFERENT lava cell than the one that actually rolled. */
+#define CHUNK_TEST_X0 SAND_VENT_CHUNK
+#define CHUNK_TEST_X1 (CHUNK_TEST_X0 + SAND_VENT_CHUNK - 1)
+#define CHUNK_TEST_ISO_X (CHUNK_TEST_X0 + 2 * SAND_VENT_CHUNK + 1)
+#define CHUNK_TEST_W (CHUNK_TEST_X0 + 3 * SAND_VENT_CHUNK + 4)
+/* THE LATTICE NEEDS BOTH COORDINATES ALIGNED, NOT JUST X - try_vent_
+ * chunk()'s own sampling gate checks (x % SAND_VENT_CHUNK == 0) AND
+ * (y % SAND_VENT_CHUNK == 0) together (step_one_burning_cell()'s own
+ * comment, sand_reactions.c). The pool's row has to land on the same
+ * lattice its column does, or the sampled cell never rolls at all -
+ * measured directly: raising SAND_VENT_CHUNK from 3 to 8 broke both
+ * tests below outright until the pool's row became a multiple of 8 too,
+ * because row 6 (valid at chunk size 3) is not a multiple of 8. */
+#define CHUNK_TEST_Y SAND_VENT_CHUNK
+#define CHUNK_TEST_H (2 * SAND_VENT_CHUNK + 4)
+static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
+{
+    static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
+    static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
+    sand_t v;
+    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
+    sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
+
+    /* A SAND_VENT_CHUNK-wide, 1-deep pool (x=X0..X1, y=Y), sealed the
+     * same way POOL_TEST's own scene is: a crust one row wider than the
+     * pool (x=X0-1..X1+1, y=Y-1), a floor (y=Y+1), and side walls
+     * (x=X0-1, x=X1+1) so every pool cell's three "above" neighbours are
+     * crust, not open air. */
+    for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);   /* crust */
+        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);   /* floor */
+    }
+    sand_set(&v, CHUNK_TEST_X0 - 1, CHUNK_TEST_Y, STONE);   /* left wall */
+    sand_set(&v, CHUNK_TEST_X1 + 1, CHUNK_TEST_Y, STONE);   /* right wall */
+    for (int x = CHUNK_TEST_X0; x <= CHUNK_TEST_X1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    bool far_crust_moved = false;
+    for (int i = 0; i < 40000 && !far_crust_moved; i++) {
+        sand_step(&v, 0, 1000, 0);
+        far_crust_moved =
+            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
+            MAT_STONE;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(far_crust_moved,
+        "the crust above the chunk's own far column must eventually "
+        "clear even though that column is not itself chunk-aligned and "
+        "can never roll vent_chance on its own - only try_vent_chunk() "
+        "reaching it as part of the sampled column's own chunk explains "
+        "this; if it never clears, chunk sampling regressed back to "
+        "single-cell try_vent()");
+}
+
+/* THE OTHER HALF of the chunk claim - the sibling test above proves
+ * try_vent_chunk() reaches every covered cell INSIDE its own chunk;
+ * this proves it does not reach past that chunk's own bounds into a
+ * neighbour's. A second, fully sealed lava cell sits at CHUNK_TEST_ISO_X
+ * (== CHUNK_TEST_X0 + 2 * SAND_VENT_CHUNK + 1) - two whole chunks past
+ * the tracked pool's own, so its own would-be chunk is disjoint from the
+ * tracked one - but its LEFT WALL, at ISO_X - 1, lands exactly on THAT
+ * chunk's own sampled corner (X0 + 2 * SAND_VENT_CHUNK), which is
+ * therefore a plain STONE wall, not lava, so that chunk can never roll
+ * vent_chance on its own either. The only way the isolated cell's crust
+ * could ever move in this scene is try_vent_chunk() (fired from the
+ * tracked pool's own chunk, repeatedly, over the whole run) scanning
+ * wider than its own chunk bounds - a real risk to guard against given
+ * cx1/cy1 are exclusive upper bounds computed by hand, not something the
+ * type system checks. Sealed identically to the tracked pool's own
+ * (crust, floor, side walls) so a bounds bug would find a genuinely
+ * coverable cell to wrongly vent, not silently no-op against an
+ * already-disqualified one. */
+static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
+{
+    static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
+    static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
+    sand_t v;
+    /* A DIFFERENT SEED FROM THE SIBLING TEST ABOVE (13, not 7) - measured,
+     * not derived: the extra isolated pod this test adds shifts the
+     * shared RNG stream enough (its own reactions still get scanned and
+     * decided against every step, even though its own trigger never
+     * fires) that seed 7's own tracked chunk did not roll a success
+     * within this test's 40000-step budget, while this test's own
+     * scene otherwise fires exactly as reliably as the sibling's. */
+    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 13u);
+    sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
+
+    for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
+        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);
+    }
+    sand_set(&v, CHUNK_TEST_X0 - 1, CHUNK_TEST_Y, STONE);
+    sand_set(&v, CHUNK_TEST_X1 + 1, CHUNK_TEST_Y, STONE);
+    for (int x = CHUNK_TEST_X0; x <= CHUNK_TEST_X1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+
+    for (int x = CHUNK_TEST_ISO_X - 1; x <= CHUNK_TEST_ISO_X + 1; x++) {
+        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
+        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);
+    }
+    sand_set(&v, CHUNK_TEST_ISO_X - 1, CHUNK_TEST_Y, STONE);
+    sand_set(&v, CHUNK_TEST_ISO_X + 1, CHUNK_TEST_Y, STONE);
+    sand_set(&v, CHUNK_TEST_ISO_X, CHUNK_TEST_Y,
+            CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    bool chunk_a_fired = false;
+    for (int i = 0; i < 40000 && !chunk_a_fired; i++) {
+        sand_step(&v, 0, 1000, 0);
+
+        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_ISO_X, CHUNK_TEST_Y - 1)),
+            "the neighbouring chunk's own crust must never move just "
+            "because the tracked pool's own chunk fired - the isolated "
+            "cell sits outside that chunk's own bounds, and its own "
+            "chunk's sampled corner is stone, not lava, so nothing in "
+            "this scene should ever be able to vent it");
+        chunk_a_fired =
+            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
+            MAT_STONE;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(chunk_a_fired,
+        "setup check: the tracked pool's own chunk must actually fire "
+        "within this budget (see the sibling test's own comment on why "
+        "its far column is the honest signal for that), or the loop "
+        "above proved nothing about containment - it never got a "
+        "chance to leak");
+}
+
 static void test_wood_and_steam_grain_count_is_conserved(void)
 {
     fixture();
@@ -14562,6 +14797,46 @@ static void test_a_strong_close_blast_can_breach_a_wall(void)
         "- and it needs to be seen actually happening, not just assumed "
         "from the roll's own arithmetic; where it lands afterward is no "
         "longer pinned, see this test's own top comment for why");
+}
+
+/* A ROLL FAILING IS NOT THE SAME AS LANDING - step_impulses()'s own
+ * comment (sand.c, the block right before the outward-push roll) spells
+ * out the bug this guards against: dropping a KIND_STATIC entry from
+ * impulse tracking the instant its per-turn outward-push roll fails,
+ * regardless of whether it has actually reached anything to rest on.
+ * Since that roll is a per-turn coin flip on `speed` rather than a
+ * threshold, it can fail on literally the FIRST turn - speed 0, forced
+ * here, guarantees it - while the dislodged cell is still hanging over
+ * open space with nothing beneath it. The only thing that ever makes a
+ * KIND_STATIC cell fall at all is the unconditional gravity-drift that
+ * runs "while an entry is tracked here at all" (that block's own
+ * comment) - so an entry dropped while still airborne would previously
+ * freeze exactly where gravity-drift happened to leave it after ONE
+ * step, floating there for the rest of the run with nothing left to
+ * ever revisit it.
+ *
+ * dir DOES NOT MATTER HERE - speed 0 means the outward-push roll can
+ * never succeed, so the only thing moving this cell at all is the
+ * unconditional gravity-drift, which ignores `dir` entirely. */
+static void test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 3, 0, CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
+    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
+        "a dislodged KIND_STATIC cell whose very first outward-push roll "
+        "fails (speed 0 here, guaranteeing it on every turn) must still "
+        "keep falling under the unconditional gravity-drift every step "
+        "until it is genuinely supported - stopping partway down means "
+        "the failed roll dropped it from impulse tracking while it was "
+        "still airborne, exactly the bug this test exists to catch");
 }
 
 /* THE OTHER HALF OF sand_explode()'s OWN SPLIT (see sand_displace()'s own
@@ -16264,13 +16539,34 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
         "the scene it claims to, and the ice payload means the usual "
         "cell_is_extended() plant pin cannot be reused here as-is");
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, lava_left,
-        "family C's rings (the left half) must not have melted into "
-        "lava inside this window - measured, those rings do keep "
-        "climbing under their own payload and trigger's heat, and the "
-        "first left-half lava cell appears at step 16 (123 of them by "
-        "step 40), which is a second, independent reason this window is "
-        "kept to 10 steps rather than left to run longer");
+    /* NOT an exact zero any more - see this file's own precedent on why a
+     * pinned RNG-driven outcome is "measured, not derived... not a law"
+     * (test_a_blast_inside_a_sealed_vessel_stays_inside_it's own comment
+     * makes the same point for a dislodged wall's landing cell). Family
+     * C's rings melting into lava under their own payload and trigger's
+     * heat is real and expected eventually (unaffected by reaction_t.
+     * vent_chance - lava never even appears in family C's own payload,
+     * see build_thermal_shock_scene()'s comment) - only WHEN was ever
+     * pinned here, and that timing rides the same shared RNG stream every
+     * other reaction on the board draws from. Adding a second, per-step
+     * roll to vent_chance (step_one_burning_cell(), sand_reactions.c) for
+     * the many lava payloads on the right half advances that stream
+     * faster on every step this scene has lava under a lid, which pulled
+     * family C's own melt roll earlier - measured at step 9 now, not 16.
+     * A small, single-digit residual by step 10 is exactly that timing
+     * shift, not a new leak between the two families (lava is never
+     * itself thrown by a vent - see reaction_t.vent_chance's own comment,
+     * material.h - so this is always a LOCAL glass-to-lava conversion,
+     * never material crossing over from the right half). What this must
+     * still catch is a real regression widening that leak far past a
+     * timing nudge - the original, unbounded run measured 123 left-half
+     * lava cells by step 40, three orders of magnitude past this bound. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(10, lava_left,
+        "family C's rings (the left half) must not have melted into lava "
+        "in bulk inside this window - a small residual is an expected "
+        "RNG-timing shift (see this assertion's own comment), but this "
+        "many means the window, or something else about this scene, "
+        "genuinely regressed");
 
     /* step_one_warming_cell()'s call site is gated on three things at
      * once - r->warms, may_have_temperature and may_have_heat_holder -
@@ -16436,6 +16732,21 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
      * has nothing to do with what this test exists to measure. Forced
      * off here; condensation gets its own dedicated test instead. */
     sand_set_condenses(&s, 0);
+    /* Vent_chance is the same kind of orthogonal mechanic, for the same
+     * reason: this scene's lava burner sits directly under the stone
+     * slab that traps the water above it (build_boiler_scene(), above),
+     * which is exactly a sealed pool as far as reaction_t.vent_chance is
+     * concerned. Left at its real figure, a vent firing partway through
+     * the measured window disrupts the slab that is supposed to hold
+     * steady for the whole test - measured directly: this scene passed
+     * with vent_chance briefly at its own maximum (255) only because the
+     * disruption finished during the 20-step settle phase, before
+     * measurement even starts; at a moderate figure the same disruption
+     * can land inside the measured window instead and pull a quarter's
+     * water loss below the steady-state floor below. What this test
+     * exists to measure is boiling, not venting; forced off here for the
+     * same reason condensation is, just above. */
+    sand_set_vent_chance(&s, 0);
 
     build_boiler_scene(&s);
 
@@ -19906,6 +20217,7 @@ void run_sand_suite(void)
     RUN_TEST(test_water_freezes_lava_into_stone);
     RUN_TEST(test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag);
     RUN_TEST(test_lava_does_not_put_fire_out);
+    RUN_TEST(test_falling_lava_does_not_flare);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);
     RUN_TEST(test_bubbling_conserves_the_water_it_displaces);
     RUN_TEST(test_plain_gas_bubbles_up_through_water_too);
@@ -19919,7 +20231,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thick_wall_conducts_more_slowly_than_a_thin_one);
     RUN_TEST(test_boiling_converts_the_cell_nearest_the_heat);
     RUN_TEST(test_sand_set_boils_zero_disables_conducted_heat_boiling);
-    RUN_TEST(test_boiled_steam_starts_below_full_life);
+    RUN_TEST(test_boiled_steam_starts_at_full_life);
     RUN_TEST(test_boiling_acid_produces_gas_not_steam);
     RUN_TEST(test_the_boiler_end_to_end);
     RUN_TEST(test_dry_dirt_beside_lava_smelts_into_metal_or_stone);
@@ -19938,6 +20250,8 @@ void run_sand_suite(void)
     RUN_TEST(test_sealed_lava_vent_caps_at_three_cells);
     RUN_TEST(test_sealed_lava_vents_toward_gravity_relative_up);
     RUN_TEST(test_a_wide_pool_with_a_crust_vents_not_just_a_shaft);
+    RUN_TEST(test_a_sampled_vent_throws_its_whole_chunk_together);
+    RUN_TEST(test_a_sampled_vent_does_not_reach_the_next_chunk);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
     RUN_TEST(test_a_2x2_block_of_steam_condenses_into_one_water_cell);
     RUN_TEST(test_condensation_needs_a_genuine_2x2_square);
@@ -19982,6 +20296,7 @@ void run_sand_suite(void)
 
     RUN_TEST(test_a_blast_inside_a_sealed_vessel_stays_inside_it);
     RUN_TEST(test_a_strong_close_blast_can_breach_a_wall);
+    RUN_TEST(test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails);
     RUN_TEST(test_sand_displace_alone_never_creates_fire_or_smoke);
     RUN_TEST(test_a_blast_conserves_grains);
     RUN_TEST(test_a_blast_at_the_edge_stays_in_bounds);

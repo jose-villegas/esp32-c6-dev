@@ -731,9 +731,12 @@ static void emit_burn(const reaction_t *r)
 
     if (r->vent_chance != 0) {
         printf("- If covered from above - anything directly above it, "
-               "up-left, or up-right, gravity-relative - vents through "
-               "the lid %s, throwing up to SAND_VENT_REACH cells along "
-               "each covered direction independently.\n",
+               "up-left, or up-right, gravity-relative - throws whatever "
+               "is covering it %s, peeling up to SAND_VENT_LAYER cells off "
+               "the outer surface each time it fires; a covering deeper "
+               "than that takes several separate firings, up to "
+               "SAND_VENT_REACH cells total, but is guaranteed to "
+               "eventually dislodge.\n",
                adverb("vent_chance", r->vent_chance));
     }
 }
