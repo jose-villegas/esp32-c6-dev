@@ -644,16 +644,27 @@ static inline bool boot_anim_project_segment(
  * draw_grid_circle()/draw_grid_spoke() in boot_anim.c for why a circle
  * gets away with one lookup where a spoke cannot. */
 
+/* How long the envelope's own ramp - the lerp itself, not when it starts -
+ * takes at either end. Fixed rather than authored, the same "texture, not
+ * a creative choice" reasoning BOOT_ANIM_GRID_CIRCLE_STEPS's own comment
+ * already gives: what the two authored timers below control is WHEN each
+ * ramp starts, not how fast a ramp itself moves once it does. */
+#define BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS 500
+
 /* How much of the wave's own peak amplitude is actually in effect right
- * now - two timers, not one window: BOOT_ANIM_WAVE_IN_MS is how long the
- * ripple takes to arrive at full strength from nothing, starting at the
- * very beginning of the animation; BOOT_ANIM_WAVE_OUT_MS is when it starts
- * fading back to nothing again, over whatever's left of the animation
- * after that. Whichever of the two ramps is currently the LOWER one wins -
- * the standard attack/release envelope shape, nothing special-cased for
- * the two overlapping badly (a window with no time left to plateau at
- * full strength is still a perfectly well-defined curve, just without a
- * flat middle).
+ * now - two timers, not one window, and both are a MOMENT something
+ * starts, not a duration: the ripple is fully MUTED (zero) right up
+ * until BOOT_ANIM_WAVE_IN_MS, THEN lerps up to full strength over
+ * BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS - not ramping from the very first frame
+ * the way an earlier version of this did, which is a different thing
+ * ("controlled from nothing until I say so" vs. "already moving the
+ * instant the picture starts"). BOOT_ANIM_WAVE_OUT_MS is the same shape
+ * mirrored: full strength until that moment, then lerps back down to
+ * muted over the same fixed ramp. Whichever of the two ramps is currently
+ * the LOWER one wins - the standard attack/release envelope shape,
+ * nothing special-cased for the two overlapping badly (a window with no
+ * time left to plateau at full strength in between is still a perfectly
+ * well-defined curve, just without a flat middle).
  *
  * Q0 (0..255), the same scale scale8() in boot_anim.c already multiplies
  * against - draw_floor() scales BOOT_ANIM_WAVE_HEIGHT_Q12 by this BEFORE
@@ -664,9 +675,10 @@ static inline bool boot_anim_project_segment(
  * others. */
 static inline uint8_t boot_anim_wave_envelope(uint32_t now_ms)
 {
-    const uint8_t in = tween_ramp(now_ms, 0, BOOT_ANIM_WAVE_IN_MS);
+    const uint8_t in = tween_ramp(now_ms, BOOT_ANIM_WAVE_IN_MS,
+                                  BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS);
     const uint8_t out = (uint8_t)(255u - tween_ramp(now_ms,
-        BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_MS - BOOT_ANIM_WAVE_OUT_MS));
+        BOOT_ANIM_WAVE_OUT_MS, BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 
     return (in < out) ? in : out;
 }

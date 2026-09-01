@@ -170,9 +170,11 @@ def validate(cfg):
         warn("wave_wavelength_m (%r) is not positive, so the ripple is "
              "silently invisible despite wave_height_m (%r) being nonzero"
              % (cfg["wave_wavelength_m"], cfg["wave_height_m"]))
-    if timing["wave_out_ms"] > timing["total_ms"]:
-        fail("wave_out_ms (%d) must not be after total_ms (%d) - the ramp "
-             "back to nothing needs to fit in what's left of the animation"
+    if (cfg["wave_height_m"] != 0 and
+            timing["wave_out_ms"] > timing["total_ms"]):
+        warn("wave_out_ms (%d) is after total_ms (%d) - the ripple will "
+             "still be at full strength when the picture ends, never "
+             "having started to fade out"
              % (timing["wave_out_ms"], timing["total_ms"]))
     if (cfg["wave_height_m"] != 0 and
             timing["wave_in_ms"] > timing["wave_out_ms"]):
@@ -222,10 +224,9 @@ TIMING_ORDER = [
      "full length instantly"),
     ("grid_fade_ms", "BOOT_ANIM_GRID_FADE_MS", None),
     ("wave_in_ms", "BOOT_ANIM_WAVE_IN_MS",
-     "the ripple takes this long to arrive at full strength, from nothing"),
+     "the ripple is muted before this, then lerps up to full strength"),
     ("wave_out_ms", "BOOT_ANIM_WAVE_OUT_MS",
-     "the ripple starts fading back to nothing, over whatever's left of "
-     "the animation after this"),
+     "the ripple is at full strength until this, then lerps back to muted"),
     ("pen_start_ms", "BOOT_ANIM_PEN_START_MS", None),
     ("pen_ms", "BOOT_ANIM_PEN_MS", "how long the curve takes to draw"),
     ("pen_finish_ms", "BOOT_ANIM_PEN_FINISH_MS",
@@ -308,10 +309,11 @@ def main():
     # migration.
     cfg.setdefault("wave_wavelength_m", 3 * cfg.get("grid_step_m", 1))
     cfg.setdefault("wave_period_ms", 3000)
-    # wave_in_ms/wave_out_ms are newer again - fading in over the first
-    # second and starting to fade out a second before the end are simply
-    # reasonable starting points, the same "look at it through the editor"
-    # reasoning wave_wavelength_m/wave_period_ms's own defaults above use.
+    # wave_in_ms/wave_out_ms are newer again - starting to lerp in a
+    # second in, and starting to lerp back out a second before the end,
+    # are simply reasonable starting points, the same "look at it through
+    # the editor" reasoning wave_wavelength_m/wave_period_ms's own
+    # defaults above use.
     timing.setdefault("wave_in_ms", 1000)
     timing.setdefault("wave_out_ms",
                       max(1000, timing.get("total_ms", 5800) - 1000))

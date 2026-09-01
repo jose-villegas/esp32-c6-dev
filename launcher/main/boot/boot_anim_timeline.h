@@ -42,10 +42,10 @@
 #define BOOT_ANIM_GRID_SPOKE_DRAW_MS 0
 
 #define BOOT_ANIM_GRID_FADE_MS 300
-/* the ripple takes this long to arrive at full strength, from nothing */
+/* the ripple is muted before this, then lerps up to full strength */
 #define BOOT_ANIM_WAVE_IN_MS 1000
 
-/* the ripple starts fading back to nothing, over whatever's left of the animation after this */
+/* the ripple is at full strength until this, then lerps back to muted */
 #define BOOT_ANIM_WAVE_OUT_MS 4300
 
 #define BOOT_ANIM_PEN_START_MS 520

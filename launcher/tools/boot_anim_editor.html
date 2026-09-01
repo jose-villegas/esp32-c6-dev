@@ -516,8 +516,8 @@ const FIELD_LABELS = {
   grid_spoke_dash: 'dashed instead of solid (0 solid, 1 dashed)',
   grid_spoke_start_ms: 'spokes start drawing outward from the origin',
   grid_spoke_draw_ms: 'time to reach full length (0 = instant)',
-  wave_in_ms: 'time to arrive at full strength, from nothing',
-  wave_out_ms: 'starts fading back to nothing, over what’s left after this',
+  wave_in_ms: 'muted before this, then lerps up to full strength',
+  wave_out_ms: 'full strength until this, then lerps back to muted',
   pen_start_ms: 'curve starts drawing',
   pen_ms: 'how long the curve’s first phase takes',
   pen_finish_ms: 'when the curve reaches its true end',
@@ -1224,10 +1224,10 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       if (loaded.wave_period_ms === undefined) {
         loaded.wave_period_ms = 3000;
       }
-      /* wave_in_ms/wave_out_ms are newer again - fading in over the first
-       * second and starting to fade out a second before the end are the
-       * same reasonable-starting-point defaults the generator itself
-       * falls back to. */
+      /* wave_in_ms/wave_out_ms are newer again - starting to lerp in a
+       * second in, and starting to lerp back out a second before the
+       * end, are the same reasonable-starting-point defaults the
+       * generator itself falls back to. */
       if (loaded.timing.wave_in_ms === undefined) {
         loaded.timing.wave_in_ms = 1000;
       }
