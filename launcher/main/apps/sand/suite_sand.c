@@ -3029,6 +3029,85 @@ static void test_fire_ignites_an_adjacent_flammable_neighbour(void)
         "a flammable neighbour touching fire must ignite");
 }
 
+/* bd esp32c6-zs8: an igniting gas cell that touches a KIND_STATIC
+ * neighbour bursts instead of just catching - see gas_ignite_confined()'s
+ * own comment in sand_reactions.c for the design (gas in the open burns,
+ * the same gas walled in bursts) and try_ignite()'s own comment for why
+ * this is gated on s->impulse_buf != NULL. */
+static impulse_t confined_gas_impulse_buf[W * H];
+
+static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
+{
+    /* fire_room() boxes row 3 in stone above and below (see its own
+     * comment) - the same room test_fire_ignites_an_adjacent_flammable_
+     * neighbour uses, just with impulses now enabled, so the gas cell
+     * cannot rise away before reactions gets a turn at it and its
+     * ceiling/floor neighbours are real KIND_STATIC cells to burst into,
+     * not empty air standing in for one. */
+    fire_room(3, 4);
+    sand_enable_impulses(&s, confined_gas_impulse_buf, W * H);
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "setup: the gas cell touching the wall must still ignite");
+    /* (4,2) is fire_room()'s own ceiling stone, directly above the gas
+     * cell - within sand_explode()'s core radius but never itself
+     * touching fire. sand_explode()'s core fill (SAND_EXPLODE_CORE_
+     * DIVISOR, sand.h) writes fire into every cell within that radius
+     * UNCONDITIONALLY, occupied or not, before a single flight entry is
+     * even queued - so only a REAL explosion ever touches it at all; a
+     * plain place_reacted() ignition only ever touches the one cell it
+     * targets, so the stone above it would still be stone. NOT_EQUAL
+     * rather than fire specifically: the fresh fire the core just wrote
+     * is itself a non-static occupied cell inside the blast radius, so
+     * sand_displace()'s own annulus loop queues it for outward flight too
+     * (sand_explode()'s own comment in sand.c) - it may already have
+     * moved on by the time this runs, same as any grain caught in a
+     * blast, and where it lands afterward is no longer pinned; see
+     * test_a_strong_close_blast_can_breach_a_wall's own comment for the
+     * same reasoning applied to an ordinary DETONATE blast. */
+    TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, 4, 2)),
+        "a confined gas cell's own ignition must reach past itself, into "
+        "the wall it was confined by - proof this was sand_explode()'s "
+        "own core fill, not a plain place_reacted()");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, s.impulse_count,
+        "a real explosion must also queue its own outward annulus, not "
+        "just fill a core of fire");
+}
+
+static void test_an_open_gas_pocket_still_just_catches_fire(void)
+{
+    fixture();
+    sand_enable_impulses(&s, confined_gas_impulse_buf, W * H);
+    sand_set_mobility(&s, 0);   /* keep the gas from rising away before
+                                 * reactions gets a turn at it this same
+                                 * step - see test_fire_is_not_smothered_
+                                 * by_gas's own use of this for the same
+                                 * reason */
+
+    /* Same fire-beside-gas shape as the confined test above, minus the
+     * room - nothing here touches a KIND_STATIC cell at all, so this must
+     * behave exactly like test_fire_ignites_an_adjacent_flammable_neighbour,
+     * even with impulses enabled: "gas in the open burns" must not become
+     * "gas always explodes now that the mechanism exists". */
+    sand_set(&s, 3, 3, FIRE);
+    sand_set(&s, 4, 3, GAS);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "an unconfined gas cell must still ignite");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 2)),
+        "an unconfined ignition must not reach past the cell it targets - "
+        "a neighbour that never touched fire must stay untouched");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
+        "an unconfined ignition must never queue an explosion");
+}
+
 static void test_extinguishing_wins_over_igniting(void)
 {
     fire_room(2, 4);
@@ -20161,6 +20240,8 @@ void run_sand_suite(void)
     RUN_TEST(test_gas_decaying_away_marks_its_row_dirty);
 
     RUN_TEST(test_fire_ignites_an_adjacent_flammable_neighbour);
+    RUN_TEST(test_a_confined_gas_pocket_bursts_instead_of_just_catching);
+    RUN_TEST(test_an_open_gas_pocket_still_just_catches_fire);
     RUN_TEST(test_extinguishing_wins_over_igniting);
     RUN_TEST(test_fire_burns_out_and_disappears_over_time);
     RUN_TEST(test_fire_rises_and_disperses_like_gas);
