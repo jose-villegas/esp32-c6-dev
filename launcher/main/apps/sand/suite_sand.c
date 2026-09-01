@@ -13792,7 +13792,22 @@ static void test_sealed_lava_vents_through_a_thin_cap(void)
  * healthy multiple of the reach itself is what actually gives thrown
  * material somewhere to land that does not feed back into this test's
  * own claim. */
+/* HOST keeps the full 10-pod statistical run (host time is free - see
+ * CAP_POD_STEPS' own comment). DEVICE runs a shrunk 5, both because the
+ * device suite is paying real wall-clock for every pod (this test's own
+ * 462-second history) and because 5 keeps EXACT_PODS' own threshold
+ * formula below (CAP_TEST_PODS / 4) meaningful: at 3 pods, integer
+ * division gives 0, and "must be < 0" can never pass no matter what the
+ * test measures - a floor the maintainer's own "at least 3" guidance
+ * does not by itself protect against. 5 is the smallest pod count clear
+ * of that trap while still - per its own top comment above - proving
+ * MULTIPLE independent vents open rather than collapsing to one pod's
+ * luck. */
+#ifdef DEVICE_BUILD
+#define CAP_TEST_PODS 5
+#else
 #define CAP_TEST_PODS 10
+#endif
 #define CAP_TEST_SPACING (SAND_VENT_REACH * 3 + 6)
 /* Scaled to SAND_VENT_REACH, not a fixed 16 - a cap one cell deeper than
  * the reach (DEEP_PODS, below) needs that many rows above the lava plus
@@ -13838,32 +13853,89 @@ _Static_assert(
     "for; shrink the scene further (this test's own top comment explains "
     "the sizing) rather than just tolerating a bigger malloc");
 
-/* Steps each pod simulates. Halved from 12000 on 2026-09-01, when the
- * sequential restructure above made this test's cost real for the first
- * time: the old one-giant-grid version never allocated on device, so its
- * 12000 steps were never actually paid there. Twenty pods paying them
- * pushed the whole device suite to 18.8 minutes.
+/* Steps each pod simulates - HOST and DEVICE run different budgets now,
+ * not because the claim differs, but because the two environments are
+ * chasing different parts of the same leak curve. See DEEP_LEAK_BOUND_
+ * PER_MILLE's own comment below for why the bound this budget is measured
+ * against changed too - the old 15% bound could only ever be crossed by
+ * the rare multi-thousand-step avalanche the HOST table just below
+ * documents; the new, tight bound is crossed by a much faster, much
+ * cheaper signal the DEVICE table further down measures instead.
  *
- * NOT tuned down as far as it would go. The step count is what gives
- * erosion time to cross the 15% threshold below, so cutting it trades
- * away the test's ability to DETECT a broken cap, which a green run does
- * not reveal. Measured on host by widening vent_column()'s scan to
- * SAND_VENT_REACH * 3 and sweeping (deep_empty_cells vs the 2929 bound):
+ * HOST (6000): halved from 12000 on 2026-09-01, when the sequential
+ * restructure above made this test's cost real for the first time: the
+ * old one-giant-grid version never allocated on device, so its 12000
+ * steps were never actually paid there. Twenty pods paying them pushed
+ * the whole device suite to 18.8 minutes - the 462-second problem this
+ * whole HOST/DEVICE split exists to fix, without giving up the deep
+ * statistical run entirely (host time is free; this suite runs here in
+ * well under a second regardless of what these two tests cost). Measured
+ * on host by widening vent_column()'s scan to SAND_VENT_REACH * 3 and
+ * sweeping (10 pods, deep_block_cells 19530, correct build steady at
+ * exactly 0 across the whole range):
  *
- *      steps    broken build     verdict
- *        500    passes            blind
- *       1000    passes            blind
- *       2000    passes            blind
- *       4000    3158 vs 2929      detects by 7.8% - too thin
- *       6000    3804 vs 2929      detects by 29.9%  <- chosen
- *       8000    4325 vs 2929      detects by 47.7%
- *      12000    5342 vs 2929      detects by 82.4%
+ *      steps    broken build     as a fraction of the block
+ *        100    55                0.28%
+ *        250    67                0.34%
+ *        500    80                0.41%
+ *       1000    196               1.00%
+ *       2000    697               3.57%
+ *       4000    3158              16.17%
+ *       6000    3804              19.48%  <- chosen
  *
- * Anything at or below 2000 leaves this test GREEN ON BROKEN CODE. If a
- * future change needs this cheaper still, cut CAP_TEST_PODS (which costs
- * denominator) or the grid, and re-run that sweep - do not simply lower
- * this number until the suite fits. */
+ * DEVICE (500): a different regime entirely, not a cut-down version of
+ * the host sweep above. Waiting thousands of steps on real hardware for
+ * the same rare avalanche is exactly the cost this split exists to avoid
+ * paying at all - so the device budget is instead sized against the
+ * fast, EARLY-onset leak that shows up in the first few hundred steps,
+ * well before the avalanche the host table is chasing ever gets a chance
+ * to fire. Measured the same way, at CAP_TEST_PODS' own device value (5
+ * pods, deep_block_cells 9765), correct build steady at exactly 0 across
+ * the whole range tested:
+ *
+ *      steps    broken build     as a fraction of the block
+ *        100    28                0.29%
+ *        150    28                0.29%
+ *        200    28                0.29%
+ *        300    31                0.32%
+ *        500    33                0.34%  <- chosen
+ *        750    33                0.34%
+ *       1000    33                0.34%
+ *
+ * The broken build's leak plateaus by step 300 and holds flat through at
+ * least 1000 - 500 sits comfortably inside that plateau rather than on
+ * the still-rising 100-300 transition, so the exact step count is not
+ * fighting for its margin the way landing right at the transition would
+ * be. Below 100 the EXACT_PODS group above has not finished clearing yet
+ * either (a fresh sweep at 50 steps found 2 of 5 pods still sealed), so
+ * 500 clears both groups' own needs at once, not just this one's. */
+#ifdef DEVICE_BUILD
+#define CAP_POD_STEPS 500
+#else
 #define CAP_POD_STEPS 6000
+#endif
+
+/* Bound on deep_empty_cells, in parts-per-thousand of deep_block_cells -
+ * replaces the old flat 15% (deep_block_cells * 15 / 100). That bound was
+ * checked against an ACTUAL correct-build value of exactly 0 on every
+ * measurement CAP_POD_STEPS' own comment tables above record, host and
+ * device both, across every step count swept - so 15% was never really
+ * testing "overwhelmingly intact", it was testing "has the one rare
+ * avalanche the host table chases been found yet", which is a much
+ * weaker claim that happened to need thousands of steps to even have a
+ * chance of tripping.
+ *
+ * 2 (0.2%) is chosen against the SAME measured numbers, not a fresh
+ * guess: on device (9765-cell block, 5 pods) it is 19 cells, against a
+ * measured broken-build plateau of 33 - the regression clears it with
+ * 74% to spare. On host (19530-cell block, 10 pods) it is 39, against a
+ * measured 3804 at the full 6000-step budget - enormous headroom, since
+ * host is still free to keep chasing the slow avalanche the device
+ * budget above deliberately does not wait for. In both cases a single
+ * legitimately-eroded stray cell (the failure mode this bound must not
+ * flake on) sits at 1 - roughly a nineteenth of the tighter, device-side
+ * bound - nowhere near enough on its own to trip it. */
+#define DEEP_LEAK_BOUND_PER_MILLE 2
 
 static void test_sealed_lava_vent_caps_at_three_cells(void)
 {
@@ -13882,9 +13954,10 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
      * CAP_TEST_PODS times over and collapse that denominator back down
      * to one - the counts below would still look plausible on average,
      * but they would no longer be counting anything statistical. Seeds
-     * 3 .. 3 + 2*CAP_TEST_PODS - 1 keep every one of the twenty pods
-     * (both groups together) on its own distinct trial, with EXACT_PODS
-     * and DEEP_PODS never repeating a seed between them either. */
+     * 3 .. 3 + 2*CAP_TEST_PODS - 1 keep every one of the 2*CAP_TEST_PODS
+     * pods (both groups together, 20 on host, 10 on device) on its own
+     * distinct trial, with EXACT_PODS and DEEP_PODS never repeating a
+     * seed between them either. */
     int exact_still_sealed = 0;
     int deep_block_cells   = 0;
     int deep_empty_cells   = 0;
@@ -14036,18 +14109,23 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
         "beyond it, must fully clear within this budget in nearly every "
         "pod - if most pods are still sealed, vent_chance regressed to "
         "zero or try_vent()/sand_impulse_dislodge() stopped moving stone");
-    /* < 15%, not 0 - see this test's own top comment on why an exact
-     * zero stopped being the honest bar once jitter and gravity-drift
-     * made escape a matter of probability. Measured at ~7.7% empty on
-     * the original shared-grid version of this test (same seed/budget
-     * shape) - a real, if small, residual escape rate this design does
-     * not yet fully close out, tracked rather than hidden behind a
-     * stricter threshold that would just start flaking on the next seed
-     * or budget change. A real regression (can_impulse_enter()'s STATIC
-     * refusal weakened, or SAND_VENT_REACH outgrowing this test's own
-     * block) reads as most of the block emptying out, not a residual few
-     * percent. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(deep_block_cells * 15 / 100, deep_empty_cells,
+    /* DEEP_LEAK_BOUND_PER_MILLE, not 0 - see this test's own top comment
+     * on why an exact zero stopped being the honest bar once jitter and
+     * gravity-drift made escape a matter of probability. See that
+     * constant's own comment (above CAP_POD_STEPS) for why 15% - the
+     * bound this line used to check against - stopped being the honest
+     * bar too: every correct-build measurement ever taken for this test,
+     * host and device both, at every step count swept, came back exactly
+     * 0, so 15% was never actually checking "overwhelmingly intact" - it
+     * was only ever checking "not yet found by the one rare multi-
+     * thousand-step avalanche its own sweep chased down". A real
+     * regression (can_impulse_enter()'s STATIC refusal weakened, or
+     * SAND_VENT_REACH outgrowing this test's own block) reads as most of
+     * the block emptying out, not a residual few cells - this bound only
+     * needs to clear actual measured noise (zero) with real margin, not
+     * guess at a hypothetical one. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(
+        deep_block_cells * DEEP_LEAK_BOUND_PER_MILLE / 1000, deep_empty_cells,
         "a seal built a full cell deeper than SAND_VENT_REACH everywhere "
         "jitter could possibly reach must stay overwhelmingly intact - "
         "can_impulse_enter() (sand.c) refuses a KIND_STATIC destination "
@@ -18937,6 +19015,215 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
         "scene's own claim again, not displaced LAYERS specifically");
 }
 
+/* --- vent spam: many simultaneously-covered lava pockets ---------------
+ *
+ * test_sealed_lava_vent_caps_at_three_cells() (this file's own vent
+ * section, above) exists to prove the vent mechanism NEVER leaks a
+ * properly sealed vessel - a correctness claim, checked with thousands of
+ * steps across many independent trials because the thing being ruled out
+ * is statistical. Before CAP_TEST_PODS/CAP_POD_STEPS were split by build
+ * variant (that test's own comments), that same correctness test was ALSO
+ * the only place anything in this file paid for vent_column()'s own cost
+ * at all - one to three columns of scanning and impulse-queuing per
+ * covered lava cell, per step, times up to ten pods, times up to 12000
+ * steps - and nothing was counting it: 462 of the device suite's 664
+ * seconds, about 70%, with no row in the performance report to show for
+ * it.
+ *
+ * This scene is the fix for THAT gap, not a replacement for the
+ * correctness test above: a real, if deliberately synthetic, worst case -
+ * VENT_SPAM_COUNT lava pockets packed edge to edge, each capped deep
+ * enough that none of them ever finish clearing within the measured
+ * window, with sand_set_vent_chance(255) forcing the same deterministic
+ * firing the correctness test already relies on (the real, per-material
+ * chance in material.c is deliberately rare, and a benchmark that mostly
+ * rolls "no" would not be measuring the mechanism it claims to). */
+
+#define VENT_SPAM_UNIT_W    3  /* wall, lava, wall - see build_vent_spam_
+                                * scene()'s own comment for why packed
+                                * with no gap is the point here */
+#define VENT_SPAM_MARGIN    2
+/* (REAL_W - 2*VENT_SPAM_MARGIN) / VENT_SPAM_UNIT_W == 60 pockets across
+ * the real grid's width - the same "deliberately synthetic worst case,
+ * not something the pour brush can practically sustain" framing the
+ * full-screen fire and gas benchmarks below already use, applied to the
+ * vent path instead. */
+#define VENT_SPAM_COUNT ((REAL_W - 2 * VENT_SPAM_MARGIN) / VENT_SPAM_UNIT_W)
+/* Four rows up from the grid's own bottom edge - enough clearance below
+ * for the shared floor line (build_vent_spam_scene()'s own comment) with
+ * no other reason behind the exact number; VENT_SPAM_CAP_DEPTH below is
+ * what actually has to fit, and REAL_H (224) leaves it enormous headroom
+ * either way. */
+#define VENT_SPAM_Y (REAL_H - 4)
+/* SAND_VENT_REACH + 1, not just SAND_VENT_REACH - one cell deeper than
+ * vent_column()'s own scan (sand_reactions.c) ever reaches, the same
+ * depth DEEP_PODS uses above and for the same reason: depth beyond the
+ * reach is pointless to add (the scan physically never sees it), and one
+ * cell short of it would let a pocket fully clear on its very first
+ * firing instead of staying covered - and therefore actively
+ * re-triggering the vent path - for the whole measured window. */
+#define VENT_SPAM_CAP_DEPTH (SAND_VENT_REACH + 1)
+/* Same real device impulse budget DUNE_IMPULSE_MAX (above) already
+ * mirrors - that constant's own comment has the full account. app_sand.c's
+ * own buffer is sized APP_IMPULSE_MAX (2048), and this scene should be
+ * fighting the same memory ceiling a real device vent actually has, not a
+ * looser one a differently-sized test buffer would hide. Comfortably
+ * covers a single step's worst case here too: up to VENT_SPAM_COUNT
+ * pockets, each queuing at most SAND_VENT_LAYER cells per column across
+ * up to three columns (vent_column()'s own comment, sand_reactions.c) -
+ * 60 * 3 * 3 = 540, well under 2048 - and step_impulses() resets the
+ * count to zero on entry (sand.c), so this budget only ever has to cover
+ * one step at a time, never the whole run. */
+#define VENT_SPAM_IMPULSE_MAX 2048
+
+/* One lava cell every VENT_SPAM_UNIT_W columns, each boxed on both sides
+ * (and, since the box columns run the cap's full height, on both upper
+ * diagonals too - the same box sealed_lava() and the EXACT_PODS/DEEP_PODS
+ * pods above build by hand for one pocket at a time, just stamped
+ * VENT_SPAM_COUNT times in a row) and capped VENT_SPAM_CAP_DEPTH deep -
+ * see that constant's own comment for why deeper is pointless and
+ * shallower would let a pocket empty out and go quiet.
+ *
+ * TIGHT-PACKED ON PURPOSE, NOT SPACED LIKE CAP_TEST_SPACING ABOVE - that
+ * spacing exists so a correctness test's own thrown debris cannot arc
+ * back into its own or a neighbour's column and quietly invalidate what
+ * is being measured (that constant's own comment has the account).
+ * Nothing here cares whether any given throw succeeds, lands on a
+ * neighbour, or fails outright - this is a cost benchmark, not a leak
+ * count, so neighbouring pockets sharing a wall and colliding debris is a
+ * MORE representative worst case, not a confound to design around.
+ *
+ * A single shared floor line under every pocket, not one floor per
+ * pocket - see build_lava_stress_scene()'s own reservoir and build_
+ * boiler_scene()'s own basin (above) for the same shortcut: a full-width
+ * stone row is simpler than VENT_SPAM_COUNT individual three-cell floors
+ * and behaves identically, since none of them are meant to be a reachable
+ * gap. */
+static void build_vent_spam_scene(sand_t *s)
+{
+    for (int x = 0; x < REAL_W; x++) {
+        sand_set(s, x, VENT_SPAM_Y + 1, STONE);
+    }
+
+    for (int p = 0; p < VENT_SPAM_COUNT; p++) {
+        const int lx = VENT_SPAM_MARGIN + p * VENT_SPAM_UNIT_W;
+
+        for (int dy = 0; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
+            sand_set(s, lx - 1, VENT_SPAM_Y - dy, STONE);
+            sand_set(s, lx + 1, VENT_SPAM_Y - dy, STONE);
+        }
+        for (int dy = 1; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
+            sand_set(s, lx, VENT_SPAM_Y - dy, STONE);
+        }
+        sand_set(s, lx, VENT_SPAM_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+}
+
+/* This scene really does reach the vent path it claims to, checked the
+ * same way the other scenes in this section are: build it through the
+ * same function the device test uses, step it the same number of times,
+ * and count - not "did the frame-budget test merely run without
+ * crashing", which would say nothing about whether covered_from_above()
+ * and try_vent_chunk() (sand_reactions.c) were ever actually reached.
+ *
+ * TWO INDEPENDENT SIGNALS, the same split EXACT_PODS/DEEP_PODS use above:
+ * a lava count proves the mechanism's own "the originating cell never
+ * changes" guarantee held (reaction_t.vent_chance's own comment,
+ * material.h - if this ever comes back short, something is destroying
+ * lava outright, not venting past it), and an eroded-cell count proves
+ * material actually moved rather than the scene silently sitting
+ * covered-but-never-firing for the whole window.
+ *
+ * TEN STEPS, NO SETTLING - the same shape test_a_screen_of_smoke_and_
+ * steam_fits_in_the_frame_budget and test_the_thermal_shock_scene_fits_
+ * in_the_frame_budget (below) already use, and for a related reason: ten
+ * is not an arbitrary round number here, it is SAND_VENT_REACH /
+ * SAND_VENT_LAYER (30 / 3, sand.h) - the exact number of firings it takes
+ * a single column to walk its own reachable window from the outside in.
+ * Measuring anything short of that would catch pockets only part-way
+ * through their busiest stretch; measuring much past it would start
+ * timing pockets that have already gone quiet in their outer three
+ * columns, the opposite of the worst case this scene exists to hold
+ * open. */
+static void test_the_vent_spam_scene_reaches_the_vent_path_it_claims(void)
+{
+    uint8_t *big    = malloc((size_t)REAL_W * REAL_H);
+    uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+                              ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
+    impulse_t *impulses = malloc((size_t)VENT_SPAM_IMPULSE_MAX * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
+
+    sand_t s;
+    sand_init(&s, big, REAL_W, REAL_H, 59u);
+    sand_enable_sleeping(&s, blocks);
+    sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
+    sand_enable_impulses(&s, impulses, VENT_SPAM_IMPULSE_MAX);
+    sand_set_vent_chance(&s, 255);  /* see this section's own top comment */
+
+    build_vent_spam_scene(&s);
+
+    for (int i = 0; i < 10; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int lava = 0, structure_cells = 0, eroded_cells = 0;
+    for (int p = 0; p < VENT_SPAM_COUNT; p++) {
+        const int lx = VENT_SPAM_MARGIN + p * VENT_SPAM_UNIT_W;
+
+        if (CELL_MATERIAL(sand_at(&s, lx, VENT_SPAM_Y)) == MAT_LAVA) {
+            lava++;
+        }
+        for (int dy = 0; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
+            structure_cells += 2;
+            if (CELL_IS_EMPTY(sand_at(&s, lx - 1, VENT_SPAM_Y - dy))) eroded_cells++;
+            if (CELL_IS_EMPTY(sand_at(&s, lx + 1, VENT_SPAM_Y - dy))) eroded_cells++;
+        }
+        for (int dy = 1; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
+            structure_cells++;
+            if (CELL_IS_EMPTY(sand_at(&s, lx, VENT_SPAM_Y - dy))) eroded_cells++;
+        }
+    }
+
+    free(big);
+    free(blocks);
+    free(impulses);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(VENT_SPAM_COUNT, lava,
+        "the lava cell in every pocket must never change - venting moves "
+        "whatever is ON TOP of it, not the lava itself (see reaction_t."
+        "vent_chance's own comment, material.h); a short count here means "
+        "something is destroying or converting lava outright rather than "
+        "venting past it");
+    /* Not the claim under test, but its own precondition: each pocket's
+     * wall+cap footprint is 2*(CAP_DEPTH+1) cells of wall plus CAP_DEPTH
+     * of cap. A mismatch here means the counting loop above and
+     * build_vent_spam_scene() have drifted apart from each other, which
+     * would make the eroded-cell count below meaningless without saying
+     * so - this catches that before it does. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        VENT_SPAM_COUNT * (3 * VENT_SPAM_CAP_DEPTH + 2), structure_cells,
+        "this test's own wall+cap cell count no longer matches what "
+        "build_vent_spam_scene() actually builds - the counting loop "
+        "above and the scene builder have drifted apart");
+    /* Measured 24 eroded cells out of 5700 at these settings - tight
+     * packing means most throws collide with a NEIGHBOURING pocket's own
+     * wall and fail, by design (this section's own top comment), so a
+     * low absolute count is expected, not a sign of something wrong. 10
+     * is well under that measured value while staying far enough above
+     * zero that only a real stall - covered_from_above()/try_vent_chunk()
+     * (sand_reactions.c) no longer firing for this scene at all, not
+     * ordinary run-to-run packing friction - could fail it. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(10, eroded_cells,
+        "the vent path must actually be moving material for this scene, "
+        "not merely rolling successfully and finding nowhere to put it - "
+        "a near-zero count means covered_from_above()/try_vent_chunk() "
+        "(sand_reactions.c) stopped firing for this scene");
+}
+
 #ifdef DEVICE_BUILD
 #include <stdlib.h>
 #include "esp_log.h"
@@ -20052,6 +20339,76 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
         "the rest of the file's x 0.9), not a loosened guard");
 }
 
+/* The vent-spam scene from this file's own vent-spam section above (see
+ * that section's own top comment for why it exists: 462 of the device
+ * suite's 664 seconds, about 70%, going entirely unmeasured before this
+ * row and CAP_TEST_PODS/CAP_POD_STEPS' own split existed), run as a
+ * frame-budget test.
+ *
+ * TEN STEPS, NO SETTLING - matching test_the_vent_spam_scene_reaches_the_
+ * vent_path_it_claims (above) exactly, so what this times is the same
+ * scene that test already proved really does reach covered_from_above()/
+ * try_vent_chunk() (sand_reactions.c) rather than sitting quiet. See that
+ * test's own comment for why ten specifically - SAND_VENT_REACH /
+ * SAND_VENT_LAYER (sand.h), not an arbitrary round number - and why no
+ * settling step: the scene is already at its busiest the instant it is
+ * painted, and waiting would only let pockets start winding down toward
+ * the plateau that test's own comment measures.
+ *
+ * THE ASSERTION BELOW IS NOT A BUDGET - nobody has run this scene on a
+ * device yet. It is a deliberately loose SANITY CEILING, not extrapolated
+ * from host timings: this file has already been burned once by an
+ * extrapolated figure that came out four times too pessimistic against
+ * the real device number (see git history, and test_the_lava_stress_
+ * scene_fits_in_the_frame_budget's own account of it when IT was new).
+ * Replace it with a real figure the first time this runs on a device:
+ * measured * 0.9, rounded - the same reduction-target method every other
+ * row in this section now uses (FULL_STEP_BUDGET_US's own comment has the
+ * full account of why the file moved to it) - and say what was measured,
+ * not a number picked to keep this row passing. */
+static void test_the_vent_spam_scene_fits_in_the_frame_budget(void)
+{
+    uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
+    uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
+    impulse_t *impulses = malloc((size_t)VENT_SPAM_IMPULSE_MAX * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL(big);
+    TEST_ASSERT_NOT_NULL(blocks);
+    TEST_ASSERT_NOT_NULL(impulses);
+
+    sand_t real;
+    sand_init(&real, big, REAL_W, REAL_H, 59u);
+    sand_enable_sleeping(&real, blocks);
+    sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
+    sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
+    sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
+    sand_enable_impulses(&real, impulses, VENT_SPAM_IMPULSE_MAX);
+    sand_set_vent_chance(&real, 255);  /* see the vent-spam section's own
+                                         * top comment */
+
+    build_vent_spam_scene(&real);
+
+    const int64_t start = esp_timer_get_time();
+    const int steps = 10;
+    for (int i = 0; i < steps; i++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int64_t per_step = (esp_timer_get_time() - start) / steps;
+
+    ESP_LOGI("device_tests", "vent spam scene, %dx%d: %lld us per step",
+             REAL_W, REAL_H, (long long)per_step);
+
+    free(big);
+    free(blocks);
+    free(impulses);
+
+    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
+        "PROVISIONAL ceiling, not yet measured on a device - see this "
+        "test's own comment. Once measured this row becomes measured x "
+        "0.9, rounded, the same reduction-target method every other row "
+        "in this section uses - not a number chosen to keep this row "
+        "passing");
+}
+
 /* --- gfx_present() cost against real sand scenes ------------------------
  *
  * Every frame-budget test above times sand_step() alone, with no drawing at
@@ -21008,6 +21365,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_vessel_scene_lets_nothing_reach_outside_it);
     RUN_TEST(test_the_wood_floor_scene_catches_fire);
     RUN_TEST(test_the_layered_dune_scene_throws_more_than_one_band);
+    RUN_TEST(test_the_vent_spam_scene_reaches_the_vent_path_it_claims);
     RUN_TEST(test_reinitialising_forgets_the_old_board);
     RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
     RUN_TEST(test_snow_painted_into_water_melts);
@@ -21141,6 +21499,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_vent_spam_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);
