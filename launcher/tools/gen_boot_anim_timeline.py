@@ -37,21 +37,21 @@ lerps both transforms' every number between the two keyframes bracketing
 arriving keyframe names - the same three shapes util/tween.h already
 provides, so nothing new is needed on the firmware side to interpret them.
 
-`camera_focal`, `grid_step_m` and `wave_height_m`/`wave_decay_m`/`wave_ease`
-are not per-keyframe, unlike the transforms above: `camera_focal` is a
-single lens setting (small3dlib's own S3L_Camera.focalLength - see
-boot_anim.h's "The projection" section for what 0 does to it: an
-orthographic projection, not a second code path to maintain); `grid_step_m`
-is the spacing between floor rings, authored in meters like a transform's
-`pos` and converted the same way; `wave_height_m`/`wave_decay_m`/`wave_ease`
-are the water-droplet ripple's own peak amplitude, how far behind its front
-the trailing crests/troughs die out, and the front's own easing shape (see
-boot_anim.h's "The wave" section) - there is only ever the one front, so
-nothing about it is per-keyframe either. `grid_rings` (how many rings the
-floor draws before fading out) and `wave_start_ms`/`wave_end_ms` (when the
-ripple's front sets off and when it reaches the grid's outer edge) live in
-`timing` instead, since they are plain counts/times with nothing to
-convert.
+`camera_focal`, `grid_step_m` and `wave_height_m`/`wave_wavelength_m`/
+`wave_period_ms` are not per-keyframe, unlike the transforms above:
+`camera_focal` is a single lens setting (small3dlib's own S3L_Camera.
+focalLength - see boot_anim.h's "The projection" section for what 0 does to
+it: an orthographic projection, not a second code path to maintain);
+`grid_step_m` is the spacing between floor rings, authored in meters like a
+transform's `pos` and converted the same way; `wave_height_m`/
+`wave_wavelength_m`/`wave_period_ms` are the ripple's own peak amplitude,
+its crest-to-crest distance, and how long one full cycle takes to pass a
+fixed point (see boot_anim.h's "The wave" section - a genuine radial sine,
+height(r, t) = amplitude * sin(2*pi*r/wavelength - 2*pi*t/period), not
+anchored to any one moment the way the front-based version this replaced
+needed a start/end window for). `grid_rings` (how many rings the floor
+draws before fading out) lives in `timing` instead, a plain count with
+nothing to convert.
 
 The `timing` block is everything else that paces the animation but is not
 a transform of the space: how fast the grid rings fade in, how the title
@@ -166,18 +166,10 @@ def validate(cfg):
              "be no time left to dissolve" %
              (timing["fade_start_ms"], timing["total_ms"]))
 
-    if timing["wave_end_ms"] <= timing["wave_start_ms"]:
-        fail("wave_end_ms (%d) must be after wave_start_ms (%d) - the "
-             "front needs positive duration to actually travel from the "
-             "origin to the grid's own edge in"
-             % (timing["wave_end_ms"], timing["wave_start_ms"]))
-    if cfg["wave_ease"] not in EASE_NAMES:
-        fail("wave_ease %r - must be one of %s" %
-             (cfg["wave_ease"], EASE_NAMES))
-    if cfg["wave_height_m"] != 0 and cfg["wave_decay_m"] <= 0:
-        warn("wave_decay_m (%r) is not positive, so the ripple is silently "
-             "invisible despite wave_height_m (%r) being nonzero"
-             % (cfg["wave_decay_m"], cfg["wave_height_m"]))
+    if cfg["wave_height_m"] != 0 and cfg["wave_wavelength_m"] <= 0:
+        warn("wave_wavelength_m (%r) is not positive, so the ripple is "
+             "silently invisible despite wave_height_m (%r) being nonzero"
+             % (cfg["wave_wavelength_m"], cfg["wave_height_m"]))
 
     last_letter_lands = (timing["title_start_ms"] +
                          (TITLE_LEN - 1) * timing["title_stagger_ms"] +
@@ -219,10 +211,6 @@ TIMING_ORDER = [
      "how long a spoke takes to reach the floor's own edge - 0 draws the "
      "full length instantly"),
     ("grid_fade_ms", "BOOT_ANIM_GRID_FADE_MS", None),
-    ("wave_start_ms", "BOOT_ANIM_WAVE_START_MS",
-     "the ripple's own front sets off from the origin"),
-    ("wave_end_ms", "BOOT_ANIM_WAVE_END_MS",
-     "the front reaches the grid's own outer edge"),
     ("pen_start_ms", "BOOT_ANIM_PEN_START_MS", None),
     ("pen_ms", "BOOT_ANIM_PEN_MS", "how long the curve takes to draw"),
     ("pen_finish_ms", "BOOT_ANIM_PEN_FINISH_MS",
@@ -286,24 +274,25 @@ def main():
     timing = cfg.get("timing", {})
     timing.setdefault("pen_finish_ms", timing.get("fade_start_ms"))
 
-    # The wave (grid_step_m's own "reach") is newer still - a file baked
-    # before it existed has no wave_* fields at all. Defaulting the height
-    # to 0 turns it off outright regardless of start/end/ease, the same
-    # "behaves exactly like before this existed" reasoning pen_finish_ms's
-    # own default above uses - an old timeline should not suddenly grow a
-    # ripple its author never asked for.
-    timing.setdefault("wave_start_ms", 0)
-    timing.setdefault("wave_end_ms", timing.get("total_ms", 1))
+    # The wave is newer still - a file baked before it existed has no
+    # wave_* fields at all. Defaulting the height to 0 turns it off
+    # outright regardless of wavelength/period, the same "behaves exactly
+    # like before this existed" reasoning pen_finish_ms's own default above
+    # uses - an old timeline should not suddenly grow a ripple its author
+    # never asked for.
     cfg.setdefault("wave_height_m", 0)
-    cfg.setdefault("wave_ease", "linear")
-    # wave_decay_m is newer still than wave_height_m/ease themselves - a
-    # handful of ring-spacings is a reasonable "a few rings decaying out"
-    # default for a file that predates it, though anyone who already had a
-    # nonzero wave_height_m from before this existed will want to look at
-    # the new shape it gives (a single bump, this script's own PREVIOUS
-    # version, does not survive unchanged - see boot_anim.h's own comment
-    # on why the two are not exactly the same picture).
-    cfg.setdefault("wave_decay_m", 4 * cfg.get("grid_step_m", 1))
+    # wave_wavelength_m/wave_period_ms replace an EARLIER version's
+    # wave_decay_m/wave_start_ms/wave_end_ms/wave_ease outright - a genuine
+    # radial sine now, not a travelling front with a decaying trail behind
+    # it (see boot_anim.h's own comment on why) - so this is not a faithful
+    # reproduction of the old shape for anyone who already had a nonzero
+    # wave_height_m under that model, the same honest caveat the
+    # front-based rewrite before THIS one already carried (the two are not
+    # the same picture). Three ring-spacings and three seconds are simply
+    # reasonable starting points to look at through the editor, not a
+    # migration.
+    cfg.setdefault("wave_wavelength_m", 3 * cfg.get("grid_step_m", 1))
+    cfg.setdefault("wave_period_ms", 3000)
     # grid_spokes is newer than the polar grid itself - the radial guide
     # lines used to be a fixed 8, unauthored; 8 is the exact same default
     # for a file baked before this existed, so it keeps looking the way it
@@ -374,23 +363,23 @@ def main():
     w(" * comment) turns the ripple off outright, not just down. */\n")
     w("#define BOOT_ANIM_WAVE_HEIGHT_Q12 %d\n\n" % meters_to_q12(cfg["wave_height_m"]))
 
-    w("/* How far behind the wave's own front (boot_anim_wave_front() in\n")
-    w(" * boot_anim.h) its trailing crests and troughs have fully died out -\n")
-    w(" * also meters, also authored (wave_decay_m in the JSON). */\n")
-    w("#define BOOT_ANIM_WAVE_DECAY_Q12 %d\n\n" % meters_to_q12(cfg["wave_decay_m"]))
+    w("/* The wave's own crest-to-crest distance - see boot_anim.h's \"The\n")
+    w(" * wave\" section. Also meters, also authored (wave_wavelength_m in\n")
+    w(" * the JSON). */\n")
+    w("#define BOOT_ANIM_WAVE_WAVELENGTH_Q12 %d\n\n" %
+      meters_to_q12(cfg["wave_wavelength_m"]))
+
+    w("/* How long one full cycle takes to pass a fixed point - milliseconds,\n")
+    w(" * authored (wave_period_ms in the JSON), the same \"how long one\n")
+    w(" * cycle takes\" unit title_wave_period_ms already is for the title's\n")
+    w(" * own wobble. */\n")
+    w("#define BOOT_ANIM_WAVE_PERIOD_MS %d\n\n" % cfg["wave_period_ms"])
 
     w("typedef enum {\n")
     w("    BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */\n")
     w("    BOOT_ANIM_EASE_OUT    = 1,   /* tween_ease_out() - fast then settle */\n")
     w("    BOOT_ANIM_EASE_IN     = 2,   /* tween_ease_in() - slow then rush    */\n")
     w("} boot_anim_ease_t;\n\n")
-
-    w("/* How the wave's own front (boot_anim_wave_front() in boot_anim.h)\n")
-    w(" * eases from the origin to the grid's outer edge over\n")
-    w(" * [wave_start_ms, wave_end_ms] - the same three shapes a keyframe's\n")
-    w(" * own `ease` picks from, just authored once here rather than per\n")
-    w(" * keyframe, since there is only ever the one front. */\n")
-    w("#define BOOT_ANIM_WAVE_EASE %s\n\n" % EASE_ENUM[cfg["wave_ease"]])
 
     w("/* Both transforms' pos/rot/scale are small3dlib fixed point (S3L_F =\n")
     w(" * 512 = 1.0) already - converted from the JSON's plain meters/degrees/\n")

@@ -237,6 +237,7 @@
     letter-spacing: .06em;
   }
   #constsPanel .group-title:first-child { margin-top: 0; }
+  .field-key { display: block; font-size: 9px; opacity: .55; }
 
   /* The panel is a flex column so the list (flex: 1 below) claims whatever
    * height the grid's row-stretch gives this panel - which, next to the
@@ -410,7 +411,7 @@ const DEFAULT_STATE = {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
     grid_rings: 28, grid_spokes: 8, grid_spoke_dash: 0,
     grid_spoke_start_ms: 0, grid_spoke_draw_ms: 0,
-    grid_fade_ms: 300, wave_start_ms: 520, wave_end_ms: 2500,
+    grid_fade_ms: 300,
     pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
     title_start_ms: 2700,
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
@@ -423,8 +424,8 @@ const DEFAULT_STATE = {
   camera_focal: 512,
   grid_step_m: 0.25,
   wave_height_m: 0,
-  wave_decay_m: 1,
-  wave_ease: 'ease_out',
+  wave_wavelength_m: 0.75,
+  wave_period_ms: 3000,
   keyframes: [
     { ms: 520,
       camera: { pos: [0, 2, -10], rot: [0, 0, 0], scale: [1, 1, 1] },
@@ -458,30 +459,75 @@ const DEFAULT_STATE = {
 };
 
 /* Grouped by WHAT each field actually belongs to, not by whether it
- * happens to live in `timing` vs top-level - grid_step_m/wave_height_m/
- * wave_ease are top-level (see gen_boot_anim_timeline.py's own comment on
- * why: no keyframe to attach them to), but split them into their own
- * groups instead of putting every non-`timing` field first, and a reader
- * has to track two unrelated groupings at once to find, say, "everything
- * about the wave" - it is one group here, `timing` membership be damned.
+ * happens to live in `timing` vs top-level - grid_step_m/wave_height_m are
+ * top-level (see gen_boot_anim_timeline.py's own comment on why: no
+ * keyframe to attach them to), but split them into their own groups
+ * instead of putting every non-`timing` field first, and a reader has to
+ * track two unrelated groupings at once to find, say, "everything about
+ * the wave" - it is one group here, `timing` membership be damned.
  * renderConsts() below reads this top-to-bottom, weaving in the fields
  * that are not plain `timing` numbers (grid_step_m/reach, wave_height_m/
- * ease) at the point in EACH list they actually belong, rather than
- * exiling them to their own section ahead of everything else the way the
- * old "Camera lens" / "Grid" / "Wave" mini-blocks used to. */
+ * wavelength/period) at the point in EACH list they actually belong,
+ * rather than exiling them to their own section ahead of everything else
+ * the way the old "Camera lens" / "Grid" / "Wave" mini-blocks used to.
+ *
+ * "Rings" and "Spokes" are two groups, not one "Grid" - both draw onto the
+ * same floor, but nothing about how many spokes there are or when they
+ * draw outward has any bearing on a ring's own fade-in/colour, and lumping
+ * the two together read as one long, undifferentiated list of grid_*
+ * fields with nothing telling them apart at a glance. */
 const FIELD_GROUPS = [
   { title: 'Overall', keys: ['total_ms', 'fade_start_ms'] },
   { title: 'Axes', keys: ['axes_ms'] },
-  { title: 'Grid', keys: ['grid_rings', 'grid_spokes', 'grid_spoke_dash',
-      'grid_spoke_start_ms', 'grid_spoke_draw_ms',
-      'grid_start_ms', 'grid_ring_ms', 'grid_fade_ms', 'grid_hue_ms',
-      'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max', 'grid_max'] },
-  { title: 'Wave', keys: ['wave_start_ms', 'wave_end_ms'] },
+  { title: 'Rings', keys: ['grid_rings', 'grid_start_ms', 'grid_ring_ms',
+      'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max',
+      'grid_ceiling_max', 'grid_max'] },
+  { title: 'Spokes', keys: ['grid_spokes', 'grid_spoke_dash',
+      'grid_spoke_start_ms', 'grid_spoke_draw_ms'] },
+  { title: 'Wave', keys: [] },
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
       'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms'] },
 ];
+
+/* A short, human description for every plain `timing[key]` field -
+ * addTimingField() below shows this as the field's own label, with the
+ * raw JSON key underneath in a dimmer, smaller line (not just a hover
+ * tooltip - a key like grid_spoke_draw_ms is exactly what a hand-editor of
+ * the JSON file needs to see, not something to hide behind a mouseover).
+ * A key missing here falls back to showing its own raw name as the label,
+ * so a newly-added field never renders as blank. */
+const FIELD_LABELS = {
+  total_ms: 'total animation length',
+  fade_start_ms: 'dissolve to the launcher starts',
+  axes_ms: 'axes grow out of the origin',
+  grid_rings: 'how many rings',
+  grid_start_ms: 'rings start fading in',
+  grid_ring_ms: 'delay before the next ring starts, after the one before it',
+  grid_fade_ms: 'how long one ring takes to fade in',
+  grid_hue_ms: 'time for the hue to complete one full colour cycle',
+  grid_hue_spread: 'hue shift per ring, outward',
+  grid_whiten_max: 'peak brightness of the slow colour-whitening drift',
+  grid_ceiling_max: 'peak opacity once fully brightened',
+  grid_max: 'starting opacity ceiling',
+  grid_spokes: 'how many spokes (0 hides them)',
+  grid_spoke_dash: 'dashed instead of solid (0 solid, 1 dashed)',
+  grid_spoke_start_ms: 'spokes start drawing outward from the origin',
+  grid_spoke_draw_ms: 'time to reach full length (0 = instant)',
+  pen_start_ms: 'curve starts drawing',
+  pen_ms: 'how long the curve’s first phase takes',
+  pen_finish_ms: 'when the curve reaches its true end',
+  title_start_ms: 'title starts arriving',
+  title_stagger_ms: 'delay before the next letter starts, after the one before it',
+  title_flight_ms: 'how long one letter’s flight takes',
+  title_entry_px: 'how far off-panel a letter starts',
+  title_turns_phase: 'wobble oscillations packed into the flight',
+  title_amplitude_px: 'peak wobble swing at the start',
+  title_wave_amplitude_px: 'idle wave amplitude once a letter has landed',
+  title_wave_period_ms: 'idle wave cycle time',
+  title_wave_stagger_ms: 'idle wave phase offset, per letter',
+};
 
 let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
 let playhead = 0;
@@ -542,8 +588,9 @@ async function renderNow() {
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
         grid_step_m: state.grid_step_m,
-        wave_height_m: state.wave_height_m, wave_decay_m: state.wave_decay_m,
-        wave_ease: state.wave_ease,
+        wave_height_m: state.wave_height_m,
+        wave_wavelength_m: state.wave_wavelength_m,
+        wave_period_ms: state.wave_period_ms,
         keyframes: state.keyframes, ms: playhead,
       }),
     });
@@ -663,12 +710,19 @@ function addGroupTitle(list, title) {
 
 /* Every plain `timing[key]` field, wherever it ends up grouped - see
  * FIELD_GROUPS' own comment on why that grouping no longer matches
- * "is this a timing field" one-to-one. */
+ * "is this a timing field" one-to-one. The label is FIELD_LABELS' own
+ * human description, with the raw JSON key underneath in a dimmer,
+ * smaller line - both, not one instead of the other, so the field is
+ * readable in the UI AND still identifiable against the JSON file. */
 function addTimingField(list, key) {
   const label = document.createElement('label');
   label.className = 'field';
   const span = document.createElement('span');
-  span.textContent = key;
+  span.textContent = FIELD_LABELS[key] || key;
+  const keyLine = document.createElement('span');
+  keyLine.className = 'field-key';
+  keyLine.textContent = key;
+  span.appendChild(keyLine);
   const input = document.createElement('input');
   input.type = 'number';
   input.id = 'timingField_' + key;
@@ -683,6 +737,38 @@ function addTimingField(list, key) {
   list.appendChild(label);
 }
 
+/* A field bound to a top-level (not per-keyframe, not plain `timing`)
+ * state key - camera_focal, grid_step_m, the wave's own three - all built
+ * the same shape addTimingField() gives a `timing` field: a human label, the
+ * raw JSON key underneath it in a dimmer line (omitted for `key` of '' -
+ * "reach" below has no JSON field of its own to show), a number input.
+ * `onInput` gets the parsed number and does whatever else that particular
+ * field needs (updateGridExtent(), etc.) beyond just storing it. */
+function addStateField(list, label, key, value, onInput, opts) {
+  opts = opts || {};
+  const l = document.createElement('label');
+  l.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = label;
+  if (key) {
+    const keyLine = document.createElement('span');
+    keyLine.className = 'field-key';
+    keyLine.textContent = key;
+    span.appendChild(keyLine);
+  }
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = 'any';
+  if (opts.min !== undefined) input.min = String(opts.min);
+  if (opts.id) input.id = opts.id;
+  input.value = value;
+  input.addEventListener('input', () => onInput(Number(input.value) || 0));
+  l.appendChild(span);
+  l.appendChild(input);
+  list.appendChild(l);
+  return input;
+}
+
 function renderConsts() {
   const list = document.getElementById('constsList');
   list.innerHTML = '';
@@ -694,46 +780,21 @@ function renderConsts() {
    * second code path, just this one field. The one group with nothing else
    * to gather next to it, so no FIELD_GROUPS entry for it. */
   addGroupTitle(list, 'Camera lens');
-  const focalLabel = document.createElement('label');
-  focalLabel.className = 'field';
-  const focalSpan = document.createElement('span');
-  focalSpan.textContent = 'camera_focal (0 = orthographic)';
-  const focalInput = document.createElement('input');
-  focalInput.type = 'number';
-  focalInput.value = state.camera_focal;
-  focalInput.addEventListener('input', () => {
-    state.camera_focal = Number(focalInput.value) || 0;
-    renderDebounced();
-  });
-  focalLabel.appendChild(focalSpan);
-  focalLabel.appendChild(focalInput);
-  list.appendChild(focalLabel);
+  addStateField(list, '0 = orthographic', 'camera_focal', state.camera_focal,
+    v => { state.camera_focal = v; renderDebounced(); });
 
   for (const group of FIELD_GROUPS) {
     addGroupTitle(list, group.title);
 
-    if (group.title === 'Grid') {
+    if (group.title === 'Rings') {
       /* Not per-keyframe - the spacing between floor rings, in meters
        * like a transform's own pos (see gen_boot_anim_timeline.py's top
-       * comment). Ahead of grid_rings itself (below, in this same group
-       * now) rather than off in a "Camera lens"-style group of its own -
-       * everything about the grid belongs together. */
-      const stepLabel = document.createElement('label');
-      stepLabel.className = 'field';
-      const stepSpan = document.createElement('span');
-      stepSpan.textContent = 'grid_step_m (ring spacing, meters)';
-      const stepInput = document.createElement('input');
-      stepInput.type = 'number';
-      stepInput.step = 'any';
-      stepInput.value = state.grid_step_m;
-      stepInput.addEventListener('input', () => {
-        state.grid_step_m = Number(stepInput.value) || 0;
-        updateGridExtent();
-        renderDebounced();
-      });
-      stepLabel.appendChild(stepSpan);
-      stepLabel.appendChild(stepInput);
-      list.appendChild(stepLabel);
+       * comment). Ahead of grid_rings itself (below, same group) rather
+       * than off in a "Camera lens"-style group of its own - everything
+       * about the rings belongs together. */
+      addStateField(list, 'ring spacing, meters', 'grid_step_m',
+        state.grid_step_m,
+        v => { state.grid_step_m = v; updateGridExtent(); renderDebounced(); });
 
       /* Reach isn't its own authored field - it's grid_step_m * grid_rings
        * (see draw_floor()'s own `far` in boot_anim.c) - editing it solves
@@ -744,92 +805,37 @@ function renderConsts() {
        * line-draws, while growing it by widening the spacing does not -
        * so editing reach moves the one of the two that actually changes
        * what you asked for. */
-      const extentLabel = document.createElement('label');
-      extentLabel.className = 'field';
-      const extentSpan = document.createElement('span');
-      extentSpan.textContent = 'reach (rings × step, meters)';
-      const extentInput = document.createElement('input');
-      extentInput.type = 'number';
-      extentInput.step = 'any';
-      extentInput.min = '0';
-      extentInput.id = 'gridExtentInput';
-      extentInput.addEventListener('input', () => {
-        const desired = Number(extentInput.value) || 0;
+      addStateField(list, 'reach (rings × step), meters', '', 0, v => {
         const step = state.grid_step_m;
         if (step > 0) {
-          state.timing.grid_rings = Math.max(1, Math.round(desired / step));
+          state.timing.grid_rings = Math.max(1, Math.round(v / step));
           const ringsInput = document.getElementById('timingField_grid_rings');
           if (ringsInput) ringsInput.value = state.timing.grid_rings;
         }
         renderDebounced();
-      });
-      extentLabel.appendChild(extentSpan);
-      extentLabel.appendChild(extentInput);
-      list.appendChild(extentLabel);
+      }, { min: 0, id: 'gridExtentInput' });
     }
 
     if (group.title === 'Wave') {
-      /* Also not per-keyframe - there is only ever the one front (see
-       * boot_anim.h's "The wave" section). height in meters like
+      /* Also not per-keyframe - there is only ever the one wave (see
+       * boot_anim.h's "The wave" section: a genuine radial sine, height(r,
+       * t) = amplitude * sin(2*pi*r/wavelength - 2*pi*t/period), no
+       * separate start/end window of its own - it runs for as long as the
+       * rings it rides on are themselves visible). height in meters like
        * grid_step_m above (0 turns the ripple off outright, not just
-       * down); ease shapes how the front travels from the origin to the
-       * grid's own edge over wave_start_ms..wave_end_ms (right below,
-       * same group) - the same three shapes a keyframe's own ease picks
-       * from. */
-      const waveHeightLabel = document.createElement('label');
-      waveHeightLabel.className = 'field';
-      const waveHeightSpan = document.createElement('span');
-      waveHeightSpan.textContent = 'wave_height_m (0 = off)';
-      const waveHeightInput = document.createElement('input');
-      waveHeightInput.type = 'number';
-      waveHeightInput.step = 'any';
-      waveHeightInput.value = state.wave_height_m;
-      waveHeightInput.addEventListener('input', () => {
-        state.wave_height_m = Number(waveHeightInput.value) || 0;
-        renderDebounced();
-      });
-      waveHeightLabel.appendChild(waveHeightSpan);
-      waveHeightLabel.appendChild(waveHeightInput);
-      list.appendChild(waveHeightLabel);
-
-      /* How far behind the front the trailing crests/troughs have fully
-       * decayed to nothing, also meters (see boot_anim.h's
-       * BOOT_ANIM_WAVE_DECAY_Q12 and its own comment). */
-      const waveDecayLabel = document.createElement('label');
-      waveDecayLabel.className = 'field';
-      const waveDecaySpan = document.createElement('span');
-      waveDecaySpan.textContent = 'wave_decay_m (trail length, meters)';
-      const waveDecayInput = document.createElement('input');
-      waveDecayInput.type = 'number';
-      waveDecayInput.step = 'any';
-      waveDecayInput.value = state.wave_decay_m;
-      waveDecayInput.addEventListener('input', () => {
-        state.wave_decay_m = Number(waveDecayInput.value) || 0;
-        renderDebounced();
-      });
-      waveDecayLabel.appendChild(waveDecaySpan);
-      waveDecayLabel.appendChild(waveDecayInput);
-      list.appendChild(waveDecayLabel);
-
-      const waveEaseLabel = document.createElement('label');
-      waveEaseLabel.className = 'field';
-      const waveEaseSpan = document.createElement('span');
-      waveEaseSpan.textContent = 'wave_ease';
-      const waveEaseSelect = document.createElement('select');
-      for (const opt of ['linear', 'ease_out', 'ease_in']) {
-        const o = document.createElement('option');
-        o.value = opt;
-        o.textContent = opt;
-        if (state.wave_ease === opt) o.selected = true;
-        waveEaseSelect.appendChild(o);
-      }
-      waveEaseSelect.addEventListener('change', () => {
-        state.wave_ease = waveEaseSelect.value;
-        renderDebounced();
-      });
-      waveEaseLabel.appendChild(waveEaseSpan);
-      waveEaseLabel.appendChild(waveEaseSelect);
-      list.appendChild(waveEaseLabel);
+       * down); wavelength the crest-to-crest distance, also meters;
+       * period how long one full cycle takes to pass a fixed point, the
+       * same unit title_wave_period_ms already is for the title's own
+       * wobble (see the Title group, below). */
+      addStateField(list, 'peak height, meters (0 = off)', 'wave_height_m',
+        state.wave_height_m,
+        v => { state.wave_height_m = v; renderDebounced(); });
+      addStateField(list, 'crest-to-crest distance, meters',
+        'wave_wavelength_m', state.wave_wavelength_m,
+        v => { state.wave_wavelength_m = v; renderDebounced(); });
+      addStateField(list, 'time for one cycle to pass a fixed point, ms',
+        'wave_period_ms', state.wave_period_ms,
+        v => { state.wave_period_ms = v; renderDebounced(); });
     }
 
     for (const key of group.keys) {
@@ -1157,8 +1163,9 @@ document.getElementById('btnBake').addEventListener('click', () => {
   const payload = {
     timing: state.timing, camera_focal: state.camera_focal,
     grid_step_m: state.grid_step_m,
-    wave_height_m: state.wave_height_m, wave_decay_m: state.wave_decay_m,
-    wave_ease: state.wave_ease,
+    wave_height_m: state.wave_height_m,
+    wave_wavelength_m: state.wave_wavelength_m,
+    wave_period_ms: state.wave_period_ms,
     keyframes: state.keyframes,
   };
   const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
@@ -1201,20 +1208,18 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       if (loaded.wave_height_m === undefined) {
         loaded.wave_height_m = 0;
       }
-      /* wave_decay_m is newer than wave_height_m itself - same reasoning
-       * as gen_boot_anim_timeline.py's own backward-compat default
-       * (4 * grid_step_m, i.e. a trail a few rings long). */
-      if (loaded.wave_decay_m === undefined) {
-        loaded.wave_decay_m = 4 * (loaded.grid_step_m || 1);
+      /* wave_wavelength_m/wave_period_ms replace an EARLIER version's
+       * wave_decay_m/wave_start_ms/wave_end_ms/wave_ease outright - a
+       * genuine radial sine now, not a travelling front (see
+       * gen_boot_anim_timeline.py's own comment on why a file with a
+       * nonzero wave_height_m from before this existed will not look the
+       * same either way). Same reasonable-starting-point defaults the
+       * generator itself falls back to. */
+      if (loaded.wave_wavelength_m === undefined) {
+        loaded.wave_wavelength_m = 3 * (loaded.grid_step_m || 1);
       }
-      if (loaded.wave_ease === undefined) {
-        loaded.wave_ease = 'linear';
-      }
-      if (loaded.timing.wave_start_ms === undefined) {
-        loaded.timing.wave_start_ms = 0;
-      }
-      if (loaded.timing.wave_end_ms === undefined) {
-        loaded.timing.wave_end_ms = loaded.timing.total_ms;
+      if (loaded.wave_period_ms === undefined) {
+        loaded.wave_period_ms = 3000;
       }
       /* grid_spokes is newer than grid_rings itself - same default
        * gen_boot_anim_timeline.py falls back to (the old, unconditional
@@ -1285,8 +1290,9 @@ btnBuildFlash.addEventListener('click', async () => {
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
         grid_step_m: state.grid_step_m,
-        wave_height_m: state.wave_height_m, wave_decay_m: state.wave_decay_m,
-        wave_ease: state.wave_ease,
+        wave_height_m: state.wave_height_m,
+        wave_wavelength_m: state.wave_wavelength_m,
+        wave_period_ms: state.wave_period_ms,
         keyframes: state.keyframes,
         port,
       }),

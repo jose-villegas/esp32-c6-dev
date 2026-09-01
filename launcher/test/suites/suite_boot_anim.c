@@ -356,85 +356,108 @@ static void test_the_seeds_three_axes_project_to_distinct_directions(void)
  * The wave
  *-------------------------------------------------------------------------*/
 
-/* `amp_q12`/`decay_q12` are fabricated here, not read from BOOT_ANIM_WAVE_
- * HEIGHT_Q12/BOOT_ANIM_WAVE_DECAY_Q12 - see boot_anim_wave_height()'s own
- * comment on why it takes both as parameters: the shipped seed's own
- * height is 0 (off by default - test_the_seeds_wave_is_off_by_default()
- * below is the test that actually checks THAT), which would make every
- * one of these assertions trivially true for the wrong reason. */
-static void test_wave_height_is_zero_ahead_of_the_front(void)
-{
-    const int32_t front = 5 * BOOT_ANIM_ONE;
-    const int32_t amp_q12 = BOOT_ANIM_ONE;
-    const int32_t decay_q12 = 3 * BOOT_ANIM_ONE;
-
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(
-        0, boot_anim_wave_height(front + BOOT_ANIM_ONE, front, amp_q12, decay_q12),
-        "the water ahead of the front has not been disturbed yet");
-}
-
-static void test_wave_height_peaks_at_the_front(void)
-{
-    const int32_t front = 5 * BOOT_ANIM_ONE;
-    const int32_t amp_q12 = BOOT_ANIM_ONE;
-    const int32_t decay_q12 = 3 * BOOT_ANIM_ONE;
-
-    const int32_t at_front =
-        boot_anim_wave_height(front, front, amp_q12, decay_q12);
-
-    TEST_ASSERT_TRUE_MESSAGE(at_front > 0,
-        "a vertex exactly at the front is the leading crest, and should "
-        "lift, not sit flat");
-}
-
-/* Wavelength is BOOT_ANIM_WAVE_WAVELENGTH_RINGS ring-spacings (see its own
- * comment) - half a wavelength behind the front should be a trough (the
- * cosine's own half-turn), a full wavelength behind should be back to a
- * (decayed) crest. Picking a decay long enough to still be well above zero
- * a full wavelength back is what makes "crest again" distinguishable from
- * "just decayed to nothing". */
-static void test_wave_height_oscillates_behind_the_front(void)
-{
-    const int32_t wavelength =
-        BOOT_ANIM_WAVE_WAVELENGTH_RINGS * BOOT_ANIM_GRID_STEP_Q12;
-    const int32_t front = 10 * BOOT_ANIM_ONE;
-    const int32_t amp_q12 = BOOT_ANIM_ONE;
-    const int32_t decay_q12 = 10 * wavelength;
-
-    const int32_t trough = boot_anim_wave_height(
-        front - wavelength / 2, front, amp_q12, decay_q12);
-    const int32_t next_crest = boot_anim_wave_height(
-        front - wavelength, front, amp_q12, decay_q12);
-
-    TEST_ASSERT_TRUE_MESSAGE(trough < 0,
-        "half a wavelength behind the front should be a trough, not "
-        "another crest");
-    TEST_ASSERT_TRUE_MESSAGE(next_crest > 0,
-        "a full wavelength behind the front should be back to a crest");
-}
-
-static void test_wave_height_decays_to_zero_at_the_decay_distance(void)
-{
-    const int32_t front = 10 * BOOT_ANIM_ONE;
-    const int32_t amp_q12 = BOOT_ANIM_ONE;
-    const int32_t decay_q12 = 3 * BOOT_ANIM_ONE;
-
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(
-        0, boot_anim_wave_height(front - decay_q12, front, amp_q12, decay_q12),
-        "the ripple should have fully died out by decay_q12 behind the "
-        "front");
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(
-        0, boot_anim_wave_height(front - decay_q12 * 2, front, amp_q12, decay_q12),
-        "nothing further behind than the decay distance should lift at "
-        "all");
-}
-
+/* `amp_q12`/`wavelength_q12`/`period_ms` are fabricated here, not read
+ * from BOOT_ANIM_WAVE_HEIGHT_Q12/WAVELENGTH_Q12/PERIOD_MS - see
+ * boot_anim_wave_height()'s own comment on why it takes all three as
+ * parameters: the shipped seed's own height is 0 (off by default -
+ * test_the_seeds_wave_is_off_by_default() below is the test that actually
+ * checks THAT), which would make every one of these assertions trivially
+ * true for the wrong reason. */
 static void test_wave_height_is_zero_when_the_amplitude_is_zero(void)
 {
-    const int32_t front = 3 * BOOT_ANIM_ONE;
-    const int32_t decay_q12 = BOOT_ANIM_ONE;
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(
+        BOOT_ANIM_ONE, 0, 0, BOOT_ANIM_ONE, 1000));
+}
 
-    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(front, front, 0, decay_q12));
+static void test_wave_height_is_zero_when_the_wavelength_is_not_positive(void)
+{
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(
+        BOOT_ANIM_ONE, 0, BOOT_ANIM_ONE, 0, 1000));
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_wave_height(
+        BOOT_ANIM_ONE, 0, BOOT_ANIM_ONE, -1, 1000));
+}
+
+/* sin() is exactly periodic in r for a fixed t - a vertex a full
+ * wavelength further out should read back the identical height. This is
+ * the structural fact that actually lets several rings show the ripple's
+ * own crests/troughs at once, all from the one formula, rather than
+ * needing a moving front to explain which rings are "lit" yet (see
+ * boot_anim.h's "The wave" section). */
+static void test_wave_height_is_periodic_in_radius(void)
+{
+    const int32_t wavelength = 3 * BOOT_ANIM_ONE;
+    const int32_t amp_q12 = BOOT_ANIM_ONE;
+    const int32_t r = 2 * BOOT_ANIM_ONE;
+
+    const int32_t a = boot_anim_wave_height(r, 0, amp_q12, wavelength, 0);
+    const int32_t b = boot_anim_wave_height(r + wavelength, 0, amp_q12,
+                                            wavelength, 0);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(a, b,
+        "a vertex a full wavelength further out should be at the exact "
+        "same point in the same crest/trough cycle");
+}
+
+/* Also exactly periodic in TIME, for a fixed r - one full period_ms
+ * brings the pattern back to where it started. */
+static void test_wave_height_is_periodic_in_time(void)
+{
+    const int32_t wavelength = 3 * BOOT_ANIM_ONE;
+    const int32_t amp_q12 = BOOT_ANIM_ONE;
+    const int32_t r = 2 * BOOT_ANIM_ONE;
+    const uint32_t period_ms = 1000;
+
+    const int32_t a = boot_anim_wave_height(r, 250, amp_q12, wavelength,
+                                            period_ms);
+    const int32_t b = boot_anim_wave_height(r, 250 + period_ms, amp_q12,
+                                            wavelength, period_ms);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(a, b,
+        "a full period later, the same vertex should be back at the same "
+        "height");
+}
+
+/* The travelling look itself: the same point in the crest/trough cycle
+ * that is a quarter wavelength closer to the origin right now is exactly
+ * where THIS vertex will be a quarter period from now - see
+ * boot_anim_wave_height()'s own comment on why subtracting the time term
+ * is what makes a crest's own radius grow with time, the pattern moving
+ * outward rather than inward. */
+static void test_wave_height_travels_outward_with_time(void)
+{
+    const int32_t wavelength = 4 * BOOT_ANIM_ONE;
+    const int32_t amp_q12 = BOOT_ANIM_ONE;
+    const uint32_t period_ms = 4000;
+    const int32_t r = 10 * BOOT_ANIM_ONE;
+
+    const int32_t at_r_a_quarter_period_later = boot_anim_wave_height(
+        r, period_ms / 4, amp_q12, wavelength, period_ms);
+    const int32_t a_quarter_wavelength_closer_right_now =
+        boot_anim_wave_height(r - wavelength / 4, 0, amp_q12, wavelength,
+                              period_ms);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(
+        at_r_a_quarter_period_later, a_quarter_wavelength_closer_right_now,
+        "a quarter period from now, this vertex should read the way a "
+        "vertex a quarter wavelength closer to the origin reads right now "
+        "- the pattern travels OUTWARD as time advances");
+}
+
+/* period_ms of 0 is a legitimate, if unusual, choice - a static ripple
+ * that never travels - not a division by zero. */
+static void test_wave_height_is_frozen_when_the_period_is_zero(void)
+{
+    const int32_t wavelength = 3 * BOOT_ANIM_ONE;
+    const int32_t amp_q12 = BOOT_ANIM_ONE;
+    const int32_t r = 2 * BOOT_ANIM_ONE;
+
+    const int32_t at_t0 = boot_anim_wave_height(r, 0, amp_q12, wavelength, 0);
+    const int32_t at_t_later =
+        boot_anim_wave_height(r, 999999, amp_q12, wavelength, 0);
+
+    TEST_ASSERT_EQUAL_INT32_MESSAGE(at_t0, at_t_later,
+        "a period of 0 should freeze the pattern's own time term rather "
+        "than crash or drift");
 }
 
 /* The seed this repo ships has the ripple authored off (BOOT_ANIM_WAVE_
@@ -445,27 +468,6 @@ static void test_wave_height_is_zero_when_the_amplitude_is_zero(void)
 static void test_the_seeds_wave_is_off_by_default(void)
 {
     TEST_ASSERT_EQUAL_INT32(0, BOOT_ANIM_WAVE_HEIGHT_Q12);
-}
-
-/* The front's own journey: right at the origin - so the leading crest sets
- * off from the same point the ripple is meant to originate from - the
- * instant it starts, and past the grid's outer edge by the trailing
- * decay's own reach by the time its window closes, not stopping exactly on
- * the edge - see boot_anim_wave_front()'s own comment on why overshooting
- * by BOOT_ANIM_WAVE_DECAY_Q12 is what lets the tail clear the edge cleanly
- * instead of being cut off mid-ring. */
-static void test_wave_front_starts_at_the_origin_and_ends_past_the_edge(void)
-{
-    const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
-
-    const int32_t start = boot_anim_wave_front(BOOT_ANIM_WAVE_START_MS);
-    const int32_t end = boot_anim_wave_front(BOOT_ANIM_WAVE_END_MS);
-
-    TEST_ASSERT_EQUAL_INT32_MESSAGE(0, start,
-        "the front should start at the origin the instant the window opens");
-    TEST_ASSERT_TRUE_MESSAGE(end > far,
-        "the front should finish past the grid's own outer edge, not stop "
-        "exactly on it");
 }
 
 /* The seed ships with grid_spoke_start_ms/grid_spoke_draw_ms both 0 - see
@@ -1098,13 +1100,13 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_seeds_curve_stays_near_the_panel_throughout);
     RUN_TEST(test_the_seeds_three_axes_project_to_distinct_directions);
 
-    RUN_TEST(test_wave_height_is_zero_ahead_of_the_front);
-    RUN_TEST(test_wave_height_peaks_at_the_front);
-    RUN_TEST(test_wave_height_oscillates_behind_the_front);
-    RUN_TEST(test_wave_height_decays_to_zero_at_the_decay_distance);
     RUN_TEST(test_wave_height_is_zero_when_the_amplitude_is_zero);
+    RUN_TEST(test_wave_height_is_zero_when_the_wavelength_is_not_positive);
+    RUN_TEST(test_wave_height_is_periodic_in_radius);
+    RUN_TEST(test_wave_height_is_periodic_in_time);
+    RUN_TEST(test_wave_height_travels_outward_with_time);
+    RUN_TEST(test_wave_height_is_frozen_when_the_period_is_zero);
     RUN_TEST(test_the_seeds_wave_is_off_by_default);
-    RUN_TEST(test_wave_front_starts_at_the_origin_and_ends_past_the_edge);
     RUN_TEST(test_the_seeds_spokes_reach_full_length_instantly);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);

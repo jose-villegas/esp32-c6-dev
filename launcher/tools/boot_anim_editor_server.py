@@ -12,7 +12,7 @@ JS reimplementation of it.
 HOW A REQUEST IS HANDLED
 
 POST /render body is {"timing": {...}, "camera_focal": 512, "grid_step_m":
-0.25, "wave_height_m": 0, "wave_decay_m": 1, "wave_ease": "linear",
+0.25, "wave_height_m": 0, "wave_wavelength_m": 0.75, "wave_period_ms": 3000,
 "keyframes": [...], "ms": 1234} - boot_anim_timeline.json's own shape
 (PAYLOAD_KEYS below), plus which millisecond to show. Handled and passed
 around as one `payload` dict throughout this file, not one parameter per
@@ -87,10 +87,10 @@ DEFAULT_PORT = 8934
 
 # boot_anim_timeline.json's own top-level keys, minus "ms"/"port" which are
 # per-request rather than per-timeline. The one place a new top-level field
-# (wave_decay_m, grid_spokes's own parent "timing", ...) needs to be added
-# for it to reach the renderer at all.
+# (wave_wavelength_m, grid_spokes's own parent "timing", ...) needs to be
+# added for it to reach the renderer at all.
 PAYLOAD_KEYS = ("timing", "camera_focal", "grid_step_m", "wave_height_m",
-               "wave_decay_m", "wave_ease", "keyframes")
+               "wave_wavelength_m", "wave_period_ms", "keyframes")
 
 
 def find_cc():
@@ -219,8 +219,8 @@ class Renderer:
     def render(self, payload, ms):
         """`payload` is exactly boot_anim_timeline.json's own shape (see
         PAYLOAD_KEYS) - one dict, not one parameter per top-level field, so
-        a new one of those (wave_decay_m, say) never means touching this
-        signature again. Returns (bmp_bytes, (origin_x, origin_y) or
+        a new one of those (wave_wavelength_m, say) never means touching
+        this signature again. Returns (bmp_bytes, (origin_x, origin_y) or
         None)."""
         payload_hash = hashlib.sha256(
             json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()

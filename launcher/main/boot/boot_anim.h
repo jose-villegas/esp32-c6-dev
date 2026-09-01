@@ -627,57 +627,22 @@ static inline bool boot_anim_project_segment(
 /*---------------------------------------------------------------------------
  * The wave
  *
- * A water-droplet ripple travelling outward from the space's own local
- * origin - "Wave" in tools/boot_anim_editor.html - lifting each floor
- * vertex by how close IT, not just the ring it is on, sits to a front that
- * sweeps from the origin to past the grid's own reach between
- * BOOT_ANIM_WAVE_START_MS and BOOT_ANIM_WAVE_END_MS. Riding a front rather
- * than a fixed radius is what makes it read as travelling rather than as
- * one ring somewhere lighting up.
- *
- * TRAILING, NOT SYMMETRIC: nothing lifts ahead of the front (the water has
- * not been disturbed yet), and what trails behind it is a genuine
- * OSCILLATION - alternating crests and troughs, several of them, shrinking
- * with distance behind the front - not one single bump. A vertex right at
- * the front is always the leading crest; boot_anim_wave_height() below is
- * what actually walks back through however many wavelengths
- * BOOT_ANIM_WAVE_DECAY_Q12 reaches before it cuts them off.
+ * A genuine radial sine wave - height(r, t) = amplitude * sin(2*pi*r /
+ * wavelength - 2*pi*t / period) - not a single travelling front with a
+ * decaying trail behind it (this used to be that; see the commit that
+ * replaced it - a front reads as one thing moving, not "a series of waves
+ * coming out of the center" the way this floor's own concentric rings
+ * ought to). sin() is ALREADY periodic in r, and the floor is ALREADY a
+ * set of rings at fixed radii - so every ring's own crest or trough falls
+ * out of the same one formula, all of them at once, with no separate
+ * "which rings are lit yet" bookkeeping needed the way a moving front
+ * required. The travelling look comes from the time term alone: as now_ms
+ * advances, every ring's phase shifts together, and the eye reads that as
+ * a crest sliding outward - genuinely just sin() of one combined phase.
  *
  * Per VERTEX for a spoke, ONCE per ring for a ring's own circle - see
  * draw_grid_circle()/draw_grid_spoke() in boot_anim.c for why a circle
  * gets away with one lookup where a spoke cannot. */
-
-/* How many ring-spacings long one full crest-to-crest wavelength is -
- * fixed rather than authored, unlike the front's own timing/height/decay:
- * the effect is meant to read the same relative to the grid's own density
- * regardless of how far apart the rings are (see BOOT_ANIM_GRID_STEP_Q12's
- * own comment on why RINGS and STEP are already two separate knobs for
- * exactly that reason), and this repo has not needed a knob for the
- * wavelength itself yet - trivial to promote to one later if that
- * changes. */
-#define BOOT_ANIM_WAVE_WAVELENGTH_RINGS 3
-
-/* Where the front currently is, in the same Q12 zeta-value units as
- * re/im/`far` - not a fraction, a genuine distance, so
- * boot_anim_wave_height() below can compare it directly against a
- * vertex's own. Ranges from the origin itself to BOOT_ANIM_WAVE_DECAY_Q12
- * PAST the grid's outer edge over the authored window, rather than
- * stopping exactly at `far`: the front reaching the edge is not the same
- * moment as the trailing decay behind it finally clearing the edge too,
- * and it is the second one that actually has to happen before the ripple
- * is really gone - letting the front overshoot by the same distance the
- * decay itself reaches is what lets that finish cleanly instead of
- * cutting the tail off mid-ring. */
-static inline int32_t boot_anim_wave_front(uint32_t now_ms)
-{
-    const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
-
-    const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_WAVE_START_MS,
-        BOOT_ANIM_WAVE_END_MS - BOOT_ANIM_WAVE_START_MS);
-    const uint8_t eased = boot_anim_timeline_ease(linear, BOOT_ANIM_WAVE_EASE);
-
-    return tween_lerp_i32(0, far + BOOT_ANIM_WAVE_DECAY_Q12, eased);
-}
 
 /* A zeta-value unit (meters, like every other authored length here - see
  * "The timeline"'s own UNITS comment) turned into the t_q8 that would
@@ -700,60 +665,54 @@ static inline int32_t boot_anim_zeta_to_t_q8(int32_t zeta_q12)
 }
 
 /* How far THIS vertex (at zeta-distance `r_q12` from the origin) should
- * lift, given where the front currently is - several trailing crests and
- * troughs, not one bump, in the same Q12 zeta units boot_anim_wave_front()
- * already returns its own position in, so the two compare directly with
- * no unit juggling at the call site.
+ * lift, right now.
  *
- * `amp_q12` (peak amplitude) and `decay_q12` (how far behind the front the
- * ripple has fully died out - BOTH meters, BOTH authored: "Wave" in
- * tools/boot_anim_editor.html) are passed in rather than read from
- * BOOT_ANIM_WAVE_HEIGHT_Q12/BOOT_ANIM_WAVE_DECAY_Q12 directly, so a test
- * can drive the ripple's own shape with values of its own choosing
- * regardless of what the compiled seed's happen to be (0, by default -
- * see BOOT_ANIM_WAVE_HEIGHT_Q12's own comment) - the same "pass the
- * environment in" split docs/Testing-Guide.md already asks for.
+ * `amp_q12` (peak height), `wavelength_q12` (crest-to-crest distance) and
+ * `period_ms` (how long one full cycle takes to pass a fixed point - the
+ * same "milliseconds -> Q16 phase" idiom boot_anim_title_wave() above
+ * already uses for its own left-to-right wobble) are passed in rather than
+ * read from the generated BOOT_ANIM_WAVE_HEIGHT_Q12/WAVELENGTH_Q12/
+ * PERIOD_MS directly, so a test can drive the ripple's own shape with
+ * values of its own choosing regardless of what the compiled seed's
+ * happen to be (0, by default - see BOOT_ANIM_WAVE_HEIGHT_Q12's own
+ * comment) - the same "pass the environment in" split docs/Testing-Guide.md
+ * already asks for.
  *
  * Returns t_q8 - already converted via boot_anim_zeta_to_t_q8() above -
  * ready to hand straight to boot_anim_to_camera_space() as the vertex's
- * own t. Zero ahead of the front (nothing has disturbed that water yet)
- * and zero once `decay_q12` behind it (the ripple has fully died out
- * there), so this is naturally zero everywhere outside the ripple's own
- * reach - draw_floor() still only bothers calling this while the front's
- * own window is open at all (BOOT_ANIM_WAVE_START_MS through
- * BOOT_ANIM_WAVE_END_MS), the one saving this function itself cannot make
- * on its own. */
-static inline int32_t boot_anim_wave_height(int32_t r_q12, int32_t front_r_q12,
-                                            int32_t amp_q12, int32_t decay_q12)
+ * own t. Zero whenever `amp_q12` or `wavelength_q12` is zero (the ripple
+ * authored off, or a wavelength that would divide by zero) - draw_floor()
+ * does not need its own separate "is the wave even running" branch as a
+ * result, unlike the front-based version this replaced. `period_ms` of 0
+ * freezes the pattern's own time term rather than dividing by zero - a
+ * legitimate choice (a static ripple, never travelling) rather than a
+ * crash. */
+static inline int32_t boot_anim_wave_height(int32_t r_q12, uint32_t now_ms,
+                                            int32_t amp_q12,
+                                            int32_t wavelength_q12,
+                                            uint32_t period_ms)
 {
-    const int32_t wavelength =
-        BOOT_ANIM_WAVE_WAVELENGTH_RINGS * BOOT_ANIM_GRID_STEP_Q12;
-    if (wavelength <= 0 || decay_q12 <= 0) {
+    if (amp_q12 == 0 || wavelength_q12 <= 0) {
         return 0;
     }
 
-    const int32_t behind = front_r_q12 - r_q12;
-    if (behind < 0 || behind >= decay_q12) {
-        return 0;   /* ahead of the front, or the ripple has died out here */
-    }
+    const uint32_t space_phase =
+        (uint32_t)(((int64_t)r_q12 * 65536) / wavelength_q12);
+    const uint32_t time_phase = (period_ms == 0) ? 0u :
+        (uint32_t)(((uint64_t)(now_ms % period_ms) * 65536u) / period_ms);
 
-    /* `behind` MOD `wavelength`, not clamped to one span of it - a genuine
-     * repeating oscillation, so boot_anim_cos() sees every full turn, not
-     * just its own first quarter the way a single bump only ever needed.
-     * Phase 0 (behind == 0, right at the front) is the leading crest. */
-    const int32_t phase = (int32_t)((((int64_t)behind % wavelength) * 65536)
-                                    / wavelength);
-    const int32_t cos_val = boot_anim_cos((uint16_t)phase);   /* Q15 */
-
-    /* Decays LINEARLY from full strength at the front to nothing at
-     * `decay_q12` behind it - the ripple DYING OUT, not its own crest/
-     * trough SHAPE (that is the cosine above). */
-    const int32_t decay_num = decay_q12 - behind;
-    const int32_t amp_here =
-        (int32_t)(((int64_t)amp_q12 * decay_num) / decay_q12);
+    /* Subtracting the time term, not adding it, is what makes a crest's
+     * own radius GROW with now_ms: holding space_phase - time_phase
+     * constant as t increases needs r to increase right along with it, so
+     * the pattern travels outward - the same sense the old front-based
+     * version always moved in. Wraps mod 65536 by plain uint16_t
+     * truncation, the same trick polar_point() in boot_anim.c already
+     * relies on for its own turn. */
+    const uint16_t phase = (uint16_t)(space_phase - time_phase);
+    const int32_t sin_q15 = boot_anim_sin(phase);
 
     const int32_t amp_zeta_q12 =
-        (int32_t)(((int64_t)amp_here * cos_val) >> 15);
+        (int32_t)(((int64_t)amp_q12 * sin_q15) >> 15);
 
     return boot_anim_zeta_to_t_q8(amp_zeta_q12);
 }

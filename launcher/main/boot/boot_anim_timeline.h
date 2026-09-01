@@ -42,12 +42,6 @@
 #define BOOT_ANIM_GRID_SPOKE_DRAW_MS 0
 
 #define BOOT_ANIM_GRID_FADE_MS 300
-/* the ripple's own front sets off from the origin */
-#define BOOT_ANIM_WAVE_START_MS 520
-
-/* the front reaches the grid's own outer edge */
-#define BOOT_ANIM_WAVE_END_MS 2500
-
 #define BOOT_ANIM_PEN_START_MS 520
 /* how long the curve takes to draw */
 #define BOOT_ANIM_PEN_MS 1980
@@ -110,23 +104,22 @@
  * comment) turns the ripple off outright, not just down. */
 #define BOOT_ANIM_WAVE_HEIGHT_Q12 0
 
-/* How far behind the wave's own front (boot_anim_wave_front() in
- * boot_anim.h) its trailing crests and troughs have fully died out -
- * also meters, also authored (wave_decay_m in the JSON). */
-#define BOOT_ANIM_WAVE_DECAY_Q12 4096
+/* The wave's own crest-to-crest distance - see boot_anim.h's "The
+ * wave" section. Also meters, also authored (wave_wavelength_m in
+ * the JSON). */
+#define BOOT_ANIM_WAVE_WAVELENGTH_Q12 3072
+
+/* How long one full cycle takes to pass a fixed point - milliseconds,
+ * authored (wave_period_ms in the JSON), the same "how long one
+ * cycle takes" unit title_wave_period_ms already is for the title's
+ * own wobble. */
+#define BOOT_ANIM_WAVE_PERIOD_MS 3000
 
 typedef enum {
     BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */
     BOOT_ANIM_EASE_OUT    = 1,   /* tween_ease_out() - fast then settle */
     BOOT_ANIM_EASE_IN     = 2,   /* tween_ease_in() - slow then rush    */
 } boot_anim_ease_t;
-
-/* How the wave's own front (boot_anim_wave_front() in boot_anim.h)
- * eases from the origin to the grid's outer edge over
- * [wave_start_ms, wave_end_ms] - the same three shapes a keyframe's
- * own `ease` picks from, just authored once here rather than per
- * keyframe, since there is only ever the one front. */
-#define BOOT_ANIM_WAVE_EASE BOOT_ANIM_EASE_OUT
 
 /* Both transforms' pos/rot/scale are small3dlib fixed point (S3L_F =
  * 512 = 1.0) already - converted from the JSON's plain meters/degrees/
