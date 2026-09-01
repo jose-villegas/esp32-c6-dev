@@ -100,9 +100,7 @@ set(app_reqs microui small3dlib esp_lcd heap esp_timer
 if(CONFIG_LAUNCHER_SELFTEST)
     # The suites are shared with the host runner - same sources, so what passes
     # on a laptop is the same set of assertions the board makes.
-    list(APPEND app_srcs
-        "boot/selftest.c"
-        "../test/suites.c"
+    set(suite_srcs
         "../test/suites/suite_touch_fsm.c"
         "../test/suites/suite_gesture.c"
         "../test/suites/suite_button_fsm.c"
@@ -122,8 +120,24 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_display.c"
         "../test/suites/suite_screenshot.c"
         "../test/suites/suite_device_state.c"
+    )
+    list(APPEND app_srcs
+        "boot/selftest.c"
+        "../test/suites.c"
+        "../test/timing.c"
+        ${suite_srcs}
         ${app_suites}
     )
+
+    # Every suite calls RUN_TEST(func) directly; timing.h intercepts that
+    # macro (see its own comment) to log a wall-clock line per test without
+    # editing a single suite file. -include forces it in ahead of each
+    # suite's own "#include unity.h", which is what lets Unity's own
+    # "#ifndef RUN_TEST" step aside for it. Scoped to just the suite files -
+    # forcing it onto every source in this component would be harmless too
+    # (nothing else calls RUN_TEST), but there's no reason to.
+    set_source_files_properties(${suite_srcs} ${app_suites} PROPERTIES
+        COMPILE_OPTIONS "-include;${CMAKE_CURRENT_LIST_DIR}/../test/timing.h")
 endif()
 
 idf_component_register(
