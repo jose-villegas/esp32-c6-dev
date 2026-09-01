@@ -495,6 +495,8 @@ const msReadout = document.getElementById('msReadout');
 let renderDebounceTimer = null;
 let renderSeq = 0;
 let lastObjectUrl = null;
+let renderPending = false;
+let renderDirty = false;
 
 async function renderNow() {
   const seq = ++renderSeq;
@@ -555,6 +557,45 @@ function hideError() {
   errorEl.style.display = 'none';
 }
 
+/* The server handles one render at a time (its own top comment: "every
+ * render already serializes through one compiler/one binary anyway"), but
+ * nothing used to stop the CLIENT from firing a new one anyway - Play's
+ * tick() below asks for a new frame every ~33ms of wall-clock time
+ * regardless of whether the last request has come back yet. Once a single
+ * render takes longer than that (a subprocess spawn even without Defender
+ * scanning it, or with - see the server's own startup message), requests
+ * pile up faster than the server can answer them, and renderSeq's own
+ * staleness check (in renderNow()) means almost every one of them arrives
+ * only to be thrown away because a NEWER request had already started - so
+ * the render view sits on its last successful frame for a while, then
+ * jumps straight to whichever much-later ms happened to still be current
+ * when a response finally landed while nothing newer had started yet.
+ * That is the "stays black, then jumps to a single frame" a slow render
+ * pipeline actually looks like from here.
+ *
+ * requestRender() is the fix: never more than one request in flight.
+ * Anything that wants a render while one is already pending sets
+ * `renderDirty` instead of firing a second one, and the in-flight
+ * request's own completion (success OR failure - see the `finally`)
+ * kicks off exactly one more, for whatever the latest wanted state is by
+ * then. Frame-perfect scrubbing/playback are not the goal here - keeping
+ * the pipe from ever backing up is: every response that does arrive stays
+ * current, so every one of them actually reaches the screen. */
+function requestRender() {
+  if (renderPending) {
+    renderDirty = true;
+    return;
+  }
+  renderPending = true;
+  renderNow().finally(() => {
+    renderPending = false;
+    if (renderDirty) {
+      renderDirty = false;
+      requestRender();
+    }
+  });
+}
+
 /* For scrub/play: immediate, no debounce - the server itself skips the
  * recompile when only `ms` changed. */
 function renderFrame() {
@@ -562,7 +603,7 @@ function renderFrame() {
   scrub.value = playhead;
   msReadout.textContent = `${Math.round(playhead)} ms`;
   renderKfTrack();
-  renderNow();
+  requestRender();
 }
 
 /* For edits to timing/keyframes: debounced, since these force a server
@@ -571,7 +612,7 @@ function renderDebounced() {
   scrub.max = state.timing.total_ms;
   renderKfTrack();
   if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
-  renderDebounceTimer = setTimeout(renderNow, 250);
+  renderDebounceTimer = setTimeout(requestRender, 250);
 }
 
 /* ===========================================================================
