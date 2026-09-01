@@ -907,6 +907,9 @@ pass makes the two existing fire budgets worth re-measuring.
 - [`Architecture.md`](Architecture.md) — both material tables as
   reference tables, the `kind` decision diagram, the step pipeline, and
   the exact device build/flash/verify commands.
+- [`Shading-and-Colour.md`](Shading-and-Colour.md) — the deeper dive on
+  painting an *existing* material once it has a palette block: the
+  pipeline, the recurring shading mistakes, and the one item still open.
 - [`Performance-Tuning-Attempts.md`](Performance-Tuning-Attempts.md) /
   [`Tuning-At-a-Glance.md`](Tuning-At-a-Glance.md) — what has already
   been tried, measured and rejected. Read before optimising anything.
