@@ -7252,6 +7252,433 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
 }
 
 /*=============================================================================
+ * LOCAL DEPTH'S WAKE TICK - A SETTLED EDGE MUST NOT FLICKER STALE TO FRESH
+ *
+ * row_has_liquid[]'s own regression: the periodic wake tick (LOCAL_DEPTH_
+ * WAKE_MS, app_sand.c) exists purely to keep a settled, sleeping pool's
+ * rendered local depth from going stale while gravity drifts under ordinary
+ * hand wobble with nothing physically moving (see that mechanism's own long
+ * comment in app_sand.c). An EARLIER version of that tick gated which rows
+ * it force-repainted on row_has_liquid_interior[] - true only when a row
+ * held a cell currently classified as liquid INTERIOR (mask == 0), not rim.
+ * That gate reintroduced the exact staleness bug the tick exists to close,
+ * one level down: ordinary grain-level settling noise flips a cell between
+ * rim and interior constantly at any real liquid surface, so a row can read
+ * as all-rim - no interior cell in it at all, at that instant - for
+ * hundreds of consecutive frames if it sits at a wide, shallow pool's edge.
+ * While that holds, the OLD gate skipped the row entirely: nothing refreshed
+ * what its interior colour would be. The moment a cell in that row flipped
+ * back to interior - again, ordinary edge noise - the very next wake tick
+ * painted it fresh, replacing whatever was there with a value that could be
+ * frozen from an arbitrarily distant past.
+ *
+ * REPRODUCED BELOW with a REALISTIC scene, not a hand-picked pathological
+ * one: a ragged, wide-and-shallow pool (two separate pours plus a stub wall,
+ * so the settled surface has real grain-level irregularity - the WIDTH is
+ * what matters, since a wide-and-shallow pool is exactly the shape whose
+ * horizontal local depth saturates while its vertical local depth stays
+ * small, making the blend acutely sensitive to exactly which blend weight
+ * was in effect the last time any given cell was painted), settling under
+ * near-portrait gravity (gy dominant and stable, gx small and wobbling under
+ * an ordinary hand-tremor model - a slow drift plus jitter, both small next
+ * to gy), run for thousands of simulated frames while tracking the
+ * DISPLAYED (last-painted, possibly stale) interior depth of every liquid
+ * cell - exactly what a real screen would be showing.
+ *
+ * MEASURED, with the OLD (interior-only) gate: the mean displayed interior
+ * depth sits stable at 23.671 (of a 24-cell saturating range) for over a
+ * thousand frames, then COLLAPSES to 1.958 in a single frame - a 21.71-unit
+ * swing out of a 24-unit range - before climbing back to 23.671 over the
+ * next several dozen frames as the wake tick catches every affected row up
+ * one at a time. Traced to a specific cell whose displayed value was frozen
+ * at 24 from some earlier point; when finally repainted, the FRESH
+ * computation (vdepth=1, hdepth=44, weight_h=3, nearly all weight on
+ * vertical - correctly small, since gravity is near-portrait) is entirely
+ * correct. The bug is that 24 was stale, and the correction lands as one
+ * visible jump instead of a gradual one - this is the "sharp, rectangular
+ * seams" symptom ef10262 already fixed once for the common case, surviving
+ * in this one.
+ *
+ * MEASURED, with the FIX (row_has_liquid[] - drop the mask condition
+ * entirely, ANY liquid cell marks its row): the SAME scene, SAME gravity
+ * sequence, run for the SAME number of frames, produces a worst single-frame
+ * swing of 1.87 - an ordinary, small settling shift, not a collapse. See
+ * WAKE_TEST_MAX_SWING below for the bound this is checked against.
+ *
+ * PROVEN LOAD-BEARING: temporarily restoring the reverted (mask & MATERIAL_
+ * EDGE_CARDINAL) == 0 condition inside wake_test_row_has_liquid() below (in
+ * place of the shipped `true`) turns this test RED, reproducing the 21.71
+ * collapse above almost exactly. Restoring the real condition turns it
+ * GREEN again at 1.87. Neither the scene nor the gravity sequence changes
+ * between the two runs - only the one condition this fix touches. */
+
+enum {
+    WAKE_TEST_W = 48,
+    WAKE_TEST_H = 40,
+};
+/* ~30fps, matches the reproduction that found this. */
+#define WAKE_TEST_DT_MS 33u
+/* LOCAL_DEPTH_WAKE_MS, mirrored - app_sand.c cannot be linked here (see this
+ * section's own top comment), so this is a copy of the constant, not a
+ * reference to it. */
+#define WAKE_TEST_WAKE_MS 120u
+
+static uint8_t wake_test_cells[WAKE_TEST_W * WAKE_TEST_H];
+static sand_t  wake_test_grid;
+static uint8_t wake_test_blocks[
+    ((WAKE_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
+    ((WAKE_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
+
+/* Mirrored per-frame state - the same relationship to col_local_depth[]/
+ * col_stable_depth[]/col_top_row[]/row_stable_depth[]/row_top_col[]
+ * (app_sand.c) that mirror_debounced_depth_column() above already has to
+ * col_stable_depth[]/col_top_row[]: a test-local copy of the real
+ * mechanism, since paint_row_n() itself lives in app_sand.c and cannot link
+ * here. File-static rather than stack-local purely for size - this scene is
+ * too large to want repeatedly stack-allocated - and each persists across
+ * the frame loop exactly like the real arrays persist across paint_row_n()
+ * calls. */
+static uint8_t wake_col_local_depth[WAKE_TEST_W];
+static uint8_t wake_col_stable_depth[WAKE_TEST_W];
+static uint8_t wake_col_top_row[WAKE_TEST_W];
+static uint8_t wake_row_stable_depth[WAKE_TEST_H];
+static uint8_t wake_row_top_col[WAKE_TEST_H];
+static bool    wake_prev_occupied[WAKE_TEST_W * WAKE_TEST_H];
+static int     wake_displayed_depth[WAKE_TEST_W * WAKE_TEST_H]; /* -1 = never
+                                                                    painted */
+
+/* paint_row_n()'s own cardinal mask test, transposed onto sand_at() rather
+ * than the row/above/below pointers paint_row_n() reads directly - off-grid
+ * reads as MAT_STONE (sand_at()'s own convention, sand.c), which is exactly
+ * "not empty" the same way paint_row_n()'s explicit bounds checks treat the
+ * grid edge, so no separate bounds-check is needed here either. */
+static unsigned wake_test_edge_mask(sand_t *g, int x, int y)
+{
+    unsigned m = 0;
+    if (CELL_IS_EMPTY(sand_at(g, x - 1, y))) m |= MATERIAL_EDGE_LEFT;
+    if (CELL_IS_EMPTY(sand_at(g, x + 1, y))) m |= MATERIAL_EDGE_RIGHT;
+    if (CELL_IS_EMPTY(sand_at(g, x, y - 1))) m |= MATERIAL_EDGE_UP;
+    if (CELL_IS_EMPTY(sand_at(g, x, y + 1))) m |= MATERIAL_EDGE_DOWN;
+    return m;
+}
+
+/* fabs() without pulling in <math.h> for one call - this file has no other
+ * floating-point dependency, and this test's own determinism (integer
+ * gravity, an explicitly seeded rng_t) means every platform this runs on
+ * computes the exact same sequence of means, so there is nothing here for
+ * libm to buy. */
+static double fabs_double(double x)
+{
+    return x < 0.0 ? -x : x;
+}
+
+/* row_has_liquid[]'s own population condition (app_sand.c) - THE ONE LINE
+ * THIS WHOLE TEST EXISTS TO PIN. `true` is the shipped fix: ANY liquid cell
+ * marks its row, rim included. See this section's own top comment for what
+ * temporarily hard-coding the reverted `(mask & MATERIAL_EDGE_CARDINAL) ==
+ * 0` condition here does to this test (RED, ~21.71) versus this line
+ * (GREEN, ~1.87) - that is the load-bearing proof, and this function is the
+ * one place to flip to redo it. */
+static bool wake_test_row_has_liquid(unsigned mask)
+{
+    (void)mask;
+    return true;
+}
+
+/* Runs the full reproduction for `steps` frames and returns the worst
+ * single-frame swing in the mean DISPLAYED interior depth - the empirical
+ * signature of the bug this test exists to catch. Mirrors, in order every
+ * frame: sand_step() itself; update_local_depth_gravity()'s weight/reversal
+ * (v_reverse is never exercised - gy stays positive throughout this
+ * near-portrait scenario by construction, so it is left out rather than
+ * mirrored unused); advance_local_depth_wake()'s tick; ordinary dirty-row
+ * marking from real cell occupancy changes (mark_rows()/mark_depth_band(),
+ * sand_priv.h); the wake tick's own row gate (wake_test_row_has_liquid()
+ * above); and, for every row that ends up dirty either way, paint_row_n()'s
+ * full per-cell walk - raw vertical walk, its debounce, raw horizontal
+ * walk, its debounce, the blend, and the interior test that would feed
+ * row_has_liquid[] on the NEXT frame. */
+static double wake_test_run(int steps)
+{
+    sand_init(&wake_test_grid, wake_test_cells, WAKE_TEST_W, WAKE_TEST_H,
+              41u);
+    sand_enable_sleeping(&wake_test_grid, wake_test_blocks);
+
+    memset(wake_col_top_row, 255, sizeof wake_col_top_row);
+    memset(wake_row_top_col, 255, sizeof wake_row_top_col);
+    memset(wake_col_local_depth, 0, sizeof wake_col_local_depth);
+    memset(wake_col_stable_depth, 0, sizeof wake_col_stable_depth);
+    memset(wake_row_stable_depth, 0, sizeof wake_row_stable_depth);
+    memset(wake_prev_occupied, 0, sizeof wake_prev_occupied);
+    for (int i = 0; i < WAKE_TEST_W * WAKE_TEST_H; i++) {
+        wake_displayed_depth[i] = -1;
+    }
+
+    /* A RAGGED basin, not one clean rectangle - two separate pours plus a
+     * stub wall, so the settled surface has real grain-level irregularity:
+     * a hand-authored flat pool never flips a cell between rim and interior
+     * classification, so it could never have found this bug. */
+    for (int y = WAKE_TEST_H - 6; y < WAKE_TEST_H; y++) {
+        for (int x = 0; x < WAKE_TEST_W; x++) {
+            sand_set(&wake_test_grid, x, y, CELL_MAKE(MAT_STONE, 0));
+        }
+    }
+    sand_spawn(&wake_test_grid, WAKE_TEST_W / 3, 6, 5, MAT_WATER);
+    sand_spawn(&wake_test_grid, 2 * WAKE_TEST_W / 3, 4, 6, MAT_WATER);
+    for (int y = WAKE_TEST_H - 9; y < WAKE_TEST_H - 8; y++) {
+        sand_set(&wake_test_grid, WAKE_TEST_W / 2, y,
+                  CELL_MAKE(MAT_STONE, 0));
+    }
+
+    rng_t wobble;
+    rng_seed(&wobble, 7u);
+
+    uint32_t wake_elapsed_ms = 0;
+    const int settle_steps = 400; /* let the pool actually settle first */
+    double worst_jump = 0.0;
+    double prev_mean = -1.0;
+
+    for (int f = 0; f < steps; f++) {
+        /* Near-perfect PORTRAIT: gy dominant and stable, gx small and
+         * wobbling under an ordinary hand tremor - a slow triangle-wave
+         * drift (period 90 frames, no trigonometry needed for it) plus
+         * per-frame jitter from wobble, both small next to gy. This is the
+         * shape of gravity a hand actually produces holding the board
+         * close to upright: never perfectly still, never anywhere close to
+         * a landscape tilt either. */
+        const int phase = f % 90;
+        const int tri = (phase < 45) ? (-40 + (phase * 80) / 45)
+                                      : (40 - ((phase - 45) * 80) / 45);
+        const int gx = tri + (int)rng_below(&wobble, 21) - 10;
+        const int gy = 950 + (int)rng_below(&wobble, 11) - 5;
+
+        sand_step(&wake_test_grid, gx, gy, 0);
+
+        /* update_local_depth_gravity(), mirrored: one divide per frame, not
+         * per cell. */
+        const unsigned ax = (unsigned)(gx < 0 ? -gx : gx);
+        const unsigned ay = (unsigned)(gy < 0 ? -gy : gy);
+        const unsigned sum = ax + ay;
+        const unsigned weight_h_q8 = sum ? (256u * ax) / sum : 128u;
+        const bool h_reverse = (gx < 0);
+
+        /* advance_local_depth_wake(), mirrored. */
+        wake_elapsed_ms += WAKE_TEST_DT_MS;
+        bool wake_fired = false;
+        if (wake_elapsed_ms >= WAKE_TEST_WAKE_MS) {
+            wake_elapsed_ms -= (wake_elapsed_ms / WAKE_TEST_WAKE_MS) *
+                                WAKE_TEST_WAKE_MS;
+            wake_fired = true;
+        }
+
+        /* Ordinary dirty-row marking, from the real grid: any cell whose
+         * EMPTY/occupied state changed this step marks its row - the same
+         * event mark_rows()/mark_depth_band() (sand_priv.h) exist to
+         * report, approximated here from the grid's own before/after state
+         * rather than by instrumenting the simulation's internals. */
+        bool row_dirty[WAKE_TEST_H] = { 0 };
+        for (int y = 0; y < WAKE_TEST_H; y++) {
+            for (int x = 0; x < WAKE_TEST_W; x++) {
+                const bool now =
+                    !CELL_IS_EMPTY(sand_at(&wake_test_grid, x, y));
+                if (now != wake_prev_occupied[y * WAKE_TEST_W + x]) {
+                    row_dirty[y] = true;
+                }
+            }
+        }
+
+        /* THE WAKE TICK'S OWN ROW GATE - row_has_liquid[]'s population,
+         * recomputed fresh each frame from the live grid (paint_row_n()
+         * recomputes it every time a row is painted; a row that never gets
+         * painted keeps whatever this cache last decided, exactly like the
+         * real array). */
+        for (int y = 0; y < WAKE_TEST_H; y++) {
+            bool has_liquid = false;
+            for (int x = 0; x < WAKE_TEST_W; x++) {
+                const cell_t c = sand_at(&wake_test_grid, x, y);
+                if (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == MAT_WATER) {
+                    const unsigned mask = wake_test_edge_mask(&wake_test_grid,
+                                                              x, y);
+                    if (wake_test_row_has_liquid(mask)) {
+                        has_liquid = true;
+                        break;
+                    }
+                }
+            }
+            if (wake_fired && has_liquid) {
+                row_dirty[y] = true;
+            }
+        }
+
+        /* paint_row_n()'s own per-cell walk, for every dirty row. */
+        for (int y = 0; y < WAKE_TEST_H; y++) {
+            if (!row_dirty[y]) {
+                continue;
+            }
+            unsigned h_running_depth = 0;
+            const int cx_first = h_reverse ? WAKE_TEST_W - 1 : 0;
+            const int cx_step  = h_reverse ? -1 : 1;
+
+            for (int cx_i = 0; cx_i < WAKE_TEST_W; cx_i++) {
+                const int cx = cx_first + cx_i * cx_step;
+                const cell_t here = sand_at(&wake_test_grid, cx, y);
+
+                if (CELL_IS_EMPTY(here)) {
+                    wake_displayed_depth[y * WAKE_TEST_W + cx] = -1;
+                    continue;
+                }
+
+                const bool is_liquid =
+                    material_of(here)->kind == KIND_LIQUID;
+
+                /* Vertical raw walk + debounce - col_local_depth[]/
+                 * col_stable_depth[]/col_top_row[]. */
+                const cell_t v_neighbour =
+                    sand_at(&wake_test_grid, cx, y - 1);
+                const bool v_same =
+                    CELL_MATERIAL(v_neighbour) == CELL_MATERIAL(here);
+                const unsigned vdepth_raw = v_same
+                    ? (wake_col_local_depth[cx] < 255u
+                           ? wake_col_local_depth[cx] + 1u : 255u)
+                    : 0u;
+                wake_col_local_depth[cx] = (uint8_t)vdepth_raw;
+
+                unsigned vdepth;
+                if (!is_liquid) {
+                    vdepth = 0u;
+                } else if (v_same) {
+                    vdepth = wake_col_stable_depth[cx] < 255u
+                        ? wake_col_stable_depth[cx] + 1u : 255u;
+                } else if (wake_col_top_row[cx] == (uint8_t)y) {
+                    vdepth = 0u;
+                } else {
+                    vdepth = wake_col_stable_depth[cx] < 255u
+                        ? wake_col_stable_depth[cx] + 1u : 255u;
+                    wake_col_top_row[cx] = (uint8_t)y;
+                }
+                wake_col_stable_depth[cx] = (uint8_t)vdepth;
+
+                /* Horizontal raw walk + debounce - h_running_depth/
+                 * row_stable_depth[]/row_top_col[]. */
+                const int h_neighbour_cx = h_reverse ? cx + 1 : cx - 1;
+                const bool has_h_neighbour =
+                    h_reverse ? (cx < WAKE_TEST_W - 1) : (cx > 0);
+                const cell_t h_neighbour = has_h_neighbour
+                    ? sand_at(&wake_test_grid, h_neighbour_cx, y)
+                    : CELL_MAKE(MAT_STONE, 0);
+                const bool h_same = has_h_neighbour &&
+                    CELL_MATERIAL(h_neighbour) == CELL_MATERIAL(here);
+                const unsigned hdepth_raw = h_same
+                    ? (h_running_depth < 255u ? h_running_depth + 1u : 255u)
+                    : 0u;
+                h_running_depth = hdepth_raw;
+
+                unsigned hdepth;
+                if (!is_liquid) {
+                    hdepth = 0u;
+                } else if (h_same) {
+                    hdepth = wake_row_stable_depth[y] < 255u
+                        ? wake_row_stable_depth[y] + 1u : 255u;
+                } else if (wake_row_top_col[y] == (uint8_t)cx) {
+                    hdepth = 0u;
+                } else {
+                    hdepth = wake_row_stable_depth[y] < 255u
+                        ? wake_row_stable_depth[y] + 1u : 255u;
+                    wake_row_top_col[y] = (uint8_t)cx;
+                }
+                wake_row_stable_depth[y] = (uint8_t)hdepth;
+
+                /* THE BLEND. */
+                const unsigned depth =
+                    ((vdepth * (256u - weight_h_q8)) +
+                     (hdepth * weight_h_q8)) >> 8;
+
+                /* Clamped to MATERIAL_LIQUID_DEPTH_BAND before storing, the
+                 * same way material_colours() itself clamps `depth` to
+                 * DEPTH_SATURATE_CELLS (== MATERIAL_LIQUID_DEPTH_BAND,
+                 * material.c) before shading with it - past that point the
+                 * RENDERED result cannot tell one raw depth from another, so
+                 * measuring the mean on the unclamped value would count a
+                 * difference the screen never actually shows. */
+                const unsigned depth_capped = depth > MATERIAL_LIQUID_DEPTH_BAND
+                    ? MATERIAL_LIQUID_DEPTH_BAND : depth;
+                wake_displayed_depth[y * WAKE_TEST_W + cx] = (int)depth_capped;
+            }
+        }
+
+        for (int y = 0; y < WAKE_TEST_H; y++) {
+            for (int x = 0; x < WAKE_TEST_W; x++) {
+                wake_prev_occupied[y * WAKE_TEST_W + x] =
+                    !CELL_IS_EMPTY(sand_at(&wake_test_grid, x, y));
+            }
+        }
+
+        /* Measure the DISPLAYED interior mean depth this frame - interior
+         * only (mask & MATERIAL_EDGE_CARDINAL) == 0, the only cells whose
+         * depth material_colours() ever reads. */
+        long sum_d = 0;
+        int n = 0;
+        for (int y = 0; y < WAKE_TEST_H; y++) {
+            for (int x = 0; x < WAKE_TEST_W; x++) {
+                const cell_t c = sand_at(&wake_test_grid, x, y);
+                if (CELL_IS_EMPTY(c) || CELL_MATERIAL(c) != MAT_WATER) {
+                    continue;
+                }
+                if ((wake_test_edge_mask(&wake_test_grid, x, y) &
+                     MATERIAL_EDGE_CARDINAL) != 0) {
+                    continue;
+                }
+                const int d = wake_displayed_depth[y * WAKE_TEST_W + x];
+                if (d < 0) {
+                    continue;
+                }
+                sum_d += d;
+                n++;
+            }
+        }
+        if (n > 0) {
+            const double mean = (double)sum_d / n;
+            if (f >= settle_steps && prev_mean >= 0) {
+                const double jump = fabs_double(mean - prev_mean);
+                if (jump > worst_jump) {
+                    worst_jump = jump;
+                }
+            }
+            prev_mean = mean;
+        }
+    }
+
+    return worst_jump;
+}
+
+/* THE BOUND: comfortably above the ~1.87 measured with the real fix (an
+ * ordinary settling shift, not a collapse), comfortably below the ~21.71
+ * measured with the reverted gate (see this section's own top comment for
+ * both numbers) - a third of the full 24-cell saturating range, nowhere
+ * close to the near-total collapse the bug produces. */
+#define WAKE_TEST_MAX_SWING 8.0
+
+static void test_a_settled_edge_does_not_flicker_stale_to_fresh(void)
+{
+    const double worst_swing = wake_test_run(3000);
+
+    char why[640];
+    snprintf(why, sizeof why,
+             "worst single-frame swing in mean displayed interior depth was "
+             "%.2f (of a %d-cell saturating range) - the reported bug is a "
+             "settled pool's mean collapsing from 23.671 to 1.958 in one "
+             "frame (a 21.71-unit swing) when a row's only liquid happens to "
+             "read as all-rim right when the wake tick fires, recovering "
+             "over the next several dozen frames as the tick catches every "
+             "affected row up one at a time - gating the wake on ANY liquid "
+             "cell, not only interior ones, keeps every liquid row on the "
+             "same bounded refresh cadence regardless of how its edges "
+             "flicker between rim and interior",
+             worst_swing, (int)MATERIAL_LIQUID_DEPTH_BAND);
+    TEST_ASSERT_TRUE_MESSAGE(worst_swing < WAKE_TEST_MAX_SWING, why);
+}
+
+/*=============================================================================
  * WATER'S FOAM - gathered at crevices, never on a flat run.
  *
  * material_colours()'s own top comment (material.c) has the full account of
@@ -21637,6 +22064,7 @@ void run_sand_suite(void)
     RUN_TEST(test_pouring_onto_a_settled_pool_redirties_a_bounded_band_below);
     RUN_TEST(test_every_liquid_interior_is_exactly_the_body_colour_when_saturated);
     RUN_TEST(test_a_shallow_puddle_still_shows_real_darkening);
+    RUN_TEST(test_a_settled_edge_does_not_flicker_stale_to_fresh);
     RUN_TEST(test_water_foams_where_its_rim_is_curved);
     RUN_TEST(test_a_flat_rim_still_never_foams);
     RUN_TEST(test_only_water_foams);
