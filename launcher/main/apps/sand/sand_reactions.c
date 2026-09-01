@@ -2683,6 +2683,54 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
     return next != SAND_AMBIENT_HEAT;
 }
 
+/* Blast radius for a confined gas pocket's own ignition - see
+ * gas_ignite_confined()'s own comment for what "confined" means here.
+ * Fixed, not scaled to the size of the gas pocket (a bounded flood fill
+ * over the connected pocket, using crack_run()'s own shape, was considered
+ * and explicitly deferred - see bd esp32c6-zs8): a fire cascade through a
+ * large sealed container ignites its rim one cell per step (this file's
+ * own top comment on why a cascade takes multiple steps to cross a
+ * pocket), so a chain of blasts along that rim, one per step, is what
+ * reads as the container's lid giving way over time rather than one
+ * instant, radius-scaled detonation.
+ *
+ * 8, not the original 3 - raised at least 2.5x on review: a radius small
+ * enough to barely clear its own core (SAND_EXPLODE_CORE_DIVISOR, just
+ * below - core_radius is 1 at either value, so this only widens the
+ * annulus, not the fireball itself) read as too subtle a burst to sell
+ * "the container's lid gives way", and too short a reach to threaten a
+ * wall more than one cell past the ignition point. Starting point, not
+ * final - tune on device like every other constant here. */
+#define SAND_GAS_IGNITE_BLAST_RADIUS 8
+
+/* Whether an igniting GAS cell at (x, y) is confined - touches at least
+ * one KIND_STATIC neighbour - the cheap LOCAL stand-in for "pressure" that
+ * bd esp32c6-zs8's design notes call for: gas in the open burns, the same
+ * gas walled in by stone (or wood, or glass, or metal - any KIND_STATIC
+ * material, not stone specifically) bursts. Four neighbour reads, exactly
+ * touches_air()'s own shape above, and deliberately NOT a flood fill over
+ * the connected pocket - that region walk is the one thing the design
+ * notes explicitly warn off doing unconditionally, since gas ignition is
+ * already the hot path of the single most expensive benchmark in the
+ * suite (see Tuning-At-a-Glance.md, "Fire cascade through gas"). Off-grid
+ * does not count as a wall, mirroring touches_air()'s own out-of-bounds
+ * handling - the board edge is not a container a player built. */
+static inline bool
+gas_ignite_confined(const sand_t* s, int x, int y, int w, int h) {
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (!CELL_IS_EMPTY(n) && material_of(n)->kind == KIND_STATIC) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
  * flammable material, and the roll for it succeeds. Returns whether it
  * did - the caller needs this to know whether this burning cell reacted
@@ -2727,6 +2775,31 @@ try_ignite(sand_t* s, int nx, int ny, int w, int h) {
     const int f = (s->flammability >= 0) ? s->flammability : r->flammability;
     if (f < 255 && (int)(rng_next(&s->rng) & 0xFF) >= f) {
         return false;
+    }
+    /* A CONFINED GAS POCKET BURSTS RATHER THAN JUST CATCHING - bd
+     * esp32c6-zs8. Gated on the material's own kind, not on `becomes`
+     * (which is always MAT_FIRE for gas either way), so only gas ever pays
+     * for gas_ignite_confined()'s neighbour scan - wood charring into an
+     * ember, oil catching, every other ignition in this file is untouched.
+     * sand_explode() already does everything place_reacted() would have
+     * here (writes fresh MAT_FIRE at (nx, ny), wakes and marks it) as part
+     * of its own core fill, so this replaces that call rather than running
+     * both.
+     *
+     * s->impulse_buf != NULL FIRST - sand_explode() is a complete no-op,
+     * including its own core fire fill, when sand_enable_impulses() was
+     * never called (see its own comment in sand.c) - so without this
+     * check, gas ignited in a scene or test that never enabled impulses
+     * would silently fail to ignite at all instead of catching fire like
+     * every other flammable material. Falling through to the ordinary
+     * place_reacted() below keeps that case behaving exactly as it always
+     * has: no impulses means no explosions anywhere else in the
+     * simulation either, so an unconditional plain ignition here is
+     * consistent, not a special case. */
+    if (s->impulse_buf != NULL && material_of(n)->kind == KIND_GAS &&
+        gas_ignite_confined(s, nx, ny, w, h)) {
+        sand_explode(s, nx, ny, SAND_GAS_IGNITE_BLAST_RADIUS);
+        return true;
     }
     /* 0 (MAT_EMPTY) reads as MAT_FIRE, so a flammable material that does
      * not care what it turns into (gas) gets the obvious default for
