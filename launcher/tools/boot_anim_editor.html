@@ -613,11 +613,23 @@ function renderConsts() {
   stepInput.value = state.grid_step_m;
   stepInput.addEventListener('input', () => {
     state.grid_step_m = Number(stepInput.value) || 0;
+    updateGridExtent();
     renderDebounced();
   });
   stepLabel.appendChild(stepSpan);
   stepLabel.appendChild(stepInput);
   list.appendChild(stepLabel);
+
+  /* Reach isn't its own authored field - it's grid_step_m * grid_rings
+   * (see draw_floor()'s own `far` in boot_anim.c) - so this is read-only,
+   * recomputed from whichever of those two changed. Density (spacing) and
+   * reach (how far out the floor goes) are kept as separate knobs on
+   * purpose: growing the reach by adding rings also adds line-draws, while
+   * growing it by widening the spacing does not. */
+  const extentRow = document.createElement('div');
+  extentRow.id = 'gridExtent';
+  extentRow.style.cssText = 'font-size:11px;color:var(--text-dim);margin:2px 0 0;';
+  list.appendChild(extentRow);
 
   for (const group of TIMING_GROUPS) {
     const h = document.createElement('div');
@@ -634,6 +646,7 @@ function renderConsts() {
       input.value = state.timing[key];
       input.addEventListener('input', () => {
         state.timing[key] = Number(input.value) || 0;
+        if (key === 'grid_rings') updateGridExtent();
         renderDebounced();
       });
       label.appendChild(span);
@@ -641,6 +654,15 @@ function renderConsts() {
       list.appendChild(label);
     }
   }
+
+  updateGridExtent();
+}
+
+function updateGridExtent() {
+  const el = document.getElementById('gridExtent');
+  if (!el) return;
+  const extent = (state.grid_step_m || 0) * (state.timing.grid_rings || 0);
+  el.textContent = `grid extends ${extent.toFixed(2)} m from the origin`;
 }
 
 /* ===========================================================================
