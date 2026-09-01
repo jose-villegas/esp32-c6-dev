@@ -446,7 +446,7 @@ static void test_a_span_climbs_steadily_when_its_points_do(void)
 
 /* Phase 1 only - see boot_anim_pen()'s own "TWO PHASES" comment. It reaches
  * BOOT_ANIM_CURVE_PHASE1_FRACTION, not BOOT_ANIM_ONE, at the end of
- * BOOT_ANIM_PEN_MS now; test_the_pen_reaches_the_whole_curve_by_the_fade()
+ * BOOT_ANIM_PEN_MS now; test_the_curve_is_finished_by_pen_finish_ms()
  * covers phase 2's own end. */
 static void test_the_pen_runs_from_nothing_to_phase_ones_end(void)
 {
@@ -457,16 +457,18 @@ static void test_the_pen_runs_from_nothing_to_phase_ones_end(void)
 }
 
 /* Phase 2: continues past phase 1's end rather than sitting still, and
- * reaches the whole curve by the time the fade begins - see
- * test_the_curve_is_finished_before_the_dissolve_starts() for that half,
- * kept as its own test since it is really a claim about the fade, not
- * about the pen. */
+ * reaches the whole curve by BOOT_ANIM_PEN_FINISH_MS - an authored moment
+ * of its own, independent of BOOT_ANIM_FADE_START_MS (see boot_anim_pen()'s
+ * own "TWO PHASES" comment on why the two were split apart) - see
+ * test_the_curve_is_finished_by_pen_finish_ms() for that half, kept as its
+ * own test since it is really a claim about PEN_FINISH_MS, not about the
+ * pen's climb in general. */
 static void test_the_pen_keeps_climbing_through_phase_two(void)
 {
     const uint32_t phase1_end_ms =
         BOOT_ANIM_PEN_START_MS + BOOT_ANIM_PEN_MS;
     const uint32_t mid_ms =
-        (phase1_end_ms + BOOT_ANIM_FADE_START_MS) / 2;
+        (phase1_end_ms + BOOT_ANIM_PEN_FINISH_MS) / 2;
 
     TEST_ASSERT_TRUE_MESSAGE(
         boot_anim_pen(mid_ms) > BOOT_ANIM_CURVE_PHASE1_FRACTION,
@@ -475,11 +477,22 @@ static void test_the_pen_keeps_climbing_through_phase_two(void)
         "the pen should not have reached the end of the curve yet");
 }
 
-static void test_the_curve_is_finished_before_the_dissolve_starts(void)
+static void test_the_curve_is_finished_by_pen_finish_ms(void)
 {
     TEST_ASSERT_EQUAL_INT32_MESSAGE(BOOT_ANIM_ONE,
-        boot_anim_pen(BOOT_ANIM_FADE_START_MS),
-        "the curve was still being drawn when the picture began fading");
+        boot_anim_pen(BOOT_ANIM_PEN_FINISH_MS),
+        "the curve should have reached its full extent by pen_finish_ms");
+}
+
+/* Not a claim boot_anim_pen() itself makes - see its own comment on why
+ * PEN_FINISH_MS landing after FADE_START_MS is only ever a generator
+ * warning, not a refusal - but true of the SEED this repo ships, and worth
+ * catching if a future edit to the committed timeline quietly breaks it. */
+static void test_the_seed_finishes_the_curve_before_the_dissolve_starts(void)
+{
+    TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_PEN_FINISH_MS <= BOOT_ANIM_FADE_START_MS,
+        "the shipped seed's curve is still being drawn when the picture "
+        "begins fading");
 }
 
 static void test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void)
@@ -964,7 +977,8 @@ void run_boot_anim_suite(void)
 
     RUN_TEST(test_the_pen_runs_from_nothing_to_phase_ones_end);
     RUN_TEST(test_the_pen_keeps_climbing_through_phase_two);
-    RUN_TEST(test_the_curve_is_finished_before_the_dissolve_starts);
+    RUN_TEST(test_the_curve_is_finished_by_pen_finish_ms);
+    RUN_TEST(test_the_seed_finishes_the_curve_before_the_dissolve_starts);
     RUN_TEST(test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end);
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
     RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);

@@ -143,6 +143,11 @@ def validate(cfg):
              "- the curve would still be drawing when the picture starts "
              "dissolving" % (pen_end, timing["fade_start_ms"]))
 
+    if timing["pen_finish_ms"] <= pen_end:
+        fail("pen_finish_ms (%d) must be after pen_start_ms + pen_ms (%d) - "
+             "phase 2 needs positive duration to actually finish drawing "
+             "the curve in" % (timing["pen_finish_ms"], pen_end))
+
     if timing["fade_start_ms"] >= timing["total_ms"]:
         fail("fade_start_ms (%d) must be before total_ms (%d) - there would "
              "be no time left to dissolve" %
@@ -155,6 +160,11 @@ def validate(cfg):
         warn("the last title letter lands at %d, after fade_start_ms (%d) - "
              "it will still be arriving when the picture starts dissolving"
              % (last_letter_lands, timing["fade_start_ms"]))
+
+    if timing["pen_finish_ms"] > timing["fade_start_ms"]:
+        warn("pen_finish_ms (%d) is after fade_start_ms (%d) - the curve "
+             "will still be drawing when the picture starts dissolving"
+             % (timing["pen_finish_ms"], timing["fade_start_ms"]))
 
     if kfs[-1]["ms"] != timing["total_ms"]:
         warn("the last keyframe is at %d, not total_ms (%d) - the camera "
@@ -175,6 +185,9 @@ TIMING_ORDER = [
     ("grid_fade_ms", "BOOT_ANIM_GRID_FADE_MS", None),
     ("pen_start_ms", "BOOT_ANIM_PEN_START_MS", None),
     ("pen_ms", "BOOT_ANIM_PEN_MS", "how long the curve takes to draw"),
+    ("pen_finish_ms", "BOOT_ANIM_PEN_FINISH_MS",
+     "when the curve reaches the table's true end - independent of "
+     "fade_start_ms, so it can keep drawing well past phase 1"),
     ("title_start_ms", "BOOT_ANIM_TITLE_START_MS",
      "the title arrives after the curve, not during it"),
     ("title_stagger_ms", "BOOT_ANIM_TITLE_STAGGER_MS",

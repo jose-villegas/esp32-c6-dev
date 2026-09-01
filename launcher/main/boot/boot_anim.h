@@ -1153,8 +1153,18 @@ static inline int boot_anim_grid_hue(uint32_t now_ms, int ring)
  * Phase 2 picks up from there and keeps climbing - the curve given
  * something to keep doing for the rest of the picture, rather than sitting
  * finished while the camera and the letters are still moving - reaching the
- * table's true end exactly at BOOT_ANIM_FADE_START_MS, so the dissolve
- * never catches an unfinished curve. */
+ * table's true end at BOOT_ANIM_PEN_FINISH_MS, an authored moment of its
+ * own ("Curve" in tools/boot_anim_editor.html) rather than always the same
+ * instant BOOT_ANIM_FADE_START_MS is: coupling the two meant the curve could
+ * only ever finish drawing exactly when the dissolve began, with nothing
+ * between "still drawing" and "already gone", however much of the picture's
+ * own total_ms sat between phase 1 ending and the fade starting. Left
+ * uncapped against BOOT_ANIM_FADE_START_MS on purpose - the generator only
+ * warns if PEN_FINISH lands after it (gen_boot_anim_timeline.py's own
+ * validate()), the same way it only warns about a title still landing late,
+ * because a curve still being drawn as it dissolves is a choice someone
+ * editing the timeline might actually want, not a broken state the way
+ * phase 1 not even reaching PHASE1_FRACTION before the fade would be. */
 #define BOOT_ANIM_CURVE_PHASE1_FRACTION \
     ((int32_t)(((int64_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1) * BOOT_ANIM_ONE) / \
                (BOOT_ANIM_CURVE_POINTS - 1)))
@@ -1170,7 +1180,7 @@ static inline int32_t boot_anim_pen(uint32_t now_ms)
     }
 
     const uint8_t linear2 = tween_ramp(
-        now_ms, phase1_end_ms, BOOT_ANIM_FADE_START_MS - phase1_end_ms);
+        now_ms, phase1_end_ms, BOOT_ANIM_PEN_FINISH_MS - phase1_end_ms);
     return tween_lerp_i32(BOOT_ANIM_CURVE_PHASE1_FRACTION, BOOT_ANIM_ONE,
                           linear2);
 }
