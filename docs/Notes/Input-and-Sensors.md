@@ -73,7 +73,7 @@ through the swipe rather than on release, or it feels sluggish.
 
 ## The IMU's axes do not match the screen's
 
-`main/imu.c` drives the QMI8658 (WHO_AM_I `0x05` at `0x6b`), configured for
+`launcher/main/input/imu.c` drives the QMI8658 (WHO_AM_I `0x05` at `0x6b`), configured for
 +/-8 g and +/-512 dps, which is where 4096 counts per g and 64 counts per dps
 come from. All six axes come from one twelve-byte burst read at `0x35` - worth
 doing as one transfer, because reading them separately can straddle a sample

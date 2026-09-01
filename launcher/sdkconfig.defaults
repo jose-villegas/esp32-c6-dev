@@ -4,6 +4,24 @@ CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
 CONFIG_PARTITION_TABLE_CUSTOM=y
 
+# This board's one USB-C port is the ESP32-C6's own native USB-Serial/JTAG
+# peripheral (Waveshare's own docs: "USB Type-C port - ESP32-C6 USB
+# interface, for program flashing and log printing") - UART0 is broken out
+# separately on solder pads and is not what anyone's cable is plugged into.
+# ESP-IDF's own default (CONFIG_ESP_CONSOLE_UART_DEFAULT, i.e. UART0 as
+# primary with USB-Serial-JTAG as a write-only secondary mirror) is built
+# for the OTHER common case - a board with an external USB-UART bridge chip
+# wired to UART0 - and on this board it means log OUTPUT looks completely
+# normal over that one USB cable while any INPUT (a typed idf_monitor
+# command, util/screenshot.c's listener, anything) silently goes nowhere:
+# console reads only ever come from the primary channel (see
+# esp_vfs_console/vfs_console.c's console_read()), and the secondary is
+# output-only by design (see esp_system/Kconfig's own ESP_CONSOLE_SECONDARY
+# choice: "input through this secondary port" requires making it primary).
+# This is what idf_monitor's own "Writing to serial is timing out" warning
+# was reporting - not a firmware bug, a channel that was never being read.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
 # 1 kHz tick instead of the 100 Hz default. vTaskDelay(1) is the render loop's
 # yield, and at 100 Hz that is a full 10 ms - a quarter of the frame budget.
 # It also makes the touch task's 100 Hz polling land accurately rather than

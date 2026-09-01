@@ -189,6 +189,17 @@ typedef uint8_t cell_t;
  * leaves an occupied cell holding nothing. */
 #define MASS_MAX 15
 
+/* How many cells of LOCAL DEPTH (app_sand.c's per-puddle depth walk) it
+ * takes a liquid interior's shading to reach full saturation - see
+ * material.c's DEPTH_SATURATE_CELLS, which is this value, for the shading
+ * side of the story. Shared here, rather than left private to material.c,
+ * because sand_liquid.c's pour-staleness fix needs the SAME distance to
+ * decide how far a newly-claimed surface cell can possibly change any
+ * cell's rendered depth - the two have to agree by construction, not by
+ * coincidence, the way MATERIAL_EDGE_MASK_COUNT's own comment in material.c
+ * warns two same-valued constants can quietly stop agreeing. */
+#define MATERIAL_LIQUID_DEPTH_BAND 24
+
 /*---------------------------------------------------------------------------
  * Materials
  *-------------------------------------------------------------------------*/
@@ -489,6 +500,33 @@ typedef struct {
      * material that exists to be a heat conductor. */
     uint8_t conducts;
 
+    /* Chance in 256, per step, that a liquid conduct_heat() (sand_reactions.
+     * c) has already decided conducted heat reaches THIS step actually
+     * boils it into steam - a second roll, not the one `conducts` already
+     * made getting the heat there. 0, the default, means immune to
+     * conducted-heat boiling entirely; a liquid opts in by setting a
+     * nonzero figure, same idiom as `dissolves`/`vent_chance` below.
+     *
+     * Water sets a low figure so a poured stream can occasionally outpace
+     * evaporation over a hot stone crust rather than every drop flashing
+     * to steam the instant heat arrives. Acid, which also qualifies for
+     * conduct_heat()'s boiling branch, sets 255 (effectively always) so
+     * its own pre-existing instant-boil behaviour is unchanged now that
+     * this field exists to gate it. */
+    uint8_t boils;
+
+    /* What a `boils` roll above turns this liquid into - a material_id_t,
+     * narrowed, same idiom as `quench_to`. 0 means MAT_STEAM, so water
+     * (and every other liquid that never sets this) keeps the original,
+     * literal reading of "boils". Acid overrides it to MAT_GAS: acid
+     * boiling through a wall is not water and has no business leaving
+     * the same white kettle-steam behind - it already leaves MAT_GAS
+     * everywhere else it evaporates (step_one_dissolver_cell()'s
+     * `evaporates` roll, `fizz`'s dissolving residue), and conducted-heat
+     * boiling was the one path still hardcoded to steam regardless of
+     * which liquid was on the far side of the wall. */
+    uint8_t boils_to;
+
     /* Chance in 256 that a burnt-out cell of this material leaves
      * MAT_SMOKE behind instead of simply clearing.
      *
@@ -509,11 +547,112 @@ typedef struct {
     uint8_t quench_to;
 
     /* Chance in 256, per step, that this material emits a MAT_FIRE cell
-     * into an adjacent empty cell. Meaningless for anything that is not a
-     * static heat source with nothing above it - left at zero for
-     * everything but the one material that needs to look like it is
-     * licking a flame upward while staying put itself. */
+     * into an adjacent empty cell (try_flare(), sand_reactions.c) -
+     * meant for something that looks like it is licking a flame upward
+     * while staying PUT itself, left at zero for everything else. Ember
+     * (KIND_STATIC, never moves on its own) is the mechanic's original
+     * case; lava (KIND_LIQUID) sets it too, which is the one case where
+     * "staying put" is not guaranteed - try_flare() itself now SKIPS the
+     * roll entirely while a cell is still free-falling (nothing beneath
+     * it, gravity-relative), rather than rolling it every step of a long
+     * pour's fall, which used to make lava specifically the most
+     * expensive material to pour: many separate falling grains each
+     * spending several steps in open air, each independently rolling
+     * this every one of those steps, each successful roll latching
+     * may_have_burning for a fresh MAT_FIRE cell that then keeps burning
+     * (and eventually rolls `residue`, above, for its own smoke) long
+     * after the pour itself is done. */
     uint8_t flare;
+
+    /* TRAPPED HEAT VENTS UPWARD. Chance in 256, per step, that a cell of
+     * this material that is COVERED FROM ABOVE (see covered_from_above(),
+     * sand_reactions.c - ANY of the three neighbours "above" it, gravity-
+     * relative, strictly denser and non-liquid) throws whatever is
+     * covering it along EACH covered direction independently (up-left,
+     * up, up-right - see try_vent()'s and vent_column()'s own comments,
+     * sand_reactions.c), up to SAND_VENT_REACH cells deep along that
+     * direction. A lid leaning to one side gets hit where it actually is,
+     * not from a single fixed point - but wherever it is found, it gets
+     * THROWN toward gravity-relative up, not further along whichever
+     * diagonal it was found on, and noticeably farther than an ordinary
+     * explosion (SAND_VENT_IMPULSE_RAMP, sand.h) - see vent_column()'s
+     * own comment for why aiming every column at -gravity reads as one
+     * cohesive eruption rather than three jets fanning out at their own
+     * angles, and is still safe against falling straight back into the
+     * seal it just cleared. When SAND_VENT_CHUNK groups several covered
+     * cells into one firing (below), their CEILING material specifically
+     * - the straight-up column directly above each of them - all launch
+     * on the exact same angle in the same instant, reading as one
+     * connected slab breaking off rather than a scatter of grains that
+     * merely happen to pop at once; see try_vent_chunk()'s own comment
+     * for why the two corner columns are deliberately excluded from
+     * that sharing.
+     *
+     * DELIBERATELY NOT smothered()'s all-4-cardinal rule (the one that
+     * extinguishes a burning SOLID) - see covered_from_above()'s own
+     * comment for why a lid on top is the right question for a wide
+     * liquid pool, where smothered() can never be true no matter how
+     * sealed the surface is (a pool wider than one cell always has more
+     * of the same liquid to its sides and below, and neighbor_smothers()
+     * never counts a liquid neighbour). What is beside or below a lava
+     * cell does not trap its heat; only what sits on top of it does.
+     *
+     * THE CELL ITSELF NEVER CHANGES - no fire, no conversion, nothing to
+     * name a byproduct for - only whatever was covering it gets thrown,
+     * and unlike an ordinary explosion's random, density-scaled wall-
+     * toughness roll, a vent's push GUARANTEES the dislodge (see sand_
+     * impulse_dislodge()'s own comment, sand.h): this is pressure on the
+     * exact seal trapping it, not random shrapnel grazing an arbitrary
+     * wall, and a seal that only sometimes gave way even once vent_chance
+     * itself had already rolled true read as broken on a thin, realistic
+     * crust - the single-layer result of water quenching a pool's
+     * surface, and the case this feature is actually judged against.
+     * NO OTHER LIQUID CHANGES EITHER - vent_column()'s own scan (sand_
+     * reactions.c) stops at the first liquid cell it meets, the same as
+     * it stops at empty, so a second pocket of lava (or any other
+     * liquid) sitting further along the same line is never mistaken for
+     * part of the seal and never thrown alongside it.
+     *
+     * A MODERATE MIDDLE GROUND, MEASURED ON DEVICE - the table figure
+     * below is 24 (~9.4%; was 1, the rarest this roll can express, when
+     * this feature first shipped as an occasional, dramatic pulse), and
+     * step_one_burning_cell()'s (sand_reactions.c) own second, independent
+     * roll on top of this one - the same shape reaction_t.evaporates uses,
+     * see step_one_dissolver_cell()'s own comment there - is `% 8`
+     * (~12.5%), rather than the 60-times-rarer figure it used to apply.
+     * Both figures briefly went to their absolute extreme (255 and `% 1`,
+     * unconditionally true) in pursuit of "venting as often as possible",
+     * and that extreme was measured on device to be a real problem, not
+     * just louder: a stream of water quenching lava creates a covered cell
+     * that gets thrown away the very next step, before any more crust can
+     * build on top of it, so it read as "material pops the instant water
+     * touches lava" rather than "a sealed slab breaks free" - there was
+     * never time for a slab to exist. These two figures pull back from
+     * that extreme to something that still fires roughly 14x more often
+     * than the original design while leaving a covered cell several
+     * expected steps to accumulate before it vents. Not yet re-measured on
+     * device at this exact pairing - retune further if it still fires
+     * before a slab can form, or has gone too rare to notice.
+     * SAND_VENT_REACH and SAND_VENT_CHUNK are unaffected by any of this -
+     * how far a pulse throws and how wide a slab it grabs are separate
+     * dials from how often one happens; see their own comments (sand.h)
+     * for those. A living balance number, not a protected constant - this
+     * project's own convention is to revise a shipped figure on request
+     * and update this comment alongside it, not to treat "that is what
+     * shipped" as a reason to leave it.
+     *
+     * This is lava's own answer to a real dead end: a burning LIQUID is
+     * never smothered the way a solid is (see step_one_burning_cell()'s
+     * own long comment on why burying lava must bury something hot rather
+     * than delete it), which is correct and, on its own, means a sealed
+     * pool of lava - walled in by stone, or capped by its own quenched
+     * crust - has no way to ever matter again. `vent_chance` does not
+     * reopen that decision: the lava is still never deleted, still never
+     * extinguished, still just as hot as it always was, and the cell
+     * itself never moves. It only adds that being sealed in a THIN shell
+     * is not the safe, inert state it used to read as. 0, the default,
+     * means never - only lava sets it. */
+    uint8_t vent_chance;
 
     /* Chance in 256, per step, that a cell of this material DISSOLVES one
      * of its four cardinal neighbours. Acid is the only thing that does.
@@ -550,6 +689,30 @@ typedef struct {
      * here", which is what this is. */
     uint8_t fizz;
 
+    /* Chance in 256, per step, that a cell of this material spontaneously
+     * turns into a single MAT_GAS cell - unconditional, no heat or
+     * neighbour required, unlike boiling. 0, the default, means never;
+     * only acid sets it. */
+    uint8_t evaporates;
+
+    /* The inverse of evaporating: chance in 256, per step, that a 2x2
+     * square of four cells all holding this same material COLLAPSES into
+     * a single cell of `condenses_to`, at the square's own top-left
+     * corner, with the other three cleared to empty. 0, the default,
+     * means never; only steam sets it, turning a stray puff quietly back
+     * into a little water.
+     *
+     * Deliberately not a real thermal model - no cold surface to check
+     * for, no heat reading involved - which is what keeps this a rare
+     * cosmetic touch (fake condensation) rather than a second boiler to
+     * tune. See step_one_condensing_cell() in sand_reactions.c. */
+    uint8_t condenses;
+
+    /* What a successful `condenses` roll above produces - a
+     * material_id_t, narrowed, the same relationship `quench_to` has with
+     * its own trigger field. Meaningless while `condenses` is 0. */
+    uint8_t condenses_to;
+
     /* What HEAT alone turns this material into, without burning it, and
      * the chance in 256 per step per adjacent heat source that it does.
      *
@@ -566,6 +729,47 @@ typedef struct {
      * of the sand on the other side exactly as it boils water there. */
     uint8_t heats_to;
     uint8_t heat_chance;
+
+    /* THE IMPURE YIELD. Rolled off the SAME successful heat_chance roll
+     * above, not a trigger of its own: chance in 256 that a bone-dry cell
+     * converts into `flaw_to` instead of `heats_to`. 0, the default, means
+     * every successful roll is clean - exactly the behaviour before this
+     * field existed.
+     *
+     * Dirt names MAT_STONE here: a smelt run too fast, or ore that was
+     * never pure to begin with, comes out part stone rather than part
+     * metal. Rejected once as "a new field serving exactly one material"
+     * (docs/Sand/Metal-Smelting-Plan.md, "Decisions taken") - it still is,
+     * and that is fine; not every mechanic has to earn its keep across the
+     * whole table the way `heats_to` does.
+     *
+     * A flaw is not drawn independently per cell - see try_heat_transform()
+     * (sand_reactions.c) for the rolling-modulo clump that turns
+     * `flaw_chance` into NODULES of stone rather than a speckle. */
+    uint8_t flaw_to;
+    uint8_t flaw_chance;
+
+    /* THE RUINED YIELD. Rolled off the SAME successful heat_chance roll
+     * above, on a cell the wet-earth branch below would otherwise drive one
+     * moisture level off of: chance in 256 that the cell spoils into
+     * `spoils_to` outright instead. 0, the default, means wet cells never
+     * spoil - the moisture-draining behaviour runs exactly as it did before
+     * this field existed.
+     *
+     * Dirt names MAT_SAND here: clay fired too fast while it is still wet
+     * cracks rather than firing clean. Independent of `flaw_to` above by
+     * construction - a cell that spoils never reaches the dry branch at
+     * all, so the two chances are never rolled against the same event.
+     *
+     * Unconditional - rolled from the FIRST successful heat_chance roll a
+     * wet cell ever gets, no exemption. An earlier version tried to
+     * guarantee a free first puff of steam before any risk of spoiling by
+     * gating on the moisture value; see try_heat_transform()'s own comment
+     * (sand_reactions.c) for why that cannot work (ambient drying can beat
+     * heat to the first level, unrelated to this field entirely) and was
+     * removed rather than patched further. */
+    uint8_t spoils_to;
+    uint8_t spoils_chance;
 
     /* HEAT THAT ACCUMULATES, rather than a roll that either fires or does
      * not. Non-zero `heat_ramp` means this material banks heat in its own
@@ -1225,6 +1429,23 @@ material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
  * they are painted). The one thing left that still depends purely on
  * gravity's DIRECTION is the specular table above. */
 void material_set_gravity(int gx, int gy);
+
+/* The Q8 unit vector a travelling shine should sweep along, for this frame's
+ * gravity - what turns paint_row_n()'s HATCHED shine band from a fixed
+ * diagonal into one that tracks the way the board is held.
+ *
+ * MINUS gravity, same convention liquid_spec's highlight above uses: the
+ * shine sweeps toward wherever up currently is, the same direction real
+ * light would slide across a tilted reflective surface.
+ *
+ * Pure and stateless, unlike material_set_gravity() - there is no per-cell
+ * table to fill ahead of a hot loop, just two numbers the caller reads once
+ * a frame and carries into paint_row_n() itself (see shine_ux_q8/shine_uy_q8
+ * there). Degenerate input (flat, or free fall - `im_len(gx, gy) == 0`) has
+ * no "up" to sweep toward, so it returns the plain (1, 1) diagonal the shine
+ * always travelled before gravity had any say in it, rather than inventing
+ * a direction nothing measured. */
+void material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8);
 
 /* Called once per frame, before painting, with a value that climbs steadily
  * over real time - see app_sand.c's own FOAM_PHASE_MS for how it derives one

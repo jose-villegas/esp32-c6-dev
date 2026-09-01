@@ -98,6 +98,10 @@ launcher/tools/results/
 # gitignored by the same pattern rather than listed per app.
 launcher/main/apps/*/tools/results/
 
+# Captured .bmp files from tools/screenshot.sh - scratch output, not
+# something to commit.
+launcher/tools/screenshots/
+
 ### Windows
 # Windows thumbnail cache files
 Thumbs.db
@@ -124,3 +128,6 @@ $RECYCLE.BIN/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+### Beads (bd issue tracker) — local backlog DB, not versioned
+.beads/

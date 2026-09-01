@@ -2,6 +2,7 @@
 #include "gfx/gfx_dirty.h"
 #include "util/intmath.h"
 
+#include <stdlib.h>
 #include <string.h>
 
 #include "driver/spi_master.h"
@@ -749,10 +750,13 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
 #if CONFIG_LAUNCHER_DEVELOPMENT
 /* Runtime state for the overlay below. Declared only in this block, same as
  * the getter/setter that touch it - see the "why not always compiled"
- * comment on their declaration in gfx.h. */
+ * comment on their declaration in gfx.h.
+ *
+ * gfx_set_debug_overlay() itself is defined further down, after BORDER_
+ * PIXELS (see that #define's own comment for why it lives past send_full_
+ * row()'s helpers) - it needs that constant to size the save/restore
+ * scratch it now malloc's. */
 static bool debug_overlay_on;
-
-void gfx_set_debug_overlay(bool on) { debug_overlay_on = on; }
 bool gfx_debug_overlay(void) { return debug_overlay_on; }
 
 /* Same story as debug_overlay_on above - see gfx_set_leaf_overlay()'s own
@@ -886,6 +890,41 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
         buf[(size_t)row * stride + (w - 1)] = saved[i++];
     }
 }
+
+/* send_full_row()'s save/restore scratch (GRID_COLS * BORDER_PIXELS
+ * gfx_color_t, 2496 bytes at this board's dimensions) - malloc'd here on
+ * enable and freed on disable, rather than a permanent static, because the
+ * only path that can ever turn this overlay on is the Diagnostics app
+ * (app_diagnostics.c, CONFIG_LAUNCHER_SELFTEST-only - see CMakeLists.txt).
+ * A plain --dev build compiles this whole block in (CONFIG_LAUNCHER_
+ * DEVELOPMENT, not SELFTEST) but has no UI path to ever call
+ * gfx_set_debug_overlay(true) - a static array here would have reserved
+ * 2496 bytes of .bss for a feature that build can never switch on, right
+ * where app_sand.c's grid needs its own single largest contiguous heap
+ * run (see app_sand.c's own comment on that allocation for why a few KB of
+ * unrelated static growth is enough to tip it - this is the same class of
+ * regression, not a new one). Malloc/free around enable/disable is the
+ * same fixture/teardown pattern already used for cube_perf's samples/
+ * stat_scratch (see selftest OOM incident notes) - here the toggle calls
+ * themselves are the fixture and the teardown. */
+static gfx_color_t (*overlay_saved)[BORDER_PIXELS];
+
+void gfx_set_debug_overlay(bool on)
+{
+    if (on && overlay_saved == NULL) {
+        overlay_saved = malloc(sizeof(*overlay_saved) * GRID_COLS);
+        if (overlay_saved == NULL) {
+            ESP_LOGE(TAG, "debug overlay: could not allocate %u-byte save "
+                          "buffer - staying off",
+                     (unsigned)(sizeof(*overlay_saved) * GRID_COLS));
+            return;
+        }
+    } else if (!on && overlay_saved != NULL) {
+        free(overlay_saved);
+        overlay_saved = NULL;
+    }
+    debug_overlay_on = on;
+}
 #endif
 
 /* Packs [x0,x1) x [y0,y1) into gather_buf and sends it as one draw_bitmap()
@@ -985,10 +1024,9 @@ static void send_full_row(int row, int *queued)
      * before anything else - a later gather, a later frame - reads fb
      * again. Acceptable cost while actively debugging, not otherwise. */
     if (debug_overlay_on) {
-        static gfx_color_t saved[GRID_COLS][BORDER_PIXELS];
         for (int col = 0; col < GRID_COLS; col++) {
             gfx_color_t *cell = fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
-            save_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT, saved[col]);
+            save_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT, overlay_saved[col]);
             mark_rect_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
                              gfx_rgb(0x00FFFF));
         }
@@ -998,7 +1036,7 @@ static void send_full_row(int row, int *queued)
         for (int col = 0; col < GRID_COLS; col++) {
             gfx_color_t *cell = fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
             restore_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
-                           saved[col]);
+                           overlay_saved[col]);
         }
         return;
     }

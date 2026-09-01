@@ -34,7 +34,12 @@ typedef struct {
     const char     *name;
     bool            ok;
     post_severity_t severity;
-    char            detail[72];
+    /* 96 comfortably fits every check's detail string, including
+     * check_sdcard_live()'s "<name>, <capacity> MB (live, <n> ms round
+     * trip)" in post.c, the longest one - with margin for GCC's own
+     * (pessimistic) -Wformat-truncation estimate of that string's maximum
+     * length, which came out to 79 bytes. */
+    char            detail[96];
 } post_result_t;
 
 /* POST runs in two phases, because the SD card and the display are wired to

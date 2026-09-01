@@ -33,15 +33,18 @@
  * These are NOT interchangeable, and picking the one that "sounds more
  * correct" is exactly the mistake this comment exists to head off:
  *
- *   - sand.c's mom_x_q8/mom_y_q8 (Q8, signed, routinely negative - momentum
- *     built from a shaken tilt direction) decay with fx_mul_floor(). That
- *     matches the `>> 8` they were hand-rolled as before this header existed;
- *     swapping in fx_mul_round() would nudge every negative decay step
- *     upward by up to one part in 256 and change the simulation's output.
- *   - sand_liquid.c's rebound_kick() also uses fx_mul_floor(), on an operand
- *     already guarded non-negative by its caller - floor and round agree
- *     there, so the choice is only for consistency with the rest of the
- *     simulation, not because it matters numerically.
+ *   - sand.c used to decay a Q8, signed, routinely-negative momentum
+ *     accumulator (mom_x_q8/mom_y_q8, built from a shaken tilt direction)
+ *     with fx_mul_floor(), matching the `>> 8` it was hand-rolled as before
+ *     this header existed - swapping in fx_mul_round() would have nudged
+ *     every negative decay step upward by up to one part in 256 and changed
+ *     the simulation's output. Removed 2026-08-30 along with the rest of
+ *     the wall-rebound splash mechanism (see git history), but kept here as
+ *     a worked example of exactly the mistake this comment warns against.
+ *   - boot_anim.c's phase-span interpolation uses fx_mul_floor() on an
+ *     operand already guarded non-negative by its own caller - floor and
+ *     round agree there, so the choice is only for consistency with the
+ *     rest of that file's math, not because it matters numerically.
  *   - ui_transform.h's ui_fp_mul()/ui_fp_div() use rounding (via
  *     fx_mul_round()/fx_div_round()), because a UI transform is a geometry
  *     computation where round-trip accuracy - a rect mapped and mapped back

@@ -85,7 +85,7 @@ void post_run_before_display(void)
         const uint64_t bytes =
             (uint64_t)bsp_sdcard->csd.capacity * bsp_sdcard->csd.sector_size;
 
-        char detail[72];
+        char detail[96];
         snprintf(detail, sizeof(detail), "%s, %llu MB, mounted and released",
                  bsp_sdcard->cid.name, (unsigned long long)(bytes >> 20));
         report("sd card", true, POST_OPTIONAL, detail);
@@ -134,9 +134,9 @@ static void check_sdcard_live(void)
              (long long)(t_card - t_suspended),
              (long long)(t_resumed - t_card));
 
-    /* Wider than post_result_t::detail on purpose so the round-trip figure
-     * cannot be the thing that gets cut; report() trims to fit. */
-    char detail[sizeof(card) + 40];
+    /* Matches post_result_t::detail's size exactly, like every other check in
+     * this file - report()'s copy into it can never truncate what fit here. */
+    char detail[96];
     snprintf(detail, sizeof(detail), "%s (live, %lld ms round trip)",
              card, (long long)((t_resumed - t0) / 1000));
 
@@ -154,7 +154,7 @@ static void check_soc(void)
     esp_chip_info_t info;
     esp_chip_info(&info);
 
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "rev %d, %d core, %s%s%s",
              info.revision, info.cores,
              (info.features & CHIP_FEATURE_WIFI_BGN) ? "wifi " : "",
@@ -168,7 +168,7 @@ static void check_flash(void)
     uint32_t size = 0;
     const bool ok = esp_flash_get_size(NULL, &size) == ESP_OK;
 
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "%" PRIu32 " MB%s", size / (1024 * 1024),
              (ok && size != EXPECTED_FLASH_BYTES) ? " (expected 16)" : "");
 
@@ -180,7 +180,7 @@ static void check_memory(void)
     const size_t free_heap = esp_get_free_heap_size();
     const size_t largest_dma = heap_caps_get_largest_free_block(MALLOC_CAP_DMA);
 
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "%u KiB free, DMA block %u KiB",
              (unsigned)(free_heap / 1024), (unsigned)(largest_dma / 1024));
     report("memory", free_heap > MIN_FREE_HEAP, POST_REQUIRED, detail);
@@ -197,7 +197,7 @@ static void check_mac(void)
     uint8_t mac[6] = { 0 };
     const bool ok = esp_read_mac(mac, ESP_MAC_WIFI_STA) == ESP_OK;
 
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "%02x:%02x:%02x:%02x:%02x:%02x",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
@@ -224,7 +224,7 @@ static void check_temperature(void)
     temperature_sensor_disable(sensor);
     temperature_sensor_uninstall(sensor);
 
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "%.1f C", celsius);
 
     /* A plausible reading also rules out a sensor stuck at a fixed value. */
@@ -258,7 +258,7 @@ static void check_i2c_devices(void)
     for (unsigned i = 0; i < sizeof(devices) / sizeof(devices[0]); i++) {
         const bool present = i2c_master_probe(bus, devices[i].address, 100) == ESP_OK;
 
-        char detail[72];
+        char detail[96];
         snprintf(detail, sizeof(detail), "0x%02x  %s",
                  devices[i].address, devices[i].what);
         report(devices[i].name, present, POST_REQUIRED, detail);
@@ -294,7 +294,7 @@ static void check_audio_codec(void)
     /* Leave it off again: POST must not change the state the shell inherits. */
     bsp_audio_poweramp_enable(false);
 
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "0x%02x  ES8311%s",
              ES8311_I2C_7BIT_ADDR, powered ? "" : " (amp enable failed)");
     report("audio codec", present, POST_REQUIRED, detail);
@@ -302,7 +302,7 @@ static void check_audio_codec(void)
 
 static void check_display(void)
 {
-    char detail[72];
+    char detail[96];
     snprintf(detail, sizeof(detail), "%dx%d %s", GFX_WIDTH, GFX_HEIGHT,
              bsp_board_variant_to_name(bsp_board_get_variant()));
     report("display", gfx_framebuffer() != NULL, POST_REQUIRED, detail);

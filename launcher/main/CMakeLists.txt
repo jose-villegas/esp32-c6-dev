@@ -15,6 +15,8 @@ set(app_srcs
     "input/imu.c"
     "ui/ui.c"
     "ui/ui_launcher.c"
+    "util/device_state.c"
+    "util/screenshot.c"
 )
 
 # Apps are discovered, not listed.
@@ -80,6 +82,7 @@ list(APPEND app_srcs ${discovered_apps})
 set(app_reqs microui small3dlib esp_lcd heap esp_timer
              esp_driver_i2c esp_driver_tsens esp_hw_support spi_flash
              fatfs esp_driver_sdspi sdmmc
+             esp_driver_usb_serial_jtag vfs
              waveshare__esp_lcd_sh8601
              # Unity is listed unconditionally, NOT inside the block below.
              # ESP-IDF expands REQUIRES in an early pass where CONFIG_* is not
@@ -117,6 +120,8 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_ui_transform.c"
         "../test/suites/suite_ui_centered_rect.c"
         "../test/suites/suite_display.c"
+        "../test/suites/suite_screenshot.c"
+        "../test/suites/suite_device_state.c"
         ${app_suites}
     )
 endif()

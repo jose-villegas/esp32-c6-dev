@@ -136,6 +136,13 @@ that only makes sense alongside them, with `CONFIG_LAUNCHER_SELFTEST`. Neither
 belongs ungated, and neither belongs gated on the other one just because they
 currently happen to travel together in `build.diag/`.
 
+A bare log line specifically has a second, complementary mechanism worth
+knowing about: ESP-IDF's own `CONFIG_LOG_MAXIMUM_LEVEL` compiles
+`ESP_LOGI`/`ESP_LOGW`/etc. calls out of the binary entirely above a given
+severity, project-wide, with no per-call-site `#if` needed — this project
+just doesn't split that ceiling per build variant yet. See
+[Log-Level-Plan.md](Log-Level-Plan.md).
+
 ### The Kconfig trap in REQUIRES
 
 One thing must **not** be gated on `CONFIG_LAUNCHER_SELFTEST`: the `unity`
@@ -184,7 +191,7 @@ that refuses to.
 
 ## POST is a third thing
 
-Separate from both runners is the **power-on self test** in `main/post.c`. It
+Separate from both runners is the **power-on self test** in `launcher/main/boot/post.c`. It
 answers a different question, so it lives in a different place and obeys
 different rules.
 
@@ -416,3 +423,10 @@ against.
   codebase; this is what it is actually testing.
 - `docs/Notes/` — the hardware constraints behind the device-only
   performance tests. Start at `docs/Notes/README.md`.
+- `docs/Settings-App-Plan.md` — planned follow-up to the DEVELOPMENT/SELFTEST
+  split this guide documents: the Diagnostics app's toggle page mixes both,
+  and untangling that is what would let the SELFTEST/"diagnostics" naming
+  mismatch actually resolve rather than just get renamed over.
+- `docs/Log-Level-Plan.md` — planned compile-time log-severity ceiling per
+  build variant, complementing the DEVELOPMENT/SELFTEST split above rather
+  than replacing it.

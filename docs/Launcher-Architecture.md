@@ -57,7 +57,7 @@ and means something different by each:
 | | |
 |---|---|
 | **shell** | the frame loop and the app switching — `main.c`, whose log tag is literally `shell` |
-| **launcher** | the home screen the shell draws when no app is running — `ui/ui_launcher.c`. This is what you reach after booting. |
+| **launcher** | the home screen the shell draws when no app is running — `launcher/main/ui/ui_launcher.c`. This is what you reach after booting. |
 | **boot** | what runs once before the loop exists and never again — `boot/` |
 
 
@@ -259,11 +259,11 @@ cube app is slower because rasterizing costs ~28 ms on top.
 
 Three steps.
 
-**1. Write `main/apps/app_yours.c`:**
+**1. Write `main/apps/<name>/app_<name>.c`** (e.g. `main/apps/sand/app_sand.c`):
 
 ```c
-#include "../app.h"
-#include "../gfx.h"
+#include "../../app.h"
+#include "../../gfx/gfx.h"
 
 static void yours_enter(void) { /* reset state */ }
 
@@ -323,7 +323,7 @@ shell-owned header alongside an app one, say) stays in the shared
 `launcher/tools/` instead. `main/apps/sand/tools/block_size_sweep.ps1` is the
 first tenant - it only ever touches `sand.h` - while
 `launcher/tools/sweeps/row_leaf_sweep.ps1`, which sweeps a sand constant
-*and* a `main/gfx_dirty.h` constant together, stays shared for exactly that
+*and* a `launcher/main/gfx/gfx_dirty.h` constant together, stays shared for exactly that
 reason.
 
 See `docs/Sand/Sand-Simulation.md` for how the pieces above fit together - the
@@ -372,9 +372,14 @@ SPI2, so it has no business being reachable in a shipped image. See
 [Testing-Guide](Testing-Guide.md#release-builds-contain-no-test-code) — note in
 particular that `REQUIRES` must **not** be gated this way.
 
+Diagnostics' own toggle page currently mixes SELFTEST-only content (the "run
+self test suite" button) with content that is really DEVELOPMENT-only (the
+gfx debug overlays, the orientation readout) - planned to split apart into
+its own Settings app; see [Settings-App-Plan.md](Settings-App-Plan.md).
+
 ### Drawing a UI, in the shell or in an app
 
-`main/ui.c` owns the microui integration; `ui_launcher.c` is just one caller.
+`launcher/main/ui/ui.c` owns the microui integration; `ui_launcher.c` is just one caller.
 An app builds a UI the same way:
 
 ```c
@@ -619,3 +624,5 @@ requires nothing new, but reworking input handling means preserving this.
 - `docs/Sand/Sand-Simulation.md` — the falling-sand app in depth: materials, the
   water model, momentum, and why its liquid logic is its own file.
 - `docs/Testing-Guide.md` — how to test any of it.
+- `docs/Settings-App-Plan.md` — planned split of the Diagnostics app's
+  developer-toggle page into its own Settings app.

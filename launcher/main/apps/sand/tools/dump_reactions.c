@@ -47,6 +47,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include "material.h"
 
@@ -84,6 +88,8 @@ typedef enum {
     GRP_HARDEN,       /* becoming wood, and what that leaves behind */
     GRP_REGROW,       /* new growth and foliage from a finished trunk, and drinking */
     GRP_SHATTER,      /* thermal shock: shatters_to */
+    GRP_CONDENSE,     /* a 2x2 block collapsing into one cell: condenses,
+                       * condenses_to */
     GRP_COUNT
 } group_id_t;
 
@@ -207,6 +213,7 @@ static const field_doc_t field_docs[] = {
     FCHANCE(residue,  GRP_BURN, "leaves smoke"),
     F(quench_to,    GRP_BURN, FK_TARGET, NULL),
     FRATE(flare,     GRP_BURN, "licks flame into the air"),
+    FRATE(vent_chance, GRP_BURN, "vents through whatever covers it from above"),
 
     /* GRP_ACID (dissolves/dissolvable/fizz all belong to the acid pair,
      * whichever side of it this row is on - see emit_acid()). `dissolves`
@@ -222,10 +229,37 @@ static const field_doc_t field_docs[] = {
      * row gets. */
     FCHANCE_VOCAB(dissolvable, GRP_ACID, "dissolves in acid", ease_words),
     FCHANCE(fizz,        GRP_ACID, "leaves smoke"),
+    /* Pre-existing gap, unrelated to whatever else changed in this table
+     * recently: `evaporates` never had a field_docs row at all, so this
+     * file has not compiled since the field was added - caught trying to
+     * regenerate the doc for an unrelated change, fixed here rather than
+     * left for the next person. Genuine per-step rate, no partner or
+     * condition required - the same shape as `dries` elsewhere in this
+     * file (FRATE(dries, GRP_WET, ...)), not a one-shot FCHANCE. */
+    FRATE(evaporates,   GRP_ACID, "spontaneously evaporates into gas"),
 
-    /* GRP_TRANSFORM */
+    /* GRP_CONDENSE - the inverse of evaporation: a 2x2 block of one
+     * material collapsing into a single cell of another. Genuine
+     * per-step rate, gated on a 2x2 neighbourhood match rather than a
+     * partner or a prior roll - the same shape as `dissolves`, not a
+     * one-shot FCHANCE. */
+    FRATE(condenses,    GRP_CONDENSE, "condenses"),
+    F(condenses_to,     GRP_CONDENSE, FK_TARGET, NULL),
+
+    /* GRP_TRANSFORM. `flaw_chance` is a one-shot chance conditioned on
+     * heat_chance's roll already having succeeded, the same shape as
+     * `dissolvable` - not a rate of its own, so FCHANCE rather than
+     * FRATE. `spoils_to`/`spoils_chance` fire from a condition
+     * (heat_chance succeeding on a WET cell) that lives entirely at the
+     * read site in sand_reactions.c, not in this table - see this file's
+     * own top comment on shatters_to for why that gets the [TODO: trigger]
+     * treatment (emit_spoils()) rather than guessed prose. */
     F(heats_to,     GRP_TRANSFORM, FK_TARGET, NULL),
     FRATE(heat_chance, GRP_TRANSFORM, "melts"),
+    F(flaw_to,       GRP_TRANSFORM, FK_TARGET, NULL),
+    FCHANCE(flaw_chance, GRP_TRANSFORM, "comes out flawed"),
+    F(spoils_to,     GRP_TRANSFORM, FK_TARGET, NULL),
+    FCHANCE(spoils_chance, GRP_TRANSFORM, "spoils"),
 
     /* GRP_TEMPERATURE */
     FRATE(heat_ramp, GRP_TEMPERATURE, "holds heat"),
@@ -234,6 +268,8 @@ static const field_doc_t field_docs[] = {
     /* GRP_COLD / GRP_WARMTH / GRP_THAW - each one field */
     FRATE(chills,   GRP_COLD,   "chills whatever it touches"),
     FRATE(conducts, GRP_TEMPERATURE, "passes heat on"),
+    FRATE(boils,    GRP_TEMPERATURE, "boils"),
+    F(boils_to,     GRP_TEMPERATURE, FK_TARGET, NULL),
     FRATE(warms,    GRP_WARMTH, "warms whatever it touches"),
     FRATE(thaws,    GRP_THAW,   "melts in any liquid it touches"),
 
@@ -692,6 +728,17 @@ static void emit_burn(const reaction_t *r)
         printf(". Touched by a quenching liquid, simply goes out");
     }
     printf(".\n");
+
+    if (r->vent_chance != 0) {
+        printf("- If covered from above - anything directly above it, "
+               "up-left, or up-right, gravity-relative - throws whatever "
+               "is covering it %s, peeling up to SAND_VENT_LAYER cells off "
+               "the outer surface each time it fires; a covering deeper "
+               "than that takes several separate firings, up to "
+               "SAND_VENT_REACH cells total, but is guaranteed to "
+               "eventually dislodge.\n",
+               adverb("vent_chance", r->vent_chance));
+    }
 }
 
 static void emit_transform(const reaction_t *r)
@@ -718,7 +765,23 @@ static void emit_transform(const reaction_t *r)
         printf("- Beside %s, melts to %s %s.\n", heat_sources,
                prose_name(to_name(r->heats_to)),
                adverb("heat_chance", r->heat_chance));
+        if (r->flaw_to != 0) {
+            /* Same trigger as the clause just printed - the SAME roll,
+             * not a second one - so this reads as a qualifier on it
+             * rather than a separate reaction. */
+            printf("  %s comes out as %s instead, in clumped runs "
+                   "rather than an even speckle.\n",
+                   adverb("flaw_chance", r->flaw_chance),
+                   prose_name(to_name(r->flaw_to)));
+        }
     }
+}
+
+static void emit_spoils(const reaction_t *r)
+{
+    if (r->spoils_to == 0) return;
+    printf("- Spoils into %s %s.\n", prose_name(to_name(r->spoils_to)),
+           CAUSE);
 }
 
 static void emit_temperature(const reaction_t *r)
@@ -744,6 +807,19 @@ static void emit_temperature(const reaction_t *r)
                adverb("conducts", r->conducts));
     }
     printf(".\n");
+}
+
+/* Its own function rather than folded into emit_temperature() just above:
+ * that one is gated on heat_ramp/conducts, banking or passing heat along,
+ * and water (boils's whole reason for existing) does neither - it just
+ * boils where it stands, so emit_temperature()'s own gate would skip it
+ * entirely if this clause lived there instead. */
+static void emit_boils(const reaction_t *r)
+{
+    if (r->boils == 0) return;
+    const uint8_t boils_to = r->boils_to ? r->boils_to : MAT_STEAM;
+    printf("- Once conducted heat reaches it, boils into %s %s.\n",
+           prose_name(to_name(boils_to)), adverb("boils", r->boils));
 }
 
 static void emit_cold(const reaction_t *r)
@@ -828,6 +904,21 @@ static void emit_acid(const reaction_t *r)
         printf("- Dissolves in acid %s.\n",
                adverb("dissolvable", r->dissolvable));
     }
+}
+
+static void emit_evaporates(const reaction_t *r)
+{
+    if (r->evaporates == 0) return;
+    printf("- Spontaneously evaporates into gas %s - unconditional, no "
+           "heat or neighbour required.\n",
+           adverb("evaporates", r->evaporates));
+}
+
+static void emit_condense(const reaction_t *r)
+{
+    if (r->condenses == 0 || r->condenses_to == 0) return;
+    printf("- A 2x2 block of it %s condenses into a single cell of %s.\n",
+           adverb("condenses", r->condenses), prose_name(to_name(r->condenses_to)));
 }
 
 static void emit_grow(const reaction_t *r)
@@ -925,12 +1016,16 @@ static void emit_material_section(const char *name, const reaction_t *r,
     emit_ignite(r, self_id);
     emit_burn(r);
     emit_transform(r);
+    emit_spoils(r);
     emit_temperature(r);
+    emit_boils(r);
     emit_cold(r);
     emit_warmth(r);
     emit_thaw(r);
     emit_wet(r);
     emit_acid(r);
+    emit_evaporates(r);
+    emit_condense(r);
     emit_grow(r);
     emit_harden(r);
     emit_regrow(r);
@@ -2011,6 +2106,17 @@ static void emit_anatomy(void)
 
 int main(void)
 {
+#ifdef _WIN32
+    /* MinGW's CRT defaults stdout to text mode, which rewrites every '\n'
+     * this file prints into "\r\n" - invisible on Windows, but it makes
+     * report_reactions.sh --check compare a CRLF TMP_MD against docs/Sand/
+     * Reaction-Table.md's LF (.gitattributes forces every .md to eol=lf -
+     * see that file's own comment on why - so the committed doc is LF
+     * regardless of which platform generated it). Binary mode turns off
+     * the rewrite, so this prints the same bytes on every platform the
+     * same way find_cc.sh already picks a compiler on every platform. */
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
     field_docs_offsets_are_sound();
     build_rows();
     join_names(pred_wets_liquid, " or ", wetting_liquids,

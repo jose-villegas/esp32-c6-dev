@@ -19,6 +19,8 @@
 #pragma once
 
 #include <stddef.h>
+#include <stdint.h>
+#include <string.h>
 
 #include "sand.h"
 
@@ -54,10 +56,62 @@ static inline uint8_t *dest_row(const sand_t *s, int y)
  * a single pair of points to wake blocks from - see the comment there. */
 static inline void mark_rows(sand_t *s, int y0, int y1)
 {
+    /* DEFENSIVE, ADDED 2026-09-01 - see wake_block_and_neighbors()'s own
+     * matching guard, just above in this same file, for the real device
+     * crash this was traced to (mark_move(), called from gas cell
+     * movement, sand_gas.c). y0/y1 were "guaranteed in range at every
+     * call site" by design, and a heap-poisoning-enabled rebuild reproduced
+     * the identical crash, ruling out memory corruption from elsewhere as
+     * the cause - something upstream is genuinely computing an
+     * out-of-range row, not yet pinned to one exact line. This bound stops
+     * the out-of-bounds write while that is still being tracked down. */
     if (s->dirty_rows != NULL) {
-        s->dirty_rows[y0] = 1;
-        s->dirty_rows[y1] = 1;
+        if ((unsigned)y0 < (unsigned)s->h) {
+            s->dirty_rows[y0] = 1;
+        }
+        if ((unsigned)y1 < (unsigned)s->h) {
+            s->dirty_rows[y1] = 1;
+        }
     }
+}
+
+/* A liquid cell at row `y` just turned from EMPTY into occupied - see
+ * pour_into()'s `was_empty` return, its only caller - which is the only
+ * event that can move where a puddle's surface is, and therefore the only
+ * event that can make app_sand.c's LOCAL DEPTH render stale below it (see
+ * that mechanism's own long comment in app_sand.c, "STALE READINGS UNDER
+ * THE DIRTY-ROW OPTIMISATION ARE ACCEPTED"). Ordinary mass moving between
+ * two ALREADY-liquid cells - the common case, every step a pool is settling
+ * or sloshing - never calls this: it cannot change the depth topology, only
+ * redistribute mass within it, so marking dirty for it would repaint a
+ * settled reservoir on every step something merely levels out, exactly the
+ * "updating all water just because of a pour" cost this exists to avoid.
+ *
+ * Marks a band of rows, not two points the way mark_rows() does - a settled
+ * column's stored local depth for anything within MATERIAL_LIQUID_DEPTH_BAND
+ * cells of the new surface can now read differently once repainted, and
+ * anything further than that already saturates to the same flat body colour
+ * whether the true depth is one cell more or a hundred, so there is nothing
+ * further out worth invalidating. Direction-agnostic (both above and below
+ * `y`) rather than reasoning about which way is "toward depth" this frame -
+ * that answer lives in app_sand.c's own gravity-derived bookkeeping
+ * (local_depth_v_reverse/local_depth_h_reverse), and coupling the
+ * simulation to it here would be a layering mistake for a mark that is
+ * already cheap enough to just cover both directions. */
+static inline void mark_depth_band(sand_t *s, int y)
+{
+    if (s->dirty_rows == NULL) {
+        return;
+    }
+    int y0 = y - MATERIAL_LIQUID_DEPTH_BAND;
+    int y1 = y + MATERIAL_LIQUID_DEPTH_BAND;
+    if (y0 < 0) {
+        y0 = 0;
+    }
+    if (y1 >= s->h) {
+        y1 = s->h - 1;
+    }
+    memset(&s->dirty_rows[y0], 1, (size_t)(y1 - y0 + 1));
 }
 
 /* Settled-block bits, in block_state - the finer-grained sibling of
@@ -251,8 +305,8 @@ static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
 /* Marks block (bx,by) - the one containing (x,y) - and its up to 8
  * neighbours unsettled, unconditionally. Used only by touches that
  * happen OUTSIDE the gravity sweep (sand_set(), sand_erase(),
- * try_spawn_one(), and liquid's cross-flow/rebound passes in
- * sand_liquid.c), where there is no `moved_here`-style bookkeeping for
+ * try_spawn_one(), and liquid's cross-flow pass in sand_liquid.c), where
+ * there is no `moved_here`-style bookkeeping for
  * the pull-based any_neighbor_active() check above to observe on its
  * own next step.
  *
@@ -278,6 +332,22 @@ static inline bool block_or_neighbour_has_liquid(const sand_t *s, int bx,
 static inline void wake_block_and_neighbors(sand_t *s, int x, int y)
 {
     if (s->block_state == NULL) {
+        return;
+    }
+    /* DEFENSIVE, ADDED 2026-09-01 - a real device crash (Guru Meditation,
+     * Store/Load access fault) traced here through mark_move(), called
+     * from equalise_gas_one_cell() (sand_gas.c) with a gas grain's own
+     * destination coordinates. The unsigned cast just below this comment
+     * assumes x,y are always in-range grid coordinates - true of every
+     * OTHER call site, but the exact upstream source of an out-of-range
+     * (x, y) reaching this one was not pinned down before this landed;
+     * see mark_rows()'s own matching guard, just below in this same file,
+     * and the git history around both for the investigation. Cheap
+     * unsigned-compare, same idiom the rest of this file already uses -
+     * this does not paper over the real bug, it just stops it from
+     * reading/writing block_state out of bounds while that bug is still
+     * being tracked down. */
+    if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) {
         return;
     }
 
@@ -374,6 +444,7 @@ static inline void clear_content_flags(sand_t *s)
     s->may_have_heat_holder = false;
 
     s->may_have_withering   = false;
+    s->may_have_condenser   = false;
 }
 
 static inline void latch_content_flags(sand_t *s, cell_t cell)
@@ -401,6 +472,9 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
     }
     if (r->withers != 0) {
         s->may_have_withering = true;
+    }
+    if (r->condenses != 0) {
+        s->may_have_condenser = true;
     }
     /* Off ambient in EITHER direction is work to do: a frosted pane has to
      * warm back up just as a hot one has to cool down. At ambient exactly
@@ -438,7 +512,7 @@ static inline void latch_content_flags(sand_t *s, cell_t cell)
 /* The row-shaped bookkeeping mark_rows() always did, plus waking the
  * touched blocks - see wake_block_and_neighbors() above for why this is
  * only used outside the sweep (sand_set()/sand_erase()/try_spawn_one(),
- * and liquid's equalise_one_cell()/rebound_one_cell()). The sweep's own
+ * and liquid's equalise_one_cell()). The sweep's own
  * move-reporting call sites (sand.c's try_scatter()/try_fall_or_scatter()/
  * try_slide()/try_slide_pair(), and move_liquid_grain() in
  * sand_liquid.c) call mark_rows() directly instead - they need no block
@@ -614,10 +688,10 @@ typedef struct {
 } xflow_t;
 
 /* Defined in sand_liquid.c: the whole of a step's liquid work that does NOT
- * belong inside the main sweep - cross-flow levelling and the wall-rebound
- * splash. Called once from sand_step(), after that sweep finishes. `flow`
- * describes how this liquid levels - see xflow_t; `dx`/`dy` is gravity's own
- * dithered direction this step. */
+ * belong inside the main sweep - cross-flow levelling. Called once from
+ * sand_step(), after that sweep finishes. `flow` describes how this liquid
+ * levels - see xflow_t; `dx`/`dy` is gravity's own dithered direction this
+ * step. */
 void sand_step_liquids(sand_t *s, const xflow_t *flow, int dx, int dy);
 
 /* Defined in sand_gas.c: a gas grain's whole step - rising (reusing
@@ -678,8 +752,15 @@ void sand_step_gas(sand_t *s, int gx, int gy, int dx, int dy,
  * Empty space always yields. Anything else yields only to something denser,
  * which is how sand sinks through water while water cannot push its way back
  * up through sand. Static materials never yield whatever the arithmetic says,
- * so a wall stays a wall. */
-static inline bool can_enter(uint8_t mover_density, cell_t target)
+ * so a wall stays a wall.
+ *
+ * `mover_id` exists only for the one-pairing exception below, and costs
+ * nothing on every other call: it is a plain uint8_t already sitting in a
+ * register at every call site (CELL_MATERIAL() of a cell_t already in
+ * hand), and the branch that reads it is reached only once density has
+ * already said yes - the common misses (empty target aside, already
+ * handled above; static target; insufficient density) never touch it. */
+static inline bool can_enter(uint8_t mover_density, uint8_t mover_id, cell_t target)
 {
     if (CELL_IS_EMPTY(target)) {
         return true;
@@ -697,8 +778,21 @@ static inline bool can_enter(uint8_t mover_density, cell_t target)
      * rather than landing on it, which is exactly what it looked like.
      * Density still decides fluids - sand sinks in water, snow floats on
      * it - and stops deciding anything between solids. */
-    return (t->kind == KIND_LIQUID || t->kind == KIND_GAS) &&
-           mover_density > t->density;
+    if (!(t->kind == KIND_LIQUID || t->kind == KIND_GAS) ||
+        mover_density <= t->density) {
+        return false;
+    }
+
+    /* Sand does not sink into oil, despite being denser (60 against 22 -
+     * see material.c). Oil's density has to stay low so it floats on
+     * every OTHER liquid it meets there, which makes it look lighter than
+     * sand too - a side effect of the one shared scalar, not something
+     * true about sand and oil specifically. Named directly by material id
+     * rather than given its own field: this is the only pairing density
+     * gets wrong, so a generic mechanism would cost more than it explains.
+     * Reached only past the density check above, so every other mover and
+     * every other target pay nothing for it. */
+    return !(mover_id == MAT_SAND && CELL_MATERIAL(target) == MAT_OIL);
 }
 
 /* Whether a cell exists and can be entered, without moving anything into it.
@@ -706,10 +800,11 @@ static inline bool can_enter(uint8_t mover_density, cell_t target)
  * Needed so scatter can be decided ONLY for cells that could actually fall.
  * Drawing a random number for every cell regardless would undo the single
  * biggest saving in this loop - see the note on the common path below. */
-static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density)
+static inline bool cell_open(const uint8_t *row, int nx, int w, uint8_t density,
+                             uint8_t mat_id)
 {
     return row != NULL && (unsigned)nx < (unsigned)w &&
-           can_enter(density, row[nx]);
+           can_enter(density, mat_id, row[nx]);
 }
 
 /* Move a grain into `to_row` at column `nx`, if that cell exists and is free.
@@ -721,7 +816,7 @@ static inline bool move_to(uint8_t *from_row, uint8_t *to_row,
                            int x, int nx, int w, cell_t mover, uint8_t density)
 {
     if (to_row == NULL || (unsigned)nx >= (unsigned)w ||
-        !can_enter(density, to_row[nx])) {
+        !can_enter(density, CELL_MATERIAL(mover), to_row[nx])) {
         return false;
     }
 
@@ -778,7 +873,8 @@ static inline bool try_scatter(sand_t *s, uint8_t *row, uint8_t *prow,
                                const int *slide_b, cell_t grain,
                                uint8_t density, int scatter)
 {
-    if (scatter == 0 || !cell_open(prow, x + dx, w, density)) {
+    if (scatter == 0 ||
+        !cell_open(prow, x + dx, w, density, CELL_MATERIAL(grain))) {
         return false;
     }
 

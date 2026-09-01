@@ -11,12 +11,12 @@
  * A cell per pixel would be 368 x 448 = 165 KB of grid. After the framebuffer
  * takes 322 KB of the chip's ~424 KB there is nowhere near that left, so a
  * cell is a square block of `cell` x `cell` pixels, and `cell` is chosen from
- * the boot menu rather than fixed: HIGH (2 px) gives a 184 x 224 grid, or
- * 41 KB; MEDIUM (3 px, the default) gives 122 x 149, or 18 KB; LOW (4 px)
- * gives 92 x 112, or 10 KB; VERY LOW (6 px) gives 61 x 74, or about 4.5 KB.
- * All four still read as grains rather than bricks - the choice trades
- * fineness for the step budget a finer grid costs, not for whether it looks
- * right.
+ * the boot menu rather than fixed: ULTRA (2 px) gives a 184 x 224 grid, or
+ * 41 KB; HIGH (3 px) gives 122 x 149, or 18 KB; NORMAL (4 px, the default)
+ * gives 92 x 112, or 10 KB; LOW (6 px) gives 61 x 74, or about 4.5 KB;
+ * VERY LOW (8 px) gives 46 x 56, or about 2.5 KB. All five still read as
+ * grains rather than bricks - the choice trades fineness for the step budget
+ * a finer grid costs, not for whether it looks right.
  *
  * Every allocation below is sized for the finest quality (2 px) regardless of
  * which one is active, so switching quality on the menu never reallocates
@@ -75,13 +75,14 @@ static const char *TAG = "sand";
  * see the comment on `quality` itself. */
 typedef struct { const char *name; int cell; } quality_t;
 static const quality_t qualities[] = {
-    { "HIGH",     2 },
-    { "MEDIUM",   3 },
-    { "LOW",      4 },
-    { "VERY LOW", 6 },
+    { "ULTRA",    2 },
+    { "HIGH",     3 },
+    { "NORMAL",   4 },
+    { "LOW",      6 },
+    { "VERY LOW", 8 },
 };
 #define QUALITY_COUNT ((int)(sizeof(qualities) / sizeof(qualities[0])))
-#define QUALITY_DEFAULT 1        /* MEDIUM */
+#define QUALITY_DEFAULT 2        /* NORMAL */
 
 /* Persists across app visits by design - only a device reboot resets this to
  * QUALITY_DEFAULT. Reset in sand_enter() would mean picking LOW, backing out
@@ -479,7 +480,7 @@ static sand_ui_t ui = {
 static uint8_t    *grid;
 static uint8_t    *dirty_rows;   /* GRID_H_MAX bytes: which rows changed -
                                    * only the first grid_h are in use at any
-                                   * quality below HIGH */
+                                   * quality below ULTRA */
 static uint8_t    *sleep_blocks; /* BLOCK_COLS_MAX*BLOCK_ROWS_MAX bytes:
                                    * settled blocks to skip - see
                                    * sand_enable_sleeping() */
@@ -495,7 +496,7 @@ static impulse_t  *impulse_buf;  /* APP_IMPULSE_MAX entries: grains in
  * genuinely separate blobs in one row keep being sent separately instead
  * of one box spanning the gap between them. See row_runs.h. GRID_H_MAX *
  * ROW_MAX_RUNS entries each - only the first grid_h rows are in use at any
- * quality below HIGH; row_run_n[cy] says how many of a row's ROW_MAX_RUNS
+ * quality below ULTRA; row_run_n[cy] says how many of a row's ROW_MAX_RUNS
  * slots are actually in use. */
 static uint16_t   *row_run_x0;
 static uint16_t   *row_run_x1;
@@ -504,6 +505,17 @@ static sand_t      sim;
 static tilt_t      tilt;
 static bool        failed;
 static uint32_t    label_left_ms;    /* countdown for the mode label */
+
+/* False from the moment start_sim() runs until the finger that pressed
+ * START actually lifts. Without this, the same touch that tapped START is
+ * still `input->down` on the first RUNNING frame, and handle_pour_input()
+ * cannot tell that touch apart from a deliberate pour - it would drop a
+ * blob of sand under wherever START happened to be the instant the
+ * simulation starts. The same shape as sand_ui_t's own `swallow_release`
+ * guard (see sand_ui.h) for the identical reason: wait for a release, not a
+ * fixed delay, since a delay would either cut off a genuinely fast tap or
+ * still fire early under a slow one. */
+static bool        input_ready;
 
 /* Which shell quarter the palette panel was last actually painted at - see
  * sand_frame()'s SAND_UI_PALETTE handling, which repaints the sand
@@ -680,6 +692,7 @@ static void start_sim(void)
     ui.mode = SAND_MODE_PAINT;
     label_left_ms = 0;
     failed = false;
+    input_ready = false;
 
     if (dirty_rows == NULL) {
         dirty_rows = malloc(GRID_H_MAX);
@@ -808,6 +821,10 @@ static void start_sim(void)
      * material (currently just gas) has a nonzero figure in the table, so
      * this is a no-op for sand, water and stone. */
     sand_set_decay(&sim, SAND_DECAY_PER_MATERIAL);
+    /* Per-material, same reasoning as decay above - only acid has a
+     * nonzero figure in the table, so this is a no-op for everything
+     * else. */
+    sand_set_evaporates(&sim, SAND_EVAPORATES_PER_MATERIAL);
     sand_set_soak(&sim, SAND_SOAK_PER_MATERIAL);
     /* Per-material too - only gas has a figure below full speed, so this
      * is a no-op for sand, water and stone. */
@@ -833,10 +850,6 @@ static void start_sim(void)
          * app degrades to plain downward sand rather than refusing to run. */
         ESP_LOGW(TAG, "No IMU - falling back to fixed downward gravity");
     }
-
-    /* A starting heap, so the app is doing something the moment it opens
-     * rather than presenting an empty screen and no clue what to do. */
-    sand_spawn(&sim, grid_w / 2, grid_h / 4, grid_w / 5, MAT_SAND);
 
     ESP_LOGI(TAG, "%d x %d grid, %d bytes, %d px cells",
              grid_w, grid_h, grid_w * grid_h, cell);
@@ -881,17 +894,31 @@ static void sand_exit(void)
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
 /* A band of light travelling across anything hatched.
  *
- * This replaces a version that aligned the shine to the board's tilt. That
- * was a nicer idea and it never became visible: the direction was right,
- * the repaint was right by the end, and three rounds of looking at it on
- * the device still could not see it. Two diagonals of single pixels
- * differing only in WHICH way they lean is simply not a difference the eye
- * picks up on a 184x224 grid, however correct the arithmetic underneath.
+ * An early version of this aligned the shine to the board's tilt by
+ * picking WHICH of two fixed diagonals it travelled along. That was a
+ * nicer idea and it never became visible: the direction was right, the
+ * repaint was right by the end, and three rounds of looking at it on the
+ * device still could not see it. Two diagonals of single pixels differing
+ * only in WHICH way they lean is simply not a difference the eye picks up
+ * on a 184x224 grid, however correct the arithmetic underneath.
  *
  * Movement is a difference the eye cannot miss, which is the whole reason
- * to prefer this. The band sweeps, so the glass is doing something.
+ * the band exists at all - it sweeps, so the glass is doing something,
+ * whatever else changes about it.
  *
- * SHINE_PERIOD is the distance between bands along the diagonal, and the
+ * GRAVITY IS BACK, but as a continuous angle rather than a choice of two.
+ * shine_ux_q8/shine_uy_q8 (below) are a Q8 unit vector of the current
+ * gravity direction - see material_shine_direction() in material.h - and
+ * paint_row_n() projects each pixel onto it instead of onto the fixed
+ * (1, 1) diagonal the band used before. Tilting the board now visibly
+ * ROTATES which way the band runs, not merely which of two ways it leans,
+ * which is a different and considerably less subtle claim than the one
+ * that failed to show up before - but it is still a claim about a 184x224
+ * grid that has not yet been confirmed on the device, and the same
+ * "picked the wrong difference to make visible" failure mode applies
+ * until it has.
+ *
+ * SHINE_PERIOD is the distance between bands along that direction, and the
  * band moves SHINE_STEP_PX every SHINE_STEP_MS - about 1.3 seconds for one
  * band to reach where the one before it started.
  *
@@ -918,6 +945,17 @@ static void sand_exit(void)
 
 static int      shine_offset;
 static uint32_t shine_elapsed_ms;
+
+/* The Q8 unit vector the shine band currently sweeps along - see
+ * material_shine_direction()'s own comment in material.h for the fixed-
+ * point convention and why gravity's direction is computed there, once a
+ * frame, rather than here per pixel. Initialised to the plain (1, 1)
+ * diagonal so a frame drawn before update_shine_direction() has ever run
+ * (there is none in practice - sand_frame() calls it before the first
+ * draw - but a static default of (0, 0) would be a silent trap for
+ * whoever adds one) looks exactly like the mechanism always used to. */
+static int shine_ux_q8 = 181;
+static int shine_uy_q8 = 181;
 
 /* Which rows had anything hatched in them last time they were painted, so
  * a tick of the shine can repaint those and leave the rest alone.
@@ -1107,6 +1145,52 @@ static unsigned local_depth_weight_h_q8;
 static bool local_depth_v_reverse;
 static bool local_depth_h_reverse;
 
+/* THE DEBOUNCED PARALLEL WALK - what feeds the BLEND's vertical component,
+ * in place of col_local_depth[]'s own raw value.
+ *
+ * col_local_depth[] above stays the RAW, instantaneous walk - it has to,
+ * or an obstacle breaking a pool's surface would take extra frames to
+ * reveal (test_local_depth_follows_the_puddles_own_shape). This array runs
+ * the same incremental walk in parallel, but only ever accumulates through
+ * LIQUID cells (`material_of(row[cx])->kind == KIND_LIQUID` gates it, see
+ * paint_row_n() below) - any non-liquid cell resets it to a clean 0 rather
+ * than letting a run of open air pollute the value a real boundary
+ * inherits - and a RESET only commits once the SAME ROW has asked for it
+ * on two consecutive painted frames, tracked by row index in
+ * col_top_row[cx], not by column-chain position.
+ *
+ * Row-keyed on purpose: a settled pool's topmost cell blinking empty/full
+ * for one frame never gets its neighbour row to ask twice from the SAME
+ * row index, so it is absorbed; a genuine, lasting change (the pool
+ * draining, an obstacle appearing) keeps asking from the same new row and
+ * commits within one extra frame - not something a human eye can tell
+ * from immediate.
+ *
+ * KNOWN LIMITATION, ACCEPTED: a column with TWO reset points (an obstacle
+ * inside an otherwise open pool) has both competing for the single
+ * col_top_row[cx] slot, so the shallower (true surface) one can lag its
+ * own commit by a frame. True per-row memory would fix it, at the cost of
+ * one byte per CELL rather than per column - unaffordable on this
+ * device's heap (grid itself already costs 41,216 bytes, see start_sim()'s
+ * own comment on that allocation), so this is where the trade lands.
+ *
+ * ONLY DEBOUNCES THE VERTICAL WALK - h_running_depth below has no
+ * cross-call state to extend (it is call-local, reset once per row), so
+ * debouncing it would need a genuinely new mechanism; left for a
+ * follow-up, unchanged by the blend replacing the discrete axis choice
+ * this was originally built alongside. There is no "dominant axis" for
+ * this array to be gated on any more, either: it debounces col_local_
+ * depth[cx] every frame, unconditionally, exactly like the raw walk it
+ * rides on - what changed is only where its result goes afterward (into
+ * the blend below, rather than being the sole depth reading). */
+static uint8_t col_stable_depth[GRID_W_MAX];
+
+/* The row index of column cx's most recent boundary request, confirmed or
+ * still just a one-frame candidate - see col_stable_depth[]'s own comment
+ * above for the full mechanism. 255 means "nothing tracked yet" (GRID_H_MAX
+ * is 224, comfortably under 255, so that value can never be a real row). */
+static uint8_t col_top_row[GRID_W_MAX];
+
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
  * frame's own local-depth blend, not last frame's, and working out the
@@ -1181,7 +1265,16 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * at all, unlike col_local_depth[]: reset once per ROW, right here, not
      * persisted across paint_row_n() calls, because the horizontal case's
      * "toward the surface" neighbour always sits inside the SAME row this
-     * function is already walking start to finish. */
+     * function is already walking start to finish.
+     *
+     * NOT DEBOUNCED - see col_stable_depth[]'s own comment above for why
+     * the vertical case's debounce cannot simply be copied here: it rides
+     * on a per-column array that already exists for an unrelated reason
+     * (cross-ROW persistence), and this case has nothing equivalent to
+     * ride on. A horizontal-dominant frame (device held mostly on its
+     * side) can still show the flicker this file's LOCAL DEPTH section
+     * otherwise kills; fixing that needs a genuinely new per-row array,
+     * left for a follow-up rather than folded into this change. */
     unsigned h_running_depth = 0u;
 
     for (int cx_i = 0; cx_i < grid_w; cx_i++) {
@@ -1254,27 +1347,71 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             : material_grain_hash(cx, cy);
 
         /* THE PER-CELL COST OF LOCAL DEPTH, in full, now that BOTH walks run
-         * unconditionally and get BLENDED: two comparisons against a
-         * neighbour's material id (one per axis) instead of one, one array
-         * read+write (vertical) AND one local-variable read+write
-         * (horizontal) instead of either/or, plus the blend itself - one
-         * multiply, one add, one shift, no divide (the only divide is
-         * update_local_depth_gravity()'s, once a frame, not here). Roughly
-         * DOUBLE what the single-axis version cost, and still O(1) per cell
-         * with no per-cell branch on gravity and no full-grid pass - still
-         * affordable, just no longer free. See col_local_depth[]'s own
-         * comment above this function for the full mechanism. Computed for
-         * every cell, liquid or not - the same as the old depth_acc was -
-         * because material_colours() is the only consumer that ever reads
-         * the result (only for a liquid's interior), and a branch to skip
-         * this for non-liquids would cost more than the comparisons it
-         * would save. */
+         * unconditionally and get BLENDED, and the vertical walk's RESULT is
+         * additionally debounced before it enters that blend: two
+         * comparisons against a neighbour's material id (one per axis), one
+         * array read+write for the raw vertical walk PLUS one more for its
+         * debounced parallel (col_stable_depth[]/col_top_row[] - see that
+         * array's own comment above this function for the full mechanism,
+         * including the two bugs an earlier version of it had), one
+         * local-variable read+write for the horizontal walk, plus the blend
+         * itself - one multiply, one add, one shift, no divide (the only
+         * divide is update_local_depth_gravity()'s, once a frame, not here).
+         * Computed for every cell, liquid or not - the same as the old
+         * depth_acc was - because material_colours() is the only consumer
+         * that ever reads the result (only for a liquid's interior), and a
+         * branch to skip this for non-liquids would cost more than the
+         * comparisons it would save. */
         const bool v_same_material = (v_toward_surface != NULL) &&
             (CELL_MATERIAL(v_toward_surface[cx]) == CELL_MATERIAL(row[cx]));
-        const unsigned vdepth = v_same_material
+        const unsigned vdepth_raw = v_same_material
             ? (col_local_depth[cx] < 255u ? col_local_depth[cx] + 1u : 255u)
             : 0u;
-        col_local_depth[cx] = (uint8_t)vdepth;
+        col_local_depth[cx] = (uint8_t)vdepth_raw;
+
+        /* THE DEBOUNCE ITSELF, riding on the raw vertical walk above but
+         * feeding the BLEND below rather than being the sole depth reading
+         * the way it was on main - see col_stable_depth[]'s own comment
+         * above this function for the full mechanism (and the two bugs an
+         * earlier version of this block had, found from exactly this kind
+         * of trace). There is no freeze branch here any more: the diagonal
+         * dead zone and the axis Schmitt trigger it used to protect are
+         * both gone (LOCAL DEPTH's own top comment) - the blend never has a
+         * "wrong regime" reading for a freeze to guard against, so this is
+         * exactly main's original debounce, just no longer wrapped in a
+         * branch that could suspend it. */
+        unsigned vdepth;
+        if (material_of(row[cx])->kind != KIND_LIQUID) {
+            /* NOT a liquid cell: depth is irrelevant here - material_
+             * colours() never reads it for anything but a liquid interior
+             * - and must not be allowed to accumulate through this cell,
+             * or a run of open air (or any other non-liquid material)
+             * above a real boundary corrupts the value that boundary
+             * inherits. Clean reset, and col_top_row[cx] is left alone -
+             * this cell is not a boundary request of any kind. */
+            vdepth = 0u;
+        } else if (v_same_material) {
+            /* Confirmed continuation of a liquid body - climb exactly like
+             * the raw walk. Not a boundary request either, so
+             * col_top_row[cx] is left alone here too. */
+            vdepth = col_stable_depth[cx] < 255u
+                ? col_stable_depth[cx] + 1u : 255u;
+        } else if (col_top_row[cx] == (uint8_t)cy) {
+            /* THIS EXACT ROW asked for a reset the last time it was
+             * painted too - a real, lasting boundary, not a blink.
+             * Commit. */
+            vdepth = 0u;
+        } else {
+            /* A reset is being asked for at a row that was NOT the tracked
+             * boundary - either nothing was tracked yet, or the boundary
+             * moved. HOLD: keep climbing as if nothing happened, and start
+             * tracking THIS row, so it asking again next time it is
+             * painted will match and commit. */
+            vdepth = col_stable_depth[cx] < 255u
+                ? col_stable_depth[cx] + 1u : 255u;
+            col_top_row[cx] = (uint8_t)cy;
+        }
+        col_stable_depth[cx] = (uint8_t)vdepth;
 
         const bool has_h_neighbour =
             local_depth_h_reverse ? (cx < grid_w - 1) : (cx > 0);
@@ -1284,13 +1421,17 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         const unsigned hdepth = h_same_material
             ? (h_running_depth < 255u ? h_running_depth + 1u : 255u)
             : 0u;
-        h_running_depth = hdepth;
+        h_running_depth = hdepth;   /* not debounced - see
+                                      * h_running_depth's own comment */
 
         /* THE BLEND ITSELF - see LOCAL DEPTH's own top comment for why a
          * crossfade replaces a discrete switch. `local_depth_weight_h_q8`
          * is 0-256, computed once per frame; this is the whole reason a
          * per-cell divide is never needed: it is a fixed Q8 fraction, not a
-         * ratio recomputed here. */
+         * ratio recomputed here. Blends the DEBOUNCED vertical value, not
+         * the raw one - hdepth stays undebounced, matching the precedent
+         * h_running_depth's own comment establishes: it has no cross-call
+         * state to ride a debounce on. */
         const unsigned depth =
             ((vdepth * (256u - local_depth_weight_h_q8)) +
              (hdepth * local_depth_weight_h_q8)) >> 8;
@@ -1327,8 +1468,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * pattern printed on one. A single family of lines was almost
          * invisible; the crossings are what the eye picks up.
          *
-         * The gravity-aligned diagonal is the one drawn slightly stronger
-         * (it picks `lit` first), so the grain still follows the board.
+         * Both diagonals are drawn identically today - no gravity
+         * asymmetry between them, and none wanted: this is the surface's
+         * fixed woven texture, not the light landing on it. An earlier
+         * version favoured whichever one aligned with the board's tilt;
+         * see SHINE_PERIOD's own comment above for why a gravity-aligned
+         * difference like that turned out to be imperceptible on this
+         * grid and was dropped - the shine below is where gravity is
+         * expressed now, as a continuously rotating angle rather than a
+         * choice between these two.
          *
          * Measured in SCREEN pixels rather than within the block, so the
          * lines run unbroken from one cell into the next instead of
@@ -1342,6 +1490,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * broken by any of this. */
         const int base = (cx + cy) * n;
         const int diff = (cx - cy) * n;
+
+        /* The shine's own axis, in Q8 screen-pixel units: this cell's
+         * origin projected onto the current gravity direction (shine_ux_q8/
+         * shine_uy_q8, updated once a frame - see material_shine_direction()
+         * in material.h). Computed once per cell, same as base/diff above,
+         * so the per-pixel loop below only ever adds dx/dy's own share of
+         * the projection. */
+        const int shine_base_q8 = (cx * n) * shine_ux_q8 + (cy * n) * shine_uy_q8;
+
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
                 /* One pixel every eight, both ways. Wide bands were the
@@ -1354,21 +1511,37 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                  * of two, and it is fine on the negative values `w` takes
                  * left of the diagonal: two's complement just shifts the
                  * phase, which nothing here can tell apart from any other
-                 * phase. */
+                 * phase.
+                 *
+                 * Fixed to the (1, 1)/(1, -1) diagonals regardless of
+                 * gravity - this is the WOVEN TEXTURE of the surface, not
+                 * the light landing on it, and a texture that rotated with
+                 * every tilt would look like the material itself was
+                 * turning rather than like a fixed pane being lit from a
+                 * new angle. Only the shine below follows gravity. */
                 const bool grain = (((base + dx + dy) & 7) == 0) ||
                                    (((diff + dx - dy) & 7) == 0);
 
-                /* SHINE: a band travelling along the diagonal, advanced on
-                 * a clock rather than aimed by anything. A mask rather
-                 * than a modulo because SHINE_PERIOD is a power of two,
-                 * and it is fine on the values left of the origin -
-                 * two's complement shifts the phase, which nothing here
-                 * can tell from any other phase.
+                /* SHINE: a band travelling along the CURRENT GRAVITY
+                 * DIRECTION, advanced on a clock - see this function's own
+                 * top comment for why both halves of that matter. Projecting
+                 * (dx, dy) onto shine_ux_q8/shine_uy_q8 is a plain 2D dot
+                 * product in Q8 fixed point; the `>> 8` back down to pixel
+                 * units is an arithmetic right shift, sign-extending on this
+                 * toolchain, so it is fine on the negative projections a
+                 * pixel above or left of a cell's origin produces - the same
+                 * trust the mask below places in two's complement.
+                 *
+                 * A mask rather than a modulo because SHINE_PERIOD is a
+                 * power of two, and it is fine on the values left of the
+                 * origin - two's complement shifts the phase, which nothing
+                 * here can tell from any other phase.
                  *
                  * `< n` is the width: one CELL, so the band looks the same
                  * at every quality setting. n is a compile-time constant
                  * here, so this is a comparison against a literal. */
-                const int along = (base + dx + dy + shine_offset)
+                const int shine_q8 = shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
+                const int along = ((shine_q8 >> 8) + shine_offset)
                                   & (SHINE_PERIOD - 1);
 
                 /* The band wins wherever it falls, including over the
@@ -1402,6 +1575,7 @@ static void paint_row(gfx_color_t *fb, const gfx_color_t *pal, int cy,
     case 3:  paint_row_n(fb, pal, cy, row, 3); break;
     case 4:  paint_row_n(fb, pal, cy, row, 4); break;
     case 6:  paint_row_n(fb, pal, cy, row, 6); break;
+    case 8:  paint_row_n(fb, pal, cy, row, 8); break;
     /* Not reachable for any cell size in qualities[] above - if it is ever
      * hit, that table grew an entry this switch does not know about, which
      * is a bug there, not here. Falls back to the finest size (2) rather
@@ -1566,15 +1740,15 @@ static void draw_dirty_rows(bool shine_moved)
 
 /* The marker's fixed on-screen size, in pixels rather than cells - the same
  * reasoning POUR_RADIUS_PX's comment above gives for the pour/erase
- * brushes: a cell is not a physical size, it is 2 px at HIGH and 6 px at
+ * brushes: a cell is not a physical size, it is 2 px at ULTRA and 8 px at
  * VERY LOW for the same object, so a marker drawn "one cell wide" would be
  * a different physical mark at every quality setting, and it would shrink
- * to nearly nothing at HIGH specifically - the opposite of what a marker
+ * to nearly nothing at ULTRA specifically - the opposite of what a marker
  * that has to be findable by a finger needs. Findability is a property of
  * the finger, not of the grid, so the marker gets a size the grid has no
  * say over.
  *
- * Tuned by eye. At MEDIUM's 3 px cells this spans about four cells across,
+ * Tuned by eye. At HIGH's 3 px cells this spans about four cells across,
  * so it does sit over a little of what the source underneath is actually
  * producing - an accepted trade for being visible at all, not an
  * oversight. */
@@ -2128,12 +2302,9 @@ static void draw_palette(const input_t *input)
  *-------------------------------------------------------------------------*/
 
 /* Where is down, and how hard? The GYROSCOPE says how fast the board is
- * turning. It sets how quickly the tilt filter tracks a genuine
- * reorientation, and - raw, unlike everything that filter smooths - it is
- * also what tells the sand how hard it is currently being flicked; see
- * sand_set_flick() and the comment above SAND_REBOUND_GAIN in sand.h. It is
- * deliberately not what shaking is read from - see tilt.h, and the note on
- * rotating not being shaking.
+ * turning, which sets how quickly the tilt filter tracks a genuine
+ * reorientation. It is deliberately not what shaking is read from - see
+ * tilt.h, and the note on rotating not being shaking.
  *
  * Falls back to straight down at full speed when there is no sensor. */
 static void read_gravity_input(uint32_t dt_ms, imu_sample_t *sample, int *gx,
@@ -2244,8 +2415,8 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
     /* The radii are defined in pixels and divided down here rather than
      * defined in cells, so a finger's-width brush stays a finger's width on
      * screen at every quality - a cell-based radius would instead have
-     * covered twice the physical area at LOW that it does at HIGH, since a
-     * LOW cell is twice as many pixels across.
+     * covered twice the physical area at NORMAL that it does at ULTRA, since
+     * a NORMAL cell is twice as many pixels across.
      *
      * Rounded to nearest (+ cell / 2 before dividing) rather than truncated,
      * because this is a physical size in pixels being converted to a count
@@ -2254,7 +2425,7 @@ static void handle_pour_input(const input_t *input, uint32_t dt_ms)
      * 3 or 4 px, and a 40% shrink at 6 px, where 10 / 6 truncates to 1
      * instead of rounding to 2. Never rounds to 0 for any quality in the
      * table: the smallest result is POUR_RADIUS_PX at the coarsest cell,
-     * (10 + 3) / 6 = 2. */
+     * (10 + 4) / 8 = 1. */
     for (int i = 0; i < applications; i++) {
         if (ui.mode == SAND_MODE_ERASE) {
             sand_erase(&sim, cx, cy, (ERASE_RADIUS_PX + cell / 2) / cell);
@@ -2300,7 +2471,7 @@ static void log_direction_change(int gx, int gy, int jostle,
  * a stop over a moment rather than freezing between one frame and the next.
  * It is also the real behaviour, since a grain on a tray tilted by theta is
  * driven by g*sin(theta). */
-static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
+static void run_sim_steps(int gx, int gy, int jostle, int flow,
                           uint32_t dt_ms)
 {
     sim_accumulator_q8 += dt_ms * (uint32_t)flow;
@@ -2312,7 +2483,6 @@ static void run_sim_steps(int gx, int gy, int jostle, int flow, int rotation,
         sim_accumulator_q8 -= (uint32_t)steps * SIM_STEP_MS * 256;
     }
 
-    sand_set_flick(&sim, rotation);
     for (int i = 0; i < steps; i++) {
         sand_step(&sim, gx, gy, jostle);
     }
@@ -2428,9 +2598,10 @@ static void track_pour_split(const input_t *input, int64_t step_us,
 #endif
 
 /* The boot menu: START begins the simulation at the current quality, and the
- * quality button cycles HIGH/MEDIUM/LOW and stays on the menu. Modeled on
- * ui_launcher.c's own frame - same ui_begin()/ui_begin_screen()/
- * mu_end_window()/ui_end() shape, one full-screen window with no chrome.
+ * quality button cycles ULTRA/HIGH/NORMAL/LOW/VERY LOW and stays on the
+ * menu. Modeled on ui_launcher.c's own frame - same ui_begin()/
+ * ui_begin_screen()/mu_end_window()/ui_end() shape, one full-screen window
+ * with no chrome.
  *
  * The shell (main.c) draws the home-swipe hint over whatever the app drew
  * and owns the swipe-up-to-exit gesture itself, so this menu needs no back
@@ -2720,20 +2891,39 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
         gfx_mark_dirty(0, 0, GFX_WIDTH, GFX_HEIGHT);
     }
 
-    handle_pour_input(input, dt_ms);
+    /* input_ready's own guard: skip pour/erase/detonate/spawn entirely while
+     * the START tap that opened this run is still held down - see
+     * input_ready's own comment for why this waits for the release rather
+     * than a fixed delay. */
+    if (input_ready) {
+        handle_pour_input(input, dt_ms);
+    } else if (!input->down) {
+        input_ready = true;
+    }
     log_direction_change(gx, gy, jostle, &sample);
 
 #if CONFIG_LAUNCHER_DEVELOPMENT
     const int64_t t0 = esp_timer_get_time();
 #endif
 
-    run_sim_steps(gx, gy, jostle, flow, rotation, dt_ms);
+    run_sim_steps(gx, gy, jostle, flow, dt_ms);
 
     /* Same gravity sand_step() above was just given, so a liquid rim's
      * highlight tracks the same tilt the sand itself is responding to.
      * Once per frame, not once per cell - see material_set_gravity()'s own
      * comment for why that split is what keeps the paint loop cheap. */
     material_set_gravity(gx, gy);
+
+    /* Same reason, same frequency, for the travelling shine's own
+     * direction - material_shine_direction() is pure and stateless (see
+     * its own comment in material.h), so all it needs from here is
+     * somewhere to land once a frame rather than being called from inside
+     * paint_row_n()'s per-pixel loop. A tilt that has not yet crossed into
+     * the next shine_offset tick still gets picked up within SHINE_STEP_MS
+     * of changing - draw_dirty_rows() repaints every row_has_shine[] row
+     * on each tick regardless of what moved it, and paint_row_n() always
+     * reads whatever shine_ux_q8/shine_uy_q8 hold at the time it runs. */
+    material_shine_direction(gx, gy, &shine_ux_q8, &shine_uy_q8);
 
     /* The liquid interior's LOCAL DEPTH blend needs its own per-frame facts
      * from this same gravity vector - the blend weight, and which way each
@@ -2781,17 +2971,41 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
 #endif
 }
 
+/* Diagnostic only - see app_t's own comment in app.h for the contract
+ * (a JSON object fragment, starting `{`, ending `}`, no trailing comma)
+ * and screenshot.c's dump_state() for where this actually gets spliced in.
+ *
+ * Exposes tilt_x()/tilt_y() - the SMOOTHED gravity the sim actually acts
+ * on, not the raw IMU counts device_state.h already reports. tilt.c's own
+ * filter can differ substantially from the raw reading during a fast
+ * rotation (see tilt.h's own top comment on TILT_TAU_MOVING_MS), which a
+ * capture cannot otherwise tell apart from a raw ax/ay reading elsewhere
+ * in the same dump.
+ *
+ * Originally added alongside two more fields - local_depth_in_deadzone and
+ * local_depth_freeze_active - to debug a diagonal-dead-zone freeze that no
+ * longer exists (LOCAL DEPTH's own top comment in this file: the blend
+ * replaced the discrete axis choice the dead zone existed to protect, so
+ * there is no freeze left to report on). Removed with that mechanism
+ * rather than left behind reporting fields that no longer mean anything. */
+static void sand_diagnostic_json(char *out, size_t len)
+{
+    snprintf(out, len, "{\"tilt_x\":%d,\"tilt_y\":%d}",
+             tilt_x(&tilt), tilt_y(&tilt));
+}
+
 /* .home_gesture deliberately left unset (false) - see app_t's own comment.
  * A touch drag starting near a screen edge to steer or pour sand is easy to
  * mistake for the shell's swipe-home gesture, so this app needs that
  * detection off entirely rather than merely hiding its hint strip, and
  * provides its own way back to the launcher instead. */
 const app_t app_sand = {
-    .name    = "Falling Sand",
-    .summary = "Tilt to steer, touch to pour",
-    .enter   = sand_enter,
-    .frame   = sand_frame,
-    .exit    = sand_exit,
+    .name           = "Falling Sand",
+    .summary        = "Tilt to steer, touch to pour",
+    .enter          = sand_enter,
+    .frame          = sand_frame,
+    .exit           = sand_exit,
+    .diagnostic_json = sand_diagnostic_json,
 };
 
 APP_REGISTER(app_sand);

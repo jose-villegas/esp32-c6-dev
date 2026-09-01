@@ -57,10 +57,9 @@ static const uint8_t cube_corner_colors[S3L_CUBE_VERTEX_COUNT][3] = {
     {   0, 255, 255 },  /* 7  left,  top,    back  */
 };
 
-/* Exposed for performance testing (suite_cube_perf.c). */
-S3L_Model3D cube;
-S3L_Scene   scene;
-uint32_t    elapsed_ms;
+static S3L_Model3D cube;
+static S3L_Scene   scene;
+static uint32_t    elapsed_ms;
 
 /* The toggle this file exists to demonstrate: whether cube_frame() clears
  * the whole framebuffer every frame (like every other app) or only the
@@ -68,7 +67,11 @@ uint32_t    elapsed_ms;
  * relying on gfx_clear()'s implicit "everything changed". On by default -
  * the partial-clear path this enables is what the cube app is meant to
  * showcase. Flipped from inside draw_menu(), not directly by BOOT any
- * more - see menu_open below and cube_frame(). */
+ * more - see menu_open below and cube_frame().
+ *
+ * Exposed (suite_cube_perf.c forces this true in its fixture, so a stray
+ * BOOT-menu toggle left over from manual testing can never silently skew
+ * a perf run). */
 bool partial_updates = true;
 
 /* Whether the BOOT-opened menu (draw_menu()) is showing instead of the
@@ -77,12 +80,12 @@ bool partial_updates = true;
  * partial_updates toggle, lives behind BOOT in here, the same
  * one-physical-button-one-screen-level-concern split app_diagnostics.c's
  * page cycling and app_sand.c's SAND_UI_MENU/RUNNING split already use. */
-bool menu_open;
+static bool menu_open;
 
 /* This frame's drawn-pixel bounds, accumulated by shade_pixel() while
  * partial_updates is on - reset to an empty range at the top of
  * cube_frame(), widened by every covered pixel small3dlib reports. */
-int frame_x0, frame_y0, frame_x1, frame_y1;
+static int frame_x0, frame_y0, frame_x1, frame_y1;
 
 /* On-screen framerate readout - the other half of what makes the toggle
  * above worth having: main.c's own report_fps() only ever reaches a serial
@@ -91,14 +94,14 @@ int frame_x0, frame_y0, frame_x1, frame_y1;
  * esp_timer_get_time() like report_fps() does, so this needs nothing beyond
  * what cube_frame() is already handed. */
 #define FPS_WINDOW_MS 500
-uint32_t fps_frame_count;
-uint32_t fps_window_elapsed_ms;
-double   fps_value;
+static uint32_t fps_frame_count;
+static uint32_t fps_window_elapsed_ms;
+static double   fps_value;
 
 /* Last ui_layout_generation() seen, so cube_frame() can tell a shell
  * orientation change happened since last frame - see its own comment for
  * why that forces a full clear rather than a partial one. */
-uint32_t last_layout_generation;
+static uint32_t last_layout_generation;
 
 static inline uint8_t clamp_to_byte(S3L_Unit v)
 {
@@ -340,7 +343,58 @@ static void draw_menu(const input_t *input)
     ui_end(BACKGROUND_RGB);
 }
 
-void cube_frame(uint32_t dt_ms, const input_t *input)
+/* The three phases below are exposed (suite_cube_perf.c) so the perf suite
+ * can time each on its own without ever touching small3dlib itself.
+ * small3dlib.h defines real, non-static functions when included with
+ * S3L_PIXEL_FUNCTION etc. set - not just declarations - so only the
+ * translation unit that already includes it (this one) can call
+ * S3L_newFrame()/S3L_drawScene() at all; a second #include from
+ * suite_cube_perf.c would redefine those same symbols and fail to link.
+ * cube_frame() below is just these three calls plus draw_fps(), so the
+ * suite's with_hud runs exercise the exact same code, not a hand copy of
+ * it that could drift out of sync. */
+void cube_update_rotation(uint32_t dt_ms)
+{
+    elapsed_ms += dt_ms;
+
+    cube.transform.rotation.y =
+        (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
+    cube.transform.rotation.x =
+        (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
+}
+
+void cube_clear_frame(void)
+{
+    /* gfx_set_partial_clear() delegates bounding-box erase and dirty marking
+     * of previous-frame bounds directly to gfx_clear(). */
+    gfx_set_partial_clear(partial_updates);
+    gfx_clear(gfx_rgb(BACKGROUND_RGB));
+}
+
+void cube_rasterize_frame(void)
+{
+    if (partial_updates) {
+        frame_x0 = GFX_WIDTH;
+        frame_y0 = GFX_HEIGHT;
+        frame_x1 = 0;
+        frame_y1 = 0;
+    }
+
+    S3L_newFrame();       /* resets the triangle sorter */
+    S3L_drawScene(scene); /* calls shade_pixel() for every covered pixel */
+
+    if (partial_updates) {
+        /* shade_pixel() wrote straight into gfx_framebuffer(), which gfx
+         * cannot see - this is the one gfx_mark_dirty() call that tells it
+         * what actually changed this frame. */
+        if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
+            gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0,
+                           frame_y1 - frame_y0);
+        }
+    }
+}
+
+static void cube_frame(uint32_t dt_ms, const input_t *input)
 {
     /* BOOT opens/closes the menu now, rather than flipping partial_updates
      * directly - the toggle moved onto its own bezel button inside
@@ -391,38 +445,9 @@ void cube_frame(uint32_t dt_ms, const input_t *input)
         fps_window_elapsed_ms = 0;
     }
 
-    elapsed_ms += dt_ms;
-
-    cube.transform.rotation.y =
-        (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_Y_MS) % S3L_F);
-    cube.transform.rotation.x =
-        (S3L_Unit)(((uint64_t)elapsed_ms * S3L_F / SPIN_PERIOD_X_MS) % S3L_F);
-
-    /* gfx_set_partial_clear() delegates bounding-box erase and dirty marking
-     * of previous-frame bounds directly to gfx_clear(). */
-    gfx_set_partial_clear(partial_updates);
-    gfx_clear(gfx_rgb(BACKGROUND_RGB));
-
-    if (partial_updates) {
-        frame_x0 = GFX_WIDTH;
-        frame_y0 = GFX_HEIGHT;
-        frame_x1 = 0;
-        frame_y1 = 0;
-    }
-
-    S3L_newFrame();       /* resets the triangle sorter */
-    S3L_drawScene(scene); /* calls shade_pixel() for every covered pixel */
-
-    if (partial_updates) {
-        /* shade_pixel() wrote straight into gfx_framebuffer(), which gfx
-         * cannot see - this is the one gfx_mark_dirty() call that tells it
-         * what actually changed this frame. */
-        if (frame_x1 > frame_x0 && frame_y1 > frame_y0) {
-            gfx_mark_dirty(frame_x0, frame_y0, frame_x1 - frame_x0,
-                           frame_y1 - frame_y0);
-        }
-    }
-
+    cube_update_rotation(dt_ms);
+    cube_clear_frame();
+    cube_rasterize_frame();
     draw_fps(input);
 }
 
