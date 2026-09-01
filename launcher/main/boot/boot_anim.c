@@ -137,25 +137,23 @@ static int32_t units(int n)
 /*---------------------------------------------------------------------------
  * The floor
  *
- * The complex plane zeta's value lives in, drawn as a grid at t = 0. Giving
- * it a floor rather than leaving the two axes bare is what makes the third
- * axis read as height instead of as a third line through the same point.
- *-------------------------------------------------------------------------*/
-
-/* Each ring is a pair of crossing lines - one horizontal, one vertical, on
- * each side of the origin - bounded to `far`, the outermost ring's own
- * reach, rather than a closed square outline. A closed square only ever
- * draws a ring's own PERIMETER; it never crosses another ring's lines, so
- * no matter how many of them nest together the result is concentric
- * outlines, not a grid with cells - a direction was missing. Crossing
- * lines are what an actual square grid is made of: every ring's pair
- * crosses every OTHER ring's pair too, and it is that lattice of
- * intersections, not just the outermost boundary, that reads as a mesh of
- * cells. (An earlier version of this drew crossing lines that ran
- * unbounded past the panel - the same idea, but with too few, too dim
- * rings and a broken shrink collapsing them all toward the origin, the
- * result read as a bare cross rather than a grid; bounded, dense and
- * bright, the same construction reads as intended.)
+ * The complex plane zeta's value lives in, drawn as a floor at t = 0.
+ * Giving it a floor rather than leaving the two axes bare is what makes
+ * the third axis read as height instead of as a third line through the
+ * same point.
+ *
+ * A POLAR grid - concentric rings, each a genuine circle, plus a handful
+ * of radial spokes - not the square lattice of crossing horizontal/
+ * vertical lines this used to be. Two things needed that, together:
+ * boot_anim_wave_height() (see boot_anim.h's "The wave" section) already
+ * lifts a point by its true distance from the origin, so a ring drawn as
+ * a real circle rises as one uniform ring, exactly like a water ripple's
+ * own wavefront; a square ring cannot ever BE that shape, whatever its
+ * height does, and neither can its COLOUR - boot_anim_grid_hue() below
+ * still colours one ring in one flat tone, so on the old crossing-line
+ * grid that tone traced the same square/diamond the lines themselves did,
+ * not the circle the maths already treated it as. A circle fixes both
+ * with the one change.
  *
  * `far`/`d` are fixed local-space reach now, not scaled by a shrink of
  * their own - the grid IS the plane the curve and axes are drawn against,
@@ -163,36 +161,86 @@ static int32_t units(int n)
  * through the exact same space transform they do (see project() above),
  * rather than riding its own separate pulse the way it used to. */
 
-/* One of a ring's own straight lines, walked in short spans rather than
- * drawn as a single segment - see boot_anim.h's "The wave" section for why
- * a ripple needs every VERTEX's own distance from the origin, not just the
- * ring's: points along one straight line are at continuously varying
- * distance from it, from the closest approach at the line's own midpoint
- * out to sqrt(d^2 + far^2) at its ends, so a single height per ring would
- * move the whole line as a flat plank instead of rippling it.
- *
- * `fixed` is the ring's own offset - re if `im_varies`, im otherwise - the
- * same two calls draw_floor() below already made per ring, just each now
- * a walk instead of one straight shot. BOOT_ANIM_WAVE_STEPS spans per
- * line, not authored: the same fixed, tuned-by-eye smoothness/cost
- * tradeoff BOOT_ANIM_SPLINE_STEPS already is for the curve, and for the
- * same reason - a keyframe has no business tuning it. */
-#define BOOT_ANIM_WAVE_STEPS 8
+/* Segments per ring's own circle, and spokes radiating from the origin to
+ * `far` - both fixed, tuned-by-eye smoothness/cost tradeoffs, the same
+ * reasoning BOOT_ANIM_SPLINE_STEPS already is for the curve: a keyframe
+ * has no business tuning either. CIRCLE_STEPS deliberately modest - an
+ * octagon-ish ring, not a smooth curve - so drawing every ring as a
+ * genuine circle costs roughly what the old two-crossing-lines-per-ring
+ * square did, not several times it. */
+#define BOOT_ANIM_GRID_CIRCLE_STEPS 8
+#define BOOT_ANIM_GRID_SPOKES 8
+#define BOOT_ANIM_GRID_SPOKE_STEPS 8
 
-static void draw_grid_line(int32_t fixed, bool im_varies, int32_t far,
-                           int32_t front_r, gfx_color_t c,
-                           const boot_anim_view_t *view)
+/* A point at zeta-distance `radius` from the origin, `turn`/BOOT_ANIM_ONE
+ * of the way round a full turn - boot_anim_sin()/cos() take a phase in
+ * their own Q16-per-turn convention, not BOOT_ANIM_ONE's Q12, so this is
+ * the one conversion every polar point here needs. int64_t: `radius` can
+ * be tens of thousands of Q12 units for a wide grid reach, and boot_anim_
+ * cos()/sin() return up to S3L_F's own Q15 magnitude - gfx.c's clip_line()
+ * leans on the same int64_t-intermediate trick for the same reason. */
+static void polar_point(int32_t radius, uint16_t turn, int32_t *re, int32_t *im)
+{
+    const int32_t cos_v = boot_anim_cos(turn);
+    const int32_t sin_v = boot_anim_sin(turn);
+    *re = (int32_t)(((int64_t)radius * cos_v) >> 15);
+    *im = (int32_t)(((int64_t)radius * sin_v) >> 15);
+}
+
+/* One ring, walked all the way round rather than drawn as a single
+ * segment - a straight line cannot approximate a circle at all, however
+ * short. Every vertex is at the SAME distance from the origin by
+ * construction (it is a circle), so unlike a spoke (see draw_grid_spoke()
+ * below) the wave's own height is identical for the whole ring - `t` is
+ * computed once by the caller, not per vertex here. */
+static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
+                             const boot_anim_view_t *view)
 {
     S3L_Vec4 prev_cs;
     bool have_prev = false;
 
-    for (int step = 0; step <= BOOT_ANIM_WAVE_STEPS; step++) {
-        const int32_t walk = -far + (2 * far * step) / BOOT_ANIM_WAVE_STEPS;
-        const int32_t re = im_varies ? fixed : walk;
-        const int32_t im = im_varies ? walk : fixed;
-        const int32_t r = im_len(re, im);
-        const int32_t t = boot_anim_wave_height(r, front_r,
-                                                BOOT_ANIM_WAVE_HEIGHT_Q12);
+    for (int step = 0; step <= BOOT_ANIM_GRID_CIRCLE_STEPS; step++) {
+        /* step == STEPS closes the loop back onto step 0's own point,
+         * rather than leaving a gap on the last edge of the ring. */
+        const int i = (step == BOOT_ANIM_GRID_CIRCLE_STEPS) ? 0 : step;
+        const uint16_t turn =
+            (uint16_t)((i * 65536) / BOOT_ANIM_GRID_CIRCLE_STEPS);
+        int32_t re, im;
+        polar_point(radius, turn, &re, &im);
+        const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
+
+        if (have_prev) {
+            int ax, ay, bx, by;
+            if (boot_anim_project_segment_cs(prev_cs, cs, view,
+                                             &ax, &ay, &bx, &by)) {
+                gfx_line_ex(ax, ay, bx, by, c, 0u);
+            }
+        }
+        prev_cs = cs;
+        have_prev = true;
+    }
+}
+
+/* One spoke, from the origin out to `far` at a fixed angle `turn` - the
+ * structure a polar grid needs that rings alone do not give it (nothing
+ * otherwise says which way is "outward" at a glance). Walked in short
+ * spans, unlike a ring: a spoke's own vertices range continuously from
+ * distance 0 to `far`, so the wave's height genuinely varies along its
+ * length and needs computing per vertex, the same reason draw_curve()'s
+ * own segments each get their own projection rather than one shared by
+ * the whole curve. */
+static void draw_grid_spoke(uint16_t turn, int32_t far, int32_t front_r,
+                            int32_t amp_q12, gfx_color_t c,
+                            const boot_anim_view_t *view)
+{
+    S3L_Vec4 prev_cs;
+    bool have_prev = false;
+
+    for (int step = 0; step <= BOOT_ANIM_GRID_SPOKE_STEPS; step++) {
+        const int32_t radius = (far * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
+        int32_t re, im;
+        polar_point(radius, turn, &re, &im);
+        const int32_t t = boot_anim_wave_height(radius, front_r, amp_q12);
         const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
 
         if (have_prev) {
@@ -212,16 +260,16 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
 {
     const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
 
-    /* The wave's own front only needs computing once a frame - see
-     * boot_anim_wave_front() - and the whole walked-line path below only
-     * needs to run at all while its window is open: outside it,
-     * boot_anim_wave_height() would return 0 for every vertex anyway, so
-     * this is a real cost saved, not just a style choice, for the vast
-     * majority of the animation the ripple is not running in. */
+    /* The wave's own front, and the amplitude every draw_grid_*() call
+     * below actually uses - 0 outside the authored window, rather than
+     * BOOT_ANIM_WAVE_HEIGHT_Q12 itself, so a spoke's own per-vertex
+     * boot_anim_wave_height() naturally comes back flat with no separate
+     * "is the wave even running" branch of its own. */
     const bool wave_active = BOOT_ANIM_WAVE_HEIGHT_Q12 != 0 &&
                              now_ms >= BOOT_ANIM_WAVE_START_MS &&
                              now_ms <= BOOT_ANIM_WAVE_END_MS;
     const int32_t front_r = wave_active ? boot_anim_wave_front(now_ms) : 0;
+    const int32_t amp_q12 = wave_active ? BOOT_ANIM_WAVE_HEIGHT_Q12 : 0;
 
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
@@ -244,37 +292,20 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
          * together than that by default, and generated (an "other const",
          * like the ring count itself) rather than fixed. */
         const int32_t d = (int32_t)ring * BOOT_ANIM_GRID_STEP_Q12;
+        const int32_t t = boot_anim_wave_height(d, front_r, amp_q12);
 
-        for (int sign = -1; sign <= 1; sign += 2) {
-            const int32_t off = sign * d;
+        draw_grid_circle(d, t, c, view);
+    }
 
-            if (wave_active) {
-                draw_grid_line(off, true, far, front_r, c, view);
-                draw_grid_line(off, false, far, front_r, c, view);
-                continue;
-            }
-
-            /* Each ring line runs the grid's full reach - see draw_floor()'s
-             * own top comment - which is exactly what makes a wide reach
-             * more likely to send one end of it behind the camera: not
-             * drawn at all if boot_anim_project_segment() says so, rather
-             * than connected anyway (see its own comment for what that
-             * used to draw). Not draw_grid_line() here too, though it would
-             * give the same result while the wave is flat: a single
-             * straight segment is cheaper than walking BOOT_ANIM_WAVE_STEPS
-             * of them for no visual difference, and this is the common case
-             * - the wave is only ever running for a small slice of the
-             * whole animation. */
-            int ax, ay, bx, by;
-            if (boot_anim_project_segment(off, -far, 0, off, far, 0, view,
-                                          &ax, &ay, &bx, &by)) {
-                gfx_line_ex(ax, ay, bx, by, c, 0u);
-            }
-            if (boot_anim_project_segment(-far, off, 0, far, off, 0, view,
-                                          &ax, &ay, &bx, &by)) {
-                gfx_line_ex(ax, ay, bx, by, c, 0u);
-            }
-        }
+    /* Structure, not the thing being coloured - a fixed, unhued tone
+     * throughout (the same one the axes themselves use) rather than
+     * riding boot_anim_grid_hue()'s own per-ring cycle the way the rings
+     * do: a spoke passes through every ring in turn, so there is no one
+     * ring index left to colour it by. */
+    const gfx_color_t spoke_c = lit(COL_AXIS, ink);
+    for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
+        const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
+        draw_grid_spoke(turn, far, front_r, amp_q12, spoke_c, view);
     }
 }
 
