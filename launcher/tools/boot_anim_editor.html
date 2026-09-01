@@ -42,6 +42,19 @@
   "Load" reopens a previously-baked JSON (or any file in this shape) to
   keep editing it. Bake/Load never touch the SCRATCH copy the server
   renders from while you edit - that scratch copy is disposable by design.
+
+  WHAT "BUILD & FLASH" DOES
+
+  The one button here that is not a preview: it writes the current values
+  straight to the REAL main/boot/boot_anim_timeline.json and regenerates
+  the REAL boot_anim_timeline.h (what Bake + a manual copy + regenerate
+  would produce, done here instead), then runs tools/build_flash_dev.sh -
+  builds the development firmware image and flashes it to the serial port
+  typed in next to the button (default COM3). See
+  boot_anim_editor_server.py's own top comment for the /build_flash
+  endpoint this calls, and build_flash_dev.sh's own header for what the
+  development image is (development-only logging/instrumentation, no test
+  suites - see build_flash.sh's own comment on --dev vs --diag).
 -->
 <html lang="en">
 <head>
@@ -171,10 +184,17 @@
   }
   #playbar {
     display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .playbar-row {
+    display: flex;
     align-items: center;
     gap: 8px;
   }
-  #playbar input[type=range] { flex: 1; }
+  .playbar-row input[type=range] { flex: 1; }
+  #flashPort { width: 70px; flex: none; }
+  #flashStatus { font-size: 12px; color: var(--text-dim); }
   button {
     background: var(--accent-dim);
     color: var(--text);
@@ -331,12 +351,21 @@
   </div>
 
   <div class="panel" id="playbar">
-    <button id="btnPlay">Play</button>
-    <span id="msReadout" style="width:70px;text-align:right;color:var(--text-dim)">0 ms</span>
-    <input type="range" id="scrub" min="0" max="5800" value="0" step="1">
-    <button id="btnLoad">Load</button>
-    <input type="file" id="fileInput" accept=".json" style="display:none">
-    <button id="btnBake" class="primary">Bake</button>
+    <div class="playbar-row">
+      <button id="btnPlay">Play</button>
+      <span id="msReadout" style="width:70px;text-align:right;color:var(--text-dim)">0 ms</span>
+      <input type="range" id="scrub" min="0" max="5800" value="0" step="1">
+    </div>
+    <div class="playbar-row">
+      <button id="btnLoad">Load</button>
+      <input type="file" id="fileInput" accept=".json" style="display:none">
+      <button id="btnBake" class="primary">Bake</button>
+    </div>
+    <div class="playbar-row">
+      <input type="text" id="flashPort" value="COM3" title="Serial port the device is on">
+      <button id="btnBuildFlash" class="primary">Build &amp; Flash</button>
+      <span id="flashStatus"></span>
+    </div>
   </div>
 
   <div class="panel" id="kfDetailPanel">
@@ -937,6 +966,59 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   };
   reader.readAsText(file);
   e.target.value = '';
+});
+
+/* ===========================================================================
+ * Build & Flash - the only button here that touches the real, committed
+ * timeline files and real hardware. Everything above (the render view,
+ * scrubbing, Play) only ever talks to the server's SCRATCH copy - see
+ * boot_anim_editor_server.py's own top comment on the render()/build_and_
+ * flash() split.
+ * ======================================================================= */
+
+const flashPortInput = document.getElementById('flashPort');
+const flashStatusEl = document.getElementById('flashStatus');
+const btnBuildFlash = document.getElementById('btnBuildFlash');
+
+btnBuildFlash.addEventListener('click', async () => {
+  const port = flashPortInput.value.trim() || 'COM3';
+  const proceed = confirm(
+    'This overwrites the committed main/boot/boot_anim_timeline.json and ' +
+    '.h with the values currently in this page, then builds and flashes ' +
+    'the development image to ' + port + '.\n\nContinue?');
+  if (!proceed) return;
+
+  btnBuildFlash.disabled = true;
+  flashStatusEl.textContent = 'building & flashing... (can take a minute)';
+  flashStatusEl.style.color = 'var(--text-dim)';
+  hideError();
+
+  try {
+    const res = await fetch('/build_flash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timing: state.timing, camera_focal: state.camera_focal,
+        grid_step_m: state.grid_step_m, keyframes: state.keyframes,
+        port,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      flashStatusEl.textContent = 'failed';
+      flashStatusEl.style.color = 'var(--danger)';
+      showError(body.error || ('HTTP ' + res.status));
+      return;
+    }
+    flashStatusEl.textContent = 'flashed to ' + port;
+    flashStatusEl.style.color = 'var(--accent)';
+  } catch (err) {
+    flashStatusEl.textContent = 'failed';
+    flashStatusEl.style.color = 'var(--danger)';
+    showError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err);
+  } finally {
+    btnBuildFlash.disabled = false;
+  }
 });
 
 /* ===========================================================================

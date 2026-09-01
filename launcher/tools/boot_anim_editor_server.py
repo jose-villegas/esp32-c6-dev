@@ -20,11 +20,11 @@ shape, plus which millisecond to show.
      changing) never recompiles, it is one process spawn of an
      already-built binary.
   2. Otherwise: write that JSON to a SCRATCH copy of boot_anim_timeline.json
-     (never the real, committed one - only this repo's tools/
-     boot_anim_editor.html's own Bake button writes anything meant to be
-     committed) and run tools/gen_boot_anim_timeline.py against it. A
-     validation failure there (curve still drawing when the fade starts,
-     etc.) is reported back as a 400 with the generator's own message.
+     (never the real, committed one - see build_and_flash() below for the
+     one thing here that does write it) and run
+     tools/gen_boot_anim_timeline.py against it. A validation failure there
+     (curve still drawing when the fade starts, etc.) is reported back as a
+     400 with the generator's own message.
   3. Compile tools/boot_anim_render_host.c + main/gfx/gfx.c +
      main/boot/boot_anim.c, with the scratch directory (holding the DRAFT
      boot_anim_timeline.h from step 2) and components/small3dlib/include
@@ -37,8 +37,23 @@ shape, plus which millisecond to show.
      origin readout it printed to stderr (see boot_anim_render_host.c's
      own comment on that line) passed through as an X-Origin header.
 
+POST /build_flash is the only other endpoint, and the only thing here that
+writes anything meant to be committed or touches the real device: same body
+shape as /render minus `ms`, plus `port` (a serial port, e.g. "COM3"). It
+validates exactly like step 2 above (into a throwaway scratch file first, so
+a bad edit never reaches the real files), then overwrites the REAL
+main/boot/boot_anim_timeline.json and boot_anim_timeline.h - what
+tools/boot_anim_editor.html's Bake button downloads, written here instead of
+copied in by hand - and runs tools/build_flash_dev.sh, which builds the
+development image and flashes it to `port`. Its combined stdout/stderr comes
+back as the response body (200) or as the error (500) if the build or the
+flash failed.
+
 Single-threaded on purpose: this is a local, single-user tool, and every
-render already serializes through one compiler/one binary anyway.
+render already serializes through one compiler/one binary anyway. A
+/build_flash request blocks the server for as long as the build+flash
+takes (tens of seconds) - nothing else this tool does needs to run at the
+same time.
 """
 
 import hashlib
@@ -56,6 +71,13 @@ MAIN_DIR = os.path.join(LAUNCHER_DIR, "main")
 SMALL3DLIB_DIR = os.path.join(LAUNCHER_DIR, "components", "small3dlib", "include")
 EDITOR_HTML = os.path.join(TOOLS_DIR, "boot_anim_editor.html")
 GENERATOR = os.path.join(TOOLS_DIR, "gen_boot_anim_timeline.py")
+
+# The REAL, committed files - see build_and_flash()'s own comment on why
+# these, unlike everything render() touches, are not disposable.
+TIMELINE_JSON = os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.json")
+TIMELINE_HEADER = os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.h")
+BUILD_FLASH_SCRIPT = os.path.join(TOOLS_DIR, "build_flash_dev.sh")
+BUILD_FLASH_TIMEOUT_S = 300
 
 DEFAULT_PORT = 8934
 
@@ -77,6 +99,22 @@ def find_cc():
             "mingw64", "bin", "gcc.exe")
         if os.path.isfile(winlibs):
             return winlibs
+    return None
+
+
+def find_bash():
+    """build_flash_dev.sh is POSIX sh, written to run under Git Bash (see its
+    own top comment) - idf.py itself cannot run under Git Bash on Windows
+    (see the project's CLAUDE.md), but build_flash.sh already routes around
+    that itself (tools/idf.sh -> idf_shim.bat), so running the .sh under
+    Git Bash's own bash.exe is the one thing this needs to get right."""
+    found = shutil.which("bash")
+    if found:
+        return found
+    for candidate in (r"C:\Program Files\Git\bin\bash.exe",
+                      r"C:\Program Files\Git\usr\bin\bash.exe"):
+        if os.path.isfile(candidate):
+            return candidate
     return None
 
 
@@ -188,6 +226,63 @@ class Renderer:
                 break
         return run.stdout, origin
 
+    def build_and_flash(self, timing, camera_focal, grid_step_m, keyframes, port):
+        """Overwrites the REAL main/boot/boot_anim_timeline.json and
+        boot_anim_timeline.h - unlike render()'s scratch copy, not
+        disposable - then builds and flashes the development image. Returns
+        the build+flash log (str) on success; raises RenderError otherwise.
+
+        Validated into a THROWAWAY scratch file first, the same way render()
+        validates into the scratch directory - a bad edit (the curve still
+        drawing when the fade starts, say) must never leave the committed
+        json/header half-written."""
+        payload = {"timing": timing, "camera_focal": camera_focal,
+                  "grid_step_m": grid_step_m, "keyframes": keyframes}
+
+        fd, scratch_json = tempfile.mkstemp(suffix=".json",
+                                            prefix="boot_anim_timeline_")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            gen = subprocess.run(
+                [sys.executable, GENERATOR, scratch_json],
+                capture_output=True, text=True)
+            if gen.returncode != 0:
+                raise RenderError(400, gen.stderr.strip() or
+                                  "gen_boot_anim_timeline.py failed with no message")
+            header_text = gen.stdout
+        finally:
+            os.remove(scratch_json)
+
+        with open(TIMELINE_JSON, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=4)
+            f.write("\n")
+        with open(TIMELINE_HEADER, "w", encoding="utf-8", newline="\n") as f:
+            f.write(header_text)
+
+        bash = find_bash()
+        if bash is None:
+            raise RenderError(
+                500, "no bash.exe found - build_flash_dev.sh needs Git Bash "
+                "(see the project's CLAUDE.md). The timeline files were "
+                "still written to main/boot/ above.")
+
+        # stdin=DEVNULL: build_flash_dev.sh ends with an interactive "press
+        # Enter to close" (it doubles as a double-clickable script) that
+        # would otherwise hang this request forever - see its own comment
+        # on the `|| true` that makes stdin-at-EOF there a no-op, not a
+        # reported failure.
+        proc = subprocess.run(
+            [bash, BUILD_FLASH_SCRIPT, port],
+            cwd=LAUNCHER_DIR, stdin=subprocess.DEVNULL,
+            capture_output=True, text=True, timeout=BUILD_FLASH_TIMEOUT_S)
+        log = proc.stdout + proc.stderr
+        if proc.returncode != 0:
+            raise RenderError(500, log.strip() or
+                              "build_flash_dev.sh exited with code %d" %
+                              proc.returncode)
+        return log
+
 
 class Handler(http.server.BaseHTTPRequestHandler):
     renderer = None   # set in main()
@@ -202,10 +297,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_error(404)
 
     def do_POST(self):
-        if self.path != "/render":
+        if self.path == "/render":
+            self._do_render()
+        elif self.path == "/build_flash":
+            self._do_build_flash()
+        else:
             self.send_error(404)
-            return
 
+    def _do_render(self):
         length = int(self.headers.get("Content-Length", "0"))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -235,6 +334,41 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.send_header("X-Origin", "%d,%d" % origin)
         self.end_headers()
         self.wfile.write(bmp)
+
+    def _do_build_flash(self):
+        length = int(self.headers.get("Content-Length", "0"))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+            timing = body["timing"]
+            camera_focal = body["camera_focal"]
+            grid_step_m = body["grid_step_m"]
+            keyframes = body["keyframes"]
+            port = body.get("port") or "COM3"
+        except (ValueError, KeyError) as exc:
+            self._send_json_error(400, "bad request body: %s" % exc)
+            return
+
+        try:
+            log = self.renderer.build_and_flash(
+                timing, camera_focal, grid_step_m, keyframes, port)
+        except RenderError as exc:
+            self._send_json_error(exc.status, exc.message)
+            return
+        except subprocess.TimeoutExpired:
+            self._send_json_error(
+                500, "build_flash_dev.sh did not finish within %ds" %
+                BUILD_FLASH_TIMEOUT_S)
+            return
+        except Exception as exc:   # noqa: BLE001 - surfaced to the browser
+            self._send_json_error(500, "%s: %s" % (type(exc).__name__, exc))
+            return
+
+        body = json.dumps({"log": log}).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _serve_file(self, path, content_type):
         with open(path, "rb") as f:
