@@ -32,9 +32,14 @@
 # the whole run makes zero network calls to any cloud provider. See Model-
 # Delegation-Workflow.md's "Route local through the Ollama CLI directly, not
 # OmniRoute" -- OmniRoute's own ollama-local provider has no working
-# connection pool. Uses gemma4:26b by default (LOCAL_MODEL env var to
-# override); if you also pass --review with --local, REVIEW_MODEL is treated
-# as a local Ollama tag too, not a cloud model id.
+# connection pool. Uses mistral-nemo:latest by default (~7GB weights, fits a
+# 16GB card easily; LOCAL_MODEL env var to override); if you also pass
+# --review with --local, REVIEW_MODEL is treated as a local Ollama tag too,
+# not a cloud model id. If local Ollama runs are freezing the machine
+# regardless of model choice, see Model-Delegation-Workflow.md's "A global
+# Ollama setting can make picking a 'small enough' model pointless" -- a
+# stuck 262144 Context Length setting in the Ollama app itself overrides
+# every model's context and is the far more likely culprit.
 #
 # Usage: scripts/fix-audited-docs.sh [--review <model-id>] [--worktree] [--local] [--no-push] [doc-file ...]
 set -euo pipefail
@@ -46,7 +51,7 @@ COMBO="docs-update-free"
 REVIEW_MODEL=""
 USE_WORKTREE=0
 LOCAL_MODE=0
-LOCAL_MODEL="${LOCAL_MODEL:-gemma4:26b}"
+LOCAL_MODEL="${LOCAL_MODEL:-mistral-nemo:latest}"
 NO_PUSH=0
 DOC_ARGS=()
 

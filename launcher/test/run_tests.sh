@@ -21,7 +21,12 @@ set -eu
 
 TEST_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 MAIN_DIR=$(CDPATH= cd -- "$TEST_DIR/../main" && pwd)
-BUILD_DIR="$TEST_DIR/build"
+# Overridable so two runs cannot clobber each other: the build dir holds one
+# host_tests binary, so concurrent runs (parallel agents, a sweep script
+# running beside a manual run) otherwise race to compile and execute the
+# same file, and a result can end up attributed to a source state that never
+# existed. Defaults to the old path, so nothing that does not set it changes.
+BUILD_DIR="${TEST_BUILD_DIR:-$TEST_DIR/build}"
 
 # --- find a compiler -------------------------------------------------------
 # Sourced rather than defined here, so that report_reactions.sh (main/apps/
@@ -52,7 +57,7 @@ CFLAGS="-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -g -O1"
 SOURCES="
 $TEST_DIR/host_main.c
 $TEST_DIR/suites.c
-$TEST_DIR/framework/unity.c
+$TEST_DIR/timing.c
 $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
 $TEST_DIR/suites/suite_button_fsm.c
@@ -112,6 +117,22 @@ done
 mkdir -p "$BUILD_DIR"
 OUT="$BUILD_DIR/host_tests"
 
+# Every suite calls RUN_TEST(func) directly; timing.h intercepts that macro
+# (see its own comment) to log a wall-clock line per test without editing a
+# single suite file - forced in ahead of everything else's own
+# "#include unity.h" via -include below.
+#
+# unity.c itself must NOT see that -include: Unity's RUN_TEST is guarded by
+# "#ifndef RUN_TEST", and if timing.h has already defined it by the time
+# unity.c's own copy of that guard runs, Unity assumes a full replacement
+# runner has been supplied (UNITY_SKIP_DEFAULT_RUNNER) and compiles
+# UnityDefaultTestRun's body out entirely - the one function timing.c
+# calls. So it is compiled alone, first, without -include.
+UNITY_OBJ="$BUILD_DIR/unity.o"
+# shellcheck disable=SC2086
+"$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
+    -c "$TEST_DIR/framework/unity.c" -o "$UNITY_OBJ"
+
 # components/microui/include is on the path for ui_style.h's sake: it needs
 # mu_Rect and mu_Color, and those are plain declarations in microui.h with no
 # library behind them. Nothing here links microui.c - see suite_ui_style.c on
@@ -127,8 +148,8 @@ OUT="$BUILD_DIR/host_tests"
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
     -I "$TEST_DIR/../components/microui/include" \
-    -I "$TEST_DIR/../components/small3dlib/include" \
-    $SOURCES -o "$OUT"
+    -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
+    $SOURCES "$UNITY_OBJ" -o "$OUT"
 
 # MinGW appends .exe; elsewhere the plain name is produced.
 [ -x "$OUT" ] || OUT="$OUT.exe"

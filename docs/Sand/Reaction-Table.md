@@ -14,6 +14,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 
 ### Water
 
+- Once conducted heat reaches it, boils into steam fast.
 - Wets whatever it touches: things that soak will draw it in.
 - Dissolves in acid easily.
 
@@ -42,6 +43,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Steam
 
 - Warms whatever it touches swiftly, without igniting or quenching anything.
+- A 2x2 block of it slowly condenses into a single cell of water.
 
 ### Smoke
 
@@ -55,10 +57,11 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Lava
 
 - Is a heat source in its own right, and licks flame into an empty neighbour readily. Touched by a quenching liquid, becomes stone.
-- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - vents through the lid slowly, throwing up to SAND_VENT_REACH cells along each covered direction independently.
+- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - throws whatever is covering it fast, peeling up to SAND_VENT_LAYER cells off the outer surface each time it fires; a covering deeper than that takes several separate firings, up to SAND_VENT_REACH cells total, but is guaranteed to eventually dislodge.
 
 ### Acid
 
+- Once conducted heat reaches it, boils into gas instantly.
 - Dissolves an adjacent cell swiftly, sometimes leaving smoke behind.
 - Spontaneously evaporates into gas slowly - unconditional, no heat or neighbour required.
 

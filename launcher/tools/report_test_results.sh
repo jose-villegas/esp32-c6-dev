@@ -91,7 +91,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
 "
 
 echo "=== Capturing self-test output ==="
-python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
+# 1500s, not 300. The suite ran in ~168s for as long as its frame-budget
+# fixtures were failing to allocate their grids instantly; once the heap
+# was freed on 2026-09-01 and the scenes actually ran, a full pass took
+# 1,125,726 ms - 18.8 minutes. A 300s window now times out every run and
+# produces a capture with no SELFTEST_COMPLETE in it, which the validator
+# below correctly rejects but which costs a full capture cycle to learn.
+python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 1500
 
 echo "=== Generating report ==="
 # report_test_results.py exits 1 when the capture contains ANY failing

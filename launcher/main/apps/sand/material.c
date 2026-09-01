@@ -284,12 +284,32 @@ const material_t materials[MATERIAL_MAX] = {
                                      * tune on device like every other
                                      * constant here. */
 
-            .decay = 24,     /* matches ember's own figure as a
-                                     * starting point, tune independently
-                                     * later - roughly 160 steps, ~2.7s
-                                     * at ~60fps, so a wisp of steam
-                                     * visibly fades rather than either
-                                     * lingering or vanishing at once. */
+            .decay = 12,     /* RAISED PAST SMOKE'S OWN 16 AGAIN, on a
+                                     * later request to make steam last
+                                     * longer still, at least 30% - it had
+                                     * previously been lowered TO exactly
+                                     * smoke's 16 (see the git history on
+                                     * this line and test_the_air_agrees_
+                                     * about_weight_speed_and_lifetime's own
+                                     * comment for that earlier, now
+                                     * superseded, "on purpose, matches
+                                     * smoke" decision), which was never a
+                                     * hard floor - that test only ever
+                                     * asserted steam must not fade FASTER
+                                     * than smoke, not that the two must be
+                                     * equal, so steam decaying slower than
+                                     * smoke again needs no test change.
+                                     * ~320 steps (~5.3s at ~60fps) to fully
+                                     * decay from full life, against 16's
+                                     * ~240 steps (~4s) - a 33% increase,
+                                     * comfortably past the 30% asked for.
+                                     * The starting life it decays FROM is
+                                     * already at its own ceiling
+                                     * (MATERIAL_VARIANTS - 1 = 15 - see
+                                     * conduct_heat()'s boiling branch), so
+                                     * decay chance is still the only dial
+                                     * that extends duration. Not yet
+                                     * measured on device at this figure. */
             .mobility = 160, /* noticeably faster than gas's 96 or
                                      * fire's 96 - steam should read as
                                      * rising eagerly off a boiling pot,
@@ -601,6 +621,17 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * Starting point, not final - tune on device like every other
              * constant here. */
             .dissolvable = 220,
+
+            /* Low, deliberately: a poured stream should be able to
+             * occasionally outpace evaporation over a hot stone crust and
+             * pool up a little, rather than every drop flashing to steam
+             * the instant conducted heat reaches it (see conduct_heat(),
+             * sand_reactions.c). Acid, below, sits at the opposite end of
+             * this same field. Started at 24, raised about 20% (~9.4% ->
+             * ~11.3% per step) once reported as resisting more than
+             * wanted. Starting point, not final - tune on device like
+             * every other constant here. */
+            .boils = 29,
         },
 
     [MAT_ACID] =
@@ -651,6 +682,20 @@ const reaction_t reactions[MATERIAL_MAX] = {
                              * uses whatever chance it is given exactly.
                              * Starting point, not final - tune on device
                              * like every other constant here. */
+
+            /* Acid boiled via conducted heat unconditionally before this
+             * field existed. 255 is what keeps that behaviour effectively
+             * unchanged now that boiling is gated by a roll at all, rather
+             * than acid quietly going immune to it by omission - the
+             * opposite end of this same field from water's own low
+             * figure above. */
+            .boils = 255,
+
+            /* Not water's MAT_STEAM default - acid evaporating through a
+             * hot wall should leave the same MAT_GAS it leaves everywhere
+             * else it evaporates (see .evaporates and .fizz above), not
+             * kettle-steam. */
+            .boils_to = MAT_GAS,
         },
 
     [MAT_OIL] =
@@ -713,26 +758,43 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
-            /* SEALED IN IS NOT SAFE, BUT A PULSE SHOULD BE RARE - 1 in 256
-             * (~0.4%), per step, once a pool is COVERED FROM ABOVE - see
-             * reaction_t.vent_chance's own comment for the design and
-             * try_vent()/covered_from_above() (sand_reactions.c) for the
-             * mechanism. The rarest a single byte-wide roll can express
-             * (same floor sand_set_evaporates()'s own per-material figure
-             * starts from, material.c's MAT_ACID row), deliberate: this
-             * rolls every step a cell STAYS covered, not once per pool, so
-             * even this floor still fires roughly once every 256 steps per
-             * covered cell - frequent enough that a sealed pool is not
-             * permanently inert, rare enough that a vent reads as an
-             * occasional, dramatic pulse rather than a constant leak.
-             * Paired with SAND_VENT_REACH set high (sand.h) so that rare
-             * pulse throws a lot of material when it does fire, instead of
-             * a small, frequent trickle - a held-in eruption rather than a
-             * hiss. sand_set_vent_chance() (sand.h) overrides this for
-             * tests that need a fast, deterministic pulse instead of
-             * waiting on this real figure. Starting point, not measured on
-             * device. */
-            .vent_chance = 1,
+            /* A MODERATE FIGURE, MEASURED ON DEVICE TWICE NOW -
+             * 24 in 256 (~9.4%), per step, once a pool is COVERED FROM
+             * ABOVE - see reaction_t.vent_chance's own comment for the
+             * design and try_vent()/covered_from_above() (sand_
+             * reactions.c) for the mechanism. This briefly sat at 255
+             * (the maximum this roll can express) and, combined with the
+             * second roll below also being maxed, produced a real,
+             * observed-on-device problem: a stream of water quenching
+             * lava creates a covered cell (fresh stone, covered by
+             * nothing yet but itself sitting over more lava) that then
+             * gets thrown away the very next step, before any more crust
+             * can build on top of it - "material pops the instant water
+             * touches lava", not "a sealed slab breaks free". Pulled back
+             * to this figure, then watched live over the serial console
+             * again (REACT_DBG instrumentation, since removed) once
+             * vent_column() started peeling layers instead of clearing a
+             * whole covering in one shot (SAND_VENT_LAYER, sand.h): the
+             * same covered cell now genuinely gets re-checked and re-fires
+             * repeatedly over time, confirmed by a climbing "still covered,
+             * seen N times" counter and the same (x, y) firing again and
+             * again - the ambient, ongoing behaviour this whole feature was
+             * asked for, working. Left AT this figure; the second roll
+             * below is what moved instead (1-in-8 down to 1-in-12, this
+             * round) after a wide active pour - many covered cells at
+             * once - read as firing a bit too often in aggregate, even
+             * though any single cell's own rate did not change.
+             * SAND_VENT_REACH and SAND_VENT_CHUNK (sand.h) are unaffected
+             * - how FAR a pulse
+             * throws and how WIDE a slab it grabs are separate dials from
+             * how OFTEN one happens, and stay exactly as tuned.
+             * sand_set_vent_chance() (sand.h) still overrides this for
+             * tests that need an exact, pinned value regardless of what
+             * production is currently tuned to. A living balance number,
+             * not a protected constant - see this project's own convention
+             * of revising these on request rather than treating a shipped
+             * figure as fixed. */
+            .vent_chance = 24,
 
             /* No residue: lava never burns out (decay 0 above), so nothing
          * here would ever fire. No conducts either - lava IS the heat,
@@ -941,12 +1003,33 @@ const reaction_t reactions[MATERIAL_MAX] = {
             .thaws = 4,
         },
 
-    /* Steam and smoke have rows here only for convection - they are
-     * byproducts that react with nothing else, which is the usual reason a
-     * material skips this table entirely. */
+    /* Steam and smoke have rows here for convection, and steam now for
+     * one more thing - see .condenses below. Otherwise they are
+     * byproducts that react with nothing else, which is the usual reason
+     * a material skips this table entirely. */
     [MAT_STEAM] =
         {
             .warms = 48, /* the hotter carrier: water that has just boiled */
+
+            /* The inverse of water's own evaporation: a small,
+             * deliberately rare per-step chance that a 2x2 patch of
+             * steam quietly turns back into a droplet of water - fake
+             * condensation, a cosmetic touch, not a real thermal model
+             * (no cold surface checked, no heat reading involved - see
+             * reaction_t.condenses's own comment in material.h). Started
+             * at 3 (roughly 1 in 85), halved to roughly 1 in 128 once
+             * reported as happening more than a "small chance" should,
+             * then halved again to 1 (the rarest a byte-wide chance-in-
+             * 256 roll can express short of disabling it outright) once
+             * steam's own decay was lowered to make it last much longer
+             * (see reaction_t.decay's own row above) - a wisp that now
+             * lingers for roughly 4 seconds has that much more time to
+             * roll condensation, so the per-step chance needed to drop
+             * to keep the OVERALL odds of condensing before fading away
+             * from climbing right back up. Starting point, not final -
+             * tune on device like every other constant here. */
+            .condenses = 1,
+            .condenses_to = MAT_WATER,
         },
 
     [MAT_SMOKE] =
@@ -1799,6 +1882,23 @@ static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
 
+/* Metal's woven line and travelling shine - the same HATCHED mechanism
+ * glass uses in paint_row_n(), which is generic to anything hatched and
+ * not glass-specific (the diagonal grain, the crossings, the travelling
+ * band all key off the pattern, never the material). What glass gets that
+ * metal cannot is a per-variant ramp to shade these by: an extended
+ * material's low nibble is spent naming WHICH one it is rather than
+ * holding a variant (see the MAT_EXTENDED case below), so there is one
+ * dither tone and one shine tone here, not sixteen.
+ *
+ * Lifted off METAL_LIGHT rather than off metal_grain's own per-cell
+ * wobble, same reasoning as GLASS_LINE/GLASS_SHINE above: a highlight
+ * that wobbled per cell would look chewed rather than reflective. Same
+ * two weights as glass's, 4 and 11 of 15 - metal is meant to look
+ * brushed and catching light exactly the way a pane does, just opaque. */
+static const gfx_color_t metal_dither = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 4));
+static const gfx_color_t metal_shine = GFX_RGB(LERP(METAL_LIGHT, 0xFFFFFF, 11));
+
 static const gfx_color_t stone_edge_speckle[MATERIAL_VARIANTS][8] = {
     STONE_EDGE_ROW(0),  STONE_EDGE_ROW(1),  STONE_EDGE_ROW(2),  STONE_EDGE_ROW(3),
     STONE_EDGE_ROW(4),  STONE_EDGE_ROW(5),  STONE_EDGE_ROW(6),  STONE_EDGE_ROW(7),
@@ -1938,6 +2038,26 @@ material_set_gravity(int gx, int gy) {
          * trust the arithmetic by eye. */
         liquid_spec[mask] = (int8_t)(-fx_round_div(spec_q8 * SPEC_STRENGTH, 256));
     }
+}
+
+/* See this function's own declaration in material.h for what it is for and
+ * why it is a separate, stateless function rather than another table filled
+ * alongside liquid_spec[] above.
+ *
+ * Same MINUS-gravity unit vector material_set_gravity() computes for the
+ * specular table, just handed back to the caller instead of dotted against
+ * a fixed set of edge normals - a travelling shine has no mask of edge bits
+ * to look one up by, only a direction to sweep along. */
+void
+material_shine_direction(int gx, int gy, int *ux_q8, int *uy_q8) {
+    const int len = im_len(gx, gy);
+    if (len == 0) {
+        *ux_q8 = 181;
+        *uy_q8 = 181;
+        return;
+    }
+    *ux_q8 = (-gx * 256) / len;
+    *uy_q8 = (-gy * 256) / len;
 }
 
 /*=============================================================================
@@ -2385,20 +2505,28 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
          * rather than a variant - see MATX(). Anything without a grain of
          * its own falls through to the flat palette entry below.
          *
-         * Left as a guard plus a ternary chain rather than respelled as a
-         * switch, which is what adding a third material to it wanted. This
-         * runs per painted cell, and in this codebase a respelling of a
-         * hot branch is a performance change: an if/else rewrite elsewhere
-         * cost 14% through the inlining cliff, and a single unhinted
-         * branch cost 26% of a benchmark with the simulation byte-
-         * identical either way. Ship the shape that was measured - see
-         * docs/Sand/Tuning-At-a-Glance.md. That measurement was taken at
-         * three materials deep; metal makes it a fourth. */
-            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_METAL) {
-                out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
+         * Metal gets its own leading equality check, ahead of the guard
+         * below, because it returns a different PATTERN (HATCHED) rather
+         * than just a different colour - it cannot live inside the
+         * ternary, which only ever chooses a colour for one shared
+         * MATERIAL_SPECKLED return. That guard-plus-ternary shape below is
+         * otherwise untouched and back to the three materials it was
+         * measured at: a respelling of it into a switch cost 14% through
+         * the inlining cliff, and a single unhinted branch cost 26% of a
+         * benchmark, simulation byte-identical either way - see
+         * docs/Sand/Tuning-At-a-Glance.md. Adding metal's check ahead of it
+         * is one more cheap equality test per extended cell, not a
+         * restructure of the measured shape. */
+            if (v == MATX_METAL) {
+                out[0] = metal_grain[hash & 7u];
+                out[1] = metal_dither;
+                out[2] = metal_shine;
+                return MATERIAL_HATCHED;
+            }
+            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
+                out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
-                         : (v == MATX_ICE)  ? ice_grain[hash & 7u]
-                                            : metal_grain[hash & 7u];
+                                            : ice_grain[hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
                 return MATERIAL_SPECKLED;

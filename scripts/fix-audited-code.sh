@@ -103,12 +103,19 @@
 # has no working connection pool (every model in it timed out identically at
 # 30s on a trivial prompt -- see Model-Delegation-Workflow.md's "Route local
 # through the Ollama CLI directly, not OmniRoute"). Fixer defaults to
-# qwen2.5:14b, reviewer to gemma4:26b (LOCAL_FIXER_MODEL / LOCAL_REVIEW_MODEL
-# env vars to override with anything else pulled -- see `ollama list`); two
-# different model families so the review step is a real second opinion, not
-# the same model checking its own work. --review is not required when
-# --local is set (defaults to LOCAL_REVIEW_MODEL); passing --review together
-# with --local overrides just the reviewer's model tag.
+# qwen2.5:14b, reviewer to mistral-nemo:latest (LOCAL_FIXER_MODEL /
+# LOCAL_REVIEW_MODEL env vars to override with anything else pulled -- see
+# `ollama list`); two different model families so the review step is a real
+# second opinion, not the same model checking its own work. Both defaults
+# are chosen so their weights alone (~9GB / ~7GB) fit a 16GB card; bigger
+# models like gemma4:26b (~18GB) remain available via LOCAL_REVIEW_MODEL for
+# anyone with VRAM headroom. If local Ollama runs are freezing the machine
+# regardless of model choice, see Model-Delegation-Workflow.md's "A global
+# Ollama setting can make picking a 'small enough' model pointless" -- a
+# stuck 262144 Context Length setting in the Ollama app itself overrides
+# every model's context and is the far more likely culprit. --review is not
+# required when --local is set (defaults to LOCAL_REVIEW_MODEL); passing
+# --review together with --local overrides just the reviewer's model tag.
 #
 # Usage:
 #   scripts/fix-audited-code.sh --review <model-id>
@@ -142,7 +149,7 @@ REPORT=""
 USE_WORKTREE=0
 LOCAL_MODE=0
 LOCAL_FIXER_MODEL="${LOCAL_FIXER_MODEL:-qwen2.5:14b}"
-LOCAL_REVIEW_MODEL="${LOCAL_REVIEW_MODEL:-gemma4:26b}"
+LOCAL_REVIEW_MODEL="${LOCAL_REVIEW_MODEL:-mistral-nemo:latest}"
 NO_PUSH=0
 MAX_PARALLEL=3
 MAX_ROUNDS=2
