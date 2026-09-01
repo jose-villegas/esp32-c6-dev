@@ -131,3 +131,6 @@ $RECYCLE.BIN/
 
 ### Beads (bd issue tracker) — local backlog DB, not versioned
 .beads/
+# scripts/perf-loop.sh working area: logs, per-candidate reports and the
+# quarantine pile. Regenerated per run, never worth committing.
+.perf-loop/
