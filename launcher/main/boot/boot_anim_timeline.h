@@ -30,6 +30,12 @@
 #define BOOT_ANIM_GRID_RINGS 28
 
 #define BOOT_ANIM_GRID_FADE_MS 300
+/* the ripple's own front sets off from the origin */
+#define BOOT_ANIM_WAVE_START_MS 520
+
+/* the front reaches the grid's own outer edge */
+#define BOOT_ANIM_WAVE_END_MS 2500
+
 #define BOOT_ANIM_PEN_START_MS 520
 /* how long the curve takes to draw */
 #define BOOT_ANIM_PEN_MS 1980
@@ -85,11 +91,25 @@
  * boot_anim.c does. */
 #define BOOT_ANIM_GRID_STEP_Q12 1024
 
+/* The wave's own peak amplitude - see boot_anim.h's "The wave"
+ * section. Authored in meters (wave_height_m in the JSON), the same
+ * as grid_step_m just above; 0 (the default for a file baked before
+ * this existed - see this script's own backward-compatibility
+ * comment) turns the ripple off outright, not just down. */
+#define BOOT_ANIM_WAVE_HEIGHT_Q12 0
+
 typedef enum {
     BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */
     BOOT_ANIM_EASE_OUT    = 1,   /* tween_ease_out() - fast then settle */
     BOOT_ANIM_EASE_IN     = 2,   /* tween_ease_in() - slow then rush    */
 } boot_anim_ease_t;
+
+/* How the wave's own front (boot_anim_wave_front() in boot_anim.h)
+ * eases from the origin to the grid's outer edge over
+ * [wave_start_ms, wave_end_ms] - the same three shapes a keyframe's
+ * own `ease` picks from, just authored once here rather than per
+ * keyframe, since there is only ever the one front. */
+#define BOOT_ANIM_WAVE_EASE BOOT_ANIM_EASE_OUT
 
 /* Both transforms' pos/rot/scale are small3dlib fixed point (S3L_F =
  * 512 = 1.0) already - converted from the JSON's plain meters/degrees/

@@ -409,7 +409,8 @@ const DEFAULT_STATE = {
   timing: {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
     grid_rings: 28,
-    grid_fade_ms: 300, pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
+    grid_fade_ms: 300, wave_start_ms: 520, wave_end_ms: 2500,
+    pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
     title_start_ms: 2700,
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
     title_turns_phase: 229376, title_amplitude_px: 22,
@@ -420,6 +421,8 @@ const DEFAULT_STATE = {
   },
   camera_focal: 512,
   grid_step_m: 0.25,
+  wave_height_m: 0,
+  wave_ease: 'ease_out',
   keyframes: [
     { ms: 520,
       camera: { pos: [0, 2, -10], rot: [0, 0, 0], scale: [1, 1, 1] },
@@ -457,6 +460,7 @@ const TIMING_GROUPS = [
   { title: 'Axes / grid', keys: ['axes_ms', 'grid_start_ms', 'grid_ring_ms', 'grid_rings',
       'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max',
       'grid_max'] },
+  { title: 'Wave', keys: ['wave_start_ms', 'wave_end_ms'] },
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
@@ -522,6 +526,7 @@ async function renderNow() {
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
         grid_step_m: state.grid_step_m,
+        wave_height_m: state.wave_height_m, wave_ease: state.wave_ease,
         keyframes: state.keyframes, ms: playhead,
       }),
     });
@@ -715,6 +720,52 @@ function renderConsts() {
   extentLabel.appendChild(extentSpan);
   extentLabel.appendChild(extentInput);
   list.appendChild(extentLabel);
+
+  /* Also not per-keyframe - there is only ever the one front (see
+   * boot_anim.h's "The wave" section). height in meters like grid_step_m
+   * just above (0 turns the ripple off outright, not just down); ease
+   * shapes how the front travels from the origin to the grid's own edge
+   * over wave_start_ms..wave_end_ms (below, in the Wave timing group) -
+   * the same three shapes a keyframe's own ease picks from. */
+  const waveHead = document.createElement('div');
+  waveHead.className = 'group-title';
+  waveHead.textContent = 'Wave';
+  list.appendChild(waveHead);
+  const waveHeightLabel = document.createElement('label');
+  waveHeightLabel.className = 'field';
+  const waveHeightSpan = document.createElement('span');
+  waveHeightSpan.textContent = 'wave_height_m (0 = off)';
+  const waveHeightInput = document.createElement('input');
+  waveHeightInput.type = 'number';
+  waveHeightInput.step = 'any';
+  waveHeightInput.value = state.wave_height_m;
+  waveHeightInput.addEventListener('input', () => {
+    state.wave_height_m = Number(waveHeightInput.value) || 0;
+    renderDebounced();
+  });
+  waveHeightLabel.appendChild(waveHeightSpan);
+  waveHeightLabel.appendChild(waveHeightInput);
+  list.appendChild(waveHeightLabel);
+
+  const waveEaseLabel = document.createElement('label');
+  waveEaseLabel.className = 'field';
+  const waveEaseSpan = document.createElement('span');
+  waveEaseSpan.textContent = 'wave_ease';
+  const waveEaseSelect = document.createElement('select');
+  for (const opt of ['linear', 'ease_out', 'ease_in']) {
+    const o = document.createElement('option');
+    o.value = opt;
+    o.textContent = opt;
+    if (state.wave_ease === opt) o.selected = true;
+    waveEaseSelect.appendChild(o);
+  }
+  waveEaseSelect.addEventListener('change', () => {
+    state.wave_ease = waveEaseSelect.value;
+    renderDebounced();
+  });
+  waveEaseLabel.appendChild(waveEaseSpan);
+  waveEaseLabel.appendChild(waveEaseSelect);
+  list.appendChild(waveEaseLabel);
 
   for (const group of TIMING_GROUPS) {
     const h = document.createElement('div');
@@ -1061,6 +1112,7 @@ document.getElementById('btnBake').addEventListener('click', () => {
   const payload = {
     timing: state.timing, camera_focal: state.camera_focal,
     grid_step_m: state.grid_step_m,
+    wave_height_m: state.wave_height_m, wave_ease: state.wave_ease,
     keyframes: state.keyframes,
   };
   const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
@@ -1096,6 +1148,21 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
        * than sitting blank until the next edit touches it. */
       if (loaded.timing.pen_finish_ms === undefined) {
         loaded.timing.pen_finish_ms = loaded.timing.fade_start_ms;
+      }
+      /* The wave is newer still - same reasoning, same fallback the
+       * generator itself uses: height 0 turns the ripple off outright, so
+       * an old file keeps behaving exactly like it always did. */
+      if (loaded.wave_height_m === undefined) {
+        loaded.wave_height_m = 0;
+      }
+      if (loaded.wave_ease === undefined) {
+        loaded.wave_ease = 'linear';
+      }
+      if (loaded.timing.wave_start_ms === undefined) {
+        loaded.timing.wave_start_ms = 0;
+      }
+      if (loaded.timing.wave_end_ms === undefined) {
+        loaded.timing.wave_end_ms = loaded.timing.total_ms;
       }
       state = loaded;
       selectedKf = 0;
@@ -1144,7 +1211,9 @@ btnBuildFlash.addEventListener('click', async () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
-        grid_step_m: state.grid_step_m, keyframes: state.keyframes,
+        grid_step_m: state.grid_step_m,
+        wave_height_m: state.wave_height_m, wave_ease: state.wave_ease,
+        keyframes: state.keyframes,
         port,
       }),
     });

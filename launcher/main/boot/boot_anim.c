@@ -162,10 +162,66 @@ static int32_t units(int n)
  * and now reads as the same scale changing they do because it goes
  * through the exact same space transform they do (see project() above),
  * rather than riding its own separate pulse the way it used to. */
+
+/* One of a ring's own straight lines, walked in short spans rather than
+ * drawn as a single segment - see boot_anim.h's "The wave" section for why
+ * a ripple needs every VERTEX's own distance from the origin, not just the
+ * ring's: points along one straight line are at continuously varying
+ * distance from it, from the closest approach at the line's own midpoint
+ * out to sqrt(d^2 + far^2) at its ends, so a single height per ring would
+ * move the whole line as a flat plank instead of rippling it.
+ *
+ * `fixed` is the ring's own offset - re if `im_varies`, im otherwise - the
+ * same two calls draw_floor() below already made per ring, just each now
+ * a walk instead of one straight shot. BOOT_ANIM_WAVE_STEPS spans per
+ * line, not authored: the same fixed, tuned-by-eye smoothness/cost
+ * tradeoff BOOT_ANIM_SPLINE_STEPS already is for the curve, and for the
+ * same reason - a keyframe has no business tuning it. */
+#define BOOT_ANIM_WAVE_STEPS 8
+
+static void draw_grid_line(int32_t fixed, bool im_varies, int32_t far,
+                           int32_t front_r, gfx_color_t c,
+                           const boot_anim_view_t *view)
+{
+    S3L_Vec4 prev_cs;
+    bool have_prev = false;
+
+    for (int step = 0; step <= BOOT_ANIM_WAVE_STEPS; step++) {
+        const int32_t walk = -far + (2 * far * step) / BOOT_ANIM_WAVE_STEPS;
+        const int32_t re = im_varies ? fixed : walk;
+        const int32_t im = im_varies ? walk : fixed;
+        const int32_t r = im_len(re, im);
+        const int32_t t = boot_anim_wave_height(r, front_r,
+                                                BOOT_ANIM_WAVE_HEIGHT_Q12);
+        const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
+
+        if (have_prev) {
+            int ax, ay, bx, by;
+            if (boot_anim_project_segment_cs(prev_cs, cs, view,
+                                             &ax, &ay, &bx, &by)) {
+                gfx_line_ex(ax, ay, bx, by, c, 0u);
+            }
+        }
+        prev_cs = cs;
+        have_prev = true;
+    }
+}
+
 static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
     const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
+
+    /* The wave's own front only needs computing once a frame - see
+     * boot_anim_wave_front() - and the whole walked-line path below only
+     * needs to run at all while its window is open: outside it,
+     * boot_anim_wave_height() would return 0 for every vertex anyway, so
+     * this is a real cost saved, not just a style choice, for the vast
+     * majority of the animation the ripple is not running in. */
+    const bool wave_active = BOOT_ANIM_WAVE_HEIGHT_Q12 != 0 &&
+                             now_ms >= BOOT_ANIM_WAVE_START_MS &&
+                             now_ms <= BOOT_ANIM_WAVE_END_MS;
+    const int32_t front_r = wave_active ? boot_anim_wave_front(now_ms) : 0;
 
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
@@ -191,14 +247,25 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
 
         for (int sign = -1; sign <= 1; sign += 2) {
             const int32_t off = sign * d;
-            int ax, ay, bx, by;
+
+            if (wave_active) {
+                draw_grid_line(off, true, far, front_r, c, view);
+                draw_grid_line(off, false, far, front_r, c, view);
+                continue;
+            }
 
             /* Each ring line runs the grid's full reach - see draw_floor()'s
              * own top comment - which is exactly what makes a wide reach
              * more likely to send one end of it behind the camera: not
              * drawn at all if boot_anim_project_segment() says so, rather
              * than connected anyway (see its own comment for what that
-             * used to draw). */
+             * used to draw). Not draw_grid_line() here too, though it would
+             * give the same result while the wave is flat: a single
+             * straight segment is cheaper than walking BOOT_ANIM_WAVE_STEPS
+             * of them for no visual difference, and this is the common case
+             * - the wave is only ever running for a small slice of the
+             * whole animation. */
+            int ax, ay, bx, by;
             if (boot_anim_project_segment(off, -far, 0, off, far, 0, view,
                                           &ax, &ay, &bx, &by)) {
                 gfx_line_ex(ax, ay, bx, by, c, 0u);
