@@ -169,16 +169,16 @@ static int32_t units(int n)
 #define BOOT_ANIM_GRID_CIRCLE_STEPS 12
 
 /* How finely a SPOKE is walked, unlike a ring's own CIRCLE_STEPS above -
- * a spoke's vertices are the only ones that ever have to resolve the
- * wave's own OSCILLATION (see boot_anim.h's "The wave" section) along
- * their own length, not just one height shared by the whole ring, and an
- * authored wavelength can be a lot shorter than the grid's own ring
- * spacing - several samples per wavelength are what keep the pattern
- * reading as a wave rather than being aliased away entirely. Not
- * per-spoke: BOOT_ANIM_GRID_SPOKES (generated - "Grid" in tools/
- * boot_anim_editor.html, 0 hides them outright) is rarely more than a
- * handful, so even a step count this much finer stays cheap regardless of
- * how many spokes are actually drawn. */
+ * a spoke's own vertices span a real distance (0 to `far`), not one
+ * shared radius, so a growing reach (boot_anim_grid_spoke_reach()) needs
+ * several steps to read as smoothly extending outward rather than
+ * jumping in visible chunks, and a dashed spoke (BOOT_ANIM_GRID_SPOKE_
+ * DASH) needs at least a couple of segments per dash/gap pair - NOT the
+ * wave (see draw_grid_spoke()'s own comment on why a spoke stays flat
+ * regardless of it). Not per-spoke: BOOT_ANIM_GRID_SPOKES (generated -
+ * "Grid" in tools/boot_anim_editor.html, 0 hides them outright) is rarely
+ * more than a handful, so even a step count this fine stays cheap
+ * regardless of how many spokes are actually drawn. */
 #define BOOT_ANIM_GRID_SPOKE_STEPS 32
 
 /* A point at zeta-distance `radius` from the origin, `turn`/BOOT_ANIM_ONE
@@ -232,12 +232,14 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
 
 /* One spoke, from the origin out to `far` at a fixed angle `turn` - the
  * structure a polar grid needs that rings alone do not give it (nothing
- * otherwise says which way is "outward" at a glance). Walked in short
- * spans, unlike a ring: a spoke's own vertices range continuously from
- * distance 0 to `far`, so the wave's height genuinely varies along its
- * length and needs computing per vertex, the same reason draw_curve()'s
- * own segments each get their own projection rather than one shared by
- * the whole curve.
+ * otherwise says which way is "outward" at a glance). Drawn FLAT - a
+ * spoke does not carry the wave (see boot_anim.h's "The wave" section):
+ * it is a guide line for the plane itself, and a guide that bent along
+ * with the very displacement it is meant to help read stops doing its
+ * job - only the rings, which the wave is actually about, lift. Still
+ * walked in short spans rather than one straight segment, unlike a ring,
+ * so a growing reach and a dash pattern (both below) have several
+ * segments to work with rather than one all-or-nothing line.
  *
  * `dash`: BOOT_ANIM_GRID_SPOKE_DASH (generated - "Grid" in tools/
  * boot_anim_editor.html) skips drawing every OTHER segment rather than
@@ -246,17 +248,13 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
  * is a whole gfx_line_ex() call, so skipping half of them skips half the
  * walk()s outright - the bounding box and dirty_mark() included, not just
  * the plot()s inside one - genuinely cheaper to draw, not just a different
- * look. The vertex walk itself (and so the wave's own per-vertex height)
- * is untouched either way; only whether a given span's line actually gets
- * drawn changes.
+ * look.
  *
  * `reach` (boot_anim_grid_spoke_reach(), Q0) bounds how much of the walk
  * even happens, not just whether a given segment draws - the loop simply
  * stops early, so a spoke mid-reveal costs less to draw than a finished
  * one, not the same amount with the tail end thrown away. */
-static void draw_grid_spoke(uint16_t turn, int32_t far, uint32_t now_ms,
-                            int32_t amp_q12, int32_t wavelength_q12,
-                            uint32_t period_ms, gfx_color_t c,
+static void draw_grid_spoke(uint16_t turn, int32_t far, gfx_color_t c,
                             bool dash, uint8_t reach,
                             const boot_anim_view_t *view)
 {
@@ -268,9 +266,7 @@ static void draw_grid_spoke(uint16_t turn, int32_t far, uint32_t now_ms,
         const int32_t radius = (far * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
         int32_t re, im;
         polar_point(radius, turn, &re, &im);
-        const int32_t t = boot_anim_wave_height(radius, now_ms, amp_q12,
-                                                wavelength_q12, period_ms);
-        const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
+        const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, 0, view);
 
         /* Segment `step` runs from vertex step-1 to step - odd segments on,
          * even ones off, a plain 50/50 split fine enough at 32 segments per
@@ -294,14 +290,15 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
 {
     const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
 
-    /* The three values every draw_grid_*() call below hands straight to
+    /* The three values the ring loop below hands straight to
      * boot_anim_wave_height() - see its own comment on why a zero
      * amplitude or wavelength already comes back flat with no separate
      * "is the wave even running" branch needed here. Peak amplitude
      * scaled by boot_anim_wave_envelope() BEFORE it gets here, not inside
      * boot_anim_wave_height() itself - the ripple's own shape and its own
      * strength-over-time are two separate concerns (see that function's
-     * own comment). */
+     * own comment). Spokes do not take any of this at all - see
+     * draw_grid_spoke()'s own comment on why they stay flat. */
     const int32_t amp_q12 = (int32_t)(((int64_t)BOOT_ANIM_WAVE_HEIGHT_Q12 *
         boot_anim_wave_envelope(now_ms)) / 255);
     const int32_t wavelength_q12 = BOOT_ANIM_WAVE_WAVELENGTH_Q12;
@@ -344,8 +341,7 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     if (spoke_reach > 0) {
         for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
             const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-            draw_grid_spoke(turn, far, now_ms, amp_q12, wavelength_q12,
-                            period_ms, spoke_c,
+            draw_grid_spoke(turn, far, spoke_c,
                             BOOT_ANIM_GRID_SPOKE_DASH != 0, spoke_reach, view);
         }
     }
