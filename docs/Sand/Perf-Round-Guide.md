@@ -63,6 +63,47 @@ generated `.md` table and the raw serial capture (`*_raw.txt`) beside it.
 Read the raw capture, not just the table, when a row looks wrong; the table
 generator can only report what it was pointed at.
 
+### The capture must be validated before it is read
+
+`report_performance.sh` runs `launcher/tools/sweeps/validate_capture.py`
+between the capture and the report, and refuses to generate a table from a
+bad capture. Run it by hand on any raw file you did not capture yourself:
+
+```sh
+python launcher/tools/sweeps/validate_capture.py <capture>_raw.txt
+```
+
+It catches the three failures that have each cost a full cycle here: a run
+that never finished, a crash loop (more than one boot banner), and - the
+expensive one - a capture that completes cleanly while measuring nothing.
+`python launcher/tools/sweeps/validate_capture.py --selftest` checks the
+validator itself against known-good and known-bad captures in `results/`.
+
+**Free heap is a precondition, not a detail.** Every frame-budget scene
+mallocs its grid, so when the heap is short the suite still runs, still
+prints `SELFTEST_COMPLETE`, and still produces a report-shaped capture -
+with no timings in it at all. Grep the capture for
+`free heap after framebuffer` before reading anything else:
+
+| Free heap | What you get |
+|---|---|
+| ~66,600 B | every scene allocates; measurements are real |
+| ~42,900 B | all 34 fixture-based tests fail to allocate; zero timings |
+
+One grid is ~41 KB on its own. If a round suddenly reports nothing, suspect
+a static test fixture added since the last good capture before suspecting
+the device - that has now been the cause twice.
+
+### Comparing two rounds
+
+```sh
+python launcher/main/apps/sand/tools/compare_reports.py <before>.md <after>.md
+```
+
+It derives the noise floor from the two control rows in the reports being
+compared rather than hardcoding one, so a run that was noisier than usual
+does not get read as a win.
+
 ## Reading a capture
 
 - **Check the controls first.** The two liquid-free control benchmarks
