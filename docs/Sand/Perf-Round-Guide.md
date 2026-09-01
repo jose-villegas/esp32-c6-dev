@@ -9,6 +9,18 @@ map). This page is instructions, not narrative.
 
 ## The loop
 
+0. **Start every round from a capture you took yourself.** Do not open the
+   newest `.md` in `results/` and read its numbers as current, and do not
+   carry a previous round's table forward as the baseline. Those files are
+   an archive, not a state - they are timestamped, never overwritten, and
+   several of them were generated from captures that turned out to have
+   measured nothing. This has already gone wrong twice: once a stale report
+   was quoted as a fresh result because it was simply the most recent file
+   on disk, and once a whole round's budgets were read from a capture whose
+   fixtures had all failed to allocate. A capture is cheap next to a wrong
+   conclusion drawn from an old one - and if a fresh capture and an archived
+   table disagree, the fresh capture wins every time.
+
 1. **Attribute before optimising.** Host counters first: which pass, which
    function, does the suspect code even run in the failing benchmark's
    window (`git log --all --grep attempt` for prior instances of this
@@ -85,14 +97,24 @@ prints `SELFTEST_COMPLETE`, and still produces a report-shaped capture -
 with no timings in it at all. Grep the capture for
 `free heap after framebuffer` before reading anything else:
 
-| Free heap | What you get |
-|---|---|
-| ~66,600 B | every scene allocates; measurements are real |
-| ~42,900 B | all 34 fixture-based tests fail to allocate; zero timings |
+| Free heap | What you get | |
+|---|---|---|
+| 66,632 B | every scene allocates | measured 2026-08-28 |
+| 63,952 B | every scene allocates | measured 2026-09-01 |
+| 42,880 B | all 34 fixture tests fail to allocate; zero timings | measured 2026-09-01 |
+| 28,480 B | same, worse | measured 2026-08-31 |
 
 One grid is ~41 KB on its own. If a round suddenly reports nothing, suspect
 a static test fixture added since the last good capture before suspecting
 the device - that has now been the cause twice.
+
+**A healthy suite is SLOW, and that is the correct sign.** While the
+fixtures were failing to allocate, the whole device run finished in ~168
+seconds, because failing a malloc is instant. With the heap freed and every
+scene actually simulating, a full pass measured 1,125,726 ms - 18.8
+minutes. Both report scripts capture with a 1500-second window for this
+reason. If a run finishes in a couple of minutes, that is not a fast
+device: it is a suite that measured nothing, and the validator will say so.
 
 ### Comparing two rounds
 

@@ -14,8 +14,16 @@ See [`Perf-Round-Guide.md`](Perf-Round-Guide.md) to run a new round.
 
 **All thirteen of the original budgets are uniform reduction targets —
 measured × 0.9, rounded — and, by design, all fail until their own tenth is
-won.** A fourteenth row (wet earth) has since been added and is still
-unpegged — see [`Perf-Round-Guide.md`](Perf-Round-Guide.md)'s open items.
+won.** The fourteenth row, wet earth, was pegged on 2026-09-01 from its
+first real capture: measured 100,367 µs for 30 steps → **80,000**. That row
+alone is measured × **0.8**, a deliberate 20% target set by the person
+pegging it — do not "correct" it to × 0.9 for consistency.
+
+Its previous 300,000 ceiling was extrapolated with no hardware and proved
+3× looser than the truth (+66.5% headroom), so it never constrained
+anything. Three device rounds could not measure this row at all, because
+static test fixtures had eaten the heap the scene needed to allocate its
+grid.
 
 | Test | Measured (2026-08-26 clean) | Target | To close |
 |---|---:|---:|---:|
