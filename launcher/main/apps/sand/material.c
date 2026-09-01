@@ -738,7 +738,7 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
-            /* SETTLED BACK TO A MODERATE FIGURE, MEASURED ON DEVICE -
+            /* A MODERATE FIGURE, MEASURED ON DEVICE TWICE NOW -
              * 24 in 256 (~9.4%), per step, once a pool is COVERED FROM
              * ABOVE - see reaction_t.vent_chance's own comment for the
              * design and try_vent()/covered_from_above() (sand_
@@ -750,26 +750,30 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * nothing yet but itself sitting over more lava) that then
              * gets thrown away the very next step, before any more crust
              * can build on top of it - "material pops the instant water
-             * touches lava", not "a sealed slab breaks free". Watched live
-             * over the serial console (VENT_DBG instrumentation, since
-             * removed) confirmed the mechanism was firing exactly as
-             * coded, just too fast for a slab to ever exist long enough to
-             * see. This figure, paired with the second roll's own return
-             * to a real gate (see step_one_burning_cell()'s own comment),
-             * is a first attempt at a middle ground: noticeably more
-             * frequent than the original 1 (~0.4%, an occasional pulse
-             * over minutes) without firing before a crust can accumulate.
-             * Not yet re-measured on device at this exact figure - tune
-             * further if it still fires too fast or has gone too rare.
+             * touches lava", not "a sealed slab breaks free". Pulled back
+             * to this figure, then watched live over the serial console
+             * again (REACT_DBG instrumentation, since removed) once
+             * vent_column() started peeling layers instead of clearing a
+             * whole covering in one shot (SAND_VENT_LAYER, sand.h): the
+             * same covered cell now genuinely gets re-checked and re-fires
+             * repeatedly over time, confirmed by a climbing "still covered,
+             * seen N times" counter and the same (x, y) firing again and
+             * again - the ambient, ongoing behaviour this whole feature was
+             * asked for, working. Left AT this figure; the second roll
+             * below is what moved instead (1-in-8 down to 1-in-12, this
+             * round) after a wide active pour - many covered cells at
+             * once - read as firing a bit too often in aggregate, even
+             * though any single cell's own rate did not change.
              * SAND_VENT_REACH and SAND_VENT_CHUNK (sand.h) are unaffected
-             * - how FAR a pulse throws and how WIDE a slab it grabs are
-             * separate dials from how OFTEN one happens, and stay exactly
-             * as tuned. sand_set_vent_chance() (sand.h) still overrides
-             * this for tests that need an exact, pinned value regardless
-             * of what production is currently tuned to. A living balance
-             * number, not a protected constant - see this project's own
-             * convention of revising these on request rather than
-             * treating a shipped figure as fixed. */
+             * - how FAR a pulse
+             * throws and how WIDE a slab it grabs are separate dials from
+             * how OFTEN one happens, and stay exactly as tuned.
+             * sand_set_vent_chance() (sand.h) still overrides this for
+             * tests that need an exact, pinned value regardless of what
+             * production is currently tuned to. A living balance number,
+             * not a protected constant - see this project's own convention
+             * of revising these on request rather than treating a shipped
+             * figure as fixed. */
             .vent_chance = 24,
 
             /* No residue: lava never burns out (decay 0 above), so nothing

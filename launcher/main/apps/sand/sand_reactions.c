@@ -3484,17 +3484,23 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * fire before a crust could ever accumulate: a stream of water
      * quenching lava creates a covered cell that gets thrown away the
      * very next step, so it read as "material pops the instant water
-     * touches lava" rather than "a sealed slab breaks free". Back to a
-     * real gate now, `% 8` (~12.5%), paired with vent_chance's own
-     * matching retreat to a moderate figure - see that field's own
-     * comment for the account and the numbers. Combined this is roughly
-     * 14x the original design's rate (1-in-60 on a rarest-possible table
-     * figure, ~1-in-15,360) while still leaving several steps' worth of
-     * expected wait for a crust to actually exist before it vents.
-     * Not yet re-measured on device at this exact figure. Does not touch
-     * sand_set_vent_chance()'s override path - forcing this to a specific
-     * value for a test still gets a single, deterministic roll, exactly
-     * as sand_set_evaporates() does for acid.
+     * touches lava" rather than "a sealed slab breaks free". Pulled back
+     * to `% 8` alongside SAND_VENT_LAYER splitting a firing's throw into
+     * stages (sand.h), then watched live over the serial console again:
+     * confirmed the SAME covered cell now genuinely re-checks and re-
+     * fires repeatedly over time rather than only once - the mechanism
+     * this whole feature exists for, actually working. That same session
+     * also showed a wide active pour - many covered cells at once - firing
+     * a bit too often in aggregate, even though no single cell's own rate
+     * had changed; moved to `% 12` (~8.3%) to bring the aggregate down a
+     * notch without re-touching vent_chance's own figure. Combined this is
+     * roughly 9x the original design's rate (1-in-60 on a rarest-possible
+     * table figure, ~1-in-15,360) while still leaving several steps'
+     * worth of expected wait for a crust to actually exist before it
+     * vents. Not yet re-measured on device at this exact figure. Does not
+     * touch sand_set_vent_chance()'s override path - forcing this to a
+     * specific value for a test still gets a single, deterministic roll,
+     * exactly as sand_set_evaporates() does for acid.
      *
      * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ONLY IN PER-MATERIAL MODE -
      * see that constant's own comment (sand.h) for the mechanism and why.
@@ -3540,7 +3546,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         (!vent_per_material || (x % SAND_VENT_CHUNK) == 0) &&
         covered_from_above(s, x, y, w, h, mat->density) &&
         (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
-        (!vent_per_material || (rng_next(&s->rng) % 8) == 0)) {
+        (!vent_per_material || (rng_next(&s->rng) % 12) == 0)) {
         try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
         acted = true;
     }
