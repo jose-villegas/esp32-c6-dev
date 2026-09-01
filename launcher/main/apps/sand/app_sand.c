@@ -673,6 +673,55 @@ static void mark_sand_fully_dirty(void)
     gfx_mark_all_dirty();
 }
 
+#if CONFIG_LAUNCHER_SELFTEST
+/* Can a fresh entry into this app still get everything it needs, right now?
+ *
+ * Every frame-budget row in suite_sand.c measures sand_step() on a grid the
+ * TEST allocated. Nothing asserted that the app's own allocation still
+ * succeeds - so the campaign could have been measuring a simulation this
+ * device could no longer enter, and the first sign of it was a "no memory
+ * for the grid" screen someone happened to notice after a capture. This is
+ * the missing check, and it lives HERE rather than in the suite so that it
+ * uses these constants: a copy of the sizes in the test file would drift
+ * the first time one of them changed.
+ *
+ * Allocates its own set rather than inspecting the app's, in the same order
+ * the app uses - that order is load-bearing, see impulse_buf's own comment
+ * in start_sim() below - and frees all of it before returning, so asking
+ * the question cannot be what makes the answer no.
+ *
+ * impulse_buf is reported separately because the app treats it as optional:
+ * losing it disables the blast mechanic, not the app. */
+bool sand_app_alloc_selfcheck(size_t *out_largest_free, bool *out_impulses_ok)
+{
+    uint8_t   *t_dirty  = malloc(GRID_H_MAX);
+    uint8_t   *t_blocks = malloc((size_t)BLOCK_COLS_MAX * BLOCK_ROWS_MAX);
+    uint8_t   *t_grid   = malloc((size_t)GRID_W_MAX * GRID_H_MAX);
+    uint16_t  *t_x0     = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint16_t  *t_x1     = malloc(GRID_H_MAX * ROW_MAX_RUNS * sizeof(uint16_t));
+    uint8_t   *t_n      = malloc(GRID_H_MAX * sizeof(uint8_t));
+    impulse_t *t_imp    = malloc((size_t)APP_IMPULSE_MAX * sizeof(impulse_t));
+
+    const bool essential_ok = (t_dirty && t_blocks && t_grid &&
+                               t_x0 && t_x1 && t_n);
+    if (out_impulses_ok) {
+        *out_impulses_ok = (t_imp != NULL);
+    }
+    if (out_largest_free) {
+        *out_largest_free = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+    }
+
+    free(t_imp);
+    free(t_n);
+    free(t_x1);
+    free(t_x0);
+    free(t_grid);
+    free(t_blocks);
+    free(t_dirty);
+    return essential_ok;
+}
+#endif /* CONFIG_LAUNCHER_SELFTEST */
+
 /* Builds the active grid at the chosen quality, then does everything
  * sand_enter() used to do unconditionally: allocate (only on the first-ever
  * call - see the header comment on why every allocation is sized for

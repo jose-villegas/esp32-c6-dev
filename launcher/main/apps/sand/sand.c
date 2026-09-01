@@ -2444,6 +2444,26 @@ static void step_impulses(sand_t *s, int dx, int dy)
     }
 }
 
+/* Pinned to a cache-line boundary so this function's own placement stops
+ * being a coin flip of whatever unrelated code happens to sit before it in
+ * this translation unit. Host bisect evidence (docs/Sand/Perf-Round-Guide.md
+ * "Open items", attempt 15's finding A): across six materials-wave commits
+ * that each changed sand.c/material.c/sand_reactions.c but never this
+ * function's own body, sand_step()'s compiled bytes were IDENTICAL every
+ * time - only its absolute address moved, by whatever an unrelated function
+ * earlier in the file grew or shrank by - and the two liquid-free control
+ * benchmarks (which call only this) swung between two timing bands in
+ * lock-step with that address's alignment. Forcing the alignment removes the
+ * coin flip: unrelated code elsewhere in this file, or a future insertion
+ * before this point, can no longer silently move this function across a
+ * cache-line boundary and change its own performance for free.
+ *
+ * 32, not 64: 32 bytes is this chip's own i-cache line, and 64 does not
+ * link - it raises .flash.text's section alignment past the 0x...20 start
+ * ESP-IDF's linker script pairs with .flash_rodata_dummy, and ld refuses
+ * the overlap. The host bisect that motivated this used 64 because that is
+ * what collapsed the x86 buckets; on this target the line is half that. */
+__attribute__((aligned(32)))
 void sand_step(sand_t *s, int gx, int gy, int jostle)
 {
     /* Emitters get their one attempt per step FIRST, before gravity is even
