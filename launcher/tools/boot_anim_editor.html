@@ -455,11 +455,24 @@ const DEFAULT_STATE = {
   ],
 };
 
-const TIMING_GROUPS = [
+/* Grouped by WHAT each field actually belongs to, not by whether it
+ * happens to live in `timing` vs top-level - grid_step_m/wave_height_m/
+ * wave_ease are top-level (see gen_boot_anim_timeline.py's own comment on
+ * why: no keyframe to attach them to), but split them into their own
+ * groups instead of putting every non-`timing` field first, and a reader
+ * has to track two unrelated groupings at once to find, say, "everything
+ * about the wave" - it is one group here, `timing` membership be damned.
+ * renderConsts() below reads this top-to-bottom, weaving in the fields
+ * that are not plain `timing` numbers (grid_step_m/reach, wave_height_m/
+ * ease) at the point in EACH list they actually belong, rather than
+ * exiling them to their own section ahead of everything else the way the
+ * old "Camera lens" / "Grid" / "Wave" mini-blocks used to. */
+const FIELD_GROUPS = [
   { title: 'Overall', keys: ['total_ms', 'fade_start_ms'] },
-  { title: 'Axes / grid', keys: ['axes_ms', 'grid_start_ms', 'grid_ring_ms', 'grid_rings',
-      'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max',
-      'grid_max'] },
+  { title: 'Axes', keys: ['axes_ms'] },
+  { title: 'Grid', keys: ['grid_rings', 'grid_start_ms', 'grid_ring_ms',
+      'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max',
+      'grid_ceiling_max', 'grid_max'] },
   { title: 'Wave', keys: ['wave_start_ms', 'wave_end_ms'] },
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
@@ -637,6 +650,35 @@ function renderDebounced() {
  * Other consts panel
  * ======================================================================= */
 
+function addGroupTitle(list, title) {
+  const h = document.createElement('div');
+  h.className = 'group-title';
+  h.textContent = title;
+  list.appendChild(h);
+}
+
+/* Every plain `timing[key]` field, wherever it ends up grouped - see
+ * FIELD_GROUPS' own comment on why that grouping no longer matches
+ * "is this a timing field" one-to-one. */
+function addTimingField(list, key) {
+  const label = document.createElement('label');
+  label.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = key;
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.id = 'timingField_' + key;
+  input.value = state.timing[key];
+  input.addEventListener('input', () => {
+    state.timing[key] = Number(input.value) || 0;
+    if (key === 'grid_rings') updateGridExtent();
+    renderDebounced();
+  });
+  label.appendChild(span);
+  label.appendChild(input);
+  list.appendChild(label);
+}
+
 function renderConsts() {
   const list = document.getElementById('constsList');
   list.innerHTML = '';
@@ -645,11 +687,9 @@ function renderConsts() {
    * carry - see boot_anim_timeline.json's own comment: a lens property, not
    * a position or angle. small3dlib's own S3L_F (512) is its "normal" FOV;
    * 0 is orthographic (see boot_anim.h's "The projection" section) - not a
-   * second code path, just this one field. */
-  const focalHead = document.createElement('div');
-  focalHead.className = 'group-title';
-  focalHead.textContent = 'Camera lens';
-  list.appendChild(focalHead);
+   * second code path, just this one field. The one group with nothing else
+   * to gather next to it, so no FIELD_GROUPS entry for it. */
+  addGroupTitle(list, 'Camera lens');
   const focalLabel = document.createElement('label');
   focalLabel.className = 'field';
   const focalSpan = document.createElement('span');
@@ -665,130 +705,112 @@ function renderConsts() {
   focalLabel.appendChild(focalInput);
   list.appendChild(focalLabel);
 
-  /* Also not per-keyframe - the spacing between floor rings, in meters like
-   * a transform's own pos (see gen_boot_anim_timeline.py's top comment).
-   * How MANY rings is grid_rings, a plain count, in the Axes/grid group
-   * below with everything else that paces the floor. */
-  const stepHead = document.createElement('div');
-  stepHead.className = 'group-title';
-  stepHead.textContent = 'Grid';
-  list.appendChild(stepHead);
-  const stepLabel = document.createElement('label');
-  stepLabel.className = 'field';
-  const stepSpan = document.createElement('span');
-  stepSpan.textContent = 'grid_step_m (ring spacing, meters)';
-  const stepInput = document.createElement('input');
-  stepInput.type = 'number';
-  stepInput.step = 'any';
-  stepInput.value = state.grid_step_m;
-  stepInput.addEventListener('input', () => {
-    state.grid_step_m = Number(stepInput.value) || 0;
-    updateGridExtent();
-    renderDebounced();
-  });
-  stepLabel.appendChild(stepSpan);
-  stepLabel.appendChild(stepInput);
-  list.appendChild(stepLabel);
+  for (const group of FIELD_GROUPS) {
+    addGroupTitle(list, group.title);
 
-  /* Reach isn't its own authored field - it's grid_step_m * grid_rings
-   * (see draw_floor()'s own `far` in boot_anim.c) - editing it solves for
-   * grid_rings (below, in Axes/grid) at the CURRENT spacing, rather than
-   * being a third independent number: density (spacing) and reach (how
-   * far out the floor goes) are kept as separate knobs on purpose -
-   * growing the reach by adding rings also adds line-draws, while growing
-   * it by widening the spacing does not - so editing reach moves the one
-   * of the two that actually changes what you asked for. */
-  const extentLabel = document.createElement('label');
-  extentLabel.className = 'field';
-  const extentSpan = document.createElement('span');
-  extentSpan.textContent = 'reach (rings × step, meters)';
-  const extentInput = document.createElement('input');
-  extentInput.type = 'number';
-  extentInput.step = 'any';
-  extentInput.min = '0';
-  extentInput.id = 'gridExtentInput';
-  extentInput.addEventListener('input', () => {
-    const desired = Number(extentInput.value) || 0;
-    const step = state.grid_step_m;
-    if (step > 0) {
-      state.timing.grid_rings = Math.max(1, Math.round(desired / step));
-      const ringsInput = document.getElementById('timingField_grid_rings');
-      if (ringsInput) ringsInput.value = state.timing.grid_rings;
-    }
-    renderDebounced();
-  });
-  extentLabel.appendChild(extentSpan);
-  extentLabel.appendChild(extentInput);
-  list.appendChild(extentLabel);
-
-  /* Also not per-keyframe - there is only ever the one front (see
-   * boot_anim.h's "The wave" section). height in meters like grid_step_m
-   * just above (0 turns the ripple off outright, not just down); ease
-   * shapes how the front travels from the origin to the grid's own edge
-   * over wave_start_ms..wave_end_ms (below, in the Wave timing group) -
-   * the same three shapes a keyframe's own ease picks from. */
-  const waveHead = document.createElement('div');
-  waveHead.className = 'group-title';
-  waveHead.textContent = 'Wave';
-  list.appendChild(waveHead);
-  const waveHeightLabel = document.createElement('label');
-  waveHeightLabel.className = 'field';
-  const waveHeightSpan = document.createElement('span');
-  waveHeightSpan.textContent = 'wave_height_m (0 = off)';
-  const waveHeightInput = document.createElement('input');
-  waveHeightInput.type = 'number';
-  waveHeightInput.step = 'any';
-  waveHeightInput.value = state.wave_height_m;
-  waveHeightInput.addEventListener('input', () => {
-    state.wave_height_m = Number(waveHeightInput.value) || 0;
-    renderDebounced();
-  });
-  waveHeightLabel.appendChild(waveHeightSpan);
-  waveHeightLabel.appendChild(waveHeightInput);
-  list.appendChild(waveHeightLabel);
-
-  const waveEaseLabel = document.createElement('label');
-  waveEaseLabel.className = 'field';
-  const waveEaseSpan = document.createElement('span');
-  waveEaseSpan.textContent = 'wave_ease';
-  const waveEaseSelect = document.createElement('select');
-  for (const opt of ['linear', 'ease_out', 'ease_in']) {
-    const o = document.createElement('option');
-    o.value = opt;
-    o.textContent = opt;
-    if (state.wave_ease === opt) o.selected = true;
-    waveEaseSelect.appendChild(o);
-  }
-  waveEaseSelect.addEventListener('change', () => {
-    state.wave_ease = waveEaseSelect.value;
-    renderDebounced();
-  });
-  waveEaseLabel.appendChild(waveEaseSpan);
-  waveEaseLabel.appendChild(waveEaseSelect);
-  list.appendChild(waveEaseLabel);
-
-  for (const group of TIMING_GROUPS) {
-    const h = document.createElement('div');
-    h.className = 'group-title';
-    h.textContent = group.title;
-    list.appendChild(h);
-    for (const key of group.keys) {
-      const label = document.createElement('label');
-      label.className = 'field';
-      const span = document.createElement('span');
-      span.textContent = key;
-      const input = document.createElement('input');
-      input.type = 'number';
-      input.id = 'timingField_' + key;
-      input.value = state.timing[key];
-      input.addEventListener('input', () => {
-        state.timing[key] = Number(input.value) || 0;
-        if (key === 'grid_rings') updateGridExtent();
+    if (group.title === 'Grid') {
+      /* Not per-keyframe - the spacing between floor rings, in meters
+       * like a transform's own pos (see gen_boot_anim_timeline.py's top
+       * comment). Ahead of grid_rings itself (below, in this same group
+       * now) rather than off in a "Camera lens"-style group of its own -
+       * everything about the grid belongs together. */
+      const stepLabel = document.createElement('label');
+      stepLabel.className = 'field';
+      const stepSpan = document.createElement('span');
+      stepSpan.textContent = 'grid_step_m (ring spacing, meters)';
+      const stepInput = document.createElement('input');
+      stepInput.type = 'number';
+      stepInput.step = 'any';
+      stepInput.value = state.grid_step_m;
+      stepInput.addEventListener('input', () => {
+        state.grid_step_m = Number(stepInput.value) || 0;
+        updateGridExtent();
         renderDebounced();
       });
-      label.appendChild(span);
-      label.appendChild(input);
-      list.appendChild(label);
+      stepLabel.appendChild(stepSpan);
+      stepLabel.appendChild(stepInput);
+      list.appendChild(stepLabel);
+
+      /* Reach isn't its own authored field - it's grid_step_m * grid_rings
+       * (see draw_floor()'s own `far` in boot_anim.c) - editing it solves
+       * for grid_rings (right below, same group) at the CURRENT spacing,
+       * rather than being a third independent number: density (spacing)
+       * and reach (how far out the floor goes) are kept as separate knobs
+       * on purpose - growing the reach by adding rings also adds
+       * line-draws, while growing it by widening the spacing does not -
+       * so editing reach moves the one of the two that actually changes
+       * what you asked for. */
+      const extentLabel = document.createElement('label');
+      extentLabel.className = 'field';
+      const extentSpan = document.createElement('span');
+      extentSpan.textContent = 'reach (rings × step, meters)';
+      const extentInput = document.createElement('input');
+      extentInput.type = 'number';
+      extentInput.step = 'any';
+      extentInput.min = '0';
+      extentInput.id = 'gridExtentInput';
+      extentInput.addEventListener('input', () => {
+        const desired = Number(extentInput.value) || 0;
+        const step = state.grid_step_m;
+        if (step > 0) {
+          state.timing.grid_rings = Math.max(1, Math.round(desired / step));
+          const ringsInput = document.getElementById('timingField_grid_rings');
+          if (ringsInput) ringsInput.value = state.timing.grid_rings;
+        }
+        renderDebounced();
+      });
+      extentLabel.appendChild(extentSpan);
+      extentLabel.appendChild(extentInput);
+      list.appendChild(extentLabel);
+    }
+
+    if (group.title === 'Wave') {
+      /* Also not per-keyframe - there is only ever the one front (see
+       * boot_anim.h's "The wave" section). height in meters like
+       * grid_step_m above (0 turns the ripple off outright, not just
+       * down); ease shapes how the front travels from the origin to the
+       * grid's own edge over wave_start_ms..wave_end_ms (right below,
+       * same group) - the same three shapes a keyframe's own ease picks
+       * from. */
+      const waveHeightLabel = document.createElement('label');
+      waveHeightLabel.className = 'field';
+      const waveHeightSpan = document.createElement('span');
+      waveHeightSpan.textContent = 'wave_height_m (0 = off)';
+      const waveHeightInput = document.createElement('input');
+      waveHeightInput.type = 'number';
+      waveHeightInput.step = 'any';
+      waveHeightInput.value = state.wave_height_m;
+      waveHeightInput.addEventListener('input', () => {
+        state.wave_height_m = Number(waveHeightInput.value) || 0;
+        renderDebounced();
+      });
+      waveHeightLabel.appendChild(waveHeightSpan);
+      waveHeightLabel.appendChild(waveHeightInput);
+      list.appendChild(waveHeightLabel);
+
+      const waveEaseLabel = document.createElement('label');
+      waveEaseLabel.className = 'field';
+      const waveEaseSpan = document.createElement('span');
+      waveEaseSpan.textContent = 'wave_ease';
+      const waveEaseSelect = document.createElement('select');
+      for (const opt of ['linear', 'ease_out', 'ease_in']) {
+        const o = document.createElement('option');
+        o.value = opt;
+        o.textContent = opt;
+        if (state.wave_ease === opt) o.selected = true;
+        waveEaseSelect.appendChild(o);
+      }
+      waveEaseSelect.addEventListener('change', () => {
+        state.wave_ease = waveEaseSelect.value;
+        renderDebounced();
+      });
+      waveEaseLabel.appendChild(waveEaseSpan);
+      waveEaseLabel.appendChild(waveEaseSelect);
+      list.appendChild(waveEaseLabel);
+    }
+
+    for (const key of group.keys) {
+      addTimingField(list, key);
     }
   }
 
