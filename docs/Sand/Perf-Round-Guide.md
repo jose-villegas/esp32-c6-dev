@@ -126,6 +126,38 @@ It derives the noise floor from the two control rows in the reports being
 compared rather than hardcoding one, so a run that was noisier than usual
 does not get read as a win.
 
+### Unattended candidate evaluation
+
+`scripts/perf-loop.sh` evaluates optimisation candidates without a human,
+and is built so a candidate cannot be accepted for the wrong reason:
+
+```sh
+sh scripts/perf-loop.sh --baseline <report>.md --candidates <file>
+sh scripts/perf-loop.sh --host-only --candidate "sed -i ... sand.c"
+```
+
+Five gates, cheapest first - allowlist, host suite, fingerprint, device
+capture, measured verdict - then one of three outcomes: ACCEPT (won, and
+behaviour byte-identical, committed to a branch), QUARANTINE (won, but
+behaviour changed - patch kept for review), REJECT.
+
+The allowlist runs FIRST and matters most. The cheapest way to make a
+deliberately-failing budget pass is to raise the budget, and the next
+cheapest is to weaken the scene; both live in files a candidate may not
+open, so neither is discouraged - both are unreachable.
+
+`main/apps/sand/tools/report_fingerprint.sh --check` is the behavioural
+gate and is worth running by hand during any perf round. It hashes the
+grid after a fixed number of steps across five scenes and prints the
+per-material histogram beside each hash. Proven necessary: setting
+`SAND_VENT_LAYER` from 3 to 5 passes all 680 tests and changes the
+simulation - the suite cannot see it, this does. Read a failure by the
+histogram, not the hash: identical counts with a different hash is a
+reordering, changed counts mean material was created or destroyed.
+
+`--update` re-records the baseline and is deliberately a human act. A loop
+that can re-record its own baseline has no baseline.
+
 ## Reading a capture
 
 - **Check the controls first.** The two liquid-free control benchmarks
