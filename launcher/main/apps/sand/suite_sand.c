@@ -21226,6 +21226,46 @@ static void test_acid_bubbles_still_fire_once_the_block_is_asleep(void)
 
 /* --- suite -------------------------------------------------------------- */
 
+#ifdef DEVICE_BUILD
+/* Defined in app_sand.c, the hardware-facing entry point, which is not part
+ * of the host build - hence DEVICE_BUILD around both this declaration and
+ * the test. Declared here rather than in a header because one function does
+ * not earn an app_sand.h and nothing else calls it. */
+bool sand_app_alloc_selfcheck(size_t *out_largest_free, bool *out_impulses_ok);
+
+/* THE CHECK NOTHING ELSE IN THIS FILE MAKES. Every other device row here
+ * times sand_step() on a grid this suite allocated for itself, which says
+ * nothing about whether the APP can still get one - and on 2026-09-01 it
+ * could not: a "no memory for the grid" screen was sitting on the board
+ * after a capture, unnoticed by 741 passing tests.
+ *
+ * Runs inside the suite on purpose, not before it. The question worth
+ * asking is whether the app can be entered on a heap this suite has already
+ * worked over, because that is the state someone actually finds the board
+ * in after an autorun image finishes. */
+static void test_the_sand_app_can_still_allocate_everything_it_needs(void)
+{
+    size_t largest_free = 0;
+    bool   impulses_ok  = false;
+    const bool ok = sand_app_alloc_selfcheck(&largest_free, &impulses_ok);
+
+    ESP_LOGI("device_tests",
+             "app alloc selfcheck: essential=%s impulses=%s largest_free=%u",
+             ok ? "ok" : "FAILED", impulses_ok ? "ok" : "failed",
+             (unsigned)largest_free);
+
+    /* impulses are REPORTED, not asserted: the app treats a missing impulse
+     * buffer as losing the blast mechanic rather than losing the app, so
+     * failing the suite over it would overstate the damage. */
+    TEST_ASSERT_TRUE_MESSAGE(ok,
+        "the sand app could not allocate the grid and buffers a fresh entry "
+        "needs - the simulation every frame-budget row in this file measures "
+        "is one this device can no longer actually run. Read largest_free in "
+        "the line above: the grid alone needs a contiguous 41,216 bytes, and "
+        "this suite has just churned dozens of allocations that size");
+}
+#endif /* DEVICE_BUILD */
+
 void run_sand_suite(void)
 {
     RUN_TEST(test_acid_bubbles_do_not_favour_one_wall);
@@ -21609,6 +21649,7 @@ void run_sand_suite(void)
     RUN_TEST(test_shaking_spreads_a_pile_sideways);
 
 #ifdef DEVICE_BUILD
+    RUN_TEST(test_the_sand_app_can_still_allocate_everything_it_needs);
     RUN_TEST(test_a_full_size_step_fits_in_the_frame_budget);
     RUN_TEST(test_a_screen_of_settled_sand_costs_almost_nothing);
     RUN_TEST(test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget);
