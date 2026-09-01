@@ -29,6 +29,12 @@
 /* how many rings the floor draws before fading out */
 #define BOOT_ANIM_GRID_RINGS 28
 
+/* radial guide lines from the origin to the floor's own edge - 0 hides them */
+#define BOOT_ANIM_GRID_SPOKES 8
+
+/* draws each spoke as alternating dashes instead of a solid line - 0 solid, 1 dashed */
+#define BOOT_ANIM_GRID_SPOKE_DASH 0
+
 #define BOOT_ANIM_GRID_FADE_MS 300
 /* the ripple's own front sets off from the origin */
 #define BOOT_ANIM_WAVE_START_MS 520
@@ -97,6 +103,11 @@
  * this existed - see this script's own backward-compatibility
  * comment) turns the ripple off outright, not just down. */
 #define BOOT_ANIM_WAVE_HEIGHT_Q12 0
+
+/* How far behind the wave's own front (boot_anim_wave_front() in
+ * boot_anim.h) its trailing crests and troughs have fully died out -
+ * also meters, also authored (wave_decay_m in the JSON). */
+#define BOOT_ANIM_WAVE_DECAY_Q12 4096
 
 typedef enum {
     BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */

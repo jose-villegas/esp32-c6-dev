@@ -161,16 +161,25 @@ static int32_t units(int n)
  * through the exact same space transform they do (see project() above),
  * rather than riding its own separate pulse the way it used to. */
 
-/* Segments per ring's own circle, and spokes radiating from the origin to
- * `far` - both fixed, tuned-by-eye smoothness/cost tradeoffs, the same
- * reasoning BOOT_ANIM_SPLINE_STEPS already is for the curve: a keyframe
- * has no business tuning either. CIRCLE_STEPS deliberately modest - an
- * octagon-ish ring, not a smooth curve - so drawing every ring as a
- * genuine circle costs roughly what the old two-crossing-lines-per-ring
- * square did, not several times it. */
-#define BOOT_ANIM_GRID_CIRCLE_STEPS 8
-#define BOOT_ANIM_GRID_SPOKES 8
-#define BOOT_ANIM_GRID_SPOKE_STEPS 8
+/* Segments per ring's own circle - fixed, a tuned-by-eye smoothness/cost
+ * tradeoff, the same reasoning BOOT_ANIM_SPLINE_STEPS already is for the
+ * curve: a keyframe has no business tuning it. Not authored like
+ * BOOT_ANIM_GRID_SPOKES below (a spoke is a creative choice - how many,
+ * whether to show them at all - a ring's own roundness is not). */
+#define BOOT_ANIM_GRID_CIRCLE_STEPS 12
+
+/* How finely a SPOKE is walked, unlike a ring's own CIRCLE_STEPS above -
+ * a spoke's vertices are the only ones that ever have to resolve the
+ * wave's trailing OSCILLATION (see boot_anim.h's "The wave" section)
+ * along their own length, not just one height shared by the whole ring,
+ * and a wavelength of a few ring-spacings needs several samples across it
+ * to read as a wave rather than be aliased away entirely - the old,
+ * single-bump wave never needed this many, but a repeating one does. Not
+ * per-spoke: BOOT_ANIM_GRID_SPOKES (generated - "Grid" in tools/
+ * boot_anim_editor.html, 0 hides them outright) is rarely more than a
+ * handful, so even a step count this much finer stays cheap regardless of
+ * how many spokes are actually drawn. */
+#define BOOT_ANIM_GRID_SPOKE_STEPS 32
 
 /* A point at zeta-distance `radius` from the origin, `turn`/BOOT_ANIM_ONE
  * of the way round a full turn - boot_anim_sin()/cos() take a phase in
@@ -228,10 +237,21 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
  * distance 0 to `far`, so the wave's height genuinely varies along its
  * length and needs computing per vertex, the same reason draw_curve()'s
  * own segments each get their own projection rather than one shared by
- * the whole curve. */
+ * the whole curve.
+ *
+ * `dash`: BOOT_ANIM_GRID_SPOKE_DASH (generated - "Grid" in tools/
+ * boot_anim_editor.html) skips drawing every OTHER segment rather than
+ * thinning pixels within one - each of the BOOT_ANIM_GRID_SPOKE_STEPS
+ * segments a spoke is already walked in (see that constant's own comment)
+ * is a whole gfx_line_ex() call, so skipping half of them skips half the
+ * walk()s outright - the bounding box and dirty_mark() included, not just
+ * the plot()s inside one - genuinely cheaper to draw, not just a different
+ * look. The vertex walk itself (and so the wave's own per-vertex height)
+ * is untouched either way; only whether a given span's line actually gets
+ * drawn changes. */
 static void draw_grid_spoke(uint16_t turn, int32_t far, int32_t front_r,
-                            int32_t amp_q12, gfx_color_t c,
-                            const boot_anim_view_t *view)
+                            int32_t amp_q12, int32_t decay_q12, gfx_color_t c,
+                            bool dash, const boot_anim_view_t *view)
 {
     S3L_Vec4 prev_cs;
     bool have_prev = false;
@@ -240,10 +260,16 @@ static void draw_grid_spoke(uint16_t turn, int32_t far, int32_t front_r,
         const int32_t radius = (far * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
         int32_t re, im;
         polar_point(radius, turn, &re, &im);
-        const int32_t t = boot_anim_wave_height(radius, front_r, amp_q12);
+        const int32_t t = boot_anim_wave_height(radius, front_r, amp_q12,
+                                                decay_q12);
         const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
 
-        if (have_prev) {
+        /* Segment `step` runs from vertex step-1 to step - odd segments on,
+         * even ones off, a plain 50/50 split fine enough at 32 segments per
+         * spoke to read as a clean dashed line rather than a scatter of
+         * dots. */
+        const bool draw_segment = !dash || (step % 2) == 1;
+        if (have_prev && draw_segment) {
             int ax, ay, bx, by;
             if (boot_anim_project_segment_cs(prev_cs, cs, view,
                                              &ax, &ay, &bx, &by)) {
@@ -270,6 +296,7 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
                              now_ms <= BOOT_ANIM_WAVE_END_MS;
     const int32_t front_r = wave_active ? boot_anim_wave_front(now_ms) : 0;
     const int32_t amp_q12 = wave_active ? BOOT_ANIM_WAVE_HEIGHT_Q12 : 0;
+    const int32_t decay_q12 = BOOT_ANIM_WAVE_DECAY_Q12;
 
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
@@ -292,7 +319,7 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
          * together than that by default, and generated (an "other const",
          * like the ring count itself) rather than fixed. */
         const int32_t d = (int32_t)ring * BOOT_ANIM_GRID_STEP_Q12;
-        const int32_t t = boot_anim_wave_height(d, front_r, amp_q12);
+        const int32_t t = boot_anim_wave_height(d, front_r, amp_q12, decay_q12);
 
         draw_grid_circle(d, t, c, view);
     }
@@ -305,7 +332,8 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     const gfx_color_t spoke_c = lit(COL_AXIS, ink);
     for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
         const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-        draw_grid_spoke(turn, far, front_r, amp_q12, spoke_c, view);
+        draw_grid_spoke(turn, far, front_r, amp_q12, decay_q12, spoke_c,
+                        BOOT_ANIM_GRID_SPOKE_DASH != 0, view);
     }
 }
 

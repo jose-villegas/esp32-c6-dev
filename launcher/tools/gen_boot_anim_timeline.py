@@ -37,19 +37,21 @@ lerps both transforms' every number between the two keyframes bracketing
 arriving keyframe names - the same three shapes util/tween.h already
 provides, so nothing new is needed on the firmware side to interpret them.
 
-`camera_focal`, `grid_step_m` and `wave_height_m`/`wave_ease` are not
-per-keyframe, unlike the transforms above: `camera_focal` is a single lens
-setting (small3dlib's own S3L_Camera.focalLength - see boot_anim.h's "The
-projection" section for what 0 does to it: an orthographic projection, not
-a second code path to maintain); `grid_step_m` is the spacing between floor
-rings, authored in meters like a transform's `pos` and converted the same
-way; `wave_height_m`/`wave_ease` are the water-droplet ripple's own peak
-amplitude and its front's easing shape (see boot_anim.h's "The wave"
-section) - there is only ever the one front, so nothing about it is
-per-keyframe either. `grid_rings` (how many rings the floor draws before
-fading out) and `wave_start_ms`/`wave_end_ms` (when the ripple's front sets
-off and when it reaches the grid's outer edge) live in `timing` instead,
-since they are plain counts/times with nothing to convert.
+`camera_focal`, `grid_step_m` and `wave_height_m`/`wave_decay_m`/`wave_ease`
+are not per-keyframe, unlike the transforms above: `camera_focal` is a
+single lens setting (small3dlib's own S3L_Camera.focalLength - see
+boot_anim.h's "The projection" section for what 0 does to it: an
+orthographic projection, not a second code path to maintain); `grid_step_m`
+is the spacing between floor rings, authored in meters like a transform's
+`pos` and converted the same way; `wave_height_m`/`wave_decay_m`/`wave_ease`
+are the water-droplet ripple's own peak amplitude, how far behind its front
+the trailing crests/troughs die out, and the front's own easing shape (see
+boot_anim.h's "The wave" section) - there is only ever the one front, so
+nothing about it is per-keyframe either. `grid_rings` (how many rings the
+floor draws before fading out) and `wave_start_ms`/`wave_end_ms` (when the
+ripple's front sets off and when it reaches the grid's outer edge) live in
+`timing` instead, since they are plain counts/times with nothing to
+convert.
 
 The `timing` block is everything else that paces the animation but is not
 a transform of the space: how fast the grid rings fade in, how the title
@@ -124,6 +126,12 @@ def validate(cfg):
         fail("grid_rings must be positive (%r given)" % (timing["grid_rings"],))
     if cfg["grid_step_m"] <= 0:
         fail("grid_step_m must be positive (%r given)" % (cfg["grid_step_m"],))
+    if timing["grid_spokes"] < 0:
+        fail("grid_spokes must not be negative (%r given) - 0 hides them, "
+             "there is no such thing as fewer" % (timing["grid_spokes"],))
+    if timing["grid_spoke_dash"] not in (0, 1):
+        fail("grid_spoke_dash must be 0 or 1 (%r given)" %
+             (timing["grid_spoke_dash"],))
 
     last_ms = -1
     for kf in kfs:
@@ -166,6 +174,10 @@ def validate(cfg):
     if cfg["wave_ease"] not in EASE_NAMES:
         fail("wave_ease %r - must be one of %s" %
              (cfg["wave_ease"], EASE_NAMES))
+    if cfg["wave_height_m"] != 0 and cfg["wave_decay_m"] <= 0:
+        warn("wave_decay_m (%r) is not positive, so the ripple is silently "
+             "invisible despite wave_height_m (%r) being nonzero"
+             % (cfg["wave_decay_m"], cfg["wave_height_m"]))
 
     last_letter_lands = (timing["title_start_ms"] +
                          (TITLE_LEN - 1) * timing["title_stagger_ms"] +
@@ -196,6 +208,11 @@ TIMING_ORDER = [
      "each ring waits for the one inside"),
     ("grid_rings", "BOOT_ANIM_GRID_RINGS",
      "how many rings the floor draws before fading out"),
+    ("grid_spokes", "BOOT_ANIM_GRID_SPOKES",
+     "radial guide lines from the origin to the floor's own edge - 0 hides them"),
+    ("grid_spoke_dash", "BOOT_ANIM_GRID_SPOKE_DASH",
+     "draws each spoke as alternating dashes instead of a solid line - "
+     "0 solid, 1 dashed"),
     ("grid_fade_ms", "BOOT_ANIM_GRID_FADE_MS", None),
     ("wave_start_ms", "BOOT_ANIM_WAVE_START_MS",
      "the ripple's own front sets off from the origin"),
@@ -274,6 +291,22 @@ def main():
     timing.setdefault("wave_end_ms", timing.get("total_ms", 1))
     cfg.setdefault("wave_height_m", 0)
     cfg.setdefault("wave_ease", "linear")
+    # wave_decay_m is newer still than wave_height_m/ease themselves - a
+    # handful of ring-spacings is a reasonable "a few rings decaying out"
+    # default for a file that predates it, though anyone who already had a
+    # nonzero wave_height_m from before this existed will want to look at
+    # the new shape it gives (a single bump, this script's own PREVIOUS
+    # version, does not survive unchanged - see boot_anim.h's own comment
+    # on why the two are not exactly the same picture).
+    cfg.setdefault("wave_decay_m", 4 * cfg.get("grid_step_m", 1))
+    # grid_spokes is newer than the polar grid itself - the radial guide
+    # lines used to be a fixed 8, unauthored; 8 is the exact same default
+    # for a file baked before this existed, so it keeps looking the way it
+    # always did.
+    timing.setdefault("grid_spokes", 8)
+    # grid_spoke_dash is newer still - a file baked before it existed drew
+    # every spoke solid, so 0 (solid) is what keeps it looking the same.
+    timing.setdefault("grid_spoke_dash", 0)
 
     validate(cfg)
 
@@ -326,6 +359,11 @@ def main():
     w(" * this existed - see this script's own backward-compatibility\n")
     w(" * comment) turns the ripple off outright, not just down. */\n")
     w("#define BOOT_ANIM_WAVE_HEIGHT_Q12 %d\n\n" % meters_to_q12(cfg["wave_height_m"]))
+
+    w("/* How far behind the wave's own front (boot_anim_wave_front() in\n")
+    w(" * boot_anim.h) its trailing crests and troughs have fully died out -\n")
+    w(" * also meters, also authored (wave_decay_m in the JSON). */\n")
+    w("#define BOOT_ANIM_WAVE_DECAY_Q12 %d\n\n" % meters_to_q12(cfg["wave_decay_m"]))
 
     w("typedef enum {\n")
     w("    BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */\n")

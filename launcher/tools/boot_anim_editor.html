@@ -408,7 +408,7 @@
 const DEFAULT_STATE = {
   timing: {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
-    grid_rings: 28,
+    grid_rings: 28, grid_spokes: 8, grid_spoke_dash: 0,
     grid_fade_ms: 300, wave_start_ms: 520, wave_end_ms: 2500,
     pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
     title_start_ms: 2700,
@@ -422,6 +422,7 @@ const DEFAULT_STATE = {
   camera_focal: 512,
   grid_step_m: 0.25,
   wave_height_m: 0,
+  wave_decay_m: 1,
   wave_ease: 'ease_out',
   keyframes: [
     { ms: 520,
@@ -470,9 +471,9 @@ const DEFAULT_STATE = {
 const FIELD_GROUPS = [
   { title: 'Overall', keys: ['total_ms', 'fade_start_ms'] },
   { title: 'Axes', keys: ['axes_ms'] },
-  { title: 'Grid', keys: ['grid_rings', 'grid_start_ms', 'grid_ring_ms',
-      'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max',
-      'grid_ceiling_max', 'grid_max'] },
+  { title: 'Grid', keys: ['grid_rings', 'grid_spokes', 'grid_spoke_dash',
+      'grid_start_ms', 'grid_ring_ms', 'grid_fade_ms', 'grid_hue_ms',
+      'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max', 'grid_max'] },
   { title: 'Wave', keys: ['wave_start_ms', 'wave_end_ms'] },
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
@@ -539,7 +540,8 @@ async function renderNow() {
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
         grid_step_m: state.grid_step_m,
-        wave_height_m: state.wave_height_m, wave_ease: state.wave_ease,
+        wave_height_m: state.wave_height_m, wave_decay_m: state.wave_decay_m,
+        wave_ease: state.wave_ease,
         keyframes: state.keyframes, ms: playhead,
       }),
     });
@@ -787,6 +789,25 @@ function renderConsts() {
       waveHeightLabel.appendChild(waveHeightSpan);
       waveHeightLabel.appendChild(waveHeightInput);
       list.appendChild(waveHeightLabel);
+
+      /* How far behind the front the trailing crests/troughs have fully
+       * decayed to nothing, also meters (see boot_anim.h's
+       * BOOT_ANIM_WAVE_DECAY_Q12 and its own comment). */
+      const waveDecayLabel = document.createElement('label');
+      waveDecayLabel.className = 'field';
+      const waveDecaySpan = document.createElement('span');
+      waveDecaySpan.textContent = 'wave_decay_m (trail length, meters)';
+      const waveDecayInput = document.createElement('input');
+      waveDecayInput.type = 'number';
+      waveDecayInput.step = 'any';
+      waveDecayInput.value = state.wave_decay_m;
+      waveDecayInput.addEventListener('input', () => {
+        state.wave_decay_m = Number(waveDecayInput.value) || 0;
+        renderDebounced();
+      });
+      waveDecayLabel.appendChild(waveDecaySpan);
+      waveDecayLabel.appendChild(waveDecayInput);
+      list.appendChild(waveDecayLabel);
 
       const waveEaseLabel = document.createElement('label');
       waveEaseLabel.className = 'field';
@@ -1134,7 +1155,8 @@ document.getElementById('btnBake').addEventListener('click', () => {
   const payload = {
     timing: state.timing, camera_focal: state.camera_focal,
     grid_step_m: state.grid_step_m,
-    wave_height_m: state.wave_height_m, wave_ease: state.wave_ease,
+    wave_height_m: state.wave_height_m, wave_decay_m: state.wave_decay_m,
+    wave_ease: state.wave_ease,
     keyframes: state.keyframes,
   };
   const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
@@ -1177,6 +1199,12 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       if (loaded.wave_height_m === undefined) {
         loaded.wave_height_m = 0;
       }
+      /* wave_decay_m is newer than wave_height_m itself - same reasoning
+       * as gen_boot_anim_timeline.py's own backward-compat default
+       * (4 * grid_step_m, i.e. a trail a few rings long). */
+      if (loaded.wave_decay_m === undefined) {
+        loaded.wave_decay_m = 4 * (loaded.grid_step_m || 1);
+      }
       if (loaded.wave_ease === undefined) {
         loaded.wave_ease = 'linear';
       }
@@ -1185,6 +1213,17 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
       }
       if (loaded.timing.wave_end_ms === undefined) {
         loaded.timing.wave_end_ms = loaded.timing.total_ms;
+      }
+      /* grid_spokes is newer than grid_rings itself - same default
+       * gen_boot_anim_timeline.py falls back to (the old, unconditional
+       * 8-spoke grid). */
+      if (loaded.timing.grid_spokes === undefined) {
+        loaded.timing.grid_spokes = 8;
+      }
+      /* grid_spoke_dash is newer still - an old file drew every spoke
+       * solid, so 0 (solid) is what keeps it looking the same. */
+      if (loaded.timing.grid_spoke_dash === undefined) {
+        loaded.timing.grid_spoke_dash = 0;
       }
       state = loaded;
       selectedKf = 0;
@@ -1234,7 +1273,8 @@ btnBuildFlash.addEventListener('click', async () => {
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
         grid_step_m: state.grid_step_m,
-        wave_height_m: state.wave_height_m, wave_ease: state.wave_ease,
+        wave_height_m: state.wave_height_m, wave_decay_m: state.wave_decay_m,
+        wave_ease: state.wave_ease,
         keyframes: state.keyframes,
         port,
       }),
