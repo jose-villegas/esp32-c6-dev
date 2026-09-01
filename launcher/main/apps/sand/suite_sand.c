@@ -13838,6 +13838,33 @@ _Static_assert(
     "for; shrink the scene further (this test's own top comment explains "
     "the sizing) rather than just tolerating a bigger malloc");
 
+/* Steps each pod simulates. Halved from 12000 on 2026-09-01, when the
+ * sequential restructure above made this test's cost real for the first
+ * time: the old one-giant-grid version never allocated on device, so its
+ * 12000 steps were never actually paid there. Twenty pods paying them
+ * pushed the whole device suite to 18.8 minutes.
+ *
+ * NOT tuned down as far as it would go. The step count is what gives
+ * erosion time to cross the 15% threshold below, so cutting it trades
+ * away the test's ability to DETECT a broken cap, which a green run does
+ * not reveal. Measured on host by widening vent_column()'s scan to
+ * SAND_VENT_REACH * 3 and sweeping (deep_empty_cells vs the 2929 bound):
+ *
+ *      steps    broken build     verdict
+ *        500    passes            blind
+ *       1000    passes            blind
+ *       2000    passes            blind
+ *       4000    3158 vs 2929      detects by 7.8% - too thin
+ *       6000    3804 vs 2929      detects by 29.9%  <- chosen
+ *       8000    4325 vs 2929      detects by 47.7%
+ *      12000    5342 vs 2929      detects by 82.4%
+ *
+ * Anything at or below 2000 leaves this test GREEN ON BROKEN CODE. If a
+ * future change needs this cheaper still, cut CAP_TEST_PODS (which costs
+ * denominator) or the grid, and re-run that sweep - do not simply lower
+ * this number until the suite fits. */
+#define CAP_POD_STEPS 6000
+
 static void test_sealed_lava_vent_caps_at_three_cells(void)
 {
     /* CAP_TEST_PODS independent trials PER GROUP, run sequentially on a
@@ -13894,7 +13921,7 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
         }
         sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
 
-        for (int i = 0; i < 12000; i++) {
+        for (int i = 0; i < CAP_POD_STEPS; i++) {
             sand_step(&c, 0, 1000, 0);
         }
 
@@ -13963,7 +13990,7 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
         sand_set(&c, lx + 1, y + 1, STONE);
         sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
 
-        for (int i = 0; i < 12000; i++) {
+        for (int i = 0; i < CAP_POD_STEPS; i++) {
             sand_step(&c, 0, 1000, 0);
         }
 
@@ -19968,30 +19995,22 @@ static void test_the_boiler_scene_fits_in_the_frame_budget(void)
  * already proved really is sustained percolation rather than a spreading
  * transient that has not yet reached every column.
  *
- * NO DEVICE MEASUREMENT YET. Every ceiling above this one in the file was
- * retired to a measured-times-0.9 reduction target the same day it was
- * captured - this row has not been captured at all, so the number below
- * is a PROVISIONAL ceiling in the sense the four-liquids, lava-stress and
- * thermal-shock tests shipped with when they were new: deliberately loose
- * so it does not fail before a real capture exists, not a claim about
- * what this scene actually costs. 300000 us is sized against the two
- * scenes nearest this one in shape - a full 184x224 grid with the
- * reactions pass genuinely active - which measured 121377 us for 20 steps
- * (lava stress) and 31529 us for 30 steps (the boiler) on their first
- * capture; this scene touches close to the whole grid's earth every step
- * the way the lava stress scene does, so 300000 us for 30 steps is
- * chosen to sit comfortably above that end of the range rather than
- * anywhere close to a tight guess.
+ * MEASURED 2026-09-01: 100367 us for 30 steps, on the first capture that
+ * could allocate this scene at all - three rounds of device captures had
+ * measured nothing here, because the fixtures could not get their grids
+ * until the static-fixture conversions freed the heap back to 63952 bytes.
  *
- * ONCE MEASURED, THIS ROW BECOMES MEASURED x 0.8, NOT x 0.9. Every other
- * reduction target among this file's other thirteen device budgets uses
- * the 10%-below-first-measurement rule; this one has been specified,
- * deliberately, to become a 20% reduction target instead. That is an
- * instruction from the person pegging this benchmark, not a number this
- * file's own convention derived - so when this ceiling is next re-pegged
- * from a real capture, the replacement is measured * 0.8 rounded, and
- * should NOT be "corrected" to the usual * 0.9 for consistency with the
- * rest of the file. */
+ * The provisional 300000 ceiling this replaces was sized with no hardware
+ * and turned out to be 3x looser than the truth - the scene came in at
+ * +66.5% headroom against it, so it never constrained anything.
+ *
+ * 80000 is measured * 0.8 rounded, NOT the * 0.9 the file's other thirteen
+ * device budgets use. That was an explicit instruction from the person
+ * pegging this benchmark, so it should not be "corrected" to * 0.9 for
+ * consistency with the rest of the file. Like every other reduction target
+ * here it is deliberately below what the scene currently costs: this row
+ * is expected to FAIL until the work is done, and the budget is never
+ * raised to meet a measurement. */
 static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -20026,7 +20045,7 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
     free(big);
     free(blocks);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(300000, (int)per_step,
+    TEST_ASSERT_LESS_THAN_MESSAGE(80000, (int)per_step,
         "PROVISIONAL ceiling, not yet re-pegged from a device capture - "
         "see this test's own comment. Once measured this row becomes "
         "measured x 0.8 (a deliberately tighter reduction target than "
