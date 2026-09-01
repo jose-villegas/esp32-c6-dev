@@ -125,13 +125,30 @@ def validate(capture_path: str):
             "rebooted mid-run. That means a crash loop, not a slow run."
         )
 
+    # The sentinel means "at least one frame-budget test got far enough to
+    # log a measurement". What that tells you depends entirely on whether the
+    # suite ran at all, so the two cases are reported differently - reading
+    # them as one thing produced a confidently wrong diagnosis on this tool's
+    # first real use, blaming the image when the suite had in fact run and a
+    # fixture had simply failed to allocate.
     if SENTINEL not in text:
-        failures.append(
-            f"measurement sentinel {SENTINEL!r} not found - the flashed image "
-            "either had the suites compiled in but not running (autorun off), "
-            "or was the wrong image entirely. The device sat in the launcher "
-            "for the whole capture window instead of running any test."
-        )
+        if not m:
+            failures.append(
+                f"measurement sentinel {SENTINEL!r} not found, and the run "
+                "never completed - the flashed image either had the suites "
+                "compiled in but not running (autorun off), or was the wrong "
+                "image entirely. The device sat in the launcher for the whole "
+                "capture window instead of running any test."
+            )
+        else:
+            failures.append(
+                f"measurement sentinel {SENTINEL!r} not found, but the suite "
+                "DID run to completion - so the image is fine and the "
+                "frame-budget tests themselves failed before logging a "
+                "measurement. The usual cause is a fixture that could not "
+                "allocate: check free heap in this capture against the ~41 KB "
+                "one grid needs. There are no timings in this capture to read."
+            )
 
     wdt_count = sum(1 for line in lines if TASK_WDT_MARKER in line)
     if wdt_count:
