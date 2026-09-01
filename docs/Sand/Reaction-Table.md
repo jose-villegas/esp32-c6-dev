@@ -43,7 +43,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Steam
 
 - Warms whatever it touches swiftly, without igniting or quenching anything.
-- A 2x2 block of it steadily condenses into a single cell of water.
+- A 2x2 block of it slowly condenses into a single cell of water.
 
 ### Smoke
 
