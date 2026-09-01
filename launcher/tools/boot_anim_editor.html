@@ -631,15 +631,35 @@ function renderConsts() {
   list.appendChild(stepLabel);
 
   /* Reach isn't its own authored field - it's grid_step_m * grid_rings
-   * (see draw_floor()'s own `far` in boot_anim.c) - so this is read-only,
-   * recomputed from whichever of those two changed. Density (spacing) and
-   * reach (how far out the floor goes) are kept as separate knobs on
-   * purpose: growing the reach by adding rings also adds line-draws, while
-   * growing it by widening the spacing does not. */
-  const extentRow = document.createElement('div');
-  extentRow.id = 'gridExtent';
-  extentRow.style.cssText = 'font-size:11px;color:var(--text-dim);margin:2px 0 0;';
-  list.appendChild(extentRow);
+   * (see draw_floor()'s own `far` in boot_anim.c) - editing it solves for
+   * grid_rings (below, in Axes/grid) at the CURRENT spacing, rather than
+   * being a third independent number: density (spacing) and reach (how
+   * far out the floor goes) are kept as separate knobs on purpose -
+   * growing the reach by adding rings also adds line-draws, while growing
+   * it by widening the spacing does not - so editing reach moves the one
+   * of the two that actually changes what you asked for. */
+  const extentLabel = document.createElement('label');
+  extentLabel.className = 'field';
+  const extentSpan = document.createElement('span');
+  extentSpan.textContent = 'reach (rings × step, meters)';
+  const extentInput = document.createElement('input');
+  extentInput.type = 'number';
+  extentInput.step = 'any';
+  extentInput.min = '0';
+  extentInput.id = 'gridExtentInput';
+  extentInput.addEventListener('input', () => {
+    const desired = Number(extentInput.value) || 0;
+    const step = state.grid_step_m;
+    if (step > 0) {
+      state.timing.grid_rings = Math.max(1, Math.round(desired / step));
+      const ringsInput = document.getElementById('timingField_grid_rings');
+      if (ringsInput) ringsInput.value = state.timing.grid_rings;
+    }
+    renderDebounced();
+  });
+  extentLabel.appendChild(extentSpan);
+  extentLabel.appendChild(extentInput);
+  list.appendChild(extentLabel);
 
   for (const group of TIMING_GROUPS) {
     const h = document.createElement('div');
@@ -653,6 +673,7 @@ function renderConsts() {
       span.textContent = key;
       const input = document.createElement('input');
       input.type = 'number';
+      input.id = 'timingField_' + key;
       input.value = state.timing[key];
       input.addEventListener('input', () => {
         state.timing[key] = Number(input.value) || 0;
@@ -669,10 +690,10 @@ function renderConsts() {
 }
 
 function updateGridExtent() {
-  const el = document.getElementById('gridExtent');
-  if (!el) return;
+  const el = document.getElementById('gridExtentInput');
+  if (!el || document.activeElement === el) return;   // don't fight the user's own typing
   const extent = (state.grid_step_m || 0) * (state.timing.grid_rings || 0);
-  el.textContent = `grid extends ${extent.toFixed(2)} m from the origin`;
+  el.value = extent.toFixed(2);
 }
 
 /* ===========================================================================
