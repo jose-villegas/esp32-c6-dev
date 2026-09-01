@@ -547,25 +547,46 @@ typedef struct {
     uint8_t quench_to;
 
     /* Chance in 256, per step, that this material emits a MAT_FIRE cell
-     * into an adjacent empty cell. Meaningless for anything that is not a
-     * static heat source with nothing above it - left at zero for
-     * everything but the one material that needs to look like it is
-     * licking a flame upward while staying put itself. */
+     * into an adjacent empty cell (try_flare(), sand_reactions.c) -
+     * meant for something that looks like it is licking a flame upward
+     * while staying PUT itself, left at zero for everything else. Ember
+     * (KIND_STATIC, never moves on its own) is the mechanic's original
+     * case; lava (KIND_LIQUID) sets it too, which is the one case where
+     * "staying put" is not guaranteed - try_flare() itself now SKIPS the
+     * roll entirely while a cell is still free-falling (nothing beneath
+     * it, gravity-relative), rather than rolling it every step of a long
+     * pour's fall, which used to make lava specifically the most
+     * expensive material to pour: many separate falling grains each
+     * spending several steps in open air, each independently rolling
+     * this every one of those steps, each successful roll latching
+     * may_have_burning for a fresh MAT_FIRE cell that then keeps burning
+     * (and eventually rolls `residue`, above, for its own smoke) long
+     * after the pour itself is done. */
     uint8_t flare;
 
     /* TRAPPED HEAT VENTS UPWARD. Chance in 256, per step, that a cell of
      * this material that is COVERED FROM ABOVE (see covered_from_above(),
      * sand_reactions.c - ANY of the three neighbours "above" it, gravity-
-     * relative, strictly denser and non-liquid) punches a vent through
-     * whatever is sealing it in: up to SAND_VENT_REACH cells along EACH
-     * covered direction (up-left, up, up-right - each independently, not
-     * only the one straight "above" - see try_vent()'s own comment) get
-     * thrown with sand_impulse_dislodge(), each column stopping at the
-     * first empty cell found along its own direction. The cell itself
-     * never changes - no fire, no conversion, nothing to name a byproduct
-     * for - only whatever was sitting over it moves, and it moves further
-     * along whichever direction it was already sitting in, not all
-     * converging on one column.
+     * relative, strictly denser and non-liquid) throws whatever is
+     * covering it along EACH covered direction independently (up-left,
+     * up, up-right - see try_vent()'s and vent_column()'s own comments,
+     * sand_reactions.c), up to SAND_VENT_REACH cells deep along that
+     * direction. A lid leaning to one side gets hit where it actually is,
+     * not from a single fixed point - but wherever it is found, it gets
+     * THROWN toward gravity-relative up, not further along whichever
+     * diagonal it was found on, and noticeably farther than an ordinary
+     * explosion (SAND_VENT_IMPULSE_RAMP, sand.h) - see vent_column()'s
+     * own comment for why aiming every column at -gravity reads as one
+     * cohesive eruption rather than three jets fanning out at their own
+     * angles, and is still safe against falling straight back into the
+     * seal it just cleared. When SAND_VENT_CHUNK groups several covered
+     * cells into one firing (below), their CEILING material specifically
+     * - the straight-up column directly above each of them - all launch
+     * on the exact same angle in the same instant, reading as one
+     * connected slab breaking off rather than a scatter of grains that
+     * merely happen to pop at once; see try_vent_chunk()'s own comment
+     * for why the two corner columns are deliberately excluded from
+     * that sharing.
      *
      * DELIBERATELY NOT smothered()'s all-4-cardinal rule (the one that
      * extinguishes a burning SOLID) - see covered_from_above()'s own
@@ -576,13 +597,49 @@ typedef struct {
      * never counts a liquid neighbour). What is beside or below a lava
      * cell does not trap its heat; only what sits on top of it does.
      *
-     * SAND_VENT_REACH IS A HARD DEPTH LIMIT, NOT A PISTON - a covering
-     * exactly that many cells deep, with open space right beyond it,
-     * clears completely; a covering even one cell deeper has no open
-     * space within reach at all and stays sealed forever, because nothing
-     * can move into a destination that is still occupied (see try_vent()'s
-     * own comment for the full mechanics). Deliberate, not a shortfall:
-     * thin seals get relieved, a genuinely thick vessel stays contained.
+     * THE CELL ITSELF NEVER CHANGES - no fire, no conversion, nothing to
+     * name a byproduct for - only whatever was covering it gets thrown,
+     * and unlike an ordinary explosion's random, density-scaled wall-
+     * toughness roll, a vent's push GUARANTEES the dislodge (see sand_
+     * impulse_dislodge()'s own comment, sand.h): this is pressure on the
+     * exact seal trapping it, not random shrapnel grazing an arbitrary
+     * wall, and a seal that only sometimes gave way even once vent_chance
+     * itself had already rolled true read as broken on a thin, realistic
+     * crust - the single-layer result of water quenching a pool's
+     * surface, and the case this feature is actually judged against.
+     * NO OTHER LIQUID CHANGES EITHER - vent_column()'s own scan (sand_
+     * reactions.c) stops at the first liquid cell it meets, the same as
+     * it stops at empty, so a second pocket of lava (or any other
+     * liquid) sitting further along the same line is never mistaken for
+     * part of the seal and never thrown alongside it.
+     *
+     * A MODERATE MIDDLE GROUND, MEASURED ON DEVICE - the table figure
+     * below is 24 (~9.4%; was 1, the rarest this roll can express, when
+     * this feature first shipped as an occasional, dramatic pulse), and
+     * step_one_burning_cell()'s (sand_reactions.c) own second, independent
+     * roll on top of this one - the same shape reaction_t.evaporates uses,
+     * see step_one_dissolver_cell()'s own comment there - is `% 8`
+     * (~12.5%), rather than the 60-times-rarer figure it used to apply.
+     * Both figures briefly went to their absolute extreme (255 and `% 1`,
+     * unconditionally true) in pursuit of "venting as often as possible",
+     * and that extreme was measured on device to be a real problem, not
+     * just louder: a stream of water quenching lava creates a covered cell
+     * that gets thrown away the very next step, before any more crust can
+     * build on top of it, so it read as "material pops the instant water
+     * touches lava" rather than "a sealed slab breaks free" - there was
+     * never time for a slab to exist. These two figures pull back from
+     * that extreme to something that still fires roughly 14x more often
+     * than the original design while leaving a covered cell several
+     * expected steps to accumulate before it vents. Not yet re-measured on
+     * device at this exact pairing - retune further if it still fires
+     * before a slab can form, or has gone too rare to notice.
+     * SAND_VENT_REACH and SAND_VENT_CHUNK are unaffected by any of this -
+     * how far a pulse throws and how wide a slab it grabs are separate
+     * dials from how often one happens; see their own comments (sand.h)
+     * for those. A living balance number, not a protected constant - this
+     * project's own convention is to revise a shipped figure on request
+     * and update this comment alongside it, not to treat "that is what
+     * shipped" as a reason to leave it.
      *
      * This is lava's own answer to a real dead end: a burning LIQUID is
      * never smothered the way a solid is (see step_one_burning_cell()'s
@@ -591,9 +648,10 @@ typedef struct {
      * pool of lava - walled in by stone, or capped by its own quenched
      * crust - has no way to ever matter again. `vent_chance` does not
      * reopen that decision: the lava is still never deleted, still never
-     * extinguished, still just as hot as it always was. It only adds that
-     * being sealed in a THIN shell is not the safe, inert state it used to
-     * read as. 0, the default, means never - only lava sets it. */
+     * extinguished, still just as hot as it always was, and the cell
+     * itself never moves. It only adds that being sealed in a THIN shell
+     * is not the safe, inert state it used to read as. 0, the default,
+     * means never - only lava sets it. */
     uint8_t vent_chance;
 
     /* Chance in 256, per step, that a cell of this material DISSOLVES one

@@ -43,7 +43,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Steam
 
 - Warms whatever it touches swiftly, without igniting or quenching anything.
-- A 2x2 block of it steadily condenses into a single cell of water.
+- A 2x2 block of it slowly condenses into a single cell of water.
 
 ### Smoke
 
@@ -57,7 +57,7 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Lava
 
 - Is a heat source in its own right, and licks flame into an empty neighbour readily. Touched by a quenching liquid, becomes stone.
-- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - vents through the lid slowly, throwing up to SAND_VENT_REACH cells along each covered direction independently.
+- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - throws whatever is covering it fast, peeling up to SAND_VENT_LAYER cells off the outer surface each time it fires; a covering deeper than that takes several separate firings, up to SAND_VENT_REACH cells total, but is guaranteed to eventually dislodge.
 
 ### Acid
 
