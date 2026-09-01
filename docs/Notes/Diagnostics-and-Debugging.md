@@ -81,6 +81,10 @@ against memory/sensor conditions at that instant - see
 `main/util/screenshot.h` and `main/util/device_state.h` for the mechanism
 and the full field list.
 
+- Also writes a same-named `.png` if Pillow is installed (`pip install
+  Pillow`) - the `.bmp` is written either way, the `.png` is just a
+  convenience for viewers that don't read BMP.
+
 - **Development-only** (`--dev` or `--diag` build) - a release build carries
   none of it.
 - **Slow by design**: a full 368x448 frame is roughly 650 KB of base64 over
