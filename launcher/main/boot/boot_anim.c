@@ -170,11 +170,11 @@ static int32_t units(int n)
 
 /* How finely a SPOKE is walked, unlike a ring's own CIRCLE_STEPS above -
  * a spoke's vertices are the only ones that ever have to resolve the
- * wave's trailing OSCILLATION (see boot_anim.h's "The wave" section)
- * along their own length, not just one height shared by the whole ring,
- * and a wavelength of a few ring-spacings needs several samples across it
- * to read as a wave rather than be aliased away entirely - the old,
- * single-bump wave never needed this many, but a repeating one does. Not
+ * wave's own OSCILLATION (see boot_anim.h's "The wave" section) along
+ * their own length, not just one height shared by the whole ring, and an
+ * authored wavelength can be a lot shorter than the grid's own ring
+ * spacing - several samples per wavelength are what keep the pattern
+ * reading as a wave rather than being aliased away entirely. Not
  * per-spoke: BOOT_ANIM_GRID_SPOKES (generated - "Grid" in tools/
  * boot_anim_editor.html, 0 hides them outright) is rarely more than a
  * handful, so even a step count this much finer stays cheap regardless of
@@ -254,8 +254,9 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
  * even happens, not just whether a given segment draws - the loop simply
  * stops early, so a spoke mid-reveal costs less to draw than a finished
  * one, not the same amount with the tail end thrown away. */
-static void draw_grid_spoke(uint16_t turn, int32_t far, int32_t front_r,
-                            int32_t amp_q12, int32_t decay_q12, gfx_color_t c,
+static void draw_grid_spoke(uint16_t turn, int32_t far, uint32_t now_ms,
+                            int32_t amp_q12, int32_t wavelength_q12,
+                            uint32_t period_ms, gfx_color_t c,
                             bool dash, uint8_t reach,
                             const boot_anim_view_t *view)
 {
@@ -267,8 +268,8 @@ static void draw_grid_spoke(uint16_t turn, int32_t far, int32_t front_r,
         const int32_t radius = (far * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
         int32_t re, im;
         polar_point(radius, turn, &re, &im);
-        const int32_t t = boot_anim_wave_height(radius, front_r, amp_q12,
-                                                decay_q12);
+        const int32_t t = boot_anim_wave_height(radius, now_ms, amp_q12,
+                                                wavelength_q12, period_ms);
         const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
 
         /* Segment `step` runs from vertex step-1 to step - odd segments on,
@@ -293,17 +294,13 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
 {
     const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
 
-    /* The wave's own front, and the amplitude every draw_grid_*() call
-     * below actually uses - 0 outside the authored window, rather than
-     * BOOT_ANIM_WAVE_HEIGHT_Q12 itself, so a spoke's own per-vertex
-     * boot_anim_wave_height() naturally comes back flat with no separate
-     * "is the wave even running" branch of its own. */
-    const bool wave_active = BOOT_ANIM_WAVE_HEIGHT_Q12 != 0 &&
-                             now_ms >= BOOT_ANIM_WAVE_START_MS &&
-                             now_ms <= BOOT_ANIM_WAVE_END_MS;
-    const int32_t front_r = wave_active ? boot_anim_wave_front(now_ms) : 0;
-    const int32_t amp_q12 = wave_active ? BOOT_ANIM_WAVE_HEIGHT_Q12 : 0;
-    const int32_t decay_q12 = BOOT_ANIM_WAVE_DECAY_Q12;
+    /* The three values every draw_grid_*() call below hands straight to
+     * boot_anim_wave_height() - see its own comment on why a zero
+     * amplitude or wavelength already comes back flat with no separate
+     * "is the wave even running" branch needed here. */
+    const int32_t amp_q12 = BOOT_ANIM_WAVE_HEIGHT_Q12;
+    const int32_t wavelength_q12 = BOOT_ANIM_WAVE_WAVELENGTH_Q12;
+    const uint32_t period_ms = BOOT_ANIM_WAVE_PERIOD_MS;
 
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
@@ -326,7 +323,8 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
          * together than that by default, and generated (an "other const",
          * like the ring count itself) rather than fixed. */
         const int32_t d = (int32_t)ring * BOOT_ANIM_GRID_STEP_Q12;
-        const int32_t t = boot_anim_wave_height(d, front_r, amp_q12, decay_q12);
+        const int32_t t = boot_anim_wave_height(d, now_ms, amp_q12,
+                                                wavelength_q12, period_ms);
 
         draw_grid_circle(d, t, c, view);
     }
@@ -341,7 +339,8 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     if (spoke_reach > 0) {
         for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
             const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-            draw_grid_spoke(turn, far, front_r, amp_q12, decay_q12, spoke_c,
+            draw_grid_spoke(turn, far, now_ms, amp_q12, wavelength_q12,
+                            period_ms, spoke_c,
                             BOOT_ANIM_GRID_SPOKE_DASH != 0, spoke_reach, view);
         }
     }
