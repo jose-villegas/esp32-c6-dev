@@ -1081,7 +1081,12 @@ static uint32_t foam_elapsed_ms;
  * pass, so a plain local variable inside that one call carries it - see
  * h_running_depth inside paint_row_n() below. It ALSO always runs now,
  * walked in the direction matching gx's OWN sign, independent of whether
- * horizontal ends up mattering to the blend this frame.
+ * horizontal ends up mattering to the blend this frame. It gets the same
+ * debounced parallel vertical already has, too - row_stable_depth[]/
+ * row_top_col[] below, keyed by ROW instead of column for exactly the
+ * reason h_running_depth itself needs no cross-call array: see those two
+ * arrays' own comment for why this was not already done and what closes
+ * the gap now.
  *
  * WHICH WAY A ROW OR COLUMN SCAN HAS TO GO, so that "the neighbour toward
  * the surface" is always the one already processed: ascending for the
@@ -1174,15 +1179,19 @@ static bool local_depth_h_reverse;
  * device's heap (grid itself already costs 41,216 bytes, see start_sim()'s
  * own comment on that allocation), so this is where the trade lands.
  *
- * ONLY DEBOUNCES THE VERTICAL WALK - h_running_depth below has no
- * cross-call state to extend (it is call-local, reset once per row), so
- * debouncing it would need a genuinely new mechanism; left for a
- * follow-up, unchanged by the blend replacing the discrete axis choice
- * this was originally built alongside. There is no "dominant axis" for
- * this array to be gated on any more, either: it debounces col_local_
- * depth[cx] every frame, unconditionally, exactly like the raw walk it
- * rides on - what changed is only where its result goes afterward (into
- * the blend below, rather than being the sole depth reading). */
+ * USED TO ONLY DEBOUNCE THE VERTICAL WALK - h_running_depth below has no
+ * cross-call state to extend (it is call-local, reset once per row), so this
+ * array's own row-keyed trick could not simply be reused as-is; that gap was
+ * left for a follow-up rather than folded into the blend that replaced the
+ * discrete axis choice this was originally built alongside. row_stable_
+ * depth[]/row_top_col[] below CLOSE that gap - same debounce, transposed
+ * onto a per-ROW array instead of per-column, because h_running_depth resets
+ * fresh every paint_row_n() call rather than surviving across calls the way
+ * col_local_depth[] does. There is no "dominant axis" for this array to be
+ * gated on any more, either: it debounces col_local_depth[cx] every frame,
+ * unconditionally, exactly like the raw walk it rides on - what changed is
+ * only where its result goes afterward (into the blend below, rather than
+ * being the sole depth reading). */
 static uint8_t col_stable_depth[GRID_W_MAX];
 
 /* The row index of column cx's most recent boundary request, confirmed or
@@ -1190,6 +1199,54 @@ static uint8_t col_stable_depth[GRID_W_MAX];
  * above for the full mechanism. 255 means "nothing tracked yet" (GRID_H_MAX
  * is 224, comfortably under 255, so that value can never be a real row). */
 static uint8_t col_top_row[GRID_W_MAX];
+
+/* THE DEBOUNCED PARALLEL FOR THE HORIZONTAL WALK - mirrors col_stable_
+ * depth[]/col_top_row[] exactly, transposed: keyed by ROW (cy) instead of
+ * column (cx), because h_running_depth (paint_row_n()'s own running
+ * horizontal value) resets fresh every time that function is called for a
+ * given row, rather than surviving across separate calls the way
+ * col_local_depth[] survives across the separate paint_row_n() calls that
+ * walk one column down through different rows. What needs to persist ACROSS
+ * FRAMES for the horizontal case is therefore state keyed by THIS ROW,
+ * remembering what happened the last time this same row was painted -
+ * exactly mirroring what col_top_row[cx] already remembers about the last
+ * time this same COLUMN was painted.
+ *
+ * Same reset rule as the vertical version: a RESET only commits once the
+ * SAME ROW has asked for it from the SAME COLUMN on two consecutive painted
+ * frames, tracked by column index in row_top_col[cy]. A one-frame blink of a
+ * horizontal neighbour (the same class of transient col_stable_depth[] was
+ * built to catch on the vertical side) is absorbed instead of swinging
+ * straight into the blend, which is exactly the gap that made the diagonal
+ * dead zone's removal visible as flicker in the first place: with no freeze
+ * left to hide behind, this undebounced reading used to reach the screen
+ * raw wherever horizontal carried real blend weight - significant well
+ * before 45 degrees and growing toward 90.
+ *
+ * KNOWN LIMITATION, ACCEPTED - the SAME CLASS of trade-off col_stable_
+ * depth[]'s own comment already accepts for the vertical case, not a new or
+ * worse one: a ROW that crosses more than one separate liquid body side by
+ * side (not stacked - two puddles divided by a strip of dry ground, say)
+ * has all of them competing for the single row_top_col[cy] slot, so only
+ * the MOST RECENTLY walked boundary request in a given frame's scan is what
+ * gets tracked for next frame's comparison; an earlier boundary in that same
+ * row's walk that also needed debouncing does not get it, that frame. One
+ * slot per axis-index, last writer wins among simultaneous competing
+ * boundaries - identical shape to the vertical limitation above, just
+ * transposed onto rows.
+ *
+ * NO RESET TRIGGER NEEDED, for the same reason col_stable_depth[]/col_top_
+ * row[] need none any more: both arrays here are computed the same way
+ * every frame, for every row, regardless of the blend weight - there is no
+ * "other regime" whose stale reading could ever leak in, so there is
+ * nothing an axis change could invalidate. */
+static uint8_t row_stable_depth[GRID_H_MAX];
+
+/* The column index of row cy's most recent boundary request - see row_
+ * stable_depth[]'s own comment above for the full mechanism. 255 means
+ * "nothing tracked yet" (GRID_W_MAX is 184, comfortably under 255, so that
+ * value can never be a real column). */
+static uint8_t row_top_col[GRID_H_MAX];
 
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
@@ -1261,20 +1318,18 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     const int cx_first = local_depth_h_reverse ? grid_w - 1 : 0;
     const int cx_step  = local_depth_h_reverse ? -1 : 1;
 
-    /* The horizontal case's own running value - needs no cross-call state
-     * at all, unlike col_local_depth[]: reset once per ROW, right here, not
-     * persisted across paint_row_n() calls, because the horizontal case's
-     * "toward the surface" neighbour always sits inside the SAME row this
-     * function is already walking start to finish.
-     *
-     * NOT DEBOUNCED - see col_stable_depth[]'s own comment above for why
-     * the vertical case's debounce cannot simply be copied here: it rides
-     * on a per-column array that already exists for an unrelated reason
-     * (cross-ROW persistence), and this case has nothing equivalent to
-     * ride on. A horizontal-dominant frame (device held mostly on its
-     * side) can still show the flicker this file's LOCAL DEPTH section
-     * otherwise kills; fixing that needs a genuinely new per-row array,
-     * left for a follow-up rather than folded into this change. */
+    /* The horizontal case's own RAW running value - needs no cross-call
+     * state at all, unlike col_local_depth[]: reset once per ROW, right
+     * here, not persisted across paint_row_n() calls, because the
+     * horizontal case's "toward the surface" neighbour always sits inside
+     * the SAME row this function is already walking start to finish. This
+     * itself is exactly as undebounced as it always was, and has to stay
+     * that way for the same reason col_local_depth[] stays raw - see that
+     * array's own comment. The DEBOUNCE now rides on its result the same way
+     * col_stable_depth[] rides on col_local_depth[]'s - see row_stable_
+     * depth[]/row_top_col[]'s own comment above this function for the full
+     * mechanism (this used to have nothing equivalent to ride a debounce
+     * on; it does now). */
     unsigned h_running_depth = 0u;
 
     for (int cx_i = 0; cx_i < grid_w; cx_i++) {
@@ -1347,21 +1402,24 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             : material_grain_hash(cx, cy);
 
         /* THE PER-CELL COST OF LOCAL DEPTH, in full, now that BOTH walks run
-         * unconditionally and get BLENDED, and the vertical walk's RESULT is
-         * additionally debounced before it enters that blend: two
+         * unconditionally and get BLENDED, and BOTH walks' RESULTS are
+         * additionally debounced before they enter that blend: two
          * comparisons against a neighbour's material id (one per axis), one
          * array read+write for the raw vertical walk PLUS one more for its
          * debounced parallel (col_stable_depth[]/col_top_row[] - see that
          * array's own comment above this function for the full mechanism,
          * including the two bugs an earlier version of it had), one
-         * local-variable read+write for the horizontal walk, plus the blend
-         * itself - one multiply, one add, one shift, no divide (the only
-         * divide is update_local_depth_gravity()'s, once a frame, not here).
-         * Computed for every cell, liquid or not - the same as the old
-         * depth_acc was - because material_colours() is the only consumer
-         * that ever reads the result (only for a liquid's interior), and a
-         * branch to skip this for non-liquids would cost more than the
-         * comparisons it would save. */
+         * local-variable read+write for the raw horizontal walk PLUS one
+         * more array read+write for ITS debounced parallel (row_stable_
+         * depth[]/row_top_col[] - see that array's own comment for the
+         * mechanism, transposed onto rows), plus the blend itself - one
+         * multiply, one add, one shift, no divide (the only divide is
+         * update_local_depth_gravity()'s, once a frame, not here). Computed
+         * for every cell, liquid or not - the same as the old depth_acc was
+         * - because material_colours() is the only consumer that ever reads
+         * the result (only for a liquid's interior), and a branch to skip
+         * this for non-liquids would cost more than the comparisons it
+         * would save. */
         const bool v_same_material = (v_toward_surface != NULL) &&
             (CELL_MATERIAL(v_toward_surface[cx]) == CELL_MATERIAL(row[cx]));
         const unsigned vdepth_raw = v_same_material
@@ -1418,20 +1476,59 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
         const int h_neighbour_cx = local_depth_h_reverse ? cx + 1 : cx - 1;
         const bool h_same_material = has_h_neighbour &&
             (CELL_MATERIAL(row[h_neighbour_cx]) == CELL_MATERIAL(row[cx]));
-        const unsigned hdepth = h_same_material
+        const unsigned hdepth_raw = h_same_material
             ? (h_running_depth < 255u ? h_running_depth + 1u : 255u)
             : 0u;
-        h_running_depth = hdepth;   /* not debounced - see
-                                      * h_running_depth's own comment */
+        h_running_depth = hdepth_raw;   /* raw walk, not debounced itself -
+                                          * see h_running_depth's own comment */
+
+        /* THE DEBOUNCE ITSELF, transposed onto rows - riding on the raw
+         * horizontal walk above but feeding the BLEND below rather than
+         * being the sole depth reading, exactly the same relationship
+         * col_stable_depth[] has to col_local_depth[]. See row_stable_
+         * depth[]/row_top_col[]'s own comment above this function for the
+         * full mechanism and its accepted limitation; this block mirrors
+         * the vertical debounce block above line for line, with cy standing
+         * in for "this axis's own coordinate" (cx there) and cx standing in
+         * for "the other axis's coordinate being tracked" (cy there). */
+        unsigned hdepth;
+        if (material_of(row[cx])->kind != KIND_LIQUID) {
+            /* NOT a liquid cell - same reasoning as the vertical branch
+             * above: must not accumulate through it, and row_top_col[cy] is
+             * left alone since this is not a boundary request. */
+            hdepth = 0u;
+        } else if (h_same_material) {
+            /* Confirmed continuation of a liquid body - climb exactly like
+             * the raw walk. Not a boundary request, so row_top_col[cy] is
+             * left alone here too. */
+            hdepth = row_stable_depth[cy] < 255u
+                ? row_stable_depth[cy] + 1u : 255u;
+        } else if (row_top_col[cy] == (uint8_t)cx) {
+            /* THIS EXACT COLUMN asked for a reset the last time THIS ROW
+             * was painted too - a real, lasting boundary, not a blink.
+             * Commit. */
+            hdepth = 0u;
+        } else {
+            /* A reset is being asked for at a column that was NOT the
+             * tracked boundary for this row - either nothing was tracked
+             * yet, or the boundary moved. HOLD: keep climbing as if nothing
+             * happened, and start tracking THIS column, so it asking again
+             * next time this row is painted will match and commit. */
+            hdepth = row_stable_depth[cy] < 255u
+                ? row_stable_depth[cy] + 1u : 255u;
+            row_top_col[cy] = (uint8_t)cx;
+        }
+        row_stable_depth[cy] = (uint8_t)hdepth;
 
         /* THE BLEND ITSELF - see LOCAL DEPTH's own top comment for why a
          * crossfade replaces a discrete switch. `local_depth_weight_h_q8`
          * is 0-256, computed once per frame; this is the whole reason a
          * per-cell divide is never needed: it is a fixed Q8 fraction, not a
-         * ratio recomputed here. Blends the DEBOUNCED vertical value, not
-         * the raw one - hdepth stays undebounced, matching the precedent
-         * h_running_depth's own comment establishes: it has no cross-call
-         * state to ride a debounce on. */
+         * ratio recomputed here. Blends the two DEBOUNCED values, vdepth and
+         * hdepth - both now go through the same class of row/column-keyed
+         * debounce before reaching here, closing the asymmetry that used to
+         * let a single-frame horizontal blink swing straight into the
+         * blended result wherever horizontal carried real weight. */
         const unsigned depth =
             ((vdepth * (256u - local_depth_weight_h_q8)) +
              (hdepth * local_depth_weight_h_q8)) >> 8;
