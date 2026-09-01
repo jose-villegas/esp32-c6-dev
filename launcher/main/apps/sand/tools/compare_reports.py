@@ -61,6 +61,11 @@ def parse_report(path: str) -> dict:
     return measured
 
 
+# Smallest absolute movement, in microseconds, that --verdict will treat as
+# real regardless of how large it looks as a percentage. See its use below.
+MIN_ABS_DELTA_US = 20
+
+
 def pct_delta(old: int, new: int) -> float:
     if old == 0:
         return float("inf") if new else 0.0
@@ -106,6 +111,12 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("old_report", help="Earlier performance_*.md")
     parser.add_argument("new_report", help="Later performance_*.md")
+    parser.add_argument("--verdict", action="store_true",
+                        help="Print one machine-readable line instead of the "
+                             "tables, and exit 0 only if this is a win: at "
+                             "least one row improved beyond the noise floor "
+                             "and none regressed beyond it. For the "
+                             "optimisation loop, which cannot read a table.")
     args = parser.parse_args()
 
     old_report = parse_report(args.old_report)
@@ -115,6 +126,44 @@ def main() -> int:
     if error:
         print(f"ERROR: {error}")
         return 1
+
+    if args.verdict:
+        # A row is only counted when BOTH reports measured it, so a newly
+        # added or newly failing-to-run row can never be read as a win.
+        improved, regressed, best, worst = [], [], 0.0, 0.0
+        for name, new_v in sorted(new_report.items()):
+            if name not in old_report:
+                continue
+            d = pct_delta(old_report[name], new_v)
+            if abs(d) <= floor_pct:
+                continue
+            # A percentage floor alone is not enough on the very small rows.
+            # test_an_unchanged_frame_costs_almost_nothing measures 3 us, so
+            # one microsecond of timer quantisation reads as 33% and would
+            # be banked as a large win by a loop that only checked percent.
+            # Requiring an absolute movement too makes the tiny rows
+            # unwinnable rather than wildly noisy, which is correct: nothing
+            # worth finding hides in a 1 us move.
+            if abs(new_v - old_report[name]) < MIN_ABS_DELTA_US:
+                continue
+            if d < 0:
+                improved.append(name)
+                best = min(best, d)
+            else:
+                regressed.append(name)
+                worst = max(worst, d)
+        # A regression beyond the floor disqualifies the candidate outright,
+        # however large the win elsewhere: this loop is not authorised to
+        # trade one budget against another. A human decides that.
+        win = bool(improved) and not regressed
+        print(f"VERDICT {'WIN' if win else 'NO'} floor={floor_pct:.1f}% "
+              f"improved={len(improved)} regressed={len(regressed)} "
+              f"best={best:.1f}% worst={worst:.1f}%")
+        for name in improved:
+            print(f"  improved {name} {pct_delta(old_report[name], new_report[name]):.1f}%")
+        for name in regressed:
+            print(f"  REGRESSED {name} {pct_delta(old_report[name], new_report[name]):.1f}%")
+        return 0 if win else 1
 
     print(f"# Comparing `{args.old_report}` -> `{args.new_report}`")
     print()
