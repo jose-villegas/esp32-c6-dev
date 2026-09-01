@@ -5,6 +5,8 @@
         "grid_start_ms": 150,
         "grid_ring_ms": 12,
         "grid_rings": 28,
+        "grid_spokes": 8,
+        "grid_spoke_dash": 0,
         "grid_fade_ms": 300,
         "pen_start_ms": 520,
         "pen_ms": 1980,
@@ -30,6 +32,7 @@
     "camera_focal": 512,
     "grid_step_m": 0.25,
     "wave_height_m": 0,
+    "wave_decay_m": 1,
     "wave_ease": "ease_out",
     "keyframes": [
         {
