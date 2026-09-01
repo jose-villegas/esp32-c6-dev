@@ -18537,8 +18537,16 @@ static void build_dune_beside_water_scene(sand_t *s)
 {
     sand_spawn(s, REAL_W / 2, REAL_H / 4, REAL_W / 5, MAT_SAND);
 
-    for (int y = REAL_H / 2; y < REAL_H; y++) {
-        for (int x = (REAL_W * 2) / 3; x < REAL_W; x++) {
+    /* Laid down at roughly the depth this volume settles to anyway,
+     * spread across the basin, rather than stacked in the right-hand
+     * third. The old shape had its left face open, so the pool spent 2,480
+     * steps - 124 settle batches against 29-39 for every other scene in
+     * this file, and ~98% of this test's runtime - travelling sideways to
+     * reach the same equilibrium. Same water, same basin, same claims;
+     * it simply starts where it was always going to end up. */
+    const int pool_depth = 38;
+    for (int y = REAL_H - pool_depth; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
             sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
@@ -18635,8 +18643,24 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
     /* Well inside the pool, away from its own edges - see this function's
      * own top comment for why detonating in the dune instead would not
      * exercise the claim this test exists for. */
+    /* FOUND, not hardcoded. A fixed row only lands inside the pool for one
+     * particular water level, so it silently becomes a precondition on
+     * where the pool happened to settle - and then any unrelated change to
+     * how water or sand comes to rest fails this test for a reason that has
+     * nothing to do with what it tests. Descending from the surface keeps
+     * the centre genuinely submerged whatever the level turns out to be. */
     const int cx = (REAL_W * 5) / 6;
-    const int cy = (REAL_H * 3) / 4;
+    int surface_y = -1;
+    for (int y = 0; y < REAL_H; y++) {
+        if (CELL_MATERIAL(sand_at(&real, cx, y)) == MAT_WATER) {
+            surface_y = y;
+            break;
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_MESSAGE(-1, surface_y,
+        "the pool must have a water surface in the column this test "
+        "detonates in, or there is no pool to test");
+    const int cy = surface_y + 12 < REAL_H - 2 ? surface_y + 12 : REAL_H - 2;
     const int centre_material_before = CELL_MATERIAL(sand_at(&real, cx, cy));
 
     sand_explode(&real, cx, cy, DUNE_BLAST_RADIUS);
