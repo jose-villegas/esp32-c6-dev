@@ -194,6 +194,7 @@
   }
   .playbar-row input[type=range] { flex: 1; }
   #flashPort { width: 70px; flex: none; }
+  #rangeFrom, #rangeTo, #playSpeed { width: 60px; flex: none; }
   #flashStatus { font-size: 12px; color: var(--text-dim); }
   button {
     background: var(--accent-dim);
@@ -355,6 +356,15 @@
       <button id="btnPlay">Play</button>
       <span id="msReadout" style="width:70px;text-align:right;color:var(--text-dim)">0 ms</span>
       <input type="range" id="scrub" min="0" max="5800" value="0" step="1">
+    </div>
+    <div class="playbar-row" style="font-size:12px;color:var(--text-dim);">
+      <span>loop</span>
+      <input type="number" id="rangeFrom" value="0" min="0" title="Play loops from this ms">
+      <span>&ndash;</span>
+      <input type="number" id="rangeTo" value="5800" min="0" title="Play loops back to “from” once it reaches this ms">
+      <span style="margin-left:8px;">speed</span>
+      <input type="number" id="playSpeed" value="1" min="0.01" step="0.05"
+             title="Playback speed multiplier - below 1 slows Play down, scrubbing is unaffected">
     </div>
     <div class="playbar-row">
       <button id="btnLoad">Load</button>
@@ -907,11 +917,32 @@ scrub.addEventListener('input', () => {
 });
 
 const btnPlay = document.getElementById('btnPlay');
+const rangeFromInput = document.getElementById('rangeFrom');
+const rangeToInput = document.getElementById('rangeTo');
+const playSpeedInput = document.getElementById('playSpeed');
+
+/* Editor-only conveniences, not part of the animation itself - never sent
+ * to the server, never in `state`, never in Bake's payload. Loops back to
+ * `from` rather than 0 once Play reaches `to`, so you can park on one
+ * transition (say, the finale's turn) and watch just that segment repeat
+ * instead of the whole 5+ second animation every time. Falls back to the
+ * full timeline on anything nonsensical (to <= from, blank fields) rather
+ * than refusing to play. */
+function getLoopRange() {
+  const total = state.timing.total_ms;
+  let from = clamp(Number(rangeFromInput.value) || 0, 0, total);
+  let to = Number(rangeToInput.value);
+  if (!(to > from)) to = total;
+  to = clamp(to, from + 1, total);
+  return { from, to };
+}
+
 btnPlay.addEventListener('click', () => {
   playing = !playing;
   btnPlay.textContent = playing ? 'Pause' : 'Play';
   if (playing) {
-    if (playhead >= state.timing.total_ms) playhead = 0;
+    const { from, to } = getLoopRange();
+    if (playhead < from || playhead >= to) playhead = from;
     lastFrameTime = performance.now();
     requestAnimationFrame(tick);
   }
@@ -930,9 +961,16 @@ function tick(now) {
   const dt = now - lastFrameTime;
   if (dt >= 1000 / PLAYBACK_FPS) {
     lastFrameTime = now;
-    playhead += dt;
-    if (playhead >= state.timing.total_ms) {
-      playhead = 0;
+    /* Below 1, this is the whole "time step (slow down)" mechanism: the
+     * animation's OWN clock (playhead) advances slower than the wall
+     * clock driving requestAnimationFrame, rather than skipping frames or
+     * throttling the request rate - so slow motion stays smooth, just
+     * slow, at whatever the server can actually render. */
+    const speed = Math.max(0.01, Number(playSpeedInput.value) || 1);
+    playhead += dt * speed;
+    const { from, to } = getLoopRange();
+    if (playhead >= to) {
+      playhead = from;
     }
     renderFrame();
   }
