@@ -230,11 +230,9 @@ skipped.
 
 Open items, as of this file's writing:
 
-- **The wet-earth scene's budget is unpegged.** It ships with a
-  deliberately loose 300,000 µs provisional ceiling
-  (`test_the_wet_earth_scene_fits_in_the_frame_budget`, `suite_sand.c`) and
-  awaits its first device capture. Re-peg at `measured × 0.8` per the rule
-  above, not ×0.9.
+- ~~**The wet-earth scene's budget is unpegged.**~~ Pegged 2026-09-01 at
+  80,000 (measured × 0.8 per the rule above). Attempt 18's reaction masks
+  then took the row 100,367 → 93,486 µs on device; the budget stands.
 - **Five blast-scene tests currently fail on device with allocation
   errors** — the device has ~66–68 KB free after the framebuffer and one
   grid alone is ~41 KB; several blast/dune/vessel fixtures allocate a grid
@@ -249,13 +247,16 @@ Open items, as of this file's writing:
   current free-heap number before adding any new device fixture; this is
   likely the most valuable single fix available right now, not a new
   optimisation.
-- **Attempt 15's "finding A" residual (~267–269 µs on the two liquid-free
-  controls) is unbisected** between two commits that both touch
-  `sand_step`'s compiled object — `30bfba7` ("Grow the plant, and fix the
-  two things that stopped it") and `0dac86a` ("Let trees lean with the
-  tilt, and fix the fan that made them jump"). Neither commit's source
-  touches anything either control benchmark executes; the residual is
-  believed to be the same "same instructions, different schedule" effect
-  attempt 15 found for `e03aabd`, just not run to ground. A host bisect
-  the way attempt 16 did it (compile `suite_sand.c` itself against shims,
-  not a hand-copied scene) is the cheap way to close it.
+- ~~**Attempt 15's "finding A" residual is unbisected.**~~ **Closed by
+  attempt 18 (2026-09-01).** The host bisect found two separable causes:
+  five of six commit transitions were pure placement — `sand_step`'s
+  compiled bytes byte-identical across the whole window, only its address
+  moving with unrelated functions' size changes earlier in the file — and
+  `0dac86a` alone added real work (two unconditional `last_step_dx/dy`
+  stores per call). This file's earlier claim that "neither commit's
+  source touches anything either control benchmark executes" was wrong
+  for `0dac86a`, directly and unconditionally. The placement half is now
+  pinned: `sand_step` carries `aligned(32)` (commit `66a1e9b`; 64 does
+  not link — it collides with ESP-IDF's `.flash_rodata_dummy` overlay),
+  and the device controls sit at 5,907/6,003 µs, −1.8%/−1.7% from their
+  budgets.
