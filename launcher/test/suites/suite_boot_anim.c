@@ -468,6 +468,18 @@ static void test_wave_front_starts_at_the_origin_and_ends_past_the_edge(void)
         "exactly on it");
 }
 
+/* The seed ships with grid_spoke_start_ms/grid_spoke_draw_ms both 0 - see
+ * gen_boot_anim_timeline.py's own comment on why that reproduces "every
+ * spoke drawn at full length instantly", the behaviour before either field
+ * existed - so boot_anim_grid_spoke_reach() should already be at its own
+ * max (255, tween_ramp()'s own Q0 "fully arrived") by the very next
+ * millisecond, not just eventually. */
+static void test_the_seeds_spokes_reach_full_length_instantly(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_spoke_reach(0));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_grid_spoke_reach(1));
+}
+
 /*---------------------------------------------------------------------------
  * Smoothing
  *-------------------------------------------------------------------------*/
@@ -1093,6 +1105,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_wave_height_is_zero_when_the_amplitude_is_zero);
     RUN_TEST(test_the_seeds_wave_is_off_by_default);
     RUN_TEST(test_wave_front_starts_at_the_origin_and_ends_past_the_edge);
+    RUN_TEST(test_the_seeds_spokes_reach_full_length_instantly);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
     RUN_TEST(test_a_repeated_point_pins_the_end_of_the_curve);

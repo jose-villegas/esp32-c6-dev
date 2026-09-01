@@ -7,6 +7,8 @@
         "grid_rings": 28,
         "grid_spokes": 8,
         "grid_spoke_dash": 0,
+        "grid_spoke_start_ms": 0,
+        "grid_spoke_draw_ms": 0,
         "grid_fade_ms": 300,
         "pen_start_ms": 520,
         "pen_ms": 1980,

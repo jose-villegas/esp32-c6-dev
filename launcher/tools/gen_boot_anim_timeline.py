@@ -213,6 +213,11 @@ TIMING_ORDER = [
     ("grid_spoke_dash", "BOOT_ANIM_GRID_SPOKE_DASH",
      "draws each spoke as alternating dashes instead of a solid line - "
      "0 solid, 1 dashed"),
+    ("grid_spoke_start_ms", "BOOT_ANIM_GRID_SPOKE_START_MS",
+     "spokes start drawing outward from the origin"),
+    ("grid_spoke_draw_ms", "BOOT_ANIM_GRID_SPOKE_DRAW_MS",
+     "how long a spoke takes to reach the floor's own edge - 0 draws the "
+     "full length instantly"),
     ("grid_fade_ms", "BOOT_ANIM_GRID_FADE_MS", None),
     ("wave_start_ms", "BOOT_ANIM_WAVE_START_MS",
      "the ripple's own front sets off from the origin"),
@@ -307,6 +312,15 @@ def main():
     # grid_spoke_dash is newer still - a file baked before it existed drew
     # every spoke solid, so 0 (solid) is what keeps it looking the same.
     timing.setdefault("grid_spoke_dash", 0)
+    # grid_spoke_start_ms/grid_spoke_draw_ms are newer again - a file baked
+    # before they existed drew every spoke at full length the instant it
+    # was eligible to show at all, with no outward reveal of its own. 0/0
+    # reproduces exactly that: tween_ramp()'s own "dur_ms of 0 jumps
+    # straight to 255 the instant now_ms passes start_ms" (see tween.h)
+    # means a spoke is already full length by the first frame it would
+    # have appeared in before these existed.
+    timing.setdefault("grid_spoke_start_ms", 0)
+    timing.setdefault("grid_spoke_draw_ms", 0)
 
     validate(cfg)
 

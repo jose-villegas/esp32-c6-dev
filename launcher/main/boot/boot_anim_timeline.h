@@ -35,6 +35,12 @@
 /* draws each spoke as alternating dashes instead of a solid line - 0 solid, 1 dashed */
 #define BOOT_ANIM_GRID_SPOKE_DASH 0
 
+/* spokes start drawing outward from the origin */
+#define BOOT_ANIM_GRID_SPOKE_START_MS 0
+
+/* how long a spoke takes to reach the floor's own edge - 0 draws the full length instantly */
+#define BOOT_ANIM_GRID_SPOKE_DRAW_MS 0
+
 #define BOOT_ANIM_GRID_FADE_MS 300
 /* the ripple's own front sets off from the origin */
 #define BOOT_ANIM_WAVE_START_MS 520

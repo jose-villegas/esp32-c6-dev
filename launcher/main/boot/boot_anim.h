@@ -981,6 +981,22 @@ static inline uint8_t boot_anim_grid_alpha(uint32_t now_ms, int ring)
     return (uint8_t)((arrived * near) / 255u);
 }
 
+/* How far outward a spoke has drawn from the origin, right now - 0 before
+ * BOOT_ANIM_GRID_SPOKE_START_MS, 255 (its full length) once
+ * BOOT_ANIM_GRID_SPOKE_DRAW_MS has passed since - the same "milliseconds
+ * in, Q0 fraction out" tween_ramp() already is for boot_anim_pen()'s own
+ * outward draw of the curve, applied to a spoke's own length instead of a
+ * point count. Every spoke shares this one fraction (see draw_floor()'s
+ * own call site) rather than each getting its own start, the same "one
+ * shared clock" boot_anim_grid_climb() already is for the floor as a
+ * whole - a spoke-by-spoke stagger is a bigger, unrequested feature (like
+ * BOOT_ANIM_GRID_RING_MS's per-ring one) that nothing here asks for yet. */
+static inline uint8_t boot_anim_grid_spoke_reach(uint32_t now_ms)
+{
+    return tween_ramp(now_ms, BOOT_ANIM_GRID_SPOKE_START_MS,
+                      BOOT_ANIM_GRID_SPOKE_DRAW_MS);
+}
+
 /* How far the grid's own hue has been mixed toward white, by now - see
  * boot_anim_grid_climb()'s own comment for why the colour needs to climb
  * ALONGSIDE the alpha ceiling, not instead of it: a saturated hue lifted
