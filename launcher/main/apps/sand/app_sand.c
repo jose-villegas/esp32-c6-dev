@@ -894,17 +894,31 @@ static void sand_exit(void)
  * whole frame is 9.6 ms of bus time and drawing is a fraction of that. */
 /* A band of light travelling across anything hatched.
  *
- * This replaces a version that aligned the shine to the board's tilt. That
- * was a nicer idea and it never became visible: the direction was right,
- * the repaint was right by the end, and three rounds of looking at it on
- * the device still could not see it. Two diagonals of single pixels
- * differing only in WHICH way they lean is simply not a difference the eye
- * picks up on a 184x224 grid, however correct the arithmetic underneath.
+ * An early version of this aligned the shine to the board's tilt by
+ * picking WHICH of two fixed diagonals it travelled along. That was a
+ * nicer idea and it never became visible: the direction was right, the
+ * repaint was right by the end, and three rounds of looking at it on the
+ * device still could not see it. Two diagonals of single pixels differing
+ * only in WHICH way they lean is simply not a difference the eye picks up
+ * on a 184x224 grid, however correct the arithmetic underneath.
  *
  * Movement is a difference the eye cannot miss, which is the whole reason
- * to prefer this. The band sweeps, so the glass is doing something.
+ * the band exists at all - it sweeps, so the glass is doing something,
+ * whatever else changes about it.
  *
- * SHINE_PERIOD is the distance between bands along the diagonal, and the
+ * GRAVITY IS BACK, but as a continuous angle rather than a choice of two.
+ * shine_ux_q8/shine_uy_q8 (below) are a Q8 unit vector of the current
+ * gravity direction - see material_shine_direction() in material.h - and
+ * paint_row_n() projects each pixel onto it instead of onto the fixed
+ * (1, 1) diagonal the band used before. Tilting the board now visibly
+ * ROTATES which way the band runs, not merely which of two ways it leans,
+ * which is a different and considerably less subtle claim than the one
+ * that failed to show up before - but it is still a claim about a 184x224
+ * grid that has not yet been confirmed on the device, and the same
+ * "picked the wrong difference to make visible" failure mode applies
+ * until it has.
+ *
+ * SHINE_PERIOD is the distance between bands along that direction, and the
  * band moves SHINE_STEP_PX every SHINE_STEP_MS - about 1.3 seconds for one
  * band to reach where the one before it started.
  *
@@ -931,6 +945,17 @@ static void sand_exit(void)
 
 static int      shine_offset;
 static uint32_t shine_elapsed_ms;
+
+/* The Q8 unit vector the shine band currently sweeps along - see
+ * material_shine_direction()'s own comment in material.h for the fixed-
+ * point convention and why gravity's direction is computed there, once a
+ * frame, rather than here per pixel. Initialised to the plain (1, 1)
+ * diagonal so a frame drawn before update_shine_direction() has ever run
+ * (there is none in practice - sand_frame() calls it before the first
+ * draw - but a static default of (0, 0) would be a silent trap for
+ * whoever adds one) looks exactly like the mechanism always used to. */
+static int shine_ux_q8 = 181;
+static int shine_uy_q8 = 181;
 
 /* Which rows had anything hatched in them last time they were painted, so
  * a tick of the shine can repaint those and leave the rest alone.
@@ -1576,8 +1601,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * pattern printed on one. A single family of lines was almost
          * invisible; the crossings are what the eye picks up.
          *
-         * The gravity-aligned diagonal is the one drawn slightly stronger
-         * (it picks `lit` first), so the grain still follows the board.
+         * Both diagonals are drawn identically today - no gravity
+         * asymmetry between them, and none wanted: this is the surface's
+         * fixed woven texture, not the light landing on it. An earlier
+         * version favoured whichever one aligned with the board's tilt;
+         * see SHINE_PERIOD's own comment above for why a gravity-aligned
+         * difference like that turned out to be imperceptible on this
+         * grid and was dropped - the shine below is where gravity is
+         * expressed now, as a continuously rotating angle rather than a
+         * choice between these two.
          *
          * Measured in SCREEN pixels rather than within the block, so the
          * lines run unbroken from one cell into the next instead of
@@ -1591,6 +1623,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * broken by any of this. */
         const int base = (cx + cy) * n;
         const int diff = (cx - cy) * n;
+
+        /* The shine's own axis, in Q8 screen-pixel units: this cell's
+         * origin projected onto the current gravity direction (shine_ux_q8/
+         * shine_uy_q8, updated once a frame - see material_shine_direction()
+         * in material.h). Computed once per cell, same as base/diff above,
+         * so the per-pixel loop below only ever adds dx/dy's own share of
+         * the projection. */
+        const int shine_base_q8 = (cx * n) * shine_ux_q8 + (cy * n) * shine_uy_q8;
+
         for (int dy = 0; dy < n; dy++) {
             for (int dx = 0; dx < n; dx++) {
                 /* One pixel every eight, both ways. Wide bands were the
@@ -1603,21 +1644,37 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                  * of two, and it is fine on the negative values `w` takes
                  * left of the diagonal: two's complement just shifts the
                  * phase, which nothing here can tell apart from any other
-                 * phase. */
+                 * phase.
+                 *
+                 * Fixed to the (1, 1)/(1, -1) diagonals regardless of
+                 * gravity - this is the WOVEN TEXTURE of the surface, not
+                 * the light landing on it, and a texture that rotated with
+                 * every tilt would look like the material itself was
+                 * turning rather than like a fixed pane being lit from a
+                 * new angle. Only the shine below follows gravity. */
                 const bool grain = (((base + dx + dy) & 7) == 0) ||
                                    (((diff + dx - dy) & 7) == 0);
 
-                /* SHINE: a band travelling along the diagonal, advanced on
-                 * a clock rather than aimed by anything. A mask rather
-                 * than a modulo because SHINE_PERIOD is a power of two,
-                 * and it is fine on the values left of the origin -
-                 * two's complement shifts the phase, which nothing here
-                 * can tell from any other phase.
+                /* SHINE: a band travelling along the CURRENT GRAVITY
+                 * DIRECTION, advanced on a clock - see this function's own
+                 * top comment for why both halves of that matter. Projecting
+                 * (dx, dy) onto shine_ux_q8/shine_uy_q8 is a plain 2D dot
+                 * product in Q8 fixed point; the `>> 8` back down to pixel
+                 * units is an arithmetic right shift, sign-extending on this
+                 * toolchain, so it is fine on the negative projections a
+                 * pixel above or left of a cell's origin produces - the same
+                 * trust the mask below places in two's complement.
+                 *
+                 * A mask rather than a modulo because SHINE_PERIOD is a
+                 * power of two, and it is fine on the values left of the
+                 * origin - two's complement shifts the phase, which nothing
+                 * here can tell from any other phase.
                  *
                  * `< n` is the width: one CELL, so the band looks the same
                  * at every quality setting. n is a compile-time constant
                  * here, so this is a comparison against a literal. */
-                const int along = (base + dx + dy + shine_offset)
+                const int shine_q8 = shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
+                const int along = ((shine_q8 >> 8) + shine_offset)
                                   & (SHINE_PERIOD - 1);
 
                 /* The band wins wherever it falls, including over the
@@ -2984,6 +3041,17 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * Once per frame, not once per cell - see material_set_gravity()'s own
      * comment for why that split is what keeps the paint loop cheap. */
     material_set_gravity(gx, gy);
+
+    /* Same reason, same frequency, for the travelling shine's own
+     * direction - material_shine_direction() is pure and stateless (see
+     * its own comment in material.h), so all it needs from here is
+     * somewhere to land once a frame rather than being called from inside
+     * paint_row_n()'s per-pixel loop. A tilt that has not yet crossed into
+     * the next shine_offset tick still gets picked up within SHINE_STEP_MS
+     * of changing - draw_dirty_rows() repaints every row_has_shine[] row
+     * on each tick regardless of what moved it, and paint_row_n() always
+     * reads whatever shine_ux_q8/shine_uy_q8 hold at the time it runs. */
+    material_shine_direction(gx, gy, &shine_ux_q8, &shine_uy_q8);
 
     /* The liquid interior's LOCAL DEPTH walk needs its own per-frame fact
      * from this same gravity vector - which axis is dominant, and which way
