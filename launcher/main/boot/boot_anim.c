@@ -322,8 +322,14 @@ static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
         if (t > pen_t_q8) {
             break;      /* the table is in order, so nothing after it either */
         }
-        const screen_pt_t p = project(0, 0, t, view);
-        gfx_fill_rect(p.x - ZERO_DOT / 2, p.y - ZERO_DOT / 2,
+        /* Not project(): a marker behind the camera is not "off screen",
+         * it is a lit square somewhere it was never meant to be - see
+         * boot_anim_project_point()'s own comment. */
+        int x, y;
+        if (!boot_anim_project_point(0, 0, t, view, &x, &y)) {
+            continue;
+        }
+        gfx_fill_rect(x - ZERO_DOT / 2, y - ZERO_DOT / 2,
                       ZERO_DOT, ZERO_DOT, lit(COL_ZERO, ink));
     }
 }
@@ -423,9 +429,15 @@ static void draw_heads(int32_t colour_pen, uint8_t ink,
             i = BOOT_ANIM_CURVE_POINTS - 1;   /* the table ran out first */
         }
         const boot_anim_pt_t p = boot_anim_sample(i);
-        const screen_pt_t s = project(p.re, p.im, p.t, view);
+        /* Not project(): a pen behind the camera is not "off screen", it
+         * is a bright disc somewhere it was never meant to be - see
+         * boot_anim_project_point()'s own comment. */
+        int x, y;
+        if (!boot_anim_project_point(p.re, p.im, p.t, view, &x, &y)) {
+            continue;
+        }
 
-        draw_head(s.x, s.y,
+        draw_head(x, y,
                   boot_anim_hue_rgb(boot_anim_stroke(at, colour_pen).hue), ink);
     }
 }
