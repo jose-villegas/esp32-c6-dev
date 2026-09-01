@@ -1100,10 +1100,11 @@ static uint32_t foam_elapsed_ms;
  * ascending; this is safe to reverse for a gravity-up frame instead of
  * needing a trickier fix inside the depth bookkeeping itself, because
  * nothing else that loop does depends on row order - dirty_rows[cy],
- * row_run_x0/x1/n and row_has_shine[cy] are all indexed by cy directly and
- * read/written independently per row, and gfx_mark_dirty() only ever unions
- * a bounding box of (y, height) pairs (dirty_mark(), gfx_dirty.h), which
- * does not care what order the boxes arrive in either - the same reasoning
+ * row_run_x0/x1/n, row_has_shine[cy] and row_has_liquid_interior[cy] are all
+ * indexed by cy directly and read/written independently per row, and
+ * gfx_mark_dirty() only ever unions a bounding box of (y, height) pairs
+ * (dirty_mark(), gfx_dirty.h), which does not care what order the boxes
+ * arrive in either - the same reasoning
  * f9679df's own commit already established still holds, unchanged; only the
  * CONDITION under which the reversal fires got simpler, since it is now
  * just "does gravity point up" with no "and is vertical dominant this
@@ -1278,11 +1279,87 @@ static void update_local_depth_gravity(int gx, int gy)
     local_depth_h_reverse = (gx < 0);
 }
 
+/* LOCAL DEPTH'S OWN PERIODIC WAKE - closes the same gap SHINE_STEP_MS
+ * already closes for the travelling shine (see that constant's own comment
+ * above, and advance_shine() below, for the pattern this mirrors almost
+ * exactly).
+ *
+ * THE BUG: the blend above is recomputed from THIS FRAME's gravity, every
+ * frame paint_row_n() runs for a row - but a settled, sleeping block does
+ * not run it again once nothing is moving, because nothing calls
+ * paint_row_n() for a row draw_dirty_rows() never marks dirty.
+ * sand_enable_sleeping()'s own comment (sand.h) - "everything wakes when
+ * the gravity direction changes... since either can free a grain" - is a
+ * promise about the SIMULATION's sleeping blocks (BLOCK_ACTIVE, whether
+ * PHYSICS gets re-examined), not about this file's dirty_rows[] (whether
+ * PIXELS get repainted). A block can wake for physics, find nothing
+ * actually needs to move, and go back to sleep without ever touching
+ * dirty_rows[]. Ordinary hand wobble drifts gravity continuously - smoothed
+ * by the tilt filter but never perfectly still - so local_depth_weight_h_q8
+ * above keeps changing, frame after frame, with no cell in a settled pool
+ * ever moving to earn that pool's rows a repaint. The result: a sleeping
+ * block's blend is stuck at whatever it was the last time something nearby
+ * genuinely disturbed it, while a neighbouring block still being redrawn
+ * for an unrelated reason repaints with the CURRENT blend - a hard,
+ * rectangular seam between "stale" and "fresh" exactly where one block's
+ * sleep boundary meets another's, in place of the smooth gradient a
+ * puddle's own surface should read as.
+ *
+ * THE FIX is the same shape as the shine's: an unconditional periodic tick
+ * that marks every row known to hold a liquid interior dirty, regardless of
+ * what the simulation did that frame - see row_has_liquid_interior[] just
+ * below, advance_local_depth_wake() beside advance_shine() further down,
+ * and draw_dirty_rows()'s own shine_moved block for the precedent this
+ * repeats in the same shape.
+ *
+ * A SEPARATE clock from the shine's own, on purpose - not folded into one
+ * shared tick for two features. Different feature, different rate,
+ * independently tunable - the same reasoning that keeps FOAM_PHASE_MS's own
+ * clock apart from the shine's rather than reusing it.
+ *
+ * 120 IS A STARTING POINT, a look/cost trade-off tuned by eye and by device
+ * measurement, not a physical constant - exactly the same status
+ * SHINE_STEP_MS's own comment gives that constant: speed comes from the
+ * STEP SIZE, not from ticking more often, so a SHORTER value here tracks
+ * gravity's drift more closely at a proportionally HIGHER redraw cost
+ * (every row holding any liquid interior repainted in full, every tick),
+ * while a longer value is cheaper and drifts more visibly out of date
+ * before the next wake catches it up. Unlike glass, a large body of water,
+ * oil, lava or acid can cover far more of the screen than a typical hatched
+ * scene ever does, so this cost is worth watching closely on the device
+ * before trusting 120 as final - it has not been measured there yet. */
+#define LOCAL_DEPTH_WAKE_MS 120
+
+/* Real time accumulated toward the next local-depth wake tick - carried
+ * across frames the same way shine_elapsed_ms and foam_elapsed_ms are, for
+ * the same reason: driven by dt_ms rather than a frame count, so the wake
+ * fires at the same real-world rate whatever the frame rate happens to
+ * be. */
+static uint32_t local_depth_wake_elapsed_ms;
+
+/* Which rows painted a liquid interior cell last time they were painted -
+ * the interior-only counterpart to row_has_shine[] above, kept for exactly
+ * the same reason: without this the wake tick would have to claim the
+ * whole screen every time it fires, which at LOCAL_DEPTH_WAKE_MS is far too
+ * often to be affordable if the screen holds anything besides liquid. A row
+ * that is not repainted keeps its last answer, which stays true only until
+ * the next wake tick - see LOCAL DEPTH's own periodic-wake comment above
+ * for why that staleness is exactly the bug this array's tick exists to
+ * bound.
+ *
+ * Reset to 0 at the top of paint_row_n() right beside row_has_shine[cy]'s
+ * own reset, and set to 1 the moment a cell in that row paints as a liquid
+ * interior cell - see the interior test inside paint_row_n() below, right
+ * where `depth` is blended, for exactly which cells that is and why it is
+ * recomputed there rather than read back out of material_colours(). */
+static uint8_t row_has_liquid_interior[GRID_H_MAX];
+
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
     gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
     row_has_shine[cy] = 0;
+    row_has_liquid_interior[cy] = 0;
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
@@ -1533,6 +1610,19 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             ((vdepth * (256u - local_depth_weight_h_q8)) +
              (hdepth * local_depth_weight_h_q8)) >> 8;
 
+        /* row_has_liquid_interior[]'s own population point - see that
+         * array's comment above paint_row_n() for the mechanism this feeds.
+         * material_colours() below decides the same thing internally
+         * (KIND_LIQUID and `(mask & MATERIAL_EDGE_CARDINAL) == 0` is its own
+         * interior branch, material.c) but does not report which branch it
+         * took, and does not need a new out-parameter to say so: both facts
+         * are already sitting right here, so this is one more branch, not a
+         * new call. */
+        if (material_of(row[cx])->kind == KIND_LIQUID &&
+            (mask & MATERIAL_EDGE_CARDINAL) == 0) {
+            row_has_liquid_interior[cy] = 1;
+        }
+
         gfx_color_t col[3];
         const material_pattern_t pat =
             material_colours(row[cx], hash, mask, depth, col);
@@ -1727,7 +1817,30 @@ static bool advance_shine(uint32_t dt_ms)
     return true;
 }
 
-static void draw_dirty_rows(bool shine_moved)
+/* Advances the local-depth wake clock, and says whether it fired this
+ * frame - see LOCAL_DEPTH_WAKE_MS's own comment above paint_row_n() for why
+ * this exists at all. Same accumulate/compare/carry-the-remainder shape as
+ * advance_shine() just above, DELIBERATELY SIMPLER: the wake has nothing
+ * analogous to shine_offset to advance BY. shine_offset is a travelling
+ * band's own position, so advance_shine() has to fold `steps` into it to
+ * land in the right place after however many ticks elapsed at once; the
+ * wake has no position of its own, only "did a tick land this frame", so
+ * `steps` here is consumed purely to reset the carry and never otherwise
+ * used - firing at most once per call regardless of how many whole
+ * intervals dt_ms actually covered, same as the shine's own tick, just
+ * with nothing left to advance once it fires. */
+static bool advance_local_depth_wake(uint32_t dt_ms)
+{
+    local_depth_wake_elapsed_ms += dt_ms;
+    if (local_depth_wake_elapsed_ms < LOCAL_DEPTH_WAKE_MS) {
+        return false;
+    }
+    const uint32_t steps = local_depth_wake_elapsed_ms / LOCAL_DEPTH_WAKE_MS;
+    local_depth_wake_elapsed_ms -= steps * LOCAL_DEPTH_WAKE_MS;
+    return true;
+}
+
+static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
 {
     gfx_color_t *fb = gfx_framebuffer();
 
@@ -1756,6 +1869,22 @@ static void draw_dirty_rows(bool shine_moved)
         }
     }
 
+    /* THE SAME MECHANISM, for a liquid interior's local-depth blend instead
+     * of a hatched material's shine - see LOCAL_DEPTH_WAKE_MS's own comment
+     * above paint_row_n() for the bug this closes (gravity drifting a
+     * settled, sleeping block's blend stale with nothing left to mark its
+     * rows dirty) and why it needs the same unconditional periodic tick the
+     * shine already uses. Only the rows that actually held a liquid
+     * interior last time they were painted, for the same affordability
+     * reason row_has_shine[] gates the block above. */
+    if (local_depth_woke) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            if (row_has_liquid_interior[cy]) {
+                dirty_rows[cy] = 1;
+            }
+        }
+    }
+
     /* 256 entries in flash, indexed by the raw cell byte: no material lookup,
      * no shade arithmetic, no colour conversion, and no RAM. */
     const gfx_color_t *pal = material_palette();
@@ -1777,10 +1906,10 @@ static void draw_dirty_rows(bool shine_moved)
      * more. Reversing here, rather than juggling which array slot means
      * "toward the surface" inside the depth bookkeeping itself, is safe
      * because nothing else in this loop depends on row order -
-     * dirty_rows[cy], row_run_x0/x1/n and row_has_shine[cy] are all indexed
-     * by cy directly, and gfx_mark_dirty() below only ever unions a
-     * bounding box, which does not care what order the boxes arrive in
-     * either. */
+     * dirty_rows[cy], row_run_x0/x1/n, row_has_shine[cy] and
+     * row_has_liquid_interior[cy] are all indexed by cy directly, and
+     * gfx_mark_dirty() below only ever unions a bounding box, which does not
+     * care what order the boxes arrive in either. */
     const bool reverse_rows = local_depth_v_reverse;
 
     for (int i = 0; i < grid_h; i++) {
@@ -2935,13 +3064,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
              * draw_dirty_rows(): the markers are drawn straight over the
              * grid's own pixels, not stored in it, so a full repaint of the
              * grid alone would erase them without this. Nothing here calls
-             * advance_shine() or passes shine_moved - the simulation is
-             * paused while the panel is open, so this repaint happens only
-             * on an actual orientation change, never once per frame; ticking
-             * the shine on a static canvas would be paying an animation cost
-             * for a picture that already looks right. */
+             * advance_shine() or advance_local_depth_wake(), or passes
+             * either's result along - the simulation is paused while the
+             * panel is open, so this repaint happens only on an actual
+             * orientation change, never once per frame; ticking either clock
+             * on a static canvas would be paying an animation cost for a
+             * picture that already looks right. */
             mark_sand_fully_dirty();
-            draw_dirty_rows(false);
+            draw_dirty_rows(false, false);
             draw_emitter_markers();
             palette_drawn_quarter = quarter;
         }
@@ -3048,7 +3178,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
     count_awake(&awake_blocks, &awake_cells);
 #endif
 
-    draw_dirty_rows(advance_shine(dt_ms));
+    /* The local-depth wake gets its own clock tick here, alongside the
+     * shine's, for the same reason it gets its own elapsed-time counter and
+     * its own row array rather than sharing either with the shine - see
+     * LOCAL_DEPTH_WAKE_MS's own comment above paint_row_n(). Both are driven
+     * by this same dt_ms because both need real elapsed time, not a frame
+     * count, but they are two independent ticks at two independently tuned
+     * rates, not one clock wearing two hats. */
+    draw_dirty_rows(advance_shine(dt_ms), advance_local_depth_wake(dt_ms));
 
     /* After the rows, every frame - see draw_emitter_markers()'s own
      * comment for why once would not be enough. */
