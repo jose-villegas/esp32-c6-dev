@@ -284,39 +284,32 @@ const material_t materials[MATERIAL_MAX] = {
                                      * tune on device like every other
                                      * constant here. */
 
-            .decay = 16,     /* NOW DELIBERATELY MATCHES SMOKE'S OWN 16 -
-                                     * this went through several rounds
-                                     * (24 to 18 for "at least 30% longer",
-                                     * then 18 to 16 for "another 10% on
-                                     * top") before landing exactly on
-                                     * smoke's own figure, which used to be
-                                     * a problem: a test asserted steam
-                                     * must fade SOONER than smoke ("it
-                                     * condenses, it does not linger"),
-                                     * and tying smoke's rate broke that
-                                     * claim. Explicitly settled, not an
-                                     * accident of rounding - asked to let
-                                     * steam's lifespan match smoke's much
-                                     * more closely, so the two now share
-                                     * this figure on purpose; see
-                                     * test_the_air_agrees_about_weight_
-                                     * speed_and_lifetime's own updated
-                                     * comment (suite_sand.c) for the
-                                     * matching test change. The starting
-                                     * life it decays FROM is also already
-                                     * at its own ceiling - conduct_heat()'s
-                                     * boiling branch calls place_reacted(),
-                                     * giving a full MATERIAL_VARIANTS - 1
-                                     * = 15 rather than a shortened figure,
-                                     * see that function's own comment -
-                                     * so decay chance was the only dial
-                                     * left to extend duration at all.
-                                     * ~240 steps (~4s at ~60fps) to fully
-                                     * decay from full life, against the
-                                     * original 24's ~160 steps (~2.7s) -
-                                     * 50% longer overall. Not yet
-                                     * measured on device at this exact
-                                     * figure. */
+            .decay = 12,     /* RAISED PAST SMOKE'S OWN 16 AGAIN, on a
+                                     * later request to make steam last
+                                     * longer still, at least 30% - it had
+                                     * previously been lowered TO exactly
+                                     * smoke's 16 (see the git history on
+                                     * this line and test_the_air_agrees_
+                                     * about_weight_speed_and_lifetime's own
+                                     * comment for that earlier, now
+                                     * superseded, "on purpose, matches
+                                     * smoke" decision), which was never a
+                                     * hard floor - that test only ever
+                                     * asserted steam must not fade FASTER
+                                     * than smoke, not that the two must be
+                                     * equal, so steam decaying slower than
+                                     * smoke again needs no test change.
+                                     * ~320 steps (~5.3s at ~60fps) to fully
+                                     * decay from full life, against 16's
+                                     * ~240 steps (~4s) - a 33% increase,
+                                     * comfortably past the 30% asked for.
+                                     * The starting life it decays FROM is
+                                     * already at its own ceiling
+                                     * (MATERIAL_VARIANTS - 1 = 15 - see
+                                     * conduct_heat()'s boiling branch), so
+                                     * decay chance is still the only dial
+                                     * that extends duration. Not yet
+                                     * measured on device at this figure. */
             .mobility = 160, /* noticeably faster than gas's 96 or
                                      * fire's 96 - steam should read as
                                      * rising eagerly off a boiling pot,
