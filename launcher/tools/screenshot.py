@@ -16,8 +16,9 @@ list), and a SCREENSHOT_END line. Anything else on the wire - ordinary
 ESP_LOG output, in particular - is ignored rather than treated as an
 error, since the device keeps logging normally while it streams.
 
-Writes two files: `--out` itself (the .bmp) and, if a SCREENSHOT_STATE:
-line arrived, a same-named .json beside it.
+Writes the .bmp at `--out`, a same-named .png beside it (requires Pillow -
+see the import below), and, if a SCREENSHOT_STATE: line arrived, a same-named
+.json beside that.
 """
 
 import argparse
@@ -29,6 +30,11 @@ import sys
 import time
 
 import serial
+
+try:
+    from PIL import Image
+except ImportError:
+    Image = None
 
 BEGIN_RE = re.compile(r"^SCREENSHOT_BEGIN size=(\d+)$")
 DATA_PREFIX = "SCREENSHOT_DATA:"
@@ -152,6 +158,15 @@ def main() -> int:
                     with open(args.out, "wb") as f:
                         f.write(data)
                     print(f"wrote {args.out} ({len(data)} bytes)")
+
+                    if Image is not None:
+                        png_path = os.path.splitext(args.out)[0] + ".png"
+                        Image.open(args.out).save(png_path)
+                        print(f"wrote {png_path}")
+                    else:
+                        print("Pillow not installed - skipping .png "
+                              "conversion (pip install Pillow to enable it)",
+                              file=sys.stderr)
 
                     if state_json is not None:
                         state_path = os.path.splitext(args.out)[0] + ".json"
