@@ -528,6 +528,31 @@ static inline void boot_anim_project(int32_t re_q12, int32_t im_q12,
  * point that is genuinely behind the camera or right on top of it. */
 #define BOOT_ANIM_NEAR_Z (S3L_F / 10)
 
+/* A single point, drawn only if it is actually in front of the camera -
+ * unlike boot_anim_project() itself, which projects unconditionally and
+ * leaves the caller to notice (or not) that the answer is nonsense for a
+ * point behind the near plane: dividing by a negative z still produces an
+ * ordinary-looking screen coordinate, often one that lands right back
+ * inside the panel, not off it - see boot_anim_project_segment_cs()'s own
+ * comment on the same trap for a LINE's endpoint. A lone point has no
+ * far side to clip to the way a segment does - either it is visible or it
+ * is not - so this is just the visibility test boot_anim_project() itself
+ * has no way to report, ahead of the same divide-and-map. Returns false
+ * (nothing written) rather than draw a pen or a zero marker somewhere it
+ * was never meant to be. */
+static inline bool boot_anim_project_point(int32_t re_q12, int32_t im_q12,
+                                           int32_t t_q8,
+                                           const boot_anim_view_t *view,
+                                           int *screen_x, int *screen_y)
+{
+    const S3L_Vec4 p = boot_anim_to_camera_space(re_q12, im_q12, t_q8, view);
+    if (p.z <= BOOT_ANIM_NEAR_Z) {
+        return false;
+    }
+    boot_anim_camera_to_screen(p, view->focal, screen_x, screen_y);
+    return true;
+}
+
 /* A line segment between two points ALREADY IN CAMERA SPACE (see
  * boot_anim_to_camera_space() above), clipped to the near plane before
  * projecting - unlike projecting each endpoint independently (what calling
