@@ -26,6 +26,9 @@
 /* each ring waits for the one inside */
 #define BOOT_ANIM_GRID_RING_MS 12
 
+/* how many rings the floor draws before fading out */
+#define BOOT_ANIM_GRID_RINGS 28
+
 #define BOOT_ANIM_GRID_FADE_MS 300
 #define BOOT_ANIM_PEN_START_MS 520
 /* how long the curve takes to draw */
@@ -72,6 +75,12 @@
  * lens default. Authored directly in this unit - it is a lens
  * property, not a position or angle, so meters/degrees do not apply. */
 #define BOOT_ANIM_CAMERA_FOCAL 512
+
+/* The floor's ring spacing - see BOOT_ANIM_GRID_RINGS's own comment
+ * in boot_anim.h. Authored in meters (grid_step_m in the JSON), like
+ * a transform's own pos, and converted here the same way units() in
+ * boot_anim.c does. */
+#define BOOT_ANIM_GRID_STEP_Q12 1024
 
 typedef enum {
     BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */

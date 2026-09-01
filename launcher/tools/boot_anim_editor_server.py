@@ -11,13 +11,14 @@ JS reimplementation of it.
 
 HOW A REQUEST IS HANDLED
 
-POST /render body is {"timing": {...}, "camera_focal": 512, "keyframes":
-[...], "ms": 1234} - boot_anim_timeline.json's own shape, plus which
-millisecond to show.
+POST /render body is {"timing": {...}, "camera_focal": 512, "grid_step_m":
+0.25, "keyframes": [...], "ms": 1234} - boot_anim_timeline.json's own
+shape, plus which millisecond to show.
 
-  1. Hash {timing, camera_focal, keyframes}. If it matches the last build,
-     skip straight to step 4 - scrubbing/playback (ms alone changing) never
-     recompiles, it is one process spawn of an already-built binary.
+  1. Hash {timing, camera_focal, grid_step_m, keyframes}. If it matches the
+     last build, skip straight to step 4 - scrubbing/playback (ms alone
+     changing) never recompiles, it is one process spawn of an
+     already-built binary.
   2. Otherwise: write that JSON to a SCRATCH copy of boot_anim_timeline.json
      (never the real, committed one - only this repo's tools/
      boot_anim_editor.html's own Bake button writes anything meant to be
@@ -123,13 +124,14 @@ class Renderer:
                 '    Add-MpPreference -ExclusionPath "%s"' % self.scratch,
                 file=sys.stderr)
 
-    def _regenerate_and_compile(self, payload_hash, timing, camera_focal, keyframes):
+    def _regenerate_and_compile(self, payload_hash, timing, camera_focal,
+                                grid_step_m, keyframes):
         scratch_json = os.path.join(self.scratch, "boot_anim_timeline.json")
         scratch_header = os.path.join(self.scratch, "boot", "boot_anim_timeline.h")
 
         with open(scratch_json, "w", encoding="utf-8") as f:
             json.dump({"timing": timing, "camera_focal": camera_focal,
-                      "keyframes": keyframes}, f)
+                      "grid_step_m": grid_step_m, "keyframes": keyframes}, f)
 
         gen = subprocess.run(
             [sys.executable, GENERATOR, scratch_json],
@@ -159,15 +161,16 @@ class Renderer:
 
         self.built_hash = payload_hash
 
-    def render(self, timing, camera_focal, keyframes, ms):
+    def render(self, timing, camera_focal, grid_step_m, keyframes, ms):
         """Returns (bmp_bytes, (origin_x, origin_y) or None)."""
         payload_hash = hashlib.sha256(
             json.dumps({"timing": timing, "camera_focal": camera_focal,
-                      "keyframes": keyframes},
+                      "grid_step_m": grid_step_m, "keyframes": keyframes},
                       sort_keys=True).encode("utf-8")).hexdigest()
 
         if payload_hash != self.built_hash:
-            self._regenerate_and_compile(payload_hash, timing, camera_focal, keyframes)
+            self._regenerate_and_compile(payload_hash, timing, camera_focal,
+                                         grid_step_m, keyframes)
 
         run = subprocess.run([self.binary, str(int(ms))], capture_output=True)
         if run.returncode != 0:
@@ -208,6 +211,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
             timing = body["timing"]
             camera_focal = body["camera_focal"]
+            grid_step_m = body["grid_step_m"]
             keyframes = body["keyframes"]
             ms = body["ms"]
         except (ValueError, KeyError) as exc:
@@ -215,7 +219,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return
 
         try:
-            bmp, origin = self.renderer.render(timing, camera_focal, keyframes, ms)
+            bmp, origin = self.renderer.render(timing, camera_focal, grid_step_m,
+                                               keyframes, ms)
         except RenderError as exc:
             self._send_json_error(exc.status, exc.message)
             return

@@ -369,6 +369,7 @@
 const DEFAULT_STATE = {
   timing: {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
+    grid_rings: 28,
     grid_fade_ms: 300, pen_start_ms: 520, pen_ms: 1980, title_start_ms: 2700,
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
     title_turns_phase: 229376, title_amplitude_px: 22,
@@ -378,6 +379,7 @@ const DEFAULT_STATE = {
     grid_max: 70,
   },
   camera_focal: 512,
+  grid_step_m: 0.25,
   keyframes: [
     { ms: 520,
       camera: { pos: [0, 2, -10], rot: [0, 0, 0], scale: [1, 1, 1] },
@@ -412,8 +414,9 @@ const DEFAULT_STATE = {
 
 const TIMING_GROUPS = [
   { title: 'Overall', keys: ['total_ms', 'fade_start_ms'] },
-  { title: 'Axes / grid', keys: ['axes_ms', 'grid_start_ms', 'grid_ring_ms', 'grid_fade_ms',
-      'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max', 'grid_max'] },
+  { title: 'Axes / grid', keys: ['axes_ms', 'grid_start_ms', 'grid_ring_ms', 'grid_rings',
+      'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max',
+      'grid_max'] },
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
@@ -465,6 +468,7 @@ async function renderNow() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         timing: state.timing, camera_focal: state.camera_focal,
+        grid_step_m: state.grid_step_m,
         keyframes: state.keyframes, ms: playhead,
       }),
     });
@@ -561,6 +565,30 @@ function renderConsts() {
   focalLabel.appendChild(focalSpan);
   focalLabel.appendChild(focalInput);
   list.appendChild(focalLabel);
+
+  /* Also not per-keyframe - the spacing between floor rings, in meters like
+   * a transform's own pos (see gen_boot_anim_timeline.py's top comment).
+   * How MANY rings is grid_rings, a plain count, in the Axes/grid group
+   * below with everything else that paces the floor. */
+  const stepHead = document.createElement('div');
+  stepHead.className = 'group-title';
+  stepHead.textContent = 'Grid';
+  list.appendChild(stepHead);
+  const stepLabel = document.createElement('label');
+  stepLabel.className = 'field';
+  const stepSpan = document.createElement('span');
+  stepSpan.textContent = 'grid_step_m (ring spacing, meters)';
+  const stepInput = document.createElement('input');
+  stepInput.type = 'number';
+  stepInput.step = 'any';
+  stepInput.value = state.grid_step_m;
+  stepInput.addEventListener('input', () => {
+    state.grid_step_m = Number(stepInput.value) || 0;
+    renderDebounced();
+  });
+  stepLabel.appendChild(stepSpan);
+  stepLabel.appendChild(stepInput);
+  list.appendChild(stepLabel);
 
   for (const group of TIMING_GROUPS) {
     const h = document.createElement('div');
@@ -867,6 +895,7 @@ function tick(now) {
 document.getElementById('btnBake').addEventListener('click', () => {
   const payload = {
     timing: state.timing, camera_focal: state.camera_focal,
+    grid_step_m: state.grid_step_m,
     keyframes: state.keyframes,
   };
   const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
@@ -890,8 +919,9 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   reader.onload = () => {
     try {
       const loaded = JSON.parse(reader.result);
-      if (!loaded.timing || !loaded.keyframes || loaded.camera_focal === undefined) {
-        throw new Error('missing timing/camera_focal/keyframes');
+      if (!loaded.timing || !loaded.keyframes || loaded.camera_focal === undefined ||
+          loaded.grid_step_m === undefined) {
+        throw new Error('missing timing/camera_focal/grid_step_m/keyframes');
       }
       state = loaded;
       selectedKf = 0;

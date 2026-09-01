@@ -351,35 +351,35 @@ static inline int32_t boot_anim_cos(uint16_t phase)
  * tools/gen_zeta_curve.py's PHASE1_T_MAX. */
 #define BOOT_ANIM_T_MAX_PHASE1 35
 
-/* The floor's outer edge is a fade rather than a boundary: ring FADE is
- * fully dark, so nothing past it is worth drawing at all, and what a
- * viewer sees is rings thinning out with distance rather than a fixed
+/* The floor's outer edge is a fade rather than a boundary: the outermost
+ * ring is fully dark, so nothing past it is worth drawing at all, and what
+ * a viewer sees is rings thinning out with distance rather than a fixed
  * square tile floating in the dark - which is a thing sitting in the
  * scene, where a plane carrying on past what is drawn is what a
  * coordinate plane actually is.
  *
  * RINGS is therefore how far the fade reaches, not how big the floor is -
- * and a quarter of a unit apart (see BOOT_ANIM_GRID_STEP_Q12 below), not a
- * whole one: at a whole unit per ring there were only ever six or seven
- * rings actually lit at once, each one a visibly distinct step in
- * brightness from its neighbours rather than something that reads as a
+ * and, by default, a quarter of a unit apart (see BOOT_ANIM_GRID_STEP_Q12
+ * below), not a whole one: at a whole unit per ring there were only ever
+ * six or seven rings actually lit at once, each one a visibly distinct step
+ * in brightness from its neighbours rather than something that reads as a
  * continuous wave, and even the first cut of that (twice as many, half as
  * far apart) still read as individually countable bands rather than a
  * dense ripple once the floor itself was also allowed to grow this much
  * bigger on screen (the old projection's own floor-shrink mechanism, since
  * replaced by the space transform's own scale - see "The timeline" above) -
- * the bigger the
- * drawn area, the higher a frequency it takes for the same ring count to
- * still look dense rather than sparse. Four times as many rings, a
- * quarter as far apart, covers the same physical reach as the original
- * whole-unit spacing. */
-#define BOOT_ANIM_GRID_RINGS 28
-#define BOOT_ANIM_GRID_FADE  28
-
-/* A quarter of a unit, not a whole one - see BOOT_ANIM_GRID_RINGS's own
- * comment. Q12, like every other plane coordinate here (see units() in
- * boot_anim.c, which this is used in place of for the floor specifically). */
-#define BOOT_ANIM_GRID_STEP_Q12 (BOOT_ANIM_ONE / 4)
+ * the bigger the drawn area, the higher a frequency it takes for the same
+ * ring count to still look dense rather than sparse.
+ *
+ * Both are generated - "Other consts" in tools/boot_anim_editor.html -
+ * BOOT_ANIM_GRID_RINGS lives in boot_anim_timeline.h, BOOT_ANIM_GRID_STEP_Q12
+ * with it (converted there from plain meters, like every other authored
+ * length here). FADE is kept as its own name for what it means in
+ * boot_anim_grid_alpha() below, but is never a different NUMBER from
+ * RINGS - the fade has to reach exactly as far as the rings actually drawn,
+ * not short of them (a hard edge) or past them (dividing by a count nothing
+ * ever reaches). */
+#define BOOT_ANIM_GRID_FADE BOOT_ANIM_GRID_RINGS
 
 /* Converting the curve/grid's own existing Q12 "zeta value" units into
  * small3dlib's own fixed point - see "The timeline"'s own UNITS comment for

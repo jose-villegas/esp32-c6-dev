@@ -4,6 +4,7 @@
         "axes_ms": 450,
         "grid_start_ms": 150,
         "grid_ring_ms": 12,
+        "grid_rings": 28,
         "grid_fade_ms": 300,
         "pen_start_ms": 520,
         "pen_ms": 1980,
@@ -24,6 +25,7 @@
         "grid_max": 70
     },
     "camera_focal": 512,
+    "grid_step_m": 0.25,
     "keyframes": [
         {
             "ms": 520,

@@ -37,10 +37,14 @@ lerps both transforms' every number between the two keyframes bracketing
 arriving keyframe names - the same three shapes util/tween.h already
 provides, so nothing new is needed on the firmware side to interpret them.
 
-`camera_focal` is the one thing here that is not per-keyframe: a single
-lens setting (small3dlib's own S3L_Camera.focalLength - see
-boot_anim.h's "The projection" section for what 0 does to it: an
-orthographic projection, not a second code path to maintain).
+`camera_focal` and `grid_step_m` are not per-keyframe, unlike the transforms
+above: `camera_focal` is a single lens setting (small3dlib's own
+S3L_Camera.focalLength - see boot_anim.h's "The projection" section for
+what 0 does to it: an orthographic projection, not a second code path to
+maintain); `grid_step_m` is the spacing between floor rings, authored in
+meters like a transform's `pos` and converted the same way. `grid_rings`
+(how many rings the floor draws before fading out) lives in `timing`
+instead, since it is a plain count with nothing to convert.
 
 The `timing` block is everything else that paces the animation but is not
 a transform of the space: how fast the grid rings fade in, how the title
@@ -93,12 +97,28 @@ def scale_to_s3l(v):
     return round(v * S3L_F)
 
 
+# One space-unit is one meter - see boot_anim.h's own top comment - so this
+# is the SAME conversion boot_anim.c's units() does for the curve/grid's own
+# geometry, not small3dlib's fixed point (S3L_F above). BOOT_ANIM_ONE, not
+# imported from boot_anim.h to keep this script standalone.
+BOOT_ANIM_ONE = 4096
+
+
+def meters_to_q12(v):
+    return round(v * BOOT_ANIM_ONE)
+
+
 def validate(cfg):
     timing = cfg["timing"]
     kfs = cfg["keyframes"]
 
     if len(kfs) < 2:
         fail("need at least two keyframes")
+
+    if timing["grid_rings"] <= 0:
+        fail("grid_rings must be positive (%r given)" % (timing["grid_rings"],))
+    if cfg["grid_step_m"] <= 0:
+        fail("grid_step_m must be positive (%r given)" % (cfg["grid_step_m"],))
 
     last_ms = -1
     for kf in kfs:
@@ -150,6 +170,8 @@ TIMING_ORDER = [
     ("grid_start_ms", "BOOT_ANIM_GRID_START_MS", None),
     ("grid_ring_ms", "BOOT_ANIM_GRID_RING_MS",
      "each ring waits for the one inside"),
+    ("grid_rings", "BOOT_ANIM_GRID_RINGS",
+     "how many rings the floor draws before fading out"),
     ("grid_fade_ms", "BOOT_ANIM_GRID_FADE_MS", None),
     ("pen_start_ms", "BOOT_ANIM_PEN_START_MS", None),
     ("pen_ms", "BOOT_ANIM_PEN_MS", "how long the curve takes to draw"),
@@ -240,6 +262,12 @@ def main():
     w(" * lens default. Authored directly in this unit - it is a lens\n")
     w(" * property, not a position or angle, so meters/degrees do not apply. */\n")
     w("#define BOOT_ANIM_CAMERA_FOCAL %d\n\n" % cfg["camera_focal"])
+
+    w("/* The floor's ring spacing - see BOOT_ANIM_GRID_RINGS's own comment\n")
+    w(" * in boot_anim.h. Authored in meters (grid_step_m in the JSON), like\n")
+    w(" * a transform's own pos, and converted here the same way units() in\n")
+    w(" * boot_anim.c does. */\n")
+    w("#define BOOT_ANIM_GRID_STEP_Q12 %d\n\n" % meters_to_q12(cfg["grid_step_m"]))
 
     w("typedef enum {\n")
     w("    BOOT_ANIM_EASE_LINEAR = 0,   /* no easing - a plain ramp        */\n")
