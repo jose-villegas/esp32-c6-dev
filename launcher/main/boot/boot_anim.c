@@ -248,15 +248,22 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
  * the plot()s inside one - genuinely cheaper to draw, not just a different
  * look. The vertex walk itself (and so the wave's own per-vertex height)
  * is untouched either way; only whether a given span's line actually gets
- * drawn changes. */
+ * drawn changes.
+ *
+ * `reach` (boot_anim_grid_spoke_reach(), Q0) bounds how much of the walk
+ * even happens, not just whether a given segment draws - the loop simply
+ * stops early, so a spoke mid-reveal costs less to draw than a finished
+ * one, not the same amount with the tail end thrown away. */
 static void draw_grid_spoke(uint16_t turn, int32_t far, int32_t front_r,
                             int32_t amp_q12, int32_t decay_q12, gfx_color_t c,
-                            bool dash, const boot_anim_view_t *view)
+                            bool dash, uint8_t reach,
+                            const boot_anim_view_t *view)
 {
     S3L_Vec4 prev_cs;
     bool have_prev = false;
+    const int max_step = (BOOT_ANIM_GRID_SPOKE_STEPS * reach) / 255;
 
-    for (int step = 0; step <= BOOT_ANIM_GRID_SPOKE_STEPS; step++) {
+    for (int step = 0; step <= max_step; step++) {
         const int32_t radius = (far * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
         int32_t re, im;
         polar_point(radius, turn, &re, &im);
@@ -330,10 +337,13 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
      * do: a spoke passes through every ring in turn, so there is no one
      * ring index left to colour it by. */
     const gfx_color_t spoke_c = lit(COL_AXIS, ink);
-    for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
-        const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-        draw_grid_spoke(turn, far, front_r, amp_q12, decay_q12, spoke_c,
-                        BOOT_ANIM_GRID_SPOKE_DASH != 0, view);
+    const uint8_t spoke_reach = boot_anim_grid_spoke_reach(now_ms);
+    if (spoke_reach > 0) {
+        for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
+            const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
+            draw_grid_spoke(turn, far, front_r, amp_q12, decay_q12, spoke_c,
+                            BOOT_ANIM_GRID_SPOKE_DASH != 0, spoke_reach, view);
+        }
     }
 }
 

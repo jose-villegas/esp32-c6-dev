@@ -409,6 +409,7 @@ const DEFAULT_STATE = {
   timing: {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
     grid_rings: 28, grid_spokes: 8, grid_spoke_dash: 0,
+    grid_spoke_start_ms: 0, grid_spoke_draw_ms: 0,
     grid_fade_ms: 300, wave_start_ms: 520, wave_end_ms: 2500,
     pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
     title_start_ms: 2700,
@@ -472,6 +473,7 @@ const FIELD_GROUPS = [
   { title: 'Overall', keys: ['total_ms', 'fade_start_ms'] },
   { title: 'Axes', keys: ['axes_ms'] },
   { title: 'Grid', keys: ['grid_rings', 'grid_spokes', 'grid_spoke_dash',
+      'grid_spoke_start_ms', 'grid_spoke_draw_ms',
       'grid_start_ms', 'grid_ring_ms', 'grid_fade_ms', 'grid_hue_ms',
       'grid_hue_spread', 'grid_whiten_max', 'grid_ceiling_max', 'grid_max'] },
   { title: 'Wave', keys: ['wave_start_ms', 'wave_end_ms'] },
@@ -1224,6 +1226,16 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
        * solid, so 0 (solid) is what keeps it looking the same. */
       if (loaded.timing.grid_spoke_dash === undefined) {
         loaded.timing.grid_spoke_dash = 0;
+      }
+      /* grid_spoke_start_ms/grid_spoke_draw_ms are newer again - an old
+       * file drew every spoke at full length instantly, with no outward
+       * reveal. 0/0 reproduces that (see gen_boot_anim_timeline.py's own
+       * comment on why). */
+      if (loaded.timing.grid_spoke_start_ms === undefined) {
+        loaded.timing.grid_spoke_start_ms = 0;
+      }
+      if (loaded.timing.grid_spoke_draw_ms === undefined) {
+        loaded.timing.grid_spoke_draw_ms = 0;
       }
       state = loaded;
       selectedKf = 0;
