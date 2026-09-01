@@ -297,8 +297,13 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     /* The three values every draw_grid_*() call below hands straight to
      * boot_anim_wave_height() - see its own comment on why a zero
      * amplitude or wavelength already comes back flat with no separate
-     * "is the wave even running" branch needed here. */
-    const int32_t amp_q12 = BOOT_ANIM_WAVE_HEIGHT_Q12;
+     * "is the wave even running" branch needed here. Peak amplitude
+     * scaled by boot_anim_wave_envelope() BEFORE it gets here, not inside
+     * boot_anim_wave_height() itself - the ripple's own shape and its own
+     * strength-over-time are two separate concerns (see that function's
+     * own comment). */
+    const int32_t amp_q12 = (int32_t)(((int64_t)BOOT_ANIM_WAVE_HEIGHT_Q12 *
+        boot_anim_wave_envelope(now_ms)) / 255);
     const int32_t wavelength_q12 = BOOT_ANIM_WAVE_WAVELENGTH_Q12;
     const uint32_t period_ms = BOOT_ANIM_WAVE_PERIOD_MS;
 
