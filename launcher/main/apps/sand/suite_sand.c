@@ -20306,8 +20306,22 @@ static void test_present_cost_against_a_falling_sand_scene(void)
      * 9,900 across two captures of different builds, a 0.1% spread.
      * A present row can therefore be held far tighter than a sim row,
      * and that difference is a fact about which hardware each one is
-     * bound by, not a matter of taste. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(10200, (int)mean_us,
+     * bound by, not a matter of taste.
+     *
+     * RE-PEGGED 10200 -> 9650 on 2026-09-01, and with it this row stops
+     * being a guard and becomes a reduction target like the sand rows -
+     * measured 9,961 * 0.97, deliberately below the measurement, so it
+     * fails until the work is done.
+     *
+     * 0.97, NOT the 0.9 the sand budgets use, and the difference is the
+     * whole point: only ~6% of a present is not bus time, so a 10% target
+     * here would be unreachable by any code that could ever be written -
+     * a permanently red row teaches nothing. 3% asks for half of the only
+     * part that can actually move. Do not "correct" this to 0.9 for
+     * consistency with the sand rows; they are bound by different
+     * hardware. If the reachable 6% is ever fully won, re-peg from the
+     * new measurement rather than cutting deeper on principle. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(9650, (int)mean_us,
         "present() against a moving falling-sand scene got more expensive "
         "- check the full-band vs gathered counts in the log line above "
         "before suspecting the panel");
@@ -20478,11 +20492,21 @@ static void test_present_cost_against_the_thermal_shock_scene(void)
      * here is a guard sitting just above a number that cannot legally
      * fall. Measured 18,017 / 18,042 / 18,129 across three captures of
      * three different builds - a 0.6% spread, because a bus-bound row
-     * does not ride the layout lottery - so 18700 is ~3% over and still
-     * comfortably outside that spread. If this ever fails, something
-     * made the scene dirty MORE pixels; do not go looking for a slower
-     * present. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(18700, (int)mean_us,
+     * does not ride the layout lottery - so a present row can be held far
+     * tighter than a sim row.
+     *
+     * RE-PEGGED 18700 -> 17450 on 2026-09-01: measured 17,992 * 0.97, so
+     * this stops being a guard ~3% ABOVE the measurement and becomes a
+     * reduction target ~3% BELOW it, failing until the work is done.
+     * 0.97 rather than the sand rows' 0.9 because only ~6% of a present
+     * is not bus time - see the same re-peg note on
+     * test_present_cost_against_a_falling_sand_scene for the full
+     * reasoning, which applies unchanged here.
+     *
+     * If this fails because something made the scene dirty MORE pixels,
+     * that is the regression this row still catches; do not go looking
+     * for a slower present. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(17450, (int)mean_us,
         "present() against the thermal shock lattice got more expensive "
         "than a full-screen send every frame, which is already what it "
         "costs - check the strip-send counts in the log line above");
