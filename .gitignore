@@ -128,3 +128,6 @@ $RECYCLE.BIN/
 
 # Built Visual Studio Code Extensions
 *.vsix
+
+### Beads (bd issue tracker) — local backlog DB, not versioned
+.beads/
