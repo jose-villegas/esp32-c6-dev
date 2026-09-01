@@ -20401,12 +20401,21 @@ static void test_the_vent_spam_scene_fits_in_the_frame_budget(void)
     free(blocks);
     free(impulses);
 
-    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
-        "PROVISIONAL ceiling, not yet measured on a device - see this "
-        "test's own comment. Once measured this row becomes measured x "
-        "0.9, rounded, the same reduction-target method every other row "
-        "in this section uses - not a number chosen to keep this row "
-        "passing");
+    /* PEGGED 2026-09-01 from this scene's first device capture: 25,514 us
+     * for 10 steps, so 23000 is measured * 0.9 rounded - the same
+     * reduction target every other row in this file carries, and like
+     * them it is expected to FAIL until the work is done.
+     *
+     * The provisional 400000 it replaces was 15.7x looser than the truth.
+     * That is not a criticism of the guess - a provisional ceiling exists
+     * to avoid failing before a measurement exists, and it did that - but
+     * it is the reason a provisional number must never be read as a claim
+     * about cost. Nothing was learned about this scene until it ran. */
+    TEST_ASSERT_LESS_THAN_MESSAGE(23000, (int)per_step,
+        "sealed-lava vent spam got more expensive - this scene forces the "
+        "vent path every step across 60 sealed pockets, so a regression "
+        "here is the vent chunk throw or its sight scan, not the sim at "
+        "large");
 }
 
 /* --- gfx_present() cost against real sand scenes ------------------------
