@@ -184,8 +184,9 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
             boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)),
             boot_anim_grid_whiten(now_ms), alpha);
         /* BOOT_ANIM_GRID_STEP_Q12, not units() (a whole unit) - see
-         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are a
-         * quarter of a unit apart now. */
+         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are closer
+         * together than that by default, and generated (an "other const",
+         * like the ring count itself) rather than fixed. */
         const int32_t d = (int32_t)ring * BOOT_ANIM_GRID_STEP_Q12;
 
         for (int sign = -1; sign <= 1; sign += 2) {
