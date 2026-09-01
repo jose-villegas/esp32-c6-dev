@@ -8,6 +8,7 @@
         "grid_fade_ms": 300,
         "pen_start_ms": 520,
         "pen_ms": 1980,
+        "pen_finish_ms": 4300,
         "title_start_ms": 2700,
         "title_stagger_ms": 140,
         "title_flight_ms": 900,
