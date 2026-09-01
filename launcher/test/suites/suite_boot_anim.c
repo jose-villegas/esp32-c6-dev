@@ -482,9 +482,19 @@ static void test_wave_envelope_is_zero_at_the_very_start(void)
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(0));
 }
 
-static void test_wave_envelope_reaches_full_strength_by_wave_in_ms(void)
+/* The whole point of wave_in_ms being a MOMENT rather than a duration:
+ * the ripple stays muted right up to and including that moment itself -
+ * an author controls exactly when it is allowed to start, not merely how
+ * long a ramp beginning at frame 0 takes. */
+static void test_wave_envelope_is_still_muted_at_wave_in_ms_itself(void)
 {
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(BOOT_ANIM_WAVE_IN_MS));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(BOOT_ANIM_WAVE_IN_MS));
+}
+
+static void test_wave_envelope_reaches_full_strength_after_the_ramp(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(
+        BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 }
 
 static void test_wave_envelope_plateaus_between_in_and_out(void)
@@ -493,6 +503,15 @@ static void test_wave_envelope_plateaus_between_in_and_out(void)
         (BOOT_ANIM_WAVE_IN_MS + BOOT_ANIM_WAVE_OUT_MS) / 2;
 
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_wave_envelope(midpoint));
+}
+
+/* Symmetric with test_wave_envelope_is_still_muted_at_wave_in_ms_itself
+ * above: still at FULL strength right at wave_out_ms itself - that moment
+ * is when the fade-out ramp starts, not when it has already finished. */
+static void test_wave_envelope_is_still_full_at_wave_out_ms_itself(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(255,
+        boot_anim_wave_envelope(BOOT_ANIM_WAVE_OUT_MS));
 }
 
 static void test_wave_envelope_fades_back_to_zero_by_the_end(void)
@@ -1138,8 +1157,10 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_wave_height_is_frozen_when_the_period_is_zero);
     RUN_TEST(test_the_seeds_wave_is_off_by_default);
     RUN_TEST(test_wave_envelope_is_zero_at_the_very_start);
-    RUN_TEST(test_wave_envelope_reaches_full_strength_by_wave_in_ms);
+    RUN_TEST(test_wave_envelope_is_still_muted_at_wave_in_ms_itself);
+    RUN_TEST(test_wave_envelope_reaches_full_strength_after_the_ramp);
     RUN_TEST(test_wave_envelope_plateaus_between_in_and_out);
+    RUN_TEST(test_wave_envelope_is_still_full_at_wave_out_ms_itself);
     RUN_TEST(test_wave_envelope_fades_back_to_zero_by_the_end);
     RUN_TEST(test_the_seeds_spokes_reach_full_length_instantly);
 
