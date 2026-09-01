@@ -10184,13 +10184,14 @@ static void test_metal_shine_does_not_vary_between_cells(void)
  * the air was also the first to disappear, and a pocket of gas could not
  * be built with.
  *
- * STEAM AND SMOKE NOW SHARE THE SAME DECAY FIGURE, ON PURPOSE - steam's
- * own decay was lowered twice (24 to 18, then 18 to 16) to make it last
- * noticeably longer, landing exactly on smoke's already-tuned 16; asked
- * to let steam's lifespan match smoke's much more closely, not asked to
- * keep it strictly shorter, so the two being equal is the settled result,
- * not a regression - the ordering that still matters is gas outlasting
- * both of the lighter, quicker-fading ones.
+ * STEAM'S OWN DECAY HAS MOVED SEVERAL TIMES SINCE, ALWAYS DOWNWARD (24,
+ * then 18, then 16 - briefly landing exactly on smoke's own figure and
+ * matching it on purpose - then 12, on a later request for steam to last
+ * at least 30% longer still). None of those moves ever required smoke to
+ * be equal or slower - the assertion below only ever forbade steam fading
+ * FASTER than smoke, so it has never needed to change alongside steam's
+ * figure; the ordering that actually matters is gas outlasting both of
+ * the lighter, quicker-fading ones.
  *
  * Asserted on the TABLE rather than by watching cells fade. Three
  * populations decaying past each other is a slow and noisy way to check a
@@ -10214,9 +10215,9 @@ static void test_the_air_agrees_about_weight_speed_and_lifetime(void)
      * tick DOWN, so a bigger figure is a shorter life. */
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(materials[MAT_SMOKE].decay,
         materials[MAT_STEAM].decay,
-        "steam must not fade FASTER than smoke - the two are allowed to "
-        "match now (asked to let steam's lifespan close in on smoke's), "
-        "just not reverse past it entirely");
+        "steam must not fade FASTER than smoke - equal or slower is fine, "
+        "steam's own decay has moved either way over time, just not "
+        "reversed past smoke's entirely");
     TEST_ASSERT_GREATER_THAN_MESSAGE(materials[MAT_GAS].decay,
         materials[MAT_SMOKE].decay,
         "and smoke sooner than gas - the heaviest, slowest thing in the "
