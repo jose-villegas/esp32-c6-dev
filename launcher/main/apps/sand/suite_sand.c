@@ -2133,12 +2133,31 @@ static void test_a_tipped_basin_keeps_its_sand(void)
 #define CONDUCT_REACH_TEST 32
 #define CAP_W (CONDUCT_REACH_TEST + 16)
 #define CAP_H 8
-static uint8_t wide_cells[WIDE_W * WIDE_H];
+/* HEAP, not static file scope - `wide` is this file's second shared
+ * fixture (after `s`/fixture() itself), reused by every test below wide
+ * enough to need more than the 8x8 default, from the water-levelling
+ * tests just below through the boiler/conduction/metal-rod tests much
+ * further down. A pointer, not an array: each TOP-LEVEL test that
+ * touches it - directly, or through a helper like build_boiler_room() /
+ * poured_height() / steps_to_boil_through() that reads and writes this
+ * same global rather than taking a parameter - mallocs its own
+ * WIDE_W * WIDE_H bytes and frees them once it is done, the same
+ * technique as every other fixture in this file; see drop_impulse_buf's
+ * own comment above for why this file's static test fixtures cannot
+ * share the framebuffer's memory budget. */
+static uint8_t *wide_cells;
 static sand_t  wide;
 
 /* How tall a heap the same pour leaves, in cells above the floor. */
 static int poured_height(material_id_t m)
 {
+    /* Self-contained: malloc, use, free, all within one call - the two
+     * callers below each get their own fresh grid rather than sharing
+     * one across both pours. */
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "poured-height comparison grid must fit in what the framebuffer "
+        "leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
 
     /* Measured shortly after the pour, not once everything has long since
@@ -2152,14 +2171,21 @@ static int poured_height(material_id_t m)
         sand_step(&wide, 0, 1000, 0);
     }
 
-    for (int y = 0; y < WIDE_H; y++) {
+    int result = 0;
+    for (int y = 0; y < WIDE_H && result == 0; y++) {
         for (int x = 0; x < WIDE_W; x++) {
             if (!CELL_IS_EMPTY(sand_at(&wide, x, y))) {
-                return WIDE_H - y;
+                result = WIDE_H - y;
+                break;
             }
         }
     }
-    return 0;
+
+    /* Freed BEFORE returning: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(wide_cells);
+    return result;
 }
 
 static void test_water_puddles_where_sand_heaps(void)
@@ -2199,6 +2225,10 @@ static void test_a_large_body_of_water_levels(void)
      * The volume here is deliberately much wider than a cell can see, which is
      * the whole point: it must level by looking further than one step's worth
      * of travel. */
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "large-body-of-water levelling grid must fit in what the "
+        "framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
 
     for (int i = 0; i < 90; i++) {
@@ -2209,8 +2239,7 @@ static void test_a_large_body_of_water_levels(void)
     for (int i = 0; i < 600; i++) {
         sand_step(&wide, 0, 1000, 0);
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(volume, mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER),
-        "and none of it may be lost on the way");
+    const long volume_after = mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER);
 
     /* Level means every column is the same depth, give or take the one row a
      * remainder has to sit somewhere. */
@@ -2236,6 +2265,14 @@ static void test_a_large_body_of_water_levels(void)
         }
     }
 
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of wide_cells (via `wide`) are done by this
+     * point. */
+    free(wide_cells);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(volume, volume_after,
+        "and none of it may be lost on the way");
     TEST_ASSERT_GREATER_THAN_MESSAGE(2 * MASS_MAX, deepest,
         "there must actually be a pool here to level");
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(MASS_MAX / 2, deepest - shallowest,
@@ -2264,6 +2301,9 @@ static void test_a_settled_pool_does_not_flicker(void)
      * level along one axis can read as wildly unbalanced along the other. */
     const int gx = 60, gy = 1000;
 
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "settled-pool flicker grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     for (int i = 0; i < 90; i++) {
         sand_spawn(&wide, WIDE_W / 2, 1, 3, MAT_WATER);
@@ -2296,6 +2336,11 @@ static void test_a_settled_pool_does_not_flicker(void)
         }
         memcpy(prev, wide_cells, sizeof(prev));
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of wide_cells are done by this point. */
+    free(wide_cells);
 
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(4 * MASS_MAX, worst_churn,
         "a settled pool must not swing large amounts of mass around once "
@@ -3033,8 +3078,13 @@ static void test_fire_ignites_an_adjacent_flammable_neighbour(void)
  * neighbour bursts instead of just catching - see gas_ignite_confined()'s
  * own comment in sand_reactions.c for the design (gas in the open burns,
  * the same gas walled in bursts) and try_ignite()'s own comment for why
- * this is gated on s->impulse_buf != NULL. */
-static impulse_t confined_gas_impulse_buf[W * H];
+ * this is gated on s->impulse_buf != NULL.
+ *
+ * HEAP, not static file scope - shared by the two tests below, each of
+ * which mallocs its own W * H impulse_t buffer and frees it before its
+ * own assertions can fail; see drop_impulse_buf's own comment above for
+ * why this file's static test fixtures cannot share the framebuffer's
+ * memory budget. */
 
 static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
 {
@@ -3045,14 +3095,16 @@ static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
      * ceiling/floor neighbours are real KIND_STATIC cells to burst into,
      * not empty air standing in for one. */
     fire_room(3, 4);
+    impulse_t *confined_gas_impulse_buf = malloc((size_t)(W * H) * sizeof *confined_gas_impulse_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(confined_gas_impulse_buf,
+        "confined-gas-pocket impulse queue must fit in what the "
+        "framebuffer leaves");
     sand_enable_impulses(&s, confined_gas_impulse_buf, W * H);
     sand_set(&s, 3, 3, FIRE);
     sand_set(&s, 4, 3, GAS);
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 4, 3)),
-        "setup: the gas cell touching the wall must still ignite");
     /* (4,2) is fire_room()'s own ceiling stone, directly above the gas
      * cell - within sand_explode()'s core radius but never itself
      * touching fire. sand_explode()'s core fill (SAND_EXPLODE_CORE_
@@ -3069,12 +3121,23 @@ static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
      * blast, and where it lands afterward is no longer pinned; see
      * test_a_strong_close_blast_can_breach_a_wall's own comment for the
      * same reasoning applied to an ordinary DETONATE blast. */
-    TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_STONE,
-        CELL_MATERIAL(sand_at(&s, 4, 2)),
+    const uint8_t ceiling_material = CELL_MATERIAL(sand_at(&s, 4, 2));
+    const uint8_t gas_cell_material = CELL_MATERIAL(sand_at(&s, 4, 3));
+    const int impulse_count = s.impulse_count;
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of confined_gas_impulse_buf (via `s`) are done by
+     * this point. */
+    free(confined_gas_impulse_buf);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, gas_cell_material,
+        "setup: the gas cell touching the wall must still ignite");
+    TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_STONE, ceiling_material,
         "a confined gas cell's own ignition must reach past itself, into "
         "the wall it was confined by - proof this was sand_explode()'s "
         "own core fill, not a plain place_reacted()");
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, s.impulse_count,
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, impulse_count,
         "a real explosion must also queue its own outward annulus, not "
         "just fill a core of fire");
 }
@@ -3082,6 +3145,10 @@ static void test_a_confined_gas_pocket_bursts_instead_of_just_catching(void)
 static void test_an_open_gas_pocket_still_just_catches_fire(void)
 {
     fixture();
+    impulse_t *confined_gas_impulse_buf = malloc((size_t)(W * H) * sizeof *confined_gas_impulse_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(confined_gas_impulse_buf,
+        "open-gas-pocket impulse queue must fit in what the framebuffer "
+        "leaves");
     sand_enable_impulses(&s, confined_gas_impulse_buf, W * H);
     sand_set_mobility(&s, 0);   /* keep the gas from rising away before
                                  * reactions gets a turn at it this same
@@ -3099,12 +3166,21 @@ static void test_an_open_gas_pocket_still_just_catches_fire(void)
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, CELL_MATERIAL(sand_at(&s, 4, 3)),
+    const uint8_t gas_cell_material = CELL_MATERIAL(sand_at(&s, 4, 3));
+    const bool neighbour_empty = CELL_IS_EMPTY(sand_at(&s, 4, 2));
+    const int impulse_count = s.impulse_count;
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(confined_gas_impulse_buf);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, gas_cell_material,
         "an unconfined gas cell must still ignite");
-    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 2)),
+    TEST_ASSERT_TRUE_MESSAGE(neighbour_empty,
         "an unconfined ignition must not reach past the cell it targets - "
         "a neighbour that never touched fire must stay untouched");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, impulse_count,
         "an unconfined ignition must never queue an explosion");
 }
 
@@ -3602,12 +3678,16 @@ static void test_quenching_costs_the_water_a_unit_of_mass(void)
  * bias itself, not a single sample, and without hard-coding exact counts
  * a future retune of either constant would break. */
 #define QUENCH_W 2000
-static uint8_t quench_cells[QUENCH_W * 2];
 static sand_t  quench_sim;
 
-static void acid_quench_fixture(void)
+/* cells is HEAP, not static file scope - each of the three callers below
+ * mallocs its own QUENCH_W * 2 (4000 byte) grid and frees it before its
+ * own assertions can fail; see drop_impulse_buf's own comment above for
+ * why this file's static test fixtures cannot share the framebuffer's
+ * memory budget. */
+static void acid_quench_fixture(uint8_t *cells)
 {
-    sand_init(&quench_sim, quench_cells, QUENCH_W, 2, 11u);
+    sand_init(&quench_sim, cells, QUENCH_W, 2, 11u);
     sand_set_mobility(&quench_sim, 0);   /* keep fire from rising away
                                           * before reactions quenches it
                                           * this same step - same
@@ -3622,20 +3702,36 @@ static void acid_quench_fixture(void)
 
 static void test_acid_quenching_fire_never_leaves_steam(void)
 {
-    acid_quench_fixture();
+    uint8_t *quench_cells = malloc((size_t)QUENCH_W * 2);
+    TEST_ASSERT_NOT_NULL_MESSAGE(quench_cells,
+        "acid-quench grid must fit in what the framebuffer leaves");
+    acid_quench_fixture(quench_cells);
     sand_step(&quench_sim, 0, 1000, 0);
 
+    bool any_steam = false;
     for (int x = 0; x < QUENCH_W; x++) {
-        TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_STEAM,
-            CELL_MATERIAL(sand_at(&quench_sim, x, 0)),
-            "acid quenching fire must never leave MAT_STEAM behind - "
-            "steam is water's own byproduct");
+        if (CELL_MATERIAL(sand_at(&quench_sim, x, 0)) == MAT_STEAM) {
+            any_steam = true;
+            break;
+        }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(quench_cells);
+
+    TEST_ASSERT_FALSE_MESSAGE(any_steam,
+        "acid quenching fire must never leave MAT_STEAM behind - "
+        "steam is water's own byproduct");
 }
 
 static void test_acid_quenching_fire_sometimes_leaves_nothing(void)
 {
-    acid_quench_fixture();
+    uint8_t *quench_cells = malloc((size_t)QUENCH_W * 2);
+    TEST_ASSERT_NOT_NULL_MESSAGE(quench_cells,
+        "acid-quench grid must fit in what the framebuffer leaves");
+    acid_quench_fixture(quench_cells);
     sand_step(&quench_sim, 0, 1000, 0);
 
     int empty = 0;
@@ -3645,6 +3741,11 @@ static void test_acid_quenching_fire_sometimes_leaves_nothing(void)
         }
     }
 
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(quench_cells);
+
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, empty,
         "SAND_ACID_QUENCH_RESIDUE_CHANCE must be able to miss - some acid "
         "quenches must leave the flame simply out, with nothing behind, "
@@ -3653,7 +3754,10 @@ static void test_acid_quenching_fire_sometimes_leaves_nothing(void)
 
 static void test_acid_quenching_fire_favours_smoke_over_gas(void)
 {
-    acid_quench_fixture();
+    uint8_t *quench_cells = malloc((size_t)QUENCH_W * 2);
+    TEST_ASSERT_NOT_NULL_MESSAGE(quench_cells,
+        "acid-quench grid must fit in what the framebuffer leaves");
+    acid_quench_fixture(quench_cells);
     sand_step(&quench_sim, 0, 1000, 0);
 
     int smoke = 0;
@@ -3666,6 +3770,11 @@ static void test_acid_quenching_fire_favours_smoke_over_gas(void)
             gas++;
         }
     }
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(quench_cells);
 
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, gas,
         "setup: acid quenching fire must sometimes leave gas too, not "
@@ -9351,10 +9460,18 @@ static void test_a_finished_tree_carries_no_green(void)
  * is being tested is what a run does once it HAS a direction. */
 #define LIMB_W 30
 #define LIMB_H 26
-static uint8_t limb_cells[LIMB_W * LIMB_H];
 
 static void test_a_limb_travels_outward_instead_of_climbing(void)
 {
+    /* HEAP, not static file scope - one malloc reused across all eight
+     * seeds via memset + a fresh sand_init() each time, freed once after
+     * the loop - see drop_impulse_buf's own comment above for why this
+     * file's static test fixtures cannot share the framebuffer's memory
+     * budget. */
+    uint8_t *limb_cells = malloc((size_t)LIMB_W * LIMB_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(limb_cells,
+        "limb-travel grid must fit in what the framebuffer leaves");
+
     /* Summed over eight seeds, and that is not laziness about a flaky
      * test - it is what the measurement actually supports. On any single
      * seed the two builds overlap: with the heading, one limb reached 7
@@ -9365,7 +9482,7 @@ static void test_a_limb_travels_outward_instead_of_climbing(void)
     int total = 0;
     for (unsigned seed = 1; seed <= 8; seed++) {
         sand_t t;
-        memset(limb_cells, 0, sizeof limb_cells);
+        memset(limb_cells, 0, (size_t)LIMB_W * LIMB_H);
         sand_init(&t, limb_cells, LIMB_W, LIMB_H, seed * 7919u);
         sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
         sand_set_decay(&t, SAND_DECAY_PER_MATERIAL);
@@ -9403,6 +9520,11 @@ static void test_a_limb_travels_outward_instead_of_climbing(void)
         }
         total += reach;
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(limb_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(60, total,
         "limbs with a heading must carry on in that direction - reckoning "
@@ -10915,12 +11037,16 @@ static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
  * actually needs to change. */
 #define FIZZ_W 40
 #define FIZZ_H 12
-static uint8_t fizz_cells[FIZZ_W * FIZZ_H];
 static sand_t  fizz_sim;
 
-static void acid_fizz_fixture(void)
+/* cells is HEAP, not static file scope - each of the two callers below
+ * mallocs its own FIZZ_W * FIZZ_H (480 byte) grid and frees it before
+ * its own assertion can fail; see drop_impulse_buf's own comment above
+ * for why this file's static test fixtures cannot share the framebuffer's
+ * memory budget. */
+static void acid_fizz_fixture(uint8_t *cells)
 {
-    sand_init(&fizz_sim, fizz_cells, FIZZ_W, FIZZ_H, 5u);
+    sand_init(&fizz_sim, cells, FIZZ_W, FIZZ_H, 5u);
     sand_set_evaporates(&fizz_sim, 0);   /* isolate fizz - see the tests'
                                           * own comments for why */
     for (int y = 4; y < FIZZ_H; y++) {
@@ -10937,7 +11063,10 @@ static void acid_fizz_fixture(void)
 
 static void test_acid_fizzes_while_it_eats(void)
 {
-    acid_fizz_fixture();
+    uint8_t *fizz_cells = malloc((size_t)FIZZ_W * FIZZ_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(fizz_cells,
+        "acid-fizz grid must fit in what the framebuffer leaves");
+    acid_fizz_fixture(fizz_cells);
 
     /* Smoke OR gas: the fizz coin-flips between the two (see
      * step_one_dissolver_cell()), so either one is proof the fizz fired -
@@ -10955,6 +11084,11 @@ static void test_acid_fizzes_while_it_eats(void)
         }
     }
 
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(fizz_cells);
+
     TEST_ASSERT_TRUE_MESSAGE(fizzed,
         "acid eating a pile of sand must leave some smoke or gas behind - "
         "it is the only sign on screen that the acid is working");
@@ -10968,7 +11102,10 @@ static void test_acid_fizzes_while_it_eats(void)
 static void test_the_fizz_rises_out_of_the_acid(void)
 {
     const int surface = 0;      /* acid_fizz_fixture() fills from row 0 */
-    acid_fizz_fixture();
+    uint8_t *fizz_cells = malloc((size_t)FIZZ_W * FIZZ_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(fizz_cells,
+        "acid-fizz-rise grid must fit in what the framebuffer leaves");
+    acid_fizz_fixture(fizz_cells);
 
     /* Smoke OR gas: the fizz coin-flips between the two (see
      * step_one_dissolver_cell()), and both rise through try_bubble() the
@@ -10986,6 +11123,11 @@ static void test_the_fizz_rises_out_of_the_acid(void)
             }
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(fizz_cells);
 
     TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(surface, highest,
         "smoke or gas made at the bottom of an acid pool must reach the "
@@ -11404,13 +11546,20 @@ static int water_inside_oil(sand_t *g)
 
 static void test_water_does_not_drill_into_oil_when_tilted(void)
 {
-    static uint8_t drag_cells[DRAG_W * DRAG_H];
+    /* HEAP, not static file scope - one malloc reused across all `seeds`
+     * iterations via memset + a fresh sand_init() each time, freed once
+     * after the loop - see drop_impulse_buf's own comment above for why
+     * this file's static test fixtures cannot share the framebuffer's
+     * memory budget. */
+    uint8_t *drag_cells = malloc((size_t)DRAG_W * DRAG_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(drag_cells,
+        "interfacial-drag grid must fit in what the framebuffer leaves");
     sand_t g;
     const int seeds = 4;
     int total = 0;
 
     for (int k = 0; k < seeds; k++) {
-        memset(drag_cells, 0, sizeof drag_cells);
+        memset(drag_cells, 0, (size_t)DRAG_W * DRAG_H);
         sand_init(&g, drag_cells, DRAG_W, DRAG_H, (uint32_t)(11 + k));
         sand_set_mobility(&g, SAND_MOBILITY_PER_MATERIAL);
 
@@ -11443,6 +11592,11 @@ static void test_water_does_not_drill_into_oil_when_tilted(void)
         total += water_inside_oil(&g);
     }
 
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(drag_cells);
+
     /* 20 sits between the two measured means at this width (29.8 ungated,
      * 12.3 with drag) with room either side for ordinary variation. */
     TEST_ASSERT_LESS_THAN_INT_MESSAGE(20 * seeds, total,
@@ -11461,7 +11615,14 @@ static void test_oil_flows_more_slowly_than_water(void)
     /* On `wide` (32 cells across), not the 8-wide default fixture. Over
      * six cells of travel both liquids arrive in the same four steps and
      * the difference is pure quantisation; the ratio only means anything
-     * across a real distance. */
+     * across a real distance. One malloc reused across both liquids via
+     * a fresh sand_init() each iteration, freed once after the loop - see
+     * drop_impulse_buf's own comment above for why this file's static
+     * test fixtures cannot share the framebuffer's memory budget. */
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "oil-vs-water flow-rate grid must fit in what the framebuffer "
+        "leaves");
     for (int k = 0; k < 2; k++) {
         sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 5u);
         sand_set_mobility(&wide, SAND_MOBILITY_PER_MATERIAL);
@@ -11484,6 +11645,11 @@ static void test_oil_flows_more_slowly_than_water(void)
         TEST_ASSERT_NOT_EQUAL_MESSAGE(-1, steps[k],
             "setup: both liquids must eventually reach the far wall");
     }
+
+    /* Freed BEFORE the final assertion: Unity longjmps out of a failure,
+     * so a free() after one never runs - see drop_impulse_buf's own
+     * comment above. All reads of wide_cells are done by this point. */
+    free(wide_cells);
 
     /* Half again, not double: oil is 140 against water's 255 and lands
      * around twice the time, but this is a "they are distinguishable"
@@ -12038,6 +12204,15 @@ static void test_stone_does_not_conduct_fire_into_empty_space(void)
  * Returns the column the water cell sits at. */
 static int build_boiler_room(int wall_len)
 {
+    /* Mallocs wide_cells fresh on every call and does NOT free it -
+     * ownership passes to whichever caller reads `wide` afterward: see
+     * each call site below (test_a_thick_wall_still_conducts frees it
+     * directly once done; steps_to_boil() frees it itself, since it is
+     * the one that wraps a whole call here in a self-contained round
+     * trip). */
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "boiler-room grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_mobility(&wide, 0);
 
@@ -12073,6 +12248,12 @@ static void test_a_thick_wall_still_conducts(void)
         boiled = CELL_MATERIAL(sand_at(&wide, water_x, 2)) == MAT_STEAM;
     }
 
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of wide_cells (via `wide`) are done by this
+     * point. */
+    free(wide_cells);
+
     TEST_ASSERT_TRUE_MESSAGE(boiled,
         "an eleven-cell-thick stone wall - what app_sand.c's own pour "
         "brush actually draws, not a one-cell idealisation - must still "
@@ -12098,7 +12279,13 @@ static void test_conduction_stops_at_the_reach_cap(void)
      * otherwise wipe the override) makes every ROLL along the walk
      * succeed, so the only thing left that can stop it is the reach cap
      * itself, which is exactly what this pins down. */
-    static uint8_t cap_cells[CAP_W * CAP_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *cap_cells = malloc((size_t)CAP_W * CAP_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cap_cells,
+        "conduction-reach-cap grid must fit in what the framebuffer "
+        "leaves");
     sand_t cap;
     sand_init(&cap, cap_cells, CAP_W, CAP_H, 3u);
     sand_set_mobility(&cap, 0);
@@ -12121,9 +12308,14 @@ static void test_conduction_stops_at_the_reach_cap(void)
     for (int i = 0; i < 50; i++) {
         sand_step(&cap, 0, 1000, 0);
     }
+    const uint8_t result_material = CELL_MATERIAL(sand_at(&cap, water_x, 2));
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&cap, water_x, 2)),
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(cap_cells);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, result_material,
         "a conductor run longer than CONDUCT_REACH must never conduct "
         "at all, even with every per-cell roll forced to succeed - the "
         "walk has to actually stop at the cap, not merely be unlikely "
@@ -12137,13 +12329,20 @@ static void test_conduction_stops_at_the_reach_cap(void)
 static int steps_to_boil(int wall_len, int budget)
 {
     const int water_x = build_boiler_room(wall_len);
+    int result = budget;
     for (int i = 0; i < budget; i++) {
         sand_step(&wide, 0, 1000, 0);
         if (CELL_MATERIAL(sand_at(&wide, water_x, 2)) == MAT_STEAM) {
-            return i + 1;
+            result = i + 1;
+            break;
         }
     }
-    return budget;
+    /* Freed here, not by build_boiler_room() - this wrapper is a whole
+     * self-contained round trip, called twice by the test below, each
+     * call getting its own fresh grid; see build_boiler_room()'s own
+     * comment. */
+    free(wide_cells);
+    return result;
 }
 
 static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
@@ -12190,6 +12389,10 @@ static void test_a_thick_wall_conducts_more_slowly_than_a_thin_one(void)
  * the bubble had got to by the time it was inspected. */
 static void test_boiling_converts_the_cell_nearest_the_heat(void)
 {
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "boil-nearest-the-heat grid must fit in what the framebuffer "
+        "leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
     sand_set_mobility(&wide, 0);
@@ -12215,12 +12418,18 @@ static void test_boiling_converts_the_cell_nearest_the_heat(void)
         sand_step(&wide, 0, 1000, 0);
         boiled = CELL_MATERIAL(sand_at(&wide, x, water_bottom)) == MAT_STEAM;
     }
+    const uint8_t surface_material = CELL_MATERIAL(sand_at(&wide, x, water_top));
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of wide_cells (via `wide`) are done by this
+     * point. */
+    free(wide_cells);
 
     TEST_ASSERT_TRUE_MESSAGE(boiled,
         "the cell nearest the stone - the one conduct_heat() actually "
         "reaches - must be the one that boils");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&wide, x, water_top)),
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, surface_material,
         "and the surface must still be plain water at that moment - "
         "boiling happens at the heat source now, and the steam makes "
         "its own way up by bubbling rather than being conjured at the "
@@ -12238,6 +12447,9 @@ static void test_boiling_converts_the_cell_nearest_the_heat(void)
  * proof this is a real second condition and not decoration. */
 static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
 {
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "boils-disabled grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
     sand_set_boils(&wide, 0);
@@ -12257,9 +12469,14 @@ static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
     for (int i = 0; i < 50; i++) {
         sand_step(&wide, 0, 1000, 0);
     }
+    const uint8_t result_material = CELL_MATERIAL(sand_at(&wide, x, water_y));
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
-        CELL_MATERIAL(sand_at(&wide, x, water_y)),
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(wide_cells);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER, result_material,
         "sand_set_boils(0) must stop conducted heat from ever boiling a "
         "liquid, even with conduction itself forced to 255 and fifty "
         "steps to try");
@@ -12275,6 +12492,9 @@ static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
  * place_reacted() guarantee holds for boiling too. */
 static void test_boiled_steam_starts_at_full_life(void)
 {
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "boiled-steam-life grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
     sand_set_boils(&wide, 255);
@@ -12294,6 +12514,12 @@ static void test_boiled_steam_starts_at_full_life(void)
     sand_step(&wide, 0, 1000, 0);
 
     const cell_t c = sand_at(&wide, x, water_y);
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. `c` was read out above, so this is safe. */
+    free(wide_cells);
+
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(c),
         "sand_set_boils(255) must still boil deterministically in one "
         "step, exactly as boiling always has");
@@ -12312,6 +12538,10 @@ static void test_boiled_steam_starts_at_full_life(void)
  * swapped for acid, MAT_STEAM swapped for MAT_GAS. */
 static void test_boiling_acid_produces_gas_not_steam(void)
 {
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "boiling-acid-produces-gas grid must fit in what the framebuffer "
+        "leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_conduction(&wide, 255);
     sand_set_boils(&wide, 255);
@@ -12329,8 +12559,14 @@ static void test_boiling_acid_produces_gas_not_steam(void)
     }
 
     sand_step(&wide, 0, 1000, 0);
+    const uint8_t result_material = CELL_MATERIAL(sand_at(&wide, x, acid_y));
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&wide, x, acid_y)),
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(wide_cells);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, result_material,
         "conducted heat boiling acid must leave MAT_GAS behind, the same "
         "byproduct acid leaves everywhere else it evaporates - not "
         "MAT_STEAM, which is water's own byproduct");
@@ -12338,6 +12574,9 @@ static void test_boiling_acid_produces_gas_not_steam(void)
 
 static void test_the_boiler_end_to_end(void)
 {
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "boiler end-to-end grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
 
     const int x = 10;
@@ -12421,6 +12660,14 @@ static void test_the_boiler_end_to_end(void)
         }
     }
 
+    const long water_after = mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER);
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of wide_cells (via `wide`) are done by this
+     * point. */
+    free(wide_cells);
+
     TEST_ASSERT_TRUE_MESSAGE(steam_above_basin,
         "the boiler must eventually produce steam that rises above "
         "where the water started - wood catching, charring into an "
@@ -12429,8 +12676,7 @@ static void test_the_boiler_end_to_end(void)
         "per-material figures with nothing forced. This is the "
         "feature; if it does not pass, nothing else in this section "
         "matters");
-    TEST_ASSERT_LESS_THAN_MESSAGE(water_before,
-        mass_of(&wide, WIDE_W, WIDE_H, MAT_WATER),
+    TEST_ASSERT_LESS_THAN_MESSAGE(water_before, water_after,
         "the water level must have dropped - the boiler consumed at "
         "least one cell's worth of it");
 }
@@ -12772,6 +13018,9 @@ static void test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes(voi
 #define SPOILS_TEST_PODS 6
 static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
 {
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "wet-dirt-spoils grid must fit in what the framebuffer leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_mobility(&wide, 0);
 
@@ -12796,6 +13045,11 @@ static void test_wet_dirt_can_spoil_into_sand_instead_of_smelting(void)
             spoiled = CELL_MATERIAL(sand_at(&wide, lava_x + 1, y)) == MAT_SAND;
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(wide_cells);
 
     TEST_ASSERT_TRUE_MESSAGE(spoiled,
         "at least one of several saturated dirt cells against lava must "
@@ -13061,6 +13315,13 @@ static void test_sand_still_becomes_glass_beside_the_new_dirt_branch(void)
  * material and the heat source. */
 static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
 {
+    /* Self-contained, like steps_to_boil() above: malloc, use, free, all
+     * within one call - the test below calls this twice and gets a
+     * fresh grid each time. */
+    wide_cells = malloc((size_t)WIDE_W * WIDE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wide_cells,
+        "steps-to-boil-through grid must fit in what the framebuffer "
+        "leaves");
     sand_init(&wide, wide_cells, WIDE_W, WIDE_H, 3u);
     sand_set_mobility(&wide, 0);
     /* This measures CONDUCTION speed, not water's own new resistance to
@@ -13094,13 +13355,20 @@ static int steps_to_boil_through(int wall_len, cell_t wall_cell, int budget)
     }
     sand_set(&wide, water_x, y, WATER);
 
+    int result = budget;
     for (int i = 0; i < budget; i++) {
         sand_step(&wide, 0, 1000, 0);
         if (CELL_MATERIAL(sand_at(&wide, water_x, y)) == MAT_STEAM) {
-            return i + 1;
+            result = i + 1;
+            break;
         }
     }
-    return budget;
+
+    /* Freed BEFORE returning: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(wide_cells);
+    return result;
 }
 
 /* The performance-relevant claim the plan itself flags as the one thing
@@ -13164,7 +13432,12 @@ static void test_a_metal_run_conducts_further_than_a_stone_one(void)
 static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
 {
     enum { ROD_W = CONDUCT_REACH_TEST * 2, ROD_H = 6 };
-    static uint8_t rod_cells[ROD_W * ROD_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *rod_cells = malloc((size_t)ROD_W * ROD_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(rod_cells,
+        "metal-rod grid must fit in what the framebuffer leaves");
     sand_t rod;
     sand_init(&rod, rod_cells, ROD_W, ROD_H, 3u);
     sand_set_mobility(&rod, 0);
@@ -13220,6 +13493,12 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
         flawed[smelted_len] = is_stone;
         smelted_len++;
     }
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of rod_cells (via `rod`) are done by this point -
+     * everything below reads only smelted_len and the local flawed[]. */
+    free(rod_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(CONDUCT_REACH_TEST - 4, smelted_len,
         "the rod must actually reach close to CONDUCT_REACH - if this "
@@ -13426,8 +13705,16 @@ static void sealed_lava(sand_t *s, uint8_t *cells, impulse_t *impulses,
 
 static void test_sealed_lava_vents_through_a_thin_cap(void)
 {
-    static uint8_t cells[VENT_TEST_W * VENT_TEST_H];
-    static impulse_t impulses[VENT_TEST_W * VENT_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *cells = malloc((size_t)VENT_TEST_W * VENT_TEST_H);
+    impulse_t *impulses = malloc((size_t)VENT_TEST_W * VENT_TEST_H * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "thin-cap vent grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+        "thin-cap vent impulse queue must fit in what the framebuffer "
+        "leaves");
     sand_t v;
     sealed_lava(&v, cells, impulses, VENT_TEST_W * VENT_TEST_H, 1);
 
@@ -13445,6 +13732,13 @@ static void test_sealed_lava_vents_through_a_thin_cap(void)
         roof_moved = CELL_MATERIAL(sand_at(&v, VENT_LAVA_X,
                                            VENT_LAVA_Y - 1)) != MAT_STONE;
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of cells/impulses (via `v`) are done by this
+     * point. */
+    free(cells);
+    free(impulses);
 
     TEST_ASSERT_TRUE_MESSAGE(roof_moved,
         "a lava cell sealed under a single stone roof must eventually "
@@ -13500,48 +13794,95 @@ static void test_sealed_lava_vents_through_a_thin_cap(void)
  * own claim. */
 #define CAP_TEST_PODS 10
 #define CAP_TEST_SPACING (SAND_VENT_REACH * 3 + 6)
-#define CAP_TEST_GROUP_W (2 + CAP_TEST_SPACING * CAP_TEST_PODS)
-#define CAP_TEST_W (CAP_TEST_GROUP_W * 2 + 2)
 /* Scaled to SAND_VENT_REACH, not a fixed 16 - a cap one cell deeper than
  * the reach (DEEP_PODS, below) needs that many rows above the lava plus
  * genuine open margin beyond it, and a fixed height stopped fitting the
  * moment SAND_VENT_REACH grew past a small starting value. */
 #define CAP_TEST_H (SAND_VENT_REACH + 6)
+/* Restructured 2026-09-01: CAP_TEST_PODS pods used to be laid out side
+ * by side on one CAP_TEST_W-wide grid (CAP_TEST_W scaling with
+ * SAND_VENT_REACH via CAP_TEST_SPACING * PODS * 2 groups) - at the
+ * shipped SAND_VENT_REACH (30) that combined grid's cells+impulses pair
+ * cost 69,336 + 416,016 = 485,352 bytes, on its own dwarfing this
+ * device's whole no-PSRAM heap budget and failing the firmware LINK
+ * outright (`region 'sram_seg' overflowed`) rather than just this one
+ * test. test_sealed_lava_vent_caps_at_three_cells() below now runs each
+ * pod on its OWN POD_GRID_W x CAP_TEST_H grid instead, sequentially, one
+ * at a time, accumulating the same pass/fail counts the old wide-grid
+ * version did - still testing the SHIPPED SAND_VENT_REACH, not a shrunk
+ * stand-in for it. POD_GRID_W reuses CAP_TEST_SPACING's own sizing
+ * unchanged: that constant's own comment above (room for a pod's own
+ * thrown material to land without arcing back into its OWN lava) applies
+ * just as much to a single centred pod as it did to neighbouring ones on
+ * the old shared grid. */
+#define POD_GRID_W CAP_TEST_SPACING
+
+/* THE GUARD THIS RESTRUCTURE ITSELF EXISTS TO NEED: the old side-by-side
+ * layout only ever failed at RUNTIME, on real hardware, the hard way (see
+ * this test's own git history - a 485,352-byte static pair that failed
+ * the link outright). SAND_VENT_REACH growing again would just as
+ * silently regrow POD_GRID_W/CAP_TEST_H back past what this device's
+ * heap can serve, one call to malloc() at a time - this turns that into
+ * a compile-time error naming the problem, instead of a test that starts
+ * failing TEST_ASSERT_NOT_NULL_MESSAGE for a reason nobody diagnosing it
+ * would think to connect back to SAND_VENT_REACH. 32768 (32 KiB) sits
+ * comfortably above the ~24,192 bytes one pod's cells+impulses pair costs
+ * at the shipped SAND_VENT_REACH (30); past it, restructure this scene
+ * again - a smaller footprint, or fewer buffers alive at once - rather
+ * than just raising the number. */
+_Static_assert(
+    (unsigned long)POD_GRID_W * CAP_TEST_H +
+    (unsigned long)POD_GRID_W * CAP_TEST_H * sizeof(impulse_t) <= 32768,
+    "sealed-lava vent-cap per-pod grid exceeds its 32768-byte budget - "
+    "SAND_VENT_REACH grew past what this test's restructure is sized "
+    "for; shrink the scene further (this test's own top comment explains "
+    "the sizing) rather than just tolerating a bigger malloc");
+
 static void test_sealed_lava_vent_caps_at_three_cells(void)
 {
-    /* HEAP, not static file scope - CAP_TEST_W/H scale with
-     * SAND_VENT_REACH (sand.h), which grew from 10 to 30 after this
-     * fixture was written; at the current value the pair is 69,336 +
-     * 416,016 = 485,352 bytes, on its own dwarfing this device's whole
-     * no-PSRAM heap budget. A static pair that size does not merely
-     * cost heap the way the rest of this file's converted fixtures did -
-     * it fails the FIRMWARE LINK outright (`region 'sram_seg' overflowed`),
-     * taking every other device test down with it. Heap-allocating it
-     * turns that into an honest, isolated TEST_ASSERT_NOT_NULL_MESSAGE
-     * failure on hardware too small to run this specific scene, instead
-     * of a build that cannot boot at all - the same trade this file's
-     * other conversions make, just at a size where the difference is
-     * between "one failing test" and "no device tests ever run again". */
-    uint8_t *cells = malloc((size_t)CAP_TEST_W * CAP_TEST_H);
-    impulse_t *impulses = malloc((size_t)CAP_TEST_W * CAP_TEST_H * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "sealed-lava vent-cap grid must fit in what the framebuffer leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-        "sealed-lava vent-cap impulse queue must fit in what the "
-        "framebuffer leaves");
-    sand_t c;
-    sand_init(&c, cells, CAP_TEST_W, CAP_TEST_H, 3u);
-    sand_enable_impulses(&c, impulses, CAP_TEST_W * CAP_TEST_H);
-    sand_set_vent_chance(&c, 255);  /* see sealed_lava()'s own comment */
-
-    const int y = SAND_VENT_REACH + 3;
-    for (int x = 0; x < CAP_TEST_W; x++) {
-        sand_set(&c, x, y + 1, STONE);          /* one shared floor */
-    }
+    /* CAP_TEST_PODS independent trials PER GROUP, run sequentially on a
+     * freshly malloc'd pod-sized grid each time rather than laid out
+     * side by side on one huge one - see POD_GRID_W's own comment above
+     * for why.
+     *
+     * A DIFFERENT SEED EVERY ITERATION, NOT THE SAME CONSTANT REPLAYED -
+     * try_vent() jitters its own throw direction per firing
+     * (vent_column()'s own comment, sand_reactions.c), which is the
+     * entire reason CAP_TEST_PODS pods give "a real denominator to hold
+     * a real statistical claim against" (EXACT_PODS's own comment below)
+     * rather than a single pass/fail verdict. Re-seeding every iteration
+     * with the SAME constant would replay one identical trial
+     * CAP_TEST_PODS times over and collapse that denominator back down
+     * to one - the counts below would still look plausible on average,
+     * but they would no longer be counting anything statistical. Seeds
+     * 3 .. 3 + 2*CAP_TEST_PODS - 1 keep every one of the twenty pods
+     * (both groups together) on its own distinct trial, with EXACT_PODS
+     * and DEEP_PODS never repeating a seed between them either. */
+    int exact_still_sealed = 0;
+    int deep_block_cells   = 0;
+    int deep_empty_cells   = 0;
 
     /* EXACT_PODS: cap == SAND_VENT_REACH, open air right beyond it. */
     for (int k = 0; k < CAP_TEST_PODS; k++) {
-        const int lx = 2 + CAP_TEST_SPACING * k;
+        uint8_t *cells = malloc((size_t)POD_GRID_W * CAP_TEST_H);
+        impulse_t *impulses =
+            malloc((size_t)POD_GRID_W * CAP_TEST_H * sizeof *impulses);
+        TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+            "sealed-lava vent-cap pod grid must fit in what the "
+            "framebuffer leaves");
+        TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+            "sealed-lava vent-cap pod impulse queue must fit in what "
+            "the framebuffer leaves");
+        sand_t c;
+        sand_init(&c, cells, POD_GRID_W, CAP_TEST_H, 3u + (unsigned)k);
+        sand_enable_impulses(&c, impulses, POD_GRID_W * CAP_TEST_H);
+        sand_set_vent_chance(&c, 255);  /* see sealed_lava()'s own comment */
+
+        const int y  = SAND_VENT_REACH + 3;
+        const int lx = POD_GRID_W / 2;
+        for (int x = 0; x < POD_GRID_W; x++) {
+            sand_set(&c, x, y + 1, STONE);          /* this pod's floor */
+        }
         sand_set(&c, lx - 1, y, STONE);
         sand_set(&c, lx + 1, y, STONE);
         sand_set(&c, lx - 1, y - 1, STONE);      /* diagonal corners - see */
@@ -13552,10 +13893,31 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
             sand_set(&c, lx, y - 1 - i, STONE);
         }
         sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+        for (int i = 0; i < 12000; i++) {
+            sand_step(&c, 0, 1000, 0);
+        }
+
+        bool all_clear = true;
+        for (int i = 0; i < SAND_VENT_REACH; i++) {
+            if (CELL_MATERIAL(sand_at(&c, lx, y - 1 - i)) == MAT_STONE) {
+                all_clear = false;
+            }
+        }
+        if (!all_clear) {
+            exact_still_sealed++;
+        }
+
+        /* Freed BEFORE the next iteration mallocs again: Unity longjmps
+         * out of a failure, so a free() after one never runs - see
+         * drop_impulse_buf's own comment above. */
+        free(cells);
+        free(impulses);
     }
 
-    /* DEEP_PODS: a SOLID BLOCK, not three thin lines - a second, disjoint
-     * region of the same grid, well clear of EXACT_PODS on the left.
+    /* DEEP_PODS: a SOLID BLOCK, not three thin lines - each pod its own
+     * grid, same as EXACT_PODS above, just with a different seed range so
+     * neither group ever replays the other's trials.
      *
      * A genuine, real-world "thick vessel" is a filled mass of rock, not
      * a wireframe of three one-cell-wide rays with open air between
@@ -13569,9 +13931,27 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
      * sideways-jittered throw can correctly find. A solid rectangle,
      * REACH+1 deep and wide enough to cover every direction jitter can
      * reach, is what actually has no gap anywhere for it to find. */
-    const int deep_base = CAP_TEST_GROUP_W + 1;
     for (int k = 0; k < CAP_TEST_PODS; k++) {
-        const int lx = deep_base + 2 + CAP_TEST_SPACING * k;
+        uint8_t *cells = malloc((size_t)POD_GRID_W * CAP_TEST_H);
+        impulse_t *impulses =
+            malloc((size_t)POD_GRID_W * CAP_TEST_H * sizeof *impulses);
+        TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+            "sealed-lava vent-cap deep-pod grid must fit in what the "
+            "framebuffer leaves");
+        TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+            "sealed-lava vent-cap deep-pod impulse queue must fit in "
+            "what the framebuffer leaves");
+        sand_t c;
+        sand_init(&c, cells, POD_GRID_W, CAP_TEST_H,
+                  3u + (unsigned)(CAP_TEST_PODS + k));
+        sand_enable_impulses(&c, impulses, POD_GRID_W * CAP_TEST_H);
+        sand_set_vent_chance(&c, 255);
+
+        const int y  = SAND_VENT_REACH + 3;
+        const int lx = POD_GRID_W / 2;
+        for (int x = 0; x < POD_GRID_W; x++) {
+            sand_set(&c, x, y + 1, STONE);          /* this pod's floor */
+        }
         for (int dy = 1; dy <= SAND_VENT_REACH + 1; dy++) {
             for (int dx = -(SAND_VENT_REACH + 1); dx <= SAND_VENT_REACH + 1; dx++) {
                 sand_set(&c, lx + dx, y - dy, STONE);
@@ -13582,49 +13962,32 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
         sand_set(&c, lx - 1, y + 1, STONE);
         sand_set(&c, lx + 1, y + 1, STONE);
         sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    }
 
-    for (int i = 0; i < 12000; i++) {
-        sand_step(&c, 0, 1000, 0);
-    }
-
-    int exact_still_sealed = 0;
-    for (int k = 0; k < CAP_TEST_PODS; k++) {
-        const int lx = 2 + CAP_TEST_SPACING * k;
-        bool all_clear = true;
-        for (int i = 0; i < SAND_VENT_REACH; i++) {
-            if (CELL_MATERIAL(sand_at(&c, lx, y - 1 - i)) == MAT_STONE) {
-                all_clear = false;
-            }
+        for (int i = 0; i < 12000; i++) {
+            sand_step(&c, 0, 1000, 0);
         }
-        if (!all_clear) {
-            exact_still_sealed++;
-        }
-    }
 
-    /* Fraction of the block's own cells, not "did any pod ever lose even
-     * one cell" - see this test's own top comment for why an exact zero
-     * stopped being the honest bar once jitter and gravity-drift made
-     * escape a matter of probability rather than geometry. A block this
-     * large (2*(SAND_VENT_REACH+1)+1 wide, SAND_VENT_REACH+1 deep, times
-     * CAP_TEST_PODS of them) gives a real denominator to hold a real
-     * statistical claim against, rather than a single rare cell flipping
-     * a per-pod yes/no verdict for the whole block around it. */
-    /* EMPTY specifically, not "not stone" - a material histogram taken
-     * while diagnosing this test showed the "not stone" count was mostly
-     * FIRE (517 of 713 cells, one run), not vent escapes at all: lava's
-     * OWN flare mechanic (material.c) licks flame into any empty
-     * neighbour, and fire is KIND_GAS, so once even a few genuine
-     * vent-driven gaps open up, ordinary gas-rise physics spreads fire
-     * through whatever connected empty pockets exist - a real, separate,
-     * working mechanic finding a path through this test's own leak,
-     * inflating the apparent damage well past what actually escaped.
-     * EMPTY is the honest count of cells the vent mechanism itself ever
-     * actually vacated. */
-    int deep_block_cells = 0;
-    int deep_empty_cells = 0;
-    for (int k = 0; k < CAP_TEST_PODS; k++) {
-        const int lx = deep_base + 2 + CAP_TEST_SPACING * k;
+        /* Fraction of the block's own cells, not "did any pod ever lose
+         * even one cell" - see this test's own top comment for why an
+         * exact zero stopped being the honest bar once jitter and
+         * gravity-drift made escape a matter of probability rather than
+         * geometry. Accumulated across all CAP_TEST_PODS deep pods -
+         * block size (2*(SAND_VENT_REACH+1)+1 wide, SAND_VENT_REACH+1
+         * deep) times CAP_TEST_PODS of them - gives a real denominator
+         * to hold a real statistical claim against, rather than a single
+         * rare cell flipping a per-pod yes/no verdict for the whole
+         * block around it. */
+        /* EMPTY specifically, not "not stone" - a material histogram
+         * taken while diagnosing this test showed the "not stone" count
+         * was mostly FIRE (517 of 713 cells, one run), not vent escapes
+         * at all: lava's OWN flare mechanic (material.c) licks flame
+         * into any empty neighbour, and fire is KIND_GAS, so once even a
+         * few genuine vent-driven gaps open up, ordinary gas-rise
+         * physics spreads fire through whatever connected empty pockets
+         * exist - a real, separate, working mechanic finding a path
+         * through this test's own leak, inflating the apparent damage
+         * well past what actually escaped. EMPTY is the honest count of
+         * cells the vent mechanism itself ever actually vacated. */
         for (int dy = 1; dy <= SAND_VENT_REACH + 1; dy++) {
             for (int dx = -(SAND_VENT_REACH + 1); dx <= SAND_VENT_REACH + 1; dx++) {
                 deep_block_cells++;
@@ -13633,14 +13996,13 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
                 }
             }
         }
-    }
 
-    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. All reads of cells/impulses (via `c`) are done by this
-     * point; both remaining assertions read only the local counts. */
-    free(cells);
-    free(impulses);
+        /* Freed BEFORE the next iteration mallocs again: Unity longjmps
+         * out of a failure, so a free() after one never runs - see
+         * drop_impulse_buf's own comment above. */
+        free(cells);
+        free(impulses);
+    }
 
     TEST_ASSERT_LESS_THAN_MESSAGE(CAP_TEST_PODS / 4, exact_still_sealed,
         "a cap exactly SAND_VENT_REACH cells deep, with open air right "
@@ -13650,13 +14012,14 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
     /* < 15%, not 0 - see this test's own top comment on why an exact
      * zero stopped being the honest bar once jitter and gravity-drift
      * made escape a matter of probability. Measured at ~7.7% empty on
-     * this exact seed/budget - a real, if small, residual escape rate
-     * this design does not yet fully close out, tracked rather than
-     * hidden behind a stricter threshold that would just start flaking
-     * on the next seed or budget change. A real regression
-     * (can_impulse_enter()'s STATIC refusal weakened, or SAND_VENT_REACH
-     * outgrowing this test's own block) reads as most of the block
-     * emptying out, not a residual few percent. */
+     * the original shared-grid version of this test (same seed/budget
+     * shape) - a real, if small, residual escape rate this design does
+     * not yet fully close out, tracked rather than hidden behind a
+     * stricter threshold that would just start flaking on the next seed
+     * or budget change. A real regression (can_impulse_enter()'s STATIC
+     * refusal weakened, or SAND_VENT_REACH outgrowing this test's own
+     * block) reads as most of the block emptying out, not a residual few
+     * percent. */
     TEST_ASSERT_LESS_THAN_MESSAGE(deep_block_cells * 15 / 100, deep_empty_cells,
         "a seal built a full cell deeper than SAND_VENT_REACH everywhere "
         "jitter could possibly reach must stay overwhelmingly intact - "
@@ -13679,8 +14042,17 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
  * only WHICH wall the vent is supposed to punch through changes. */
 static void test_sealed_lava_vents_toward_gravity_relative_up(void)
 {
-    static uint8_t cells[VENT_TEST_W * VENT_TEST_H];
-    static impulse_t impulses[VENT_TEST_W * VENT_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *cells = malloc((size_t)VENT_TEST_W * VENT_TEST_H);
+    impulse_t *impulses = malloc((size_t)VENT_TEST_W * VENT_TEST_H * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "gravity-relative vent grid must fit in what the framebuffer "
+        "leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+        "gravity-relative vent impulse queue must fit in what the "
+        "framebuffer leaves");
     sand_t v;
     sealed_lava(&v, cells, impulses, VENT_TEST_W * VENT_TEST_H, 1);
 
@@ -13701,6 +14073,13 @@ static void test_sealed_lava_vents_toward_gravity_relative_up(void)
         left_wall_moved = CELL_MATERIAL(sand_at(&v, VENT_LAVA_X - 1,
                                                 VENT_LAVA_Y)) != MAT_STONE;
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of cells/impulses (via `v`) are done by this
+     * point. */
+    free(cells);
+    free(impulses);
 
     TEST_ASSERT_TRUE_MESSAGE(left_wall_moved,
         "under gravity pulling right, the vent must push through the "
@@ -13730,8 +14109,16 @@ static void test_sealed_lava_vents_toward_gravity_relative_up(void)
 #define POOL_TEST_H 16
 static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
 {
-    static uint8_t cells[POOL_TEST_W * POOL_TEST_H];
-    static impulse_t impulses[POOL_TEST_W * POOL_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *cells = malloc((size_t)POOL_TEST_W * POOL_TEST_H);
+    impulse_t *impulses = malloc((size_t)POOL_TEST_W * POOL_TEST_H * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "wide-pool vent grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+        "wide-pool vent impulse queue must fit in what the framebuffer "
+        "leaves");
     sand_t p;
     sand_init(&p, cells, POOL_TEST_W, POOL_TEST_H, 5u);
     sand_enable_impulses(&p, impulses, POOL_TEST_W * POOL_TEST_H);
@@ -13768,6 +14155,13 @@ static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
             }
         }
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of cells/impulses (via `p`) are done by this
+     * point. */
+    free(cells);
+    free(impulses);
 
     TEST_ASSERT_TRUE_MESSAGE(any_crust_moved,
         "a lava POOL three cells wide, sealed under a stone crust, must "
@@ -13829,8 +14223,16 @@ static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
 #define CHUNK_TEST_H (2 * SAND_VENT_CHUNK + 4)
 static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
 {
-    static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
-    static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *cells = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H);
+    impulse_t *impulses = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "chunk-together vent grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+        "chunk-together vent impulse queue must fit in what the "
+        "framebuffer leaves");
     sand_t v;
     sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
     sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
@@ -13857,6 +14259,13 @@ static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
             CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
             MAT_STONE;
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of cells/impulses (via `v`) are done by this
+     * point. */
+    free(cells);
+    free(impulses);
 
     TEST_ASSERT_TRUE_MESSAGE(far_crust_moved,
         "the crust above the chunk's own far column must eventually "
@@ -13887,8 +14296,17 @@ static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
  * already-disqualified one. */
 static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
 {
-    static uint8_t cells[CHUNK_TEST_W * CHUNK_TEST_H];
-    static impulse_t impulses[CHUNK_TEST_W * CHUNK_TEST_H];
+    /* HEAP, not static file scope - see drop_impulse_buf's own comment
+     * above for why this file's static test fixtures cannot share the
+     * framebuffer's memory budget. */
+    uint8_t *cells = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H);
+    impulse_t *impulses = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H * sizeof *impulses);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "chunk-containment vent grid must fit in what the framebuffer "
+        "leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
+        "chunk-containment vent impulse queue must fit in what the "
+        "framebuffer leaves");
     sand_t v;
     /* A DIFFERENT SEED FROM THE SIBLING TEST ABOVE (13, not 7) - measured,
      * not derived: the extra isolated pod this test adds shifts the
@@ -13934,6 +14352,13 @@ static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
             CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
             MAT_STONE;
     }
+
+    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. All reads of cells/impulses (via `v`) are done by this
+     * point. */
+    free(cells);
+    free(impulses);
 
     TEST_ASSERT_TRUE_MESSAGE(chunk_a_fired,
         "setup check: the tracked pool's own chunk must actually fire "
