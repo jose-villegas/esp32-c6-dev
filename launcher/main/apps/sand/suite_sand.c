@@ -18552,6 +18552,51 @@ static void build_dune_beside_water_scene(sand_t *s)
  * dune, is deliberate: the dune already has its own scene above, and
  * mixing the two claims into one scene would leave neither checked
  * cleanly. */
+/* How much WATER, and how much EMPTY, sits within `r` of (cx, cy). The
+ * refill claim below needs both, and needs them counted by material: the
+ * cavity a disturbance opens in a pool gets filled by falling sand or by
+ * impulse-thrown debris whether or not the liquid can flow at all, so
+ * "something is there now" is not evidence of anything. */
+static int water_within(const sand_t *s, int cx, int cy, int r)
+{
+    int n = 0;
+    for (int y = cy - r; y <= cy + r; y++) {
+        for (int x = cx - r; x <= cx + r; x++) {
+            if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) {
+                continue;
+            }
+            const int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy > r * r) {
+                continue;
+            }
+            if (CELL_MATERIAL(sand_at(s, x, y)) == MAT_WATER) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+static int empty_within(const sand_t *s, int cx, int cy, int r)
+{
+    int n = 0;
+    for (int y = cy - r; y <= cy + r; y++) {
+        for (int x = cx - r; x <= cx + r; x++) {
+            if ((unsigned)x >= (unsigned)s->w || (unsigned)y >= (unsigned)s->h) {
+                continue;
+            }
+            const int dx = x - cx, dy = y - cy;
+            if (dx * dx + dy * dy > r * r) {
+                continue;
+            }
+            if (sand_at(s, x, y) == SAND_EMPTY) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
 static void test_the_water_pool_scene_refills_its_own_cavity(void)
 {
     const size_t cells_len = (size_t)REAL_W * REAL_H;
@@ -18614,6 +18659,46 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
         }
     }
 
+    /* THE CLAIM THIS TEST IS NAMED FOR, asserted at last.
+     *
+     * Until 2026-09-01 the only refill check was "the blast's own centre
+     * is not empty" - which cannot fail, for two compounding reasons. The
+     * blast never empties that centre (queue_outward_impulse() skips it by
+     * design, sand.c), and in a fully packed region an impulse SWAPS two
+     * occupied cells, so occupancy is conserved and no hole is opened
+     * anywhere. Measured: with move_liquid_grain() stubbed to return false,
+     * so liquids cannot move AT ALL, this test still passed.
+     *
+     * So the cavity is carved directly rather than hoped for from the
+     * blast, and the assertion asks for WATER back, not merely for
+     * something. Measured over 113 carved cells: 89 refill normally, 32
+     * with liquids immobile; half the carved count sits between them with
+     * roughly 50% margin either way. Disabling cross-flow levelling instead
+     * refills 113 and passes, correctly - water falling vertically is a
+     * different mechanism, and test_a_pool_settles_at_the_angle_it_is_
+     * tilted_to is the test that dies when cross-flow does.
+     *
+     * Carved AFTER water_after is counted, so the conservation assertion
+     * above still measures the blast alone. */
+    const int carve_r = 6;
+    for (int y = cy - carve_r; y <= cy + carve_r; y++) {
+        for (int x = cx - carve_r; x <= cx + carve_r; x++) {
+            if ((unsigned)x >= (unsigned)REAL_W ||
+                (unsigned)y >= (unsigned)REAL_H) {
+                continue;
+            }
+            const int ddx = x - cx, ddy = y - cy;
+            if (ddx * ddx + ddy * ddy <= carve_r * carve_r) {
+                sand_set(&real, x, y, SAND_EMPTY);
+            }
+        }
+    }
+    const int carved_empty = empty_within(&real, cx, cy, carve_r);
+    for (int refill_step = 0; refill_step < 100; refill_step++) {
+        sand_step(&real, 0, 1000, 0);
+    }
+    const int carved_water_after = water_within(&real, cx, cy, carve_r);
+
     free(big);
     free(blocks);
     free(impulses);
@@ -18631,6 +18716,12 @@ static void test_the_water_pool_scene_refills_its_own_cavity(void)
         "the blast's own centre must not be left an empty void once "
         "everything has settled - a liquid closes over a disturbance, "
         "it does not leave a permanent hole in itself");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(carved_empty / 2, carved_water_after,
+        "a cavity carved into the pool must fill back up with WATER, not "
+        "merely with something - this is the claim this test is named for, "
+        "and for a long time nothing here checked it: the old assertion "
+        "asked only that the blast's centre be non-empty, which held even "
+        "with liquids unable to move at all");
     TEST_ASSERT_GREATER_THAN_MESSAGE(water_before / 2, water_after,
         "the pool must still hold most of its own water after settling - "
         "a blast in water should slosh and refill, not boil the whole "
