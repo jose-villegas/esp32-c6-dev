@@ -12,13 +12,14 @@ JS reimplementation of it.
 HOW A REQUEST IS HANDLED
 
 POST /render body is {"timing": {...}, "camera_focal": 512, "grid_step_m":
-0.25, "keyframes": [...], "ms": 1234} - boot_anim_timeline.json's own
-shape, plus which millisecond to show.
+0.25, "wave_height_m": 0, "wave_ease": "linear", "keyframes": [...],
+"ms": 1234} - boot_anim_timeline.json's own shape, plus which millisecond
+to show.
 
-  1. Hash {timing, camera_focal, grid_step_m, keyframes}. If it matches the
-     last build, skip straight to step 4 - scrubbing/playback (ms alone
-     changing) never recompiles, it is one process spawn of an
-     already-built binary.
+  1. Hash {timing, camera_focal, grid_step_m, wave_height_m, wave_ease,
+     keyframes}. If it matches the last build, skip straight to step 4 -
+     scrubbing/playback (ms alone changing) never recompiles, it is one
+     process spawn of an already-built binary.
   2. Otherwise: write that JSON to a SCRATCH copy of boot_anim_timeline.json
      (never the real, committed one - see build_and_flash() below for the
      one thing here that does write it) and run
@@ -163,13 +164,14 @@ class Renderer:
                 file=sys.stderr)
 
     def _regenerate_and_compile(self, payload_hash, timing, camera_focal,
-                                grid_step_m, keyframes):
+                                grid_step_m, wave_height_m, wave_ease, keyframes):
         scratch_json = os.path.join(self.scratch, "boot_anim_timeline.json")
         scratch_header = os.path.join(self.scratch, "boot", "boot_anim_timeline.h")
 
         with open(scratch_json, "w", encoding="utf-8") as f:
             json.dump({"timing": timing, "camera_focal": camera_focal,
-                      "grid_step_m": grid_step_m, "keyframes": keyframes}, f)
+                      "grid_step_m": grid_step_m, "wave_height_m": wave_height_m,
+                      "wave_ease": wave_ease, "keyframes": keyframes}, f)
 
         gen = subprocess.run(
             [sys.executable, GENERATOR, scratch_json],
@@ -199,16 +201,19 @@ class Renderer:
 
         self.built_hash = payload_hash
 
-    def render(self, timing, camera_focal, grid_step_m, keyframes, ms):
+    def render(self, timing, camera_focal, grid_step_m, wave_height_m,
+              wave_ease, keyframes, ms):
         """Returns (bmp_bytes, (origin_x, origin_y) or None)."""
         payload_hash = hashlib.sha256(
             json.dumps({"timing": timing, "camera_focal": camera_focal,
-                      "grid_step_m": grid_step_m, "keyframes": keyframes},
+                      "grid_step_m": grid_step_m, "wave_height_m": wave_height_m,
+                      "wave_ease": wave_ease, "keyframes": keyframes},
                       sort_keys=True).encode("utf-8")).hexdigest()
 
         if payload_hash != self.built_hash:
             self._regenerate_and_compile(payload_hash, timing, camera_focal,
-                                         grid_step_m, keyframes)
+                                         grid_step_m, wave_height_m, wave_ease,
+                                         keyframes)
 
         run = subprocess.run([self.binary, str(int(ms))], capture_output=True)
         if run.returncode != 0:
@@ -226,7 +231,8 @@ class Renderer:
                 break
         return run.stdout, origin
 
-    def build_and_flash(self, timing, camera_focal, grid_step_m, keyframes, port):
+    def build_and_flash(self, timing, camera_focal, grid_step_m, wave_height_m,
+                        wave_ease, keyframes, port):
         """Overwrites the REAL main/boot/boot_anim_timeline.json and
         boot_anim_timeline.h - unlike render()'s scratch copy, not
         disposable - then builds and flashes the development image. Returns
@@ -237,7 +243,8 @@ class Renderer:
         drawing when the fade starts, say) must never leave the committed
         json/header half-written."""
         payload = {"timing": timing, "camera_focal": camera_focal,
-                  "grid_step_m": grid_step_m, "keyframes": keyframes}
+                  "grid_step_m": grid_step_m, "wave_height_m": wave_height_m,
+                  "wave_ease": wave_ease, "keyframes": keyframes}
 
         fd, scratch_json = tempfile.mkstemp(suffix=".json",
                                             prefix="boot_anim_timeline_")
@@ -311,6 +318,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             timing = body["timing"]
             camera_focal = body["camera_focal"]
             grid_step_m = body["grid_step_m"]
+            wave_height_m = body["wave_height_m"]
+            wave_ease = body["wave_ease"]
             keyframes = body["keyframes"]
             ms = body["ms"]
         except (ValueError, KeyError) as exc:
@@ -319,6 +328,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         try:
             bmp, origin = self.renderer.render(timing, camera_focal, grid_step_m,
+                                               wave_height_m, wave_ease,
                                                keyframes, ms)
         except RenderError as exc:
             self._send_json_error(exc.status, exc.message)
@@ -342,6 +352,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             timing = body["timing"]
             camera_focal = body["camera_focal"]
             grid_step_m = body["grid_step_m"]
+            wave_height_m = body["wave_height_m"]
+            wave_ease = body["wave_ease"]
             keyframes = body["keyframes"]
             port = body.get("port") or "COM3"
         except (ValueError, KeyError) as exc:
@@ -350,7 +362,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         try:
             log = self.renderer.build_and_flash(
-                timing, camera_focal, grid_step_m, keyframes, port)
+                timing, camera_focal, grid_step_m, wave_height_m, wave_ease,
+                keyframes, port)
         except RenderError as exc:
             self._send_json_error(exc.status, exc.message)
             return

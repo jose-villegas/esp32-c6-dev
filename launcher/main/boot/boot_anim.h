@@ -625,6 +625,128 @@ static inline bool boot_anim_project_segment(
 }
 
 /*---------------------------------------------------------------------------
+ * The wave
+ *
+ * A water-droplet ripple travelling outward from the space's own local
+ * origin - "Wave" in tools/boot_anim_editor.html - lifting each floor
+ * vertex by how close IT, not just the ring it is on, sits to a front that
+ * sweeps from just inside the origin to just past the grid's own reach
+ * between BOOT_ANIM_WAVE_START_MS and BOOT_ANIM_WAVE_END_MS. Riding a
+ * front rather than a fixed radius is what makes it read as travelling
+ * rather than as one ring somewhere lighting up.
+ *
+ * Per VERTEX, not per ring: draw_floor()'s own ring lines are straight
+ * (re or im fixed, the other running from -far to far), so points along
+ * ONE line are at continuously varying distance from the origin, not the
+ * ring's own single distance - the closest approach at the line's own
+ * midpoint, out to sqrt(d^2 + far^2) at its ends. A single height per ring
+ * would move a ring's line as a flat plank, not a ripple; boot_anim.c's
+ * draw_grid_line() below is what actually walks a line in short spans so
+ * each of THIS SECTION's heights lands on its own vertex.
+ *-------------------------------------------------------------------------*/
+
+/* How many ring-spacings wide the bump is - fixed rather than authored,
+ * unlike the front's own timing/height/shape: the effect is meant to read
+ * the same relative to the grid's own density regardless of how far apart
+ * the rings are (see BOOT_ANIM_GRID_STEP_Q12's own comment on why RINGS
+ * and STEP are already two separate knobs for exactly that reason), and
+ * this repo has not needed a knob for the bump's own width yet - trivial
+ * to promote to one later if that changes. */
+#define BOOT_ANIM_WAVE_WIDTH_RINGS 3
+
+/* Where the front currently is, in the same Q12 zeta-value units as
+ * re/im/`far` - not a fraction, a genuine distance, so
+ * boot_anim_wave_height() below can compare it directly against a
+ * vertex's own. Ranges from HALF the bump's width BEHIND the origin to
+ * half a bump width PAST the grid's outer edge over the authored window,
+ * rather than 0 to `far`: a bump centred exactly on the origin at
+ * BOOT_ANIM_WAVE_START_MS, or exactly on the outer edge at
+ * BOOT_ANIM_WAVE_END_MS, would already be half-formed the instant it
+ * appears or disappears - starting and ending just outside the grid
+ * entirely is what lets the SAME falloff that shapes every other moment
+ * of the ripple also fade it in and out, with nothing special-cased at
+ * either end. */
+static inline int32_t boot_anim_wave_front(uint32_t now_ms)
+{
+    const int32_t half_width =
+        (BOOT_ANIM_WAVE_WIDTH_RINGS * BOOT_ANIM_GRID_STEP_Q12) / 2;
+    const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
+
+    const uint8_t linear = tween_ramp(now_ms, BOOT_ANIM_WAVE_START_MS,
+        BOOT_ANIM_WAVE_END_MS - BOOT_ANIM_WAVE_START_MS);
+    const uint8_t eased = boot_anim_timeline_ease(linear, BOOT_ANIM_WAVE_EASE);
+
+    return tween_lerp_i32(-half_width, far + half_width, eased);
+}
+
+/* A zeta-value unit (meters, like every other authored length here - see
+ * "The timeline"'s own UNITS comment) turned into the t_q8 that would
+ * displace a vertex by that same S3L distance along t as it would along
+ * re/im - the exact inverse of boot_anim_t_to_s3l()'s own
+ * BOOT_ANIM_T_TO_S3L_Q8 compression. Needed because "the height" (Wave in
+ * tools/boot_anim_editor.html) is authored in meters like everything
+ * else, but t's own native scale is deliberately NOT 1 zeta-unit to 1
+ * meter (see boot_anim_t_to_s3l()'s own comment on why) - without
+ * inverting that, the same "1 meter" that moves the grid one full ring's
+ * spacing sideways would lift it by a visually different amount. Nothing
+ * about the curve or the axes needs this: t there is always authored
+ * directly in its own native units already, never derived from a zeta
+ * one. int64_t only to keep the shift-then-divide safe for a height
+ * larger than this was ever tuned for - a mistuned value should look
+ * wrong, not overflow. */
+static inline int32_t boot_anim_zeta_to_t_q8(int32_t zeta_q12)
+{
+    return (int32_t)(((int64_t)zeta_q12 << 5) / BOOT_ANIM_T_TO_S3L_Q8);
+}
+
+/* How far THIS vertex (at zeta-distance `r_q12` from the origin) should
+ * lift, given where the front currently is - a raised-cosine bump
+ * centred on the front, in the same Q12 zeta units boot_anim_wave_front()
+ * already returns its own position in, so the two compare directly with
+ * no unit juggling at the call site. `amp_q12` is the wave's own peak
+ * amplitude (BOOT_ANIM_WAVE_HEIGHT_Q12 at every real call site, in
+ * boot_anim.c) - passed in rather than read here directly so a test can
+ * drive the bump's own shape with a nonzero amplitude regardless of what
+ * the compiled seed's own height happens to be (0, by default - see
+ * BOOT_ANIM_WAVE_HEIGHT_Q12's own comment) - the same "pass the
+ * environment in" split docs/Testing-Guide.md already asks for.
+ *
+ * Returns t_q8 - already converted via boot_anim_zeta_to_t_q8() above -
+ * ready to hand straight to boot_anim_to_camera_space() as the vertex's
+ * own t. Zero (no bump at all) once the vertex is a whole half-width from
+ * the front in either direction, so this is naturally zero everywhere
+ * outside the ripple's own reach - draw_floor() still only bothers
+ * calling this while the front's own window is open at all
+ * (BOOT_ANIM_WAVE_START_MS through BOOT_ANIM_WAVE_END_MS), the one saving
+ * this function itself cannot make on its own. */
+static inline int32_t boot_anim_wave_height(int32_t r_q12, int32_t front_r_q12,
+                                            int32_t amp_q12)
+{
+    const int32_t half_width =
+        (BOOT_ANIM_WAVE_WIDTH_RINGS * BOOT_ANIM_GRID_STEP_Q12) / 2;
+    if (half_width <= 0) {
+        return 0;
+    }
+
+    const int32_t adelta = r_q12 > front_r_q12 ? r_q12 - front_r_q12
+                                               : front_r_q12 - r_q12;
+    if (adelta >= half_width) {
+        return 0;
+    }
+
+    /* adelta/half_width, 0..1, mapped onto boot_anim_cos()'s own quarter-
+     * turn (0..16384): 1.0 at the front itself, tapering smoothly to 0.0
+     * at the bump's own edge - a dome, not a spike or a hard-edged disc. */
+    const int32_t phase =
+        (int32_t)(((int64_t)adelta * 16384) / half_width);
+    const int32_t cos_val = boot_anim_cos((uint16_t)phase);   /* Q15 */
+    const int32_t amp_zeta_q12 =
+        (int32_t)(((int64_t)amp_q12 * cos_val) >> 15);
+
+    return boot_anim_zeta_to_t_q8(amp_zeta_q12);
+}
+
+/*---------------------------------------------------------------------------
  * Smoothing
  *
  * 205 samples of a curve that crosses most of the screen is a chord every six
