@@ -284,12 +284,39 @@ const material_t materials[MATERIAL_MAX] = {
                                      * tune on device like every other
                                      * constant here. */
 
-            .decay = 24,     /* matches ember's own figure as a
-                                     * starting point, tune independently
-                                     * later - roughly 160 steps, ~2.7s
-                                     * at ~60fps, so a wisp of steam
-                                     * visibly fades rather than either
-                                     * lingering or vanishing at once. */
+            .decay = 16,     /* NOW DELIBERATELY MATCHES SMOKE'S OWN 16 -
+                                     * this went through several rounds
+                                     * (24 to 18 for "at least 30% longer",
+                                     * then 18 to 16 for "another 10% on
+                                     * top") before landing exactly on
+                                     * smoke's own figure, which used to be
+                                     * a problem: a test asserted steam
+                                     * must fade SOONER than smoke ("it
+                                     * condenses, it does not linger"),
+                                     * and tying smoke's rate broke that
+                                     * claim. Explicitly settled, not an
+                                     * accident of rounding - asked to let
+                                     * steam's lifespan match smoke's much
+                                     * more closely, so the two now share
+                                     * this figure on purpose; see
+                                     * test_the_air_agrees_about_weight_
+                                     * speed_and_lifetime's own updated
+                                     * comment (suite_sand.c) for the
+                                     * matching test change. The starting
+                                     * life it decays FROM is also already
+                                     * at its own ceiling - conduct_heat()'s
+                                     * boiling branch calls place_reacted(),
+                                     * giving a full MATERIAL_VARIANTS - 1
+                                     * = 15 rather than a shortened figure,
+                                     * see that function's own comment -
+                                     * so decay chance was the only dial
+                                     * left to extend duration at all.
+                                     * ~240 steps (~4s at ~60fps) to fully
+                                     * decay from full life, against the
+                                     * original 24's ~160 steps (~2.7s) -
+                                     * 50% longer overall. Not yet
+                                     * measured on device at this exact
+                                     * figure. */
             .mobility = 160, /* noticeably faster than gas's 96 or
                                      * fire's 96 - steam should read as
                                      * rising eagerly off a boiling pot,
@@ -998,10 +1025,17 @@ const reaction_t reactions[MATERIAL_MAX] = {
              * (no cold surface checked, no heat reading involved - see
              * reaction_t.condenses's own comment in material.h). Started
              * at 3 (roughly 1 in 85), halved to roughly 1 in 128 once
-             * reported as happening more than a "small chance" should.
-             * Starting point, not final - tune on device like every
-             * other constant here. */
-            .condenses = 2,
+             * reported as happening more than a "small chance" should,
+             * then halved again to 1 (the rarest a byte-wide chance-in-
+             * 256 roll can express short of disabling it outright) once
+             * steam's own decay was lowered to make it last much longer
+             * (see reaction_t.decay's own row above) - a wisp that now
+             * lingers for roughly 4 seconds has that much more time to
+             * roll condensation, so the per-step chance needed to drop
+             * to keep the OVERALL odds of condensing before fading away
+             * from climbing right back up. Starting point, not final -
+             * tune on device like every other constant here. */
+            .condenses = 1,
             .condenses_to = MAT_WATER,
         },
 
