@@ -93,9 +93,17 @@
 #
 # Env overrides (distinct names from the other two local scripts on
 # purpose, so setting one never silently changes another):
-#   TESTWRITE_FIXER_MODEL   default qwen3-coder:30b (fall back to
-#                           qwen2.5-coder:32b-instruct-q4_K_M if not pulled)
-#   TESTWRITE_REVIEW_MODEL  default gemma4:26b
+#   TESTWRITE_FIXER_MODEL   default qwen2.5:14b
+#   TESTWRITE_REVIEW_MODEL  default mistral-nemo:latest
+# Both chosen so their weights alone (~9GB / ~7GB) fit a 16GB card; bigger
+# options like qwen3-coder:30b or gemma4:26b (~18GB each) remain available
+# via the env vars above for anyone with real VRAM headroom. If local
+# Ollama runs are freezing the machine regardless of model choice, see
+# docs/Model-Delegation-Workflow.md's "A global Ollama setting can make
+# picking a 'small enough' model pointless" -- a stuck 262144 Context
+# Length setting in the Ollama app itself overrides every model's context
+# and is the far more likely culprit; one test spec plus a suite file never
+# needs anywhere near that once the app setting is sane.
 set -euo pipefail
 
 REPO_ROOT="$(git rev-parse --show-toplevel)"
@@ -131,26 +139,18 @@ if [ -z "$SUITE" ] || [ -z "$SPEC" ]; then
 fi
 [ -f "$SPEC" ] || { echo "Spec file not found: $SPEC" >&2; exit 1; }
 
-FIXER_MODEL="${TESTWRITE_FIXER_MODEL:-qwen3-coder:30b}"
-REVIEW_MODEL="${TESTWRITE_REVIEW_MODEL:-gemma4:26b}"
+FIXER_MODEL="${TESTWRITE_FIXER_MODEL:-qwen2.5:14b}"
+REVIEW_MODEL="${TESTWRITE_REVIEW_MODEL:-mistral-nemo:latest}"
 
-if ! ollama list | awk '{print $1}' | grep -qxF "$FIXER_MODEL"; then
-  FALLBACK="qwen2.5-coder:32b-instruct-q4_K_M"
-  if ollama list | awk '{print $1}' | grep -qxF "$FALLBACK"; then
-    echo "'$FIXER_MODEL' not pulled -- falling back to '$FALLBACK'." >&2
-    FIXER_MODEL="$FALLBACK"
-  else
-    echo "Neither '$FIXER_MODEL' nor the fallback '$FALLBACK' is pulled." >&2
-    echo "Pull one, or set TESTWRITE_FIXER_MODEL to something in:" >&2
+for m in "$FIXER_MODEL" "$REVIEW_MODEL"; do
+  if ! ollama list | awk '{print $1}' | grep -qxF "$m"; then
+    echo "Model '$m' is not in \`ollama list\`. Pull it first, or override" >&2
+    echo "via TESTWRITE_FIXER_MODEL / TESTWRITE_REVIEW_MODEL env vars." >&2
+    echo "Currently pulled:" >&2
     ollama list >&2
     exit 1
   fi
-fi
-if ! ollama list | awk '{print $1}' | grep -qxF "$REVIEW_MODEL"; then
-  echo "Model '$REVIEW_MODEL' is not in \`ollama list\`. Pull it, or override" >&2
-  echo "via TESTWRITE_REVIEW_MODEL." >&2
-  exit 1
-fi
+done
 
 ORIG_BRANCH="$(git symbolic-ref --short -q HEAD || true)"
 

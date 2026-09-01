@@ -118,7 +118,21 @@ for flag in CONFIG_LAUNCHER_SELFTEST CONFIG_LAUNCHER_SELFTEST_AUTORUN; do
 done
 
 echo "=== Capturing self-test output ==="
-python "$LAUNCHER_DIR/tools/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 300
+# 1500s, not 300. The suite ran in ~168s for as long as its frame-budget
+# fixtures were failing to allocate their grids instantly; once the heap
+# was freed on 2026-09-01 and the scenes actually ran, a full pass took
+# 1,125,726 ms - 18.8 minutes. A 300s window now times out every run and
+# produces a capture with no SELFTEST_COMPLETE in it, which the validator
+# below correctly rejects but which costs a full capture cycle to learn.
+python "$LAUNCHER_DIR/tools/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 1500
+
+# A capture that never finished, crashed, or measured nothing (wrong image,
+# suites compiled in but not running) still produces a plausible-looking
+# report if fed straight to report_performance.py below - that has already
+# cost two full capture cycles and once got mistaken for a fresh result.
+# Fail loudly here, before spending any time generating a table from it.
+echo "=== Validating capture ==="
+python "$LAUNCHER_DIR/tools/sweeps/validate_capture.py" "$RAW_CAPTURE"
 
 echo "=== Generating performance report ==="
 # Both halves of a frame: the simulation's budgets live in the sand suite,

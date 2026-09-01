@@ -40,6 +40,22 @@ BUDGET_RE = re.compile(r"TEST_ASSERT_LESS_THAN_MESSAGE\(\s*(\w+)\s*,")
 DEFINE_RE = re.compile(r"#define\s+(\w+)\s+(\d+)")
 
 RESULT_RE = re.compile(r"^\S+:\d+:(?P<name>\w+):(?P<status>PASS|FAIL)(?::\s*(?P<message>.*))?$")
+
+# A separate line - not part of the result line above - emitted by
+# test/timing.c for every test, on both host and device. Kept separate on
+# purpose: RESULT_RE is anchored at end-of-line, so appending timing to the
+# PASS/FAIL line itself would have broken it (and validate_capture.py's
+# looser prefix match) rather than just adding a new thing to ignore. Its
+# absence means an older capture, from before per-test timing existed - see
+# make_slow_tests_section() below, which degrades to nothing rather than
+# erroring on one.
+TEST_TIME_RE = re.compile(r"^TEST_TIME name=(?P<name>\w+) elapsed_ms=(?P<ms>\d+)$")
+
+# selftest.c's own sentinel, printed once at the very end of the run - the
+# one total this file cannot get by summing TEST_TIME lines, because a
+# capture can be truncated (see validate_capture.py's panic handling) while
+# still having logged individual test times right up to the crash.
+SELFTEST_COMPLETE_RE = re.compile(r"SELFTEST_COMPLETE(?:\s+failures=(\d+)\s+elapsed_ms=(\d+))?")
 # ESP_LOGI lines this project's own frame-budget tests print - always
 # tagged "device_tests", always some number of microseconds. Phrasing
 # after the number varies per test ("us per step", "us for the one
@@ -84,16 +100,69 @@ def parse_budgets(source_path: str) -> dict:
     return budgets
 
 
+def format_duration(ms: int) -> str:
+    """1234 -> "1.2s"; 462117 -> "7m 42.1s" - the ms column alone doesn't
+    read at a glance across a range that spans sub-millisecond tests and an
+    eight-minute one, which is the whole reason this section exists."""
+    if ms < 1000:
+        return f"{ms} ms"
+    if ms < 60_000:
+        return f"{ms / 1000:.1f}s"
+    minutes, rest_ms = divmod(ms, 60_000)
+    return f"{minutes}m {rest_ms / 1000:.1f}s"
+
+
+def make_slow_tests_section(capture: dict, total_ms, top_n: int = 15) -> list:
+    """The slowest tests by wall time, across every suite - not just the
+    frame-budget ones. A test with no declared budget (like the sand suite's
+    own sealed-vent test, ~7.7 minutes and the single biggest cost in the
+    whole run - see docs/Sand/Sand-Simulation.md) is otherwise invisible to
+    this report: it never enters `known`, and the "measured in this capture"
+    table above only lists tests with a device_tests log line, which most
+    tests don't print. This is the only place that ranks the whole suite.
+
+    Returns [] when the capture predates per-test timing (test/timing.c) -
+    an older raw capture still produces every other section of this report
+    unchanged."""
+    timed = [(name, e["elapsed_ms"]) for name, e in capture.items()
+             if e["elapsed_ms"] is not None]
+    if not timed:
+        return []
+
+    timed.sort(key=lambda pair: pair[1], reverse=True)
+
+    section = []
+    section.append("## Slowest Tests by Wall Time")
+    section.append("")
+    section.append(f"Top {min(top_n, len(timed))} of {len(timed)} timed tests.")
+    section.append("")
+    section.append("| Test | Elapsed | Share of run |")
+    section.append("|---|---:|---:|")
+    for name, ms in timed[:top_n]:
+        share_s = f"{ms / total_ms * 100:.1f}%" if total_ms else "?"
+        section.append(f"| `{name}` | {format_duration(ms)} | {share_s} |")
+    section.append("")
+    return section
+
+
 def parse_capture(capture_path: str):
     with open(capture_path, "r", errors="replace") as f:
         text = f.read()
 
-    entries = {}  # test name -> {"status", "message", "measured"}
+    entries = {}  # test name -> {"status", "message", "measured", "elapsed_ms"}
+    test_times = {}  # test name -> elapsed_ms, from TEST_TIME lines
     pending_measure = None
     for line in text.splitlines():
         mm = MEASURE_RE.search(line)
         if mm:
             pending_measure = int(mm.group(1))
+            continue
+        tm = TEST_TIME_RE.match(line.strip())
+        if tm:
+            # Keyed by name, not by position relative to the result line -
+            # timing.c always prints this after the PASS/FAIL line, but
+            # nothing here should depend on that staying true.
+            test_times[tm.group("name")] = int(tm.group("ms"))
             continue
         rm = RESULT_RE.match(line.strip())
         if rm and rm.group("name") not in entries:
@@ -101,9 +170,20 @@ def parse_capture(capture_path: str):
                 "status": rm.group("status"),
                 "message": rm.group("message"),
                 "measured": pending_measure,
+                "elapsed_ms": None,
             }
             pending_measure = None
-    return entries
+
+    for name, ms in test_times.items():
+        if name in entries:
+            entries[name]["elapsed_ms"] = ms
+
+    total_ms = None
+    sm = SELFTEST_COMPLETE_RE.search(text)
+    if sm and sm.group(2) is not None:
+        total_ms = int(sm.group(2))
+
+    return entries, total_ms
 
 
 def main() -> int:
@@ -130,7 +210,7 @@ def main() -> int:
     budgets = {}
     for source in args.source:
         budgets.update(parse_budgets(source))
-    capture = parse_capture(args.capture_path)
+    capture, total_ms = parse_capture(args.capture_path)
 
     # Only tests that both declare a budget AND actually ran this capture -
     # a test present in one but not the other is worth surfacing, not
@@ -145,6 +225,8 @@ def main() -> int:
     lines.append("")
     lines.append(f"Captured: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}")
     lines.append(f"Source: `{args.capture_path}`, budgets from `{args.source}`")
+    if total_ms is not None:
+        lines.append(f"Total run time: {format_duration(total_ms)} ({total_ms} ms)")
     lines.append("")
     lines.append("| Test | Budget (us) | Measured (us) | Headroom | Status |")
     lines.append("|---|---:|---:|---:|---|")
@@ -188,6 +270,8 @@ def main() -> int:
             m = capture[name]["measured"]
             lines.append(f"| `{name}` | {m if m is not None else '?'} |")
         lines.append("")
+
+    lines.extend(make_slow_tests_section(capture, total_ms))
 
     with open(args.out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
