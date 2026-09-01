@@ -350,6 +350,21 @@ typedef struct {
     uint16_t heat_flaw_seq;
     bool     heat_flaw_is_flawed;
 
+    /* TWO MATERIAL-INDEXED MEMBERSHIP MASKS, rebuilt at the top of every
+     * sand_step_reactions() pass entry from the live reactions[]/
+     * extended_reactions[]/materials[] tables - see that function's own
+     * comment for exactly what each bit means and why an O(16) rebuild
+     * every pass is cheap enough that neither can ever go stale against a
+     * sand_set_* table override, unlike the retired per-cell mask
+     * (docs/Sand/Performance-Tuning-Attempts.md, "Never retry"). Read by
+     * try_heat_transform() and step_one_soaking_cell() to reject a
+     * neighbour that could not possibly react before touching reaction_of()
+     * or the RNG - not state that means anything between calls, so nothing
+     * outside sand_step_reactions() itself may rely on either surviving
+     * from one step to the next. */
+    uint16_t heat_mask;
+    uint16_t wet_mask;
+
     int      last_load_dx, last_load_dy;
 
     /* The DITHERED direction of the last step, as opposed to the nearest
