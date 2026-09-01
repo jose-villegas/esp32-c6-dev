@@ -1149,7 +1149,7 @@ static uint32_t foam_elapsed_ms;
  * ascending; this is safe to reverse for a gravity-up frame instead of
  * needing a trickier fix inside the depth bookkeeping itself, because
  * nothing else that loop does depends on row order - dirty_rows[cy],
- * row_run_x0/x1/n, row_has_shine[cy] and row_has_liquid_interior[cy] are all
+ * row_run_x0/x1/n, row_has_shine[cy] and row_has_liquid[cy] are all
  * indexed by cy directly and read/written independently per row, and
  * gfx_mark_dirty() only ever unions a bounding box of (y, height) pairs
  * (dirty_mark(), gfx_dirty.h), which does not care what order the boxes
@@ -1355,11 +1355,29 @@ static void update_local_depth_gravity(int gx, int gy)
  * puddle's own surface should read as.
  *
  * THE FIX is the same shape as the shine's: an unconditional periodic tick
- * that marks every row known to hold a liquid interior dirty, regardless of
- * what the simulation did that frame - see row_has_liquid_interior[] just
- * below, advance_local_depth_wake() beside advance_shine() further down,
- * and draw_dirty_rows()'s own shine_moved block for the precedent this
- * repeats in the same shape.
+ * that marks every row known to hold a liquid cell dirty, regardless of
+ * what the simulation did that frame - see row_has_liquid[] just below,
+ * advance_local_depth_wake() beside advance_shine() further down, and
+ * draw_dirty_rows()'s own shine_moved block for the precedent this repeats
+ * in the same shape.
+ *
+ * row_has_liquid[] GATES ON ANY LIQUID CELL, RIM INCLUDED - not only an
+ * interior one, despite this array existing purely to feed the blend that
+ * only an interior cell ever reads. An earlier version gated on interior
+ * cells alone, which reproduced this exact staleness bug one level down:
+ * ordinary grain-level settling noise flips a cell between rim
+ * (`mask != 0`) and interior (`mask == 0`) classification constantly at any
+ * real liquid surface, so a wide, shallow pool's edge rows can read as
+ * all-rim for many consecutive ticks - the wake skips them entirely for as
+ * long as that holds, which is unbounded - and when a cell in one of those
+ * rows THEN flips back to interior, the very next wake tick repaints it
+ * from CURRENT gravity/weight over a value that may be frozen from an
+ * arbitrarily distant past. Gating on any liquid cell keeps every
+ * liquid-bearing row on the same bounded refresh cadence regardless of how
+ * its edges flicker between rim and interior, so by the time a cell IS
+ * classified interior its row was already fresh as of the last wake tick -
+ * see test_a_settled_edge_does_not_flicker_stale_to_fresh in suite_sand.c
+ * for the reproduction and the measured collapse this closes.
  *
  * A SEPARATE clock from the shine's own, on purpose - not folded into one
  * shared tick for two features. Different feature, different rate,
@@ -1371,12 +1389,25 @@ static void update_local_depth_gravity(int gx, int gy)
  * SHINE_STEP_MS's own comment gives that constant: speed comes from the
  * STEP SIZE, not from ticking more often, so a SHORTER value here tracks
  * gravity's drift more closely at a proportionally HIGHER redraw cost
- * (every row holding any liquid interior repainted in full, every tick),
- * while a longer value is cheaper and drifts more visibly out of date
- * before the next wake catches it up. Unlike glass, a large body of water,
- * oil, lava or acid can cover far more of the screen than a typical hatched
- * scene ever does, so this cost is worth watching closely on the device
- * before trusting 120 as final - it has not been measured there yet. */
+ * (every row holding any liquid cell repainted in full, every tick), while
+ * a longer value is cheaper and drifts more visibly out of date before the
+ * next wake catches it up. Unlike glass, a large body of water, oil, lava
+ * or acid can cover far more of the screen than a typical hatched scene
+ * ever does, so this cost is worth watching closely on the device before
+ * trusting 120 as final - it has not been measured there yet.
+ *
+ * WIDENING row_has_liquid[] TO RIM CELLS TOO does not change this estimate
+ * in any way that matters: a row with liquid but no interior cell at all is
+ * a thin strip sitting right at a pool's edge - one or two rows at the very
+ * top, bottom, or side of a settled body, where the liquid is shallow
+ * enough that every cell in the row happens to have an empty cardinal
+ * neighbour at that instant. A pool's INTERIOR - the bulk of its rows, the
+ * part this array already marked before the widening - is unaffected: a
+ * row with any interior cell was already gated in, rim or not. The
+ * widening can only ADD the handful of edge-only rows the old condition
+ * used to skip; it cannot double the marked-row count the way gating on
+ * "any liquid" from scratch would if the array previously gated on nothing
+ * at all. */
 #define LOCAL_DEPTH_WAKE_MS 120
 
 /* Real time accumulated toward the next local-depth wake tick - carried
@@ -1386,29 +1417,37 @@ static void update_local_depth_gravity(int gx, int gy)
  * be. */
 static uint32_t local_depth_wake_elapsed_ms;
 
-/* Which rows painted a liquid interior cell last time they were painted -
- * the interior-only counterpart to row_has_shine[] above, kept for exactly
- * the same reason: without this the wake tick would have to claim the
- * whole screen every time it fires, which at LOCAL_DEPTH_WAKE_MS is far too
- * often to be affordable if the screen holds anything besides liquid. A row
- * that is not repainted keeps its last answer, which stays true only until
- * the next wake tick - see LOCAL DEPTH's own periodic-wake comment above
- * for why that staleness is exactly the bug this array's tick exists to
- * bound.
+/* Which rows painted ANY liquid cell last time they were painted - rim or
+ * interior - the liquid counterpart to row_has_shine[] above, kept for
+ * exactly the same reason: without this the wake tick would have to claim
+ * the whole screen every time it fires, which at LOCAL_DEPTH_WAKE_MS is far
+ * too often to be affordable if the screen holds anything besides liquid. A
+ * row that is not repainted keeps its last answer, which stays true only
+ * until the next wake tick - see LOCAL DEPTH's own periodic-wake comment
+ * above for why that staleness is exactly the bug this array's tick exists
+ * to bound.
+ *
+ * NOT interior-only, on purpose, even though only an interior cell's depth
+ * ever gets blended: gating on interior cells alone let a row go stale for
+ * an unbounded time whenever its only liquid was classified as rim for a
+ * stretch (ordinary edge-settling noise flips a cell between rim and
+ * interior constantly) - see LOCAL DEPTH'S OWN PERIODIC WAKE's own comment
+ * above for the full story and the reproduction that found it. Any liquid
+ * cell, rim included, is enough to keep the row on the bounded cadence.
  *
  * Reset to 0 at the top of paint_row_n() right beside row_has_shine[cy]'s
- * own reset, and set to 1 the moment a cell in that row paints as a liquid
- * interior cell - see the interior test inside paint_row_n() below, right
+ * own reset, and set to 1 the moment a cell in that row paints as ANY
+ * liquid cell - see the population point inside paint_row_n() below, right
  * where `depth` is blended, for exactly which cells that is and why it is
  * recomputed there rather than read back out of material_colours(). */
-static uint8_t row_has_liquid_interior[GRID_H_MAX];
+static uint8_t row_has_liquid[GRID_H_MAX];
 
 static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                                int cy, const uint8_t *row, int n)
 {
     gfx_color_t *out = fb + (cy * n) * GFX_WIDTH;
     row_has_shine[cy] = 0;
-    row_has_liquid_interior[cy] = 0;
+    row_has_liquid[cy] = 0;
 
     /* grid_w, not a parameter: it does not need to be a compile-time
      * constant the way n does - only the innermost dy/dx loops below are hot
@@ -1659,17 +1698,15 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             ((vdepth * (256u - local_depth_weight_h_q8)) +
              (hdepth * local_depth_weight_h_q8)) >> 8;
 
-        /* row_has_liquid_interior[]'s own population point - see that
-         * array's comment above paint_row_n() for the mechanism this feeds.
-         * material_colours() below decides the same thing internally
-         * (KIND_LIQUID and `(mask & MATERIAL_EDGE_CARDINAL) == 0` is its own
-         * interior branch, material.c) but does not report which branch it
-         * took, and does not need a new out-parameter to say so: both facts
-         * are already sitting right here, so this is one more branch, not a
-         * new call. */
-        if (material_of(row[cx])->kind == KIND_LIQUID &&
-            (mask & MATERIAL_EDGE_CARDINAL) == 0) {
-            row_has_liquid_interior[cy] = 1;
+        /* row_has_liquid[]'s own population point - see that array's
+         * comment above paint_row_n() for the mechanism this feeds. ANY
+         * liquid cell marks the row, rim included - not gated on `mask`
+         * at all, unlike material_colours()'s own interior test (KIND_
+         * LIQUID and `(mask & MATERIAL_EDGE_CARDINAL) == 0`, material.c) -
+         * see row_has_liquid[]'s own comment for why the wider condition is
+         * the fix, not an oversight. */
+        if (material_of(row[cx])->kind == KIND_LIQUID) {
+            row_has_liquid[cy] = 1;
         }
 
         gfx_color_t col[3];
@@ -1923,12 +1960,15 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
      * above paint_row_n() for the bug this closes (gravity drifting a
      * settled, sleeping block's blend stale with nothing left to mark its
      * rows dirty) and why it needs the same unconditional periodic tick the
-     * shine already uses. Only the rows that actually held a liquid
-     * interior last time they were painted, for the same affordability
-     * reason row_has_shine[] gates the block above. */
+     * shine already uses. Only the rows that actually held a liquid cell
+     * last time they were painted, for the same affordability reason
+     * row_has_shine[] gates the block above - RIM cells included, not only
+     * interior ones, per row_has_liquid[]'s own comment (interior-only
+     * gating let a row go stale for an unbounded time whenever its liquid
+     * happened to read as all-rim). */
     if (local_depth_woke) {
         for (int cy = 0; cy < grid_h; cy++) {
-            if (row_has_liquid_interior[cy]) {
+            if (row_has_liquid[cy]) {
                 dirty_rows[cy] = 1;
             }
         }
@@ -1956,7 +1996,7 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
      * "toward the surface" inside the depth bookkeeping itself, is safe
      * because nothing else in this loop depends on row order -
      * dirty_rows[cy], row_run_x0/x1/n, row_has_shine[cy] and
-     * row_has_liquid_interior[cy] are all indexed by cy directly, and
+     * row_has_liquid[cy] are all indexed by cy directly, and
      * gfx_mark_dirty() below only ever unions a bounding box, which does not
      * care what order the boxes arrive in either. */
     const bool reverse_rows = local_depth_v_reverse;
