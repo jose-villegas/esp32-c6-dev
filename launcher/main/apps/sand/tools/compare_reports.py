@@ -79,6 +79,17 @@ def classify(old_report: dict, new_report: dict):
         old_v, new_v = old_report[name], new_report[name]
         control_rows.append((name, old_v, new_v, new_v - old_v, pct_delta(old_v, new_v)))
     floor_pct = max(abs(row[4]) for row in control_rows)
+
+    # A floor of exactly zero is not a claim that 1us is meaningful - it
+    # means both controls happened to land on identical values, which does
+    # happen here: the flash layout lottery on this device is quantised
+    # (controls come back on one of a small number of value-pairs, never
+    # between), so two different builds can produce byte-identical control
+    # rows. Taking 0.0% literally labels a +1us move "signal" and invites
+    # chasing noise, which is the exact failure this tool exists to prevent.
+    # 0.5% is the smallest move this campaign has ever attributed to a real
+    # cause; below that, a single capture cannot tell you anything.
+    floor_pct = max(floor_pct, 0.5)
     return floor_pct, control_rows, None
 
 
