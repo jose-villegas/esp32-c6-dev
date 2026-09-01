@@ -498,10 +498,21 @@ let lastObjectUrl = null;
 let renderPending = false;
 let renderDirty = false;
 
+/* Below this, a render is indistinguishable from instant - a cache-hit
+ * frame during ordinary scrubbing/playback normally comes back in tens of
+ * ms (see requestRender()'s own comment on why there is now at most one
+ * of these in flight at a time). Showing "rendering..." for every one of
+ * those anyway would flicker the label on and off every frame despite
+ * nothing actually being slow; only a render that is ACTUALLY taking a
+ * while - a real recompile, a cold Defender scan - earns the label. */
+const STATUS_DELAY_MS = 150;
+
 async function renderNow() {
   const seq = ++renderSeq;
-  statusEl.textContent = 'rendering...';
-  statusEl.className = 'busy';
+  const busyTimer = setTimeout(() => {
+    statusEl.textContent = 'rendering...';
+    statusEl.className = 'busy';
+  }, STATUS_DELAY_MS);
 
   let res;
   try {
@@ -515,12 +526,14 @@ async function renderNow() {
       }),
     });
   } catch (err) {
+    clearTimeout(busyTimer);
     if (seq !== renderSeq) return;
     statusEl.textContent = 'server unreachable';
     statusEl.className = 'error';
     showError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err);
     return;
   }
+  clearTimeout(busyTimer);
   if (seq !== renderSeq) return;
 
   if (!res.ok) {
