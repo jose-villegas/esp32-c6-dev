@@ -282,21 +282,15 @@ void gfx_set_debug_overlay(bool on);
 bool gfx_debug_overlay(void);
 
 /* A second, fully independent overlay layer, not a refinement of the one
- * above: outlines, in green, the leaves gfx_dirty.h's dirty_mark() actually
- * marked dirty this frame - the leaves that were really touched, not the
- * static leaf lattice. One rectangle per CONTIGUOUS RUN of dirty leaves in
- * each leaf-row (gfx_dirty.h's dirty_leaf_rects()), not one per individual
- * leaf: sand's dirty runs are gap-free by construction, so outlining every
- * leaf separately would just redraw that same fixed lattice by another
- * route. Merging shows the unit refine_run() can actually act on, and lets
- * a genuine gap read as two separated boxes instead of being lost among a
- * run of identical ones. Leaf-rows themselves are never merged into each
- * other - leaf_dirty is genuinely 2D. Works on its own with the panel-grid
- * layer off. Leaf bits are only ever set by a caller that hands
- * dirty_mark() a real box (see gfx_dirty.h's mark_leaves()) - mark_band()
- * never marks leaves, so a region only ever touched that way legitimately
- * shows nothing here; that is a consequence of the design, not a bug. Same
- * undefined-outside-development reasoning as the toggle above. */
+ * above: outlines the leaves gfx_dirty.h's dirty_mark() actually marked
+ * dirty this frame, one rectangle per dirty leaf, in green - the leaves
+ * that were really touched, not the static leaf lattice. Works on its own
+ * with the panel-grid layer off. Leaf bits are only ever set by a caller
+ * that hands dirty_mark() a real box (see gfx_dirty.h's mark_leaves()) -
+ * mark_band() never marks leaves, so a region only ever touched that way
+ * legitimately shows nothing here; that is a consequence of the design,
+ * not a bug. Same undefined-outside-development reasoning as the toggle
+ * above. */
 void gfx_set_leaf_overlay(bool on);
 bool gfx_debug_leaf_overlay(void);
 

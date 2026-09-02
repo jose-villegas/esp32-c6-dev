@@ -830,19 +830,22 @@ static void mark_rect_border(gfx_color_t *buf, int stride, int w, int h,
 }
 
 /* Copies out, or back in, exactly the pixels mark_rect_border() touches for
- * a w x h rectangle - into/from a buffer holding at least 2*(w+h) pixels
- * (BORDER_PIXELS below sizes a whole cell's fixed-stride slot; a leaf rect's
- * save area is packed instead - see overlay_leaf_save()'s own comment for
- * why). Used to make a border on a full-width send temporary: unlike the
- * gathered paths, which draw their border into the disposable gather_buf, a
- * full-width send has no scratch copy - it sends fb directly, so drawing
- * the border there would permanently corrupt fb for whoever reads it next:
- * a later gather over this exact cell, or this row simply never being
- * redrawn again. Same pixel order both ways, so save/restore are exact
- * inverses of each other - true regardless of w/h, which is what lets
- * send_full_row() reuse these for both the fixed-size cell border and a
- * leaf rect's variable one. */
+ * a w x h rectangle - into/from a buffer sized 2*(w+h) (BORDER_PIXELS for a
+ * whole cell, LEAF_BORDER_PIXELS for a leaf rect - see both below). Used to
+ * make a border on a full-width send temporary: unlike the gathered paths,
+ * which draw their border into the disposable gather_buf, a full-width send
+ * has no scratch copy - it sends fb directly, so drawing the border there
+ * would permanently corrupt fb for whoever reads it next: a later gather
+ * over this exact cell, or this row simply never being redrawn again. Same
+ * pixel order both ways, so save/restore are exact inverses of each other -
+ * true regardless of w/h, which is what lets send_full_row() reuse these
+ * for both the fixed-size cell border and a leaf rect's variable one. */
 #define BORDER_PIXELS (2 * (COL_WIDTH + STRIP_HEIGHT))
+
+/* A leaf rect is clipped to the caller's box (see dirty_leaf_rects()), so
+ * its perimeter varies - but it can never exceed an unclipped leaf's own
+ * LEAF_W x LEAF_H extent, which bounds the save slot each one needs. */
+#define LEAF_BORDER_PIXELS (2 * (LEAF_W + LEAF_H))
 
 static void save_border(const gfx_color_t *buf, int stride, int w, int h,
                         gfx_color_t *out)
@@ -874,7 +877,8 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
 
 /* send_full_row()'s save/restore scratch for the panel-grid layer
  * (GRID_COLS * BORDER_PIXELS gfx_color_t, 1248 px) and the leaf layer
- * (OVERLAY_LEAF_SAVE_PIXELS below, 3968 px) - 5216 px together.
+ * (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS gfx_color_t, 4992 px) -
+ * 6240 px together.
  *
  * This used to be two buffers malloc'd on enable and freed on disable
  * (~12.5 KB combined). That was the bug: sand needs one ~41 KB contiguous
@@ -900,44 +904,17 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
  *
  * The _Static_assert ties this to GATHER_MAX_PIXELS so a future change to
  * it, or to GRID_COLS/COL_WIDTH/STRIP_HEIGHT/LEAF_SUB (which all feed
- * BORDER_PIXELS/OVERLAY_LEAF_SAVE_PIXELS), that breaks the fit is a compile
- * error, not a silent overflow into DMA-mapped memory - the same failure
- * mode plan_run()'s own comment already warns about for gather_buf's other
- * use. */
+ * BORDER_PIXELS/LEAF_BORDER_PIXELS/LEAF_RECTS_PER_ROW_MAX), that breaks
+ * the fit is a compile error, not a silent overflow into DMA-mapped
+ * memory - the same failure mode plan_run()'s own comment already warns
+ * about for gather_buf's other use. */
 #define OVERLAY_CELL_SAVE_PIXELS (GRID_COLS * BORDER_PIXELS)
-
-/* Unlike the cell layer above, a leaf rect's perimeter is no longer bounded
- * by one leaf's own LEAF_W x LEAF_H extent - dirty_leaf_rects() now hands
- * back one rect per merged RUN of dirty leaves, and a full-width run's
- * perimeter (2 * (GFX_DIRTY_WIDTH + LEAF_H) = 768 px) dwarfs a single
- * leaf's (2 * (LEAF_W + LEAF_H) = 78 px). Sizing a fixed per-rect stride
- * for that worst case, times LEAF_RECTS_PER_ROW_MAX slots, would need
- * 32 * 768 = 24,576 px - far more than GATHER_MAX_PIXELS has to give. So
- * this scratch is packed instead: send_full_row() writes each rect's saved
- * border back-to-back at a running offset (see its own save/restore loops)
- * and bounds the TOTAL, not a per-rect stride.
- *
- * The bound: for one leaf-row with r runs covering n dirty leaves, saved
- * perimeter pixels are 2*(n*LEAF_W) + 2*r*LEAF_H. n is at most
- * LEAF_COLS - (r - 1) (each extra run costs at least one gap leaf), so the
- * whole expression is maximised at r = 1 (one run spanning the whole
- * leaf-row), giving 2 * (GFX_DIRTY_WIDTH + LEAF_H) = 768 px - and that
- * bound applies independently to each of the LEAF_SUB leaf-rows. The macro
- * below is a clean, obviously-conservative read of that same shape rather
- * than the exact tightest bound (LEAF_SUB * 768 = 3072): it credits every
- * leaf-row with LEAF_COLS/2 runs' worth of per-run LEAF_H overhead
- * (LEAF_RECTS_PER_ROW_MAX's own worst case) on top of one full-width scan,
- * which can only overestimate, never fall short:
- *
- *   LEAF_SUB * 2 * (GFX_DIRTY_WIDTH + (LEAF_COLS / 2) * LEAF_H)
- *   = 4 * 2 * (368 + 8 * 16) = 4 * 2 * 496 = 3968 px. */
-#define OVERLAY_LEAF_SAVE_PIXELS \
-    (LEAF_SUB * 2 * (GFX_DIRTY_WIDTH + (LEAF_COLS / 2) * LEAF_H))
+#define OVERLAY_LEAF_SAVE_PIXELS (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS)
 _Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <=
               GATHER_MAX_PIXELS,
               "overlay save/restore scratch must fit inside gather_buf");
 
-/* Typed/flat views into gather_buf's front OVERLAY_CELL_SAVE_PIXELS +
+/* Typed views into gather_buf's front OVERLAY_CELL_SAVE_PIXELS +
  * OVERLAY_LEAF_SAVE_PIXELS pixels, cell-save first and leaf-save right
  * after it - matching the _Static_assert above. Both can be live at once
  * within a single send_full_row() call (both overlay layers can be on
@@ -945,21 +922,16 @@ _Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <=
  * reused twice. Small inline functions rather than static pointers set up
  * once: gather_buf's address never changes after gfx_init(), so there is
  * nothing to cache, and computing them fresh keeps it obvious neither view
- * survives past the call that uses it.
- *
- * The cell layer keeps a fixed-stride typed view (BORDER_PIXELS per cell,
- * GRID_COLS cells, never merged) - overlay_leaf_save() cannot do the same
- * now that a leaf rect's size varies with its run, so it hands back a flat
- * pointer instead; callers track their own running offset into it (see
- * send_full_row()). */
+ * survives past the call that uses it. */
 static inline gfx_color_t (*overlay_cell_save(void))[BORDER_PIXELS]
 {
     return (gfx_color_t (*)[BORDER_PIXELS])gather_buf;
 }
 
-static inline gfx_color_t *overlay_leaf_save(void)
+static inline gfx_color_t (*overlay_leaf_save(void))[LEAF_BORDER_PIXELS]
 {
-    return gather_buf + OVERLAY_CELL_SAVE_PIXELS;
+    return (gfx_color_t (*)[LEAF_BORDER_PIXELS])
+        (gather_buf + OVERLAY_CELL_SAVE_PIXELS);
 }
 
 /* dirty_leaf_rects() output, shared by send_full_row() and gather_and_send()
@@ -978,7 +950,7 @@ static inline gfx_color_t *overlay_leaf_save(void)
  *
  * So this is still malloc'd on enable and freed on disable, exactly as
  * before this fix - but on its own now, at LEAF_RECTS_PER_ROW_MAX *
- * sizeof(dirty_leaf_rect_t) = 512 bytes, a small fraction of what the
+ * sizeof(dirty_leaf_rect_t) = 1024 bytes, a small fraction of what the
  * three buffers together used to cost, and comfortably inside the ~16 KB
  * of heap headroom this fix leaves beside sand's own allocations (see the
  * comment above). Not a static: CONFIG_ESP_MAIN_TASK_STACK_SIZE is 3584
@@ -1168,21 +1140,11 @@ static void send_full_row(int row, int *queued)
                            overlay_cell_save()[col]);
             }
         }
-        /* Leaf rects vary in size (see overlay_leaf_save()'s own comment),
-         * so their save area is packed rather than fixed-stride: each
-         * rect's saved border lands back-to-back at a running byte offset,
-         * `off` tracking where the next one starts. */
-        {
-            gfx_color_t *leaf_save = overlay_leaf_save();
-            int off = 0;
-            for (int i = 0; i < leaf_n; i++) {
-                const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
-                gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
-                const int w = r->x1 - r->x0;
-                const int h = r->y1 - r->y0;
-                save_border(at, GFX_WIDTH, w, h, leaf_save + off);
-                off += 2 * (w + h);
-            }
+        for (int i = 0; i < leaf_n; i++) {
+            const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
+            gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
+            save_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
+                       overlay_leaf_save()[i]);
         }
 
         /* Draw phase - order does not matter now that everything is
@@ -1207,27 +1169,12 @@ static void send_full_row(int row, int *queued)
                                   fb + (size_t)y * GFX_WIDTH);
         xSemaphoreTake(strip_sent, portMAX_DELAY);
 
-        /* Restore. Order does not matter here - commit 5c92cfe established
-         * that every pixel either layer touches was saved before either one
-         * drew, so both saved copies of a shared pixel are the same true
-         * original regardless of which restore runs first or which pixel
-         * "wins". The leaf layer restores FORWARD, recomputing each rect's
-         * packed offset exactly as the save loop above did, rather than
-         * storing an offset array: LEAF_RECTS_PER_ROW_MAX entries would be
-         * a needless array on app_main()'s own small stack
-         * (CONFIG_ESP_MAIN_TASK_STACK_SIZE=3584, see leaf_rect_scratch's own
-         * comment on why that stack is not spent lightly here). */
-        {
-            gfx_color_t *leaf_save = overlay_leaf_save();
-            int off = 0;
-            for (int i = 0; i < leaf_n; i++) {
-                const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
-                gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
-                const int w = r->x1 - r->x0;
-                const int h = r->y1 - r->y0;
-                restore_border(at, GFX_WIDTH, w, h, leaf_save + off);
-                off += 2 * (w + h);
-            }
+        /* Restore in the reverse order of saving. */
+        for (int i = leaf_n - 1; i >= 0; i--) {
+            const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
+            gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
+            restore_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
+                          overlay_leaf_save()[i]);
         }
         if (debug_overlay_on) {
             for (int col = GRID_COLS - 1; col >= 0; col--) {
