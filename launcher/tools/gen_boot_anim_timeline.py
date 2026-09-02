@@ -115,6 +115,56 @@ def meters_to_q12(v):
     return round(v * BOOT_ANIM_ONE)
 
 
+# Mirrors BOOT_ANIM_AXIS_FAR_UNITS/BOOT_ANIM_GRID_SPOKE_FAR_UNITS in
+# boot_anim.h (both 500, by design - see that constant's own comment) -
+# duplicated here rather than imported, same reason BOOT_ANIM_ONE above is:
+# this script stays standalone. The worst-case LOCAL-SPACE coordinate an
+# authored keyframe's own space/camera transform ever has to multiply -
+# an axis/spoke tail is the longest reach this project draws, and this is
+# its value BEFORE that transform (S3L_vec3Xmat4's own input), not after.
+_FAR_UNITS = 500
+_WORST_CASE_S3L_COORD = (_FAR_UNITS * BOOT_ANIM_ONE) >> 3  # BOOT_ANIM_ZETA_TO_S3L
+
+# The scale-overflow guard below trades exactness for a real, defensible
+# margin - see its own comment at the call site for the full derivation.
+# Conservative on purpose: small3dlib's own matrix COMPOSITION step
+# (S3L_mat4Xmat4 in small3dlib.h, also plain int32_t) has its own overflow
+# risk that scales with rotation too, not just this scale product, and is
+# not modeled exactly here - this check catches the dominant, easily-
+# reasoned-about term (the final per-point multiply), not every path to
+# the same failure.
+_MAX_COMBINED_SCALE = 8
+
+
+def check_transform_scale_overflow(kf):
+    """small3dlib's own S3L_vec3Xmat4() (vendored, plain int32_t - this
+    project does not build with S3L_USE_WIDER_TYPES) multiplies a camera-
+    space coordinate by a composed space*camera matrix element that is
+    itself proportional to authored scale*S3L_F. At this project's own
+    largest authored reach (_WORST_CASE_S3L_COORD, from the 500-unit axis/
+    spoke tail), INT32_MAX / (_WORST_CASE_S3L_COORD * S3L_F) is about
+    16.4 - a combined space*camera scale anywhere near that silently wraps
+    the point somewhere nonsensical (signed overflow is undefined
+    behaviour in C, not guaranteed wraparound, so "wraps" is the observed
+    behaviour, not a guarantee). _MAX_COMBINED_SCALE leaves real headroom
+    under that, rather than cutting it close against an estimate that does
+    not model every step of the composition exactly (see this file's own
+    comment above)."""
+    space_scale = max(abs(v) for v in kf["space"]["scale"])
+    camera_scale = max(abs(v) for v in kf["camera"]["scale"])
+    combined = space_scale * camera_scale
+    if combined > _MAX_COMBINED_SCALE:
+        fail("keyframe at %d: space.scale (max %r) * camera.scale (max %r) "
+             "= %r, over this project's own %r safety margin against "
+             "small3dlib's plain-int32_t point/matrix math silently "
+             "overflowing at this project's largest authored reach "
+             "(BOOT_ANIM_AXIS_FAR_UNITS/BOOT_ANIM_GRID_SPOKE_FAR_UNITS, "
+             "both 500) - see boot_anim.h's own comment on "
+             "BOOT_ANIM_AXIS_FAR_UNITS for the full mechanism" %
+             (kf["ms"], space_scale, camera_scale, combined,
+              _MAX_COMBINED_SCALE))
+
+
 def validate(cfg):
     timing = cfg["timing"]
     kfs = cfg["keyframes"]
@@ -126,12 +176,58 @@ def validate(cfg):
         fail("grid_rings must be positive (%r given)" % (timing["grid_rings"],))
     if cfg["grid_step_m"] <= 0:
         fail("grid_step_m must be positive (%r given)" % (cfg["grid_step_m"],))
+    if timing["grid_hue_ms"] <= 0:
+        fail("grid_hue_ms must be positive (%r given) - boot_anim_grid_hue() "
+             "divides by it every frame" % (timing["grid_hue_ms"],))
+    if timing["title_wave_period_ms"] <= 0:
+        fail("title_wave_period_ms must be positive (%r given) - "
+             "boot_anim_title_wave() divides by it every frame" %
+             (timing["title_wave_period_ms"],))
+    if timing["grid_start_ms"] > timing["total_ms"]:
+        fail("grid_start_ms (%d) must not be after total_ms (%d) - "
+             "boot_anim_grid_climb() subtracts them as unsigned, so the "
+             "grid would never climb at all" %
+             (timing["grid_start_ms"], timing["total_ms"]))
     if timing["grid_spokes"] < 0:
         fail("grid_spokes must not be negative (%r given) - 0 hides them, "
              "there is no such thing as fewer" % (timing["grid_spokes"],))
     if timing["grid_spoke_dash"] not in (0, 1):
         fail("grid_spoke_dash must be 0 or 1 (%r given)" %
              (timing["grid_spoke_dash"],))
+    if not 0 <= timing["title_shadow_alpha"] <= 255:
+        fail("title_shadow_alpha must be 0..255 (%r given) - it is written "
+             "straight into a #define read as a C uint8_t; a value outside "
+             "that range would silently wrap rather than fail loudly on "
+             "the device" % (timing["title_shadow_alpha"],))
+    # 368/8/5 mirror BOOT_ANIM_TITLE_VIEW_H/the glyph cell in boot_anim.h -
+    # the same "named here, not pulled from the C header" convention
+    # suite_boot_anim.c's own top comment already uses for this panel's
+    # fixed dimensions. Only a COARSE bound: title_amplitude_px/
+    # title_wave_amplitude_px are the two knobs that can carry a landed
+    # letter off title_height_px, so they stand in as a margin rather than
+    # replaying tween_ease_out()'s own curve here - the exact simulation
+    # is test_the_title_stays_on_the_panel_once_visible() in
+    # suite_boot_anim.c, which this only backstops for a value obviously
+    # wrong enough that no test run would ever be needed to see it.
+    _title_view_h = 368
+    _title_cell_h = 8 * 5
+    _title_margin = (timing["title_amplitude_px"] +
+                     timing["title_wave_amplitude_px"])
+    if (timing["title_height_px"] - _title_margin < 0 or
+            timing["title_height_px"] + _title_cell_h + _title_margin >
+            _title_view_h):
+        fail("title_height_px=%r would carry the title off the top or "
+             "bottom of the %d-pixel-tall viewer's frame once its own "
+             "wobble (title_amplitude_px=%r) and idle wave "
+             "(title_wave_amplitude_px=%r) are accounted for" %
+             (timing["title_height_px"], _title_view_h,
+              timing["title_amplitude_px"], timing["title_wave_amplitude_px"]))
+    if timing["image_start_ms"] < 0 or timing["image_fade_ms"] < 0:
+        fail("image_start_ms/image_fade_ms must not be negative (%r/%r "
+             "given) - boot_anim_image_reveal() hands both to tween_ramp() "
+             "as a uint32_t, where a negative duration wraps to an "
+             "enormous one and the crossfade would silently never finish" %
+             (timing["image_start_ms"], timing["image_fade_ms"]))
 
     last_ms = -1
     for kf in kfs:
@@ -149,6 +245,7 @@ def validate(cfg):
                 if len(kf[xf][axis]) != 3:
                     fail("keyframe at %d: %s.%s needs 3 components" %
                          (kf["ms"], xf, axis))
+        check_transform_scale_overflow(kf)
 
     pen_end = timing["pen_start_ms"] + timing["pen_ms"]
     if pen_end > timing["fade_start_ms"]:
@@ -190,6 +287,20 @@ def validate(cfg):
         warn("the last title letter lands at %d, after fade_start_ms (%d) - "
              "it will still be arriving when the picture starts dissolving"
              % (last_letter_lands, timing["fade_start_ms"]))
+
+    # Only when the crossfade is actually authored to happen at all - the
+    # same guard the wave's own warns above use (cfg["wave_height_m"] !=
+    # 0), and for the same reason: the inert backward-compat default
+    # (image_start_ms == total_ms, see its own setdefault comment) would
+    # otherwise trip this on every regenerate of a file with no
+    # photograph in it.
+    if timing["image_start_ms"] < timing["total_ms"]:
+        image_done = timing["image_start_ms"] + timing["image_fade_ms"]
+        if image_done > timing["fade_start_ms"]:
+            warn("the photograph finishes crossing in at %d, after "
+                 "fade_start_ms (%d) - it will still be arriving as the "
+                 "picture starts dissolving"
+                 % (image_done, timing["fade_start_ms"]))
 
     if timing["pen_finish_ms"] > timing["fade_start_ms"]:
         warn("pen_finish_ms (%d) is after fade_start_ms (%d) - the curve "
@@ -248,6 +359,20 @@ TIMING_ORDER = [
      "the small idle wave once a letter has landed"),
     ("title_wave_period_ms", "BOOT_ANIM_TITLE_WAVE_PERIOD_MS", None),
     ("title_wave_stagger_ms", "BOOT_ANIM_TITLE_WAVE_STAGGER_MS", None),
+    ("title_height_px", "BOOT_ANIM_TITLE_VIEW_Y",
+     "how far down the viewer's frame the title's own centre lands - "
+     "see boot_anim.h's own comment on this section for the frame it is in"),
+    ("title_shadow_dx", "BOOT_ANIM_TITLE_SHADOW_DX",
+     "drop shadow offset, pixels right (negative is left) - 0/0 disables it"),
+    ("title_shadow_dy", "BOOT_ANIM_TITLE_SHADOW_DY",
+     "drop shadow offset, pixels down (negative is up)"),
+    ("title_shadow_alpha", "BOOT_ANIM_TITLE_SHADOW_ALPHA",
+     "shadow density, 0..255 - 0 invisible, 255 solid, between is a "
+     "dithered fake transparency (see gfx_fill_rect_dither() in gfx.c)"),
+    ("image_start_ms", "BOOT_ANIM_IMAGE_START_MS",
+     "the photograph starts crossing in as the function crosses out"),
+    ("image_fade_ms", "BOOT_ANIM_IMAGE_FADE_MS",
+     "how long that one shared crossfade takes - 0 cuts straight to the photo"),
     ("fade_start_ms", "BOOT_ANIM_FADE_START_MS",
      "dissolve into the launcher"),
     ("grid_hue_ms", "BOOT_ANIM_GRID_HUE_MS",
@@ -334,6 +459,34 @@ def main():
     # have appeared in before these existed.
     timing.setdefault("grid_spoke_start_ms", 0)
     timing.setdefault("grid_spoke_draw_ms", 0)
+    # image_start_ms/image_fade_ms are newer again - a file baked before
+    # they existed had no photograph in it at all, and total_ms is what
+    # reproduces that exactly: boot_anim_run() never draws a frame past
+    # total_ms, so defaulting image_start_ms TO total_ms means boot_anim_
+    # image_reveal() is 0 for every frame that is ever actually drawn -
+    # the crossfade is authored but never reached, not merely set to a
+    # short/instant duration, until someone deliberately pulls it
+    # earlier. image_fade_ms's own default only matters once that happens.
+    # title_height_px is newer than the title itself - BOOT_ANIM_TITLE_
+    # VIEW_Y used to be a fixed constant in boot_anim.h (derived from a
+    # golden-rectangle construction - see that section's own comment,
+    # still there as this default's own reasoning), so 50 - what it was
+    # fixed at - is what keeps a file baked before this existed landing
+    # the title exactly where it always did.
+    timing.setdefault("title_height_px", 50)
+    # title_shadow_dx/dy are newer again - the shadow used to be a fixed
+    # (1, 1) two gfx_text_font() calls always drew, so 1/1 is what keeps
+    # a file baked before this existed looking exactly the same rather
+    # than silently losing its shadow.
+    timing.setdefault("title_shadow_dx", 1)
+    timing.setdefault("title_shadow_dy", 1)
+    # title_shadow_alpha is newer again - the shadow used to be fully
+    # solid (there was no dithering to be less than that), so 255 is
+    # what keeps a file baked before this existed looking exactly the
+    # same rather than silently turning translucent.
+    timing.setdefault("title_shadow_alpha", 255)
+    timing.setdefault("image_start_ms", timing.get("total_ms", 5800))
+    timing.setdefault("image_fade_ms", 800)
 
     validate(cfg)
 

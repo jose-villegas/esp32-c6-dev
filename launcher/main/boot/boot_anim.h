@@ -590,12 +590,25 @@ static inline bool boot_anim_project_segment_cs(
         S3L_Vec4 *behind = front0 ? &p1 : &p0;
         const S3L_Vec4 *front = front0 ? &p0 : &p1;
         /* front->z > NEAR_Z >= behind->z (that is what front0 != front1
-         * means), so this denominator is always strictly positive. */
-        const int32_t frac =
-            ((BOOT_ANIM_NEAR_Z - behind->z) * S3L_F) / (front->z - behind->z);
+         * means), so this denominator is always strictly positive.
+         *
+         * Q16, not S3L_F (=512, Q9-ish) - a short curve segment barely
+         * notices the difference, but a spoke or axis tail reaching
+         * hundreds of metres out (BOOT_ANIM_GRID_SPOKE_FAR_UNITS,
+         * BOOT_ANIM_AXIS_FAR_UNITS) crosses the near plane at a fraction
+         * S3L_F's own ~0.2% resolution rounds visibly - measured up to
+         * ~11px of error on a segment that long. The wider intermediate
+         * costs nothing extra at runtime (still one divide, one multiply
+         * per clipped endpoint) and both x/y products stay comfortably
+         * inside int64_t even at this project's largest authored reach. */
+        const int64_t frac_q16 =
+            ((int64_t)(BOOT_ANIM_NEAR_Z - behind->z) << 16) /
+            (front->z - behind->z);
 
-        behind->x += ((front->x - behind->x) * frac) / S3L_F;
-        behind->y += ((front->y - behind->y) * frac) / S3L_F;
+        behind->x += (int32_t)(((int64_t)(front->x - behind->x) *
+                                frac_q16) >> 16);
+        behind->y += (int32_t)(((int64_t)(front->y - behind->y) *
+                                frac_q16) >> 16);
         behind->z = BOOT_ANIM_NEAR_Z;
     }
 
@@ -995,6 +1008,83 @@ static inline uint8_t boot_anim_grid_spoke_reach(uint32_t now_ms)
                       BOOT_ANIM_GRID_SPOKE_DRAW_MS);
 }
 
+/* How far a spoke's reveal currently reaches, in world space, for a given
+ * boot_anim_grid_spoke_reach() fraction (0..255) between `near` and `far`
+ * (draw_grid_spoke()'s own two Q12 bounds, boot_anim.c) - NOT linear in
+ * `reach`, on purpose. A point at distance r from the camera projects to
+ * roughly 1/r on screen, so interpolating the world-space radius itself
+ * linearly in `reach` puts almost all of a spoke's SCREEN-SPACE growth in
+ * the first few percent of the reveal, with the remaining ~97% crawling
+ * an imperceptible amount for the rest of it - measured happening in
+ * practice (a spoke reaching its full, panel-clipping length within the
+ * first ~2% of BOOT_ANIM_GRID_SPOKE_DRAW_MS's own window), and directly
+ * why "how long a spoke takes to reach full length" did not actually read
+ * as controllable.
+ *
+ * Interpolating 1/target linearly in `reach` instead keeps the ON-SCREEN
+ * growth roughly even across the whole reveal, to the same first-order
+ * approximation that makes 1/r itself a reasonable model of on-screen
+ * position - not exact for any specific camera, but far closer than
+ * linear-in-radius for every camera framing this project uses. Below
+ * `near`, the mapping stays linear-in-radius instead, for a reason that
+ * has nothing to do with camera distance and everything to do with the
+ * reciprocal formula itself: it needs a genuine positive radius to
+ * anchor 1/target's OWN starting value to (1/target = 1/near at
+ * reach = r0, by construction), and 1/0 does not exist - there is no way
+ * to smoothly reciprocal-interpolate a reveal that has to visibly start
+ * at radius exactly 0. `near` already being the boundary of draw_grid_
+ * spoke()'s own finely-stepped, dashable portion makes it a convenient
+ * floor to anchor at, not a distance where 1/r happens to be shallow -
+ * it is not: 1/r is steepest of all right at r=0. For this project's own
+ * shipped near=10/far=500, that floor is reached at reach = r0 = 5 (see
+ * below), so the near section still completes in the first ~2% of the
+ * reveal - a real, ACKNOWLEDGED limitation of anchoring the correction
+ * at `near` rather than a smaller radius, not something this comment
+ * claims away.
+ *
+ * Worked out algebraically to avoid computing either reciprocal directly:
+ * 1/target = (1-frac)/near + frac/far, multiplied through by (near*far),
+ * rearranges to target = (near*far) / (far - (far-near)*frac).
+ *
+ * A plain math function (in boot_anim.h, not boot_anim.c) precisely so it
+ * is reachable from the host test suite the way draw_grid_spoke() itself,
+ * living in the hardware-facing .c, is not - see suite_boot_anim.c's own
+ * tests on this function's endpoints and monotonicity. */
+static inline int32_t boot_anim_spoke_reveal_target(int32_t near,
+                                                     int32_t far,
+                                                     uint8_t reach)
+{
+    if (reach == 0) {
+        return 0;
+    }
+    if (reach >= 255 || far <= 0) {
+        return far;
+    }
+
+    /* Where the OLD linear-in-radius mapping would already have reached
+     * `near` - below this reach value there is nothing to correct (see
+     * this function's own comment on why `near` itself stays linear), so
+     * only the reach range ABOVE it switches to reciprocal interpolation.
+     * `r0 <= 0` is the degenerate `near == 0` (or negative) case - the
+     * reciprocal form below needs `near` as a genuine positive lower
+     * bound to interpolate 1/target FROM, so this falls back to the
+     * plain linear mapping across the WHOLE 0..255 range instead, same
+     * as the `reach <= r0` case just below it. */
+    const int32_t r0 = (int32_t)(((int64_t)near * 255) / far);
+    if (reach <= r0 || r0 <= 0) {
+        return (int32_t)(((int64_t)far * reach) / 255);
+    }
+
+    const int32_t frac_q8 =
+        (int32_t)(((int64_t)(reach - r0) << 8) / (255 - r0));
+    const int64_t denom_q8 =
+        ((int64_t)far << 8) - (int64_t)(far - near) * frac_q8;
+    if (denom_q8 <= 0) {
+        return far;   /* degenerate - clamp rather than divide by <=0 */
+    }
+    return (int32_t)((((int64_t)near * far) << 8) / denom_q8);
+}
+
 /* How far the grid's own hue has been mixed toward white, by now - see
  * boot_anim_grid_climb()'s own comment for why the colour needs to climb
  * ALONGSIDE the alpha ceiling, not instead of it: a saturated hue lifted
@@ -1068,8 +1158,16 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 #define BOOT_ANIM_TITLE_VIEW_W 448
 #define BOOT_ANIM_TITLE_VIEW_H 368
 
-/* Where the word rests, in the viewer's frame - the golden rectangle
- * spiral inscribed in it, not a number picked by eye.
+/* Where the word rests, in the viewer's frame. X is fixed - see below for
+ * where it comes from. Y (BOOT_ANIM_TITLE_VIEW_Y, "how far down the word
+ * lands") is authored (title_height_px in the JSON, generated into
+ * boot_anim_timeline.h) rather than fixed here, so it is a knob rather
+ * than a value someone has to come edit this comment to change.
+ *
+ * X comes from the golden rectangle spiral inscribed in the frame, not a
+ * number picked by eye - and Y's own DEFAULT (50, in boot_anim_timeline.
+ * json) is that same construction's Y, kept as the starting point even
+ * though it is no longer literally read from here.
  *
  * Inscribe a golden rectangle R0 in the 448x368 frame, width-matched
  * (448 x 448/phi = 448 x 276.9) and centred vertically. Cut it into a
@@ -1093,23 +1191,23 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
  * centre put it - both the word and the motif read as too far off to one
  * side there; see BOOT_ANIM_FINALE_ORIGIN_VIEW_X's own comment for the
  * same correction on the motif's side, a considerably bigger one.
- * BOOT_ANIM_TITLE_VIEW_X/Y is that point, minus half the word's own box
- * (BOOT_ANIM_TITLE_LEN cells of 8*SCALE+GAP, less one trailing GAP, by
- * 8*SCALE) - gfx_text_font()'s (x, y) is a corner, not a centre - and
- * nudged down by half that box's own height again so the word's CENTRE,
- * not its top edge, sits on the line.
+ * BOOT_ANIM_TITLE_VIEW_X/Y (X here, Y's own default in the JSON) is that
+ * point, minus half the word's own box (BOOT_ANIM_TITLE_LEN cells of
+ * 8*SCALE+GAP, less one trailing GAP, by 8*SCALE) - gfx_text_font()'s
+ * (x, y) is a corner, not a centre - and nudged down by half that box's
+ * own height again so the word's CENTRE, not its top edge, sits on the
+ * line.
  *
  * SCALE went up (3 -> 5, on request - the word wanted to read bigger)
  * without moving the golden point itself: (322.5, 70) is that point,
- * unchanged, and X/Y below are still centred on it. What DID move is how
- * far back from R1's own centre X sits, because the box is bigger now -
- * at the pure golden-centred X the word's own right edge landed a couple
- * of pixels past BOOT_ANIM_TITLE_VIEW_W, failing
+ * unchanged, and X/Y were still centred on it before Y became a knob.
+ * What DID move is how far back from R1's own centre X sits, because the
+ * box is bigger now - at the pure golden-centred X the word's own right
+ * edge landed a couple of pixels past BOOT_ANIM_TITLE_VIEW_W, failing
  * test_the_title_stays_on_the_panel_once_visible(). Nudged a little
  * further left than that strictly requires, for margin - and another
  * 15px left again on top of that, on request. */
 #define BOOT_ANIM_TITLE_VIEW_X 170
-#define BOOT_ANIM_TITLE_VIEW_Y 50
 
 /* BOOT_ANIM_TITLE_STAGGER_MS/FLIGHT_MS/ENTRY_PX (each letter's stagger,
  * flight duration, and how far off-panel it starts - which must clear
@@ -1225,6 +1323,26 @@ static inline boot_anim_title_pos_t boot_anim_title_letter(int i,
     p.y = BOOT_ANIM_TITLE_VIEW_Y + boot_anim_title_wobble(d_q12) +
           boot_anim_title_wave(i, now_ms);
     return p;
+}
+
+/* Turns a drop-shadow offset authored in the READER's frame (dx pixels
+ * right, dy pixels down - what BOOT_ANIM_TITLE_SHADOW_DX/DY's own comment
+ * promises) into the offset draw_title() (boot_anim.c) must add to a
+ * glyph's PANEL-space origin, which boot_anim.c's title_glyph_origin() has
+ * already turned a quarter from the viewer's frame: panel_x = W - view_y -
+ * h, panel_y = view_x. So +panel_x is -view_y (up), and +panel_y is
+ * +view_x (right) - the same quarter-turn, just for an offset instead of a
+ * point, which is why this is a swap-and-negate rather than a plain add.
+ *
+ * A pure, host-testable function on purpose: draw_title() itself cannot be
+ * (it needs a framebuffer and a panel - see suite_boot_anim.c's own top
+ * comment), and this is the one piece of that function's shadow logic
+ * that is just arithmetic, with no gfx call in it. */
+static inline void boot_anim_title_shadow_offset(int dx, int dy,
+                                                  int *panel_dx, int *panel_dy)
+{
+    *panel_dx = -dy;
+    *panel_dy = dx;
 }
 
 /* "Every letter must have landed before the picture starts fading" used to
@@ -1388,6 +1506,66 @@ static inline uint8_t boot_anim_ink(uint32_t now_ms)
 {
     return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_FADE_START_MS,
                                            BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
+}
+
+/* THE CROSSFADE TO THE PHOTOGRAPH
+ *
+ * boot_anim_image.h's own photo of Cerro Autana - the tepui the title is
+ * named after - replaces the zeta-function scene (floor, axes, curve,
+ * zeros) as the animation's background, over one window: how much of the
+ * photo has arrived, 0..255, ramping from BOOT_ANIM_IMAGE_START_MS across
+ * BOOT_ANIM_IMAGE_FADE_MS. Two knobs, authored in boot_anim_timeline.json
+ * exactly like BOOT_ANIM_GRID_SPOKE_START_MS/_DRAW_MS already are for a
+ * spoke's own outward reveal - when it starts, how long it takes.
+ *
+ * Plain tween_ramp(), not eased, unlike boot_anim_finale_reach() right
+ * below - ease_out(r) + ease_out(255 - r) is NOT 255 at every r (an
+ * eased curve and its own mirror do not sum to a constant), so easing
+ * either half of a cross-dissolve makes the midpoint of the transition
+ * read brighter than either end. Linear is what keeps the two halves
+ * summing to exactly one whole picture throughout - see boot_anim_
+ * scene_reach() below, and the test that actually checks this in
+ * suite_boot_anim.c. */
+static inline uint8_t boot_anim_image_reveal(uint32_t now_ms)
+{
+    return tween_ramp(now_ms, BOOT_ANIM_IMAGE_START_MS,
+                      BOOT_ANIM_IMAGE_FADE_MS);
+}
+
+/* The other half of the same window - how much of the zeta-function scene
+ * is still meant to be on screen. Defined as the exact complement of
+ * boot_anim_image_reveal() rather than as a second, independent
+ * tween_ramp() of its own, so the two can never drift apart by a
+ * rounding step at either end - each is computed by a separate divide
+ * inside tween_ramp(), and two separately-rounded ramps are not
+ * guaranteed to still sum to 255 the way one value and its own
+ * subtraction always are.
+ *
+ * A DEPARTURE from this file's own stated design elsewhere (see
+ * scale8()'s comment in boot_anim.c - "one multiply takes the whole
+ * picture down together rather than each element fading on its own
+ * schedule"): this is a SECOND, independent visibility clock, on
+ * purpose, for the floor/axes/curve/zeros ONLY - not the title, which
+ * keeps flying in and wobbling on plain boot_anim_ink() alone,
+ * unaffected by this value entirely.
+ *
+ * Realised in boot_anim.c as COMPOSITE ORDER, not as a multiply folded
+ * into each element's own alpha the way ink is: every draw_* call in
+ * that file mixes its colour off a CONSTANT black (lit()/lit_whitened(),
+ * both gfx_color_mix(COL_BG, ...)) and then stores it - nothing there
+ * reads the pixel already in the framebuffer. A grid line drawn at a
+ * fading alpha over the photograph that way would paint a dark, OPAQUE
+ * scratch, not a fading-transparent one - lit()'s own mix has no idea
+ * there is a photograph underneath to fade toward. So the scene is
+ * instead drawn at its normal, undimmed ink (gated off by this value
+ * once it would be fully covered anyway - see boot_anim_draw_frame()),
+ * and the photograph is composited OVER it afterward, in draw_image(),
+ * which is the one place that actually reads gfx_framebuffer() first -
+ * a real cross-dissolve, not a second alpha multiply pretending to be
+ * one. */
+static inline uint8_t boot_anim_scene_reach(uint32_t now_ms)
+{
+    return (uint8_t)(255u - boot_anim_image_reveal(now_ms));
 }
 
 #define BOOT_ANIM_HUE_START 875    /* azure, at the foot of the climb */
@@ -1558,8 +1736,26 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
  * already fixed for spokes - see its own comment on why "far enough" has
  * to be a real margin, not a guess). Matching that same value here, not a
  * smaller one - both lines need the identical guarantee, and 500 is
- * already confirmed numerically safe (a fixed-point overflow risk in
- * principle) up to the largest space scale this project's own seed uses. */
+ * already confirmed numerically safe up to the largest space scale this
+ * project's own seed uses.
+ *
+ * That headroom is not unlimited, and NOT guarded here - the actual
+ * multiply that could overflow is small3dlib's own S3L_vec3Xmat4()
+ * (vendored, plain int32_t - this project does not build with
+ * S3L_USE_WIDER_TYPES, see boot_anim_camera_to_screen()'s own comment on
+ * that tradeoff), composing this reach with whatever the space and
+ * camera transforms' own SCALE channels are authored to that frame. At
+ * this 500-unit reach (BOOT_ANIM_ZETA_TO_S3L(500 * BOOT_ANIM_ONE) = a
+ * 256000 S3L-unit LOCAL-space coordinate, S3L_vec3Xmat4()'s own input
+ * before that multiply, not its output), INT32_MAX / (256000 * S3L_F)
+ * is about 16.4 - a combined space*camera scale anywhere near THAT, not
+ * merely "tens", risks it. Guarded instead in gen_boot_anim_timeline.py's
+ * own validate() (check_transform_scale_overflow(), a real margin under
+ * that 16.4 figure, not this exact boundary - see its own comment for
+ * why some slack is deliberate) rather than here, at the point authored
+ * data actually enters, the same as this project's other keyframe
+ * validation - not a per-frame runtime check for something only an
+ * authored edit can ever trigger. */
 #define BOOT_ANIM_AXIS_FAR_UNITS 500
 
 /*---------------------------------------------------------------------------

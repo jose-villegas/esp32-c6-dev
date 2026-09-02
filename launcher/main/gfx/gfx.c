@@ -642,6 +642,90 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
 }
 
 /*---------------------------------------------------------------------------
+ * Dithered fake transparency
+ *
+ * gfx has no blending anywhere (see draw_glyph_font()'s own comment on why a
+ * >1bpp font is skipped rather than drawn: nothing here can mix two colours
+ * by coverage) - this is the other way to fake it, and the classic one:
+ * ordered (Bayer) dithering picks WHICH pixels to draw, not how to blend the
+ * ones it does. No extra framebuffer read, no float math, just a per-pixel
+ * threshold test against a small fixed table - practically free next to a
+ * real blend, which is exactly why 8-bit consoles used it for shadows and
+ * water decades before this chip's own class of hardware could afford
+ * anything better.
+ *---------------------------------------------------------------------------*/
+
+/* The standard order-4 Bayer matrix, values 0..15 rather than pre-scaled to
+ * 0..255 - gfx_fill_rect_dither() scales the ONE side that actually needs
+ * to be a byte (alpha, an input this file does not control), not the table
+ * it is compared against.
+ *
+ * Indexed by each pixel's own ABSOLUTE panel row/col (row & 3, col & 3),
+ * not a position local to whatever shape is being dithered. That is what
+ * keeps two dithered shapes that overlap or sit edge to edge in phase with
+ * each other - a local (per-rect) index would have every dithered rect
+ * restart the pattern at its own corner, which reads as a seam where two
+ * of them meet rather than one continuous texture. */
+static const uint8_t dither4x4[4][4] = {
+    {  0,  8,  2, 10 },
+    { 12,  4, 14,  6 },
+    {  3, 11,  1,  9 },
+    { 15,  7, 13,  5 },
+};
+
+/* gfx_fill_rect(), but at `alpha`'s own apparent coverage instead of solid -
+ * 0 draws nothing, 255 draws every pixel, everything between is one of 16
+ * graduated levels (dither4x4's own size), not a smooth per-pixel blend.
+ * Coarse on purpose: a genuine alpha blend needs a framebuffer READ this
+ * panel's other primitives do not pay for, and 16 levels is already finer
+ * than this chip's own class of hardware could dither convincingly on
+ * anything smaller than a few dozen pixels across.
+ *
+ * 255 takes its own unconditional path rather than the dither test, so the
+ * fully-solid case - what gfx_fill_rect() itself, and every caller that
+ * never asks for less than full alpha, still gets - is never one Bayer
+ * cell short of solid the way a plain `alpha > threshold` test would
+ * leave it (the highest table value, 15, can never compare less than a
+ * scaled 255 by one ULP of the shift below). 0 returns before touching the
+ * framebuffer or marking anything dirty, the same "truly nothing happened"
+ * contract boot_anim.c's draw_image() already uses for its own 0-alpha
+ * case. */
+void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
+                          uint8_t alpha)
+{
+    if (alpha == 0) {
+        return;
+    }
+
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+
+    if (x0 < clip.x0) x0 = clip.x0;
+    if (y0 < clip.y0) y0 = clip.y0;
+    if (x1 > clip.x1) x1 = clip.x1;
+    if (y1 > clip.y1) y1 = clip.y1;
+
+    /* Rounded, not truncated - a plain `alpha >> 4` maps every alpha in
+     * 1..15 to level 0, which then never compares greater than any
+     * dither4x4 cell (0..15) and draws nothing at all: an author-visible
+     * value that is supposed to mean "barely there" instead means
+     * "invisible", indistinguishable from alpha 0. +8 rounds to the
+     * nearest of the 16 levels instead of always flooring. */
+    const int level = (alpha + 8) >> 4;   /* 0..16 */
+
+    for (int row = y0; row < y1; row++) {
+        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
+        const uint8_t *drow = dither4x4[row & 3];
+        for (int col = x0; col < x1; col++) {
+            if (alpha >= 255 || level > drow[col & 3]) {
+                dst[col] = color;
+            }
+        }
+    }
+
+    mark_band(y0, y1);
+}
+
+/*---------------------------------------------------------------------------
  * Text
  *
  * One font-aware path (gfx_text_font(), gfx_font_width()) that everything
@@ -782,6 +866,99 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
                      int scale, int quarter_turns)
 {
     gfx_text_font(x, y, text, color, scale, quarter_turns, gfx_default_font());
+}
+
+/*---------------------------------------------------------------------------
+ * Dithered text
+ *
+ * A second, complete copy of draw_rotated_font_pixel()/draw_glyph_font()/
+ * gfx_text_font() rather than one shared core threaded with an alpha
+ * parameter - on purpose: gfx_text_font() is the single font-aware path
+ * every other text call in this file, and every caller of it in the whole
+ * tree, already goes through, and it is worth that path staying exactly
+ * the code it was before dithering existed, provably unable to regress
+ * from this addition, rather than trusting a compiler to fold an
+ * `alpha == 255` check back out of it at every call site forever. The
+ * duplication is small (three short functions) and it buys that
+ * guarantee outright instead of by inspection.
+ *---------------------------------------------------------------------------*/
+
+static void draw_rotated_font_pixel_dither(const gfx_font_t *font, int x,
+                                           int y, int row, int col,
+                                           int scale, int turn,
+                                           gfx_color_t color, uint8_t alpha)
+{
+    int px, py;
+    switch (turn) {
+    case 1:  px = font->cell_h - 1 - row; py = col;                   break;
+    case 2:  px = font->cell_w - 1 - col; py = font->cell_h - 1 - row; break;
+    case 3:  px = row;                    py = font->cell_w - 1 - col; break;
+    default: px = col;                    py = row;                   break;
+    }
+    gfx_fill_rect_dither(x + px * scale, y + py * scale, scale, scale,
+                         color, alpha);
+}
+
+static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
+                                   unsigned char ch, gfx_color_t color,
+                                   int scale, int turn, uint8_t alpha)
+{
+    if (font->bpp != 1) {
+        return;
+    }
+    if (ch < font->first || (unsigned)(ch - font->first) >= font->count) {
+        return;
+    }
+
+    const uint8_t *glyph = font->atlas + (size_t)(ch - font->first) * font->cell_h;
+
+    for (int row = 0; row < font->cell_h; row++) {
+        const uint8_t bits = glyph[row];
+        if (bits == 0) {
+            continue;
+        }
+        for (int col = 0; col < font->cell_w; col++) {
+            if (bits & (1 << col)) {
+                draw_rotated_font_pixel_dither(font, x, y, row, col, scale,
+                                               turn, color, alpha);
+            }
+        }
+    }
+}
+
+/* gfx_text_font(), but every glyph pixel goes through gfx_fill_rect_dither()
+ * at `alpha` instead of a solid gfx_fill_rect() - see that function's own
+ * comment for what `alpha` actually controls. Exists for boot_anim.c's
+ * title shadow (a dithered shadow reads as translucent - the background
+ * shows through it in a fine stipple - rather than a hard, opaque
+ * silhouette), but nothing here is boot-animation-specific: any caller
+ * wanting text that fades rather than cuts is the intended use. */
+void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
+                          int scale, int quarter_turns,
+                          const gfx_font_t *font, uint8_t alpha)
+{
+    if (scale < 1) {
+        scale = 1;
+    }
+
+    const int turn = ((quarter_turns % 4) + 4) % 4;
+
+    /* Same table as gfx_text_font()'s own, deliberately - see that
+     * function's own comment on what each entry means. */
+    static const int step[4][2] = {
+        {  1,  0 },
+        {  0,  1 },
+        { -1,  0 },
+        {  0, -1 },
+    };
+
+    for (const char *p = text; *p != '\0'; p++) {
+        const unsigned char ch = (unsigned char)*p;
+        draw_glyph_font_dither(font, x, y, ch, color, scale, turn, alpha);
+        const int adv = gfx_font_advance(font, ch, scale);
+        x += step[turn][0] * adv;
+        y += step[turn][1] * adv;
+    }
 }
 
 /*---------------------------------------------------------------------------

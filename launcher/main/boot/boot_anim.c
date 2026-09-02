@@ -22,16 +22,38 @@
  * trail behind the pen re-colours a long stretch of curve every frame, so a
  * frame differs from the one before it almost everywhere and there is nothing
  * to save. The clear also gets the picture back to true black, which is both
- * what the additive strokes need underneath them and what the dissolve at the
- * end fades into.
+ * what the additive strokes need underneath them and (until the photograph
+ * arrives - see draw_image()'s own comment on why that phase composites
+ * rather than clearing into) what the dissolve at the end fades into.
  *===========================================================================*/
 
 #include "boot/boot_anim.h"
 
+#include <string.h>
+
+#include "boot/boot_anim_image.h"
 #include "display/display.h"
 #include "gfx/gfx.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
+
+/* The shipped photo's own shape has to match this panel exactly - see
+ * gen_boot_anim_image.py's own top comment for why it is generated
+ * pre-rotated into panel space rather than rotated at draw time. This is
+ * the "shipped artifact tested independently of the generator" half of
+ * this project's generated-file convention (CLAUDE.md's "Generated
+ * files" section) for an asset with no underlying math to check pixel
+ * content against - what CAN still be checked, at compile time, for
+ * free, is that the array is exactly one framebuffer's worth of the
+ * right shape, which is also the exact fact draw_image()'s own memcpy
+ * fast path below depends on being true. */
+_Static_assert(BOOT_ANIM_IMAGE_W == GFX_WIDTH && BOOT_ANIM_IMAGE_H == GFX_HEIGHT,
+    "boot_anim_image.h was generated for a different panel - regenerate it: "
+    "python tools/gen_boot_anim_image.py ../design/boot/boot.png");
+_Static_assert(sizeof(boot_anim_image) ==
+                   (size_t)GFX_WIDTH * GFX_HEIGHT * sizeof(gfx_color_t),
+    "the photo is not exactly one framebuffer - draw_image()'s memcpy "
+    "fast path assumes it is");
 
 /* Only boot_anim_run() itself, at the bottom of this file, touches
  * ESP-IDF/FreeRTOS - see gfx.c's own ESP_PLATFORM comment for why that is
@@ -104,29 +126,31 @@ static gfx_color_t lit_whitened(uint32_t rgb, uint8_t whiten, uint8_t alpha)
 }
 
 /*---------------------------------------------------------------------------
- * Projection helper
+ * Projection
  *
- * boot_anim_project() (boot_anim.h) already does the real work - a matrix-
- * vector multiply by the frame's composed space-then-camera transform, then
- * a perspective divide - this is just the two-output-parameters call spelled
- * as an expression, which is what every draw_* call site below actually
- * wants: a point's screen (x, y) together, not one coordinate at a time the
- * way the old three-fixed-directions projection could cheaply offer.
+ * boot_anim.h's projection family - a matrix-vector multiply by the frame's
+ * composed space-then-camera transform, then a perspective divide - does
+ * the real work; there is no local wrapper here any more, so every draw_*
+ * call site below reads one of boot_anim.h's own functions directly.
+ * Which one depends on what is being drawn, not a single shared choice:
+ * a lone point (a zero marker, a pen head, an axis label anchor) reads
+ * boot_anim_project_point(), which rejects outright rather than draw
+ * somewhere nonsensical for a point behind the camera (see that
+ * function's own comment); a LINE (a curve segment, a grid ring or
+ * spoke, an axis arm) reads boot_anim_project_segment()/boot_anim_
+ * project_segment_cs() instead, which clips a segment straddling the
+ * near plane to where it actually crosses it rather than rejecting the
+ * whole thing - see that function's own comment for why a segment needs
+ * the extra step a lone point does not. Nothing left here calls the raw,
+ * unclipped boot_anim_project() at all - see the three "Not boot_anim_
+ * project() directly" comments below for the class of bug that used to
+ * risk.
  *
- * There is no separate "shrunk" variant any more either - what used to be a
- * post-projection pixel-space shrink (boot_anim_motif_shrink_q8(), applied
- * here via csx()/csy()) is now the space transform's own SCALE channel,
- * baked into the matrix `view` already carries. Every draw_* call below
- * reads this one function, at full scale, always. */
-typedef struct { int x, y; } screen_pt_t;
-
-static screen_pt_t project(int32_t re, int32_t im, int32_t t,
-                           const boot_anim_view_t *view)
-{
-    screen_pt_t p;
-    boot_anim_project(re, im, t, view, &p.x, &p.y);
-    return p;
-}
+ * There is no separate "shrunk" variant either - what used to be a post-
+ * projection pixel-space shrink (boot_anim_motif_shrink_q8(), applied here
+ * via csx()/csy()) is now the space transform's own SCALE channel, baked
+ * into the matrix `view` already carries. Every draw_* call below reads
+ * this, at full scale, always. */
 
 /* A whole number of grid units, as a Q12 value. */
 static int32_t units(int n)
@@ -158,7 +182,7 @@ static int32_t units(int n)
  * `far`/`d` are fixed local-space reach now, not scaled by a shrink of
  * their own - the grid IS the plane the curve and axes are drawn against,
  * and now reads as the same scale changing they do because it goes
- * through the exact same space transform they do (see project() above),
+ * through the exact same space transform they do (see "Projection" above),
  * rather than riding its own separate pulse the way it used to. */
 
 /* Segments per ring's own circle - fixed, a tuned-by-eye smoothness/cost
@@ -313,7 +337,13 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
  * given segment draws: the loop simply stops early and the tail simply
  * does not reach as far yet, so a spoke mid-reveal costs less to draw
  * than a finished one, not the same amount with the far end thrown
- * away. */
+ * away.
+ *
+ * `target` itself (see boot_anim_spoke_reveal_target()) is NOT `reach`
+ * scaled linearly onto `near..far` - a linear world-space target puts
+ * nearly all of the tail's own ON-SCREEN growth in the first few percent
+ * of the reveal, since screen position falls off closer to 1/radius than
+ * linearly with it. */
 static void draw_grid_spoke(uint16_t turn, int32_t near, int32_t far,
                             gfx_color_t c, bool dash, uint8_t reach,
                             const boot_anim_view_t *view)
@@ -322,7 +352,7 @@ static void draw_grid_spoke(uint16_t turn, int32_t near, int32_t far,
     bool have_prev = false;
     int32_t last_radius = 0;
 
-    const int32_t target = (int32_t)(((int64_t)far * reach) / 255);
+    const int32_t target = boot_anim_spoke_reveal_target(near, far, reach);
     const int32_t near_target = target < near ? target : near;
     const int max_step = near > 0 ?
         (int)(((int64_t)BOOT_ANIM_GRID_SPOKE_STEPS * near_target) / near) : 0;
@@ -366,8 +396,6 @@ static void draw_grid_spoke(uint16_t turn, int32_t near, int32_t far,
 static void draw_floor(uint32_t now_ms, uint8_t ink,
                        const boot_anim_view_t *view)
 {
-    const int32_t far = (int32_t)BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12;
-
     /* The three values the ring loop below hands straight to
      * boot_anim_wave_height() - see its own comment on why a zero
      * amplitude or wavelength already comes back flat with no separate
@@ -385,8 +413,19 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
         if (alpha == 0) {
-            continue;       /* faded out with distance - and so is everything
-                             * beyond it, but the loop is nine long */
+            /* Not just THIS ring faded out with distance - every ring
+             * beyond it is too, so there is nothing left for the rest of
+             * the loop to draw. boot_anim_grid_alpha()'s own `arrived`
+             * and `near` factors are both non-increasing in `ring` for a
+             * fixed `now_ms` (a later ring starts fading in later, and
+             * `left` shrinks as ring grows), and scale8() is monotonic
+             * in its own first argument - so once this product hits
+             * zero, it stays zero for every ring after it. `break`, not
+             * `continue`: with BOOT_ANIM_GRID_RINGS large (the ring
+             * count is authored, not fixed), skipping the rest outright
+             * saves a real number of otherwise-wasted boot_anim_grid_
+             * alpha() calls every frame, not just a cosmetic difference. */
+            break;
         }
 
         /* The floor is the one thing on screen the whole time that is not
@@ -419,14 +458,16 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     if (spoke_reach > 0) {
         /* A spoke is a structural guide line, the same as an axis - not
          * the ring data the wave is actually about, which is what
-         * BOOT_ANIM_GRID_RINGS's own finite count is really describing.
-         * Not bounded by (or even related to) `far` at all: the actual
-         * limit is wherever the projected line crosses the panel's own
-         * edge - gfx_line_ex()'s own clip_line() already computes exactly
-         * that x,y intersection for any segment reaching past it, so a
-         * radius this far out is "effectively forever" for every camera
-         * framing this project uses, not a guess at a specific reach that
-         * happens to usually be enough. */
+         * BOOT_ANIM_GRID_RINGS's own finite count (BOOT_ANIM_GRID_RINGS *
+         * BOOT_ANIM_GRID_STEP_Q12, the ring loop's own `d` above) is
+         * really describing. A spoke is not bounded by, or even related
+         * to, that finite reach at all: the actual limit is wherever the
+         * projected line crosses the panel's own edge - gfx_line_ex()'s
+         * own clip_line() already computes exactly that x,y intersection
+         * for any segment reaching past it, so a radius this far out is
+         * "effectively forever" for every camera framing this project
+         * uses, not a guess at a specific reach that happens to usually
+         * be enough. */
         for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
             const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
             draw_grid_spoke(turn, units(BOOT_ANIM_GRID_SPOKE_NEAR_UNITS),
@@ -526,13 +567,28 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
      * simplest to let the labels belong to the short-arm phase only and
      * drop away once the arms start growing past it. */
     if (reach == 255 && finale == 0) {
-        const screen_pt_t re_tip = project(arm, 0, 0, view);
-        const screen_pt_t im_tip = project(0, arm, 0, view);
-        const screen_pt_t t_tip  = project(0, 0, top, view);
+        /* Not boot_anim_project() directly: a label anchored to a point
+         * behind the camera would draw wherever the unclipped divide
+         * happens to land it, not "no label" - see
+         * boot_anim_project_point()'s own comment. finale == 0 keeps
+         * every arm well within the short, always-in-front-of-camera
+         * phase in practice, but the check costs nothing and keeps this
+         * call site consistent with every other one that projects a
+         * single point rather than a segment. */
+        int re_x, re_y, im_x, im_y, t_x, t_y;
+        const bool re_ok = boot_anim_project_point(arm, 0, 0, view, &re_x, &re_y);
+        const bool im_ok = boot_anim_project_point(0, arm, 0, view, &im_x, &im_y);
+        const bool t_ok  = boot_anim_project_point(0, 0, top, view, &t_x, &t_y);
 
-        draw_label(re_tip.x + LABEL_GAP * 2, re_tip.y + LABEL_GAP, "Re", ink);
-        draw_label(im_tip.x - LABEL_GAP * 2, im_tip.y + LABEL_GAP, "Im", ink);
-        draw_label(t_tip.x + LABEL_GAP * 2, t_tip.y - LABEL_GAP, "t", ink);
+        if (re_ok) {
+            draw_label(re_x + LABEL_GAP * 2, re_y + LABEL_GAP, "Re", ink);
+        }
+        if (im_ok) {
+            draw_label(im_x - LABEL_GAP * 2, im_y + LABEL_GAP, "Im", ink);
+        }
+        if (t_ok) {
+            draw_label(t_x + LABEL_GAP * 2, t_y - LABEL_GAP, "t", ink);
+        }
     }
 }
 
@@ -555,9 +611,9 @@ static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
         if (t > pen_t_q8) {
             break;      /* the table is in order, so nothing after it either */
         }
-        /* Not project(): a marker behind the camera is not "off screen",
-         * it is a lit square somewhere it was never meant to be - see
-         * boot_anim_project_point()'s own comment. */
+        /* Not boot_anim_project() directly: a marker behind the camera is
+         * not "off screen", it is a lit square somewhere it was never
+         * meant to be - see boot_anim_project_point()'s own comment. */
         int x, y;
         if (!boot_anim_project_point(0, 0, t, view, &x, &y)) {
             continue;
@@ -662,9 +718,9 @@ static void draw_heads(int32_t colour_pen, uint8_t ink,
             i = BOOT_ANIM_CURVE_POINTS - 1;   /* the table ran out first */
         }
         const boot_anim_pt_t p = boot_anim_sample(i);
-        /* Not project(): a pen behind the camera is not "off screen", it
-         * is a bright disc somewhere it was never meant to be - see
-         * boot_anim_project_point()'s own comment. */
+        /* Not boot_anim_project() directly: a pen behind the camera is
+         * not "off screen", it is a bright disc somewhere it was never
+         * meant to be - see boot_anim_project_point()'s own comment. */
         int x, y;
         if (!boot_anim_project_point(p.re, p.im, p.t, view, &x, &y)) {
             continue;
@@ -805,7 +861,53 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
  * choreography; this is only gfx calls. White rather than a hue-wheel
  * colour, deliberately: the word is the one thing on screen that is not
  * part of the curve, and it stays legible against whatever the spiral is
- * doing behind it precisely because it does not compete on colour. */
+ * doing behind it precisely because it does not compete on colour.
+ *
+ * Drop-shadowed - a second copy of each letter, offset by (BOOT_ANIM_
+ * TITLE_SHADOW_DX, _DY) pixels, drawn FIRST so the ink lands on top of
+ * it. Both authored (title_shadow_dx/dy in the JSON) - signed, so the
+ * pair controls direction as well as reach: (1,1) is the classic down-
+ * right shadow, (-2,0) a hard-left one, (0,0) disables the extra draw
+ * outright rather than drawing a zero-offset copy under the ink for no
+ * visible effect.
+ *
+ * DX/DY are authored in the READER's frame (right/down, same as the
+ * comment above promises), but title_glyph_origin() has already turned
+ * (px, py) into PANEL space - so the offset goes through
+ * boot_anim_title_shadow_offset() (boot_anim.h) first, the same quarter-
+ * turn done to the origin itself, or "down-right" comes out as "up-
+ * right". See that function's own comment for the derivation - it is
+ * pure arithmetic, host-tested there, since this function cannot be.
+ *
+ * DITHERED, not solid - gfx_text_font_dither() at BOOT_ANIM_TITLE_
+ * SHADOW_ALPHA (also authored) instead of a plain gfx_text_font(), so
+ * the shadow can read as translucent rather than a hard black
+ * silhouette: fake transparency, the same ordered-dither trick this
+ * panel uses for it everywhere, since it has no real blending anywhere
+ * to fall back on (see gfx_fill_rect_dither()'s own comment in gfx.c).
+ * 255 (the backward-compatible default) is guaranteed identical to the
+ * old plain gfx_text_font() call, pixel for pixel - see that same
+ * comment for why 255 takes its own unconditional path rather than the
+ * dither test. 0 disables the shadow outright, same as dx=dy=0.
+ *
+ * Plain COL_BG, not derived from the ink the way a general-purpose halo
+ * would be (see ui_style.h's own ui_text_halo(), used briefly here
+ * before this became a knob, dropped when it stopped being ABLE to
+ * offer a variable offset anyway - no reason to keep a cross-layer
+ * microui.h dependency for a fixed distance this file no longer uses).
+ * A luminance-derived halo would flip to full white the instant ink
+ * dips dark, which is backwards for what this word actually does at the
+ * end of the animation: fading toward black together with everything
+ * else (see boot_anim_ink()). Plain COL_BG is already true black on this
+ * AMOLED (see this file's own top comment), so it is already invisible
+ * against the black background for most of the animation and only
+ * starts doing real work once the photograph arrives behind the word
+ * (see draw_image()) - which is also the one moment a white-on-white-ish
+ * word would actually need it.
+ *
+ * Up to two gfx_text_font*() calls per letter now instead of one - real,
+ * but bounded to six letters, and paid only for the ~1s the title is
+ * actually flying in and settling, not the whole animation. */
 static void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
@@ -814,15 +916,101 @@ static void draw_title(uint32_t now_ms, uint8_t ink)
     const int glyph_h = gfx_font_height(font, BOOT_ANIM_TITLE_SCALE);
     char one[2] = { 0, 0 };
 
+    const bool has_shadow =
+        (BOOT_ANIM_TITLE_SHADOW_DX != 0 || BOOT_ANIM_TITLE_SHADOW_DY != 0) &&
+        BOOT_ANIM_TITLE_SHADOW_ALPHA != 0;
+
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const boot_anim_title_pos_t p = boot_anim_title_letter(i, now_ms);
         int px, py;
         title_glyph_origin(p.x, p.y, glyph_w, glyph_h, &px, &py);
 
         one[0] = BOOT_ANIM_TITLE[i];
+        if (has_shadow) {
+            int shadow_dx, shadow_dy;
+            boot_anim_title_shadow_offset(BOOT_ANIM_TITLE_SHADOW_DX,
+                                          BOOT_ANIM_TITLE_SHADOW_DY,
+                                          &shadow_dx, &shadow_dy);
+            gfx_text_font_dither(px + shadow_dx, py + shadow_dy, one, COL_BG,
+                                 BOOT_ANIM_TITLE_SCALE, DISPLAY_LANDSCAPE,
+                                 font, BOOT_ANIM_TITLE_SHADOW_ALPHA);
+        }
         gfx_text_font(px, py, one, c, BOOT_ANIM_TITLE_SCALE,
                      DISPLAY_LANDSCAPE, font);
     }
+}
+
+/*---------------------------------------------------------------------------
+ * The photograph
+ *
+ * The one thing here that is not drawn but COMPOSITED: every draw_* call
+ * above computes a colour and STORES it - lit()/lit_whitened() both mix
+ * off the constant COL_BG, and gfx_pixel()/gfx_line_ex() write whatever
+ * they are handed. Nothing above ever reads the pixel already sitting in
+ * the framebuffer. That is fine over black and wrong over a photograph -
+ * a half-faded grid line drawn that way would paint a dark, OPAQUE
+ * scratch across the mountain, not a fading-transparent one - so the
+ * crossfade happens here instead, the one place a draw call actually
+ * reads gfx_framebuffer() before writing it. boot_anim_draw_frame() below
+ * draws the scene (floor/axes/curve/zeros) at full, undimmed ink, gated
+ * off once boot_anim_scene_reach() says it is about to be fully covered
+ * anyway; this then blends the photograph OVER whatever that left behind,
+ * at boot_anim_image_reveal() - the exact cross-dissolve (1-r)*scene +
+ * r*photo. The title is drawn AFTER this call, untouched by any of it -
+ * see boot_anim_scene_reach()'s own comment in boot_anim.h for why that
+ * is a deliberate departure from this file's "one multiply takes the
+ * whole picture down together" design elsewhere.
+ *
+ * Writes through gfx_framebuffer() directly rather than 164,864
+ * gfx_pixel() calls - the same bulk path app_cube.c and app_sand.c's own
+ * dirty-row writer already take for a full-frame write, and with it the
+ * same obligation gfx.h's own dirty-tracking comment states: gfx cannot
+ * see a write through this pointer, so the caller marks it. gfx_clear()
+ * has already marked everything dirty this frame, so the call below is
+ * redundant today - it is here because the contract says so regardless,
+ * and because that redundancy is not guaranteed to still hold if this
+ * frame ever grows a partial clear. */
+static void draw_image(uint8_t ink, uint8_t reveal)
+{
+    if (reveal == 0) {
+        return;
+    }
+
+    gfx_color_t *fb = gfx_framebuffer();
+    const size_t n = (size_t)GFX_WIDTH * GFX_HEIGHT;
+
+    if (reveal == 255 && ink == 255) {
+        /* Fully arrived and not yet dissolving - which is most of the
+         * photograph's time on screen. gfx_color_mix() is exact at both
+         * of its own endpoints, so this is the identical result the
+         * general loop below would produce, for a plain row-major copy
+         * of one framebuffer's worth of already-panel-format pixels -
+         * true only because the two _Static_asserts near this file's own
+         * includes make it true, not merely likely. */
+        memcpy(fb, boot_anim_image, n * sizeof *fb);
+    } else if (ink == 255) {
+        /* The crossfade itself, the common case: ink is 255 for the
+         * whole of it unless a timeline is deliberately authored to
+         * overlap the two dissolves, so hoisting that test out of the
+         * loop halves the per-pixel work here. */
+        for (size_t i = 0; i < n; i++) {
+            fb[i] = gfx_color_mix(fb[i], (gfx_color_t)boot_anim_image[i],
+                                  reveal);
+        }
+    } else {
+        /* Dissolving, and possibly still arriving at once. Both
+         * multiplies, in the order they mean: the photograph is lifted
+         * off black by ink first (the same "how lit is anything" ink
+         * already governs everywhere else), and THAT lit result is what
+         * gets blended over what the scene left in the framebuffer. */
+        for (size_t i = 0; i < n; i++) {
+            const gfx_color_t lit_px =
+                gfx_color_mix(COL_BG, (gfx_color_t)boot_anim_image[i], ink);
+            fb[i] = gfx_color_mix(fb[i], lit_px, reveal);
+        }
+    }
+
+    gfx_mark_all_dirty();
 }
 
 /*---------------------------------------------------------------------------
@@ -831,7 +1019,9 @@ static void draw_title(uint32_t now_ms, uint8_t ink)
 
 void boot_anim_draw_frame(uint32_t now_ms)
 {
-    const uint8_t ink = boot_anim_ink(now_ms);
+    const uint8_t ink    = boot_anim_ink(now_ms);
+    const uint8_t reveal = boot_anim_image_reveal(now_ms);
+    const uint8_t scene  = boot_anim_scene_reach(now_ms);
 
     /* Reads now_ms directly and derives everything from it internally - see
      * boot_anim_view()'s own comment in boot_anim.h for where the composed
@@ -843,15 +1033,27 @@ void boot_anim_draw_frame(uint32_t now_ms)
                                                  now_ms);
 
     gfx_clear(COL_BG);
-    draw_floor(now_ms, ink, &view);
-    draw_axes(now_ms, ink, &view);
 
-    /* Zeros before the curve, so the curve's own glow lands on top of them
-     * rather than the dots punching holes in it. */
-    const int32_t reached = draw_curve(now_ms, ink, &view);
-    draw_zeros(reached, ink, &view);
+    /* Gated the same way the title already is below: once the photograph
+     * is about to fully cover the panel, this is a whole frame of drawing
+     * draw_image() is going to overwrite pixel for pixel - see boot_anim_
+     * scene_reach()'s own comment in boot_anim.h for why this is a plain
+     * skip rather than a second alpha multiply threaded into `ink`. */
+    if (scene > 0) {
+        draw_floor(now_ms, ink, &view);
+        draw_axes(now_ms, ink, &view);
 
-    /* Gated rather than always called: every letter's own ramp is already
+        /* Zeros before the curve, so the curve's own glow lands on top of
+         * them rather than the dots punching holes in it. */
+        const int32_t reached = draw_curve(now_ms, ink, &view);
+        draw_zeros(reached, ink, &view);
+    }
+
+    draw_image(ink, reveal);
+
+    /* Last, so it lands on top of the curve early in the animation and on
+     * top of the photograph later - see draw_image()'s own comment.
+     * Gated rather than always called: every letter's own ramp is already
      * zero before BOOT_ANIM_TITLE_START_MS, so skipping the six gfx calls
      * entirely for the 2.7s before that is a real saving, not just tidiness. */
     if (now_ms >= BOOT_ANIM_TITLE_START_MS) {

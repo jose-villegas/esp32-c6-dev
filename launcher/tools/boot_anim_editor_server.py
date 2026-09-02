@@ -11,6 +11,16 @@ JS reimplementation of it.
 
 HOW A REQUEST IS HANDLED
 
+Step 0, before any of the below: if design/boot/boot.png is newer than the
+committed main/boot/boot_anim_image.h, regenerate that header from it (see
+_ensure_image_current()) - the one asset here that is not part of the
+browser's own live payload, so there is no JSON to hash it against the way
+step 1 hashes `payload`; an mtime comparison against the real, checked-in
+header is what stands in for that. Unlike the timeline JSON below, this
+writes the REAL header directly, not a scratch copy - there is no "draft"
+concept for a photo, and regenerating in place is exactly what running
+tools/gen_boot_anim_image.py by hand already does.
+
 POST /render body is {"timing": {...}, "camera_focal": 512, "grid_step_m":
 0.25, "wave_height_m": 0, "wave_wavelength_m": 0.75, "wave_period_ms": 3000,
 "keyframes": [...], "ms": 1234} - boot_anim_timeline.json's own shape
@@ -40,6 +50,13 @@ else here.
      stream its stdout - a BMP - back as the response body, with the
      origin readout it printed to stderr (see boot_anim_render_host.c's
      own comment on that line) passed through as an X-Origin header.
+
+GET /timeline returns the REAL, committed main/boot/boot_anim_timeline.json
+verbatim - what the editor page fetches on open instead of relying solely on
+its own hand-duplicated DEFAULT_STATE (see boot_anim_editor.html's own
+comment on that constant), so opening the page always reflects what is
+actually committed, and skipping Load before Build & Flash no longer
+silently reverts it to a stale copy.
 
 POST /build_flash is the only other endpoint, and the only thing here that
 writes anything meant to be committed or touches the real device: same body
@@ -80,6 +97,19 @@ GENERATOR = os.path.join(TOOLS_DIR, "gen_boot_anim_timeline.py")
 # these, unlike everything render() touches, are not disposable.
 TIMELINE_JSON = os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.json")
 TIMELINE_HEADER = os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.h")
+
+# The photograph half of the same "keep the generated header in sync"
+# story, but with no live payload to compare it against - unlike the
+# timeline, boot.png is a real file on disk, not something typed into
+# the browser, so _ensure_image_current() below compares mtimes instead
+# of hashing a request body. Always the REAL, committed header (never a
+# scratch copy the way TIMELINE_HEADER gets one for a live-edited
+# timeline) - there is no "draft" concept for a photo the way there is
+# for in-progress timing values; regenerating in place is exactly what
+# running the generator by hand already does.
+GEN_IMAGE = os.path.join(TOOLS_DIR, "gen_boot_anim_image.py")
+BOOT_PNG = os.path.join(os.path.dirname(LAUNCHER_DIR), "design", "boot", "boot.png")
+BOOT_ANIM_IMAGE_HEADER = os.path.join(MAIN_DIR, "boot", "boot_anim_image.h")
 BUILD_FLASH_SCRIPT = os.path.join(TOOLS_DIR, "build_flash_dev.sh")
 # 300 measured too short in practice - a from-scratch (or even mostly-
 # cached) dev build going through this script's own Git-Bash -> cmd-shim
@@ -98,6 +128,177 @@ DEFAULT_PORT = 8934
 # added for it to reach the renderer at all.
 PAYLOAD_KEYS = ("timing", "camera_focal", "grid_step_m", "wave_height_m",
                "wave_wavelength_m", "wave_period_ms", "keyframes")
+
+# Every DIRECTORY the compile in _regenerate_and_compile() reads a .c or
+# .h from - the render cache (Renderer.built_hash) is keyed on every file
+# under these (see _watched_source_paths()) alongside the payload hash,
+# precisely so that editing any of them (the actual point of this tool -
+# iterating on boot_anim.c itself, not just the timeline) invalidates the
+# cache instead of silently serving a binary built from whatever they
+# looked like at the LAST payload change. A payload-only hash used to
+# miss this entirely: editing boot_anim.c with the server already running
+# and re-requesting the same `ms`/timeline kept hitting the cached
+# binary, no different from a payload that had not changed.
+#
+# A whole-directory glob, not a hand-picked file list - an earlier version
+# of this hard-coded the exact .c sources plus one header (boot_anim.h)
+# that happened to matter at the time, which is exactly the kind of list
+# that goes stale the next time a source gains a new #include: a
+# forgotten entry would silently go back to never invalidating for that
+# one file, the same bug this exists to fix. A narrower version of this
+# same mistake, walking only main/boot|gfx|util, missed it again -
+# boot_anim_render_host.c pulls in util/screenshot.h, which pulls in
+# main/app.h (for app_t/input_t - see screenshot_dump()'s own signature),
+# which pulls in main/input/buttons.h, none of them under those three
+# subdirectories. The whole of MAIN_DIR (~80 files, trivial to stat every
+# render) is the actual honest answer to "everything under here MIGHT be
+# a compile dependency, so watch all of it" rather than trying to name
+# every subdirectory this build's own transitive #includes happen to
+# reach today - the same reasoning that makes this a glob instead of a
+# file list in the first place, just not stopped short at the first
+# level of it. SMALL3DLIB_DIR alongside it for the identical reason -
+# boot_anim.h includes small3dlib.h directly (and it is on the compile's
+# own -I path, per _regenerate_and_compile() below), so editing IT (a
+# vendored, but still locally-modifiable, file) is exactly the kind of
+# edit that should invalidate a cached render too. Not a real dependency
+# scan (gcc -M and friends) either - simpler, and the false positives it
+# costs (recompiling on an edit to an unrelated file elsewhere in the
+# tree) are free on a tool nothing else times, unlike the false negative
+# a narrower watch risks. Walked RECURSIVELY.
+WATCHED_SOURCE_DIRS = (
+    MAIN_DIR,
+    SMALL3DLIB_DIR,
+)
+
+# Listed NON-recursively (see _watched_source_paths()) - unlike the above,
+# tools/ also holds results/screenshots/sweeps/__pycache__ subdirectories
+# (sweep/report scratch output, not source), so recursing here the same
+# way would work but for the wrong reason - only boot_anim_render_host.c
+# actually lives directly in this one.
+WATCHED_TOP_LEVEL_DIRS = (TOOLS_DIR,)
+
+# boot_anim_timeline.h under main/boot is the one file in that directory
+# that must NOT be watched - it is the REAL, committed one (see
+# TIMELINE_HEADER below), never what a render actually compiles against
+# (the scratch copy in Renderer.scratch, rewritten fresh on every payload
+# change and already covered by the payload hash itself). Watching it too
+# would mean every edit to the committed timeline invalidates the cache
+# for a render that never reads that file - harmless, but pointless
+# extra compiles, and confusing to reason about when it fires.
+WATCHED_EXCLUDE = frozenset([
+    os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.h"),
+])
+
+
+def _watched_source_paths():
+    """Every .c/.h file under WATCHED_SOURCE_DIRS (recursively) and
+    WATCHED_TOP_LEVEL_DIRS (top level only), minus WATCHED_EXCLUDE - see
+    those constants' own comments for why a glob, not a fixed list."""
+    paths = []
+    for d in WATCHED_SOURCE_DIRS:
+        for root, _dirs, files in os.walk(d):
+            for name in files:
+                if name.endswith((".c", ".h")):
+                    path = os.path.join(root, name)
+                    if path not in WATCHED_EXCLUDE:
+                        paths.append(path)
+    for d in WATCHED_TOP_LEVEL_DIRS:
+        for name in os.listdir(d):
+            path = os.path.join(d, name)
+            if name.endswith((".c", ".h")) and os.path.isfile(path):
+                if path not in WATCHED_EXCLUDE:
+                    paths.append(path)
+    return paths
+
+
+def _source_signature(sources):
+    """One hash covering every watched file's path AND mtime - order-
+    stable (sorted) so the same set of files always signs the same way
+    regardless of how `sources` was built. A missing file (renamed or
+    deleted mid-session, after _watched_source_paths() already listed it)
+    signs as absent rather than raising - the file no longer being there
+    for the SIGNATURE isn't this function's problem to solve; if it was
+    actually needed, the compile invocation itself is what surfaces
+    that, as a normal compiler error."""
+    parts = []
+    for path in sorted(sources):
+        try:
+            parts.append("%s:%d" % (path, os.stat(path).st_mtime_ns))
+        except OSError:
+            parts.append("%s:MISSING" % path)
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
+def _ensure_image_current():
+    """Regenerates the REAL main/boot/boot_anim_image.h from design/boot/
+    boot.png whenever the PNG is newer than the header - the one asset in
+    this pipeline that lives outside the browser's own payload, so there
+    is no JSON hash to compare it against the way render()'s own
+    payload_hash covers the timeline. mtime is the cheap, honest signal:
+    a PNG resave always bumps it, and comparing it costs one stat() call
+    on every request, not just the ones that actually changed anything.
+
+    Called before _source_signature() runs (see render()'s own call
+    site) so a freshly-regenerated header's own new mtime is what that
+    signature - and so the render cache - actually sees; calling it
+    after would mean the FIRST render following a photo edit still
+    served the stale cached binary.
+
+    Raises RenderError the same way _regenerate_and_compile() does for a
+    timeline validation failure - a self-check gen_boot_anim_image.py
+    itself refuses to pass (wrong PNG dimensions, say) has to reach the
+    browser as a clear message, not a silent skip that leaves the OLD
+    photo showing with no explanation. No PNG at all is not that kind
+    of failure - it means this checkout has never generated the header
+    from a photo (or the file was moved), and the already-committed
+    header is exactly what every other generated file in this tree does
+    when its own source input is not being actively edited: nothing to
+    regenerate from, so nothing happens.
+
+    Written via a temp-file-plus-rename, not straight into the real path:
+    unlike _regenerate_and_compile()'s own scratch copy (a few KB, disposable
+    if torn), this is the REAL, committed 1.37 MB header - a Ctrl-C or
+    disk-full mid-write here would leave a truncated file whose first
+    symptom is a C syntax error mid-array, not a clear message. os.replace()
+    is atomic on both POSIX and Windows, so the real path only ever sees a
+    complete write or the old file, never a partial one. Logged to stderr
+    too - this can fire just from opening the editor after resaving the PNG,
+    with no explicit save action from the user, so the rewrite of a
+    committed source file needs to be visible somewhere."""
+    try:
+        png_mtime = os.stat(BOOT_PNG).st_mtime_ns
+    except OSError:
+        return
+
+    try:
+        header_mtime = os.stat(BOOT_ANIM_IMAGE_HEADER).st_mtime_ns
+    except OSError:
+        header_mtime = -1
+
+    if png_mtime <= header_mtime:
+        return
+
+    result = subprocess.run(
+        [sys.executable, GEN_IMAGE, BOOT_PNG],
+        capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RenderError(400, result.stderr.strip() or
+                          "gen_boot_anim_image.py failed with no message")
+
+    fd, tmp_path = tempfile.mkstemp(
+        suffix=".h.tmp", dir=os.path.dirname(BOOT_ANIM_IMAGE_HEADER))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
+            f.write(result.stdout)
+        os.replace(tmp_path, BOOT_ANIM_IMAGE_HEADER)
+    except BaseException:
+        try:
+            os.remove(tmp_path)
+        except OSError:
+            pass
+        raise
+    print("boot_anim_editor_server: regenerated %s from %s" %
+          (BOOT_ANIM_IMAGE_HEADER, BOOT_PNG), file=sys.stderr)
 
 
 def find_cc():
@@ -243,8 +444,11 @@ class Renderer:
         a new one of those (wave_wavelength_m, say) never means touching
         this signature again. Returns (bmp_bytes, (origin_x, origin_y) or
         None)."""
+        _ensure_image_current()
+
         payload_hash = hashlib.sha256(
-            json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+            json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest() \
+            + ":" + _source_signature(_watched_source_paths())
 
         if payload_hash != self.built_hash:
             self._regenerate_and_compile(payload_hash, payload)
@@ -275,6 +479,13 @@ class Renderer:
         validates into the scratch directory - a bad edit (the curve still
         drawing when the fade starts, say) must never leave the committed
         json/header half-written."""
+        # Same reason render() calls this: idf.py is about to compile
+        # main/boot/boot_anim.c fresh, reading main/boot/boot_anim_image.h
+        # straight off disk - a photo edit that has not been regenerated
+        # yet would otherwise ship the OLD picture to the device with no
+        # warning at all.
+        _ensure_image_current()
+
         fd, scratch_json = tempfile.mkstemp(suffix=".json",
                                             prefix="boot_anim_timeline_")
         try:
@@ -327,14 +538,28 @@ class Renderer:
         # surfaced below if the real invocation ALSO fails with that same
         # message, so a genuine compile/flash failure's own log stays
         # undiluted the rest of the time.
-        probe = subprocess.run(
-            [bash, "-c",
-             'if [ -f "$1" ]; then echo FOUND; else echo MISSING; fi; '
-             'echo "MSYSTEM=$MSYSTEM"; echo "PWD=$(pwd)"; echo "PATH=$PATH"',
-             "probe", script_for_bash],
-            capture_output=True, text=True, timeout=10)
-        probe_info = ("bash's own view of that path just before this "
-                      "attempt:\n" + (probe.stdout + probe.stderr).strip())
+        # Its own try/except, separate from the real invocation's below -
+        # a probe timeout is itself diagnostic (bash launched but never
+        # returned), not a stand-in for "the build timed out"; letting
+        # TimeoutExpired propagate unguarded here used to surface as
+        # exactly that wrong, confusing message ("build_flash_dev.sh did
+        # not finish within 600s") for a run that had not even reached
+        # the real invocation yet.
+        try:
+            probe = subprocess.run(
+                [bash, "-c",
+                 'if [ -f "$1" ]; then echo FOUND; else echo MISSING; fi; '
+                 'echo "MSYSTEM=$MSYSTEM"; echo "PWD=$(pwd)"; echo "PATH=$PATH"',
+                 "probe", script_for_bash],
+                capture_output=True, text=True, timeout=10)
+            probe_info = ("bash's own view of that path just before this "
+                          "attempt:\n" + (probe.stdout + probe.stderr).strip())
+        except subprocess.TimeoutExpired:
+            probe_info = ("bash's own view of that path just before this "
+                          "attempt: the probe itself did not return within "
+                          "10s - bash launched but hung before even echoing "
+                          "FOUND/MISSING, a stronger signal than a normal "
+                          "probe failure.")
 
         # stdin=DEVNULL: build_flash_dev.sh ends with an interactive "press
         # Enter to close" (it doubles as a double-clickable script) that
@@ -365,7 +590,30 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if self.path in ("/", "/index.html"):
             self._serve_file(EDITOR_HTML, "text/html; charset=utf-8")
             return
+        if self.path == "/timeline":
+            self._do_get_timeline()
+            return
         self.send_error(404)
+
+    def _do_get_timeline(self):
+        """The REAL, committed boot_anim_timeline.json - see this file's
+        own top comment on why the editor page loads this on open rather
+        than opening on its own hand-duplicated DEFAULT_STATE (a
+        Build & Flash before ever pressing Load used to silently
+        overwrite the committed timeline with that stale copy)."""
+        try:
+            with open(TIMELINE_JSON, "r", encoding="utf-8") as f:
+                data = f.read()
+        except OSError as exc:
+            self._send_json_error(
+                500, "could not read %s: %s" % (TIMELINE_JSON, exc))
+            return
+        body = data.encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def do_POST(self):
         if self.path == "/render":

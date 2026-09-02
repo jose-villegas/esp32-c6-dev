@@ -116,6 +116,15 @@ void gfx_invalidate(void);
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 
+/* gfx_fill_rect(), but at `alpha`'s own apparent coverage (0 nothing, 255
+ * solid, 16 graduated steps between) rather than solid - an ordered
+ * (Bayer) dither, the cheapest fake transparency this panel can do since
+ * it has no blending anywhere. See gfx.c's own comment above the
+ * definition for the dither table itself and why 255 is guaranteed to be
+ * exactly as solid as gfx_fill_rect(). */
+void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
+                          uint8_t alpha);
+
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
 
@@ -211,6 +220,15 @@ const gfx_font_t *gfx_default_font(void);
  * font is silently skipped rather than drawn wrong. */
 void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
                    int scale, int quarter_turns, const gfx_font_t *font);
+
+/* gfx_text_font(), but every glyph pixel is drawn through
+ * gfx_fill_rect_dither() at `alpha` instead of solid - text that fades
+ * rather than cuts. A deliberately separate function, not a parameter
+ * added to gfx_text_font() itself - see gfx.c's own comment above the
+ * definition for why. */
+void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
+                          int scale, int quarter_turns,
+                          const gfx_font_t *font, uint8_t alpha);
 
 /* gfx_text_width()'s general form: the width `text` would draw at in
  * `font`, at `scale`. gfx_text_width() is this called with

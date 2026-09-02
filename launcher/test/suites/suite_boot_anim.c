@@ -258,6 +258,198 @@ static void test_a_point_further_from_the_camera_projects_smaller(void)
         "centre than the same point nearer the camera");
 }
 
+/* boot_anim_project_point()'s entire reason to exist over plain
+ * boot_anim_project() - see its own comment in boot_anim.h - is refusing
+ * to write anything for a point at or behind the near plane, rather than
+ * projecting it to an ordinary-looking but geometrically nonsense screen
+ * position. Pinned right AT the boundary rather than somewhere clearly
+ * behind it - `im_q12 = 408` is chosen so that, under an identity
+ * transform, BOOT_ANIM_ZETA_TO_S3L(408) = 408 >> 3 = 51 = BOOT_ANIM_
+ * NEAR_Z exactly - so this specifically exercises the `<=`, not just
+ * "somewhere behind", which a `<` typo in the real check would still
+ * pass at a point further back. */
+static void test_project_point_rejects_a_point_at_the_near_plane(void)
+{
+    const boot_anim_view_t view = identity_view(S3L_F);
+    int x = -1, y = -1;
+
+    const bool ok = boot_anim_project_point(0, 408, 0, &view, &x, &y);
+
+    TEST_ASSERT_FALSE_MESSAGE(ok,
+        "a point exactly at the near plane must be rejected, not "
+        "projected to a nonsense screen position");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, x,
+        "a rejected point's output x must be left untouched");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, y,
+        "a rejected point's output y must be left untouched");
+}
+
+/* The OTHER early-out in boot_anim_project_segment_cs() besides the clip
+ * itself (see test_project_segment_cs_clips_asymmetric_coordinates below
+ * for that branch): a segment with BOTH endpoints at or behind the near
+ * plane has nothing in front of the camera to draw at all, and must
+ * return false outright rather than clip against itself. */
+static void test_project_segment_cs_rejects_a_segment_entirely_behind(void)
+{
+    const boot_anim_view_t view = identity_view(S3L_F);
+    const S3L_Vec4 p0 = { 100, 200, 0, S3L_F };
+    const S3L_Vec4 p1 = { -100, -200, BOOT_ANIM_NEAR_Z, S3L_F };
+    int ax, ay, bx, by;
+
+    const bool ok =
+        boot_anim_project_segment_cs(p0, p1, &view, &ax, &ay, &bx, &by);
+
+    TEST_ASSERT_FALSE_MESSAGE(ok,
+        "a segment with both endpoints at or behind the near plane "
+        "should be rejected entirely, not clipped against itself");
+}
+
+/* boot_anim_project_segment_cs()'s near-plane clip, at asymmetric,
+ * deliberately-not-a-clean-fraction-of-512 coordinates - the exact case
+ * the Q16 rewrite (see this function's own comment in boot_anim.h)
+ * exists for: a clip fraction that lands nowhere near a multiple of
+ * 1/S3L_F (1/512) is precisely where the OLD precision rounded the
+ * worst. Verified against an independent double-precision reference
+ * computed right here, not against whatever the function under test
+ * happens to produce - worked out once BY RUNNING IT (temporarily
+ * reverting the Q16 fix and forcing a zero-tolerance assertion to read
+ * the exact numbers back - see this repo's own "watch it fail before it
+ * passes" testing convention), not by hand, after an earlier hand
+ * calculation here turned out to be wrong:
+ *
+ *   clip fraction = 86/496 = 0.17338...
+ *   this test's tolerance (20px) comfortably contains the Q16 result's
+ *   own error against the double-precision reference (7px, 0px) while
+ *   still rejecting the OLD S3L_F(512)-precision result for the exact
+ *   same inputs (3831px, 2352px off) - the actual regression this test
+ *   protects against, even though the old code no longer exists to call. */
+static void test_project_segment_cs_clips_asymmetric_coordinates(void)
+{
+    const boot_anim_view_t view = identity_view(S3L_F);
+    const S3L_Vec4 p0 = { -300123,  250009, BOOT_ANIM_NEAR_Z - 86, S3L_F };
+    const S3L_Vec4 p1 = {  401777, -180321, BOOT_ANIM_NEAR_Z + 410, S3L_F };
+
+    int ax, ay, bx, by;
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_project_segment_cs(p0, p1, &view, &ax, &ay, &bx, &by),
+        "a segment with one endpoint in front of the near plane should "
+        "always project");
+
+    /* Double-precision reference for the clip itself: p0 is BEHIND, so
+     * IT is what gets replaced by the near-plane crossing point. */
+    const double frac =
+        (double)(BOOT_ANIM_NEAR_Z - p0.z) / (double)(p1.z - p0.z);
+    const double exact_x = p0.x + (p1.x - p0.x) * frac;
+    const double exact_y = p0.y + (p1.y - p0.y) * frac;
+    int ex, ey;
+    const S3L_Vec4 exact_clip = {
+        (S3L_Unit)exact_x, (S3L_Unit)exact_y, BOOT_ANIM_NEAR_Z, S3L_F };
+    boot_anim_camera_to_screen(exact_clip, view.focal, &ex, &ey);
+
+    const int tolerance = 20;
+    TEST_ASSERT_INT_WITHIN_MESSAGE(tolerance, ex, ax,
+        "the clipped endpoint's screen x should be close to a "
+        "double-precision reference - a wide miss here is exactly the "
+        "S3L_F-precision rounding this test guards against");
+    TEST_ASSERT_INT_WITHIN_MESSAGE(tolerance, ey, ay,
+        "the clipped endpoint's screen y should be close to a "
+        "double-precision reference - a wide miss here is exactly the "
+        "S3L_F-precision rounding this test guards against");
+
+    /* p1 was already in front - not clipped at all, so it must match
+     * projecting it directly, independent of whatever the clip branch
+     * above did. */
+    int fx, fy;
+    S3L_Vec4 p1_copy = p1;
+    boot_anim_camera_to_screen(p1_copy, view.focal, &fx, &fy);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(fx, bx,
+        "the untouched (already in front) endpoint should project "
+        "identically whether reached through the clipping path or not");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(fy, by,
+        "the untouched (already in front) endpoint should project "
+        "identically whether reached through the clipping path or not");
+}
+
+/* boot_anim_spoke_reveal_target()'s own two guaranteed endpoints,
+ * regardless of where its internal linear/reciprocal switchover (`r0`)
+ * happens to fall for a given near/far pair: reach=0 must stay exactly at
+ * the origin (nothing drawn yet), and reach=255 must land exactly on
+ * `far` (a spoke actually finishes where it was told to, not asymptotic-
+ * ally close). Both are relied on directly by draw_grid_spoke() in
+ * boot_anim.c - see its own comment on `near_target`/`target`. */
+static void test_spoke_reveal_target_hits_its_endpoints_exactly(void)
+{
+    const int32_t near = 10 * BOOT_ANIM_ONE;
+    const int32_t far  = 500 * BOOT_ANIM_ONE;
+
+    TEST_ASSERT_EQUAL_INT32(0, boot_anim_spoke_reveal_target(near, far, 0));
+    TEST_ASSERT_EQUAL_INT32(far,
+        boot_anim_spoke_reveal_target(near, far, 255));
+}
+
+/* The whole point of switching to reciprocal interpolation (see this
+ * function's own comment in boot_anim.h) is keeping ON-SCREEN growth
+ * roughly even - which this test cannot see a screen to check directly,
+ * but 1/target advancing in roughly EQUAL steps as `reach` advances in
+ * equal steps is the exact algebraic property that guarantees it (screen
+ * position is itself roughly proportional to 1/target under a
+ * perspective projection - see boot_anim_camera_to_screen()). Checked as
+ * a difference-of-differences bound rather than exact equality: the
+ * reach-to-r0 knot and integer rounding both perturb it slightly, so
+ * "each step's own shrinkage is within a small tolerance of the next
+ * step's" is the property that actually matters, not bit-exact evenness. */
+static void test_spoke_reveal_target_advances_evenly_in_screen_space(void)
+{
+    const int32_t near = 10 * BOOT_ANIM_ONE;
+    const int32_t far  = 500 * BOOT_ANIM_ONE;
+    const int steps = 10;
+
+    /* Starts at i=1 (reach>0), not 0 - reach=0's own target=0 is already
+     * covered exactly by test_spoke_reveal_target_hits_its_endpoints_
+     * exactly() above, and 1/0 has no meaningful "screen position" to
+     * compare against the next step's here. */
+    double prev_inv = -1.0;
+    double prev_delta = 0.0;
+    for (int i = 1; i <= steps; i++) {
+        const uint8_t reach = (uint8_t)((255 * i) / steps);
+        const int32_t target =
+            boot_anim_spoke_reveal_target(near, far, reach);
+        TEST_ASSERT_TRUE_MESSAGE(target > 0,
+            "every non-zero reach should produce a positive target");
+        const double inv = 1.0 / (double)target;
+        if (prev_inv >= 0.0) {
+            const double delta = prev_inv - inv;
+            TEST_ASSERT_TRUE_MESSAGE(delta >= 0.0,
+                "1/target should never increase as reach climbs - the "
+                "target itself must be monotonically non-decreasing");
+            if (i > 2) {
+                /* prev_delta == 0 would mean the PRIOR step had zero
+                 * shrinkage - a plateau, not something these constants
+                 * produce, but an explicit message beats an inf/NaN
+                 * ratio silently failing the comparison below for a
+                 * reason this test's own output does not explain. */
+                TEST_ASSERT_TRUE_MESSAGE(prev_delta > 0.0,
+                    "the previous reach step had zero shrinkage in "
+                    "1/target - a plateau these test constants should "
+                    "never actually produce");
+                /* Consecutive per-step shrinkages should stay within 25%
+                 * of each other - loose on purpose (this is a fixed-point
+                 * approximation, not exact reciprocal interpolation), but
+                 * tight enough that the OLD linear-in-radius formula (whose
+                 * first step alone covers ~90% of the total 1/near-to-
+                 * 1/far span) would fail it outright. */
+                const double ratio = delta / prev_delta;
+                TEST_ASSERT_TRUE_MESSAGE(ratio > 0.75 && ratio < 1.25,
+                    "consecutive reach steps should shrink 1/target by "
+                    "roughly the same amount - a front-loaded reveal "
+                    "would fail this");
+            }
+            prev_delta = delta;
+        }
+        prev_inv = inv;
+    }
+}
+
 /* "Scale renders as 1,1,1 for default values" - the exact ask this table
  * exists to satisfy (see boot_anim_timeline.json's own comment): an
  * untouched keyframe's space scale has to read back as S3L_F (small3dlib's
@@ -680,6 +872,66 @@ static void test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end(void)
     TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ink(BOOT_ANIM_FADE_START_MS));
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_ink(BOOT_ANIM_MS));
     TEST_ASSERT_TRUE(boot_anim_ink(BOOT_ANIM_MS - 100) < 255);
+}
+
+/* boot_anim_image_reveal()'s own two guaranteed endpoints - the crossfade
+ * has not started at or before BOOT_ANIM_IMAGE_START_MS, and it is fully
+ * arrived (and stays arrived) once BOOT_ANIM_IMAGE_FADE_MS has passed
+ * since. */
+static void test_the_photograph_arrives_over_its_own_window(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_image_reveal(0));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_image_reveal(BOOT_ANIM_IMAGE_START_MS));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_image_reveal(
+        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_image_reveal(
+        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS + 1000));
+}
+
+/* The whole point of the pair (see boot_anim_scene_reach()'s own comment
+ * in boot_anim.h): one window, two halves that always sum to a whole
+ * picture. If these ever stopped summing to 255 the crossfade would
+ * visibly dip or bloom partway through - exactly the artefact plain, not
+ * eased, tween_ramp() is chosen to avoid. */
+static void test_the_scene_leaves_exactly_as_fast_as_the_photograph_arrives(void)
+{
+    const uint32_t from = BOOT_ANIM_IMAGE_START_MS > 200 ?
+        BOOT_ANIM_IMAGE_START_MS - 200 : 0;
+    const uint32_t to = BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS + 200;
+
+    for (uint32_t ms = from; ms <= to; ms += 5) {
+        TEST_ASSERT_EQUAL_UINT16_MESSAGE(255,
+            (uint16_t)boot_anim_image_reveal(ms) + boot_anim_scene_reach(ms),
+            "the photograph and the scene did not sum to one whole "
+            "picture - the crossfade would visibly dip or bloom");
+    }
+
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_scene_reach(BOOT_ANIM_IMAGE_START_MS));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_scene_reach(
+        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS));
+}
+
+/* The two clocks (ink and the crossfade) are independent by design - see
+ * boot_anim_scene_reach()'s own comment - but draw_image() still
+ * multiplies them together, so the picture needs to be at full ink for
+ * the whole time the photograph is arriving, or the mountain would fade
+ * in already dimmed rather than arriving bright and only later
+ * dissolving. Not true of every timeline the generator could author (it
+ * only WARNS if the two windows overlap) - asserted here for the one
+ * this repo actually ships. Ignored while the seed's own image_start_ms
+ * sits at its inert, no-photograph-authored default (== BOOT_ANIM_MS) -
+ * see gen_boot_anim_timeline.py's own setdefault comment. */
+static void test_the_seed_finishes_the_crossfade_before_the_dissolve_starts(void)
+{
+    if (BOOT_ANIM_IMAGE_START_MS >= BOOT_ANIM_MS) {
+        TEST_IGNORE_MESSAGE("this seed authors no photograph crossfade");
+    }
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_ink(BOOT_ANIM_IMAGE_START_MS));
+    TEST_ASSERT_TRUE_MESSAGE(
+        BOOT_ANIM_IMAGE_START_MS + BOOT_ANIM_IMAGE_FADE_MS <=
+            BOOT_ANIM_FADE_START_MS,
+        "the shipped seed is still crossing to the photograph when the "
+        "picture begins dissolving");
 }
 
 static void test_the_floor_fades_in_from_the_origin_outward(void)
@@ -1130,6 +1382,43 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
     }
 }
 
+/* boot_anim_title_shadow_offset() is the one piece of draw_title()'s
+ * shadow logic this file can reach directly - draw_title() itself needs a
+ * framebuffer and a panel (see this file's own top comment), so this is
+ * also the only test standing between a future edit here and the exact
+ * "up-right instead of down-right" bug this function was extracted to fix
+ * (see its own comment in boot_anim.h for the panel-space derivation). */
+static void test_title_shadow_offset_turns_reader_frame_into_panel_frame(void)
+{
+    int dx, dy;
+
+    /* The shipped default: 1 right, 1 down in the reader's frame. */
+    boot_anim_title_shadow_offset(1, 1, &dx, &dy);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(-1, dx,
+        "1 pixel right in the reader's frame must turn into -1 on the "
+        "panel's own X - a +1 here is the up-right regression this "
+        "function exists to prevent");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, dy, "1 pixel down must turn into +1 "
+        "on the panel's own Y");
+
+    /* Pure right (no vertical component) must not move the panel X at
+     * all - panel_x tracks -view_y, so it is only the DOWN component that
+     * can touch it. Pure down, in turn, must not move the panel Y at all
+     * - panel_y tracks view_x, only the RIGHT component reaches it. The
+     * two axes are a plain 90-degree swap, not a general rotation that
+     * would mix them. */
+    boot_anim_title_shadow_offset(5, 0, &dx, &dy);
+    TEST_ASSERT_EQUAL_INT(0, dx);
+    boot_anim_title_shadow_offset(0, 5, &dx, &dy);
+    TEST_ASSERT_EQUAL_INT(0, dy);
+
+    /* (0, 0) - the "shadow disabled" sentinel draw_title() checks for -
+     * must stay the identity, not become a spurious offset. */
+    boot_anim_title_shadow_offset(0, 0, &dx, &dy);
+    TEST_ASSERT_EQUAL_INT(0, dx);
+    TEST_ASSERT_EQUAL_INT(0, dy);
+}
+
 void run_boot_anim_suite(void)
 {
     RUN_TEST(test_the_curve_climbs_from_zero_to_the_top);
@@ -1145,6 +1434,11 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_quarter_points_are_exact);
     RUN_TEST(test_identity_transform_leaves_the_origin_at_screen_centre);
     RUN_TEST(test_a_point_further_from_the_camera_projects_smaller);
+    RUN_TEST(test_project_point_rejects_a_point_at_the_near_plane);
+    RUN_TEST(test_project_segment_cs_rejects_a_segment_entirely_behind);
+    RUN_TEST(test_project_segment_cs_clips_asymmetric_coordinates);
+    RUN_TEST(test_spoke_reveal_target_hits_its_endpoints_exactly);
+    RUN_TEST(test_spoke_reveal_target_advances_evenly_in_screen_space);
     RUN_TEST(test_an_untouched_keyframes_scale_reads_back_as_identity);
     RUN_TEST(test_the_seeds_curve_stays_near_the_panel_throughout);
     RUN_TEST(test_the_seeds_three_axes_project_to_distinct_directions);
@@ -1174,6 +1468,9 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_curve_is_finished_by_pen_finish_ms);
     RUN_TEST(test_the_seed_finishes_the_curve_before_the_dissolve_starts);
     RUN_TEST(test_the_picture_is_lit_until_the_dissolve_and_dark_at_the_end);
+    RUN_TEST(test_the_photograph_arrives_over_its_own_window);
+    RUN_TEST(test_the_scene_leaves_exactly_as_fast_as_the_photograph_arrives);
+    RUN_TEST(test_the_seed_finishes_the_crossfade_before_the_dissolve_starts);
     RUN_TEST(test_the_floor_fades_in_from_the_origin_outward);
     RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);
     RUN_TEST(test_the_floor_stays_dim_enough_to_be_a_backdrop);
@@ -1201,6 +1498,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_letters_are_staggered_left_to_right);
     RUN_TEST(test_a_letter_starts_off_panel_to_the_left);
     RUN_TEST(test_the_title_stays_on_the_panel_once_visible);
+    RUN_TEST(test_title_shadow_offset_turns_reader_frame_into_panel_frame);
 }
 
 SUITE_REGISTER(run_boot_anim_suite);

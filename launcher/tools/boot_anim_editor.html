@@ -42,6 +42,9 @@
   "Load" reopens a previously-baked JSON (or any file in this shape) to
   keep editing it. Bake/Load never touch the SCRATCH copy the server
   renders from while you edit - that scratch copy is disposable by design.
+  The page also loads the real, committed boot_anim_timeline.json
+  automatically on open (GET /timeline) - Load is for opening something
+  ELSE, not a prerequisite for starting from what is actually committed.
 
   WHAT "BUILD & FLASH" DOES
 
@@ -407,9 +410,15 @@
 /* pos in meters, rot in degrees (small3dlib's own Z-then-X-then-Y
  * composition order - see boot_anim_timeline.json's own comment), scale a
  * plain multiplier (1 = untouched) - the exact shape
- * gen_boot_anim_timeline.py's own top comment documents, kept in sync with
- * main/boot/boot_anim_timeline.json by hand since this page has no way to
- * read that file directly (see this file's own top comment on Bake/Load). */
+ * gen_boot_anim_timeline.py's own top comment documents.
+ *
+ * A FALLBACK, not the normal source: the Boot section below fetches the
+ * real, committed main/boot/boot_anim_timeline.json over GET /timeline
+ * and replaces this the moment that lands - see that section's own
+ * comment. This constant only matters when that fetch fails (a server
+ * old enough to predate the endpoint, say), so it stays worth keeping
+ * roughly in sync with the real file by hand, but is no longer the thing
+ * that silently governs a Build & Flash pressed before Load. */
 const DEFAULT_STATE = {
   timing: {
     total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
@@ -422,7 +431,10 @@ const DEFAULT_STATE = {
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
     title_turns_phase: 229376, title_amplitude_px: 22,
     title_wave_amplitude_px: 11, title_wave_period_ms: 1600,
-    title_wave_stagger_ms: 90, fade_start_ms: 4300, grid_hue_ms: 2600,
+    title_wave_stagger_ms: 90, title_height_px: 50,
+    title_shadow_dx: 1, title_shadow_dy: 1, title_shadow_alpha: 255,
+    image_start_ms: 5800, image_fade_ms: 800,
+    fade_start_ms: 4300, grid_hue_ms: 2600,
     grid_hue_spread: 70, grid_whiten_max: 120, grid_ceiling_max: 170,
     grid_max: 70,
   },
@@ -493,7 +505,10 @@ const FIELD_GROUPS = [
   { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
-      'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms'] },
+      'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms',
+      'title_height_px', 'title_shadow_dx', 'title_shadow_dy',
+      'title_shadow_alpha'] },
+  { title: 'Image', keys: ['image_start_ms', 'image_fade_ms'] },
 ];
 
 /* A short, human description for every plain `timing[key]` field -
@@ -534,6 +549,12 @@ const FIELD_LABELS = {
   title_wave_amplitude_px: 'idle wave amplitude once a letter has landed',
   title_wave_period_ms: 'idle wave cycle time',
   title_wave_stagger_ms: 'idle wave phase offset, per letter',
+  title_height_px: 'how far down the frame the title lands',
+  title_shadow_dx: 'drop shadow offset, px right (0/0 disables it)',
+  title_shadow_dy: 'drop shadow offset, px down',
+  title_shadow_alpha: 'shadow density 0-255 (dithered fake transparency)',
+  image_start_ms: 'photograph starts crossing in, scene crossing out',
+  image_fade_ms: 'how long that crossfade takes (0 = instant cut)',
 };
 
 let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
@@ -1208,6 +1229,115 @@ document.getElementById('btnBake').addEventListener('click', () => {
   URL.revokeObjectURL(url);
 });
 
+/* Shared by both ways a JSON timeline reaches this page: the Load button
+ * below, and the automatic GET /timeline fetch on open (see this file's
+ * own Boot section) - the exact same field-by-field backfill either way,
+ * so a file that predates some field is completed identically whichever
+ * path brought it in. Throws on a file missing the fields every version
+ * has always had; the caller decides what to do with that (Load shows it
+ * to the person who chose the file, boot-time load falls back quietly). */
+function applyLoadedState(loaded) {
+  if (!loaded.timing || !loaded.keyframes || loaded.camera_focal === undefined ||
+      loaded.grid_step_m === undefined) {
+    throw new Error('missing timing/camera_focal/grid_step_m/keyframes');
+  }
+  if (loaded.timing.pen_finish_ms === undefined) {
+    loaded.timing.pen_finish_ms = loaded.timing.fade_start_ms;
+  }
+  /* The wave is newer still - same reasoning, same fallback the
+   * generator itself uses: height 0 turns the ripple off outright, so
+   * an old file keeps behaving exactly like it always did. */
+  if (loaded.wave_height_m === undefined) {
+    loaded.wave_height_m = 0;
+  }
+  /* wave_wavelength_m/wave_period_ms replace an EARLIER version's
+   * wave_decay_m/wave_start_ms/wave_end_ms/wave_ease outright - a
+   * genuine radial sine now, not a travelling front (see
+   * gen_boot_anim_timeline.py's own comment on why a file with a
+   * nonzero wave_height_m from before this existed will not look the
+   * same either way). Same reasonable-starting-point defaults the
+   * generator itself falls back to. */
+  if (loaded.wave_wavelength_m === undefined) {
+    loaded.wave_wavelength_m = 3 * (loaded.grid_step_m || 1);
+  }
+  if (loaded.wave_period_ms === undefined) {
+    loaded.wave_period_ms = 3000;
+  }
+  /* wave_in_ms/wave_out_ms are newer again - starting to lerp in a
+   * second in, and starting to lerp back out a second before the
+   * end, are the same reasonable-starting-point defaults the
+   * generator itself falls back to. */
+  if (loaded.timing.wave_in_ms === undefined) {
+    loaded.timing.wave_in_ms = 1000;
+  }
+  if (loaded.timing.wave_out_ms === undefined) {
+    loaded.timing.wave_out_ms =
+      Math.max(1000, (loaded.timing.total_ms || 5800) - 1000);
+  }
+  /* grid_spokes is newer than grid_rings itself - same default
+   * gen_boot_anim_timeline.py falls back to (the old, unconditional
+   * 8-spoke grid). */
+  if (loaded.timing.grid_spokes === undefined) {
+    loaded.timing.grid_spokes = 8;
+  }
+  /* grid_spoke_dash is newer still - an old file drew every spoke
+   * solid, so 0 (solid) is what keeps it looking the same. */
+  if (loaded.timing.grid_spoke_dash === undefined) {
+    loaded.timing.grid_spoke_dash = 0;
+  }
+  /* grid_spoke_start_ms/grid_spoke_draw_ms are newer again - an old
+   * file drew every spoke at full length instantly, with no outward
+   * reveal. 0/0 reproduces that (see gen_boot_anim_timeline.py's own
+   * comment on why). */
+  if (loaded.timing.grid_spoke_start_ms === undefined) {
+    loaded.timing.grid_spoke_start_ms = 0;
+  }
+  if (loaded.timing.grid_spoke_draw_ms === undefined) {
+    loaded.timing.grid_spoke_draw_ms = 0;
+  }
+  /* title_height_px is newer again - BOOT_ANIM_TITLE_VIEW_Y used to be a
+   * fixed constant (50) in boot_anim.h, so 50 is what keeps an old file
+   * landing the title exactly where it always did. */
+  if (loaded.timing.title_height_px === undefined) {
+    loaded.timing.title_height_px = 50;
+  }
+  /* title_shadow_dx/dy are newer again - the shadow used to be a fixed
+   * (1, 1) two gfx_text_font() calls always drew, so 1/1 is what keeps
+   * an old file looking exactly the same rather than silently losing
+   * its shadow. */
+  if (loaded.timing.title_shadow_dx === undefined) {
+    loaded.timing.title_shadow_dx = 1;
+  }
+  if (loaded.timing.title_shadow_dy === undefined) {
+    loaded.timing.title_shadow_dy = 1;
+  }
+  /* title_shadow_alpha is newer again - the shadow used to be fully
+   * solid (there was no dithering to be less than that), so 255 keeps
+   * an old file looking exactly the same rather than silently turning
+   * translucent. */
+  if (loaded.timing.title_shadow_alpha === undefined) {
+    loaded.timing.title_shadow_alpha = 255;
+  }
+  /* image_start_ms/image_fade_ms are newer again - an old file had no
+   * photograph in it at all, and total_ms is what reproduces that
+   * exactly (see gen_boot_anim_timeline.py's own setdefault comment on
+   * why total_ms, specifically, is the inert value here). */
+  if (loaded.timing.image_start_ms === undefined) {
+    loaded.timing.image_start_ms = loaded.timing.total_ms || 5800;
+  }
+  if (loaded.timing.image_fade_ms === undefined) {
+    loaded.timing.image_fade_ms = 800;
+  }
+  state = loaded;
+  selectedKf = 0;
+  playhead = 0;
+  renderConsts();
+  renderKfTrack();
+  renderKfList();
+  renderKfDetail();
+  renderFrame();
+}
+
 document.getElementById('btnLoad').addEventListener('click', () => {
   document.getElementById('fileInput').click();
 });
@@ -1217,79 +1347,7 @@ document.getElementById('fileInput').addEventListener('change', (e) => {
   const reader = new FileReader();
   reader.onload = () => {
     try {
-      const loaded = JSON.parse(reader.result);
-      if (!loaded.timing || !loaded.keyframes || loaded.camera_focal === undefined ||
-          loaded.grid_step_m === undefined) {
-        throw new Error('missing timing/camera_focal/grid_step_m/keyframes');
-      }
-      /* pen_finish_ms is newer than fade_start_ms - a file baked before it
-       * existed has no way to carry it. Same default the generator itself
-       * falls back to (gen_boot_anim_timeline.py's own comment on why
-       * fade_start_ms reproduces the old, coupled behaviour exactly) - done
-       * here too so the field shows the value actually in effect rather
-       * than sitting blank until the next edit touches it. */
-      if (loaded.timing.pen_finish_ms === undefined) {
-        loaded.timing.pen_finish_ms = loaded.timing.fade_start_ms;
-      }
-      /* The wave is newer still - same reasoning, same fallback the
-       * generator itself uses: height 0 turns the ripple off outright, so
-       * an old file keeps behaving exactly like it always did. */
-      if (loaded.wave_height_m === undefined) {
-        loaded.wave_height_m = 0;
-      }
-      /* wave_wavelength_m/wave_period_ms replace an EARLIER version's
-       * wave_decay_m/wave_start_ms/wave_end_ms/wave_ease outright - a
-       * genuine radial sine now, not a travelling front (see
-       * gen_boot_anim_timeline.py's own comment on why a file with a
-       * nonzero wave_height_m from before this existed will not look the
-       * same either way). Same reasonable-starting-point defaults the
-       * generator itself falls back to. */
-      if (loaded.wave_wavelength_m === undefined) {
-        loaded.wave_wavelength_m = 3 * (loaded.grid_step_m || 1);
-      }
-      if (loaded.wave_period_ms === undefined) {
-        loaded.wave_period_ms = 3000;
-      }
-      /* wave_in_ms/wave_out_ms are newer again - starting to lerp in a
-       * second in, and starting to lerp back out a second before the
-       * end, are the same reasonable-starting-point defaults the
-       * generator itself falls back to. */
-      if (loaded.timing.wave_in_ms === undefined) {
-        loaded.timing.wave_in_ms = 1000;
-      }
-      if (loaded.timing.wave_out_ms === undefined) {
-        loaded.timing.wave_out_ms =
-          Math.max(1000, (loaded.timing.total_ms || 5800) - 1000);
-      }
-      /* grid_spokes is newer than grid_rings itself - same default
-       * gen_boot_anim_timeline.py falls back to (the old, unconditional
-       * 8-spoke grid). */
-      if (loaded.timing.grid_spokes === undefined) {
-        loaded.timing.grid_spokes = 8;
-      }
-      /* grid_spoke_dash is newer still - an old file drew every spoke
-       * solid, so 0 (solid) is what keeps it looking the same. */
-      if (loaded.timing.grid_spoke_dash === undefined) {
-        loaded.timing.grid_spoke_dash = 0;
-      }
-      /* grid_spoke_start_ms/grid_spoke_draw_ms are newer again - an old
-       * file drew every spoke at full length instantly, with no outward
-       * reveal. 0/0 reproduces that (see gen_boot_anim_timeline.py's own
-       * comment on why). */
-      if (loaded.timing.grid_spoke_start_ms === undefined) {
-        loaded.timing.grid_spoke_start_ms = 0;
-      }
-      if (loaded.timing.grid_spoke_draw_ms === undefined) {
-        loaded.timing.grid_spoke_draw_ms = 0;
-      }
-      state = loaded;
-      selectedKf = 0;
-      playhead = 0;
-      renderConsts();
-      renderKfTrack();
-      renderKfList();
-      renderKfDetail();
-      renderFrame();
+      applyLoadedState(JSON.parse(reader.result));
     } catch (err) {
       alert('Could not load that file as a boot_anim_timeline.json: ' + err.message);
     }
@@ -1364,6 +1422,26 @@ renderKfTrack();
 renderKfList();
 renderKfDetail();
 renderFrame();
+
+/* Then immediately try to replace DEFAULT_STATE's hand-duplicated copy
+ * (see its own top comment) with the REAL committed timeline, via GET
+ * /timeline (see boot_anim_editor_server.py's own comment on that
+ * endpoint) - the page above already rendered once against DEFAULT_STATE
+ * so there is always something on screen even if this fetch is slow, and
+ * a second render() call once it lands is cheap next to the alternative
+ * of opening on a copy that silently drifts from what is actually
+ * committed. Failure (server too old, file unreadable, bad JSON) falls
+ * back to staying on DEFAULT_STATE quietly - this page still needs to
+ * work against a server that predates this endpoint, and a failed
+ * best-effort refresh is not something the person opening the page needs
+ * an alert() for. */
+fetch('/timeline')
+  .then((res) => (res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status))))
+  .then((loaded) => applyLoadedState(loaded))
+  .catch((err) => {
+    console.warn('boot_anim_editor: could not load the real committed ' +
+      'timeline from GET /timeline, staying on DEFAULT_STATE:', err);
+  });
 </script>
 </body>
 </html>
