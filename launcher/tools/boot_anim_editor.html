@@ -170,7 +170,9 @@
     color: var(--text-dim);
     font-variant-numeric: tabular-nums;
   }
-  #renderError {
+  /* #flashError shares this: same look, its own separate element (see
+   * showFlashError()'s own comment on why it is not #renderError). */
+  #renderError, #flashError {
     display: none;
     white-space: pre-wrap;
     font: 12px/1.4 ui-monospace, monospace;
@@ -182,6 +184,7 @@
     max-height: 200px;
     overflow-y: auto;
   }
+  #flashError { margin-top: 8px; }
   #playbar {
     display: flex;
     flex-direction: column;
@@ -377,6 +380,7 @@
       <button id="btnBuildFlash" class="primary">Build &amp; Flash</button>
       <span id="flashStatus"></span>
     </div>
+    <div id="flashError"></div>
   </div>
 
   <div class="panel" id="kfDetailPanel">
@@ -557,6 +561,7 @@ function sortKeyframes() {
 const statusEl = document.getElementById('renderStatus');
 const originEl = document.getElementById('originReadout');
 const errorEl = document.getElementById('renderError');
+const flashErrorEl = document.getElementById('flashError');
 const imgEl = document.getElementById('renderImg');
 const scrub = document.getElementById('scrub');
 const msReadout = document.getElementById('msReadout');
@@ -634,30 +639,33 @@ async function renderNow() {
   originEl.textContent = origin ? `origin: ${origin}px` : '';
 }
 
-/* `scrollTo`: the error panel sits at the very bottom of the whole page,
- * after the entire Other Consts list (see #renderError's own grid-area) -
- * fine for a render error, which fires on nearly every keystroke while
- * editing a field and would be actively disruptive to jump the page away
- * from whatever is still being typed, but a Build & Flash failure is a
- * single deliberate action with nothing else on screen competing for
- * attention, and "failed" next to the button with the actual reason
- * scrolled out of view below several screens of consts is exactly what
- * was hard to notice. */
-function showError(msg, scrollTo) {
+function showError(msg) {
   errorEl.textContent = msg;
   errorEl.style.display = 'block';
-  if (scrollTo) {
-    /* 'auto', not 'smooth' - the animated version is the nicer-looking
-     * one but does not reliably complete in every rendering context
-     * (measured: it never moves at all in at least one automated
-     * browser environment), and the whole point of scrolling this into
-     * view at all is that the user actually sees it, not that the
-     * transition looks good. */
-    errorEl.scrollIntoView({ behavior: 'auto', block: 'center' });
-  }
 }
 function hideError() {
   errorEl.style.display = 'none';
+}
+
+/* A SEPARATE element from #renderError/showError() above, not the same
+ * one reused - renderNow() below calls hideError() unconditionally on
+ * every successful render (line ~630), and a render fires on nearly every
+ * keystroke, every scrub, every Play frame; a Build & Flash failure takes
+ * a couple of minutes, plenty of time for an unrelated render to land and
+ * silently wipe it the instant it was shown - measured happening in
+ * practice, not a hypothetical. Positioned right next to the Build &
+ * Flash button itself (see its own spot in the DOM), so unlike
+ * #renderError this is already close to on-screen - 'nearest', not
+ * 'center', is a small nudge for a short viewport rather than a jump, and
+ * safe to do unconditionally here (nothing else on screen is competing
+ * for a render error's own more careful scroll-or-not judgement call). */
+function showFlashError(msg) {
+  flashErrorEl.textContent = msg;
+  flashErrorEl.style.display = 'block';
+  flashErrorEl.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+}
+function hideFlashError() {
+  flashErrorEl.style.display = 'none';
 }
 
 /* The server handles one render at a time (its own top comment: "every
@@ -1313,7 +1321,7 @@ btnBuildFlash.addEventListener('click', async () => {
   btnBuildFlash.disabled = true;
   flashStatusEl.textContent = 'building & flashing... (can take a minute)';
   flashStatusEl.style.color = 'var(--text-dim)';
-  hideError();
+  hideFlashError();
 
   try {
     const res = await fetch('/build_flash', {
@@ -1333,7 +1341,7 @@ btnBuildFlash.addEventListener('click', async () => {
     if (!res.ok) {
       flashStatusEl.textContent = 'failed';
       flashStatusEl.style.color = 'var(--danger)';
-      showError(body.error || ('HTTP ' + res.status), true);
+      showFlashError(body.error || ('HTTP ' + res.status));
       return;
     }
     flashStatusEl.textContent = 'flashed to ' + port;
@@ -1341,7 +1349,7 @@ btnBuildFlash.addEventListener('click', async () => {
   } catch (err) {
     flashStatusEl.textContent = 'failed';
     flashStatusEl.style.color = 'var(--danger)';
-    showError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err, true);
+    showFlashError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err);
   } finally {
     btnBuildFlash.disabled = false;
   }
