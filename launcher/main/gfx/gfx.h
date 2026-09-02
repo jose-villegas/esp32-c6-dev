@@ -262,9 +262,13 @@ bool gfx_region_dirty(int x, int y, int w, int h);
  * The wait is mandatory - see the notes on asynchronous DMA in the docs. */
 void gfx_present(void);
 
-/* Runtime toggle for the grid dirty-region overlay - see gfx_present()'s
- * mark_rect_border(). Off by default even in a development build: it draws
- * directly over real content, so it should be opted into, not always on.
+/* Runtime toggle for the panel-grid overlay layer: outlines whichever grid
+ * cells are actually sent each frame, cyan for a full-row send and yellow
+ * for a gathered run - see gfx_present()'s mark_rect_border(). Off by
+ * default even in a development build: it draws directly over real
+ * content, so it should be opted into, not always on. Fully independent of
+ * the leaf layer below - either can be on with the other off, in any
+ * combination.
  *
  * Declared only under CONFIG_LAUNCHER_DEVELOPMENT on purpose: a debug knob
  * a release build can still call, quietly doing nothing, is a debug knob
@@ -277,13 +281,16 @@ void gfx_present(void);
 void gfx_set_debug_overlay(bool on);
 bool gfx_debug_overlay(void);
 
-/* A second, independent layer on top of the overlay above: draws the fixed
- * leaf-grid boundaries (see gfx_dirty.h) inside whatever box a gathered
- * send actually covers, in green, so the finer subdivision underneath a
- * yellow box is visible on real hardware rather than only in
- * suite_gfx_dirty.c. Has no effect unless gfx_debug_overlay() is also on -
- * it refines what the overlay shows, it is not a mode of its own. Same
- * undefined-outside-development reasoning as the toggle above. */
+/* A second, fully independent overlay layer, not a refinement of the one
+ * above: outlines the leaves gfx_dirty.h's dirty_mark() actually marked
+ * dirty this frame, one rectangle per dirty leaf, in green - the leaves
+ * that were really touched, not the static leaf lattice. Works on its own
+ * with the panel-grid layer off. Leaf bits are only ever set by a caller
+ * that hands dirty_mark() a real box (see gfx_dirty.h's mark_leaves()) -
+ * mark_band() never marks leaves, so a region only ever touched that way
+ * legitimately shows nothing here; that is a consequence of the design,
+ * not a bug. Same undefined-outside-development reasoning as the toggle
+ * above. */
 void gfx_set_leaf_overlay(bool on);
 bool gfx_debug_leaf_overlay(void);
 

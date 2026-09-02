@@ -140,6 +140,74 @@ static inline void mark_leaves(int x0, int y0, int x1, int y1)
     }
 }
 
+/* One dirty leaf's rectangle, absolute panel pixels - what dirty_leaf_rects()
+ * below hands back, one per dirty leaf intersecting the caller's box. */
+typedef struct {
+    int x0, y0, x1, y1;
+} dirty_leaf_rect_t;
+
+/* Worst case for one strip row: every leaf column dirty in every leaf row of
+ * the row, LEAF_COLS * LEAF_SUB. Callers size their output array from this,
+ * not a hand-counted number. */
+#define LEAF_RECTS_PER_ROW_MAX (LEAF_COLS * LEAF_SUB)
+
+/* Enumerates the dirty leaves of strip `row` that intersect [x0,x1) x
+ * [y0,y1), as absolute-pixel rects into `out`, capped at `max_out`. Returns
+ * how many were written. Backs the leaf debug-overlay layer in gfx.c
+ * (drawn straight into what gets sent, so it needs real rects, not just a
+ * bitmask) and is exercised directly by suite_gfx_dirty.c.
+ *
+ * One rect per dirty leaf, never merged into runs - merging adjacent leaves
+ * would hide the very subdivision this layer exists to show. Each rect
+ * starts at the leaf's own full LEAF_W x LEAF_H extent, then is clipped to
+ * the caller's box: a leaf only partly inside the box yields a clipped
+ * rect, a leaf entirely outside yields nothing. Leaf bits are only ever set
+ * by dirty_mark() (see mark_leaves()) - a row marked solely by mark_band()
+ * has no leaf information, so this legitimately returns nothing for it;
+ * that is a consequence of the design, not a bug to fix here.
+ *
+ * static inline, not plain static: every other function in this file is
+ * used unconditionally by gfx.c, but every call site of this one is inside
+ * an `#if CONFIG_LAUNCHER_DEVELOPMENT` block, so a release build's gfx.c
+ * includes this header and never calls it - the one case in this file the
+ * file header's "some static inline" already allows for. Plain static
+ * would warn -Wunused-function in exactly that build. */
+static inline int dirty_leaf_rects(int row, int x0, int y0, int x1, int y1,
+                                   dirty_leaf_rect_t *out, int max_out)
+{
+    int n = 0;
+
+    for (int sub = 0; sub < LEAF_SUB; sub++) {
+        const int leaf_row = row * LEAF_SUB + sub;
+        const int ly0 = leaf_row * LEAF_H;
+        const int ly1 = ly0 + LEAF_H;
+        if (ly1 <= y0 || ly0 >= y1) {
+            continue;
+        }
+
+        const uint16_t bits = leaf_dirty[leaf_row];
+        for (int col = 0; col < LEAF_COLS; col++) {
+            if (!(bits & (1u << col))) {
+                continue;
+            }
+            const int lx0 = col * LEAF_W;
+            const int lx1 = lx0 + LEAF_W;
+            if (lx1 <= x0 || lx0 >= x1) {
+                continue;
+            }
+            if (n == max_out) {
+                return n;
+            }
+            out[n].x0 = (lx0 > x0) ? lx0 : x0;
+            out[n].x1 = (lx1 < x1) ? lx1 : x1;
+            out[n].y0 = (ly0 > y0) ? ly0 : y0;
+            out[n].y1 = (ly1 < y1) ? ly1 : y1;
+            n++;
+        }
+    }
+    return n;
+}
+
 /* Marks every cell spanned by an ALREADY-CLIPPED row range, full width and
  * full strip height - mark_band() gets no x information at all, so every
  * column in the affected rows has to be assumed dirty across its own full

@@ -366,16 +366,25 @@ Menu order is by name. Constructor order follows link order, which is not
 something to depend on, so the shell sorts before showing the list.
 
 **Bench-only apps** live in `apps/diagnostics/`, excluded by folder when
-`CONFIG_LAUNCHER_SELFTEST` is off — structural rather than a name check.
+`CONFIG_LAUNCHER_DEVELOPMENT` is off — structural rather than a name check.
 Diagnostics re-runs POST, which cycles the audio rail and takes the display off
 SPI2, so it has no business being reachable in a shipped image. See
 [Testing-Guide](Testing-Guide.md#release-builds-contain-no-test-code) — note in
 particular that `REQUIRES` must **not** be gated this way.
 
-Diagnostics' own toggle page currently mixes SELFTEST-only content (the "run
-self test suite" button) with content that is really DEVELOPMENT-only (the
-gfx debug overlays, the orientation readout) - planned to split apart into
-its own Settings app; see [Settings-App-Plan.md](Settings-App-Plan.md).
+Diagnostics ships in any development build, `--dev` included, not just
+`--diag` — that is what frees the RAM the on-device test suites would
+otherwise hold, letting a `--dev` build reach the gfx debug-overlay
+checkboxes without sand's grid allocation failing for want of heap. Its own
+toggle page still mixes two shapes, but the app itself no longer does:
+the "run self test suite" button and its result line are genuinely
+SELFTEST-only (`#if CONFIG_LAUNCHER_SELFTEST` inside `app_diagnostics.c` —
+`selftest_run()` does not exist as a symbol outside a SELFTEST build) and
+compile out of `--dev`, while the POST report and the rest of the toggle
+page (gfx debug overlays, interlace, the orientation readout) are
+DEVELOPMENT-shaped and ship in both. Splitting that surviving DEVELOPMENT
+content into its own Settings app is still open; see
+[Settings-App-Plan.md](Settings-App-Plan.md).
 
 ### Drawing a UI, in the shell or in an app
 
