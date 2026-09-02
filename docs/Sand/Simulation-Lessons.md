@@ -399,6 +399,9 @@ its current numbers.
 - [`Architecture.md`](Architecture.md) — a single-page, diagram-first map
   of the app as it stands today, if you want the shape before the story
   of how it got there.
+- [`Shading-and-Colour.md`](Shading-and-Colour.md) — the same
+  discovery-narrative format, for how a material's variant becomes a
+  pixel rather than how it moves.
 - [Display-and-Rendering.md](../Notes/Display-and-Rendering.md) — the
   dirty-tracking machinery this depends on.
 - [Input-and-Sensors.md](../Notes/Input-and-Sensors.md) — the tilt and
