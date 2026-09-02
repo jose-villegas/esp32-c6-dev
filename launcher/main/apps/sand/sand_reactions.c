@@ -388,20 +388,45 @@ neighbor_smothers(const sand_t* s, int nx, int ny, int w, int h, uint8_t density
     return nm->kind != KIND_LIQUID && nm->density > density;
 }
 
-/* Whether every one of the 4 cardinal neighbours smothers this cell -
- * true burial, not a single denser touch. An ALL-of-4 predicate, unlike
- * neighbor_quenches()'s/try_ignite()'s own per-neighbour ANY/EACH loops
- * above and below - a gap on even one side means real air still reaches
- * it, so it returns false the moment any direction fails rather than
- * accumulating across all four. */
-static inline bool
-smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
+/* How many of (x, y)'s 4 cardinal neighbours smother it - see
+ * neighbor_smothers()'s own comment just above for exactly what that
+ * means (in bounds, non-empty, not a liquid, strictly denser than
+ * `density`). Out-of-bounds never counts, matching neighbor_smothers()'s
+ * own out-of-bounds return.
+ *
+ * Backs two callers with two different thresholds: smothered() below
+ * wants ALL 4 (true burial, for extinguishing a burning solid);
+ * step_one_burning_cell()'s lava-burst gate (SAND_LAVA_BURST_COVER,
+ * sand.h, bd esp32c6-mqt) wants merely "at least 3" - a pocket with one
+ * open side still counts. A single counting walk serves both rather than
+ * a bespoke loop for the second.
+ *
+ * WALKS ALL 4 DIRECTIONS EVEN AFTER AN EARLY MISS - smothered() used to
+ * return false the moment the first uncovered direction was found;
+ * folding that into a full count instead is a behaviour-NEUTRAL cost
+ * change for smothered()'s own callers, not a behaviour change: its test
+ * below is still exactly "all 4 covered", it just gets there by summing
+ * instead of short-circuiting, at most 3 extra neighbor_smothers() reads
+ * on the cells this ever runs on. Confirmed against the full host suite -
+ * no test moved. */
+static inline int
+cover_count(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
+    int n = 0;
     for (int d = 0; d < 4; d++) {
-        if (!neighbor_smothers(s, x + reaction_dirs[d][0], y + reaction_dirs[d][1], w, h, density)) {
-            return false;
+        if (neighbor_smothers(s, x + reaction_dirs[d][0], y + reaction_dirs[d][1], w, h, density)) {
+            n++;
         }
     }
-    return true;
+    return n;
+}
+
+/* Whether every one of the 4 cardinal neighbours smothers this cell -
+ * true burial, not a single denser touch. See cover_count()'s own
+ * comment for why this is now expressed as a full count compared
+ * against 4 rather than an early-exit loop. */
+static inline bool
+smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
+    return cover_count(s, x, y, w, h, density) == 4;
 }
 
 /* Whether ANY of the three neighbours "above" this cell - gravity-
@@ -3900,6 +3925,74 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         (!vent_per_material || (rng_next(&s->rng) % 12) == 0)) {
         try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
         acted = true;
+    }
+
+    /* A SUFFICIENTLY COVERED LAVA CELL CAN BURST - bd esp32c6-mqt, the
+     * chosen replacement for the vent machinery just above (bd esp32c6-0f2
+     * removes vent_chance/try_vent_chunk/covered_from_above in a later,
+     * deliberately sequenced change; this one leaves all of it alone).
+     * Where venting throws the lid away, this converts the lava itself:
+     * the cell becomes MAT_STONE via place_reacted(), then sand_explode()
+     * fires at that same spot. sand_explode() FIRST fills a core of
+     * radius `radius / SAND_EXPLODE_CORE_DIVISOR` with fire (sand.h) - at
+     * SAND_LAVA_BURST_RADIUS(8) and divisor 5 that core radius is 1, so
+     * the stone cell just placed at the centre is immediately overwritten
+     * by fresh fire. That is expected, pinned behaviour, not a bug to
+     * chase - see test_buried_lava_bursts_into_stone_and_fire
+     * (suite_sand.c), which asserts the centre's real final material
+     * rather than assuming it.
+     *
+     * A WHOLE-CELL EVENT, NOT A PER-NEIGHBOUR PROBE - placed beside the
+     * vent block above rather than inside the STAGE 2 cascade walk below,
+     * the same reason vent_chance's own block sits out here: this asks
+     * one question about the cell itself, not one question per neighbour
+     * direction.
+     *
+     * GATED ON THE SAME SHAPE cool_off_chain()'s own trigger (below) uses
+     * - burning KIND_LIQUID with a non-zero quench_to (lava's own
+     * MAT_STONE, material.c) - so only lava ever reaches this, resolved
+     * ONCE, here, before any neighbour work: a board with no lava (or any
+     * other burning liquid) costs one predicted-false compare and draws
+     * no random number at all.
+     *
+     * THE ROLL COMES BEFORE cover_count(), not after: at
+     * SAND_LAVA_BURST_CHANCE's odds (sand.h, deliberately the rarest a
+     * single byte-wide roll can express) the roll is the cheap rejection,
+     * the 4-neighbour cover_count() walk is not - so the overwhelmingly
+     * common case, a covered cell that simply loses this step's roll,
+     * never pays for the walk.
+     *
+     * cover_count() >= SAND_LAVA_BURST_COVER, NOT smothered()'s own
+     * all-4 == comparison - a pocket with one open side still qualifies
+     * (SAND_LAVA_BURST_COVER's own comment, sand.h), which is the whole
+     * point of adding cover_count() as a real count rather than reusing
+     * smothered() as-is.
+     *
+     * NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
+     * gas_ignite_confined() caller above, which skips straight to a plain
+     * ignition when impulses are off so gas still catches fire either
+     * way. There is no equivalent fallback needed here: with impulses
+     * off, sand_explode() is a documented no-op (its own first line,
+     * sand.c) and this cell simply becomes stone with nothing thrown -
+     * exactly right, since no impulses means no explosions anywhere else
+     * in the simulation either, and a bare conversion to stone is not a
+     * wrong answer on its own (see
+     * test_buried_lava_still_becomes_stone_with_impulses_off,
+     * suite_sand.c). */
+    const bool is_lava = mat->kind == KIND_LIQUID && rx->quench_to != 0;
+    const int burst_chance =
+        (s->lava_burst >= 0) ? s->lava_burst : SAND_LAVA_BURST_CHANCE;
+    if (is_lava && burst_chance != 0 &&
+        (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
+        cover_count(s, x, y, w, h, mat->density) >= SAND_LAVA_BURST_COVER) {
+        /* rx->quench_to, not a hardcoded MAT_STONE: `is_lava` above IS
+         * "a burning liquid with a quench product", so the product is
+         * already named right there, and a second burning liquid with
+         * a different one would keep working. The same reasoning
+         * cool_off_chain() gives for not carrying a material id. */
+        place_reacted(s, x, y, at, rx->quench_to);
+        sand_explode(s, x, y, SAND_LAVA_BURST_RADIUS);
+        return true;
     }
 
     /* STAGE 2 OF bd esp32c6-iu5's pair-matrix restructure: THE CASCADE.

@@ -438,6 +438,59 @@ would have made a lava pool sitting in an ordinary stone bowl slowly
 self-extinguish with no water and no fuel anywhere on the board - an
 always-on drain nobody asked for.
 
+### A sufficiently covered lava cell can burst
+
+Independent of water: a lava cell whose 4 cardinal neighbours include at
+least `SAND_LAVA_BURST_COVER` (3) that are non-liquid and strictly denser
+than lava (`cover_count()`, `sand_reactions.c` - the same walk `smothered()`
+uses, at a lower threshold than its own all-4) gets a tiny, deliberately
+rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in 256, the
+rarest a single byte-wide roll can express) to convert to `MAT_STONE` and
+immediately `sand_explode()` at that spot, fire included. This is the
+replacement for the earlier vent mechanism (`reaction_t.vent_chance`,
+which threw whatever was covering the lava rather than touching the lava
+itself) and the mechanism that reopens a sealed pool's own crust so a
+sustained pour can keep reaching lava rather than the pour's own cool-off
+chain armouring the surface shut - see the cool-off section above.
+
+3, not `smothered()`'s own all-4: a pocket with one open side still
+qualifies, which is what lets an ordinary hand-drawn vessel (which the
+`smothered()`-exemption story above already found has dozens of one-cell
+dimples) actually reopen over time rather than needing a fully sealed
+cell to ever do anything.
+
+**`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
+DIVISOR` with fire before it queues a single flight entry** (see
+`SAND_EXPLODE_CORE_DIVISOR`'s own comment, sand.h). At `SAND_LAVA_BURST_
+RADIUS` (8, `SAND_GAS_IGNITE_BLAST_RADIUS`'s own figure - the only other
+reaction-driven burst that exists) and divisor 5, that core radius is 1 -
+so the `MAT_STONE` this feature just wrote at the centre is immediately
+overwritten by fresh fire. That is pinned, expected behaviour (see
+`test_buried_lava_bursts_into_stone_and_fire`, `suite_sand.c`), not a bug.
+
+Not gated on `sand_enable_impulses()` having been called: `sand_explode()`
+is a documented no-op without it, so with impulses off the cell simply
+becomes stone and nothing is thrown - correct, since no impulses means no
+explosions anywhere else in the simulation either.
+
+**The rate is per covered cell, per step, not per pool or per event** -
+the same multiplier trap `reaction_t.vent_chance`'s own comment
+(material.c) documents making twice: a large sealed pool has many covered
+cells, each independently rolling this every step it stays covered, so a
+figure that reads as vanishingly rare in isolation is common in aggregate.
+A stress-tested "pool under a hand-drawn floor" scene (many one-cell
+dimples across a wide ceiling, deliberately packed tighter than the blast
+radius) confirmed the mechanism is self-limiting rather than a runaway
+chain: a burst's own explosion destroys the cover around it as it clears
+the pocket, so a freshly-uncovered neighbour is usually blown open rather
+than left standing and re-eligible. At the real production chance the
+scene lost roughly a sixth of its lava over 3000 steps in a slow trickle,
+never more than a handful of dimples in a single step; pinned to the
+maximum chance the same scene lost about half its lava in the first 20
+steps and then plateaued as the remaining pockets thinned out and
+scattered. Not a suppression mechanism - the tapering is an emergent
+consequence of the blast itself clearing cover, not a cap anyone added.
+
 ## Momentum and the wall-rebound splash
 
 Everything above reacts to where gravity *points*. Nothing reacted to how
