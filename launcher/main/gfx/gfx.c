@@ -753,17 +753,16 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
  * comment on their declaration in gfx.h.
  *
  * gfx_set_debug_overlay() itself is defined further down, after BORDER_
- * PIXELS (see that #define's own comment for why it lives past send_full_
- * row()'s helpers) - it needs that constant to size the save/restore
- * scratch it now malloc's. */
+ * PIXELS (see that #define's own comment) - it is a plain flag setter, its
+ * save/restore scratch is borrowed from gather_buf rather than owned. */
 static bool debug_overlay_on;
 bool gfx_debug_overlay(void) { return debug_overlay_on; }
 
 /* Same story as debug_overlay_on above - see gfx_set_leaf_overlay()'s own
  * comment in gfx.h for what this actually draws. Its setter is defined
- * further down, alongside gfx_set_debug_overlay() - both now share one
- * alloc/free helper that needs BORDER_PIXELS/LEAF_BORDER_PIXELS to size the
- * save/restore scratch. */
+ * further down, alongside gfx_set_debug_overlay() - unlike that one, it
+ * still owns a small malloc (leaf_rect_scratch) that cannot be borrowed
+ * from gather_buf; see that buffer's own comment for why. */
 static bool leaf_overlay_on;
 bool gfx_debug_leaf_overlay(void) { return leaf_overlay_on; }
 
@@ -877,27 +876,63 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
 }
 
 /* send_full_row()'s save/restore scratch for the panel-grid layer
- * (GRID_COLS * BORDER_PIXELS gfx_color_t, 2496 bytes at this board's
- * dimensions) and the leaf layer (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_
- * PIXELS gfx_color_t, ~10 KB - one strip row's worth of leaves, the most
- * send_full_row() ever needs saved at once) - malloc'd here on enable and
- * freed on disable, rather than a permanent static, because the only path
- * that can ever turn either overlay on is the Diagnostics app's toggle page
- * (app_diagnostics.c, CONFIG_LAUNCHER_DEVELOPMENT - see CMakeLists.txt),
- * which is exactly the build this memory matters most in: a plain --dev
- * build compiles this whole block in AND can now reach both setters from
- * that toggle page, with no test suites competing for RAM the way a --diag
- * build's linked-in suites do - the same build where app_sand.c's grid most
- * needs its own single largest contiguous heap run (see app_sand.c's own
- * comment on that allocation for why a few KB of unrelated static growth is
- * enough to tip it). Malloc-on-enable means this pair only ever costs
- * anything while a layer is actually switched on, instead of reserving it
- * in .bss for the life of the process regardless of whether either toggle
- * is ever tapped - the same fixture/teardown pattern already used for
- * cube_perf's samples/stat_scratch (see selftest OOM incident notes), here
- * with the toggle calls themselves as the fixture and the teardown. */
-static gfx_color_t (*overlay_saved)[BORDER_PIXELS];
-static gfx_color_t (*leaf_saved)[LEAF_BORDER_PIXELS];
+ * (GRID_COLS * BORDER_PIXELS gfx_color_t, 1248 px) and the leaf layer
+ * (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS gfx_color_t, 4992 px) -
+ * 6240 px together.
+ *
+ * This used to be two buffers malloc'd on enable and freed on disable
+ * (~12.5 KB combined). That was the bug: sand needs one ~41 KB contiguous
+ * grid allocation plus ~14.5 KB of smaller arrays out of ~72 KB free after
+ * the framebuffer, which leaves under 3 KB of headroom before
+ * fragmentation - confirmed on real hardware, whichever of sand or these
+ * two mallocs happened second lost the race and sand could not start. The
+ * two exist purely to show what gfx_present() is doing; they must never be
+ * the reason sand cannot start.
+ *
+ * The fix is to not allocate anything: borrow the front of gather_buf
+ * (GATHER_MAX_PIXELS gfx_color_t, already allocated at boot) instead.
+ * gather_buf is provably idle at every point send_full_row() runs it: the
+ * only code that ever hands gather_buf to the DMA is gather_and_send(),
+ * and it always xSemaphoreTake()s that transfer's own completion (see its
+ * own comment) before returning - so by the time control reaches any
+ * row's send_full_row(), the last thing gather_and_send() wrote has
+ * already fully drained off the bus. The frame loop itself is
+ * single-threaded (app_main()'s own while (1) in main.c calls
+ * gfx_present() directly), so there is no concurrent access to reason
+ * about beyond that ordering. Reusing gather_buf's memory for a second,
+ * mutually-exclusive-in-time job costs nothing extra.
+ *
+ * The _Static_assert ties this to GATHER_MAX_PIXELS so a future change to
+ * it, or to GRID_COLS/COL_WIDTH/STRIP_HEIGHT/LEAF_SUB (which all feed
+ * BORDER_PIXELS/LEAF_BORDER_PIXELS/LEAF_RECTS_PER_ROW_MAX), that breaks
+ * the fit is a compile error, not a silent overflow into DMA-mapped
+ * memory - the same failure mode plan_run()'s own comment already warns
+ * about for gather_buf's other use. */
+#define OVERLAY_CELL_SAVE_PIXELS (GRID_COLS * BORDER_PIXELS)
+#define OVERLAY_LEAF_SAVE_PIXELS (LEAF_RECTS_PER_ROW_MAX * LEAF_BORDER_PIXELS)
+_Static_assert(OVERLAY_CELL_SAVE_PIXELS + OVERLAY_LEAF_SAVE_PIXELS <=
+              GATHER_MAX_PIXELS,
+              "overlay save/restore scratch must fit inside gather_buf");
+
+/* Typed views into gather_buf's front OVERLAY_CELL_SAVE_PIXELS +
+ * OVERLAY_LEAF_SAVE_PIXELS pixels, cell-save first and leaf-save right
+ * after it - matching the _Static_assert above. Both can be live at once
+ * within a single send_full_row() call (both overlay layers can be on
+ * together), which is why they are two disjoint ranges rather than one
+ * reused twice. Small inline functions rather than static pointers set up
+ * once: gather_buf's address never changes after gfx_init(), so there is
+ * nothing to cache, and computing them fresh keeps it obvious neither view
+ * survives past the call that uses it. */
+static inline gfx_color_t (*overlay_cell_save(void))[BORDER_PIXELS]
+{
+    return (gfx_color_t (*)[BORDER_PIXELS])gather_buf;
+}
+
+static inline gfx_color_t (*overlay_leaf_save(void))[LEAF_BORDER_PIXELS]
+{
+    return (gfx_color_t (*)[LEAF_BORDER_PIXELS])
+        (gather_buf + OVERLAY_CELL_SAVE_PIXELS);
+}
 
 /* dirty_leaf_rects() output, shared by send_full_row() and gather_and_send()
  * rather than one LEAF_RECTS_PER_ROW_MAX array per call site - the two can
@@ -907,106 +942,54 @@ static gfx_color_t (*leaf_saved)[LEAF_BORDER_PIXELS];
  * loop that calls all of this is single-threaded - app_main()'s own
  * while (1) in main.c, not a separate task, calls gfx_present() directly.
  *
- * Malloc'd for the same reason as overlay_saved/leaf_saved above, but a
- * harder budget than .bss growth: CONFIG_ESP_MAIN_TASK_STACK_SIZE is 3584
- * bytes (launcher/sdkconfig), and because the frame loop is app_main()'s
- * own stack rather than a dedicated task's, gfx_present() and everything
- * it calls runs directly on it. A 64-entry dirty_leaf_rect_t array (1024
- * bytes) as a local in even one of these two functions would be ~29% of
- * that entire stack on top of send_one_row()'s own locals still live
- * underneath it; as locals in both, close to 60%. */
+ * Unlike the cell/leaf save scratch above, this one genuinely cannot be
+ * borrowed from gather_buf: in gather_and_send(), gather_buf itself is the
+ * packed-pixel destination the leaf borders get drawn into, using rects
+ * this list supplies - the list has to survive alongside gather_buf's own
+ * content on that path, not overlap it.
+ *
+ * So this is still malloc'd on enable and freed on disable, exactly as
+ * before this fix - but on its own now, at LEAF_RECTS_PER_ROW_MAX *
+ * sizeof(dirty_leaf_rect_t) = 1024 bytes, a small fraction of what the
+ * three buffers together used to cost, and comfortably inside the ~16 KB
+ * of heap headroom this fix leaves beside sand's own allocations (see the
+ * comment above). Not a static: CONFIG_ESP_MAIN_TASK_STACK_SIZE is 3584
+ * bytes (launcher/sdkconfig), so a 1024-byte array would also be far too
+ * big as a local on app_main()'s own stack (see gfx_present()'s call
+ * graph) - but a permanent .bss reservation is no better, given this
+ * repo's own history of static-growth OOMs in exactly this
+ * CONFIG_LAUNCHER_DEVELOPMENT-gated territory (see the selftest and
+ * dev-build grid incidents). Malloc-on-enable keeps the cost real only
+ * while the leaf layer is actually switched on. */
 static dirty_leaf_rect_t *leaf_rect_scratch;
 
-/* Shared by both setters below: allocates whichever of the three buffers
- * above is still missing. A no-op once all three already exist, which is
- * what makes "allocate on the first layer, free on the last" work
- * regardless of which of the two setters is called first - overlay_any_on()
- * is already true by the time either setter calls this, so every buffer
- * exists before send_full_row() or gather_and_send() can ever reach a
- * branch that might touch one, closing the NULL-overlay_saved crash a
- * leaf-only toggle used to risk once send_full_row()'s branch stopped being
- * gated on debug_overlay_on alone. Returns false, logging which allocation
- * failed, after rolling back whatever this call already succeeded at - the
- * caller leaves its own flag off, and no partial allocation is left behind
- * for free_overlay_buffers_if_unused() to trip over later. */
-static bool ensure_overlay_buffers(void)
-{
-    if (overlay_saved == NULL) {
-        overlay_saved = malloc(sizeof(*overlay_saved) * GRID_COLS);
-        if (overlay_saved == NULL) {
-            ESP_LOGE(TAG, "overlay: could not allocate %u-byte cell save "
-                          "buffer - staying off",
-                     (unsigned)(sizeof(*overlay_saved) * GRID_COLS));
-            return false;
-        }
-    }
-    if (leaf_saved == NULL) {
-        leaf_saved = malloc(sizeof(*leaf_saved) * LEAF_RECTS_PER_ROW_MAX);
-        if (leaf_saved == NULL) {
-            ESP_LOGE(TAG, "overlay: could not allocate %u-byte leaf save "
-                          "buffer - staying off",
-                     (unsigned)(sizeof(*leaf_saved) * LEAF_RECTS_PER_ROW_MAX));
-            free(overlay_saved);
-            overlay_saved = NULL;
-            return false;
-        }
-    }
-    if (leaf_rect_scratch == NULL) {
-        leaf_rect_scratch = malloc(sizeof(*leaf_rect_scratch) *
-                                   LEAF_RECTS_PER_ROW_MAX);
-        if (leaf_rect_scratch == NULL) {
-            ESP_LOGE(TAG, "overlay: could not allocate %u-byte leaf rect "
-                          "scratch - staying off",
-                     (unsigned)(sizeof(*leaf_rect_scratch) *
-                                LEAF_RECTS_PER_ROW_MAX));
-            free(leaf_saved);
-            leaf_saved = NULL;
-            free(overlay_saved);
-            overlay_saved = NULL;
-            return false;
-        }
-    }
-    return true;
-}
-
-/* The other half of ensure_overlay_buffers(): frees all three once neither
- * layer needs them any more. A no-op while the other layer is still on. */
-static void free_overlay_buffers_if_unused(void)
-{
-    if (overlay_any_on()) {
-        return;
-    }
-    free(overlay_saved);
-    overlay_saved = NULL;
-    free(leaf_saved);
-    leaf_saved = NULL;
-    free(leaf_rect_scratch);
-    leaf_rect_scratch = NULL;
-}
-
+/* The panel-grid layer needs no buffer of its own any more (see
+ * overlay_cell_save() above), so its setter is a plain flag - nothing to
+ * fail. */
 void gfx_set_debug_overlay(bool on)
 {
-    if (on) {
-        if (!ensure_overlay_buffers()) {
-            return;
-        }
-        debug_overlay_on = true;
-    } else {
-        debug_overlay_on = false;
-        free_overlay_buffers_if_unused();
-    }
+    debug_overlay_on = on;
 }
 
 void gfx_set_leaf_overlay(bool on)
 {
     if (on) {
-        if (!ensure_overlay_buffers()) {
-            return;
+        if (leaf_rect_scratch == NULL) {
+            leaf_rect_scratch = malloc(sizeof(*leaf_rect_scratch) *
+                                       LEAF_RECTS_PER_ROW_MAX);
+            if (leaf_rect_scratch == NULL) {
+                ESP_LOGE(TAG, "overlay: could not allocate %u-byte leaf "
+                              "rect scratch - staying off",
+                         (unsigned)(sizeof(*leaf_rect_scratch) *
+                                    LEAF_RECTS_PER_ROW_MAX));
+                return;
+            }
         }
         leaf_overlay_on = true;
     } else {
         leaf_overlay_on = false;
-        free_overlay_buffers_if_unused();
+        free(leaf_rect_scratch);
+        leaf_rect_scratch = NULL;
     }
 }
 #endif
@@ -1076,10 +1059,10 @@ static void gather_and_send(int x0, int y0, int x1, int y1, int row,
          * of which layer(s) drew into it.
          *
          * leaf_rect_scratch, not a local array: leaf_overlay_on true means
-         * ensure_overlay_buffers() already succeeded (see gfx_set_leaf_
-         * overlay()), so this is never NULL here - see leaf_rect_scratch's
-         * own comment for why it is shared with send_full_row() rather than
-         * each having its own. */
+         * gfx_set_leaf_overlay()'s own malloc already succeeded, so this is
+         * never NULL here - see leaf_rect_scratch's own comment for why it
+         * is shared with send_full_row() rather than each having its
+         * own. */
         const int n = dirty_leaf_rects(row, x0, y0, x1, y1, leaf_rect_scratch,
                                        LEAF_RECTS_PER_ROW_MAX);
         for (int i = 0; i < n; i++) {
@@ -1121,8 +1104,7 @@ static void send_full_row(int row, int *queued)
      * "nothing to actually draw" case below can be detected before
      * committing to the blocking path. leaf_rect_scratch (see its own
      * comment) is never NULL here: leaf_overlay_on can only be true once
-     * gfx_set_leaf_overlay()'s ensure_overlay_buffers() call has already
-     * allocated it. */
+     * gfx_set_leaf_overlay()'s own malloc has already allocated it. */
     int leaf_n = 0;
     if (leaf_overlay_on) {
         leaf_n = dirty_leaf_rects(row, 0, y, GFX_WIDTH, y + STRIP_HEIGHT,
@@ -1155,14 +1137,14 @@ static void send_full_row(int row, int *queued)
                 gfx_color_t *cell =
                     fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
                 save_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
-                           overlay_saved[col]);
+                           overlay_cell_save()[col]);
             }
         }
         for (int i = 0; i < leaf_n; i++) {
             const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
             gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
             save_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
-                       leaf_saved[i]);
+                       overlay_leaf_save()[i]);
         }
 
         /* Draw phase - order does not matter now that everything is
@@ -1192,14 +1174,14 @@ static void send_full_row(int row, int *queued)
             const dirty_leaf_rect_t *r = &leaf_rect_scratch[i];
             gfx_color_t *at = fb + (size_t)r->y0 * GFX_WIDTH + r->x0;
             restore_border(at, GFX_WIDTH, r->x1 - r->x0, r->y1 - r->y0,
-                          leaf_saved[i]);
+                          overlay_leaf_save()[i]);
         }
         if (debug_overlay_on) {
             for (int col = GRID_COLS - 1; col >= 0; col--) {
                 gfx_color_t *cell =
                     fb + (size_t)y * GFX_WIDTH + col * COL_WIDTH;
                 restore_border(cell, GFX_WIDTH, COL_WIDTH, STRIP_HEIGHT,
-                              overlay_saved[col]);
+                              overlay_cell_save()[col]);
             }
         }
         return;
