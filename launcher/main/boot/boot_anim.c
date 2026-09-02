@@ -339,9 +339,24 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     const gfx_color_t spoke_c = lit(COL_AXIS, ink);
     const uint8_t spoke_reach = boot_anim_grid_spoke_reach(now_ms);
     if (spoke_reach > 0) {
+        /* A spoke is a structural guide line, the same as an axis - not
+         * the ring data the wave is actually about, which is what
+         * BOOT_ANIM_GRID_RINGS's own finite count is really describing -
+         * so it gets the same "run it well past the panel and let
+         * clipping do the work" treatment BOOT_ANIM_AXIS_FAR_UNITS
+         * already is for the axes (see its own comment in boot_anim.h):
+         * always overflowing the canvas regardless of camera framing,
+         * rather than visibly ending mid-frame. MAX with `far` itself,
+         * not AXIS_FAR_UNITS alone - whatever the authored grid_rings *
+         * grid_step_m reach actually comes out to, a spoke passing
+         * through every ring in turn should never look shorter than the
+         * rings it radiates through. */
+        const int32_t axis_far = units(BOOT_ANIM_AXIS_FAR_UNITS);
+        const int32_t spoke_far = far > axis_far ? far : axis_far;
+
         for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
             const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-            draw_grid_spoke(turn, far, spoke_c,
+            draw_grid_spoke(turn, spoke_far, spoke_c,
                             BOOT_ANIM_GRID_SPOKE_DASH != 0, spoke_reach, view);
         }
     }
