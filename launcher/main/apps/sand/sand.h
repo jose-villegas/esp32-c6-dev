@@ -827,8 +827,11 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * assert against its real value rather than a hand-copied literal that
  * silently goes stale the next time this is retuned.
  *
- * Doubled from 8 to 16 on request after the first device flash. */
-#define SAND_LAVA_COOLOFF_MAX_CHAIN 16
+ * Briefly doubled to 16 and put back: reaching FURTHER per event turned
+ * out to be the wrong dial for "the pour bites harder". How OFTEN a
+ * chain gets going at all is SAND_LAVA_COOLOFF_CHANCE's job, and that
+ * is what moved instead. */
+#define SAND_LAVA_COOLOFF_MAX_CHAIN 8
 
 /* The initial speed vent_column() (sand_reactions.c) hands to sand_
  * impulse_dislodge() for each cell it throws - see SAND_EXPLODE_INITIAL_
@@ -1796,9 +1799,17 @@ void sand_set_condenses(sand_t *s, int chance);
  * NO SECOND ROLL TO SKIP - unlike vent_chance's own override, nothing
  * stacks on top of this one, so sand_set_lava_cooloff(255) gets a single,
  * deterministic firing on every qualifying event, exactly like every
- * other value this accepts. */
+ * other value this accepts.
+ *
+ * 12 -> 32 after watching a real pour on device. The first figure was
+ * chosen to be deliberately rare against events that are themselves
+ * common, and it undershot: a pour read as barely biting. Raised here,
+ * rather than by letting one event reach further (SAND_LAVA_COOLOFF_
+ * MAX_CHAIN, tried at 16 and put back) - MORE EVENTS, each still short,
+ * is what makes the pour rate the thing that sets how fast a pool dies,
+ * which is the whole shape this mechanic was designed around. */
 void sand_set_lava_cooloff(sand_t *s, int chance);
-#define SAND_LAVA_COOLOFF_CHANCE 12
+#define SAND_LAVA_COOLOFF_CHANCE 32
 
 /* The sentinel sand_set_lava_cooloff(s, chance < 0) restores, and what
  * sand_init() itself starts every sand_t at - "use SAND_LAVA_COOLOFF_
