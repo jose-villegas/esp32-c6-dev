@@ -389,6 +389,55 @@ changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
 has to latch that kind's `may_have_*` flag, and getting it wrong is
 invisible to almost every other test.
 
+### Water cools, and lava can lose ground it cannot get back without a pour
+
+Stone and glass bank heat in the low nibble their `KIND_STATIC` never
+otherwise needed (material.h's own comment on the low nibble's per-material
+reuse - see "The grid is one byte per cell" above), 0-15 with
+`SAND_AMBIENT_HEAT` sitting in the middle rather than at the floor, so a
+pane has somewhere to go both when it warms and when it chills
+(`step_one_tempered_cell()`, `sand_reactions.c`). Left alone, that variant
+relaxes back toward ambient on its own, at a rate (`reaction_t.cools`) that
+gets harder to outrun the further off ambient the cell already sits - a
+single brush of fire makes a pane fragile quickly, while cooking it all the
+way to molten stays a long exposure.
+
+A quenching liquid (`PAIR_QUENCHES` - water and acid, never lava or oil,
+this file's own top comment in `sand_reactions.c`) sitting against a
+heat-ramping cell multiplies that same drain by `SAND_WET_COOLING_FACTOR`
+(sand.h), but ONLY in the above-ambient half of the ramp. Pouring water on
+a glowing wall is what makes its banked heat actually come back down in a
+reasonable number of steps rather than the many dozens plain ambient
+cooling alone would take - and the asymmetry is deliberate: nothing about
+being wet can ever push a cell below `SAND_AMBIENT_HEAT`. That is chilling's
+job (snow, ice, `reaction_t.chills`) alone, and letting water do it too
+would let an ordinary splash thermally shock glass the same way a
+deliberately-placed snowbank does.
+
+**Lava quenched into stone can take a neighbour down with it, which is what
+lets a sustained pour eat into a pool rather than only ever sealing its
+surface.** The one-touch quench any water-on-lava contact has always done
+(`neighbor_quenches()`, `quench_to`) now rolls a small, deliberately rare
+chance (`SAND_LAVA_COOLOFF_CHANCE`, sand.h) to freeze ONE further adjacent
+lava cell too, which rolls again in turn - an iterative walk
+(`cool_off_chain()`, `sand_reactions.c`), bounded at `SAND_LAVA_COOLOFF_MAX_CHAIN`
+links so one lucky roll can never run the whole pool to stone in a single
+event. Stop pouring, and the crust that formed simply sits there - nothing
+about it keeps spreading on its own.
+
+Lava pays the same small chance for a second reason: doing the WORK of
+actually melting a neighbour into something else (a genuine material
+change - sand fusing all the way to lava, a thermal-shock crack - not
+merely banking one more level of heat, which stone and glass do on nearly
+every step they touch lava and which never costs anything) rolls the same
+chain. Getting this distinction right mattered enough to be its own guarded
+test (`test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself`,
+`suite_sand.c`): gating on whether the heat-transform probe merely
+*returned true* rather than on whether `CELL_MATERIAL` actually changed
+would have made a lava pool sitting in an ordinary stone bowl slowly
+self-extinguish with no water and no fuel anywhere on the board - an
+always-on drain nobody asked for.
+
 ## Momentum and the wall-rebound splash
 
 Everything above reacts to where gravity *points*. Nothing reacted to how
