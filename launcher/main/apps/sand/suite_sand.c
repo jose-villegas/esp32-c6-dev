@@ -20774,12 +20774,11 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe (see main/apps/sand/tools/perf_probe_reactions/) -
- * bd esp32c6-iu5's reactions-pass pair-matrix restructure. Exposes the
- * actual official test function above under a plain name, so a probe
- * harness can RUN_TEST() it directly on a laptop instead of hand-copying
- * the scene - one of this round's two liquid-free controls. Never defined
- * by any real build. */
+/* Host-only timing probe (see main/apps/sand/tools/perf_probe/, the
+ * canonical host attribution harness - bd esp32c6-o2s). Exposes the actual
+ * official test function above under a plain name, so probe_main.c can run
+ * it directly on a laptop instead of hand-copying the scene - one of the
+ * two liquid-free controls. Never defined by any real build. */
 void sand_host_probe_run_full_step_control(void)
 {
     test_a_full_size_step_fits_in_the_frame_budget();
@@ -20855,7 +20854,7 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper above,
- * and main/apps/sand/tools/perf_probe_reactions/) - bd esp32c6-iu5. */
+ * and main/apps/sand/tools/perf_probe/). */
 void sand_host_probe_run_water(void)
 {
     test_a_screen_of_water_fits_in_the_frame_budget();
@@ -20974,8 +20973,8 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's other liquid-free control
- * (see the full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the other liquid-free control (see the
+ * full-step control's own wrapper for the pattern). */
 void sand_host_probe_run_settled_flip_control(void)
 {
     test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget();
@@ -21079,8 +21078,8 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5 (see the full-step control's own
- * wrapper for the pattern). */
+/* Host-only timing probe (see the full-step control's own wrapper for the
+ * pattern). */
 void sand_host_probe_run_mixed_flip(void)
 {
     test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget();
@@ -21224,7 +21223,7 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's every-material flip (see the
+/* Host-only timing probe - the every-material flip scene (see the
  * full-step control's own wrapper for the pattern). */
 void sand_host_probe_run_every_material_flip(void)
 {
@@ -21492,8 +21491,8 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's four-liquids scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the four-liquids scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_four_liquids(void)
 {
     test_four_liquids_reacting_at_once_fits_in_the_frame_budget();
@@ -21555,8 +21554,8 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's lava stress scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the lava stress scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_lava_stress(void)
 {
     test_the_lava_stress_scene_fits_in_the_frame_budget();
@@ -21631,8 +21630,8 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's smoke+steam scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the smoke+steam scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_smoke_and_steam(void)
 {
     test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget();
@@ -21864,8 +21863,8 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's wet earth scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the wet earth scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_wet_earth(void)
 {
     test_the_wet_earth_scene_fits_in_the_frame_budget();
@@ -21952,8 +21951,8 @@ static void test_the_vent_spam_scene_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's vent spam scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the vent spam scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_vent_spam(void)
 {
     test_the_vent_spam_scene_fits_in_the_frame_budget();
