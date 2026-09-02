@@ -855,6 +855,184 @@ tilt_angle`, `test_a_sparse_repaint_does_not_band_a_tall_liquid_column`
 
 ---
 
+## Closed: a sweep's first row was reading a different row's count
+
+Reported from the device once the ray walk had shipped and fixed the shadow
+alignment, in two parts: **"a brief flip of colours"** the user could only
+catch in a single frame, and **"tilt flips into straight positions with the
+water settled seem to cause a huge spike."** Their own reproduction, adopted
+as the acceptance test: fill the screen to about 40% with water in portrait,
+let it settle, then turn the board to landscape.
+
+The two capture sidecars attached to the report
+(`launcher/tools/screenshots/screenshot_20260902_1626*.json`) read
+`app.tilt_x` -12 and -195 against `app.tilt_y` 3342 and 4190 - **portrait
+lock**, gravity essentially straight down in grid space with the horizontal
+component sitting on zero. That is nowhere near the 45-degree line, so this
+was never the regime-flip transient `update_local_depth_gravity()` already
+documents.
+
+### Three suspects, all ruled out by measurement first
+
+Ruling these out is what made the real mechanism findable, so they are worth
+recording rather than only the answer.
+
+| Suspect | Measured | Verdict |
+|---|---|---|
+| The state reset firing on hand tremor | 40 resets in 40 frames of portrait tremor, 39 in 40 of landscape - but 0 cells crossing a shade step, 0 staleness | Real, and a genuine second defect (below), but **not** the flash |
+| Wake-tick staleness (`LOCAL_DEPTH_WAKE_MS`) | Repainting every liquid row *every* frame instead made it **worse**: 1003 cells against 841 | Not the cause; pointed at the walk's bookkeeping rather than at how often it runs |
+| The walk arithmetic across 45 degrees | A fully coherent from-scratch sweep is smooth through the crossing - interior rows step by 1 or 2 of 24 per degree, 40 through 56 degrees | Not the cause |
+
+### The reproduction that isolated it
+
+A host model driving the real `sand_t`/`sand_step()` with the real dirty-row
+sparsity, the real wake tick, the real row-order reversal and the real reset
+logic, on the device's own NORMAL-quality 92x112 grid. The decisive
+experiment: settle the pool, then **freeze the simulation** - "with the water
+settled" is the reported condition, and a grid that cannot change makes every
+displayed change spurious by construction, so the measurement needs no
+oracle - and sweep gravity from 0 to 90 degrees at one degree per frame.
+
+Result: **841 interior cells - a quarter of the pool - crossed a full shade
+step in a single frame**, 23 of the 24-cell band, on the first wake tick
+after the regime flip. Disabling the reset entirely changed nothing (919).
+Waking every frame changed nothing for the better (1003).
+
+### The mechanism
+
+Every cross-row read in `paint_row_n()` treats `local_depth_prev_row[qx]` as
+"the count of the cell one step back along the ray, in row `cy - vdir`".
+That is only true when the row painted immediately before this one *was*
+that row. `draw_dirty_rows()` sweeps surface-first precisely so that it
+usually is - but it only ever paints **dirty** rows, and the wake tick marks
+only rows holding a **liquid** cell. So on a settled pool:
+
+1. The sweep's first row is the surface row.
+2. The empty row above it is never painted, so nothing zeroes the buffer.
+3. `local_depth_prev_row[]` still holds what the **last row of the previous
+   sweep** left there - the deepest row of the pool, saturated at
+   `LOCAL_DEPTH_COUNT_CEILING`.
+4. The surface row's source is air, so `same_material` is false and the walk
+   drops into the hold-then-commit debounce. A COMMIT writes 0 and all is
+   well; a **HOLD** "keeps climbing as if nothing happened" - climbing *from
+   a saturated count*.
+5. Every row beneath inherits that as a same-material climb.
+
+The whole body renders at maximum depth for a frame. Not a shade or two out:
+the gradient inverted end to end. The suite's own banding test carried the
+wrong assumption in a comment - "a pool that IS asleep takes every one of its
+repaints from the wake tick, which always walks the whole column in order and
+so can never break the chain" - which is exactly false, because the wake tick
+walks only the *liquid* rows.
+
+### The fix, and why that shape
+
+`local_depth_prev_cy` records which row `local_depth_prev_row[]` actually
+describes. `paint_row_n()` compares it against `cy - vdir` once per row
+(hoisted out of the cx loop), and on the **debounce HOLD path only**, a
+cross-row carry from a buffer that describes some other row is taken as 0
+instead - the same value the non-liquid row the chain should have started
+from would have written.
+
+**The guard is on the HOLD path only, deliberately.** A same-material climb
+reading a stale count is load-bearing: a row repainted in isolation deep
+inside a pool inherits a value that is stale but *saturated*, which is
+correct there, and is the property
+`test_a_sparse_repaint_does_not_band_a_tall_liquid_column` pins. Distrusting
+the buffer on that path too was tried in the same harness and is strictly
+worse - it makes an isolated deep row re-climb from 1, which is the banding
+that test exists to forbid. At a boundary the stale value is not
+approximately right; it belongs to a different body, so 0 is the only honest
+carry.
+
+Measured after: **83 cells** instead of 841 on the device grid. The residual
+83 are a one-to-five-column strip against the wall the ray exits through
+(`qx_ok` false, so the walk restarts from 0 by construction), whose rows
+shift as the per-row Bresenham drift changes with the tilt - the wall's own
+shadow moving, not a chain break, and left alone.
+
+An alternative fix was measured and rejected: having the wake tick also mark
+the row on the surface side of each liquid band, so the chain is always
+seeded by a non-liquid row. It reaches the same 83, but it only repairs
+*wake-driven* sweeps and leaves a simulation-driven sparse sweep whose first
+row is a boundary just as wrong, at the cost of extra repainted rows every
+tick. The guard fixes the invariant at the point of use instead.
+
+## Closed: tremor at axis lock was wiping the debounce every frame
+
+A second, separate defect found while chasing the flash - the one the flash
+was first blamed on.
+
+`local_depth_h_reverse` is just `gx < 0`. At portrait lock `gx` sits on zero
+(the sidecars' -12 against 3342), so ordinary hand tremor flips its **sign**
+many times a second. `update_local_depth_gravity()` treated any flip of any
+of its three flags as invalidating the whole walk state, so it wiped all
+three arrays on essentially every frame: 40 resets in 40 frames. Landscape is
+the mirror image with `local_depth_v_reverse` as the noisy flag, 39 in 40.
+
+**What that cost is not a flash** - the displayed depth moves by at most 1 of
+24 while the tremor runs. It is that the hold-then-commit debounce is
+disabled outright: `local_depth_top_row[]` is wiped back to "untracked"
+before every paint, so a boundary can never be asked a second time and can
+never COMMIT to 0. A settled pool's surface holds at 1 forever instead and
+every row beneath inherits the extra count. Measured over a 40-frame portrait
+tremor on a frozen 40% pool: **1472 interior cells' displayed depth moved**,
+and the pool's mean displayed depth sat at 18.12 against 17.58 without the
+resets, permanently - plus a three-array wipe every frame for a flag change
+nothing could observe.
+
+### A relevance gate, not a deadband
+
+This mechanism already removed one tuned dead zone, so the fix is exact
+arithmetic about whether the flipped flag can change a number *this grid's*
+walk actually computes. Nothing is tuned and there is no threshold to
+re-tune:
+
+- **Vertical-dominant:** `h_reverse` only supplies the *sign* of the per-row
+  drift. That drift's running total across the whole grid is
+  `floor(grid_h * ax / ay)`, so when `grid_h * ax < ay` every row's step is
+  0, and the sign of nothing is still nothing.
+- **Horizontal-dominant:** `v_reverse` only picks the cross-row source
+  (`toward_surface`, dereferenced only when `step != 0`) and the sweep order
+  that gives `local_depth_prev_row[]` its meaning. The within-row accumulator
+  adds `ay` per cell from 0 and fires at `ax`, so when `grid_w * ay < ax` no
+  cell in any row ever reads across a row and neither can be observed.
+- **A regime flip is never gated** - it always changes what the array slot
+  means, whatever the magnitudes are.
+
+Measured with the gate: portrait tremor 0 resets in 40 frames and 0 moved
+cells; landscape tremor 0 in 40; the genuine 45-degree crossing still resets,
+2 flips in a 12-frame portrait-to-landscape ramp, unchanged.
+
+### Tests
+
+- `test_turning_a_settled_pool_to_landscape_does_not_flash_the_whole_body` -
+  the user's scenario, simulation frozen after the settle, gravity swept
+  along a chord (no trigonometry) through the quarter turn. Measures **both**
+  sides in one run via `ray_walk_state_t::ignore_chain_break`, so
+  red-before-green is a permanent property of the test rather than a claim in
+  a commit message: 522 cells against 31 on the test's own 64x96 scene.
+- `test_axis_lock_tremor_does_not_wipe_the_depth_debounce` - 40 frames of
+  ±12 tremor on `gx` at portrait lock over a frozen pool. Asserts exactly
+  zero resets and exactly zero moved cells with the gate, and that the
+  ungated run still measures both, so the test cannot pass because the scene
+  stopped exercising the bug.
+- `test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget`
+  (DEVICE_BUILD) - the same turn, timed. **Its budget is UNPEGGED**: it needs
+  a `./launcher/test/run_device_tests.sh` capture and a re-peg at
+  `measured * 0.9` before it means anything. See the comment above the
+  assertion.
+
+The existing local-depth tests all stayed green through both changes:
+`test_a_submerged_obstacle_casts_a_gravity_aligned_shadow`,
+`test_a_sparse_repaint_does_not_band_a_tall_liquid_column` (still 0 banded
+pairs), `test_the_blend_has_no_jump_crossing_45_degrees`,
+`test_a_fixed_depth_reads_the_same_at_every_tilt_angle`,
+`test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle` and
+`test_a_settled_edge_does_not_flicker_stale_to_fresh`.
+
+---
+
 ## Reference: gravity's numbers, and who actually reads them
 
 - `gx, gy` are signed ints, produced exactly once a frame by
