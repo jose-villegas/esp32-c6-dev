@@ -181,6 +181,15 @@ never merged; `git show` still works once that branch is fetched, or
   code and `const` data. "Touch fewer bytes" is the only data-side lever;
   code *size* and *placement* are what keep deciding benchmarks whose
   semantics never changed.
+- **A `switch` can never become a jump table here** — the IDF toolchain
+  compiles with `-fno-jump-tables -fno-tree-switch-conversion` (verified
+  on `sand_reactions.c`'s own compile command), so every switch is a
+  compare chain. Attempt 19's dispatcher regression was partly this: its
+  switch-on-stage was assumed to compile to an indexed jump and could
+  not. The flags do NOT forbid an *explicit* address table — computed
+  goto (`goto *tbl[x]`) or a function-pointer array still emits the
+  indexed load + `jr` directly — so "dispatch through addresses" is
+  untested, only "dispatch through a switch" is retired.
 - 80 MHz QSPI is unavailable — tried twice, produces real visual
   artifacts on this panel. A full-panel blit is ~17 ms and the frame is
   94% bus-bound; the present-path's own overhead is only ~1.1 ms of that.
