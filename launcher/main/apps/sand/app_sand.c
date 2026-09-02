@@ -1319,6 +1319,73 @@ static uint8_t local_depth_row_b[GRID_W_MAX];
 static uint8_t *local_depth_cur_row = local_depth_row_a;
 static uint8_t *local_depth_prev_row = local_depth_row_b;
 
+/* WHICH ROW local_depth_prev_row[] ACTUALLY DESCRIBES - the one fact the
+ * double buffer above never carried, and whose absence turned out to be the
+ * whole of a reported device artifact: "a brief flip of colours" on a
+ * settled pool, and "a huge spike" flipping the board to a straight
+ * orientation. LOCAL_DEPTH_NO_ROW means "nothing painted yet, or the chain
+ * was deliberately broken" (chosen outside 0..GRID_H_MAX-1 so no real row
+ * can ever collide with it, the same trick local_depth_top_row[]'s own 255
+ * uses).
+ *
+ * THE DEFECT, exactly. Every cross-row read in paint_row_n() below treats
+ * local_depth_prev_row[qx] as "the count belonging to the cell one step
+ * back along the ray, in row cy - vdir". That is only true when the row
+ * painted immediately before this one WAS row cy - vdir. draw_dirty_rows()
+ * sweeps surface-first precisely so that it usually is - but it only ever
+ * paints DIRTY rows, and LOCAL_DEPTH_WAKE_MS's own tick marks only rows
+ * that hold a LIQUID cell. So on a settled pool the sweep's FIRST row is
+ * the surface row, the (empty) row above it is never painted, and
+ * local_depth_prev_row[] still holds what the LAST row of the PREVIOUS
+ * sweep left there - the DEEPEST row of the pool, saturated at
+ * LOCAL_DEPTH_COUNT_CEILING.
+ *
+ * WHY THAT IS CATASTROPHIC RATHER THAN MERELY STALE. The surface row's
+ * source is air, so `same_material` is false and the walk drops into the
+ * hold-then-commit debounce below. A COMMIT writes 0 and all is well. A
+ * HOLD instead "keeps climbing as if nothing happened" - and climbing FROM
+ * A SATURATED COUNT means the surface itself reads fully saturated, which
+ * every row beneath it then inherits as a same-material climb. The entire
+ * body renders at maximum depth in one frame: not a shade or two out, the
+ * gradient inverted end to end. Measured, host-side, on the user's own
+ * scenario (a pool filling 40% of a 92x112 grid, settled under portrait
+ * gravity, the SIMULATION THEN FROZEN so that every displayed change is
+ * spurious by construction, gravity swept 0 to 90 degrees at one degree per
+ * frame): 841 interior cells - a quarter of the pool - crossed a full shade
+ * step in a single frame, 23 of the 24-cell band, at the first wake tick
+ * after the 45-degree regime flip. With this guard: 83, and none of them in
+ * the body of the pool (see the residual note below).
+ *
+ * WHY THE GUARD IS ON THE HOLD PATH ONLY, and not on every cross-row read.
+ * A same-material climb reading a stale count is DELIBERATE and load-
+ * bearing: a row repainted in isolation deep inside a pool inherits a value
+ * that is stale but SATURATED, which is exactly right there, and is the
+ * property test_a_sparse_repaint_does_not_band_a_tall_liquid_column pins
+ * (still 0 banded pairs). Distrusting the buffer on that path too was tried
+ * in the same harness and is strictly worse: it makes an isolated deep row
+ * re-climb from 1, which is the banding that test exists to forbid. At a
+ * BOUNDARY the stale value is not approximately right - it belongs to a
+ * different body entirely - so 0 is the only honest carry, and it is also
+ * what a coherent sweep would have produced, since the non-liquid row the
+ * chain should have started from writes 0 into every column.
+ *
+ * THE RESIDUAL 83 CELLS are a one-to-five-column strip against the left
+ * wall, where the ray leaves the grid (`qx_ok` false) and the walk restarts
+ * from 0 by construction; which rows that happens on shifts as the per-row
+ * Bresenham drift changes with the tilt. That is the wall's own shadow
+ * moving, not a chain break, and it is left alone.
+ *
+ * -2, NOT -1, and the difference is load-bearing rather than stylistic: the
+ * value this is compared against is `cy - vdir`, which ranges over
+ * [-1, grid_h] as cy sweeps [0, grid_h) with vdir either sign. -1 is
+ * therefore a REAL value that comparison can produce - the top row of the
+ * grid with gravity pointing down - so a -1 sentinel would read as "the
+ * chain is intact" for exactly the cells whose neighbour is off the top of
+ * the screen, which is precisely the surface-flood case above. -2 is
+ * outside that range at both ends. */
+#define LOCAL_DEPTH_NO_ROW (-2)
+static int local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
+
 /* THE DEBOUNCE KEY - one array now, not two, but NOT a plain merge of
  * col_top_row[]/row_top_col[]'s own two conventions: the two regimes need
  * DIFFERENT things stored here, and forcing one convention onto both was
@@ -1492,15 +1559,76 @@ static void update_local_depth_gravity(int gx, int gy)
      * hand-tremor input produces (the tilt filter's own smoothing means a
      * real crossing ramps through several frames, not one). Worth
      * re-measuring on the device if a "brief pop near 45 degrees" report
-     * ever comes back in about this mechanism specifically. */
+     * ever comes back in about this mechanism specifically.
+     *
+     * A SCAN-DIRECTION FLIP ONLY EARNS THE RESET IF THE ACTIVE REGIME CAN
+     * SEE IT, and that turned out to matter at exactly the orientations a
+     * hand actually holds this board at. AT AXIS LOCK ONE COMPONENT SITS ON
+     * ZERO: the device's own capture sidecars from the report this block was
+     * re-examined for read tilt_x -12 and -195 against tilt_y 3342 and 4190
+     * - portrait, with gx hovering either side of zero. `new_h_reverse` is
+     * just `gx < 0`, so ordinary hand tremor flips it many times a second,
+     * and EVERY ONE of those flips wiped the whole walk state. Measured,
+     * host-side, over 40 frames of that exact tremor against a settled 40%
+     * pool: 40 resets in 40 frames. Landscape is the mirror image with
+     * `new_v_reverse` as the noisy flag: 39 in 40.
+     *
+     * WHAT THOSE RESETS COST, measured rather than assumed - they are NOT
+     * the "flip of colours" this file's own local_depth_prev_cy comment
+     * tracks down (with the tremor running and nothing else changing, the
+     * displayed depth moved by at most 1 of 24 and no cell crossed a shade
+     * step). What they do is DISABLE THE DEBOUNCE OUTRIGHT: local_depth_top_
+     * row[] is wiped to "untracked" before every single frame's paint, so a
+     * boundary can never be asked for a second time and can never COMMIT.
+     * The surface of a settled pool holds at 1 instead of committing to 0
+     * forever, and every row beneath inherits it - mean displayed depth over
+     * the pool's 3956 interior cells measured 18.12 with the resets against
+     * 17.58 without, permanently, plus a three-array wipe every frame for a
+     * flag change nothing can observe.
+     *
+     * THE GATE IS EXACT ARITHMETIC, NOT A DEADBAND - deliberately, because
+     * this mechanism already removed one tuned dead zone and should not
+     * quietly grow another. Each condition below is a statement about
+     * whether the flipped flag can change a number THIS grid's walk actually
+     * computes, derived from the Bresenham arithmetic itself:
+     *
+     *   VERTICAL-DOMINANT: `new_h_reverse` only supplies `xsign`, the SIGN
+     *     of the per-row drift. That drift's running total across the whole
+     *     grid is floor(grid_h * ax / ay) (see paint_row_n()'s "THE ROW
+     *     OFFSET, WITHOUT AN ACCUMULATOR"), so when `grid_h * ax < ay` every
+     *     row's step is 0, and the sign of nothing is still nothing.
+     *   HORIZONTAL-DOMINANT: `new_v_reverse` only picks the cross-row source
+     *     (`toward_surface`, dereferenced only when `step != 0`) and the
+     *     sweep order that gives `local_depth_prev_row[]` its meaning. The
+     *     within-row accumulator adds ay per cell from 0 and fires at ax, so
+     *     when `grid_w * ay < ax` no cell in any row ever reads across a row
+     *     at all, and neither of those two can be observed.
+     *
+     * A REGIME FLIP is never gated - it always changes what the array slot
+     * means, whatever the magnitudes are. Measured with the gate in place,
+     * same harness: portrait tremor 0 resets in 40 frames and the mean back
+     * to 17.58; landscape tremor 0 in 40; the genuine 45-degree crossing
+     * still resets, 2 flips in the 12-frame portrait-to-landscape ramp,
+     * unchanged. */
+    const bool drift_observable = ((long)grid_h * (long)ax >= (long)ay);
+    const bool cross_row_observable = ((long)grid_w * (long)ay >= (long)ax);
+    const bool v_reverse_matters = (new_v_reverse != local_depth_v_reverse_prev) &&
+        (new_vertical_dominant || cross_row_observable);
+    const bool h_reverse_matters = (new_h_reverse != local_depth_h_reverse_prev) &&
+        (!new_vertical_dominant || drift_observable);
+
     if (new_vertical_dominant != local_depth_vertical_dominant_prev ||
-        new_v_reverse != local_depth_v_reverse_prev ||
-        new_h_reverse != local_depth_h_reverse_prev) {
+        v_reverse_matters || h_reverse_matters) {
         for (int cx = 0; cx < grid_w; cx++) {
             local_depth_row_a[cx] = 0u;
             local_depth_row_b[cx] = 0u;
             local_depth_top_row[cx] = 255u;
         }
+        /* The wiped buffers describe no row at all now - say so, rather than
+         * leaving the next painted row to chain off two arrays of zeroes as
+         * if they were its real neighbour. See local_depth_prev_cy's own
+         * comment above paint_row_n(). */
+        local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
         local_depth_vertical_dominant_prev = new_vertical_dominant;
         local_depth_v_reverse_prev = new_v_reverse;
         local_depth_h_reverse_prev = new_h_reverse;
@@ -1654,6 +1782,19 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * below). */
     const uint8_t *toward_surface = local_depth_v_reverse ? below : above;
 
+    /* IS local_depth_prev_row[] ACTUALLY THE ROW `toward_surface` POINTS
+     * AT? - one compare, once per row, hoisted out of the cx loop entirely;
+     * see local_depth_prev_cy's own comment above this function for the
+     * device artifact this answers and the measured 841-to-83 it buys. Only
+     * the hold-then-commit debounce below reads it: a same-material climb
+     * deliberately keeps trusting a stale count (that is what makes a
+     * sparsely repainted deep row read saturated rather than banded), and
+     * only a BOUNDARY's carry is nonsense when the buffer belongs to some
+     * other row. */
+    const int local_depth_vdir = local_depth_v_reverse ? -1 : 1;
+    const bool local_depth_chain_ok =
+        (local_depth_prev_cy == cy - local_depth_vdir);
+
     /* Scan order for THIS row's own cx loop - unchanged in meaning from
      * every earlier shape of this mechanism (ascending unless gravity
      * points left), but now needed by BOTH regimes: the horizontal-
@@ -1693,7 +1834,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
      * 0`, since vertical-dominant requires `ay >= ax`). */
     int local_depth_row_step = 0;
     if (local_depth_vertical_dominant && local_depth_ay > 0u) {
-        const int vdir = local_depth_v_reverse ? -1 : 1;
+        const int vdir = local_depth_vdir;
         const int xsign = local_depth_h_reverse ? 1 : -1;
         const int n = (vdir > 0) ? cy : (grid_h - 1 - cy);
         const int cum_n  = (int)(((long)(n)     * (long)local_depth_ax) / (long)local_depth_ay);
@@ -1889,9 +2030,29 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
                  * next time THIS row is painted; horizontal-dominant: the
                  * very next write to this slot, whichever row it comes
                  * from) will match and commit if the boundary is real and
-                 * lasting. */
-                count = src_count < LOCAL_DEPTH_COUNT_CEILING
-                    ? src_count + 1u : LOCAL_DEPTH_COUNT_CEILING;
+                 * lasting.
+                 *
+                 * "AS IF NOTHING HAPPENED" MEANS CLIMBING FROM THE
+                 * NEIGHBOUR'S OWN COUNT - which requires the buffer to
+                 * actually hold that neighbour's count. When the chain is
+                 * broken (`local_depth_prev_row[]` describes some other row
+                 * entirely, because the row toward the surface was not
+                 * painted immediately before this one) a cross-row carry
+                 * here would import a number belonging to a different body:
+                 * on a settled pool that number is the DEEPEST row's
+                 * saturated count, and importing it at the surface floods
+                 * the whole body to maximum depth in one frame. Carry 0
+                 * instead - the same value the non-liquid row this chain
+                 * should have started from would have written. See local_
+                 * depth_prev_cy's own comment above this function for the
+                 * device report, the measured 841-to-83, and why this guard
+                 * belongs here and NOT on the same-material climb above. The
+                 * compare is off the hot path by construction: only a
+                 * boundary cell ever reaches this branch. */
+                const unsigned carry =
+                    (cross_row && !local_depth_chain_ok) ? 0u : src_count;
+                count = carry < LOCAL_DEPTH_COUNT_CEILING
+                    ? carry + 1u : LOCAL_DEPTH_COUNT_CEILING;
                 local_depth_top_row[cx] = local_depth_vertical_dominant
                     ? (uint8_t)cy : 0u;
             }
@@ -2052,6 +2213,13 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     uint8_t *local_depth_tmp = local_depth_cur_row;
     local_depth_cur_row = local_depth_prev_row;
     local_depth_prev_row = local_depth_tmp;
+
+    /* ...and record WHICH ROW that buffer now describes, so the next call
+     * can tell whether its own cross-row read is looking at a real
+     * neighbour or at whatever the last sweep happened to leave behind -
+     * see local_depth_prev_cy's own comment above this function. One store
+     * per painted row, beside a swap that already costs four. */
+    local_depth_prev_cy = cy;
 }
 
 /* cell is chosen on the boot menu, so it is a runtime value here - but the
