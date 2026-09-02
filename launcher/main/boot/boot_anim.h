@@ -1541,10 +1541,13 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
         now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
 }
 
-/* How far the two floor-plane axes reach once unbounded, matching the
- * floor's own FLOOR_REACH in boot_anim.c - the same "run it well past the
- * panel and let clipping do the work" reasoning applies to an axis exactly
- * as much as to a grid line. */
+/* How far the two floor-plane axes reach once unbounded - the same
+ * "run it well past the panel and let clipping do the work" reasoning
+ * draw_floor()'s own spokes in boot_anim.c now reuse this exact constant
+ * for (a spoke is a structural guide line, same as an axis - see that
+ * function's own comment). The rings themselves stay bounded on purpose:
+ * BOOT_ANIM_GRID_RINGS is the actual, finite data the wave is about, not
+ * a guide line with nothing to lose by running off-panel. */
 #define BOOT_ANIM_AXIS_FAR_UNITS 24
 
 /*---------------------------------------------------------------------------
