@@ -7,13 +7,19 @@
 # a hand-transcribed copy (like the table in docs/Sand/Architecture.md) can.
 #
 # Usage:
-#   main/apps/sand/tools/report_performance.sh [COM_PORT] [OUT.md] [IDF_EXPORT_PS1]
+#   main/apps/sand/tools/report_performance.sh [--baseline REPORT.md] \
+#       [COM_PORT] [OUT.md] [IDF_EXPORT_PS1]
 #
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   main/apps/sand/tools/results/performance_<timestamp>.md
 #   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
 #                   project's usual install location.
+#   --baseline REPORT.md
+#                   after generating the report, run compare_reports.py
+#                   --verdict against this earlier report and print its
+#                   verdict line - the fourth command of the read-a-
+#                   capture ritual below, run for you.
 #
 # Checks COM_PORT actually exists before building anything - see the
 # check right below. Restores build.release afterward, regardless of
@@ -21,9 +27,36 @@
 
 set -euo pipefail
 
-COM_PORT="${1:-COM3}"
-OUT_MD="${2:-}"
-IDF_EXPORT_PS1="${3:-C:\\Espressif\\esp-idf-v5.5\\export.ps1}"
+BASELINE=""
+ARGS=()
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --baseline)
+            if [ $# -lt 2 ]; then
+                echo "ERROR: --baseline requires a path" >&2
+                exit 1
+            fi
+            BASELINE="$2"
+            shift 2
+            ;;
+        --baseline=*)
+            BASELINE="${1#--baseline=}"
+            shift
+            ;;
+        -*)
+            echo "ERROR: unknown flag: $1" >&2
+            exit 1
+            ;;
+        *)
+            ARGS+=("$1")
+            shift
+            ;;
+    esac
+done
+
+COM_PORT="${ARGS[0]:-COM3}"
+OUT_MD="${ARGS[1]:-}"
+IDF_EXPORT_PS1="${ARGS[2]:-C:\\Espressif\\esp-idf-v5.5\\export.ps1}"
 
 # Fail in seconds, not in twelve minutes. Without this, a vanished COM
 # port was only discovered by esptool AFTER a full cold build.diag build
@@ -90,6 +123,50 @@ cleanup() {
     exit "$status"
 }
 trap cleanup EXIT
+
+# The measured (not budget) column of one row of report_performance.py's
+# table: "| `name` | budget | measured | headroom | status |". Anchored
+# at the start of the line so it only matches an actual table row, not
+# `name` appearing in one of the report's prose bullet lists (a control
+# that did not run this capture is named there instead, with no pipes at
+# all - this correctly prints nothing for that case, not the wrong field).
+extract_measured() {
+    local name="$1" report="$2"
+    awk -F'|' -v name="$name" '
+        $0 ~ "^\\| *`" name "`" { v = $4; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit }
+    ' "$report"
+}
+
+# The four-command ritual from docs/Sand/Perf-Round-Guide.md's "Reading a
+# capture" section, run here instead of left to the operator - it was
+# already being typed by hand five times in two days. Free heap first
+# (a short heap means every frame-budget fixture failed to allocate and
+# the whole capture measured nothing, see the guide's table), then the
+# two liquid-free controls (their value-pair tells a real regression from
+# ordinary flash-layout noise before reading anything else).
+print_summary() {
+    local raw="$1" report="$2"
+    echo "=== Summary ==="
+    local heap_line heap
+    heap_line="$(grep -m1 "free heap after framebuffer" "$raw" || true)"
+    if [ -z "$heap_line" ]; then
+        echo "WARNING: no 'free heap after framebuffer' line found in $raw"
+    else
+        heap="$(printf '%s\n' "$heap_line" | grep -o '[0-9]\+ bytes' | grep -o '[0-9]\+')"
+        echo "free heap after framebuffer: $heap bytes"
+        if [ -n "$heap" ] && [ "$heap" -lt 50000 ]; then
+            echo "WARNING: free heap ($heap bytes) is below ~50,000 - frame-budget"
+            echo "fixtures likely failed to allocate their grids and measured"
+            echo "nothing this run. See docs/Sand/Perf-Round-Guide.md's free-heap table."
+        fi
+    fi
+    local ctrl v
+    for ctrl in test_a_full_size_step_fits_in_the_frame_budget \
+                test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget; do
+        v="$(extract_measured "$ctrl" "$report")"
+        echo "control $ctrl: ${v:-not measured this capture} us"
+    done
+}
 
 # A generated sdkconfig WINS over the defaults fragments: idf.py only applies
 # SDKCONFIG_DEFAULTS when it has to create the file, so editing a fragment
@@ -172,3 +249,15 @@ python "$SCRIPT_DIR/report_performance.py" "$RAW_CAPTURE" "$OUT_MD" \
 
 echo "=== Report:       $OUT_MD ==="
 echo "=== Raw capture:  $RAW_CAPTURE ==="
+
+print_summary "$RAW_CAPTURE" "$OUT_MD"
+
+if [ -n "$BASELINE" ]; then
+    echo "=== Comparing against baseline: $BASELINE ==="
+    # A non-win verdict (NO, or an error like a missing control row) is a
+    # normal outcome to print and read, not a failure of THIS script -
+    # `|| true` keeps `set -e` from treating compare_reports.py's exit 1
+    # as fatal, same reasoning as report_test_results.sh's own `|| true`
+    # around a report generator whose exit code means something else.
+    python "$SCRIPT_DIR/compare_reports.py" --verdict "$BASELINE" "$OUT_MD" || true
+fi
