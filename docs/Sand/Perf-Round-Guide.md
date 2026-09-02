@@ -230,33 +230,19 @@ skipped.
 
 Open items, as of this file's writing:
 
-- ~~**The wet-earth scene's budget is unpegged.**~~ Pegged 2026-09-01 at
-  80,000 (measured × 0.8 per the rule above). Attempt 18's reaction masks
-  then took the row 100,367 → 93,486 µs on device; the budget stands.
-- **Five blast-scene tests currently fail on device with allocation
-  errors** — the device has ~66–68 KB free after the framebuffer and one
-  grid alone is ~41 KB; several blast/dune/vessel fixtures allocate a grid
-  plus an impulse buffer plus (for some scenes) a one-bit-per-cell mask on
-  top of that. Tracked as `bd esp32c6-e9t`, which also proposes making the
-  *host* enforce the device's stack and heap limits so this class of bug
-  is a one-second host failure instead of a wasted capture cycle. Recent
-  captures in `launcher/main/apps/sand/tools/results/` (2026-08-31 onward)
-  show this has widened past the original five — `heap free` has been
-  measured as low as ~28 KB on device, below what
-  `test_framebuffer_fits_with_headroom_to_spare` itself requires. Check the
-  current free-heap number before adding any new device fixture; this is
-  likely the most valuable single fix available right now, not a new
-  optimisation.
-- ~~**Attempt 15's "finding A" residual is unbisected.**~~ **Closed by
-  attempt 18 (2026-09-01).** The host bisect found two separable causes:
-  five of six commit transitions were pure placement — `sand_step`'s
-  compiled bytes byte-identical across the whole window, only its address
-  moving with unrelated functions' size changes earlier in the file — and
-  `0dac86a` alone added real work (two unconditional `last_step_dx/dy`
-  stores per call). This file's earlier claim that "neither commit's
-  source touches anything either control benchmark executes" was wrong
-  for `0dac86a`, directly and unconditionally. The placement half is now
-  pinned: `sand_step` carries `aligned(32)` (commit `66a1e9b`; 64 does
-  not link — it collides with ESP-IDF's `.flash_rodata_dummy` overlay),
-  and the device controls sit at 5,907/6,003 µs, −1.8%/−1.7% from their
-  budgets.
+- **Host limits don't mirror the device's** — a fixture that overflows the
+  device's 3,584-byte stack or ~64 KB free heap passes on the host and
+  costs a full capture cycle to discover. `bd esp32c6-e9t` proposes making
+  the host runner enforce both. Until then: check the current free-heap
+  number before adding any new device fixture.
+- **The dispatcher rung of the pair-matrix is unshipped** — the loop+switch
+  shape is in the never-retry list; a different shape, plus the ordering
+  sweep that waits on it, lives on the `sand-pair-matrix` branch
+  (`bd esp32c6-iu5`).
+- **Water's remaining gap (−44%) is call volume, not code shape** —
+  attempt 19's counters and null closed the layout line; the next water
+  idea has to reduce the double touch (~11k grains × sweep + equalise per
+  step), a mechanism-class change.
+
+Resolved items are deleted from this list rather than struck through —
+their record lives in the attempt table and `git log`.
