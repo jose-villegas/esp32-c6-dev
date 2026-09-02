@@ -167,48 +167,48 @@ static void scene_fire_gas(sand_t *s)
     }
 }
 
-/* Scene 5: lava sealed under a thick stone lid, with vent_chance forced
- * so the vent path fires every step rather than rarely.
+/* Scene 5: lava sealed under a stone lid, with the lava-burst chance (bd
+ * esp32c6-mqt) forced so every covered cell converts within this scene's
+ * own step budget rather than waiting on its real, deliberately rare
+ * production rate.
  *
  * Added after this tool FAILED to notice a deliberately broken vent scan
- * (vent_column()'s reach widened 3x) - the first four scenes never build
- * sealed lava, so the whole vent mechanism was outside what the
+ * (the mechanism this scene originally exercised, removed by bd
+ * esp32c6-0f2 once the burst replaced it) - the first four scenes never
+ * build sealed lava, so the whole mechanism was outside what the
  * fingerprint could see, and the gate passed a real behavioural
- * regression. That is the standing lesson for anyone extending this file:
- * a fingerprint only covers the mechanisms its scenes actually reach, and
+ * regression. Rebuilt against the burst rather than dropped, so the
+ * standing lesson for anyone extending this file still holds: a
+ * fingerprint only covers the mechanisms its scenes actually reach, and
  * the way to find out which those are is to break a mechanism on purpose
- * and check this tool goes red. */
+ * and check this tool goes red.
+ *
+ * No impulse buffer is enabled anywhere in this file, so sand_explode()
+ * is a documented no-op here (its own first line, sand.c) - each covered
+ * cell still deterministically converts to stone, it just throws
+ * nothing, which is enough to exercise and hash the conversion this
+ * scene exists to cover. */
 static void scene_sealed_lava(sand_t *s)
 {
-    sand_set_vent_chance(s, 255);
+    sand_set_lava_burst(s, 255);
 
     for (int x = 0; x < FP_W; x++) {
         sand_set(s, x, FP_H - 1, CELL_MAKE(MAT_STONE, MASS_MAX));
     }
 
-    /* The lid must be DEEPER than SAND_VENT_REACH, or this scene proves
-     * nothing: a vent that can already see open air through the lid
-     * behaves identically whether its reach is 30 or 90, and the first
-     * version of this scene - a 12-cell lid against a reach of 30 - was
-     * exactly that mistake. It ran, it hashed, and it stayed green when
-     * the vent scan was deliberately broken.
-     *
-     * So: lava on the floor, stone from just above it up past the reach,
-     * open air only beyond. A correct vent stays capped inside the lid; a
-     * widened one reaches the air and empties the pocket. */
+    /* Three separate pockets, each a lava cell boxed on all 4 cardinal
+     * AND all 4 diagonal neighbours by stone - unambiguously covered on
+     * every one of covered_at()'s 5 gravity-relative cells regardless of
+     * which way is down, so the scene proves the conversion actually
+     * fires rather than merely COULD fire. */
     for (int k = 0; k < 3; k++) {
         const int cx = 12 + k * 20;
-        const int lava_y = FP_H - 2;
-        const int lid_top = lava_y - (SAND_VENT_REACH + 8);
+        const int lava_y = FP_H - 3;
 
-        for (int y = lid_top; y < lava_y; y++) {
-            for (int dx = -4; dx <= 4; dx++) {
-                sand_set(s, cx + dx, y, CELL_MAKE(MAT_STONE, MASS_MAX));
-            }
-        }
-        for (int dx = -4; dx <= 4; dx++) {
-            if (dx != 0) {
-                sand_set(s, cx + dx, lava_y, CELL_MAKE(MAT_STONE, MASS_MAX));
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                sand_set(s, cx + dx, lava_y + dy, CELL_MAKE(MAT_STONE, MASS_MAX));
             }
         }
         sand_set(s, cx, lava_y, CELL_MAKE(MAT_LAVA, MASS_MAX));
@@ -247,9 +247,10 @@ int main(void)
 
         sand_t s;
         sand_init(&s, cells, FP_W, FP_H, SCENES[i].seed);
-        /* Impulses on, because the throw paths (vents, splashes) are part
-         * of the behaviour being fingerprinted - a loop is allowed to
-         * optimise them, so a change there must show up here. */
+        /* Impulses on, because the throw paths (explosions, bursts,
+         * splashes) are part of the behaviour being fingerprinted - a
+         * loop is allowed to optimise them, so a change there must show
+         * up here. */
         sand_enable_impulses(&s, impulses, cell_count);
         SCENES[i].build(&s);
 

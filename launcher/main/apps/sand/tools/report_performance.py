@@ -114,12 +114,14 @@ def format_duration(ms: int) -> str:
 
 def make_slow_tests_section(capture: dict, total_ms, top_n: int = 15) -> list:
     """The slowest tests by wall time, across every suite - not just the
-    frame-budget ones. A test with no declared budget (like the sand suite's
-    own sealed-vent test, ~7.7 minutes and the single biggest cost in the
-    whole run - see docs/Sand/Sand-Simulation.md) is otherwise invisible to
-    this report: it never enters `known`, and the "measured in this capture"
-    table above only lists tests with a device_tests log line, which most
-    tests don't print. This is the only place that ranks the whole suite.
+    frame-budget ones. A test with no declared budget (the sand suite's own
+    statistical vent-cap correctness test used to be exactly this: no budget
+    of its own, ~7.7 minutes, and the single biggest cost in the whole run,
+    until the mechanism it tested was removed along with it - bd
+    esp32c6-0f2) is otherwise invisible to this report: it never enters
+    `known`, and the "measured in this capture" table above only lists tests
+    with a device_tests log line, which most tests don't print. This is the
+    only place that ranks the whole suite.
 
     Returns [] when the capture predates per-test timing (test/timing.c) -
     an older raw capture still produces every other section of this report
@@ -230,11 +232,21 @@ def main() -> int:
     lines.append("")
     lines.append("| Test | Budget (us) | Measured (us) | Headroom | Status |")
     lines.append("|---|---:|---:|---:|---|")
+    unmeasured = []
     for name in known:
         budget = budgets[name]
         entry = capture[name]
         measured = entry["measured"]
         status = entry["status"]
+        # A row with no measurement is not a budget row. The source scan
+        # matches any TEST_ASSERT_LESS_THAN_MESSAGE, which correctness tests
+        # also use, so a scene test asserting "fewer than 10 of these" was
+        # being rendered as a frame-budget row with budget 10, measured "?"
+        # and a permanent PASS - an unfailable line in a table whose whole
+        # purpose is showing what fails, and it inflated the row count too.
+        if measured is None:
+            unmeasured.append(name)
+            continue
         if budget is None:
             budget_s, headroom_s = "?", "?"
         else:
@@ -244,6 +256,13 @@ def main() -> int:
         mark = "PASS" if status == "PASS" else f"**FAIL**"
         lines.append(f"| `{name}` | {budget_s} | {measured_s} | {headroom_s} | {mark} |")
     lines.append("")
+
+    if unmeasured:
+        lines.append("> Matched the budget pattern in source but logged no "
+                     "measurement, so they are not frame-budget rows and are "
+                     "listed rather than tabled: "
+                     + ", ".join(f"`{n}`" for n in unmeasured))
+        lines.append("")
 
     if only_in_source:
         lines.append("> Declared a budget in source but did not appear in this capture "
@@ -277,7 +296,10 @@ def main() -> int:
         f.write("\n".join(lines))
 
     failed = [n for n in known if capture[n]["status"] == "FAIL"]
-    print(f"{len(known)} frame-budget tests, {len(failed)} failing -> {args.out_path}")
+    # len(known) minus the unmeasured ones, so this line agrees with the
+    # table it is describing rather than counting rows that were dropped.
+    print(f"{len(known) - len(unmeasured)} frame-budget tests, "
+          f"{len(failed)} failing -> {args.out_path}")
     return 0
 
 
