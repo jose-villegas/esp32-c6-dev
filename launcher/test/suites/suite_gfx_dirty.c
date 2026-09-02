@@ -77,6 +77,132 @@ static void test_mark_leaves_spans_a_cell_boundary_too(void)
     TEST_ASSERT_EQUAL_HEX16(0x0018, leaf_dirty[0]);   /* bits 3 and 4 */
 }
 
+/* --- dirty_leaf_rects() ------------------------------------------------------
+ *
+ * Backs the leaf debug-overlay layer in gfx.c - one rectangle per dirty
+ * leaf, unmerged, clipped to the caller's box. A host build cannot reach
+ * gfx.c's overlay code at all (it is CONFIG_LAUNCHER_DEVELOPMENT, ESP-IDF-
+ * dependent), so this enumerator, not the drawing that consumes it, is
+ * where the geometry actually gets proven correct. */
+
+static void test_dirty_leaf_rects_finds_nothing_in_a_clean_row(void)
+{
+    fixture();
+
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
+                                   out, 8);
+
+    TEST_ASSERT_EQUAL_INT(0, n);
+}
+
+static void test_dirty_leaf_rects_one_pixel_yields_the_whole_leaf(void)
+{
+    fixture();
+    dirty_mark(5, 5, 1, 1);   /* leaf column 0, leaf row 0 */
+
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
+                                   out, 8);
+
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_INT(0, out[0].x0);
+    TEST_ASSERT_EQUAL_INT(LEAF_W, out[0].x1);
+    TEST_ASSERT_EQUAL_INT(0, out[0].y0);
+    TEST_ASSERT_EQUAL_INT(LEAF_H, out[0].y1);
+}
+
+static void test_dirty_leaf_rects_two_columns_are_two_adjacent_rects(void)
+{
+    fixture();
+    dirty_mark(LEAF_W - 1, 0, 2, 1);   /* straddles leaf columns 0 and 1 */
+
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
+                                   out, 8);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n,
+        "one rect per dirty leaf, never merged into a run - merging would "
+        "hide the leaf boundary this layer exists to show");
+    TEST_ASSERT_EQUAL_INT(0, out[0].x0);
+    TEST_ASSERT_EQUAL_INT(LEAF_W, out[0].x1);
+    TEST_ASSERT_EQUAL_INT(LEAF_W, out[1].x0);
+    TEST_ASSERT_EQUAL_INT(2 * LEAF_W, out[1].x1);
+}
+
+static void test_dirty_leaf_rects_two_leaf_rows_both_appear(void)
+{
+    fixture();
+    dirty_mark(5, LEAF_H - 1, 1, 2);   /* straddles leaf rows 0 and 1 */
+
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
+                                   out, 8);
+
+    TEST_ASSERT_EQUAL_INT(2, n);
+    TEST_ASSERT_EQUAL_INT(0, out[0].y0);
+    TEST_ASSERT_EQUAL_INT(LEAF_H, out[0].y1);
+    TEST_ASSERT_EQUAL_INT(LEAF_H, out[1].y0);
+    TEST_ASSERT_EQUAL_INT(2 * LEAF_H, out[1].y1);
+}
+
+static void test_dirty_leaf_rects_clips_to_the_callers_box(void)
+{
+    fixture();
+    dirty_mark(5, 5, 1, 1);   /* leaf column 0, leaf row 0: full extent
+                                 [0,LEAF_W) x [0,LEAF_H) */
+
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 5, 3, 15, 10, out, 8);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, n,
+        "the leaf is still one dirty leaf, just narrower than its own "
+        "full extent once clipped");
+    TEST_ASSERT_EQUAL_INT(5, out[0].x0);
+    TEST_ASSERT_EQUAL_INT(15, out[0].x1);
+    TEST_ASSERT_EQUAL_INT(3, out[0].y0);
+    TEST_ASSERT_EQUAL_INT(10, out[0].y1);
+}
+
+static void test_dirty_leaf_rects_a_leaf_entirely_outside_the_box_is_dropped(void)
+{
+    fixture();
+    dirty_mark(5, 5, 1, 1);   /* leaf column 0: [0,LEAF_W) */
+
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 30, 0, 50, STRIP_HEIGHT, out, 8);
+
+    TEST_ASSERT_EQUAL_INT(0, n);
+}
+
+static void test_dirty_leaf_rects_respects_the_max_out_cap(void)
+{
+    fixture();
+    leaf_dirty[0] = 0xFFFF;   /* every leaf column dirty in leaf row 0 */
+
+    dirty_leaf_rect_t out[16];
+    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
+                                   out, 5);
+
+    TEST_ASSERT_EQUAL_INT(5, n);
+}
+
+static void test_dirty_leaf_rects_leaf_rows_are_independent(void)
+{
+    fixture();
+    dirty_mark(5, 0, 1, 1);              /* leaf row 0 */
+    dirty_mark(5, 2 * LEAF_H, 1, 1);     /* leaf row 2 */
+
+    /* Box only spans leaf row 0's own height - leaf row 2's rect must not
+     * leak into this result just because it shares the same strip row. */
+    dirty_leaf_rect_t out[8];
+    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, LEAF_H, out, 8);
+
+    TEST_ASSERT_EQUAL_INT(1, n);
+    TEST_ASSERT_EQUAL_INT(0, out[0].y0);
+    TEST_ASSERT_EQUAL_INT(LEAF_H, out[0].y1);
+}
+
 /* --- eligibility ------------------------------------------------------------ */
 
 static void test_run_is_leaf_eligible_when_every_cell_is_tight(void)
@@ -315,6 +441,15 @@ void run_gfx_dirty_suite(void)
     RUN_TEST(test_mark_leaves_moves_to_the_next_leaf_at_a_boundary);
     RUN_TEST(test_mark_leaves_sets_every_leaf_a_wide_box_spans);
     RUN_TEST(test_mark_leaves_spans_a_cell_boundary_too);
+
+    RUN_TEST(test_dirty_leaf_rects_finds_nothing_in_a_clean_row);
+    RUN_TEST(test_dirty_leaf_rects_one_pixel_yields_the_whole_leaf);
+    RUN_TEST(test_dirty_leaf_rects_two_columns_are_two_adjacent_rects);
+    RUN_TEST(test_dirty_leaf_rects_two_leaf_rows_both_appear);
+    RUN_TEST(test_dirty_leaf_rects_clips_to_the_callers_box);
+    RUN_TEST(test_dirty_leaf_rects_a_leaf_entirely_outside_the_box_is_dropped);
+    RUN_TEST(test_dirty_leaf_rects_respects_the_max_out_cap);
+    RUN_TEST(test_dirty_leaf_rects_leaf_rows_are_independent);
 
     RUN_TEST(test_run_is_leaf_eligible_when_every_cell_is_tight);
     RUN_TEST(test_run_is_leaf_eligible_false_if_any_cell_in_the_run_is_coarse);
