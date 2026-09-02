@@ -623,6 +623,10 @@ several small functions instead of one large one.
   in the same folder as this file.
 - `docs/Sand/Adding-a-Material.md` - the practical how-to for adding a
   new material, worked through end to end against a real one (gas).
+- `docs/Sand/Shading-and-Colour.md` - how an existing material's variant
+  actually becomes a pixel: the palette pipeline, the recurring shading
+  mistakes and their fixes, and the one item still open (liquid depth is
+  not yet gravity-continuous).
 - [`Architecture.md`](Architecture.md) - a single-page, diagram-first map
   of the whole app: the pipeline, the sleeping system, the material
   table, and the exact hops to get a real number off the device.

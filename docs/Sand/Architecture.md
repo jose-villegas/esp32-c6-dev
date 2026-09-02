@@ -1116,5 +1116,8 @@ says.
   the three-attempt inlining saga referenced above.
 - [`Adding-a-Material.md`](Adding-a-Material.md) - the practical
   checklist for extending any of this with a new material.
+- [`Shading-and-Colour.md`](Shading-and-Colour.md) - how an existing
+  material's variant becomes a pixel, the recurring shading mistakes and
+  their fixes, and the one item still open.
 - `launcher/tools/sweeps/README.md` - the sweep tooling this page's
   device-verification section builds on.

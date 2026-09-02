@@ -11,6 +11,16 @@
 #   scripts/perf-loop.sh --baseline REPORT.md --candidates FILE
 #   scripts/perf-loop.sh --baseline REPORT.md --candidate "sed -i ... file.c"
 #   scripts/perf-loop.sh --host-only --candidate "..."     # no device needed
+#   scripts/perf-loop.sh --baseline REPORT.md --candidate-ref some-branch
+#
+# A candidate is normally a shell command edited into the working tree in
+# place (above). --candidate-ref instead names a git ref (branch, tag, or
+# SHA) - checked out into scripts/capture_ref.sh's own persistent capture
+# worktree rather than applied here, and evaluated through the same five
+# gates below, with gate A adapted to a ref's shape - see "REF CANDIDATES"
+# further down. A --candidates FILE line can request either kind: a plain
+# "<label><TAB><shell command>" line runs as a sed-style candidate, and
+# "<label><TAB>ref:<git-ref>" runs as a ref candidate.
 #
 # THE GATES, cheapest first, so a bad candidate dies in seconds rather than
 # after a seven-minute device round-trip:
@@ -47,6 +57,28 @@
 # binned, but it must not be auto-accepted either. It is the pile to read
 # in the morning - and the fingerprint's material histogram tells you which
 # ones are reorderings and which are bugs.
+#
+# REF CANDIDATES, and why gate A cannot stay `git status --porcelain` for
+# one. A sed-style candidate is a live, uncommitted edit sitting on top of
+# whatever this script started at, so "what changed" and "is it dirty" are
+# the same question, answered by one `git status --porcelain` call. A ref
+# is a real commit - `git status --porcelain` against it reads perfectly
+# clean regardless of what it touches, because nothing is UNCOMMITTED.
+# Trusting that would wave through a ref that rewrote a budget or gutted a
+# scene, which is exactly the cheat gate A exists to make unreachable. So
+# a ref candidate's gate A instead diffs the ref against its merge-base
+# with the commit this run started from (`git diff --name-only
+# <merge-base> <ref>`) and runs the same allowlist check against THAT file
+# list - see allowlist_check_files(). Everything past gate A reuses the
+# one persistent capture worktree scripts/capture_ref.sh also uses (via
+# scripts/lib/capture_worktree.sh, sourced by both - see that file's own
+# top comment for why it is shared rather than copied), so a ref candidate
+# gets the same warm, incremental device builds a human running
+# capture_ref.sh by hand would. On ACCEPT, the vetted diff (merge-base to
+# ref, the same one gate A already computed) is applied on top of BRANCH -
+# a ref candidate's own commit history is not replayed, matching how a
+# sed candidate's edit is committed as one squashed commit regardless of
+# how many lines the command touched.
 
 set -eu
 
@@ -57,6 +89,7 @@ SAND_TOOLS="$LAUNCHER_DIR/main/apps/sand/tools"
 
 BASELINE_REPORT=""
 CANDIDATE=""
+CANDIDATE_REF=""
 CANDIDATES_FILE=""
 HOST_ONLY=0
 BRANCH="perf-loop-accepted"
@@ -64,26 +97,27 @@ OUT_DIR="$REPO_ROOT/.perf-loop"
 COM_PORT="COM3"
 
 usage() {
-    sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'
+    sed -n '2,81p' "$0" | sed 's/^# \{0,1\}//'
     exit "${1:-0}"
 }
 
 while [ $# -gt 0 ]; do
     case "$1" in
-    --baseline)   BASELINE_REPORT="$2"; shift 2 ;;
-    --candidate)  CANDIDATE="$2";       shift 2 ;;
-    --candidates) CANDIDATES_FILE="$2"; shift 2 ;;
-    --branch)     BRANCH="$2";          shift 2 ;;
-    --out)        OUT_DIR="$2";         shift 2 ;;
-    --port)       COM_PORT="$2";        shift 2 ;;
-    --host-only)  HOST_ONLY=1;          shift ;;
-    -h|--help)    usage 0 ;;
+    --baseline)      BASELINE_REPORT="$2"; shift 2 ;;
+    --candidate)     CANDIDATE="$2";       shift 2 ;;
+    --candidate-ref) CANDIDATE_REF="$2";   shift 2 ;;
+    --candidates)    CANDIDATES_FILE="$2"; shift 2 ;;
+    --branch)        BRANCH="$2";          shift 2 ;;
+    --out)           OUT_DIR="$2";         shift 2 ;;
+    --port)          COM_PORT="$2";        shift 2 ;;
+    --host-only)     HOST_ONLY=1;          shift ;;
+    -h|--help)       usage 0 ;;
     *) echo "Unknown argument: $1" >&2; usage 2 ;;
     esac
 done
 
-if [ -z "$CANDIDATE" ] && [ -z "$CANDIDATES_FILE" ]; then
-    echo "Nothing to evaluate: pass --candidate or --candidates." >&2
+if [ -z "$CANDIDATE" ] && [ -z "$CANDIDATE_REF" ] && [ -z "$CANDIDATES_FILE" ]; then
+    echo "Nothing to evaluate: pass --candidate, --candidate-ref, or --candidates." >&2
     exit 2
 fi
 if [ "$HOST_ONLY" -eq 0 ] && [ -z "$BASELINE_REPORT" ]; then
@@ -115,11 +149,18 @@ log() {
 # --- gate A ----------------------------------------------------------------
 # Deliberately an allowlist, not a denylist: a denylist has to anticipate
 # every file worth protecting, and the one it forgets is the one that gets
-# edited. Untracked files are checked too (status --porcelain, not diff),
-# or a candidate could simply add a new file nobody vetted.
-allowlist_ok() {
-    changed=$(git -C "$REPO_ROOT" status --porcelain | awk '{print $NF}')
-    [ -z "$changed" ] && { echo "candidate changed nothing"; return 1; }
+# edited.
+#
+# allowlist_check_files() is the shared core, taking an already-computed
+# newline-separated file list so the two candidate shapes can feed it two
+# different notions of "changed": a sed-style candidate's live, uncommitted
+# edit (allowlist_ok(), status --porcelain - untracked files included, or a
+# candidate could simply add a new file nobody vetted) and a ref
+# candidate's committed diff against its own merge-base (evaluate_ref(),
+# see REF CANDIDATES in the top comment for why status --porcelain cannot
+# answer that question for a ref at all).
+allowlist_check_files() {
+    changed="$1"
     for f in $changed; do
         case "$f" in
         # Implementation the loop may optimise.
@@ -144,6 +185,12 @@ allowlist_ok() {
         esac
     done
     return 0
+}
+
+allowlist_ok() {
+    changed=$(git -C "$REPO_ROOT" status --porcelain | awk '{print $NF}')
+    [ -z "$changed" ] && { echo "candidate changed nothing"; return 1; }
+    allowlist_check_files "$changed"
 }
 
 revert_tree() {
@@ -261,6 +308,133 @@ floor with no row regressing past it. Not reviewed by a human."
     record ACCEPT "$label" "$headline"
 }
 
+# --- ref candidates ---------------------------------------------------------
+# See "REF CANDIDATES" in the top comment for why this is not just
+# evaluate() with a checkout bolted on: gate A has to diff the ref against
+# its merge-base instead of reading `git status --porcelain` (which would
+# read clean for a ref regardless of what it touched), and there is no
+# REPO_ROOT tree to revert afterward - a ref candidate never edits
+# REPO_ROOT at all, only the separate capture worktree, which is left
+# checked out for the next call to reuse rather than cleaned per-candidate.
+evaluate_ref() {
+    label="$1"; ref="$2"
+    log ""
+    log "########## candidate: $label"
+    log "########## ref:       $ref"
+
+    # Gate A, ref-shaped: diff against the merge-base with what this run
+    # started from, not against $ref's parent - a ref built on an older
+    # main is judged on what IT changed, not on everything main gained
+    # since. A ref that does not resolve, or shares no history with
+    # START_COMMIT at all, is rejected here rather than passed to git diff
+    # to fail in some less legible way.
+    if ! merge_base=$(git -C "$REPO_ROOT" merge-base "$START_COMMIT" "$ref" 2>>"$LOG"); then
+        record REJECT "$label" "ref does not resolve, or shares no history with $START_COMMIT"
+        return
+    fi
+    changed=$(git -C "$REPO_ROOT" diff --name-only "$merge_base" "$ref")
+    if [ -z "$changed" ]; then
+        record REJECT "$label" "ref is identical to its merge-base - nothing to evaluate"
+        return
+    fi
+    if ! offending=$(allowlist_check_files "$changed"); then
+        record REJECT "$label" "ref touches a file outside the allowlist: $offending"
+        return
+    fi
+
+    # shellcheck source=lib/capture_worktree.sh
+    . "$SCRIPT_DIR/lib/capture_worktree.sh"
+    worktree=$(capture_worktree_path "$REPO_ROOT")
+    if ! capture_worktree_checkout "$REPO_ROOT" "$worktree" "$ref" >>"$LOG" 2>&1; then
+        record REJECT "$label" "capture worktree is dirty, or otherwise unusable - see $LOG"
+        return
+    fi
+    wt_launcher="$worktree/launcher"
+    wt_sand_tools="$wt_launcher/main/apps/sand/tools"
+
+    if ! TEST_BUILD_DIR="$OUT_DIR/hostbuild-ref" \
+         sh "$wt_launcher/test/run_tests.sh" >>"$LOG" 2>&1; then
+        record REJECT "$label" "host suite failed (compile or test) at $ref"
+        return
+    fi
+
+    if [ -x "$wt_launcher/test/check_app_sources.sh" ]; then
+        if ! sh "$wt_launcher/test/check_app_sources.sh" >>"$LOG" 2>&1; then
+            record REJECT "$label" "check_app_sources.sh failed at $ref"
+            return
+        fi
+    fi
+
+    BEHAVIOUR=identical
+    FP_DIFF="$OUT_DIR/quarantine/$label.fingerprint.diff"
+    if ! sh "$wt_sand_tools/report_fingerprint.sh" --check >"$FP_DIFF" 2>&1; then
+        BEHAVIOUR=changed
+    else
+        rm -f "$FP_DIFF"
+    fi
+
+    if [ "$HOST_ONLY" -eq 1 ]; then
+        record HOST-OK "$label" "gates A-C passed, behaviour=$BEHAVIOUR (no device evidence)"
+        return
+    fi
+
+    # Gate D, same script a human runs by hand (report_performance.sh),
+    # just pointed at the capture worktree instead of REPO_ROOT/launcher.
+    NEW_REPORT="$OUT_DIR/$label.report.md"
+    if ! sh "$wt_sand_tools/report_performance.sh" "$COM_PORT" "$NEW_REPORT" \
+         >>"$LOG" 2>&1; then
+        record REJECT "$label" "device build/flash/capture failed or was invalid"
+        return
+    fi
+
+    VERDICT_OUT="$OUT_DIR/$label.verdict.txt"
+    if python "$wt_sand_tools/compare_reports.py" "$BASELINE_REPORT" \
+              "$NEW_REPORT" --verdict >"$VERDICT_OUT" 2>&1; then
+        WIN=1
+    else
+        WIN=0
+    fi
+    headline=$(head -1 "$VERDICT_OUT")
+
+    if [ "$WIN" -eq 0 ]; then
+        record REJECT "$label" "no measured win: $headline"
+        return
+    fi
+
+    if [ "$BEHAVIOUR" = changed ]; then
+        git -C "$REPO_ROOT" diff "$merge_base" "$ref" > "$OUT_DIR/quarantine/$label.patch"
+        record QUARANTINE "$label" "WON but behaviour changed: $headline"
+        log "    patch:       $OUT_DIR/quarantine/$label.patch"
+        log "    fingerprint: $FP_DIFF"
+        return
+    fi
+
+    # ACCEPT. The vetted diff (merge-base to ref - the same one gate A
+    # already computed) is applied on top of BRANCH built from
+    # START_COMMIT, then committed as one squashed commit - the ref's own
+    # commit history is not replayed, same as a sed candidate's edit
+    # becomes one commit regardless of how many lines it touched.
+    git -C "$REPO_ROOT" diff "$merge_base" "$ref" > "$OUT_DIR/$label.ref.patch"
+    git -C "$REPO_ROOT" checkout -q -B "$BRANCH" "$START_COMMIT"
+    if ! git -C "$REPO_ROOT" apply "$OUT_DIR/$label.ref.patch" >>"$LOG" 2>&1; then
+        git -C "$REPO_ROOT" checkout -q -
+        record REJECT "$label" "won on device but the ref's diff would not apply cleanly onto $(git -C "$REPO_ROOT" rev-parse --short "$START_COMMIT") - see $OUT_DIR/$label.ref.patch"
+        return
+    fi
+    git -C "$REPO_ROOT" add -A
+    git -C "$REPO_ROOT" commit -q -m "perf-loop: $label (ref $ref)
+
+$headline
+
+Accepted by scripts/perf-loop.sh --candidate-ref: host suite green, grid
+fingerprint byte-identical to baseline, and a device-measured win beyond
+the noise floor with no row regressing past it. Not reviewed by a human.
+Diff taken from $ref against its merge-base with the commit this run
+started from; $ref's own commit history was not replayed."
+    git -C "$REPO_ROOT" checkout -q -
+    record ACCEPT "$label" "$headline"
+}
+
 : > "$SUMMARY"
 log "perf-loop starting at $(git -C "$REPO_ROOT" rev-parse --short HEAD)"
 log "host-only=$HOST_ONLY branch=$BRANCH out=$OUT_DIR"
@@ -269,16 +443,24 @@ if [ -n "$CANDIDATE" ]; then
     evaluate "manual" "$CANDIDATE"
 fi
 
+if [ -n "$CANDIDATE_REF" ]; then
+    evaluate_ref "manual-ref" "$CANDIDATE_REF"
+fi
+
 if [ -n "$CANDIDATES_FILE" ]; then
     n=0
-    # Format: one candidate per line, "<label><TAB><shell command>".
-    # Blank lines and # comments ignored, so a candidate list can be
-    # annotated with what each one is trying and why.
+    # Format: one candidate per line, "<label><TAB><shell command>", OR
+    # "<label><TAB>ref:<git-ref>" for a ref candidate (see REF CANDIDATES
+    # in the top comment). Blank lines and # comments ignored, so a
+    # candidate list can be annotated with what each one is trying and why.
     while IFS="$(printf '\t')" read -r label cmd; do
         case "$label" in ""|\#*) continue ;; esac
         [ -z "${cmd:-}" ] && continue
         n=$((n + 1))
-        evaluate "$label" "$cmd"
+        case "$cmd" in
+        ref:*) evaluate_ref "$label" "${cmd#ref:}" ;;
+        *)     evaluate "$label" "$cmd" ;;
+        esac
     done < "$CANDIDATES_FILE"
     log "evaluated $n candidates from $CANDIDATES_FILE"
 fi

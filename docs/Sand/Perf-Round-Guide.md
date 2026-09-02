@@ -75,6 +75,29 @@ generated `.md` table and the raw serial capture (`*_raw.txt`) beside it.
 Read the raw capture, not just the table, when a row looks wrong; the table
 generator can only report what it was pointed at.
 
+### One command from a ref to a device verdict
+
+Evaluating a candidate branch used to mean: create or enter a worktree,
+detach it at the ref, sit through a cold build, run `report_performance.sh`
+by hand, and read four commands' worth of capture output yourself.
+`scripts/capture_ref.sh` does all of that as one call, against one
+persistent worktree reused across every ref you evaluate in a sitting so
+the build stays warm (`.claude/capture-worktree/` by default; see the
+script's own top comment for exactly where and why):
+
+```sh
+sh scripts/capture_ref.sh some-branch --baseline <report>.md
+sh scripts/capture_ref.sh some-branch --build-only        # build only, never flashes
+```
+
+`--build-only` builds `build.diag` in the capture worktree and stops before
+any flash or capture — useful on its own to check a candidate even LINKS
+(an `aligned(64)` candidate once failed only at link time) before spending
+a device round on it. `--baseline` and `--no-restore` are passed straight
+through to `report_performance.sh`'s own flags, described above — this
+script does not re-validate, re-summarize, or re-derive a verdict; it only
+turns a ref into a warm checkout that script can run against.
+
 ### The capture must be validated before it is read
 
 `report_performance.sh` runs `launcher/tools/sweeps/validate_capture.py`
@@ -116,6 +139,29 @@ minutes. Both report scripts capture with a 1500-second window for this
 reason. If a run finishes in a couple of minutes, that is not a fast
 device: it is a suite that measured nothing, and the validator will say so.
 
+### Attributing on the host, before touching the device
+
+Step 1's "host counters first" has a harness already:
+`launcher/main/apps/sand/tools/perf_probe/` compiles suite_sand.c itself
+with `-DDEVICE_BUILD` on a laptop, against a link-only gfx stub and a real
+`esp_timer_get_time()`, and calls the actual frame-budget test bodies
+through the `SAND_HOST_PROBE` wrapper functions beside them - not a
+hand-copied scene, so it can't drift from what the device build measures.
+
+```sh
+bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
+out/probe --list                      # every scene this build knows
+python launcher/main/apps/sand/tools/perf_probe/run_probe.py out/probe \
+    --n 10 water mixed_flip lava_stress   # interleaved best-of-N, min/median
+```
+
+This is the one host harness - do not build another one. Two per-round
+copies of this already accumulated in this tree days apart (bd
+esp32c6-o2s) before being merged back into this single directory; if a
+scene you need isn't in `--list`, add a `SAND_HOST_PROBE` wrapper next to
+its test body in suite_sand.c and a row in `perf_probe/probe_main.c`'s own
+scene table, rather than standing up a new probe next to this one.
+
 ### Comparing two rounds
 
 ```sh
@@ -134,7 +180,17 @@ and is built so a candidate cannot be accepted for the wrong reason:
 ```sh
 sh scripts/perf-loop.sh --baseline <report>.md --candidates <file>
 sh scripts/perf-loop.sh --host-only --candidate "sed -i ... sand.c"
+sh scripts/perf-loop.sh --baseline <report>.md --candidate-ref some-branch
 ```
+
+A candidate is normally a shell command applied to the working tree in
+place. `--candidate-ref` instead names a git ref, checked out into
+`capture_ref.sh`'s own persistent worktree and run through the same five
+gates below - gate A adapted to diff the ref against its merge-base rather
+than read `git status --porcelain` (which reads clean for a committed ref
+regardless of what it touches), so a ref cannot buy a pass by rewriting a
+budget or a scene any more than a sed candidate can. See `scripts/perf-
+loop.sh`'s own "REF CANDIDATES" comment for the full reasoning.
 
 Five gates, cheapest first - allowlist, host suite, fingerprint, device
 capture, measured verdict - then one of three outcomes: ACCEPT (won, and
