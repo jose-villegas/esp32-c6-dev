@@ -1156,6 +1156,62 @@ exactly what a sheen looks like. "Lost its depth blue colour"
 signal's range had collapsed - not a matter of taste. Take them as
 evidence and go measure what they imply.
 
+### Stop the reporter when the cue is not landing, and say what would settle it
+
+The checklist above asks the reporter to front-load detail. That is the
+wrong way round: the person who knows the cue has not landed is the one
+reading it, and this feature's history is mostly rounds where that person
+guessed instead of stopping. **Treat "I am not certain I share a referent
+with you" as a reason to interrupt, not as something to resolve by
+building.** One clarifying exchange costs a message; a wrong guess costs a
+delegation, a device round trip, and sometimes a shipped regression.
+
+Concrete triggers, each seen in this feature's history:
+
+- **A directional word with no frame of reference** - "not aligned", "to
+  one side", "sideways", "it points the wrong way". Ask for a **vector
+  drawing**: a zoomed crop with one arrow for what it does and one for
+  what it should do. This resolved in a single image what three rounds of
+  prose had not.
+- **A term that could name two mechanisms.** "Landscape lock" is physical
+  device tilt, but there is also a discrete screen-rotation quarter turn
+  in this app. Name both candidates and ask which - that exchange took
+  one short message and prevented investigating the wrong subsystem.
+- **A complaint about something the code produces on purpose.** An
+  obstacle's shadow, rim foam, a specular band. The ambiguity is
+  *wanted-but-wrong* versus *unwanted*, and the two lead to opposite
+  designs. Ask before designing, every time.
+- **A shape word with no obvious metric** - "blocky", "artifact prone",
+  "flickery", "a spike". Before building a harness, say which number you
+  are about to measure and ask whether it would capture what they see. A
+  mean-depth swing was measured for several rounds against a complaint
+  about *lines*, which it cannot see.
+- **Your own measurement disagreeing with the report.** When the bulk
+  gradient measured 1.6° off gravity and the report still said "not
+  aligned", the report was right and the measurement was aimed at the
+  wrong region - the complaint was about the neighbourhood of a stone,
+  which the probe had explicitly excluded. A disagreement means you are
+  measuring the wrong thing, not that they are wrong. Ask where to look.
+
+**Offer the cheapest artifact that would settle it, rather than asking an
+open question.** Ranked by how well they have worked here:
+
+1. **Candidate renders, and ask which matches.** The host probe can
+   produce a side-by-side of two hypotheses from a real settled scene in
+   minutes. This turns an open description problem into a multiple
+   choice, which is far easier to answer and far harder to answer
+   ambiguously. Underused - it settled the projection design in one
+   exchange and should have been reached for earlier and more often.
+2. **A vector or a circle on a crop.** Direction, or location. Both are
+   near-impossible to write and trivial to draw.
+3. **A capture at a named orientation.** "One near portrait and one near
+   45°" beats "send a screenshot", because the sidecar's tilt values are
+   what make the pair comparable.
+4. **A restatement of the mechanism you inferred, for confirmation.**
+   Especially for metaphors: "like platinum" → "you mean it reads as a
+   fixed sheen that does not follow the water?" Cheap, and it catches a
+   wrong inference before it becomes a design.
+
 ### What the reader of a report owes back
 
 - **Match the metric to the complaint.** Several rounds measured the
