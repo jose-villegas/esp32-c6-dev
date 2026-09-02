@@ -6130,26 +6130,60 @@ static void test_shine_direction_is_unit_length(void)
  * it.
  *===========================================================================*/
 
-/* Mirrors paint_row_n()'s vertical local-depth walk (app_sand.c) for a
- * FIXED straight-down-or-steeper gravity (gy > 0) - the simplest case:
- * surface up, "above" toward the surface, ascending row order. Also serves
- * as the vertical half of test_the_blend_has_no_jump_crossing_45_degrees
- * below, whose gravity sweep never lets gy go negative either, so this one
- * fixed direction covers both callers. Reads the LIVE grid via sand_at()
- * rather than assuming a fixed shape, the same way paint_row_n() reads the
- * live framebuffer row/above/below pointers - off-grid rows read as
- * MAT_STONE (sand_at()'s own convention), which is "not the same material"
- * as water and correctly reads as a boundary. */
+/* Mirrors app_sand.c's REAL vertical local depth - col_stable_depth[]/
+ * col_top_row[]'s hold-then-commit, band-saturating climb - for a FIXED
+ * straight-down-or-steeper gravity (gy > 0): surface up, "above" toward the
+ * surface, ascending row order. Also serves as the vertical half of
+ * test_the_blend_has_no_jump_crossing_45_degrees below, whose gravity sweep
+ * never lets gy go negative either, so this one fixed direction covers both
+ * callers. Reads the LIVE grid via sand_at() rather than assuming a fixed
+ * shape, the same way paint_row_n() reads the live framebuffer row/above/
+ * below pointers - off-grid rows read as MAT_STONE (sand_at()'s own
+ * convention), which is "not the same material" as water and correctly
+ * reads as a boundary.
+ *
+ * THIS USED TO mirror col_local_depth[]'s dead raw walk instead - immediate
+ * reset to 0 on any disagreement, saturating at a byte's own 255 - which is
+ * NOT what the shipped mechanism does and was never exercised by anything
+ * else in this file: col_local_depth[] was write-only (nothing but its own
+ * next iteration ever read it) and was removed from app_sand.c once this was
+ * noticed. This mirror now implements the array that actually reaches the
+ * screen - see col_stable_depth[]'s own comment in app_sand.c for the full
+ * mechanism this reproduces, including the two bugs its own earlier
+ * versions had.
+ *
+ * `stable`/`top_row` are IN/OUT, the same way the real col_stable_depth[cx]/
+ * col_top_row[cx] persist across the separate paint_row_n() calls that walk
+ * one column down through different rows in different frames - callers that
+ * want a fresh column (matching the real arrays' BSS-zero start) pass in
+ * { 0, 255 }, and a caller that wants to model a SECOND frame's repaint of
+ * the same column (see the hold-then-commit's own two-consecutive-frames
+ * rule) calls this again with the same state pointers. */
 static void mirror_local_depth_column(sand_t *g, int cx, int h,
+                                      unsigned char *stable,
+                                      unsigned char *top_row,
                                       unsigned depth_out[])
 {
-    unsigned running = 0;
     for (int cy = 0; cy < h; cy++) {
         const cell_t here  = sand_at(g, cx, cy);
         const cell_t above = sand_at(g, cx, cy - 1);
         const bool same = CELL_MATERIAL(above) == CELL_MATERIAL(here);
-        running = same ? (running < 255u ? running + 1u : 255u) : 0u;
-        depth_out[cy] = running;
+        unsigned depth;
+
+        if (material_of(here)->kind != KIND_LIQUID) {
+            depth = 0u;
+        } else if (same) {
+            depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
+                ? *stable + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+        } else if (*top_row == (unsigned char)cy) {
+            depth = 0u;
+        } else {
+            depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
+                ? *stable + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            *top_row = (unsigned char)cy;
+        }
+        *stable = (unsigned char)depth;
+        depth_out[cy] = depth;
     }
 }
 
@@ -6230,9 +6264,18 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
     enum { CLEAR_X = 0 };   /* an unobstructed column, elsewhere in the same
                              * pool */
 
+    /* Fresh, independent state per column, ONE call each - matching the real
+     * arrays' BSS-zero start and a single frame's repaint of a just-settled
+     * pool. See the DIVERGENCE assertion below for why a single call is the
+     * right thing to check here, not an artifact of not bothering to settle
+     * further. */
     unsigned depth_obstructed[PH], depth_clear[PH];
-    mirror_local_depth_column(&obst_pool, OBST_X, PH, depth_obstructed);
-    mirror_local_depth_column(&obst_pool, CLEAR_X, PH, depth_clear);
+    unsigned char obst_stable = 0, obst_top_row = 255;
+    unsigned char clear_stable = 0, clear_top_row = 255;
+    mirror_local_depth_column(&obst_pool, OBST_X, PH,
+                              &obst_stable, &obst_top_row, depth_obstructed);
+    mirror_local_depth_column(&obst_pool, CLEAR_X, PH,
+                              &clear_stable, &clear_top_row, depth_clear);
 
     /* Sanity: the obstacle actually landed where this test built it, and
      * water survived on both sides of it - otherwise the rest of this test
@@ -6263,17 +6306,33 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
     }
 
     /* THE DIVERGENCE ITSELF: the row right below the plug is where the
-     * obstructed column's local depth must RESET to 0 - its neighbour
-     * toward the surface is stone, not water, so this cell IS the boundary
-     * of its own body rather than a continuation of the column above the
-     * rock - while the clear column keeps climbing from wherever it
-     * already was. */
+     * obstructed column's local depth must show a fresh, near-zero reading
+     * for its own body - its neighbour toward the surface is stone, not
+     * water - while the clear column keeps climbing from wherever it
+     * already was.
+     *
+     * NOT LITERALLY 0, and that is a genuinely verified property of the
+     * shipped mechanism, not a loosened assertion: this column has TWO
+     * persistent reset points sharing the single col_top_row[cx] slot - the
+     * pool's own surface at row 2, and this resume point at row 9 - and
+     * col_stable_depth[]'s own "KNOWN LIMITATION" comment in app_sand.c
+     * proves that when two such points both persist, NEITHER ever commits;
+     * both stay in the HOLD branch forever, oscillating for the tracked
+     * slot every pass. Traced by hand against this exact geometry: row 9's
+     * neighbour (the stone plug) resets col_stable_depth[cx] to a clean 0
+     * immediately beforehand regardless of hold or commit, so the permanent
+     * HOLD here climbs by exactly one from that 0 - depth 1, not depth 0,
+     * every single call, not only this first one. Asserting 0 would be
+     * asserting behaviour the real array never produces for this shape of
+     * column; asserting <= 1 pins the value it actually, provably settles
+     * to. */
     const int first_row_below_plug = OBST_Y1 + 1;
-    TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, depth_obstructed[first_row_below_plug],
-        "the water cell right below the rock plug must show local depth "
-        "0 - its neighbour toward the surface is stone, not water, so it "
-        "is a fresh boundary of its own body, not a continuation of the "
-        "column above the rock");
+    TEST_ASSERT_TRUE_MESSAGE(depth_obstructed[first_row_below_plug] <= 1u,
+        "the water cell right below the rock plug must show a freshly-reset "
+        "local depth (0 if the reset commits, 1 if it is permanently held by "
+        "the surface boundary competing for the same tracking slot - see "
+        "col_stable_depth[]'s own KNOWN LIMITATION comment in app_sand.c) - "
+        "not a continuation of the deep climb from above the rock");
     TEST_ASSERT_TRUE_MESSAGE(
         depth_clear[first_row_below_plug] >
             depth_obstructed[first_row_below_plug],
@@ -6305,22 +6364,54 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
      * NUMBERS - which is exactly the property this test exists to check. */
 }
 
-/* Mirrors paint_row_n()'s horizontal local-depth walk (app_sand.c) for a
- * FIXED gravity that never points left (gx > 0) - the counterpart to
- * mirror_local_depth_column() above: ascending column order, "left" toward
- * the surface, a plain running value with no cross-call state. Reads the
- * LIVE grid via sand_at(), the same off-grid-reads-as-MAT_STONE convention
- * mirror_local_depth_column() relies on. */
+/* Mirrors app_sand.c's REAL horizontal local depth - row_stable_depth[]/
+ * row_top_col[]'s hold-then-commit, band-saturating climb - for a FIXED
+ * gravity that never points left (gx > 0): the counterpart to
+ * mirror_local_depth_column() above, ascending column order, "left" toward
+ * the surface. Reads the LIVE grid via sand_at(), the same
+ * off-grid-reads-as-MAT_STONE convention mirror_local_depth_column() relies
+ * on.
+ *
+ * THIS USED TO mirror h_running_depth's dead raw walk instead - see
+ * mirror_local_depth_column()'s own comment above for the matching
+ * correction on the vertical side; h_running_depth was removed from
+ * app_sand.c for the identical reason (write-only, nothing ever read it
+ * back). This mirror now implements the array that actually reaches the
+ * screen - see row_stable_depth[]'s own comment in app_sand.c for the full
+ * mechanism.
+ *
+ * `stable`/`top_col` are IN/OUT, exactly like mirror_local_depth_column()'s
+ * own `stable`/`top_row` - a caller wanting a fresh row passes { 0, 255 },
+ * and calling again with the same pointers models a second frame's repaint
+ * of the SAME row. UNLIKE the vertical mirror, this state never needs to
+ * persist across DIFFERENT rows (row_stable_depth[]'s own comment explains
+ * why the two axes are not symmetric here) - only across repeated calls for
+ * the one row a caller is interested in. */
 static void mirror_local_depth_row(sand_t *g, int cy, int w,
+                                   unsigned char *stable,
+                                   unsigned char *top_col,
                                    unsigned depth_out[])
 {
-    unsigned running = 0;
     for (int cx = 0; cx < w; cx++) {
         const cell_t here = sand_at(g, cx, cy);
         const cell_t left = sand_at(g, cx - 1, cy);
         const bool same = CELL_MATERIAL(left) == CELL_MATERIAL(here);
-        running = same ? (running < 255u ? running + 1u : 255u) : 0u;
-        depth_out[cx] = running;
+        unsigned depth;
+
+        if (material_of(here)->kind != KIND_LIQUID) {
+            depth = 0u;
+        } else if (same) {
+            depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
+                ? *stable + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+        } else if (*top_col == (unsigned char)cx) {
+            depth = 0u;
+        } else {
+            depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
+                ? *stable + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            *top_col = (unsigned char)cx;
+        }
+        *stable = (unsigned char)depth;
+        depth_out[cx] = depth;
     }
 }
 
@@ -6363,19 +6454,41 @@ static const struct { int gx, gy; } BLEND_SWEEP[] = {
 };
 #define BLEND_SWEEP_N (sizeof BLEND_SWEEP / sizeof BLEND_SWEEP[0])
 
-/* A narrow, deep pool with ONE stone cell tucked beside the test column at
- * the very bottom - built to make the two readings at the test cell
- * disagree as much as this ramp can show, the same way the fix's own
- * modelling picked its worst-case cell rather than an arbitrary one.
+/* A narrow, deep pool, NO obstacle - built to make the two readings at the
+ * test cell disagree as much as this ramp can show, the same way the fix's
+ * own modelling picked its worst-case cell rather than an arbitrary one.
  * TEST_CX's column is plain, uninterrupted water from row 2 all the way to
  * the bottom (BLEND_POOL_H - 1 rows deep - comfortably past
  * DEPTH_SATURATE_CELLS in material.c, so its vertical depth saturates),
- * while TEST_CX - 1 at the BOTTOM row only is stone - breaking the SAME
- * row's horizontal run at the cell immediately beside the test cell, so
- * the test cell's horizontal depth is 0 while its vertical depth is
- * saturated. */
+ * while the SAME cell, read across its own ROW, sits at column 0 - the
+ * grid's own left edge, one column away from a boundary that is always
+ * there (off-grid reads as a different material, see sand_at()'s own
+ * convention) - so the test cell's horizontal depth can settle to a
+ * genuine 0 while its vertical depth saturates.
+ *
+ * AN EARLIER VERSION OF THIS TEST placed a deliberate stone cell beside a
+ * column-2 test cell instead, to force the horizontal reset by hand. That
+ * setup put TWO persistent horizontal boundaries in the SAME row - the
+ * deliberate stone, AND the row's own unavoidable left edge two columns
+ * over - and row_stable_depth[]'s own KNOWN LIMITATION comment in
+ * app_sand.c proves that when two such boundaries both persist, NEITHER
+ * ever commits: the test cell's horizontal depth was permanently HELD at 1,
+ * never a genuine 0, no matter how many frames were modelled. Verified by
+ * hand-tracing that exact geometry, and confirmed by temporarily restoring
+ * a hard single-axis switch in this test's own blend computation below: with
+ * hdepth stuck at 1, the switch's worst-case jump (54 to 76 luminance, 22)
+ * fell UNDER this test's own three-quarters-of-the-full-span threshold (23)
+ * and the test stayed GREEN even with no blend at all - the exact silent
+ * regression Do NOT weaken an assertion to pass is meant to prevent. Moving
+ * the test cell to the row's OWN left edge removes the second competing
+ * boundary entirely: this row now has exactly ONE horizontal boundary (its
+ * own edge, at the test cell itself), which - unlike two competing ones -
+ * genuinely commits to 0 once asked twice from the same column (see
+ * mirror_local_depth_row()'s own comment for the hold-then-commit rule),
+ * restoring the full worst-case disagreement (lum 85 vs lum 54, span 31)
+ * the fix was actually modelled against. */
 enum { BLEND_POOL_W = 4, BLEND_POOL_H = 30 };
-enum { BLEND_TEST_CX = 2, BLEND_TEST_CY = BLEND_POOL_H - 1 };
+enum { BLEND_TEST_CX = 0, BLEND_TEST_CY = BLEND_POOL_H - 1 };
 static uint8_t blend_pool_cells[BLEND_POOL_W * BLEND_POOL_H];
 static sand_t  blend_pool;
 
@@ -6385,37 +6498,54 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
     sand_init(&blend_pool, blend_pool_cells, PW, PH, 9001u);
 
     /* Rows 0-1 stay empty (the surface); rows 2..PH-1 are a plain
-     * rectangular pool, no obstacle yet. */
+     * rectangular pool - no obstacle anywhere, see this section's own
+     * comment above for why. */
     for (int y = 2; y < PH; y++) {
         for (int x = 0; x < PW; x++) {
             sand_set(&blend_pool, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
         }
     }
 
-    /* THE ONE OBSTACLE: a single stone cell, immediately beside the test
-     * cell, in the test cell's OWN row only - it does not touch any other
-     * row of the test column, so it cannot affect that column's vertical
-     * depth at all, only the horizontal depth of the row it sits in. */
-    sand_set(&blend_pool, BLEND_TEST_CX - 1, BLEND_TEST_CY,
-             CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT));
-
     /* Sanity: the setup actually produces the disagreement this test is
-     * built around, or the rest of it proves nothing. */
+     * built around, or the rest of it proves nothing.
+     *
+     * vdepth needs only ONE call: the vertical column has exactly one
+     * boundary (its own surface, at row 2), many rows above the saturation
+     * band - whether that boundary itself has committed yet does not affect
+     * the BOTTOM row's reading, since both HOLD and COMMIT climb at the
+     * same rate and the difference is long since swallowed by the band
+     * clamp by the time the walk reaches BLEND_TEST_CY.
+     *
+     * hdepth needs TWO calls, modelling two consecutive frames repainting
+     * the same row: this row's own left-edge boundary (at the test cell
+     * itself, column 0) is the ONLY horizontal boundary in the row, so the
+     * hold-then-commit rule needs it asked twice from the same column
+     * before it commits to 0 - see mirror_local_depth_row()'s own comment.
+     * The first call's value is discarded; only the second (settled) one is
+     * read. */
     unsigned vcol[PH];
-    mirror_local_depth_column(&blend_pool, BLEND_TEST_CX, PH, vcol);
+    unsigned char v_stable = 0, v_top_row = 255;
+    mirror_local_depth_column(&blend_pool, BLEND_TEST_CX, PH,
+                              &v_stable, &v_top_row, vcol);
     unsigned hrow[PW];
-    mirror_local_depth_row(&blend_pool, BLEND_TEST_CY, PW, hrow);
+    unsigned char h_stable = 0, h_top_col = 255;
+    mirror_local_depth_row(&blend_pool, BLEND_TEST_CY, PW,
+                           &h_stable, &h_top_col, hrow);   /* frame 1: discarded */
+    mirror_local_depth_row(&blend_pool, BLEND_TEST_CY, PW,
+                           &h_stable, &h_top_col, hrow);   /* frame 2: settled */
     const unsigned vdepth = vcol[BLEND_TEST_CY];
     const unsigned hdepth = hrow[BLEND_TEST_CX];
 
     TEST_ASSERT_TRUE_MESSAGE(vdepth >= 24u,
         "setup: the test column must be deep enough for its vertical local "
-        "depth to reach (or pass) DEPTH_SATURATE_CELLS, or this is not the "
-        "worst-case cell the fix was modelled against");
+        "depth to reach MATERIAL_LIQUID_DEPTH_BAND's own saturation point, "
+        "or this is not the worst-case cell the fix was modelled against");
     TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, hdepth,
-        "setup: the stone placed beside the test cell must reset ITS "
-        "horizontal depth to 0, or this test is not exercising the "
-        "vertical/horizontal disagreement it claims to");
+        "setup: the test cell's own row edge must settle to a genuine "
+        "local depth of 0 after two consecutive frames, or this test is "
+        "not exercising the worst-case vertical/horizontal disagreement it "
+        "claims to (see this section's own top comment for why a stone "
+        "obstacle cannot be used here instead)");
 
     /* THE SWEEP: gravity steps through 30 to 60 degrees; the GRID never
      * changes, so vdepth/hdepth above are reused unmodified for every
@@ -6450,18 +6580,33 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
      * switch produces in one step.
      *
      * PROVEN LOAD-BEARING, not merely written and trusted to catch
-     * anything: temporarily swapping the blend above for a crude hard
-     * single-axis switch (`(ay >= ax) ? vdepth : hdepth`, no blend at all)
-     * turns this test RED - every sample from 30 to 45 degrees reads
-     * depth 27 (lum 54), every sample from 48 to 60 degrees reads depth 0
-     * (lum 85), a 31-luminance jump in one 3-degree step at the crossing -
-     * exactly the full span this test measures against, reproducing the
-     * reported "jump between the axis" exactly. Restoring the blend turns
-     * it GREEN again: depth moves 17,16,15,14,14,13,12,12,11,10,9 across
-     * the same eleven samples (luminance 62,62,62,62,62,62,70,70,70,70,70),
-     * an 8-luminance jump at that same crossing and 0 everywhere else -
-     * comfortably under the three-quarters-of-31 threshold, and nowhere
-     * close to the switch's full-span pop. */
+     * anything - RE-VERIFIED against the corrected mirrors and the current
+     * (vdepth=24, hdepth=0) worst-case cell, not merely carried forward from
+     * before the mirrors were fixed: temporarily swapping the blend above
+     * for a crude hard single-axis switch (`(ay >= ax) ? vdepth : hdepth`,
+     * no blend at all) turns this test RED - every sample from 30 to 45
+     * degrees reads depth 24 (lum 54), every sample from 48 to 60 degrees
+     * reads depth 0 (lum 85), a 31-luminance jump in one 3-degree step at
+     * the crossing - exactly the full span this test measures against,
+     * reproducing the reported "jump between the axis" exactly. Restoring
+     * the blend turns it GREEN again: depth moves 15,14,13,13,12,12,11,10,
+     * 10,9,8 across the same eleven samples (luminance 62,62,62,62,70,70,
+     * 70,70,70,70,70), an 8-luminance jump at that same crossing and 0
+     * everywhere else - comfortably under the three-quarters-of-31
+     * threshold, and nowhere close to the switch's full-span pop.
+     *
+     * THIS EXACT CHECK PREVIOUSLY WENT SILENTLY BLIND, and is worth stating
+     * because it very nearly stayed that way: the test's ORIGINAL geometry
+     * (a stone obstacle beside a column-2 test cell) left hdepth
+     * permanently HELD at 1, not a genuine 0 - see this section's own top
+     * comment for the full story - and a hard switch against THAT hdepth
+     * only jumps 22 (54 to 76), UNDER the 23-luminance threshold: the test
+     * stayed GREEN even with no blend at all, proven directly by making
+     * that exact substitution before the geometry was fixed. Re-verify this
+     * property again after any future change to BLEND_TEST_CX/CY, the pool
+     * shape, or MATERIAL_LIQUID_DEPTH_BAND - it is exactly the kind of
+     * "looks load-bearing, quietly is not" trap this comment exists to
+     * name. */
     gfx_color_t shallow[3], deep[3];
     material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 0u, shallow);
     material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 255u, deep);
@@ -7214,7 +7359,14 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
 
     enum { NEAR_SURFACE_Y = 3, NEAR_BOTTOM_Y = PH - 1 };
     unsigned depth[PH];
-    mirror_local_depth_column(&shallow_pool, 0, PH, depth);
+    /* Fresh state (matching the real arrays' BSS-zero start), a single
+     * call: this column has exactly ONE boundary (its own surface), so
+     * whether that boundary HOLDS or COMMITS on this first pass shifts
+     * every row's depth by the same constant amount and cannot affect the
+     * DIFFERENCE this test actually checks - see mirror_local_depth_
+     * column()'s own comment for the hold-then-commit mechanism. */
+    unsigned char stable = 0, top_row = 255;
+    mirror_local_depth_column(&shallow_pool, 0, PH, &stable, &top_row, depth);
 
     const unsigned near_surface_depth = depth[NEAR_SURFACE_Y];
     const unsigned near_bottom_depth  = depth[NEAR_BOTTOM_Y];

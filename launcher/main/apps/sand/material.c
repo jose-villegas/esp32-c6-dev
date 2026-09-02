@@ -2388,7 +2388,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
      * staleness under the dirty-row optimisation - only rows something else
      * marked dirty ever get repainted, so a column's stored depth for a row
      * that has not repainted in a while can lag the puddle's current shape
-     * - see col_local_depth[]'s own comment in app_sand.c for why that costs
+     * - see col_stable_depth[]'s own comment in app_sand.c for why that costs
      * nothing extra to accept and matches the precedent already established
      * for foam's own drift.
      *

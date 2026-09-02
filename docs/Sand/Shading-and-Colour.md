@@ -194,11 +194,13 @@ through an obstacle sitting inside the pool as if the obstacle were not
 there. The fix (`f9679df`) is **local depth**: 0 at the boundary of this
 cell's own material, one more than the neighbour's own value otherwise -
 walked along gravity's dominant axis, using a persistent per-column array
-(`col_local_depth[]`, `GRID_W_MAX` bytes) that survives across
-`paint_row_n()` calls the same way `row_has_shine[]` already does.
-Verified against an irregular pool (a rock plug inside it): the shading
-correctly dips right where the rock breaks the surface, instead of
-sweeping past it.
+(now `col_stable_depth[]`, `GRID_W_MAX` bytes - the name at `f9679df`
+itself was `col_local_depth[]`; see the "A dead array can survive its own
+mechanism" lesson below for why the two names briefly, wrongly, referred to
+*different* things in the same file) that survives across `paint_row_n()`
+calls the same way `row_has_shine[]` already does. Verified against an
+irregular pool (a rock plug inside it): the shading correctly dips right
+where the rock breaks the surface, instead of sweeping past it.
 
 **Accepted, deliberate cost:** only *dirty* rows repaint, so a column's
 stored depth for a row that has not redrawn in a while reflects whatever
@@ -335,6 +337,82 @@ rendered on *before* you combine them, not after. And when two files share
 a constant so they "agree by construction", check that they actually do -
 one of them stating the invariant in a comment is not the same as either
 of them enforcing it.
+
+### A dead array can survive its own mechanism, hidden by comments that kept describing it
+
+By the time the vertical/horizontal blend above had been through several
+rounds of fixes, `col_local_depth[]` (the vertical case) and
+`h_running_depth` (the horizontal case) had quietly stopped doing anything:
+each was still written every cell, every frame, but nothing downstream ever
+read the value written into it again - `col_stable_depth[]`'s own climb, the
+one that actually reaches the blend, read only *its own* prior stored value,
+never the "raw walk" it was extensively commented as "riding on". Two
+arrays computed side by side, one of them provably inert, for an unknown
+number of refactors, because removing the axis-hysteresis switch and adding
+the hold-then-commit debounce had each, separately, made sense on their own
+terms without anyone re-deriving whether the array from the *previous*
+design was still load-bearing afterwards.
+
+**What let it survive:** the comments were confident, specific, and wrong.
+They stated - repeatedly, in several places - that the debounced array
+"rode on" the raw one, gave a reason it had to ("or an obstacle breaking a
+pool's surface would take extra frames to reveal"), and cited a real test by
+name as proof. None of that was true by the time anyone checked the actual
+code the comments were describing; the reasoning had been accurate for an
+*earlier* version of the mechanism and simply never got re-verified against
+the version that replaced it. A comment describing intent, once written, is
+never automatically re-checked against the code it sits beside - only a
+human (or an agent) actually reading both side by side catches the drift,
+and nothing about this file's structure forced that to happen.
+
+**The test mirrors had the same disease, one level up.** The host-side
+mirrors of this mechanism (`mirror_local_depth_column()`/
+`mirror_local_depth_row()`, `suite_sand.c`) still implemented the *dead*
+array's naive semantics - immediate reset on any disagreement, no
+hold-then-commit, saturating at a byte's own 255 rather than
+`MATERIAL_LIQUID_DEPTH_BAND` - because they were written against the
+mechanism that existed when the test was first added and were never revisited
+when the mechanism moved on. The tests were green throughout, which is
+exactly the trap: a mirror that implements the *wrong* algorithm can still
+agree with a *dead copy* of that same wrong algorithm sitting unused in the
+production file, and the two wrongs cancel out into a passing suite that
+protects nothing.
+
+**Correcting the mirrors surfaced a real, previously unproven limitation,
+not just a naming problem.** The hold-then-commit debounce's own "known
+limitation" comment claimed a column with two persistent reset points (a
+pool's surface, plus an obstacle) has the shallower one merely "lag its own
+commit by a frame". Tracing the corrected mirror against the exact test
+geometry proved that claim optimistic: two such points sharing one tracking
+slot **never** commit, either of them, for as long as both persist - not a
+one-frame lag, a permanent oscillation. It happened to read as a survivable,
+constant-offset error in the specific geometry this file's tests use (the
+non-liquid cells beside the obstacle reset the accumulator to a clean 0
+immediately before the held request anyway), but re-deriving that from the
+algorithm rather than assuming the old comment's softer framing was correct
+is what caught it. A second, separate instance of the same limitation
+(rather than a bug in the fix) was found while re-verifying a *different*
+test's own regression-proving claim: with a stale test geometry that only
+ever achieved a *held* value rather than a genuine commit, a hard
+single-axis switch substituted into that test's own blend computation no
+longer produced a big enough luminance jump to fail the assertion - the
+regression test had gone silently blind to the exact regression it exists to
+catch, caught only by re-running the "temporarily break it, confirm red"
+proof this file's own testing convention already calls for.
+
+**Generalises to:** when replacing a mechanism, explicitly ask "does the
+thing the *old* design needed still get read by anything" rather than
+assuming a leftover array is obviously still load-bearing because it is
+still being *written*. A comment asserting *why* something is necessary is a
+claim to re-verify against the current code, not evidence in itself - "the
+comment says so" is exactly how this survived multiple rounds of
+otherwise-careful editing. And a test mirror that duplicates an algorithm
+instead of linking to the real one (necessary here, since `app_sand.c` is
+not host-portable - see "How to test a shading change" below) needs the same
+scrutiny the code it protects gets: read it against the CURRENT mechanism,
+not just against whatever the mirror already agrees with, and re-run every
+test's own "prove this load-bearing" substitution after any change to the
+values feeding it - not only when the mirror itself changes shape.
 
 ### Off-grid is solid, not empty - and screen y increases downward
 
