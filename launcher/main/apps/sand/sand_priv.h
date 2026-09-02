@@ -443,10 +443,10 @@ static inline int ring_of(int dx, int dy)
  *
  * Moved here from sand_reactions.c (bd esp32c6-a2j) - cover_mask() needed
  * it too, and the brief for that change was explicit that this file
- * should not grow a second predicate meaning the same thing. Every
- * existing caller (smothered(), covered_from_above(), both still in
- * sand_reactions.c) is unaffected: same name, same signature, same
- * body, just visible from one file earlier in the include chain now. */
+ * should not grow a second predicate meaning the same thing. Its
+ * existing caller at the time (smothered(), still in sand_reactions.c)
+ * was unaffected: same name, same signature, same body, just visible
+ * from one file earlier in the include chain now. */
 static inline bool
 neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density)
 {
@@ -491,10 +491,11 @@ neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density
  * s->last_load_dx/dy (sand.h) is already an int pair and already one of
  * the eight ring directions, and it is the SETTLED one: the nearest
  * eighth, stable while the board is held still. Every other structural
- * question in the sweep reads it for exactly that reason - covered_from_
- * above(), try_vent(), anchored(), growth's own "which way is up" - and
- * one of them is even pinned by a test ("try_vent() must follow
- * s->last_load_dx/dy, not a fixed screen direction", suite_sand.c).
+ * question in the sweep reads it for exactly that reason - this
+ * primitive, anchored(), growth's own "which way is up" - and this one
+ * is pinned by a test that drives it under sideways gravity specifically
+ * to stop it ever regressing to a fixed screen direction
+ * (test_a_wide_pool_under_a_sideways_crust_bursts, suite_sand.c).
  *
  * NOT s->last_step_dx/dy, which is the DITHERED direction of one step: a
  * tilt falling between two eighths spends some steps on each, in

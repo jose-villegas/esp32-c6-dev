@@ -60,10 +60,9 @@ Phase 1 output (see docs/Sand/Reaction-Doc-Generator-Plan.md): every adverb belo
 ### Lava
 
 - Is a heat source in its own right, and licks flame into an empty neighbour readily. Touched by a quenching liquid, becomes stone.
-- If covered from above - anything directly above it, up-left, or up-right, gravity-relative - throws whatever is covering it fast, peeling up to SAND_VENT_LAYER cells off the outer surface each time it fires; a covering deeper than that takes several separate firings, up to SAND_VENT_REACH cells total, but is guaranteed to eventually dislodge.
 - Being quenched into stone (above) chains a small chance into one further neighbouring lava cell, which chains again in turn - up to SAND_LAVA_COOLOFF_MAX_CHAIN links per event - which is what lets a sustained pour freeze a pool progressively deeper rather than only sealing its surface. *(hand-added)*
 - Doing the WORK of actually melting a neighbour into something new (not merely banking one more level of heat) costs lava that same small chance of freezing itself, one cell at a time, and chains the same way. *(hand-added)*
-- Covered by at least 3 of the 5 gravity-relative neighbours forming a semi-disc opposite gravity (non-liquid, denser than itself, and forming one contiguous run around that arc - or, axis-aligned only, the three cardinals of it alone even with both flanking diagonals open), rolls a tiny chance per step (1 in 256 - the rarest a single roll can express) to become stone and immediately explode at that spot, fire included; the intended eventual replacement for the vent behaviour above (a later, separately sequenced change removes venting), coexisting with it for now. *(hand-added)*
+- Covered by at least 3 of the 5 gravity-relative neighbours forming a semi-disc opposite gravity (non-liquid, denser than itself, and forming one contiguous run around that arc - or, axis-aligned only, the three cardinals of it alone even with both flanking diagonals open), rolls a tiny chance per step (1 in 256 - the rarest a single roll can express) to become stone and immediately explode at that spot, fire included - the replacement for lava's old venting behaviour, which no longer exists. *(hand-added)*
 
 ### Acid
 
