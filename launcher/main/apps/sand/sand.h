@@ -1822,16 +1822,26 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * answers "which constant". */
 #define SAND_LAVA_COOLOFF_DEFAULT (-1)
 
-/* How many of a lava cell's 4 cardinal neighbours (cover_count(),
- * sand_reactions.c) must be a powder or solid - not a liquid, strictly
- * denser than lava, exactly neighbor_smothers()'s own test - before the
- * cell is eligible to burst (bd esp32c6-mqt). 3, not smothered()'s own
- * all-4: a pocket with one open side still counts as "covered enough",
- * which is what lets a hand-built vessel with a single gap still be a
- * container worth bursting out of, rather than requiring the airtight
- * seal smothering a flame needs. Out-of-bounds never counts as cover -
- * the board edge is not a container a player built, the same rule
- * gas_ignite_confined() states for its own neighbour scan. */
+/* How many of a lava cell's 5 GRAVITY-RELATIVE neighbours (covered_at()/
+ * cover_mask()/cover_seals(), sand_priv.h - bd esp32c6-a2j) must be a
+ * powder or solid - not a liquid, strictly denser than lava, exactly
+ * neighbor_smothers()'s own test - before the cell is eligible to burst
+ * (bd esp32c6-mqt). The five are the semi-disc of the 8-ring centred on
+ * anti-gravity, not the four screen-fixed cardinals cover_count() (the
+ * mechanism's first, wrong version) used - what is BELOW a cell supports
+ * it, it does not cover it, so the eligible set has to rotate with
+ * gravity. 3, not smothered()'s own all-4 (which is also a different
+ * question over a different, gravity-agnostic set - see smothered()'s
+ * own comment, sand_reactions.c): a pocket with one open side still
+ * counts as "covered enough", which is what lets a hand-built vessel
+ * with a single gap still be a container worth bursting out of, rather
+ * than requiring the airtight seal smothering a flame needs. Out-of-
+ * bounds never counts as cover - the board edge is not a container a
+ * player built, the same rule gas_ignite_confined() states for its own
+ * neighbour scan. cover_seals() also requires the covered cells to form
+ * a contiguous run around that semi-disc (with one narrow exception -
+ * see its own comment) - a count alone is not enough, three covered
+ * cells scattered with gaps between them is not a lid. */
 #define SAND_LAVA_BURST_COVER    3
 
 /* Chance in 256 a sufficiently-covered lava cell converts to MAT_STONE
