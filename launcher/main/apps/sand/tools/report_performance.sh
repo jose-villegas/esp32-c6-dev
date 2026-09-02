@@ -7,14 +7,19 @@
 # a hand-transcribed copy (like the table in docs/Sand/Architecture.md) can.
 #
 # Usage:
-#   main/apps/sand/tools/report_performance.sh [--baseline REPORT.md] \
-#       [COM_PORT] [OUT.md] [IDF_EXPORT_PS1]
+#   main/apps/sand/tools/report_performance.sh [--no-restore] \
+#       [--baseline REPORT.md] [COM_PORT] [OUT.md] [IDF_EXPORT_PS1]
 #
 #   COM_PORT        serial port the device is on. Default: COM3.
 #   OUT.md          markdown report path. Default:
 #                   main/apps/sand/tools/results/performance_<timestamp>.md
 #   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
 #                   project's usual install location.
+#   --no-restore    skip rebuilding/reflashing build.release afterward -
+#                   the device is left on build.diag. Restoring costs a
+#                   ~3-4 minute build+flash plus a second ~90s ESP-IDF
+#                   activation on EVERY run; back-to-back candidate
+#                   captures only need it once, at the end of a session.
 #   --baseline REPORT.md
 #                   after generating the report, run compare_reports.py
 #                   --verdict against this earlier report and print its
@@ -22,15 +27,21 @@
 #                   capture ritual below, run for you.
 #
 # Checks COM_PORT actually exists before building anything - see the
-# check right below. Restores build.release afterward, regardless of
-# outcome - see report_test_results.sh's own top comment for why.
+# check right below. Restores build.release afterward unless told not
+# to, regardless of outcome otherwise - see report_test_results.sh's own
+# top comment for why.
 
 set -euo pipefail
 
+NO_RESTORE=0
 BASELINE=""
 ARGS=()
 while [ $# -gt 0 ]; do
     case "$1" in
+        --no-restore)
+            NO_RESTORE=1
+            shift
+            ;;
         --baseline)
             if [ $# -lt 2 ]; then
                 echo "ERROR: --baseline requires a path" >&2
@@ -100,14 +111,21 @@ RAW_CAPTURE="$RESULTS_DIR/performance_${TIMESTAMP}_raw.txt"
 
 cleanup() {
     local status=$?
-    echo "=== Restoring build.release ==="
-    powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
-        Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
-        & '$IDF_EXPORT_PS1' | Out-Null
-        Set-Location '$LAUNCHER_DIR_WIN'
-        idf.py -B build.release build
-        idf.py -B build.release -p '$COM_PORT' flash
-    " || echo "WARNING: could not restore build.release - device may still be on build.diag"
+    if [ "$NO_RESTORE" -eq 1 ]; then
+        echo "=== --no-restore: leaving the device on build.diag ==="
+        echo "Reminder: the device is still running the self-test image, not"
+        echo "build.release. Run this script once without --no-restore, or"
+        echo "reflash build.release yourself, before treating it as normal again."
+    else
+        echo "=== Restoring build.release ==="
+        powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "
+            Remove-Item Env:\MSYSTEM -ErrorAction SilentlyContinue
+            & '$IDF_EXPORT_PS1' | Out-Null
+            Set-Location '$LAUNCHER_DIR_WIN'
+            idf.py -B build.release build
+            idf.py -B build.release -p '$COM_PORT' flash
+        " || echo "WARNING: could not restore build.release - device may still be on build.diag"
+    fi
     if [ "$status" -ne 0 ]; then
         echo
         echo "=== FAILED (exit $status) ==="
