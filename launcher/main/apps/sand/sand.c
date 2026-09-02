@@ -1001,12 +1001,36 @@ void sand_explode(sand_t *s, int cx, int cy, int radius)
                 continue;
             }
             const size_t fat = (size_t)fy * (size_t)s->w + (size_t)fx;
-            /* Fresh, full-life fire - the same MATERIAL_VARIANTS - 1
-             * convention random_cell() (above in this file) uses for any
-             * transient material, so a blast's core reads exactly like
-             * fire painted by hand would: brightest right after ignition,
-             * fading from there via its own ordinary decay. */
-            const cell_t fire = CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1);
+            /* LIFE FALLS OFF WITH DISTANCE, so the fireball has a
+             * colour GRADIENT instead of one flat shade.
+             *
+             * Fire's palette is already a 16-step ramp indexed by its
+             * remaining life - SHADES(0x400A00, 0xFFE060) in material.c,
+             * dark ember to bright yellow - but writing every core cell at
+             * MATERIAL_VARIANTS - 1 meant the whole disc sat on the
+             * brightest entry and then faded in lockstep, so the ramp was
+             * only ever visible over TIME and never across the blast.
+             * Reported on device as the fire being barely noticeable: a
+             * uniform flat patch reads as a flicker, a graded one reads as
+             * a fireball.
+             *
+             * Scaled on the SQUARED distance, which is what the loop
+             * already has - no sqrt, and it weights the outer cells more
+             * heavily, which is the way round that looks right: a hot core
+             * with a fast-cooling fringe. The rim also dies FIRST, so the
+             * blast collapses inward rather than vanishing all at once.
+             *
+             * Floored at 1, never 0: variant 0 is a fire with no life left
+             * and tick_decay() would take it away before it was ever
+             * drawn. */
+            int life = MATERIAL_VARIANTS - 1;
+            if (core_r2 > 0) {
+                life -= (fdx * fdx + fdy * fdy) * SAND_EXPLODE_CORE_FADE / core_r2;
+                if (life < 1) {
+                    life = 1;
+                }
+            }
+            const cell_t fire = CELL_MAKE(MAT_FIRE, (uint8_t)life);
             s->cells[fat] = fire;
             latch_content_flags(s, fire);
             mark_rows(s, fy, fy);
