@@ -45,6 +45,7 @@ that won.
 | 16 | Fix a wet-earth inlining cliff (4th occurrence); add a full-width dirty-region present path | `723fac6`, `3cf88c3`, `142b2f8`, `127037a`, `dc9e7d2` | shipped |
 | 17 | Clear three named suspects; ship a sequential memo for the gas sight scan | `e07081f`, `468a53f`, `0cfc087` | shipped |
 | 18 | Counter-driven decomposition of both hot passes; mask the reaction probes' pre-roll rejects; pin `sand_step` to the cache line | `8a20c86`, `66a1e9b` | shipped |
+| 19 | The pair-matrix: a 16×16 classification table gating five probes, plus a one-load-per-neighbour cascade; a stage-list dispatcher tried and retired | `7b3273a`, `58b1f42` (shipped); `fcf329b`, `69e796e` (kept on `sand-pair-matrix`, unmerged) | mixed (stages 1–2 shipped) |
 
 A sha marked "not on main" lives on a feature/exploration branch that was
 never merged; `git show` still works once that branch is fetched, or
@@ -108,6 +109,16 @@ never merged; `git show` still works once that branch is fetched, or
   — provably removes redundant comparisons on ~98% of cells and measured
   consistently *slower* than the mask alone on the very scene it targets,
   across three capture sizes, with no inlining cliff to blame.
+- **A loop-plus-switch dispatcher for the reactions stage ladder** (19) —
+  fingerprint-identical, `sand_step_reactions` even shrank 44 B, and the
+  device confirmed the host's warning almost exactly: fifteen rows
+  regressed, smoke+steam +24.5%, boiler +17.3%, every-material +16.3%.
+  Not the indirect-jump trap (the switch compiled to compares); best
+  hypothesis is register pressure from every local staying live across
+  the dispatch loop instead of the ladder's per-branch scopes. A future
+  dispatcher needs a different shape; the stage commits and the sweepable
+  order-vector infrastructure wait on the unmerged `sand-pair-matrix`
+  branch.
 - **`aligned(64)` on a flash-resident function** (18) — does not link:
   it raises `.flash.text`'s section alignment past the `0x...20` start
   ESP-IDF's script pairs with `.flash_rodata_dummy`, and ld refuses the
