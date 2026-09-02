@@ -79,13 +79,8 @@ static void test_mark_leaves_spans_a_cell_boundary_too(void)
 
 /* --- dirty_leaf_rects() ------------------------------------------------------
  *
- * Backs the leaf debug-overlay layer in gfx.c - one rectangle per
- * CONTIGUOUS RUN of dirty leaf columns in each leaf-row (not one per
- * individual leaf - merging within a row shows the unit refine_run() can
- * act on, while sand's own dirty runs are gap-free by construction, so
- * per-leaf outlining just redrew the fixed leaf lattice by another route),
- * clipped to the caller's box. Leaf-rows themselves are never merged into
- * each other - leaf_dirty is genuinely 2D. A host build cannot reach
+ * Backs the leaf debug-overlay layer in gfx.c - one rectangle per dirty
+ * leaf, unmerged, clipped to the caller's box. A host build cannot reach
  * gfx.c's overlay code at all (it is CONFIG_LAUNCHER_DEVELOPMENT, ESP-IDF-
  * dependent), so this enumerator, not the drawing that consumes it, is
  * where the geometry actually gets proven correct. */
@@ -117,7 +112,7 @@ static void test_dirty_leaf_rects_one_pixel_yields_the_whole_leaf(void)
     TEST_ASSERT_EQUAL_INT(LEAF_H, out[0].y1);
 }
 
-static void test_dirty_leaf_rects_two_adjacent_columns_merge_into_one_rect(void)
+static void test_dirty_leaf_rects_two_columns_are_two_adjacent_rects(void)
 {
     fixture();
     dirty_mark(LEAF_W - 1, 0, 2, 1);   /* straddles leaf columns 0 and 1 */
@@ -126,63 +121,13 @@ static void test_dirty_leaf_rects_two_adjacent_columns_merge_into_one_rect(void)
     const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
                                    out, 8);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, n,
-        "adjacent dirty leaf columns are one contiguous run and must merge "
-        "- this is exactly the shape of sand's own gap-free runs");
-    TEST_ASSERT_EQUAL_INT(0, out[0].x0);
-    TEST_ASSERT_EQUAL_INT(2 * LEAF_W, out[0].x1);
-}
-
-static void test_dirty_leaf_rects_whole_leaf_row_is_one_full_width_rect(void)
-{
-    fixture();
-    leaf_dirty[0] = 0xFFFF;   /* every leaf column dirty in leaf row 0 */
-
-    dirty_leaf_rect_t out[8];
-    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
-                                   out, 8);
-
-    TEST_ASSERT_EQUAL_INT(1, n);
-    TEST_ASSERT_EQUAL_INT(0, out[0].x0);
-    TEST_ASSERT_EQUAL_INT(GFX_DIRTY_WIDTH, out[0].x1);
-}
-
-static void test_dirty_leaf_rects_two_runs_separated_by_a_gap_stay_two_rects(void)
-{
-    fixture();
-    leaf_dirty[0] = (uint16_t)((1u << 0) | (1u << 2));   /* column 1, between
-                                                             them, stays clean */
-
-    dirty_leaf_rect_t out[8];
-    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
-                                   out, 8);
-
     TEST_ASSERT_EQUAL_INT_MESSAGE(2, n,
-        "a genuine gap between two runs is the case this layer exists to "
-        "catch - it must not be swallowed into one box spanning it");
+        "one rect per dirty leaf, never merged into a run - merging would "
+        "hide the leaf boundary this layer exists to show");
     TEST_ASSERT_EQUAL_INT(0, out[0].x0);
     TEST_ASSERT_EQUAL_INT(LEAF_W, out[0].x1);
-    TEST_ASSERT_EQUAL_INT(2 * LEAF_W, out[1].x0);
-    TEST_ASSERT_EQUAL_INT(3 * LEAF_W, out[1].x1);
-}
-
-static void test_dirty_leaf_rects_three_runs_stay_three_rects(void)
-{
-    fixture();
-    leaf_dirty[0] = (uint16_t)((1u << 0) | (1u << 2) | (1u << 4));
-
-    dirty_leaf_rect_t out[8];
-    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
-                                   out, 8);
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(3, n,
-        "three isolated runs must not collapse across their gaps into fewer");
-    TEST_ASSERT_EQUAL_INT(0, out[0].x0);
-    TEST_ASSERT_EQUAL_INT(LEAF_W, out[0].x1);
-    TEST_ASSERT_EQUAL_INT(2 * LEAF_W, out[1].x0);
-    TEST_ASSERT_EQUAL_INT(3 * LEAF_W, out[1].x1);
-    TEST_ASSERT_EQUAL_INT(4 * LEAF_W, out[2].x0);
-    TEST_ASSERT_EQUAL_INT(5 * LEAF_W, out[2].x1);
+    TEST_ASSERT_EQUAL_INT(LEAF_W, out[1].x0);
+    TEST_ASSERT_EQUAL_INT(2 * LEAF_W, out[1].x1);
 }
 
 static void test_dirty_leaf_rects_two_leaf_rows_both_appear(void)
@@ -199,32 +144,6 @@ static void test_dirty_leaf_rects_two_leaf_rows_both_appear(void)
     TEST_ASSERT_EQUAL_INT(LEAF_H, out[0].y1);
     TEST_ASSERT_EQUAL_INT(LEAF_H, out[1].y0);
     TEST_ASSERT_EQUAL_INT(2 * LEAF_H, out[1].y1);
-}
-
-static void test_dirty_leaf_rects_leaf_rows_never_merge_vertically(void)
-{
-    fixture();
-    leaf_dirty[0] = (uint16_t)((1u << 0) | (1u << 1));   /* leaf row 0: run [0,2) */
-    leaf_dirty[1] = (uint16_t)(1u << 3);                 /* leaf row 1: run [3,4) -
-                                                             a different column
-                                                             range entirely */
-
-    dirty_leaf_rect_t out[8];
-    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
-                                   out, 8);
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(2, n,
-        "leaf_dirty is genuinely 2D - two leaf-rows with different dirty "
-        "column patterns must stay two rects, never merged into one taller "
-        "box just because they share a strip row");
-    TEST_ASSERT_EQUAL_INT(0, out[0].y0);
-    TEST_ASSERT_EQUAL_INT(LEAF_H, out[0].y1);
-    TEST_ASSERT_EQUAL_INT(0, out[0].x0);
-    TEST_ASSERT_EQUAL_INT(2 * LEAF_W, out[0].x1);
-    TEST_ASSERT_EQUAL_INT(LEAF_H, out[1].y0);
-    TEST_ASSERT_EQUAL_INT(2 * LEAF_H, out[1].y1);
-    TEST_ASSERT_EQUAL_INT(3 * LEAF_W, out[1].x0);
-    TEST_ASSERT_EQUAL_INT(4 * LEAF_W, out[1].x1);
 }
 
 static void test_dirty_leaf_rects_clips_to_the_callers_box(void)
@@ -245,25 +164,6 @@ static void test_dirty_leaf_rects_clips_to_the_callers_box(void)
     TEST_ASSERT_EQUAL_INT(10, out[0].y1);
 }
 
-static void test_dirty_leaf_rects_clipping_narrows_a_merged_rect(void)
-{
-    fixture();
-    leaf_dirty[0] = (uint16_t)((1u << 0) | (1u << 1));   /* merged run,
-                                                             full extent
-                                                             [0, 2*LEAF_W) */
-
-    dirty_leaf_rect_t out[8];
-    const int n = dirty_leaf_rects(0, 10, 3, LEAF_W + 5, 10, out, 8);
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, n,
-        "still one merged run, just narrower than its own full extent once "
-        "clipped on both edges");
-    TEST_ASSERT_EQUAL_INT(10, out[0].x0);
-    TEST_ASSERT_EQUAL_INT(LEAF_W + 5, out[0].x1);
-    TEST_ASSERT_EQUAL_INT(3, out[0].y0);
-    TEST_ASSERT_EQUAL_INT(10, out[0].y1);
-}
-
 static void test_dirty_leaf_rects_a_leaf_entirely_outside_the_box_is_dropped(void)
 {
     fixture();
@@ -275,36 +175,16 @@ static void test_dirty_leaf_rects_a_leaf_entirely_outside_the_box_is_dropped(voi
     TEST_ASSERT_EQUAL_INT(0, n);
 }
 
-static void test_dirty_leaf_rects_max_out_cap_still_holds(void)
+static void test_dirty_leaf_rects_respects_the_max_out_cap(void)
 {
     fixture();
-    leaf_dirty[0] = 0x5555;   /* alternating dirty/clean: 8 isolated,
-                                 one-leaf-wide runs in this leaf-row */
+    leaf_dirty[0] = 0xFFFF;   /* every leaf column dirty in leaf row 0 */
 
     dirty_leaf_rect_t out[16];
     const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
                                    out, 5);
 
     TEST_ASSERT_EQUAL_INT(5, n);
-}
-
-static void test_dirty_leaf_rects_worst_case_alternating_runs_fit_the_row_max(void)
-{
-    fixture();
-    for (int sub = 0; sub < LEAF_SUB; sub++) {
-        leaf_dirty[sub] = 0x5555;   /* 8 runs per leaf-row, in all LEAF_SUB
-                                       leaf-rows of this strip row - the
-                                       worst case LEAF_RECTS_PER_ROW_MAX is
-                                       sized for */
-    }
-
-    dirty_leaf_rect_t out[LEAF_RECTS_PER_ROW_MAX];
-    const int n = dirty_leaf_rects(0, 0, 0, GFX_DIRTY_WIDTH, STRIP_HEIGHT,
-                                   out, LEAF_RECTS_PER_ROW_MAX);
-
-    TEST_ASSERT_EQUAL_INT_MESSAGE(LEAF_RECTS_PER_ROW_MAX, n,
-        "LEAF_RECTS_PER_ROW_MAX must actually bound the real worst case, "
-        "not just an old hand-counted number");
 }
 
 static void test_dirty_leaf_rects_leaf_rows_are_independent(void)
@@ -564,17 +444,11 @@ void run_gfx_dirty_suite(void)
 
     RUN_TEST(test_dirty_leaf_rects_finds_nothing_in_a_clean_row);
     RUN_TEST(test_dirty_leaf_rects_one_pixel_yields_the_whole_leaf);
-    RUN_TEST(test_dirty_leaf_rects_two_adjacent_columns_merge_into_one_rect);
-    RUN_TEST(test_dirty_leaf_rects_whole_leaf_row_is_one_full_width_rect);
-    RUN_TEST(test_dirty_leaf_rects_two_runs_separated_by_a_gap_stay_two_rects);
-    RUN_TEST(test_dirty_leaf_rects_three_runs_stay_three_rects);
+    RUN_TEST(test_dirty_leaf_rects_two_columns_are_two_adjacent_rects);
     RUN_TEST(test_dirty_leaf_rects_two_leaf_rows_both_appear);
-    RUN_TEST(test_dirty_leaf_rects_leaf_rows_never_merge_vertically);
     RUN_TEST(test_dirty_leaf_rects_clips_to_the_callers_box);
-    RUN_TEST(test_dirty_leaf_rects_clipping_narrows_a_merged_rect);
     RUN_TEST(test_dirty_leaf_rects_a_leaf_entirely_outside_the_box_is_dropped);
-    RUN_TEST(test_dirty_leaf_rects_max_out_cap_still_holds);
-    RUN_TEST(test_dirty_leaf_rects_worst_case_alternating_runs_fit_the_row_max);
+    RUN_TEST(test_dirty_leaf_rects_respects_the_max_out_cap);
     RUN_TEST(test_dirty_leaf_rects_leaf_rows_are_independent);
 
     RUN_TEST(test_run_is_leaf_eligible_when_every_cell_is_tight);

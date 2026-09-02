@@ -141,22 +141,72 @@ static inline void mark_leaves(int x0, int y0, int x1, int y1)
 }
 
 /* One dirty leaf's rectangle, absolute panel pixels - what dirty_leaf_rects()
- * below hands back, one per contiguous run of dirty leaves intersecting the
- * caller's box. Defined here, ahead of dirty_leaf_rects() itself, purely so
- * every function between here and mark_band() below keeps its original
- * relative order - dirty_leaf_rects() moved down past collect_runs_from_mask()
- * (see its own comment for why) but this typedef and its sizing macro have
- * no such dependency, so they stay put. */
+ * below hands back, one per dirty leaf intersecting the caller's box. */
 typedef struct {
     int x0, y0, x1, y1;
 } dirty_leaf_rect_t;
 
-/* Worst case for one strip row: each of the LEAF_SUB leaf-rows produces at
- * most LEAF_COLS/2 runs - a run needs a gap column to separate it from the
- * next, so more runs than that cannot fit in LEAF_COLS columns, the same
- * reasoning collect_dirty_runs() already relies on at the cell level.
- * Callers size their output array from this, not a hand-counted number. */
-#define LEAF_RECTS_PER_ROW_MAX (LEAF_SUB * (LEAF_COLS / 2))
+/* Worst case for one strip row: every leaf column dirty in every leaf row of
+ * the row, LEAF_COLS * LEAF_SUB. Callers size their output array from this,
+ * not a hand-counted number. */
+#define LEAF_RECTS_PER_ROW_MAX (LEAF_COLS * LEAF_SUB)
+
+/* Enumerates the dirty leaves of strip `row` that intersect [x0,x1) x
+ * [y0,y1), as absolute-pixel rects into `out`, capped at `max_out`. Returns
+ * how many were written. Backs the leaf debug-overlay layer in gfx.c
+ * (drawn straight into what gets sent, so it needs real rects, not just a
+ * bitmask) and is exercised directly by suite_gfx_dirty.c.
+ *
+ * One rect per dirty leaf, never merged into runs - merging adjacent leaves
+ * would hide the very subdivision this layer exists to show. Each rect
+ * starts at the leaf's own full LEAF_W x LEAF_H extent, then is clipped to
+ * the caller's box: a leaf only partly inside the box yields a clipped
+ * rect, a leaf entirely outside yields nothing. Leaf bits are only ever set
+ * by dirty_mark() (see mark_leaves()) - a row marked solely by mark_band()
+ * has no leaf information, so this legitimately returns nothing for it;
+ * that is a consequence of the design, not a bug to fix here.
+ *
+ * static inline, not plain static: every other function in this file is
+ * used unconditionally by gfx.c, but every call site of this one is inside
+ * an `#if CONFIG_LAUNCHER_DEVELOPMENT` block, so a release build's gfx.c
+ * includes this header and never calls it - the one case in this file the
+ * file header's "some static inline" already allows for. Plain static
+ * would warn -Wunused-function in exactly that build. */
+static inline int dirty_leaf_rects(int row, int x0, int y0, int x1, int y1,
+                                   dirty_leaf_rect_t *out, int max_out)
+{
+    int n = 0;
+
+    for (int sub = 0; sub < LEAF_SUB; sub++) {
+        const int leaf_row = row * LEAF_SUB + sub;
+        const int ly0 = leaf_row * LEAF_H;
+        const int ly1 = ly0 + LEAF_H;
+        if (ly1 <= y0 || ly0 >= y1) {
+            continue;
+        }
+
+        const uint16_t bits = leaf_dirty[leaf_row];
+        for (int col = 0; col < LEAF_COLS; col++) {
+            if (!(bits & (1u << col))) {
+                continue;
+            }
+            const int lx0 = col * LEAF_W;
+            const int lx1 = lx0 + LEAF_W;
+            if (lx1 <= x0 || lx0 >= x1) {
+                continue;
+            }
+            if (n == max_out) {
+                return n;
+            }
+            out[n].x0 = (lx0 > x0) ? lx0 : x0;
+            out[n].x1 = (lx1 < x1) ? lx1 : x1;
+            out[n].y0 = (ly0 > y0) ? ly0 : y0;
+            out[n].y1 = (ly1 < y1) ? ly1 : y1;
+            n++;
+        }
+    }
+    return n;
+}
 
 /* Marks every cell spanned by an ALREADY-CLIPPED row range, full width and
  * full strip height - mark_band() gets no x information at all, so every
@@ -345,83 +395,6 @@ static int collect_runs_from_mask(uint32_t mask, int width, int *start,
         }
         end[n] = bit;
         n++;
-    }
-    return n;
-}
-
-/* Enumerates the dirty leaves of strip `row` that intersect [x0,x1) x
- * [y0,y1), as absolute-pixel rects into `out`, capped at `max_out`. Returns
- * how many were written. Backs the leaf debug-overlay layer in gfx.c
- * (drawn straight into what gets sent, so it needs real rects, not just a
- * bitmask) and is exercised directly by suite_gfx_dirty.c.
- *
- * One rect per CONTIGUOUS RUN of dirty leaf columns in each leaf-row, not
- * one per individual leaf: sand's dirty runs are gap-free by construction
- * (see docs/Notes/Display-and-Rendering.md's "Partial updates" - once
- * app_sand.c reports its own per-row runs, each run it hands to
- * gfx_mark_dirty() is already gap-free), so every leaf inside one of its
- * runs is already dirty end to end - outlining each leaf separately just
- * re-drew the fixed leaf lattice by another route, indistinguishable on the
- * device from the static grid this layer replaced. Merging within a
- * leaf-row shows the actual unit refine_run() can act on (it only refines
- * x - the run's own cell_y0/cell_y1 union already covers y), and a genuine
- * gap - the case this layer exists to catch - now stands out as two
- * separated boxes instead of being lost among two dozen identical ones.
- *
- * Leaf-rows are never merged into each other: leaf_dirty is genuinely 2D,
- * and two leaf-rows in the same strip row can carry entirely different
- * dirty column patterns, so asserting they match would be wrong. Reuses
- * collect_runs_from_mask() above rather than a second hand-rolled
- * run-finder - LEAF_COLS/2 as its max_runs means its -1 "too fragmented"
- * return can never actually trigger here (see LEAF_RECTS_PER_ROW_MAX's own
- * comment, same reasoning collect_dirty_runs() below already relies on).
- *
- * Each rect starts at its run's full LEAF_W-multiple extent, then is
- * clipped to the caller's box: a run only partly inside the box yields a
- * clipped rect, a run entirely outside yields nothing. Leaf bits are only
- * ever set by dirty_mark() (see mark_leaves()) - a row marked solely by
- * mark_band() has no leaf information, so this legitimately returns
- * nothing for it; that is a consequence of the design, not a bug to fix
- * here.
- *
- * static inline, not plain static: every other function in this file is
- * used unconditionally by gfx.c, but every call site of this one is inside
- * an `#if CONFIG_LAUNCHER_DEVELOPMENT` block, so a release build's gfx.c
- * includes this header and never calls it - the one case in this file the
- * file header's "some static inline" already allows for. Plain static
- * would warn -Wunused-function in exactly that build. */
-static inline int dirty_leaf_rects(int row, int x0, int y0, int x1, int y1,
-                                   dirty_leaf_rect_t *out, int max_out)
-{
-    int n = 0;
-
-    for (int sub = 0; sub < LEAF_SUB; sub++) {
-        const int leaf_row = row * LEAF_SUB + sub;
-        const int ly0 = leaf_row * LEAF_H;
-        const int ly1 = ly0 + LEAF_H;
-        if (ly1 <= y0 || ly0 >= y1) {
-            continue;
-        }
-
-        int run_start[LEAF_COLS / 2], run_end[LEAF_COLS / 2];
-        const int runs = collect_runs_from_mask(leaf_dirty[leaf_row],
-                                                LEAF_COLS, run_start, run_end,
-                                                LEAF_COLS / 2);
-        for (int i = 0; i < runs; i++) {
-            const int lx0 = run_start[i] * LEAF_W;
-            const int lx1 = run_end[i] * LEAF_W;
-            if (lx1 <= x0 || lx0 >= x1) {
-                continue;
-            }
-            if (n == max_out) {
-                return n;
-            }
-            out[n].x0 = (lx0 > x0) ? lx0 : x0;
-            out[n].x1 = (lx1 < x1) ? lx1 : x1;
-            out[n].y0 = (ly0 > y0) ? ly0 : y0;
-            out[n].y1 = (ly1 < y1) ? ly1 : y1;
-            n++;
-        }
     }
     return n;
 }
