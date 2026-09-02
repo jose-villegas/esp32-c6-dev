@@ -7679,6 +7679,196 @@ static void test_a_settled_edge_does_not_flicker_stale_to_fresh(void)
 }
 
 /*=============================================================================
+ * A DIRECTION FLIP MUST NOT CORRUPT THE BOUNDARY DEBOUNCE
+ *
+ * A DIFFERENT bug from the wake-tick staleness just above, in the SAME
+ * debounce mechanism (col_stable_depth[]/col_top_row[], app_sand.c) - this
+ * one fires even when every row involved IS repainted promptly, so a wake
+ * tick has nothing to do with it. See update_local_depth_gravity()'s own
+ * comment (app_sand.c, right where col_top_row[]/row_top_col[] get reset)
+ * for the full account; summarised here for this test's own reproduction.
+ *
+ * col_top_row[cx] is ONE slot per column, remembering which ROW most
+ * recently asked for a reset - not committing until the SAME row asks
+ * twice in a row, exactly like col_stable_depth[]'s own comment describes.
+ * That design assumes the boundary's ROW does not move except slowly, by
+ * real settling. It does not hold when local_depth_v_reverse itself flips:
+ * "the neighbour toward the surface" swaps from `above` to `below` (or
+ * back), which relocates WHICH ROW is the genuine boundary between two
+ * candidates that are BOTH real - the top of a water column against a
+ * wall when gravity points down, the bottom of it when gravity points up.
+ * A hand held near "landscape lock" produces exactly this: gx large and
+ * steady (pressed against the wall), gy small and tremor-noisy, crossing
+ * zero often. Every crossing hands col_top_row[cx] a DIFFERENT row than
+ * the one it is tracking, so the "asked twice" commit almost never fires -
+ * every encounter takes the HOLD branch instead, climbing col_stable_
+ * depth[cx] rather than resetting it, and two alternating boundaries
+ * compound that climb without bound (measured on a real trace: 40, 119,
+ * 199, 200 across five flips, before finally landing two consecutive asks
+ * on the same row by chance and dropping to 0).
+ *
+ * REPRODUCED BELOW with the worst case for this specific mechanism: a
+ * water column that never moves (rows FLIP_TEST_TOP..FLIP_TEST_BOTTOM,
+ * against dry "air" above it and off-grid below it - sand_step() is not
+ * even run, since this bug lives entirely in the debounce bookkeeping, not
+ * the physics), driven by a v_reverse that flips EVERY frame - deterministic
+ * on purpose (see FLIP_TEST_FRAMES's own comment), and the harshest case
+ * for "the same row never asks twice in a row", since a real hand's tremor
+ * at least sometimes holds a direction for two consecutive frames while
+ * this never does.
+ *
+ * PROVEN LOAD-BEARING: temporarily changing flip_test_sweep_column()'s own
+ * `apply_fix` guard below to always skip the reset (as if update_local_
+ * depth_gravity() never invalidated col_stable_depth[]/col_top_row[] on a
+ * flip) reproduces the unbounded HOLD-compounding growth this test exists
+ * to catch - worst single-frame swing measured at 75 (of the debounce's
+ * raw 0-255 range) within the first couple of frames, climbing further
+ * before saturating. With the reset applied, the same deterministic flip
+ * sequence settles into a small, BOUNDED alternation (worst swing 37 - the
+ * column's own interior depth, not a runaway climb) and stays there. */
+
+enum {
+    FLIP_TEST_H      = 40, /* rows 0..39 */
+    FLIP_TEST_TOP    = 2,  /* topmost water row - the boundary the ascending
+                               (v_reverse == false) walk asks about */
+    FLIP_TEST_BOTTOM = FLIP_TEST_H - 1, /* bottommost water row (39) - its
+                               "below" neighbour is off-grid, so it is
+                               ALWAYS a genuine boundary request when the
+                               walk runs descending (v_reverse == true) */
+};
+
+/* Mirrors app_sand.c's col_stable_depth[]/col_top_row[] debounce exactly
+ * like mirror_debounced_depth_column() above, generalised for a walk whose
+ * direction can REVERSE from one frame to the next - update_local_depth_
+ * gravity()'s own comment (app_sand.c) is the mechanism this pins. `top`/
+ * `bottom` bound the water column (inclusive); `stable`/`top_row` and
+ * `v_reverse_prev` are IN/OUT, persisting across calls exactly like the
+ * real file-static arrays persist across frames. `apply_fix` gates ONLY the
+ * reset itself, not the flip detection above it - flipping it to false
+ * (temporarily, for verification - see this section's own top comment) is
+ * exactly reverting update_local_depth_gravity()'s own fix and nothing
+ * else.
+ *
+ * SWEEPS ONLY [top, bottom], DELIBERATELY - not the dry air rows above
+ * `top` too, even though paint_row_n() itself would walk those as part of
+ * the same grid. A settled pool's dry air never changes and holds no
+ * liquid, so draw_dirty_rows() never marks those rows dirty again after
+ * the scene's very first paint (dirty_rows[]; row_has_liquid[]'s own wake
+ * tick only wakes rows that hold a liquid cell - see that array's own
+ * comment in app_sand.c) - real firmware simply never re-invokes
+ * paint_row_n() for them. Sweeping them here anyway every frame would feed
+ * col_stable_depth[cx] a clean reset (the "not a liquid cell" branch) on
+ * every single frame regardless of `apply_fix`, which quietly hides the
+ * exact bug this test exists to catch - found by tracing why an early
+ * version of this test passed even with `apply_fix` forced false. */
+static void flip_test_sweep_column(int top, int bottom,
+                                    bool v_reverse, bool apply_fix,
+                                    unsigned char *stable,
+                                    unsigned char *top_row,
+                                    bool *v_reverse_prev,
+                                    unsigned depth_out[])
+{
+    if (apply_fix && v_reverse != *v_reverse_prev) {
+        *stable = 0;
+        *top_row = 255;
+    }
+    *v_reverse_prev = v_reverse;
+
+    const int cy_first = v_reverse ? bottom : top;
+    const int cy_step  = v_reverse ? -1 : 1;
+    const int n = bottom - top + 1;
+
+    for (int i = 0; i < n; i++) {
+        const int cy = cy_first + i * cy_step;
+        const int neighbour_cy = v_reverse ? cy + 1 : cy - 1;
+
+        /* Every row in [top, bottom] is water by construction - the only
+         * way "same material" can be false is the neighbour falling
+         * outside that range: off-grid past `bottom` when descending, dry
+         * air just above `top` when ascending. Both are genuine boundary
+         * requests, never a blip. */
+        const bool same = neighbour_cy >= top && neighbour_cy <= bottom;
+
+        unsigned depth;
+        if (same) {
+            depth = *stable < 255u ? *stable + 1u : 255u;
+        } else if (*top_row == (unsigned char)cy) {
+            depth = 0u;
+        } else {
+            depth = *stable < 255u ? *stable + 1u : 255u;
+            *top_row = (unsigned char)cy;
+        }
+        *stable = (unsigned char)depth;
+        depth_out[cy] = depth;
+    }
+}
+
+/* EVERY FRAME, on purpose - not a smoothed sine, not an RNG. A real hand
+ * near landscape lock crosses zero irregularly (829 times over 6000 frames
+ * in the model that found this bug, an average distance of ~7 frames), but
+ * the failure this test pins does not need that average: it needs the SAME
+ * boundary row to never ask twice in a row, and alternating every single
+ * frame is the simplest, fully deterministic sequence that guarantees
+ * that - a harsher case than the real average, which is exactly what makes
+ * it a durable regression pin rather than a flaky one. */
+#define FLIP_TEST_FRAMES 40
+
+static double flip_test_run(bool apply_fix)
+{
+    unsigned char stable = 0, top_row = 255;
+    bool v_reverse_prev = false; /* matches local_depth_v_reverse_prev's own
+                                     BSS-zero default in app_sand.c */
+    unsigned depth[FLIP_TEST_H];
+
+    double worst_swing = 0.0;
+    int prev_bottom_depth = -1;
+
+    for (int f = 0; f < FLIP_TEST_FRAMES; f++) {
+        const bool v_reverse = (f % 2) == 0;
+
+        flip_test_sweep_column(FLIP_TEST_TOP, FLIP_TEST_BOTTOM, v_reverse,
+                                apply_fix, &stable, &top_row, &v_reverse_prev,
+                                depth);
+
+        const int bottom_depth = (int)depth[FLIP_TEST_BOTTOM];
+        if (prev_bottom_depth >= 0) {
+            const double swing =
+                fabs_double((double)bottom_depth - (double)prev_bottom_depth);
+            if (swing > worst_swing) {
+                worst_swing = swing;
+            }
+        }
+        prev_bottom_depth = bottom_depth;
+    }
+    return worst_swing;
+}
+
+/* Comfortably above the ~37 swing measured WITH the fix (the column's own
+ * interior depth, FLIP_TEST_BOTTOM - FLIP_TEST_TOP - an ordinary bounded
+ * alternation, not a collapse), comfortably below the ~75 measured WITHOUT
+ * it (see this section's own top comment for both numbers) - the same
+ * shape of bound WAKE_TEST_MAX_SWING above uses for its own two measured
+ * numbers. */
+#define FLIP_TEST_MAX_SWING 60.0
+
+static void test_a_direction_flip_does_not_corrupt_the_boundary_debounce(void)
+{
+    const double worst_swing = flip_test_run(true);
+
+    char why[512];
+    snprintf(why, sizeof why,
+             "worst single-frame swing in the bottom row's own debounced "
+             "vertical depth was %.0f - update_local_depth_gravity()'s reset "
+             "on a v_reverse flip (app_sand.c) exists to keep this bounded "
+             "to roughly the column's own interior depth, rather than "
+             "compounding without bound the way an un-fixed HOLD branch "
+             "does when two different, both legitimate, boundary rows keep "
+             "alternately asking for col_top_row[]'s one tracking slot",
+             worst_swing);
+    TEST_ASSERT_TRUE_MESSAGE(worst_swing < FLIP_TEST_MAX_SWING, why);
+}
+
+/*=============================================================================
  * WATER'S FOAM - gathered at crevices, never on a flat run.
  *
  * material_colours()'s own top comment (material.c) has the full account of
@@ -22065,6 +22255,7 @@ void run_sand_suite(void)
     RUN_TEST(test_every_liquid_interior_is_exactly_the_body_colour_when_saturated);
     RUN_TEST(test_a_shallow_puddle_still_shows_real_darkening);
     RUN_TEST(test_a_settled_edge_does_not_flicker_stale_to_fresh);
+    RUN_TEST(test_a_direction_flip_does_not_corrupt_the_boundary_debounce);
     RUN_TEST(test_water_foams_where_its_rim_is_curved);
     RUN_TEST(test_a_flat_rim_still_never_foams);
     RUN_TEST(test_only_water_foams);

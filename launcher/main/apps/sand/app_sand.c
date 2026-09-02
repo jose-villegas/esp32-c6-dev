@@ -1200,6 +1200,15 @@ static unsigned local_depth_weight_h_q8;
 static bool local_depth_v_reverse;
 static bool local_depth_h_reverse;
 
+/* Last frame's local_depth_v_reverse/local_depth_h_reverse - not read by
+ * paint_row_n() at all, only by update_local_depth_gravity() itself, to
+ * detect the ONE frame a reversal actually happens on. See that function's
+ * own comment for why a flip needs to invalidate col_stable_depth[]/col_
+ * top_row[] (or row_stable_depth[]/row_top_col[]) and why "no reset needed"
+ * - true for which AXIS is dominant - does not extend to this. */
+static bool local_depth_v_reverse_prev;
+static bool local_depth_h_reverse_prev;
+
 /* THE DEBOUNCED PARALLEL WALK - what feeds the BLEND's vertical component,
  * in place of col_local_depth[]'s own raw value.
  *
@@ -1241,7 +1250,15 @@ static bool local_depth_h_reverse;
  * gated on any more, either: it debounces col_local_depth[cx] every frame,
  * unconditionally, exactly like the raw walk it rides on - what changed is
  * only where its result goes afterward (into the blend below, rather than
- * being the sole depth reading). */
+ * being the sole depth reading).
+ *
+ * A REAL GRAVITY-REVERSAL RESET IS STILL NEEDED, though, and is not the same
+ * thing as either "dominant axis" reset discussed above: when
+ * local_depth_v_reverse itself flips, the row this column's boundary sits at
+ * relocates (top of the column versus bottom), and the two candidate rows
+ * compete forever for the single col_top_row[cx] slot, holding instead of
+ * ever committing - see update_local_depth_gravity()'s own comment below for
+ * the measured corruption this produced and the reset that closes it. */
 static uint8_t col_stable_depth[GRID_W_MAX];
 
 /* The row index of column cx's most recent boundary request, confirmed or
@@ -1285,11 +1302,17 @@ static uint8_t col_top_row[GRID_W_MAX];
  * boundaries - identical shape to the vertical limitation above, just
  * transposed onto rows.
  *
- * NO RESET TRIGGER NEEDED, for the same reason col_stable_depth[]/col_top_
- * row[] need none any more: both arrays here are computed the same way
- * every frame, for every row, regardless of the blend weight - there is no
- * "other regime" whose stale reading could ever leak in, so there is
- * nothing an axis change could invalidate. */
+ * NO "WHICH AXIS IS DOMINANT" RESET IS NEEDED, for the same reason col_
+ * stable_depth[]/col_top_row[] need none: both arrays here are computed the
+ * same way every frame, for every row, regardless of the blend weight -
+ * there is no "other regime" whose stale reading could ever leak in the way
+ * the old single-axis-choice design's flip used to. That is a DIFFERENT
+ * question from whether REVERSING THIS AXIS'S OWN WALK DIRECTION needs an
+ * invalidation - it does; see update_local_depth_gravity()'s own comment
+ * below for the bug that showed up when it was missing (two different, both
+ * legitimate, boundary rows/columns alternately asking for a reset as
+ * local_depth_h_reverse itself flips, forever competing for one tracking
+ * slot) and the reset that closes it. */
 static uint8_t row_stable_depth[GRID_H_MAX];
 
 /* The column index of row cy's most recent boundary request - see row_
@@ -1324,8 +1347,78 @@ static void update_local_depth_gravity(int gx, int gy)
      * whichever axis used to be dominant - because both scans run every
      * frame now. See local_depth_v_reverse/local_depth_h_reverse's own
      * comment above. */
-    local_depth_v_reverse = (gy < 0);
-    local_depth_h_reverse = (gx < 0);
+    const bool new_v_reverse = (gy < 0);
+    const bool new_h_reverse = (gx < 0);
+
+    /* A REVERSAL OF THIS AXIS'S OWN WALK DIRECTION invalidates the debounce
+     * that rides on it - a DIFFERENT failure from the "which axis is
+     * dominant" flip col_local_depth[]'s own top comment already explains
+     * is a non-issue now. Measured directly, reproducing a device report of
+     * a visible pop specifically near the "landscape lock" orientation:
+     * hold the device close to landscape (gx large and steady, pressed
+     * against the wall; gy small and hand-tremor-noisy, so it crosses zero
+     * often - 829 sign flips over a 6000-frame model) against a tall water
+     * column standing against that wall. Every time local_depth_v_reverse
+     * flips, "the neighbour toward the surface" (v_toward_surface below)
+     * swaps from `above` to `below` or back, which relocates WHICH ROW in
+     * the column is the genuine boundary - the top row when ascending, the
+     * bottom row when descending - between two candidates that are BOTH
+     * real, not one real boundary and one blip. col_top_row[cx] has only one
+     * slot, shared by both: because the tracked row keeps changing out from
+     * under it every ~7 frames (this noisy a gy crosses zero that often),
+     * the "same row asked twice -> commit" branch almost never fires, so
+     * col_stable_depth[cx] takes the HOLD branch on nearly every encounter -
+     * climbing (`+1`) instead of resetting - and compounds without bound.
+     * Traced at one column across five consecutive flips: 40, 119, 199, 200,
+     * before finally, by chance, landing two consecutive asks on the same
+     * row and dropping to 0. That is a raw-accumulator swing of up to 200
+     * (of a 0-255 range) leaking into the displayed, BLENDED depth as a real
+     * jump - small in this axis's own blend weight near landscape lock, but
+     * still visible, which is exactly why the report was specific to that
+     * orientation: near landscape, gy is the small/noisy component (so this
+     * axis's own reverse flag flips often) while vdepth still carries a
+     * nonzero blend weight; near portrait the symmetric risk sits on
+     * local_depth_h_reverse, but there hdepth's blend weight is the one near
+     * zero, so the same corruption stays invisible.
+     *
+     * THE FIX: the moment this axis's OWN reverse flag actually changes
+     * value, the debounce state it feeds is stale by construction - the
+     * "row most recently asked" and "depth accumulated so far" both describe
+     * a boundary relationship that direction no longer has - so both get
+     * invalidated before any cell paints under the new direction: the
+     * tracker back to its "untracked" sentinel (255, matching col_top_row[]/
+     * row_top_col[]'s existing convention) and the accumulator back to a
+     * clean 0, exactly the same clean reset already used above for "not a
+     * liquid cell at all" - not a partial fix that clears only the tracker
+     * and lets HOLD keep climbing from an old, direction-stale value. A
+     * clean 0 is not itself a visible defect: draw_dirty_rows() below wakes
+     * every liquid row on its own periodic tick (LOCAL_DEPTH_WAKE_MS) in
+     * ascending/descending order matching this same reversal, so a settled
+     * column's real depth is rebuilt row-by-row within that same tick,
+     * bounded by the pool's own depth range rather than by how many
+     * consecutive flips have happened. O(grid_w) (or grid_h) work, but only
+     * on the frame a reversal actually lands - measured at roughly 5 times a
+     * second at 30fps in the noisy-gy model above, trivial next to
+     * paint_row_n()'s own per-cell cost. See
+     * test_a_direction_flip_does_not_corrupt_the_boundary_debounce in
+     * suite_sand.c for the reproduction and the bound this closes. */
+    if (new_v_reverse != local_depth_v_reverse_prev) {
+        for (int cx = 0; cx < grid_w; cx++) {
+            col_top_row[cx] = 255u;
+            col_stable_depth[cx] = 0u;
+        }
+        local_depth_v_reverse_prev = new_v_reverse;
+    }
+    if (new_h_reverse != local_depth_h_reverse_prev) {
+        for (int cy = 0; cy < grid_h; cy++) {
+            row_top_col[cy] = 255u;
+            row_stable_depth[cy] = 0u;
+        }
+        local_depth_h_reverse_prev = new_h_reverse;
+    }
+
+    local_depth_v_reverse = new_v_reverse;
+    local_depth_h_reverse = new_h_reverse;
 }
 
 /* LOCAL DEPTH'S OWN PERIODIC WAKE - closes the same gap SHINE_STEP_MS
