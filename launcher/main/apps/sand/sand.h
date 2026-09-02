@@ -825,8 +825,10 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * Table.md already names this constant as part of the described
  * contract, and test_the_cool_off_chain_is_bounded (suite_sand.c) has to
  * assert against its real value rather than a hand-copied literal that
- * silently goes stale the next time this is retuned. */
-#define SAND_LAVA_COOLOFF_MAX_CHAIN 8
+ * silently goes stale the next time this is retuned.
+ *
+ * Doubled from 8 to 16 on request after the first device flash. */
+#define SAND_LAVA_COOLOFF_MAX_CHAIN 16
 
 /* The initial speed vent_column() (sand_reactions.c) hands to sand_
  * impulse_dislodge() for each cell it throws - see SAND_EXPLODE_INITIAL_

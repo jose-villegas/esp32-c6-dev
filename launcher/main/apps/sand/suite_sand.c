@@ -13367,14 +13367,24 @@ static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(voi
  * whole column can only ever be read as: the crust cool_off_chain() has
  * reached so far, contiguous from the top. */
 #define LAVA_SHAFT_W    3
-#define LAVA_SHAFT_H    20
+#define LAVA_SHAFT_H    32
 #define LAVA_SHAFT_X    1
 #define LAVA_SHAFT_TOP  1
 #define LAVA_SHAFT_BOT  (LAVA_SHAFT_H - 2)  /* one cell above the floor */
 
 static void build_lava_shaft(sand_t *p, uint8_t *cells)
 {
-    sand_init(p, cells, LAVA_SHAFT_W, LAVA_SHAFT_H, 71u);
+    /* 0u, not the 71u used elsewhere in this file as a generic fixed
+     * seed: with cool-off pinned to its own max (255/256 per link), seed
+     * 71 happens to roll a failure after only ~12 links regardless of how
+     * deep the shaft is - verified by brute-forcing seeds against this
+     * exact scene, where 0 (like most seeds) instead runs the walk all
+     * the way to the shaft's floor when nothing caps it. That makes 0 the
+     * one that actually exercises SAND_LAVA_COOLOFF_MAX_CHAIN in
+     * test_the_cool_off_chain_is_bounded below - 71 would leave that
+     * test passing for the wrong reason, bounded by luck rather than by
+     * the cap, for any cap above ~12. */
+    sand_init(p, cells, LAVA_SHAFT_W, LAVA_SHAFT_H, 0u);
     for (int y = 0; y < LAVA_SHAFT_H; y++) {
         sand_set(p, LAVA_SHAFT_X - 1, y, STONE);
         sand_set(p, LAVA_SHAFT_X + 1, y, STONE);
@@ -13558,7 +13568,7 @@ static void test_lava_that_melts_sand_into_glass_sometimes_freezes_itself(void)
 
 /* THE CHAIN IS BOUNDED. Pinned fully on, against a shaft deep enough that
  * a chain running unbounded would eat the whole thing -
- * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is 8, so the shaft's 18 lava cells
+ * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is 16, so the shaft's 30 lava cells
  * leave a wide, unambiguous margin. One quench event only: a single step
  * is enough for cool_off_chain() to run its entire walk, since the chain
  * itself is not spread across steps the way the sustained pour above is.
