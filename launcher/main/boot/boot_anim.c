@@ -168,31 +168,41 @@ static int32_t units(int n)
  * whether to show them at all - a ring's own roundness is not). */
 #define BOOT_ANIM_GRID_CIRCLE_STEPS 12
 
-/* How finely a SPOKE is walked, unlike a ring's own CIRCLE_STEPS above -
- * a spoke's own vertices span a real distance (0 to BOOT_ANIM_GRID_SPOKE_
- * FAR_UNITS below), not one shared radius, so a growing reach
- * (boot_anim_grid_spoke_reach()) needs several steps to read as smoothly
- * extending outward rather than jumping in visible chunks, and a dashed
- * spoke (BOOT_ANIM_GRID_SPOKE_DASH) needs at least a couple of segments
- * per dash/gap pair - NOT the wave (see draw_grid_spoke()'s own comment
- * on why a spoke stays flat regardless of it). Not per-spoke:
- * BOOT_ANIM_GRID_SPOKES (generated - "Grid" in tools/boot_anim_editor.html,
- * 0 hides them outright) is rarely more than a handful, so even a step
- * count this fine stays cheap regardless of how many spokes are actually
- * drawn. */
+/* How finely the NEAR portion of a spoke is walked, unlike a ring's own
+ * CIRCLE_STEPS above - a spoke's own vertices span a real distance (0 to
+ * BOOT_ANIM_GRID_SPOKE_NEAR_UNITS below), not one shared radius, so a
+ * growing reach (boot_anim_grid_spoke_reach()) needs several steps to
+ * read as smoothly extending outward rather than jumping in visible
+ * chunks, and a dashed spoke (BOOT_ANIM_GRID_SPOKE_DASH) needs at least a
+ * couple of segments per dash/gap pair - NOT the wave (see
+ * draw_grid_spoke()'s own comment on why a spoke stays flat regardless of
+ * it). Not per-spoke: BOOT_ANIM_GRID_SPOKES (generated - "Grid" in tools/
+ * boot_anim_editor.html, 0 hides them outright) is rarely more than a
+ * handful, so even a step count this fine stays cheap regardless of how
+ * many spokes are actually drawn. */
 #define BOOT_ANIM_GRID_SPOKE_STEPS 32
 
-/* How far out a spoke is walked - NOT related to the grid's own reach
- * (BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12, `far` below): a spoke
- * is a structural guide line, not the ring data the wave is actually
- * about, so its own limit is wherever the projected line crosses the
+/* How far the NEAR, finely-stepped portion of a spoke reaches - where
+ * BOOT_ANIM_GRID_SPOKE_STEPS's own resolution actually matters, because a
+ * dash or a mid-reveal tip is only ever close enough to a camera to be
+ * legible somewhere near the origin, at any framing this project uses.
+ * Fixed, not authored, and deliberately NOT related to the grid's own
+ * reach (BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12) - a spoke has no
+ * business being bounded by how many rings happen to be authored. */
+#define BOOT_ANIM_GRID_SPOKE_NEAR_UNITS 10
+
+/* How far out a spoke's own FAR tail reaches, past the near portion above -
+ * a spoke is a structural guide line, not the ring data the wave is
+ * actually about, so ITS limit is wherever the projected line crosses the
  * panel's edge, not a fixed distance in world space. gfx_line_ex()'s own
  * clip_line() already computes exactly that x,y crossing for any segment
  * reaching past the panel - this only has to be far enough that the
  * unclipped end is ALWAYS past it, for every camera framing this project
- * uses, and let clipping do the rest. Fixed, not authored: how far
- * "effectively forever" needs to be is an engineering margin, not a
- * creative choice a keyframe should be tuning. */
+ * uses, and let clipping do the rest. Walked as a SINGLE extra segment
+ * (see draw_grid_spoke()'s own comment on why), not stepped the way the
+ * near portion is - nothing out there is ever close enough to a camera
+ * for a dash or a reveal tip to matter, only whether the line eventually
+ * clips. */
 #define BOOT_ANIM_GRID_SPOKE_FAR_UNITS 500
 
 /* A point at zeta-distance `radius` from the origin, `turn`/BOOT_ANIM_ONE
@@ -250,34 +260,50 @@ static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
  * spoke does not carry the wave (see boot_anim.h's "The wave" section):
  * it is a guide line for the plane itself, and a guide that bent along
  * with the very displacement it is meant to help read stops doing its
- * job - only the rings, which the wave is actually about, lift. Still
- * walked in short spans rather than one straight segment, unlike a ring,
- * so a growing reach and a dash pattern (both below) have several
- * segments to work with rather than one all-or-nothing line.
+ * job - only the rings, which the wave is actually about, lift.
+ *
+ * TWO PARTS, not one uniform walk: the NEAR portion (0 to `near`) is
+ * walked in BOOT_ANIM_GRID_SPOKE_STEPS short spans, same as a ring's own
+ * finer structure, so a growing reach and a dash pattern (both below)
+ * have several segments to work with rather than one all-or-nothing
+ * line - this is the only part of a spoke a camera is ever actually
+ * close enough to for that resolution to be visible. Beyond it, a SINGLE
+ * long tail out to `far` (see BOOT_ANIM_GRID_SPOKE_FAR_UNITS's own
+ * comment on why that needs to reach so far at all) - stepping that at
+ * the same fine resolution would spend most of a spoke's own segment
+ * budget on a stretch of line nothing is ever close enough to see the
+ * texture of, and used to break the dash pattern outright: dividing the
+ * WHOLE reach into BOOT_ANIM_GRID_SPOKE_STEPS pieces once made each piece
+ * tens of meters long, so the entire on-screen portion of a spoke sat
+ * inside a single dash-or-gap with nothing left to alternate against.
  *
  * `dash`: BOOT_ANIM_GRID_SPOKE_DASH (generated - "Grid" in tools/
- * boot_anim_editor.html) skips drawing every OTHER segment rather than
- * thinning pixels within one - each of the BOOT_ANIM_GRID_SPOKE_STEPS
- * segments a spoke is already walked in (see that constant's own comment)
- * is a whole gfx_line_ex() call, so skipping half of them skips half the
- * walk()s outright - the bounding box and dirty_mark() included, not just
- * the plot()s inside one - genuinely cheaper to draw, not just a different
- * look.
+ * boot_anim_editor.html) skips drawing every OTHER near-segment rather
+ * than thinning pixels within one - each is a whole gfx_line_ex() call,
+ * so skipping half of them skips half the walk()s outright - the
+ * bounding box and dirty_mark() included, not just the plot()s inside
+ * one - genuinely cheaper to draw, not just a different look. The tail
+ * is never dashed - nothing out there is close enough to read a dash
+ * pattern on anyway, only whether the line eventually clips.
  *
- * `reach` (boot_anim_grid_spoke_reach(), Q0) bounds how much of the walk
- * even happens, not just whether a given segment draws - the loop simply
- * stops early, so a spoke mid-reveal costs less to draw than a finished
- * one, not the same amount with the tail end thrown away. */
-static void draw_grid_spoke(uint16_t turn, int32_t far, gfx_color_t c,
-                            bool dash, uint8_t reach,
+ * `reach` (boot_anim_grid_spoke_reach(), Q0) bounds how much of the NEAR
+ * portion even gets walked, not just whether a given segment draws - the
+ * loop simply stops early, so a spoke mid-reveal costs less to draw than
+ * a finished one, not the same amount with the tail end thrown away. The
+ * far tail always draws once any of the near portion has - there is
+ * nothing to visibly "reveal" in a stretch of line no camera framing this
+ * project uses is ever close enough to see grow. */
+static void draw_grid_spoke(uint16_t turn, int32_t near, int32_t far,
+                            gfx_color_t c, bool dash, uint8_t reach,
                             const boot_anim_view_t *view)
 {
     S3L_Vec4 prev_cs;
     bool have_prev = false;
     const int max_step = (BOOT_ANIM_GRID_SPOKE_STEPS * reach) / 255;
+    int32_t last_radius = 0;
 
     for (int step = 0; step <= max_step; step++) {
-        const int32_t radius = (far * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
+        const int32_t radius = (near * step) / BOOT_ANIM_GRID_SPOKE_STEPS;
         int32_t re, im;
         polar_point(radius, turn, &re, &im);
         const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, 0, view);
@@ -296,6 +322,18 @@ static void draw_grid_spoke(uint16_t turn, int32_t far, gfx_color_t c,
         }
         prev_cs = cs;
         have_prev = true;
+        last_radius = radius;
+    }
+
+    if (have_prev && last_radius < far) {
+        int32_t re, im;
+        polar_point(far, turn, &re, &im);
+        const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, 0, view);
+        int ax, ay, bx, by;
+        if (boot_anim_project_segment_cs(prev_cs, cs, view,
+                                         &ax, &ay, &bx, &by)) {
+            gfx_line_ex(ax, ay, bx, by, c, 0u);
+        }
     }
 }
 
@@ -365,9 +403,9 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
          * happens to usually be enough. */
         for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
             const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-            draw_grid_spoke(turn, units(BOOT_ANIM_GRID_SPOKE_FAR_UNITS),
-                            spoke_c, BOOT_ANIM_GRID_SPOKE_DASH != 0,
-                            spoke_reach, view);
+            draw_grid_spoke(turn, units(BOOT_ANIM_GRID_SPOKE_NEAR_UNITS),
+                            units(BOOT_ANIM_GRID_SPOKE_FAR_UNITS), spoke_c,
+                            BOOT_ANIM_GRID_SPOKE_DASH != 0, spoke_reach, view);
         }
     }
 }
