@@ -1144,6 +1144,18 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * did, for exactly the same reason. */
 #define SAND_EXPLODE_CORE_DIVISOR  5
 
+/* How many of fire's sixteen shades a blast core sheds between its centre
+ * and its rim - see the fill loop in sand_explode() (sand.c) for why a
+ * core written at one uniform life had a colour ramp it could never
+ * show.
+ *
+ * 8, so the rim starts at half the centre's life: a clear gradient that
+ * still leaves the outer ring alight long enough to be seen and to set
+ * fire to what it touches. Raising this past MATERIAL_VARIANTS - 2 buys
+ * nothing - the floor of 1 clamps it - and would only make the fringe
+ * die sooner. 0 restores the old flat disc exactly. */
+#define SAND_EXPLODE_CORE_FADE     8
+
 /* ONE CALLER OF sand_impulse(), seeding many radially. Queue an outward-
  * facing flight entry - at SAND_EXPLODE_INITIAL_SPEED - for every occupied
  * cell in the annulus between the core and the full radius, direction
@@ -1704,7 +1716,26 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * other reaction-driven sand_explode() caller that exists today, so
  * there is no reason yet for this one to differ from it. A starting
  * point to tune on device, not a considered figure of its own. */
-#define SAND_LAVA_BURST_RADIUS   8
+/* RAISED 8 -> 16 to make the fire actually visible, reported on device as
+ * 'barely noticeable'. The fire is not tuned by this number directly: it
+ * is the CORE that burns (sand_explode() fills radius /
+ * SAND_EXPLODE_CORE_DIVISOR with fire before handing the rest to
+ * sand_displace()), and with the divisor at 5 a radius of 8 gave a core
+ * radius of ONE - about five cells of flame, which is why a detonation
+ * read as a flicker. 16 gives a core radius of 3, near thirty cells.
+ *
+ * Raising this rather than lowering SAND_EXPLODE_CORE_DIVISOR on purpose:
+ * the divisor is shared by every explosion in the app and carries its own
+ * measured tuning table, so moving it to fix one caller's fireball would
+ * silently rescale the hand-fired detonate mode and the confined-gas burst
+ * as well.
+ *
+ * The cost is a disc walk of about four times the cells, paid only when a
+ * burst actually fires - 1 in 1024 per covered cell per step
+ * (SAND_LAVA_BURST_GATE) - and the disc still fits the impulse budget
+ * without thinning, so this buys visibility without changing what the
+ * blast is allowed to do. Starting point, tune on device. */
+#define SAND_LAVA_BURST_RADIUS   16
 
 /* Overrides SAND_LAVA_BURST_CHANCE for every lava cell alike - the same
  * shape as sand_set_lava_cooloff() just above, for the same reason: a
