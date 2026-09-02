@@ -2,6 +2,6 @@
 # scene hash mat0..mat15
 dry_fall     5ea9ec3d5f09c21f 3684 348 0 64 0 0 0 0 0 0 0 0 0 0 0 0
 water_pool   81ce1f46811e8c29 3377 18 618 83 0 0 0 0 0 0 0 0 0 0 0 0
-lava_quench  aaee0fc164bd44d0 2380 26 277 136 0 1050 0 64 0 0 137 0 0 0 26 0
+lava_quench  f8ff39bffaf1418c 2397 26 265 143 0 1041 0 74 0 0 124 0 0 0 26 0
 fire_gas     a1d78afc3cf28530 494 0 0 64 0 3158 360 0 0 20 0 0 0 0 0 0
 sealed_lava  0a2c766326ff5ae6 4005 0 0 76 0 15 0 0 0 0 0 0 0 0 0 0

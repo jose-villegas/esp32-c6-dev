@@ -1680,6 +1680,26 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * its own second roll, and that is not a pattern to repeat casually. */
 #define SAND_LAVA_BURST_CHANCE   1
 
+/* A SECOND, INDEPENDENT GATE stacked on the chance above, and the only
+ * way to express a rate below it: 1 in 256 is already the rarest a single
+ * byte-wide roll can say, so getting rarer needs another roll rather than
+ * a smaller number. The same route step_one_dissolver_cell() takes for
+ * `evaporates` (sand_reactions.c), for the same reason.
+ *
+ * 4, so the effective rate is 1 in 1024 per covered cell per step - a 75%
+ * cut, asked for on device as 'at least 50%' after the first flash of the
+ * burst read as firing too often. Remember what makes a per-cell figure
+ * misleading: a sealed pool has MANY covered cells all rolling every step,
+ * so the rate a POOL bursts at is this multiplied by however many cells
+ * are covered, which is why the honest number here looks absurdly small.
+ * Raise this constant to make bursts rarer still; it is the dial to turn
+ * before touching SAND_LAVA_BURST_CHANCE, which has no room left to fall.
+ *
+ * APPLIED ONLY TO THE NATURAL RATE. sand_set_lava_burst() bypasses it
+ * entirely, so a test that pins the chance gets exactly what it asked
+ * for. */
+#define SAND_LAVA_BURST_GATE     4
+
 /* SAND_GAS_IGNITE_BLAST_RADIUS's own figure (sand_reactions.c) - the only
  * other reaction-driven sand_explode() caller that exists today, so
  * there is no reason yet for this one to differ from it. A starting

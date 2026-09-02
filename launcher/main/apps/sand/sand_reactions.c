@@ -3570,10 +3570,17 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * test_buried_lava_still_becomes_stone_with_impulses_off,
      * suite_sand.c). */
     const bool is_lava = mat->kind == KIND_LIQUID && rx->quench_to != 0;
-    const int burst_chance =
-        (s->lava_burst >= 0) ? s->lava_burst : SAND_LAVA_BURST_CHANCE;
+    /* NATURAL rate or an override, and the difference decides whether the
+     * second gate below applies at all - exactly the split
+     * step_one_dissolver_cell() already makes for `evaporates`. A test that
+     * pins this to 255 means 'fire on every covered cell', and having to
+     * know about a hidden 1-in-N on top of that would make every such test
+     * a lie. */
+    const bool burst_natural = s->lava_burst < 0;
+    const int burst_chance = burst_natural ? SAND_LAVA_BURST_CHANCE : s->lava_burst;
     if (is_lava && burst_chance != 0 &&
         (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
+        (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0) &&
         covered_at(s, x, y, w, h, mat->density, SAND_LAVA_BURST_COVER)) {
         /* rx->quench_to, not a hardcoded MAT_STONE: `is_lava` above IS
          * "a burning liquid with a quench product", so the product is
