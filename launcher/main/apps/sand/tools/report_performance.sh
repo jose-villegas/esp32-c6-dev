@@ -60,7 +60,15 @@ cleanup() {
         echo
         echo "=== FAILED (exit $status) ==="
     fi
-    read -r -p "Press Enter to close..." _
+    # Piped or backgrounded runs (background task runners, CI) have no
+    # stdin, so `read` fails with nothing to read - and under `set -e`
+    # that failure was becoming the LAST command's exit status, which bash
+    # then uses as the whole script's exit code, silently turning a clean
+    # run into a reported failure. `|| true` swallows that; the explicit
+    # `exit "$status"` below is what actually decides the exit code now,
+    # so a real failure still propagates regardless of what happens here.
+    read -r -p "Press Enter to close..." _ || true
+    exit "$status"
 }
 trap cleanup EXIT
 
