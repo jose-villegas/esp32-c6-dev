@@ -882,19 +882,20 @@ static void restore_border(gfx_color_t *buf, int stride, int w, int h,
  * PIXELS gfx_color_t, ~10 KB - one strip row's worth of leaves, the most
  * send_full_row() ever needs saved at once) - malloc'd here on enable and
  * freed on disable, rather than a permanent static, because the only path
- * that can ever turn either overlay on is the Diagnostics app
- * (app_diagnostics.c, CONFIG_LAUNCHER_SELFTEST-only - see CMakeLists.txt).
- * A plain --dev build compiles this whole block in (CONFIG_LAUNCHER_
- * DEVELOPMENT, not SELFTEST) but has no UI path to ever call either setter
- * with true - a static array here would have reserved that memory in .bss
- * for a feature that build can never switch on, right where app_sand.c's
- * grid needs its own single largest contiguous heap run (see app_sand.c's
- * own comment on that allocation for why a few KB of unrelated static
- * growth is enough to tip it - this is the same class of regression, not a
- * new one). Malloc/free around enable/disable is the same fixture/teardown
- * pattern already used for cube_perf's samples/stat_scratch (see selftest
- * OOM incident notes) - here the toggle calls themselves are the fixture
- * and the teardown. */
+ * that can ever turn either overlay on is the Diagnostics app's toggle page
+ * (app_diagnostics.c, CONFIG_LAUNCHER_DEVELOPMENT - see CMakeLists.txt),
+ * which is exactly the build this memory matters most in: a plain --dev
+ * build compiles this whole block in AND can now reach both setters from
+ * that toggle page, with no test suites competing for RAM the way a --diag
+ * build's linked-in suites do - the same build where app_sand.c's grid most
+ * needs its own single largest contiguous heap run (see app_sand.c's own
+ * comment on that allocation for why a few KB of unrelated static growth is
+ * enough to tip it). Malloc-on-enable means this pair only ever costs
+ * anything while a layer is actually switched on, instead of reserving it
+ * in .bss for the life of the process regardless of whether either toggle
+ * is ever tapped - the same fixture/teardown pattern already used for
+ * cube_perf's samples/stat_scratch (see selftest OOM incident notes), here
+ * with the toggle calls themselves as the fixture and the teardown. */
 static gfx_color_t (*overlay_saved)[BORDER_PIXELS];
 static gfx_color_t (*leaf_saved)[LEAF_BORDER_PIXELS];
 

@@ -298,7 +298,12 @@ Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered
 **A development-only visualizer** makes this concrete on real hardware
 instead of only in synthetic tests, as two fully independent layers, each
 with its own checkbox on the Diagnostics app's second page (BOOT to reach
-it), correct in all four on/off combinations:
+it), correct in all four on/off combinations. Diagnostics is gated on
+`CONFIG_LAUNCHER_DEVELOPMENT`, not the narrower `CONFIG_LAUNCHER_SELFTEST`
+(see `docs/Launcher-Architecture.md`), so a plain `--dev` build reaches
+these checkboxes too, with no test suites competing for RAM - the point of
+that split is exactly this: using them while working on `sand` without the
+suites' static footprint threatening its grid allocation:
 
 - **Panel-grid layer** (`gfx_set_debug_overlay(true)`) outlines whichever
   cells are actually being sent each frame - yellow for a gathered run, cyan
