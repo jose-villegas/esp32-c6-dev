@@ -94,8 +94,8 @@ static inline void mark_rows(sand_t *s, int y0, int y1)
  * whether the true depth is one cell more or a hundred, so there is nothing
  * further out worth invalidating. Direction-agnostic (both above and below
  * `y`) rather than reasoning about which way is "toward depth" this frame -
- * that answer lives in app_sand.c's own gravity-axis bookkeeping
- * (local_depth_axis_vertical/local_depth_reverse), and coupling the
+ * that answer lives in app_sand.c's own gravity-derived bookkeeping
+ * (local_depth_v_reverse/local_depth_h_reverse), and coupling the
  * simulation to it here would be a layering mistake for a mark that is
  * already cheap enough to just cover both directions. */
 static inline void mark_depth_band(sand_t *s, int y)

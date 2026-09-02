@@ -68,22 +68,6 @@
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
-/* AXIS_HYSTERESIS_PCT and DEPTH_DIAGONAL_DEADZONE_PCT are OWNED by
- * app_sand.c's LOCAL DEPTH mechanism (update_local_depth_axis() and
- * DEPTH_DIAGONAL_DEADZONE_PCT's own comment there) - declared here, not
- * there, purely so suite_sand.c's host tests can reference the real values
- * instead of a hand-copied duplicate that could silently drift. The same
- * reason MATERIAL_LIQUID_DEPTH_BAND lives in material.h rather than
- * staying private to material.c.
- *
- * The two are independent - AXIS_HYSTERESIS_PCT prevents its own chatter
- * regardless of the dead zone's width, they do not need to relate. */
-#define AXIS_HYSTERESIS_PCT 15
-
-/* +/-1.2 degrees, ~2.3 degrees total - see DEPTH_DIAGONAL_DEADZONE_PCT's
- * own comment in app_sand.c. */
-#define DEPTH_DIAGONAL_DEADZONE_PCT 4
-
 /* How many persistent emitters sand_t can carry at once - see
  * sand_add_emitter() below.
  *

@@ -12,64 +12,44 @@ See [`Perf-Round-Guide.md`](Perf-Round-Guide.md) to run a new round.
 
 ## The scoreboard
 
-**All thirteen of the original budgets are uniform reduction targets —
-measured × 0.9, rounded — and, by design, all fail until their own tenth is
-won.** The fourteenth row, wet earth, was pegged on 2026-09-01 from its
-first real capture: measured 100,367 µs for 30 steps → **80,000**. That row
-alone is measured × **0.8**, a deliberate 20% target set by the person
-pegging it — do not "correct" it to × 0.9 for consistency.
+**Every sand row is a uniform reduction target — measured × 0.9, rounded —
+and, by design, all fail until their own tenth is won.** One exception:
+wet earth is measured × **0.8**, a deliberate 20% target set by the person
+who pegged it — do not "correct" it to × 0.9 for consistency. The three
+present-cost rows are tight regression guards on a bus-bound path, not
+reduction targets.
 
-Its previous 300,000 ceiling was extrapolated with no hardware and proved
-3× looser than the truth (+66.5% headroom), so it never constrained
-anything. Three device rounds could not measure this row at all, because
-static test fixtures had eaten the heap the scene needed to allocate its
-grid.
+Numbers below are the 2026-09-02 capture of main at `58b1f42` (attempt 19
+merged), controls pinned at 5,907/6,002:
 
-| Test | Measured (2026-08-26 clean) | Target | To close |
+| Test | Measured | Target | To close |
 |---|---:|---:|---:|
-| Settled screen, nothing moves | 262 µs | 235 | 27 µs |
-| Full-size step, all falling | 6,451 µs | 5,800 | 651 µs |
-| Gravity flip, settled pile | 6,546 µs | 5,900 | 646 µs |
-| Mixed scene flip | 14,391 µs | 11,700 | 2,691 µs |
-| Screen of water collapsing | 18,667 µs | 14,400 | 4,267 µs |
-| Boiler, sustained boil | 32,667 µs | 28,500 | 4,167 µs |
-| Every material at once | 78,617 µs | 67,500 | 11,117 µs |
-| Thermal shock lattice | 98,738 µs | 89,000 | 9,738 µs |
-| Four liquids reacting | 124,336 µs | 112,000 | 12,336 µs |
-| Lava stress scene | 127,386 µs | 109,000 | 18,386 µs |
-| Smoke + steam screen | 141,444 µs | 127,000 | 14,444 µs |
-| Full screen of fire, steady | 297,220 µs | 266,000 | 31,220 µs |
-| Fire cascade through gas | 412,718 µs | 371,500 | 41,218 µs |
+| Settled screen, nothing moves | 264 µs | 235 | 29 µs |
+| Full-size step, all falling | 5,907 µs | 5,800 | 107 µs |
+| Gravity flip, settled pile | 6,002 µs | 5,900 | 102 µs |
+| Mixed scene flip | 15,347 µs | 11,700 | 3,647 µs |
+| Screen of water collapsing | 20,812 µs | 14,400 | 6,412 µs |
+| Vent spam | 25,436 µs | 23,000 | 2,436 µs |
+| Boiler, sustained boil | 30,422 µs | 28,500 | 1,922 µs |
+| Every material at once | 86,209 µs | 67,500 | 18,709 µs |
+| Wet earth (× 0.8 row) | 93,783 µs | 80,000 | 13,783 µs |
+| Thermal shock lattice | 98,227 µs | 89,000 | 9,227 µs |
+| Lava stress scene | 125,119 µs | 109,000 | 16,119 µs |
+| Four liquids reacting | 126,485 µs | 112,000 | 14,485 µs |
+| Smoke + steam screen | 143,568 µs | 127,000 | 16,568 µs |
+| Full screen of fire, steady | 250,069 µs | 229,500 | 20,569 µs |
+| Fire cascade through gas | 341,343 µs | 298,000 | 43,343 µs |
 
-- A watchdog that used to charge its own console dump to whatever
-  benchmark it landed inside (up to 2.6×, deterministically — attempt 15)
-  is now off in the diag image; two contaminated rows (four liquids,
-  thermal shock) were re-pegged from clean numbers.
-- **2026-08-28: five rows moved, no target did.** The sixteenth attempt's
-  inline fix took fire −10.4%, lava stress −6.5%, thermal shock −4.9%,
-  four liquids −3.6% — reproduced twice to within 4 µs. Every-material
-  flip didn't move, as predicted; its gap is the largest on the board.
-- **Pending device verification:** the seventeenth attempt's gas
-  sight-scan carry, host-measured at fire cascade −13.9% and full screen
-  of fire −7.3%, byte-identical simulation. If confirmed, both close —
-  the first since the tenth attempt.
-- **2026-09-01, attempt 18:** reaction masks took wet earth 100,367 →
-  **93,486 µs** (past a controls-derived 3.2% floor; simulation
-  byte-identical) and the `sand_step` pin put the controls at
-  **5,907/6,003 µs** — −1.8%/−1.7% from their budgets, the closest any
-  row has been. The present-cost falling-sand guard flipped to PASS on
-  the same day's layout roll; left un-repegged deliberately, since a
-  guard tightened onto a lottery ticket would fail spuriously on the
-  next roll.
 - Fixed RNG seeds reproduce these numbers to the microsecond on an
   identical build; what moves them *between* builds is flash layout — see
-  [the layout lottery](#the-layout-lottery), now six observations deep
-  that it may have only **two tickets**, not a continuum.
-- The fourteenth attempt spent host time on purpose, trading correctness
-  for cost: water at the one gravity every budget here runs at moved
-  ≈+8% (a no-op fix, pure code-shape cost); off-axis tilts, unmeasured by
-  any row here, cost +29–37%. Paid at the 2026-08-26 re-base, unmoved
-  since.
+  [the layout lottery](#the-layout-lottery). `sand_step` is pinned, so
+  the two control rows no longer draw a ticket; read every other swing
+  against them first.
+- The present-cost falling-sand guard currently passes on a favourable
+  layout roll; deliberately not re-pegged tighter — a guard pegged to a
+  lottery ticket fails spuriously on the next roll.
+- One standing coverage gap: no budgeted row runs a tilted gravity, and
+  attempt 14's off-axis cost (+29–37%) is therefore measured by nothing.
 
 ---
 
