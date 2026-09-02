@@ -15,14 +15,33 @@
 #   IDF_EXPORT_PS1  path to ESP-IDF's export.ps1. Default: this
 #                   project's usual install location.
 #
-# Restores build.release afterward, regardless of outcome - see
-# report_test_results.sh's own top comment for why.
+# Checks COM_PORT actually exists before building anything - see the
+# check right below. Restores build.release afterward, regardless of
+# outcome - see report_test_results.sh's own top comment for why.
 
 set -euo pipefail
 
 COM_PORT="${1:-COM3}"
 OUT_MD="${2:-}"
 IDF_EXPORT_PS1="${3:-C:\\Espressif\\esp-idf-v5.5\\export.ps1}"
+
+# Fail in seconds, not in twelve minutes. Without this, a vanished COM
+# port was only discovered by esptool AFTER a full cold build.diag build
+# ("Could not open COM3 ... FileNotFoundError", 2026-09-02) - the port is
+# cheap to check and the build is not. GetPortNames() only enumerates the
+# registry, so this never opens or otherwise touches the port itself.
+AVAILABLE_PORTS="$(powershell.exe -NoProfile -ExecutionPolicy Bypass -Command \
+    "[System.IO.Ports.SerialPort]::GetPortNames() -join ','" 2>&1 | tr -d '\r\n')"
+case ",$AVAILABLE_PORTS," in
+    *",$COM_PORT,"*) ;;
+    *)
+        echo "ERROR: $COM_PORT not found."
+        echo "Ports currently visible to Windows: ${AVAILABLE_PORTS:-(none)}"
+        echo "Plug in the device, or pass the right port as the first argument."
+        read -r -p "Press Enter to close..." _ || true
+        exit 1
+        ;;
+esac
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # This file lives at main/apps/sand/tools/, four levels below launcher/ -
