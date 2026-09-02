@@ -311,9 +311,22 @@ suites' static footprint threatening its grid allocation:
   than one box drawn around a whole merged run, so a border can never land
   on the fixed line shared with a neighbouring cell.
 - **Leaf layer** (`gfx_set_leaf_overlay(true)`) outlines the leaves that
-  were actually updated this frame, one green rectangle per dirty leaf, via
-  `gfx_dirty.h`'s `dirty_leaf_rects()`. Since leaf bits are only ever set by
-  a caller that hands `dirty_mark()` a real box (`mark_band()` never marks
+  were actually updated this frame, via `gfx_dirty.h`'s `dirty_leaf_rects()`
+  - one green rectangle per CONTIGUOUS RUN of dirty leaf columns in each
+  leaf-row, not one per individual leaf. That distinction matters because
+  sand's dirty runs are gap-free by construction (see "One real,
+  currently-latent beneficiary" below): every leaf inside one of its runs
+  is already dirty end to end, so outlining each leaf separately just
+  redrew the fixed leaf lattice by another route - indistinguishable on the
+  device from the always-on grid this layer was built to replace. Merging
+  within a leaf-row instead shows the actual unit `refine_run()` can act on
+  (it only refines x; the run's own `cell_y0`/`cell_y1` union already
+  covers y), and a genuine gap - the case this layer exists to catch - now
+  reads as two separated boxes rather than being lost among two dozen
+  identical ones. Leaf-rows are never merged into each other: `leaf_dirty`
+  is genuinely 2D, and two leaf-rows in the same strip row can carry
+  different dirty column patterns. Since leaf bits are only ever set by a
+  caller that hands `dirty_mark()` a real box (`mark_band()` never marks
   them - see "A second, finer level underneath the grid" below), a region
   only ever touched by `mark_band()` legitimately shows no green at all;
   that is a consequence of the design, not a gap in the overlay.
