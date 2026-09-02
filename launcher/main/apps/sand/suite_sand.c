@@ -7691,7 +7691,6 @@ enum {
  * reference to it. */
 #define WAKE_TEST_WAKE_MS 120u
 
-static uint8_t wake_test_cells[WAKE_TEST_W * WAKE_TEST_H];
 static sand_t  wake_test_grid;
 static uint8_t wake_test_blocks[
     ((WAKE_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
@@ -7706,9 +7705,10 @@ static uint8_t wake_test_blocks[
  * like the real local_depth_row_a[]/local_depth_row_b[]/local_depth_
  * top_row[] persist across paint_row_n() calls. */
 static ray_walk_state_t wake_ray_state;
-static bool    wake_prev_occupied[WAKE_TEST_W * WAKE_TEST_H];
-static int     wake_displayed_depth[WAKE_TEST_W * WAKE_TEST_H]; /* -1 = never
-                                                                    painted */
+/* wake_test_cells/wake_prev_occupied/wake_displayed_depth used to be file
+ * statics here, permanently resident .bss even though only wake_test_run()
+ * below ever touches them - malloc'd there instead, fresh per call, freed
+ * before it returns (this test's own reproduction owns the only call). */
 
 /* paint_row_n()'s own cardinal mask test, transposed onto sand_at() rather
  * than the row/above/below pointers paint_row_n() reads directly - off-grid
@@ -7759,12 +7759,33 @@ static bool wake_test_row_has_liquid(unsigned mask)
  * either way, mirror_ray_walk_row()'s full per-cell walk. */
 static double wake_test_run(int steps)
 {
+    uint8_t *wake_test_cells = malloc((size_t)WAKE_TEST_W * WAKE_TEST_H);
+    bool *wake_prev_occupied = malloc((size_t)WAKE_TEST_W * WAKE_TEST_H *
+                                       sizeof *wake_prev_occupied);
+    /* int8_t, not int: a displayed depth is -1 (never painted) or 0..
+     * MATERIAL_LIQUID_DEPTH_BAND (24), comfortably inside int8_t's range. */
+    int8_t *wake_displayed_depth = malloc((size_t)WAKE_TEST_W * WAKE_TEST_H *
+                                           sizeof *wake_displayed_depth);
+    /* All three checked together, then freed together on failure -
+     * asserting straight after each malloc in turn would longjmp out on the
+     * first failure (Unity's assert never returns) and leak every
+     * allocation that came before it, permanently, for the rest of the run. */
+    if (!wake_test_cells || !wake_prev_occupied || !wake_displayed_depth) {
+        free(wake_test_cells);
+        free(wake_prev_occupied);
+        free(wake_displayed_depth);
+        TEST_ASSERT_TRUE_MESSAGE(false,
+            "wake test buffers (grid/prev-occupied/displayed-depth) must "
+            "fit in what the framebuffer leaves");
+    }
+
     sand_init(&wake_test_grid, wake_test_cells, WAKE_TEST_W, WAKE_TEST_H,
               41u);
     sand_enable_sleeping(&wake_test_grid, wake_test_blocks);
 
     ray_walk_state_reset(&wake_ray_state);
-    memset(wake_prev_occupied, 0, sizeof wake_prev_occupied);
+    memset(wake_prev_occupied, 0,
+           (size_t)WAKE_TEST_W * WAKE_TEST_H * sizeof *wake_prev_occupied);
     for (int i = 0; i < WAKE_TEST_W * WAKE_TEST_H; i++) {
         wake_displayed_depth[i] = -1;
     }
@@ -7878,7 +7899,7 @@ static double wake_test_run(int steps)
             for (int x = 0; x < WAKE_TEST_W; x++) {
                 const cell_t here = sand_at(&wake_test_grid, x, y);
                 wake_displayed_depth[y * WAKE_TEST_W + x] = CELL_IS_EMPTY(here)
-                    ? -1 : (int)row_depth[x];
+                    ? -1 : (int8_t)row_depth[x];
             }
         }
 
@@ -7923,6 +7944,10 @@ static double wake_test_run(int steps)
             prev_mean = mean;
         }
     }
+
+    free(wake_test_cells);
+    free(wake_prev_occupied);
+    free(wake_displayed_depth);
 
     return worst_jump;
 }
@@ -8267,16 +8292,16 @@ enum {
 #define BAND_TEST_FRAMES  900
 #define BAND_TEST_SETTLE  300
 
-static uint8_t band_test_cells[BAND_TEST_W * BAND_TEST_H];
 static sand_t  band_test_grid;
 static uint8_t band_test_blocks[
     ((BAND_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((BAND_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
 
 static ray_walk_state_t band_ray_state;
-static bool    band_prev_occupied[BAND_TEST_W * BAND_TEST_H];
-static int     band_displayed_depth[BAND_TEST_W * BAND_TEST_H]; /* -1 = never
-                                                                    painted */
+/* band_test_cells/band_prev_occupied/band_displayed_depth used to be file
+ * statics here - malloc'd inside band_test_run() below instead (its own
+ * reproduction owns the only call), for the same reason as wake_test_run()
+ * above. */
 
 /* THE ONE LINE THIS WHOLE TEST EXISTS TO PIN - where the debounced climb
  * stops. Equal to MATERIAL_LIQUID_DEPTH_BAND now, not raised above it - see
@@ -8299,11 +8324,31 @@ static unsigned band_test_ceiling(void)
  * full per-cell walk. */
 static int band_test_run(void)
 {
+    uint8_t *band_test_cells = malloc((size_t)BAND_TEST_W * BAND_TEST_H);
+    bool *band_prev_occupied = malloc((size_t)BAND_TEST_W * BAND_TEST_H *
+                                       sizeof *band_prev_occupied);
+    /* int8_t, not int - see wake_test_run()'s own comment on the same
+     * narrowing; the depth values stored here have the same -1..
+     * MATERIAL_LIQUID_DEPTH_BAND (24) range. */
+    int8_t *band_displayed_depth = malloc((size_t)BAND_TEST_W * BAND_TEST_H *
+                                           sizeof *band_displayed_depth);
+    /* All three checked together, then freed together on failure - see
+     * wake_test_run()'s own comment on the same pattern, above. */
+    if (!band_test_cells || !band_prev_occupied || !band_displayed_depth) {
+        free(band_test_cells);
+        free(band_prev_occupied);
+        free(band_displayed_depth);
+        TEST_ASSERT_TRUE_MESSAGE(false,
+            "band test buffers (grid/prev-occupied/displayed-depth) must "
+            "fit in what the framebuffer leaves");
+    }
+
     sand_init(&band_test_grid, band_test_cells, BAND_TEST_W, BAND_TEST_H, 41u);
     sand_enable_sleeping(&band_test_grid, band_test_blocks);
 
     ray_walk_state_reset(&band_ray_state);
-    memset(band_prev_occupied, 0, sizeof band_prev_occupied);
+    memset(band_prev_occupied, 0,
+           (size_t)BAND_TEST_W * BAND_TEST_H * sizeof *band_prev_occupied);
     for (int i = 0; i < BAND_TEST_W * BAND_TEST_H; i++) {
         band_displayed_depth[i] = -1;
     }
@@ -8423,7 +8468,8 @@ static int band_test_run(void)
                                 vdom, vrev, hrev, ax, ay, scale_q8, ceiling,
                                 &band_ray_state, row_depth);
             for (int x = 0; x < BAND_TEST_W; x++) {
-                band_displayed_depth[cy * BAND_TEST_W + x] = (int)row_depth[x];
+                band_displayed_depth[cy * BAND_TEST_W + x] =
+                    (int8_t)row_depth[x];
             }
         }
 
@@ -8473,6 +8519,10 @@ static int band_test_run(void)
             worst = jumps;
         }
     }
+
+    free(band_test_cells);
+    free(band_prev_occupied);
+    free(band_displayed_depth);
 
     return worst;
 }
@@ -8602,23 +8652,79 @@ enum {
  * the quantisation the panel actually applies. */
 #define FLASH_TEST_SHADE_STEP (MATERIAL_LIQUID_DEPTH_BAND / 4)
 
-static uint8_t flash_test_cells[FLASH_TEST_W * FLASH_TEST_H];
-static sand_t  flash_test_grid;
-static uint8_t flash_test_blocks[
+/* flash_test_cells/flash_displayed/flash_displayed_prev used to be file
+ * statics sized FLASH_TEST_W * FLASH_TEST_H - the biggest single .bss cost
+ * in this suite (24 KiB apiece for the two `int` arrays, 78 KiB total
+ * against flash_test_cells and flash_test_cells's own dirty/liquid arrays).
+ * Now plain pointers, malloc'd by flash_test_alloc() below and freed by
+ * flash_test_free() once the caller (flash_test_run() or tremor_test_run(),
+ * both of which reach these only through flash_test_settle()) is done with
+ * them. Narrowed to int8_t, same as wake_displayed_depth/band_displayed_
+ * depth above: a displayed depth is -1 (never painted) or 0..MATERIAL_
+ * LIQUID_DEPTH_BAND (24), comfortably inside int8_t's range, and the on-
+ * device working set (three of these plus flash_test_cells) does not fit
+ * the heap left over once the framebuffer is allocated at the wider `int`
+ * width (79,872 B against ~59 KiB free) but does at 1 byte per cell
+ * (24,576 B). tremor_test_run()'s own `before[]` snapshot (also heap, same
+ * change) memcpy()s straight out of this buffer using `sizeof *before`/
+ * `sizeof *flash_displayed` throughout rather than a hardcoded width, so it
+ * automatically keeps matching this array's element size. */
+static uint8_t *flash_test_cells;
+static sand_t   flash_test_grid;
+static uint8_t  flash_test_blocks[
     ((FLASH_TEST_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
     ((FLASH_TEST_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H)];
-static uint8_t flash_test_dirty[FLASH_TEST_H];
+static uint8_t  flash_test_dirty[FLASH_TEST_H];
 static ray_walk_state_t flash_ray_state;
-static int     flash_displayed[FLASH_TEST_W * FLASH_TEST_H];  /* -1 = never
-                                                                  painted */
-static int     flash_displayed_prev[FLASH_TEST_W * FLASH_TEST_H];
-static uint8_t flash_row_has_liquid[FLASH_TEST_H];
+static int8_t  *flash_displayed;       /* -1 = never painted */
+static int8_t  *flash_displayed_prev;
+static uint8_t  flash_row_has_liquid[FLASH_TEST_H];
 /* update_local_depth_gravity()'s own three `*_prev` flags, file-static here
  * for the same reason they are file-static there: they persist past the end
  * of one run, so test_axis_lock_tremor_does_not_wipe_the_depth_debounce can
  * pick up where the turn left off instead of pretending the board was
  * suddenly back in portrait. */
 static bool flash_vdom_prev, flash_vrev_prev, flash_hrev_prev;
+
+/* Mallocs the three buffers above, fresh, every call - flash_test_free()
+ * below must be called once the caller is done reading them, or the next
+ * call here leaks the previous allocation (same convention as loc_fixture()/
+ * loc_free() earlier in this file). Split out of flash_test_settle() only so
+ * a future caller that does not want a fresh settle can still get fresh
+ * buffers the same way; today flash_test_settle() is the only caller.
+ *
+ * Returns false, having freed whatever of the three DID succeed, if any one
+ * of them didn't - asserting straight after each malloc in turn would
+ * longjmp out on the first failure (Unity's assert never returns) and leak
+ * every allocation that came before it, permanently, for the rest of the
+ * run; that is exactly what starved the unrelated test_block_indices_stay_
+ * in_range_* tests below when this function still asserted per-buffer. The
+ * caller (flash_test_settle()) turns this into the one assertion. */
+static bool flash_test_alloc(void)
+{
+    flash_test_cells = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H);
+    flash_displayed = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H *
+                              sizeof *flash_displayed);
+    flash_displayed_prev = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H *
+                                   sizeof *flash_displayed_prev);
+    if (!flash_test_cells || !flash_displayed || !flash_displayed_prev) {
+        free(flash_test_cells);
+        free(flash_displayed);
+        free(flash_displayed_prev);
+        flash_test_cells = NULL;
+        flash_displayed = NULL;
+        flash_displayed_prev = NULL;
+        return false;
+    }
+    return true;
+}
+
+static void flash_test_free(void)
+{
+    free(flash_test_cells);
+    free(flash_displayed);
+    free(flash_displayed_prev);
+}
 
 /* update_local_depth_gravity()'s own reset, mirrored - including the
  * relevance gate that keeps hand tremor at axis lock from firing it (see
@@ -8682,7 +8788,8 @@ static void flash_test_paint(int gx, int gy, bool wake_fired)
         }
     }
 
-    memcpy(flash_displayed_prev, flash_displayed, sizeof flash_displayed);
+    memcpy(flash_displayed_prev, flash_displayed,
+           (size_t)FLASH_TEST_W * FLASH_TEST_H * sizeof *flash_displayed);
 
     unsigned row_depth[RAY_WALK_STATE_W];
     for (int i = 0; i < FLASH_TEST_H; i++) {
@@ -8701,7 +8808,7 @@ static void flash_test_paint(int gx, int gy, bool wake_fired)
             if (!CELL_IS_EMPTY(c) && material_of(c)->kind == KIND_LIQUID) {
                 flash_row_has_liquid[cy] = 1;
             }
-            flash_displayed[cy * FLASH_TEST_W + x] = (int)row_depth[x];
+            flash_displayed[cy * FLASH_TEST_W + x] = (int8_t)row_depth[x];
         }
     }
 }
@@ -8728,6 +8835,10 @@ static uint32_t flash_wake_elapsed_ms;
  * that neither can differ from the other in how the scene was reached. */
 static void flash_test_settle(bool guard_chain, bool gate_reset)
 {
+    TEST_ASSERT_TRUE_MESSAGE(flash_test_alloc(),
+        "flash test buffers (flash_test_cells/flash_displayed/flash_"
+        "displayed_prev) must fit in what the framebuffer leaves");
+
     sand_init(&flash_test_grid, flash_test_cells, FLASH_TEST_W, FLASH_TEST_H,
               1234u);
     sand_enable_sleeping(&flash_test_grid, flash_test_blocks);
@@ -8818,6 +8929,8 @@ static int flash_test_run(bool guard_chain, bool gate_reset)
             worst = crossed;
         }
     }
+
+    flash_test_free();
     return worst;
 }
 
@@ -8904,8 +9017,28 @@ static void tremor_test_run(bool gate_reset, int *resets, int *changed)
      * vary between its two runs. */
     flash_test_settle(true, gate_reset);
 
-    static int before[FLASH_TEST_W * FLASH_TEST_H];
-    memcpy(before, flash_displayed, sizeof before);
+    /* Used to be a file static - malloc'd here instead, freed below once
+     * this function is done comparing against it, for the same .bss reason
+     * as flash_test_cells/flash_displayed/flash_displayed_prev above.
+     * int8_t, not int - see wake_test_run()'s own comment on the same
+     * narrowing; matches flash_displayed's own width so this memcpy's
+     * `sizeof *before` copies neither more nor less than flash_displayed
+     * actually holds. */
+    int8_t *before = malloc((size_t)FLASH_TEST_W * FLASH_TEST_H *
+                             sizeof *before);
+    if (!before) {
+        /* flash_test_settle() above already succeeded (it asserts on its
+         * own failure), so its three buffers are live here and must be
+         * freed before this function's own assert longjmps out, or they
+         * leak for the rest of the run - see flash_test_alloc()'s own
+         * comment for the same hazard one level down. */
+        flash_test_free();
+        TEST_ASSERT_TRUE_MESSAGE(false,
+            "tremor test's `before` snapshot must fit in what the "
+            "framebuffer leaves");
+    }
+    memcpy(before, flash_displayed,
+           (size_t)FLASH_TEST_W * FLASH_TEST_H * sizeof *before);
 
     bool fired = false;
     uint32_t wake_elapsed_ms = flash_wake_elapsed_ms;
@@ -8945,6 +9078,9 @@ static void tremor_test_run(bool gate_reset, int *resets, int *changed)
             }
         }
     }
+
+    flash_test_free();
+    free(before);
     *resets = fires;
     *changed = diff;
 }
@@ -9042,7 +9178,9 @@ static void test_axis_lock_tremor_does_not_wipe_the_depth_debounce(void)
  * gives every one of the six tilts below comfortable saturation headroom
  * on every side of the obstacle. */
 enum { SHADOW_TEST_W = 92, SHADOW_TEST_H = 112 };
-static uint8_t shadow_test_cells[SHADOW_TEST_W * SHADOW_TEST_H];
+/* shadow_test_cells used to be a file static here (10304 bytes, resident for
+ * the whole suite even though only the one test below ever touches it) -
+ * malloc'd there instead, freed once that test is done with the grid. */
 static sand_t  shadow_test_grid;
 
 static bool shadow_test_is_liquid(int x, int y)
@@ -9168,6 +9306,8 @@ static bool shadow_test_bearing(const unsigned depth[], int sx, int sy,
 static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
 {
     enum { PW = SHADOW_TEST_W, PH = SHADOW_TEST_H };
+    uint8_t *shadow_test_cells = malloc((size_t)PW * PH);
+    TEST_ASSERT_NOT_NULL(shadow_test_cells);
     sand_init(&shadow_test_grid, shadow_test_cells, PW, PH, 777u);
 
     for (int y = 0; y < PH; y++) {
@@ -9236,6 +9376,8 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
             worst_i = i;
         }
     }
+
+    free(shadow_test_cells);
 
     char why[400];
     snprintf(why, sizeof why,
