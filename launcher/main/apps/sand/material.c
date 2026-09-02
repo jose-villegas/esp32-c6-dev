@@ -758,44 +758,6 @@ const reaction_t reactions[MATERIAL_MAX] = {
                                    * dangerous rather than decorative.
                                    * Starting point, not final. */
 
-            /* A MODERATE FIGURE, MEASURED ON DEVICE TWICE NOW -
-             * 24 in 256 (~9.4%), per step, once a pool is COVERED FROM
-             * ABOVE - see reaction_t.vent_chance's own comment for the
-             * design and try_vent()/covered_from_above() (sand_
-             * reactions.c) for the mechanism. This briefly sat at 255
-             * (the maximum this roll can express) and, combined with the
-             * second roll below also being maxed, produced a real,
-             * observed-on-device problem: a stream of water quenching
-             * lava creates a covered cell (fresh stone, covered by
-             * nothing yet but itself sitting over more lava) that then
-             * gets thrown away the very next step, before any more crust
-             * can build on top of it - "material pops the instant water
-             * touches lava", not "a sealed slab breaks free". Pulled back
-             * to this figure, then watched live over the serial console
-             * again (REACT_DBG instrumentation, since removed) once
-             * vent_column() started peeling layers instead of clearing a
-             * whole covering in one shot (SAND_VENT_LAYER, sand.h): the
-             * same covered cell now genuinely gets re-checked and re-fires
-             * repeatedly over time, confirmed by a climbing "still covered,
-             * seen N times" counter and the same (x, y) firing again and
-             * again - the ambient, ongoing behaviour this whole feature was
-             * asked for, working. Left AT this figure; the second roll
-             * below is what moved instead (1-in-8 down to 1-in-12, this
-             * round) after a wide active pour - many covered cells at
-             * once - read as firing a bit too often in aggregate, even
-             * though any single cell's own rate did not change.
-             * SAND_VENT_REACH and SAND_VENT_CHUNK (sand.h) are unaffected
-             * - how FAR a pulse
-             * throws and how WIDE a slab it grabs are separate dials from
-             * how OFTEN one happens, and stay exactly as tuned.
-             * sand_set_vent_chance() (sand.h) still overrides this for
-             * tests that need an exact, pinned value regardless of what
-             * production is currently tuned to. A living balance number,
-             * not a protected constant - see this project's own convention
-             * of revising these on request rather than treating a shipped
-             * figure as fixed. */
-            .vent_chance = 24,
-
             /* No residue: lava never burns out (decay 0 above), so nothing
          * here would ever fire. No conducts either - lava IS the heat,
          * it does not pass someone else's along. */
@@ -2370,18 +2332,27 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
      * to a small depth right where it interrupts the water, rather than a
      * band painted straight through it.
      *
-     * The one simplification this DOES still make is the SAME single-
-     * dominant-axis approximation build_xflow() (sand.c) already accepts
-     * for the simulation's own movement - `|gy| >= |gx|` picks a straight
-     * vertical or horizontal "toward the surface" rather than bracketing a
-     * genuinely diagonal gravity with two rays. Good enough for a cosmetic
-     * cue built on the same idiom already trusted for movement. The other
-     * accepted trade-off is staleness under the dirty-row optimisation -
-     * only rows something else marked dirty ever get repainted, so a
-     * column's stored depth for a row that has not repainted in a while can
-     * lag the puddle's current shape - see col_local_depth[]'s own comment
-     * in app_sand.c for why that costs nothing extra to accept and matches
-     * the precedent already established for foam's own drift.
+     * THIS USED TO also accept the same single-dominant-axis approximation
+     * build_xflow() (sand.c) takes for the simulation's own movement -
+     * `|gy| >= |gx|` picking a straight vertical or horizontal "toward the
+     * surface" rather than bracketing a genuinely diagonal gravity properly.
+     * That discrete switch went through two more shapes after this comment
+     * was last true here - a blend of two axis-aligned walks, then a
+     * projection-then-max combiner over the same two walks, both replaced in
+     * turn by a single walk that steps ALONG the gravity ray itself, by
+     * Bresenham (see LOCAL DEPTH's own top comment in app_sand.c for why:
+     * an axis-aligned walk, however its two readings get combined, can only
+     * ever cast an axis-aligned obstacle shadow, never one that follows the
+     * actual tilt). This function still has no idea any of that history
+     * happened, which is the point: `depth` arrives as one already-computed
+     * number, exactly as ignorant of where it came from as it was of the
+     * single-axis switch before any of it. The other accepted trade-off is
+     * staleness under the dirty-row optimisation - only rows something else
+     * marked dirty ever get repainted, so a column's stored depth for a row
+     * that has not repainted in a while can lag the puddle's current shape
+     * - see local_depth_row_a[]/local_depth_row_b[]'s own comment in
+     * app_sand.c for why that costs nothing extra to accept and matches the
+     * precedent already established for foam's own drift.
      *
      * INTERIOR ONLY, DELIBERATELY NOT THE RIM. A rim cell already carries
      * two terms - its own fill level, and liquid_spec[]'s specular shift -

@@ -68,22 +68,6 @@
 #define SAND_BLOCK_W 32
 #define SAND_BLOCK_H 64
 
-/* AXIS_HYSTERESIS_PCT and DEPTH_DIAGONAL_DEADZONE_PCT are OWNED by
- * app_sand.c's LOCAL DEPTH mechanism (update_local_depth_axis() and
- * DEPTH_DIAGONAL_DEADZONE_PCT's own comment there) - declared here, not
- * there, purely so suite_sand.c's host tests can reference the real values
- * instead of a hand-copied duplicate that could silently drift. The same
- * reason MATERIAL_LIQUID_DEPTH_BAND lives in material.h rather than
- * staying private to material.c.
- *
- * The two are independent - AXIS_HYSTERESIS_PCT prevents its own chatter
- * regardless of the dead zone's width, they do not need to relate. */
-#define AXIS_HYSTERESIS_PCT 15
-
-/* +/-1.2 degrees, ~2.3 degrees total - see DEPTH_DIAGONAL_DEADZONE_PCT's
- * own comment in app_sand.c. */
-#define DEPTH_DIAGONAL_DEADZONE_PCT 4
-
 /* How many persistent emitters sand_t can carry at once - see
  * sand_add_emitter() below.
  *
@@ -157,15 +141,15 @@
  * just with what used to be unused padding now doing something. Carries
  * queue_flying_grain()'s own `ramp` parameter (see its own comment in
  * sand.c) with the entry for as long as it flies: how fast `speed`
- * decays every turn (step_impulses(), this file) used to be the single
- * shared SAND_IMPULSE_SPEED_RAMP for every caller, which is right for an
- * ordinary explosion or splash but wrong for reaction_t.vent_chance's
- * own throw (try_vent(), sand_reactions.c) wanting to travel much
- * farther than that shared, already-measured figure allows without
- * changing what every OTHER caller of this same mechanism gets for
- * free. Ignored entirely for water/acid, which keep their own separate
- * geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT) regardless of what
- * this field holds. */
+ * decays every turn (step_impulses(), this file) is PER-ENTRY rather than
+ * one shared SAND_IMPULSE_SPEED_RAMP constant, so a caller wanting a
+ * throw to travel farther (or less far) than that shared, already-
+ * measured figure can ask for it via sand_impulse_dislodge() without
+ * changing what every OTHER caller of this same mechanism gets for free -
+ * see that function's own comment for the one caller today that needs a
+ * non-default figure, and why. Ignored entirely for water/acid, which
+ * keep their own separate geometric decay (SAND_SPLASH_SPEED_DECAY_SHIFT)
+ * regardless of what this field holds. */
 typedef struct {
     uint16_t index;
     cell_t   cell;
@@ -350,6 +334,16 @@ typedef struct {
     uint16_t heat_flaw_seq;
     bool     heat_flaw_is_flawed;
 
+    /* The material-pair classification table (pair_bits[][], sand_
+     * reactions.c) that used to live here as two separate 16-bit masks
+     * (heat_mask, wet_mask) is now a single file-scope static in
+     * sand_reactions.c instead of a sand_t field - see that table's own
+     * top comment for why: at 256 bytes it is affordable exactly once,
+     * not once per sand_t, and every sand_t rebuilds it identically from
+     * the same global reactions[]/materials[] tables every pass anyway, so
+     * per-instance storage bought nothing the two masks were not already
+     * paying for out of habit. */
+
     int      last_load_dx, last_load_dy;
 
     /* The DITHERED direction of the last step, as opposed to the nearest
@@ -369,10 +363,10 @@ typedef struct {
     int      mobility;     /* see sand_set_mobility() */
     int      flammability; /* see sand_set_flammability() */
     int      conduction;   /* see sand_set_conduction() */
-    int      vent_chance;  /* see sand_set_vent_chance() */
-    int      vent_spread;  /* see sand_set_vent_spread() */
     int      boils;        /* see sand_set_boils() */
     int      condenses;    /* see sand_set_condenses() */
+    int      lava_cooloff; /* see sand_set_lava_cooloff() */
+    int      lava_burst;   /* see sand_set_lava_burst() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -601,26 +595,37 @@ bool sand_emitter_at(const sand_t *s, int i, int *x, int *y, cell_t *cell);
  * BY NAME at that one call site; it is not a hidden exception buried in
  * this shared primitive that some future caller (gunpowder, whatever
  * comes next) could trip over by accident. Calling sand_impulse() itself
- * always gets the safe default; reaction_t.vent_chance (material.h) is the
- * one caller that needs otherwise, and gets its own dedicated dislodge
- * primitive below (sand_impulse_dislodge()) rather than an exception
- * hidden in this one. */
+ * always gets the safe default; sand_impulse_dislodge() (below) is the
+ * one primitive that gets to skip it, for a caller that already knows
+ * its own target is KIND_STATIC and wants it dislodged unconditionally
+ * rather than with the density-scaled chance every other wall-dislodging
+ * caller keeps. */
 void sand_impulse(sand_t *s, int x, int y, int dir, int speed);
 
-/* reaction_t.vent_chance's (material.h) own single-cell push - the same
- * shape as sand_impulse() but for a covering cell try_vent()
- * (sand_reactions.c) already knows is KIND_STATIC and wants to dislodge
- * GUARANTEED, not merely with a chance. See queue_flying_grain()'s own
- * comment in sand.c for why a vent's push - pressure from directly beneath
- * the exact seal it is relieving, not a stray blast fragment grazing an
- * arbitrary wall - skips the density-scaled toughness roll every other
- * wall-dislodging caller keeps.
+/* A single-cell push that skips the density-scaled toughness roll every
+ * other wall-dislodging caller keeps - for a caller that already knows
+ * its target is KIND_STATIC and wants it dislodged GUARANTEED, not
+ * merely with a chance. See queue_flying_grain()'s own comment in sand.c
+ * for the roll this bypasses, and why.
+ *
+ * Originally reaction_t.vent_chance's own single-cell push (try_vent(),
+ * sand_reactions.c - removed by bd esp32c6-0f2 once the covered-lava
+ * burst, bd esp32c6-mqt, replaced venting outright). Kept as a general
+ * primitive rather than removed alongside it - a deterministic dislodge
+ * is a real, reusable capability, not something specific to the
+ * mechanism that first needed it - and now exercised directly by
+ * test_a_dislodged_wall_keeps_falling_even_if_its_first_push_roll_fails
+ * (suite_sand.c), which uses it to place a KIND_STATIC cell airborne on
+ * demand without needing a real explosion or reaction to get one there,
+ * so it can pin down step_impulses()'s own gravity-drift behaviour in
+ * isolation.
  *
  * `ramp` is the entry's own per-turn speed decay (impulse_t's own field,
- * this file) - pass SAND_VENT_IMPULSE_RAMP, not SAND_IMPULSE_SPEED_RAMP,
- * for a throw that travels noticeably farther than an ordinary explosion
- * without touching that shared, already-measured constant for every
- * other caller - see SAND_VENT_IMPULSE_RAMP's own comment for why. */
+ * this file) - pass SAND_IMPULSE_SPEED_RAMP for the same decay every
+ * other caller gets, or a different figure for a throw that should
+ * travel farther (or less far) than that shared, already-measured
+ * constant without retuning it for every other caller of this same
+ * mechanism. */
 void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
                            int ramp);
 
@@ -751,150 +756,28 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * that either. */
 #define SAND_EXPLODE_INITIAL_SPEED  255
 
-/* The DEPTH, in cells, vent_column() (sand_reactions.c) SCANS along each
- * of the three gravity-relative "up" directions (up-left, up, up-right)
- * when reaction_t.vent_chance fires (try_vent(), same file) - how far a
- * covering wall can EVER be found and eventually cleared from, not how
- * wide the trigger's own reach is (that is covered_from_above()'s job,
- * checking only the immediate neighbour in each of those three
- * directions), and, since SAND_VENT_LAYER split off below, not how much
- * gets thrown in any ONE firing either - see that constant's own comment
- * for why a single covering can now take several separate firings to
- * fully clear rather than emptying in one shot.
+/* How far a single cool_off_chain() (sand_reactions.c) walk reaches
+ * before it stops on its own, independent of how many rolls in a row it
+ * wins. The same reasoning CRACK_MAX (sand_reactions.c) gives, at a much
+ * smaller scale: this only ever has to bound ONE cold pass, not claim
+ * anything about how far a chain could really go, and a sustained pour
+ * re-triggers this every step anyway - the pour rate is what should set
+ * how fast a pool actually dies, not this cap. A generous number here
+ * would let a single lucky roll eat a whole pool in one step, which is
+ * exactly the "dry bowl paving itself" failure mode the design has to
+ * avoid.
  *
- * THREE DIALS, NOW, NOT TWO PAIRED TOGETHER - this used to be paired
- * directly with vent_chance's own rate (raise this, lower that, so a rare
- * roll that throws far reads as a held-in eruption): that pairing broke
- * down once a single firing stopped clearing the whole reachable stack at
- * once (SAND_VENT_LAYER's own comment has the account). The three are now
- * independent: vent_chance decides how OFTEN a firing happens at all,
- * SAND_VENT_LAYER decides how MUCH comes off in any one firing, and this
- * decides how DEEP a covering can be before some of it becomes
- * permanently out of reach no matter how many firings occur.
+ * PUBLIC, unlike CRACK_MAX - docs/Sand/Reaction-Table.md already names
+ * this constant as part of the described contract, and test_the_cool_
+ * off_chain_is_bounded (suite_sand.c) has to assert against its real
+ * value rather than a hand-copied literal that silently goes stale the
+ * next time this is retuned.
  *
- * RAISED FROM 10 TO 30, back when a firing still cleared everything in
- * one shot - on device, a reach of 10 against a still-frequent-feeling
- * rate read as barely a nudge; tripling the reach is what actually made
- * the moment read as violent rather than incidental. Not yet re-measured
- * on device since SAND_VENT_LAYER split the throw into stages - a
- * starting point still, not a number pinned against an observed result
- * under the new design. */
-#define SAND_VENT_REACH  30
-
-/* HOW MUCH OF A COVERING COMES OFF IN ANY ONE FIRING, in cells, along
- * each of the three columns vent_column() (sand_reactions.c) throws -
- * split off from SAND_VENT_REACH (that constant's own comment has the
- * full account) once maxing vent_chance exposed what "one firing clears
- * the WHOLE reachable stack" actually means for a static, unreplenished
- * covering: exactly one eruption, ever, then nothing, because there is
- * nothing left above the lava afterward. A covering shallower than this
- * still empties in a single firing, same as before; a covering DEEPER
- * than this only loses its outermost layer each time, leaving the rest
- * in place still sealing the pool - covered_from_above() stays true,
- * so a later firing (at whatever rate vent_chance is tuned to) peels the
- * next layer, and so on down to the lava - a thick, static, never-
- * touched-again covering erodes away over several separate eruptions
- * instead of vanishing in one, the "random over time, not only as a
- * byproduct of pouring water" behaviour asked for once the single-shot
- * design turned out to only ever look quench-triggered.
- *
- * THE OUTER LAYER GOES FIRST, NOT THE INNER ONE - vent_column() throws
- * from the farthest cell inward, same ordering "QUEUED FARTHEST-FIRST"
- * already used for a full-depth throw, just now stopping short of the
- * cells nearest the lava when the stack is deeper than this. Peeling
- * from the outside is also the physically legible direction: a lid
- * erodes from its exposed face inward, not from its hidden underside
- * outward.
- *
- * SET TO 3, matching SAND_VENT_CHUNK's own original width - big enough
- * that a single peel still reads as "a real piece breaking off," small
- * enough that anything a player would actually stack up (a hand-drawn
- * wall many cells thick) needs several visibly separate eruptions to
- * fully clear rather than one. Not yet measured on device at this
- * figure - a starting point for the next round. */
-#define SAND_VENT_LAYER  3
-
-/* The initial speed vent_column() (sand_reactions.c) hands to sand_
- * impulse_dislodge() for each cell it throws - see SAND_EXPLODE_INITIAL_
- * SPEED's own comment for why full speed, not a distance-scaled one, is
- * what actually produces a dramatic throw rather than a shorter one. */
-#define SAND_VENT_SPEED  SAND_EXPLODE_INITIAL_SPEED
-
-/* The per-entry `ramp` (impulse_t's own comment, this file) vent_column()
- * hands to sand_impulse_dislodge() for each cell it throws - how much
- * `speed` loses every turn (step_impulses(), sand.c), same idiom as
- * SAND_IMPULSE_SPEED_RAMP but a SEPARATE dial, not a change to that one:
- * SAND_IMPULSE_SPEED_RAMP is shared by every other impulse-driven effect
- * (ordinary explosions, splashes) and is already extensively measured
- * against the dune scene (see its own comment) - lowering it to make
- * vent's own throw travel farther would silently retune every one of
- * those other effects along with it. A vent's own pulse is already the
- * rare, deliberately dramatic event this whole feature pairs a low
- * vent_chance with a deep SAND_VENT_REACH to produce (see that field's
- * own comment); the material it throws reading as merely "explosion-
- * distance" undersold that pairing rather than completing it - a held-
- * in eruption should send debris noticeably farther than an ordinary
- * blast, not the same distance from a rarer trigger.
- *
- * 1, THE LOWEST VALUE THAT STILL GUARANTEES TERMINATION - `speed` must
- * reach zero eventually or a BLOCKED entry (one whose per-turn roll
- * keeps succeeding but whose target never opens) would never hit the
- * `!rolled_move` branch that ends its tracked lifetime, growing the
- * impulse buffer without bound the same way an unrolled roll would (see
- * step_impulses()'s own comment on why the roll - and therefore the
- * decay right beside it - runs every turn, blocked or not). At 1 against
- * SAND_IMPULSE_SPEED_RAMP's 2, a vent-thrown cell's flight roughly
- * doubles in expected length - a starting point, not measured on
- * device. */
-#define SAND_VENT_IMPULSE_RAMP  1
-
-/* THE SAMPLING GRID reaction_t.vent_chance's own gate (step_one_burning_
- * cell(), sand_reactions.c) checks against, rather than rolling every
- * covered lava cell independently every step - see try_vent_chunk()'s
- * own comment (sand_reactions.c) for the mechanism. Only a cell whose x
- * lands on a multiple of this checks covered_from_above() and rolls
- * vent_chance at all; every other covered lava cell only ever vents as a
- * side effect of its OWN chunk's sampled cell succeeding.
- *
- * X ONLY, NOT Y TOO - the gate used to also require y % SAND_VENT_CHUNK
- * == 0, sampling a true 2D lattice. Measured on device to be a real bug,
- * not just a rarer trigger: the only row of a lava pool that can ever BE
- * covered_from_above() is its exposed top surface, and that row's
- * absolute y is wherever the pool happened to settle - arbitrary, not
- * periodic, not something the player or the sim arranges. Once this
- * constant grew past 1-2 the odds of that one fixed y ever landing on
- * the lattice got small enough that whole pools stopped venting for
- * their entire lifetime, independent of vent_chance's own value. x alone
- * still delivers the sampling win this constant exists for for a WIDE
- * pool, without gating on a coordinate that has no reason to cooperate.
- *
- * A DELIBERATE PERFORMANCE/DRAMA TRADE, NOT A CORRECTNESS FIX - a wide
- * pool has roughly SAND_VENT_CHUNK times fewer independent covered_
- * from_above() calls and vent_chance rolls per step this way (7 in 8
- * skipped outright at 8, before even one random number is drawn), and
- * what those far-fewer rolls DO trigger throws every covered cell in the
- * whole chunk together (try_vent_chunk()) rather than one narrow single-
- * cell column - "a chunk visibly breaks off" instead of "one grain pops
- * up out of many, one at a time." Both wanted independently: fewer total
- * checks is the performance case for a large pool of covered lava
- * (previously one covered_from_above() call plus a roll per covered
- * cell, every step); a whole neighbourhood erupting together is the
- * visual case, unrelated to how rare the trigger itself is.
- *
- * RAISED FROM 3 TO 8 - a slab of covering material eight cells long
- * breaking off together reads as a far more substantial event than a
- * three-cell one, at a further performance win on top (roughly 2.7x
- * fewer covered_from_above() calls/rolls per step for a wide pool than
- * at 3, on top of the win 3 itself already banked over the original
- * per-cell design). MEASURED ON DEVICE at this figure - it is what
- * exposed the x-and-y-both bug documented above; that bug, not this
- * width itself, was the actual regression. Lower this if the chunk
- * starts feeling too big relative to a typical hand-drawn pool
- * (an 8-wide slab is a large fraction of a small pool's own crust) or if
- * it needs to trade back toward finer-grained, more frequent breakage;
- * this cannot go below 1 (every cell sampled, chunk size of one - back
- * to the original per-cell behaviour with no grouping at all). */
-#define SAND_VENT_CHUNK  8
+ * Briefly doubled to 16 and put back: reaching FURTHER per event turned
+ * out to be the wrong dial for "the pour bites harder". How OFTEN a
+ * chain gets going at all is SAND_LAVA_COOLOFF_CHANCE's job, and that
+ * is what moved instead. */
+#define SAND_LAVA_COOLOFF_MAX_CHAIN 8
 
 /* Radius and decaying trigger CHANCE for splash_displace() (sand_liquid.c)
  * - a WATER grain landing hard, either falling onto an already-occupied
@@ -1260,6 +1143,18 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * uses, so the floor engages at exactly the same small radii it always
  * did, for exactly the same reason. */
 #define SAND_EXPLODE_CORE_DIVISOR  5
+
+/* How many of fire's sixteen shades a blast core sheds between its centre
+ * and its rim - see the fill loop in sand_explode() (sand.c) for why a
+ * core written at one uniform life had a colour ramp it could never
+ * show.
+ *
+ * 8, so the rim starts at half the centre's life: a clear gradient that
+ * still leaves the outer ring alight long enough to be seen and to set
+ * fire to what it touches. Raising this past MATERIAL_VARIANTS - 2 buys
+ * nothing - the floor of 1 clamps it - and would only make the fringe
+ * die sooner. 0 restores the old flat disc exactly. */
+#define SAND_EXPLODE_CORE_FADE     8
 
 /* ONE CALLER OF sand_impulse(), seeding many radially. Queue an outward-
  * facing flight entry - at SAND_EXPLODE_INITIAL_SPEED - for every occupied
@@ -1671,55 +1566,6 @@ void sand_set_flammability(sand_t *s, int chance);
 void sand_set_conduction(sand_t *s, int chance);
 #define SAND_CONDUCTION_PER_MATERIAL (-1)
 
-/* How often a fully COVERED lava cell vents through whatever is sealing
- * it in, per step, as a chance in 256 - see material.h's reaction_t.
- * vent_chance field and try_vent()/covered_from_above() (sand_reactions.
- * c) for the mechanism. Defaults to SAND_VENT_CHANCE_PER_MATERIAL, same
- * reasoning as sand_set_flammability()'s own default: venting only ever
- * happens to an already-burning LIQUID that is ALSO covered_from_above(),
- * a scenario a scene has to be deliberately built to reach, so there is
- * no background chance to guard an unrelated test against the way there
- * is for decay ticking or a grain scattering on their own. Without an
- * override, a test that wants to watch a THICK seal stay sealed for a
- * while uses the real, deliberately rare production figure; a test that
- * wants to watch a THIN seal actually vent forces this to 255 instead of
- * looping a number of steps scaled to however rare that figure ends up
- * being tuned.
- *
- * AN OVERRIDE SKIPS THE SECOND ROLL TOO - production, in per-material mode
- * (this left at SAND_VENT_CHANCE_PER_MATERIAL), makes venting rarer still
- * with an independent second roll at the trigger site (step_one_burning_
- * cell(), sand_reactions.c), the same acid-evaporates precedent that
- * function's own comment names. Forcing this override bypasses that
- * second roll entirely, exactly as evaporates' own override does for
- * acid - a test setting this to 255 gets a single, deterministic roll,
- * not two compounded ones. */
-void sand_set_vent_chance(sand_t *s, int chance);
-#define SAND_VENT_CHANCE_PER_MATERIAL (-1)
-
-/* Forces every vent throw's angle spread (try_vent()'s and try_vent_
- * chunk()'s own comments, sand_reactions.c - the -1/0/+1 ring-step
- * jitter around gravity-relative up) to an EXACT value instead of the
- * real, randomly rolled one - -1 for a lean toward one corner, 0 for
- * dead straight up (an EXACT axis, not merely close to it), +1 for a
- * lean toward the other. Not exercised by any test today - the one
- * that tried to use it (asserting several chunk-mates land at an
- * EXACT, predicted height in lock-step, not merely the same height as
- * each other) ran into a real, separate confound with the scene it
- * built (a multi-layer pool re-quenching itself as venting exposed
- * each layer in turn) and was pulled rather than shipped half-verified
- * - see the git history around this comment's own change for the full
- * account. Left in as a small, cheap, already-integrated piece of
- * infrastructure (every real firing already routes through this same
- * resolve step, sand_reactions.c's resolve_vent_spread()) for a future
- * attempt at that test to build on, not because anything calls it yet.
- * Pass SAND_VENT_SPREAD_RANDOM (the default) to restore the real
- * per-firing roll; any value outside -1..1 is treated the same as that
- * sentinel rather than silently clamped into range, so a typo cannot
- * masquerade as a real angle. */
-void sand_set_vent_spread(sand_t *s, int spread);
-#define SAND_VENT_SPREAD_RANDOM  2
-
 /* How often conducted heat that has already reached a liquid (see
  * conduct_heat(), sand_reactions.c) actually boils it into steam that
  * same step, as a chance in 256 - see material.h's reaction_t.boils
@@ -1743,6 +1589,167 @@ void sand_set_boils(sand_t *s, int chance);
  * up being tuned. */
 void sand_set_condenses(sand_t *s, int chance);
 #define SAND_CONDENSES_PER_MATERIAL (-1)
+
+/* How much faster a heat-ramping cell's own `cools` drain runs while a
+ * QUENCHING liquid (PAIR_QUENCHES, sand_reactions.c's own top comment -
+ * water and acid, never lava or oil) is touching it - see
+ * step_one_tempered_cell()'s own comment for the neighbour test this
+ * multiplies and why it only ever applies in the ABOVE-ambient branch,
+ * which is what stops water from chilling anything past room temperature
+ * the way snow does. Not a new per-material field: `cools` already means
+ * "how fast this material sheds heat", and a wet surface is the same
+ * drain, just faster - there is no reason a stone pane's own cooling rate
+ * and its cooling rate WHILE WET would ever want to be two independently
+ * tuned numbers. One figure, because water is the only coolant anyone
+ * actually pours - acid also satisfies PAIR_QUENCHES, and gets the same
+ * speed-up as a side effect, but nobody has asked for acid to cool a wall
+ * differently from water, and inventing a second multiplier before that
+ * is a real request would be tuning a knob nobody turns. */
+#define SAND_WET_COOLING_FACTOR 8
+
+/* How often a burning LIQUID (lava, today) that has just done the WORK of
+ * actually converting a neighbour into something else - a real melt, not
+ * merely banking one more level of heat, see step_one_burning_cell()'s
+ * and cool_off_chain()'s own comments (sand_reactions.c) for the check
+ * that tells the two apart - freezes ITSELF as the cost, and the same
+ * chance a frozen cell's own cool_off_chain() reaches for at each further
+ * link into the pool beside it.
+ *
+ * Chance in 256, per EVENT, not per step - a coarser gate than an
+ * ordinary chance-in-256-per-step field. This only ever rolls on
+ * something that is already rare
+ * (a genuine material change, or a successful water quench), so a small
+ * figure here still adds up to real, visible progress under a sustained
+ * pour without needing anywhere near the once-a-step rates the heat ramp
+ * itself is tuned to. Starting point, tune on device like every other
+ * constant in this file.
+ *
+ * NO SECOND ROLL TO SKIP - nothing stacks on top of this one, so
+ * sand_set_lava_cooloff(255) gets a single, deterministic firing on
+ * every qualifying event, exactly like every other value this accepts.
+ *
+ * 12 -> 32 after watching a real pour on device. The first figure was
+ * chosen to be deliberately rare against events that are themselves
+ * common, and it undershot: a pour read as barely biting. Raised here,
+ * rather than by letting one event reach further (SAND_LAVA_COOLOFF_
+ * MAX_CHAIN, tried at 16 and put back) - MORE EVENTS, each still short,
+ * is what makes the pour rate the thing that sets how fast a pool dies,
+ * which is the whole shape this mechanic was designed around. */
+void sand_set_lava_cooloff(sand_t *s, int chance);
+#define SAND_LAVA_COOLOFF_CHANCE 32
+
+/* The sentinel sand_set_lava_cooloff(s, chance < 0) restores, and what
+ * sand_init() itself starts every sand_t at - "use SAND_LAVA_COOLOFF_
+ * CHANCE", not "use each material's own row", since (unlike
+ * flammability/conduction/boils/condenses) this has no per-material
+ * figure to fall back to; SAND_LAVA_COOLOFF_CHANCE IS the only figure.
+ * Named _DEFAULT rather than _PER_MATERIAL for exactly that reason - the
+ * other five sentinels above answer "whose rate", this one only ever
+ * answers "which constant". */
+#define SAND_LAVA_COOLOFF_DEFAULT (-1)
+
+/* How many of a lava cell's 5 GRAVITY-RELATIVE neighbours (covered_at()/
+ * cover_mask()/cover_seals(), sand_priv.h - bd esp32c6-a2j) must be a
+ * powder or solid - not a liquid, strictly denser than lava, exactly
+ * neighbor_smothers()'s own test - before the cell is eligible to burst
+ * (bd esp32c6-mqt). The five are the semi-disc of the 8-ring centred on
+ * anti-gravity, not the four screen-fixed cardinals cover_count() (the
+ * mechanism's first, wrong version) used - what is BELOW a cell supports
+ * it, it does not cover it, so the eligible set has to rotate with
+ * gravity. 3, not smothered()'s own all-4 (which is also a different
+ * question over a different, gravity-agnostic set - see smothered()'s
+ * own comment, sand_reactions.c): a pocket with one open side still
+ * counts as "covered enough", which is what lets a hand-built vessel
+ * with a single gap still be a container worth bursting out of, rather
+ * than requiring the airtight seal smothering a flame needs. Out-of-
+ * bounds never counts as cover - the board edge is not a container a
+ * player built, the same rule gas_ignite_confined() states for its own
+ * neighbour scan. cover_seals() also requires the covered cells to form
+ * a contiguous run around that semi-disc (with one narrow exception -
+ * see its own comment) - a count alone is not enough, three covered
+ * cells scattered with gaps between them is not a lid. */
+#define SAND_LAVA_BURST_COVER    3
+
+/* Chance in 256 a sufficiently-covered lava cell converts to MAT_STONE
+ * and bursts, PER COVERED CELL, PER STEP - not per pool, not per event.
+ * This is the exact multiplier mistake the vent mechanism this feature
+ * replaced (reaction_t.vent_chance, removed by bd esp32c6-0f2) made
+ * TWICE: a figure that reads as "extremely low" in isolation is anything
+ * but, once a large sealed pool has dozens of covered cells each
+ * independently rolling this every single step they stay covered.
+ * vent_chance's own combined rate briefly hit 255 with a maxed-out
+ * second roll on top of it, and a covered cell got thrown away the very
+ * next step, before any more crust could build on top of it - "material
+ * pops the instant water touches lava", not "a sealed slab breaks free".
+ * 1 is deliberately the rarest a single byte-wide roll (rng_next(&s->rng)
+ * & 0xFF, this file's usual shape) can express - start at the floor, not
+ * at whatever "feels right" in isolation, and tune upward on device with
+ * the aggregate in mind, not the single-cell figure. If device play says
+ * this is still too frequent even at 1, the documented next move is a
+ * SECOND, independent gate in step_one_dissolver_cell()'s own
+ * 1-in-60-on-`.evaporates` style (this file), not a new field alongside
+ * this one - vent_chance already tried "add a knob" once, in the form of
+ * its own second roll, and that is not a pattern to repeat casually. */
+#define SAND_LAVA_BURST_CHANCE   1
+
+/* A SECOND, INDEPENDENT GATE stacked on the chance above, and the only
+ * way to express a rate below it: 1 in 256 is already the rarest a single
+ * byte-wide roll can say, so getting rarer needs another roll rather than
+ * a smaller number. The same route step_one_dissolver_cell() takes for
+ * `evaporates` (sand_reactions.c), for the same reason.
+ *
+ * 4, so the effective rate is 1 in 1024 per covered cell per step - a 75%
+ * cut, asked for on device as 'at least 50%' after the first flash of the
+ * burst read as firing too often. Remember what makes a per-cell figure
+ * misleading: a sealed pool has MANY covered cells all rolling every step,
+ * so the rate a POOL bursts at is this multiplied by however many cells
+ * are covered, which is why the honest number here looks absurdly small.
+ * Raise this constant to make bursts rarer still; it is the dial to turn
+ * before touching SAND_LAVA_BURST_CHANCE, which has no room left to fall.
+ *
+ * APPLIED ONLY TO THE NATURAL RATE. sand_set_lava_burst() bypasses it
+ * entirely, so a test that pins the chance gets exactly what it asked
+ * for. */
+#define SAND_LAVA_BURST_GATE     4
+
+/* SAND_GAS_IGNITE_BLAST_RADIUS's own figure (sand_reactions.c) - the only
+ * other reaction-driven sand_explode() caller that exists today, so
+ * there is no reason yet for this one to differ from it. A starting
+ * point to tune on device, not a considered figure of its own. */
+/* RAISED 8 -> 16 to make the fire actually visible, reported on device as
+ * 'barely noticeable'. The fire is not tuned by this number directly: it
+ * is the CORE that burns (sand_explode() fills radius /
+ * SAND_EXPLODE_CORE_DIVISOR with fire before handing the rest to
+ * sand_displace()), and with the divisor at 5 a radius of 8 gave a core
+ * radius of ONE - about five cells of flame, which is why a detonation
+ * read as a flicker. 16 gives a core radius of 3, near thirty cells.
+ *
+ * Raising this rather than lowering SAND_EXPLODE_CORE_DIVISOR on purpose:
+ * the divisor is shared by every explosion in the app and carries its own
+ * measured tuning table, so moving it to fix one caller's fireball would
+ * silently rescale the hand-fired detonate mode and the confined-gas burst
+ * as well.
+ *
+ * The cost is a disc walk of about four times the cells, paid only when a
+ * burst actually fires - 1 in 1024 per covered cell per step
+ * (SAND_LAVA_BURST_GATE) - and the disc still fits the impulse budget
+ * without thinning, so this buys visibility without changing what the
+ * blast is allowed to do. Starting point, tune on device. */
+#define SAND_LAVA_BURST_RADIUS   16
+
+/* Overrides SAND_LAVA_BURST_CHANCE for every lava cell alike - the same
+ * shape as sand_set_lava_cooloff() just above, for the same reason: a
+ * test that wants a burst to fire (or never fire) deterministically
+ * cannot wait out a 1-in-256 roll and stay fast. Clamped to [0, 255]
+ * exactly like every other chance-in-256 setter in this file. */
+void sand_set_lava_burst(sand_t *s, int chance);
+
+/* The sentinel sand_set_lava_burst(s, chance < 0) restores, and what
+ * sand_init() itself starts every sand_t at - "use
+ * SAND_LAVA_BURST_CHANCE", named _DEFAULT rather than _PER_MATERIAL for
+ * the same reason SAND_LAVA_COOLOFF_DEFAULT is: this has no per-material
+ * table figure to fall back to, only the one constant. */
+#define SAND_LAVA_BURST_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,

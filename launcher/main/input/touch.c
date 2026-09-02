@@ -4,6 +4,7 @@
 #include "bsp/esp-bsp.h"
 #include "driver/gpio.h"
 #include "esp_lcd_touch.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
@@ -72,8 +73,21 @@ void touch_start(void)
     }
 
     /* Above the render loop's priority so a long blit cannot delay sampling,
-     * which is the entire point of running it separately. */
-    xTaskCreate(touch_task, "touch", 3072, NULL, 6, NULL);
+     * which is the entire point of running it separately.
+     *
+     * The result is CHECKED, because this call can genuinely fail and used
+     * to fail silently: a 3 KB stack is a small ask, but touch_start() runs
+     * after everything else at boot, and on the autorun diagnostics image
+     * that means after the whole test suite has allocated and freed the
+     * heap into a state with no 3 KB run left in it. The symptom was a
+     * board that booted, drew, and then ignored every tap - with nothing on
+     * the console to say why, because a failed xTaskCreate() here simply
+     * returned and left the panel handle looking perfectly healthy. */
+    if (xTaskCreate(touch_task, "touch", 3072, NULL, 6, NULL) != pdPASS) {
+        ESP_LOGE(TAG, "Could not start the touch task (largest free block "
+                      "is %u bytes); input will not work",
+                 (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_8BIT));
+    }
 }
 
 void touch_read(input_t *out)

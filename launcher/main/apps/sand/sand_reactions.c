@@ -202,6 +202,67 @@ static const int reaction_dirs[4][2] = {
     {1, 0},
 };
 
+/* PAIR_BITS - one byte per (mine, theirs) material-id ordered pair,
+ * classifying a neighbour probe before it ever loads reaction_of() or
+ * draws from the RNG. Replaces s->heat_mask/s->wet_mask (both folded in
+ * here) and adds three more of the same shape: sand_step_reactions()'s own
+ * top comment explains why an O(16x16) rebuild every PASS, never cached
+ * across steps, cannot go stale against a sand_set_* table override or a
+ * cell created mid-pass - everything said there applies here unchanged,
+ * this is that same mechanism widened to five probes instead of two.
+ *
+ * HONESTY NOTE, because it shapes what this table actually is: every bit
+ * below except PAIR_DENSER depends only on `theirs` - the neighbour being
+ * probed - never on `mine`. That is not an oversight; it is what this
+ * file's chemistry mostly IS (see this file's own top comment and
+ * docs/Sand/Reaction-Table.md): a probe's outcome today is almost always a
+ * fact about the neighbour's own reaction row, independent of what is
+ * doing the probing, which is exactly why the two 1-D masks this table
+ * absorbs already worked. Storing five theirs-only bits in a 16x16 shape
+ * costs nothing beyond the four-theirs-only-bits' own broadcast loop below
+ * (still O(16), same as heat_mask/wet_mask always cost) and buys one
+ * consistent lookup shape for every consumer in this file, including the
+ * one bit (PAIR_DENSER) that is genuinely pairwise. See pair_theirs_bits()
+ * just below for how a caller with no real `mine` (try_heat_transform has
+ * none - see its own call sites) reads the theirs-only bits without
+ * inventing one. */
+#define PAIR_HEAT_RESPONSIVE (1u << 0) /* theirs could pass try_heat_transform()'s first two gates - was heat_mask */
+#define PAIR_WETS            (1u << 1) /* theirs is a liquid whose reaction row wets - was wet_mask */
+#define PAIR_IGNITABLE       (1u << 2) /* theirs has a nonzero flammability - try_ignite()'s own first reject */
+#define PAIR_QUENCHES        (1u << 3) /* theirs is a liquid that is neither fuel nor a heat source - neighbor_quenches() */
+#define PAIR_DISSOLVABLE     (1u << 4) /* theirs has a nonzero dissolvable - step_one_dissolver_cell()'s own reject */
+/* PAIR_DENSER (theirs is non-liquid and strictly denser than mine -
+ * neighbor_smothers()'s own rule) is NOT packed into this table. It was
+ * measured against the table's own reason for existing rather than
+ * assumed: every other bit here exists to skip a reaction_of() load (a
+ * separate cache line off the reaction table) or an RNG draw, and this
+ * chip has no data cache at all (docs/Sand/Tuning-At-a-Glance.md, "There
+ * is no data cache") - SRAM is direct-access at every load whether the
+ * access is materials[]/reaction_of() or this table. neighbor_smothers()
+ * never touches reaction_of() or the RNG; it is one materials[] load and
+ * one compare already sitting in registers, so routing it through a
+ * second SRAM table adds a load without removing one. Threading `mine`
+ * through neighbor_smothers()/smothered() instead of the density byte
+ * they take today would still be a small, real simplification - left
+ * undone here, unmeasured, rather than folded in on the strength of the
+ * table's own naming. */
+static uint8_t pair_bits[MATERIAL_MAX][MATERIAL_MAX];
+
+/* Reads a theirs-only bit for a caller with no `mine` of its own -
+ * try_heat_transform() is reached from step_one_cold_cell() and
+ * conduct_heat() as well as the shared burning-cell walk, and none of the
+ * three have (or need) a prober material id, exactly as s->heat_mask
+ * never took one. Row MAT_EMPTY (0) carries every theirs-only bit just
+ * like every other row does - see the rebuild in sand_step_reactions() -
+ * so this is not a special case, just a fixed, documented row to read
+ * them from. Never test PAIR_DENSER through this: that bit is not stored
+ * (see the comment above) and every row would read it as "denser than
+ * empty space", which is not the question any caller here is asking. */
+static inline uint8_t
+pair_theirs_bits(uint8_t theirs) {
+    return pair_bits[MAT_EMPTY][theirs];
+}
+
 /* Write `mat` into the cell at (x, y) - at is its precomputed index, so
  * every caller that already looked the cell up once does not have to
  * multiply out y*w+x a second time - with every piece of bookkeeping a
@@ -292,41 +353,42 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
         return false;
     }
     const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-    if (CELL_IS_EMPTY(n) || material_of(n)->kind != KIND_LIQUID) {
-        return false;
-    }
-    const reaction_t* r = reaction_of(n);
-    return r->flammability == 0 && r->burns == 0;
-}
-
-/* Whether (nx, ny) is in bounds and holds something strictly denser than
- * `density` (the burning cell's own), and is not a liquid - liquid
- * already has its own, more generous single-touch extinguish rule,
- * checked separately and first, so it should not also count here.
- * Strictly denser mirrors can_enter()'s own displacement rule: a
- * neighbour at the burning cell's own density or below (more fire, or
- * plain gas) never counts, or a large, dense pocket of fire/gas would
- * smother itself from the inside out - only genuinely being buried
- * under something heavier (sand, stone) should. */
-static inline bool
-neighbor_smothers(const sand_t* s, int nx, int ny, int w, int h, uint8_t density) {
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-        return false;
-    }
-    const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
     if (CELL_IS_EMPTY(n)) {
         return false;
     }
-    const material_t* nm = material_of(n);
-    return nm->kind != KIND_LIQUID && nm->density > density;
+    /* PAIR_QUENCHES (this file's own top comment) packs exactly the three
+     * checks this used to make one at a time - liquid, not fuel, not a
+     * heat source - so a non-quenching neighbour never reaches reaction_of
+     * (n) at all now, the same win try_heat_transform()'s heat_mask
+     * already banked. */
+    return (pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0;
 }
+
+/* neighbor_smothers() moved to sand_priv.h (bd esp32c6-a2j) - cover_mask()
+ * there needs the identical predicate, and the brief for that change was
+ * explicit that this file should not end up with two functions meaning
+ * the same thing. See its own comment there; nothing about what it does
+ * changed, only where it lives. */
 
 /* Whether every one of the 4 cardinal neighbours smothers this cell -
  * true burial, not a single denser touch. An ALL-of-4 predicate, unlike
  * neighbor_quenches()'s/try_ignite()'s own per-neighbour ANY/EACH loops
  * above and below - a gap on even one side means real air still reaches
  * it, so it returns false the moment any direction fails rather than
- * accumulating across all four. */
+ * accumulating across all four.
+ *
+ * DELIBERATELY NOT cover_mask()/cover_seals() (sand_priv.h) - this used
+ * to be built on cover_count() (bd esp32c6-mqt) and briefly shared
+ * plumbing with the lava-burst gate below; bd esp32c6-a2j split them back
+ * apart on purpose. Burial is a genuinely different question from
+ * gravity-relative coverage: a burning SOLID (fire, ember) is starved of
+ * air by being surrounded on every side, screen-fixed cardinals and all -
+ * "what is below it" smothers a flame exactly as much as what is above
+ * it does, so this has no business rotating with gravity or exempting a
+ * cardinal-triple crust the way the burst gate does. Keeping one
+ * predicate answering two different questions is exactly the mistake
+ * cover_count() made the first time; this stays its own, plain,
+ * gravity-agnostic all-4 test. */
 static inline bool
 smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
     for (int d = 0; d < 4; d++) {
@@ -335,308 +397,6 @@ smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
         }
     }
     return true;
-}
-
-/* Whether ANY of the three neighbours "above" this cell - gravity-
- * relative, not screen-up, exactly like try_vent()'s own "up" (see its
- * comment for why that must be s->last_load_dx/dy rather than a fixed
- * direction) - is strictly denser and non-liquid. The three checked are
- * the ring8 direction directly opposite gravity plus the one either side
- * of it: for ordinary downward gravity that is up-left, up, up-right.
- *
- * ANY, NOT ALL THREE - each of the three feeds its own independent
- * vent_column() (try_vent()'s own comment), so each direction clears on
- * its own schedule: one corner's covering cell can vent away long before
- * the other corner's, or the straight-up one's, does. Gating on ALL
- * THREE would break the moment the FIRST of them clears - covered_from_
- * above() would go false right there, and vent_chance would never roll
- * again, permanently freezing whichever column had not yet had its own
- * lucky pickup roll (see queue_flying_grain()'s own comment in sand.c),
- * even though it is still just as covered as it always was. ANY keeps
- * firing for as long as there is still SOMETHING left to push through
- * from some angle; vent_column()'s own depth scan already turns "nothing
- * covering this direction any more" into a no-op, so an already-cleared
- * column costs nothing extra when the other two are still being worked
- * on.
- *
- * Deliberately NOT smothered()'s all-4-cardinal rule. That rule means
- * true burial and exists for extinguishing a burning SOLID (fire,
- * ember), which is usually a thin or scattered thing, not a wide
- * contiguous body - being surrounded on every side is a reasonable bar
- * for "no air reaches this" there. Lava is not: a pool of it wider than
- * one cell has more lava to its sides and below, and lava is KIND_LIQUID,
- * so neighbor_smothers() never counts another lava cell as smothering
- * this one - smothered() can therefore never be true for any cell in a
- * pool more than one cell wide, no matter how completely a crust seals
- * its surface. That is precisely the case reaction_t.vent_chance exists
- * to unstick (see its own comment, material.h), so it needs its own,
- * narrower question: not "is this cell buried on every side" but "is
- * there a lid directly over it" - what is beside or below a lava cell
- * does not trap its heat, only what is sitting on top of it does. */
-static inline bool
-covered_from_above(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
-    const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
-    for (int off = -1; off <= 1; off++) {
-        const int* d = ring_dir(up + off);
-        if (neighbor_smothers(s, x + d[0], y + d[1], w, h, density)) {
-            return true;
-        }
-    }
-    return false;
-}
-
-/* ONE OF THE THREE COLUMNS try_vent() throws - see its own comment for
- * why there are three. `scan_dir` is which ring8 direction this
- * particular column SCANS along (one of "up-left", "up", "up-right",
- * gravity-relative) to decide how deep it reaches and which cells
- * qualify; `up` is the true gravity-relative up direction shared by all
- * three calls, and is what the THROW angles toward - see the split
- * between the two, below, for why they are no longer the same thing.
- *
- * Stops scanning at the first EMPTY cell in that direction (nothing left
- * to push, and nothing further out needs venting either), the first
- * LIQUID cell, or the edge of the grid, whichever comes first - "push
- * however many are there, cap at SAND_VENT_REACH" was the exact shape
- * asked for, not "always push exactly SAND_VENT_REACH cells regardless
- * of what is really there."
- *
- * A LIQUID STOPS THE SCAN THE SAME AS EMPTY DOES, AND IS NEVER ITSELF
- * QUEUED - the same principle neighbor_smothers() already applies one
- * neighbour out (a liquid neighbour never counts as sealing a cell in,
- * see that function's own comment): a liquid sitting further along this
- * column is not part of the SOLID lid covered_from_above() found, it is
- * just another body that happens to be contiguous with it, and this
- * function has no business throwing it. Concretely this matters most for
- * another pocket of LAVA sitting along the same line (overflow resting
- * on a crust, or a second nearby pocket lining up with this one) -
- * before this check, vent_column() could not tell that apart from an
- * ordinary covering wall and would throw it exactly the same way,
- * guaranteed dislodge and all, which is how lava that was never part of
- * THIS pocket's seal ended up flung and relocated by a vent it had
- * nothing to do with. reaction_t.vent_chance's own "the cell itself
- * never changes" guarantee (material.h) only ever covered the
- * ORIGINATING lava cell try_vent() was called for; this closes the same
- * hole for every OTHER liquid cell a column might otherwise reach.
- *
- * QUEUED FARTHEST-FIRST, same idea as the cascade relay splash_displace()
- * uses for water (step_impulses(), sand.c): can_impulse_enter() refuses a
- * KIND_STATIC destination unconditionally, so a cell can only actually
- * move if the cell one step beyond it is already open. Queuing nearest-
- * first would leave every cell but the farthest one blocked on its own
- * first attempt, each waiting on step_impulses()'s per-step retry to
- * eventually notice its neighbour cleared - correct eventually, but only
- * after as many extra step_impulses() passes as there are cells in the
- * stack. Queuing farthest-first instead means the outermost cell, the one
- * cell here actually facing open air, is FIRST in s->impulse_buf and so
- * moves FIRST within this very same step_impulses() pass; the next cell
- * in is then queued right behind it and finds that farther cell's old
- * position already vacated, and so on down to the cell sitting directly
- * on the lava - the whole reachable stack shifts in one pass instead of
- * one cell surfacing per step.
- *
- * sand_impulse_dislodge(), NOT plain sand_impulse() - whatever is dense
- * enough to cover lava in the first place (the condition that gets a
- * cell here at all) is, in practice, exactly the KIND_STATIC wall
- * sand_impulse() refuses to move by default. A vent that could only ever
- * push loose powder through a stone lid would never do anything a player
- * could see: stone is the one material actually capable of covering lava
- * from above. SAND_VENT_IMPULSE_RAMP, not SAND_IMPULSE_SPEED_RAMP - see
- * its own comment (sand.h) for why a vent's own throw wants to travel
- * noticeably farther than an ordinary explosion's, without retuning that
- * shared, already-measured constant for every other caller.
- *
- * THE THROW ANGLES TOWARD `up`, NOT ALONG `scan_dir` - every one of the
- * three columns, not only the straight one, jitters its throw around
- * the true gravity-relative up direction (an acid_bubble()-style spread
- * of -1, 0 or +1 ring steps). Material found up-left or up-right of the
- * lava used to keep flying further up-left or up-right, along its own
- * diagonal; now it gets thrown mostly straight up instead, the same as
- * the centre column. SAFE FOR THE SAME REASON THE CENTRE COLUMN'S OWN
- * JITTER EXISTS: a cell up-left or up-right of the lava already has
- * genuine horizontal offset from it (that is what SCANNING along that
- * diagonal means), so step_impulses()'s own gravity-drift pulling a
- * near-vertical throw back down lands it roughly back over where it
- * started flying from - still clear of the lava - not back on top of
- * it the way a purely vertical throw from directly above the lava
- * would be without any jitter at all.
- *
- * `spread` IS THE CALLER'S TO PICK, NOT ROLLED IN HERE - see try_vent()'s
- * own comment for why the straight "up" column's spread has to be
- * shared across every covered cell a chunk-wide throw touches (try_vent_
- * chunk(), below), while the two corner columns keep rolling their own,
- * independently, per cell. Both shapes are legitimate for a column that
- * only ever throws for ONE cell; the difference only matters once
- * try_vent_chunk() calls this for several cells at once, which is
- * exactly why the decision moved up to whichever caller already knows
- * how many cells it is calling this for, rather than staying a decision
- * this function makes for itself every time.
- *
- * ONLY THE OUTER SAND_VENT_LAYER CELLS THROW, NOT THE WHOLE DEPTH FOUND -
- * see that constant's own comment (sand.h) for the account of why a
- * single firing stopped emptying the entire reachable stack. `depth` is
- * still the SCAN result (how far covering material genuinely reaches,
- * capped at SAND_VENT_REACH); `throw_from` narrows that down to at most
- * SAND_VENT_LAYER cells, farthest-first, same as before. A stack shallower
- * than SAND_VENT_LAYER still empties completely, unchanged from the
- * original single-shot behaviour; a deeper one keeps its innermost cells
- * in place, still covering the lava, so covered_from_above() stays true
- * and a later firing works on what is left. */
-static void vent_column(sand_t *s, int x, int y, int w, int h, int scan_dir,
-                        int up, int spread)
-{
-    const int *ud = ring_dir(scan_dir);
-
-    int depth = 0;
-    for (int i = 1; i <= SAND_VENT_REACH; i++) {
-        const int vx = x + ud[0] * i;
-        const int vy = y + ud[1] * i;
-        if ((unsigned)vx >= (unsigned)w || (unsigned)vy >= (unsigned)h) {
-            break;
-        }
-        const cell_t vc = s->cells[(size_t)vy * (size_t)w + (size_t)vx];
-        if (CELL_IS_EMPTY(vc) || material_of(vc)->kind == KIND_LIQUID) {
-            break;
-        }
-        depth = i;
-    }
-
-    const int throw_dir = (up + spread + 8) & 7;
-    const int throw_from = depth > SAND_VENT_LAYER ? depth - SAND_VENT_LAYER + 1 : 1;
-
-    for (int i = depth; i >= throw_from; i--) {
-        sand_impulse_dislodge(s, x + ud[0] * i, y + ud[1] * i, throw_dir,
-                              SAND_VENT_SPEED, SAND_VENT_IMPULSE_RAMP);
-    }
-}
-
-/* A fresh -1/0/+1 ring-step roll, unless sand_set_vent_spread() has
- * pinned this sand_t to an exact one - see that function's own comment
- * (sand.h) for the one kind of test this exists for. Every site that
- * would otherwise roll its own spread inline (try_vent()'s two corner
- * columns, try_vent_chunk()'s shared ceiling roll, and the single-cell
- * override path in step_one_burning_cell()) goes through this instead,
- * so a pinned spread reaches all of them uniformly rather than needing
- * each site to remember to check it separately. */
-static inline int resolve_vent_spread(sand_t *s)
-{
-    if (s->vent_spread != SAND_VENT_SPREAD_RANDOM) {
-        return s->vent_spread;
-    }
-    return (int)(rng_next(&s->rng) % 3) - 1;
-}
-
-/* TRAPPED HEAT VENTS UPWARD - see reaction_t.vent_chance's own comment
- * (material.h) for the design this implements. Called only once (x, y) is
- * already known to be covered_from_above() and to have rolled its
- * vent_chance successfully - this function's own job is purely "which
- * cells get thrown, and in which direction."
- *
- * THREE COLUMNS, NOT ONE, FOR WHERE THEY SCAN - the same three gravity-
- * relative directions covered_from_above() checks to decide a lid exists
- * at all (up-left, up, up-right) each get their own independent vent_
- * column(), so material sitting up-left of the lava, directly above it,
- * or up-right of it are each found and measured along their own line,
- * rather than every covering cell converging on one narrow column
- * regardless of where it actually sits. Where they THROW is a separate
- * question - see vent_column()'s own comment on why every column now
- * angles its throw toward `up` rather than continuing along its own
- * scan direction. "Above" IS GRAVITY-RELATIVE throughout, not screen-up:
- * a vent has to punch through whatever is actually sitting over the pool
- * from the BOARD's own point of view, which on a tilted device is not
- * necessarily +y. Reuses the exact ring math anchored() and the wet-
- * earth percolation code already use for the same reason (s->
- * last_load_dx/dy is the current settled gravity direction as a unit
- * vector; ring_of() turns that into the matching ring8 index, and the
- * ring directly OPPOSITE it - four steps around an 8-direction ring -
- * is "up").
- *
- * `ceiling_spread` IS THE STRAIGHT-UP COLUMN'S SPREAD, SUPPLIED RATHER
- * THAN ROLLED HERE - see try_vent_chunk()'s own comment for why: several
- * covered lava cells venting in the SAME chunk-wide event each get their
- * own call to this function, and their CEILING material - directly
- * above each of them - reads as one connected slab breaking off only if
- * every one of those calls throws it the same way. Rolling a fresh
- * spread per cell here, the way the two corner columns still do, would
- * have each cell's own ceiling piece veer its own slightly different
- * way even though they fire in the same instant - visually a scatter of
- * independent grains that happen to pop at once, not the one cohesive
- * ceiling breaking free that it actually is. The two corner columns
- * (up-left, up-right) are NOT shared - they scan material that is
- * already offset to a DIFFERENT side of each cell they came from, and a
- * real lid does not lean the same way at both of its own edges, so
- * keeping their own independent per-cell roll is what still reads as a
- * lid breaking messily at its corners while its middle lifts as one
- * piece. */
-static void try_vent(sand_t *s, int x, int y, int w, int h,
-                     int ceiling_spread)
-{
-    const int up = ring_of(s->last_load_dx, s->last_load_dy) + 4;
-
-    vent_column(s, x, y, w, h, up - 1, up, resolve_vent_spread(s));
-    vent_column(s, x, y, w, h, up,     up, ceiling_spread);
-    vent_column(s, x, y, w, h, up + 1, up, resolve_vent_spread(s));
-}
-
-/* THE CHUNK reaction_t.vent_chance's own gate (step_one_burning_cell(),
- * below) samples instead of checking every covered lava cell
- * independently every step - see SAND_VENT_CHUNK's own comment (sand.h)
- * for why. (x, y) is the SAMPLED cell that already passed the gate's own
- * covered_from_above()/vent_chance rolls, not necessarily this chunk's
- * own corner; `mat_id`/`density` are its material and density, reused
- * for every other cell checked here on the assumption that a chunk this
- * small is one uniform pool, not a patchwork of different lava-like
- * materials.
- *
- * EVERY QUALIFYING CELL IN THE CHUNK VENTS TOGETHER, UNCONDITIONALLY -
- * no separate roll for the cells beside the one that triggered. That is
- * the entire point of sampling coarser in the first place: trading
- * "every covered cell rolls its own dice, independently, every step"
- * (the previous behaviour) for "a whole neighbourhood erupts together,
- * rarely" - re-rolling per cell here would just reintroduce the same
- * fine-grained, spotty triggering the sampling exists to replace, while
- * still paying for the function calls sampling was meant to save.
- *
- * MATCHED ON MATERIAL, NOT MERELY "IS THIS COVERED" - a cell elsewhere
- * in the chunk that happens to be covered but is NOT the same material
- * (the covering wall itself, say, or an unrelated neighbour) is not a
- * pool this vent is relieving and must not be asked to vent through
- * itself. Lava is the only material that sets vent_chance today, so in
- * practice this only ever matches more lava - but matching by material
- * rather than hardcoding MAT_LAVA costs nothing and keeps this correct
- * the day a second venting material exists.
- *
- * ONE SHARED CEILING SPREAD FOR THE WHOLE CHUNK, rolled ONCE here rather
- * than once per cell - see try_vent()'s own comment for why. Every
- * covered cell this loop reaches is handed the SAME value for its own
- * straight-up column, so the material directly above each of them - the
- * ceiling of the pocket this chunk is relieving - all launches on the
- * same angle in the same instant and reads as one connected slab lifting
- * off, "even though technically" each cell's own column is still its
- * own independent queue of impulse entries underneath. The two corner
- * columns are untouched by this - try_vent() still rolls those
- * independently per cell it is called for, which is what keeps a lid's
- * own corners breaking messily while its middle lifts as one piece. */
-static void try_vent_chunk(sand_t *s, int x, int y, int w, int h,
-                           uint8_t mat_id, uint8_t density)
-{
-    const int cx0 = (x / SAND_VENT_CHUNK) * SAND_VENT_CHUNK;
-    const int cy0 = (y / SAND_VENT_CHUNK) * SAND_VENT_CHUNK;
-    const int cx1 = cx0 + SAND_VENT_CHUNK;
-    const int cy1 = cy0 + SAND_VENT_CHUNK;
-    const int ceiling_spread = resolve_vent_spread(s);
-
-    for (int cy = cy0; cy < cy1 && cy < h; cy++) {
-        for (int cx = cx0; cx < cx1 && cx < w; cx++) {
-            const cell_t cell = s->cells[(size_t)cy * (size_t)w + (size_t)cx];
-            if (CELL_MATERIAL(cell) != mat_id) {
-                continue;
-            }
-            if (!covered_from_above(s, cx, cy, w, h, density)) {
-                continue;
-            }
-            try_vent(s, cx, cy, w, h, ceiling_spread);
-        }
-    }
 }
 
 /* Whether any of the four cardinal neighbours is open to the air - the
@@ -687,6 +447,12 @@ static void crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from,
  * earlier of its two callers. */
 static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec);
 
+/* Defined just below try_heat_transform() itself - the wrapper needs to
+ * call forward into the core it hands off to (stage 2 of bd esp32c6-iu5's
+ * pair-matrix restructure - see try_heat_transform()'s own comment). */
+static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h,
+                                                                           size_t at, cell_t n);
+
 /* How many consecutive successful dry smelts share one flaw/no-flaw
  * decision - see reaction_t.flaw_to's own comment (material.h) for what
  * this exists to fix, and try_heat_transform()'s SMELT FLAW comment below
@@ -732,11 +498,25 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
 /* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
  * bounds and the roll succeeds - heat WITHOUT burning.
  *
- * Sand into glass is the only use today. Kept apart from try_ignite()
+ * Sand into glass is the only use today. Kept apart from try_ignite_given()
  * rather than folded into it because the two are different events that
  * happen to share a trigger: one is combustion and consumes fuel, the
  * other is a phase change and consumes nothing. A material can sensibly
  * have both, neither, or one.
+ *
+ * SPLIT IN TWO for stage 2 of bd esp32c6-iu5's pair-matrix restructure -
+ * this self-contained wrapper (bounds check, cell load, PAIR_HEAT_
+ * RESPONSIVE gate) for the three call sites that have no neighbour of
+ * their own already loaded (step_one_cold_cell()'s two, conduct_heat()'s
+ * one - all completely unchanged by this split, same signature, same
+ * bytes at the source level), and try_heat_transform_given() below for the
+ * fourth: the shared ignite+heat walk in step_one_burning_cell(), which
+ * loads the neighbour and its pair_bits[][] byte once for BOTH probes and
+ * has no reason to pay this wrapper's redundant second load and second
+ * gate test. Every call this wrapper makes to the core below happens
+ * after this wrapper has done its own three prologue steps, so nothing
+ * about what a neighbour must pass to reach the core changed - only who
+ * does the checking, and how many times.
  *
  * Returns whether it changed anything. */
 static inline __attribute__((always_inline)) bool
@@ -749,6 +529,38 @@ try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
     if (CELL_IS_EMPTY(n)) {
         return false;
     }
+    /* PAIR_HEAT_RESPONSIVE (this file's own top comment, formerly
+     * s->heat_mask): a neighbour whose bit is clear could never pass either
+     * of the two gates below even in principle, so this rejects it before
+     * ever loading reaction_of(n) - a whole cache line off the reaction
+     * table's own row - or touching the RNG. Bit-identical to falling
+     * through to "if (r->heat_ramp != 0) {...} if (r->heats_to == 0 ||
+     * r->heat_chance == 0) return false;" below and taking the same false,
+     * for every material in the table today; see sand_step_reactions()'s
+     * comment for why the table can never go stale or misjudge an extended
+     * material. */
+    if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_HEAT_RESPONSIVE) == 0) {
+        return false;
+    }
+    return try_heat_transform_given(s, nx, ny, w, h, at, n);
+}
+
+/* The core try_heat_transform() above hands off to once its own three
+ * prologue checks pass - GIVEN a neighbour already known non-empty and
+ * already known PAIR_HEAT_RESPONSIVE, not re-deriving either. FORCED
+ * INLINE for the same reason the wrapper above always was (see git blame
+ * on this comment's previous home): this now has two real call sites -
+ * the wrapper's own body, and the shared walk in step_one_burning_cell()
+ * - but always_inline is unconditional regardless of call-site count, the
+ * same bet the wrapper's four call sites were already making before this
+ * split existed. The wrapper's own four call sites are untouched by this
+ * split (same source, same signature), so whatever they cost before they
+ * cost now; the shared walk's direct call is the new one, and the one the
+ * device object gate below has to confirm actually shrank
+ * step_one_burning_cell() the way the bd issue expected rather than just
+ * moving bytes around. */
+static inline __attribute__((always_inline)) bool
+try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     const reaction_t* r = reaction_of(n);
 
     /* A material that BANKS heat climbs one level instead of transforming,
@@ -976,6 +788,78 @@ crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id
     }
 }
 
+/* Walks a chain of lava-cooling events outward from (x, y), where the
+ * burning liquid that stood there has already become `product` (this
+ * chain's own caller placed it, immediately before calling this). Each
+ * link rolls `chance`; on success it picks ONE cardinal neighbour still
+ * holding the SAME burning liquid, freezes it to `product` too, and
+ * repeats from there. A failed roll, no eligible neighbour, or
+ * SAND_LAVA_COOLOFF_MAX_CHAIN links stop it - see that constant's own
+ * comment (sand.h) for why it lives there rather than here.
+ *
+ * "Still the same burning liquid" is answered by comparing the
+ * neighbour's OWN quench_to against `product`, rather than by carrying a
+ * `from` material id through every link - reaction_of(n)->quench_to ==
+ * product is true for exactly the same cells CELL_MATERIAL(n) == (the
+ * original lava's id) would have picked out, since only a burning LIQUID
+ * whose own quench product is `product` can be the thing this chain
+ * started from (see the KIND_LIQUID gate at both call sites, which is
+ * what keeps fire - quench_to MAT_STEAM, KIND_GAS - from ever reaching
+ * here at all). Lava is the only material satisfying that today, but the
+ * test itself makes no assumption of being the only one - it would keep
+ * meaning the right thing if a second burning liquid arrived with its own
+ * distinct quench_to.
+ *
+ * ITERATIVE, NOT RECURSIVE. A chain through a real pool can legitimately
+ * want to run several cells deep, and recursion would grow the call stack
+ * by one frame per link - on a chip with 368 KB of usable RAM and no
+ * MMU-backed guard page (docs/Notes/README.md), a chain long enough to
+ * matter is also long enough to be dangerous. This only ever has one
+ * live cursor (the current end of the chain), unlike crack_run()'s
+ * frontier array above, which explores several directions in parallel -
+ * so a plain loop is enough; there is nothing here for a stack to help
+ * with. */
+static void
+cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chance) {
+    int cx = x, cy = y;
+    for (int link = 0; link < SAND_LAVA_COOLOFF_MAX_CHAIN; link++) {
+        if (chance == 0 || (int)(rng_next(&s->rng) & 0xFF) >= chance) {
+            return;
+        }
+        /* Count-then-index, the same shape step_one_soaking_cell() above
+         * uses to pick among its own three gravity-ward candidates:
+         * collect the eligible neighbours first, so the pick is uniform
+         * among however many of the (up to four) cardinal directions
+         * actually qualify, rather than biased toward whichever direction
+         * happens to be tried first. */
+        int cand_x[4], cand_y[4], n_cand = 0;
+        for (int d = 0; d < 4; d++) {
+            const int nx = cx + reaction_dirs[d][0];
+            const int ny = cy + reaction_dirs[d][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (CELL_IS_EMPTY(n)) {
+                continue;
+            }
+            if (material_of(n)->kind != KIND_LIQUID || reaction_of(n)->quench_to != product) {
+                continue;
+            }
+            cand_x[n_cand] = nx;
+            cand_y[n_cand] = ny;
+            n_cand++;
+        }
+        if (n_cand == 0) {
+            return;
+        }
+        const int pick = rng_below(&s->rng, n_cand);
+        cx = cand_x[pick];
+        cy = cand_y[pick];
+        place_reacted(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx, product);
+    }
+}
+
 /* One cell that soaks up liquid, or holds what it soaked.
  *
  * Two halves that belong together because they are the same quantity going
@@ -1014,8 +898,16 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
             const cell_t n = s->cells[nat];
             /* A liquid that WETS things, which is water and nothing
              * else. Taking a unit of any KIND_LIQUID is the obvious rule
-             * and it soaked oil, acid and lava into the ground alike. */
-            if (CELL_IS_EMPTY(n) || materials[CELL_MATERIAL(n)].kind != KIND_LIQUID || reaction_of(n)->wets == 0) {
+             * and it soaked oil, acid and lava into the ground alike.
+             *
+             * PAIR_WETS (this file's own top comment, formerly s->wet_mask)
+             * folds the old three-part test - empty, not KIND_LIQUID, wets
+             * == 0 - into one shift-and-test: bit 0 (empty) is never set,
+             * since materials[MAT_EMPTY].kind is KIND_NONE, so this single
+             * test covers CELL_IS_EMPTY() for free and never has to load
+             * materials[] or reaction_of(n) - two separate cache lines -
+             * for a neighbour that was never going to wet anything. */
+            if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_WETS) == 0) {
                 continue;
             }
             beside_liquid = true;
@@ -2620,31 +2512,55 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
      * so a smooth gradient across a wall survives instead of collapsing to
      * a single flat temperature - which would erase the hot-inside,
      * cold-outside difference the whole mechanic runs on. */
-    if (r->conducts != 0) {
-        for (int d = 0; d < 4; d++) {
-            const int nx = x + reaction_dirs[d][0];
-            const int ny = y + reaction_dirs[d][1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-            const cell_t n = s->cells[nat];
-            if (CELL_IS_EMPTY(n) || reaction_of(n)->heat_ramp == 0) {
-                continue;
-            }
-            const uint8_t nt = CELL_VARIANT(n);
-            const int gap = (int)temp - (int)nt;
-            if (gap > -2 && gap < 2) {
-                continue;
-            }
-            if ((int)(rng_next(&s->rng) & 0xFF) >= (r->conducts >> SPREAD_SHIFT)) {
-                continue;
-            }
-            s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
-            s->may_have_temperature = true;
-            mark_rows(s, ny, ny);
-            wake_block_and_neighbors(s, nx, ny);
+    /* THE WET TEST RIDES THIS SAME WALK. Hoisted out from under `if
+     * (r->conducts != 0)`, which now guards only the spread body below -
+     * every heat_ramp material also sets conducts today, so this changes
+     * no behaviour and draws no different RNG, it only stops the wet
+     * probe silently depending on a coupling that happened to be true
+     * rather than one that is actually guaranteed.
+     *
+     * Not on water's own row, on purpose: water is the most numerous
+     * material on almost any board and would pay a four-neighbour scan
+     * per cell per step for a feature that only ever matters while
+     * something nearby is hot. Hot cells are scarce, and this pass
+     * already scans them - "push the question to where it is already
+     * cheap" (see this file's own performance notes elsewhere). */
+    bool wet = false;
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
         }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        /* PAIR_QUENCHES (this file's own top comment) already means
+         * exactly "a liquid that is neither fuel nor a heat source" -
+         * water and acid, never lava or oil - which is precisely the set
+         * that should be able to cool something down rather than add to
+         * it. Reusing it costs no new table and no reaction_of(n) load
+         * just to answer this. Draws no random number of its own. */
+        if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0) {
+            wet = true;
+        }
+        if (r->conducts == 0 || reaction_of(n)->heat_ramp == 0) {
+            continue;
+        }
+        const uint8_t nt = CELL_VARIANT(n);
+        const int gap = (int)temp - (int)nt;
+        if (gap > -2 && gap < 2) {
+            continue;
+        }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= (r->conducts >> SPREAD_SHIFT)) {
+            continue;
+        }
+        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
+        s->may_have_temperature = true;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
     }
 
     /* COOLING GETS HARDER TO OUTRUN THE HOTTER IT IS. The drain scales with
@@ -2664,10 +2580,28 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
      * Scaled, the same ramp does both: near ambient the drain is small and
      * a single source climbs quickly, while near the top it grows until
      * only several adjacent sources can push through it. One flame makes
-     * glass shatterable; a lava bath melts it. */
+     * glass shatterable; a lava bath melts it.
+     *
+     * WET MAKES THE ABOVE-AMBIENT HALF STEEPER, ONLY. A quenching liquid
+     * sitting on a hot cell (see `wet`, above) multiplies this same drain
+     * by SAND_WET_COOLING_FACTOR (sand.h) - pouring water on hot stone or
+     * hot glass is what lets its banked heat actually come back down in a
+     * reasonable number of steps instead of the many dozens plain ambient
+     * cooling alone would take.
+     *
+     * GATED TO temp > SAND_AMBIENT_HEAT ON PURPOSE - the branch below this
+     * one, which warms a frosted cell back UP, is untouched by `wet`. That
+     * is what floors water at ambient rather than letting it act like
+     * snow: nothing here can ever push a cell below room temperature, so
+     * water can never reach SAND_SHOCK_COLD and thermally shock glass the
+     * way an actual chill (snow) can. Going below ambient stays snow/ice's
+     * job alone. */
     unsigned drain = r->cools;
     if (temp > SAND_AMBIENT_HEAT) {
         drain *= (unsigned)(temp - SAND_AMBIENT_HEAT);
+        if (wet) {
+            drain *= SAND_WET_COOLING_FACTOR;
+        }
         if (drain > 255u) {
             drain = 255u;
         }
@@ -2731,22 +2665,27 @@ gas_ignite_confined(const sand_t* s, int x, int y, int w, int h) {
     return false;
 }
 
-/* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
- * flammable material, and the roll for it succeeds. Returns whether it
- * did - the caller needs this to know whether this burning cell reacted
- * at all. Wake/dirty bookkeeping targets (nx, ny), the cell that
- * actually changed - not whatever burning cell called this, which did
- * not. */
+/* Ignites (nx, ny) in place if it holds a flammable material and the roll
+ * for it succeeds. Returns whether it did - the caller needs this to know
+ * whether this burning cell reacted at all. Wake/dirty bookkeeping targets
+ * (nx, ny), the cell that actually changed - not whatever burning cell
+ * called this, which did not.
+ *
+ * STAGE 2 OF bd esp32c6-iu5's pair-matrix restructure: GIVEN a neighbour
+ * already loaded and classified, not loading or classifying it itself.
+ * This used to be self-contained (bounds check, cell load, PAIR_IGNITABLE
+ * gate, all inline here) - it had exactly ONE call site, the shared
+ * ignite+heat walk in step_one_burning_cell(), and that walk is the only
+ * caller of try_heat_transform_given() (below) too. Cascading both from
+ * one bounds-check + one cell load + one pair_bits[][] byte, done once by
+ * the walk instead of twice (once per probe), is the whole point of this
+ * stage - see step_one_burning_cell()'s own comment on the walk for the
+ * exact shape. Safe to do here without touching call-site count anywhere:
+ * this function had one call site before and has the same one now, so
+ * -finline-functions-called-once still applies unconditionally regardless
+ * of this function's size, the same guarantee it always had. */
 static inline bool
-try_ignite(sand_t* s, int nx, int ny, int w, int h) {
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-        return false;
-    }
-    const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
-    const cell_t n = s->cells[at];
-    if (CELL_IS_EMPTY(n)) {
-        return false;
-    }
+try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     const reaction_t* r = reaction_of(n);
     if (r->flammability == 0) {
         return false;
@@ -2874,12 +2813,10 @@ emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec) {
  * material to pour.
  * SUPPORTED, gravity-relative (s->last_step_dx/dy - the same per-step
  * dithered direction the movement sweep just used, so "is there
- * anything to fall onto" matches what the sweep itself would ask), is
- * the same bar covered_from_above()'s own neighbours use elsewhere in
- * this file: this is not a new predicate invented for lava, it is the
- * SAME "does this have something under it" question, and off-grid reads
- * as STONE (sand_at()'s own convention) so falling off the bottom edge
- * still counts as supported rather than perpetually airborne. A settled
+ * anything to fall onto" matches what the sweep itself would ask), and
+ * off-grid reads as STONE (sand_at()'s own convention) so falling off
+ * the bottom edge still counts as supported rather than perpetually
+ * airborne. A settled
  * pool's cells all have something beneath them (the floor, or more of
  * the same pool) and flare exactly as before; a falling grain does not,
  * and now skips the roll entirely rather than spending it on a cell that
@@ -3268,6 +3205,15 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
         if (CELL_IS_EMPTY(n)) {
             continue;
         }
+        /* PAIR_DISSOLVABLE (this file's own top comment): rejects a
+         * neighbour whose dissolvable figure is 0 in every ordinary
+         * material's own row before reaction_of(n) loads it - acid's own
+         * bite is already gated behind the r->dissolves roll above, so
+         * this only ever runs for a genuine acid cell, but the reject is
+         * free either way. */
+        if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_DISSOLVABLE) == 0) {
+            continue;
+        }
         const uint8_t give = reaction_of(n)->dissolvable;
         if (give == 0 || (int)(rng_next(&s->rng) & 0xFF) >= give) {
             continue;
@@ -3482,6 +3428,29 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                     }
                     if (leaves_residue) {
                         place_reacted(s, x, y, at, product);
+                        /* TRIGGER B of cool_off_chain() (above): a cell of
+                         * burning LIQUID that just got quenched takes one
+                         * neighbouring cell of the same liquid with it, a
+                         * chance at a time. This is what makes a SUSTAINED
+                         * pour reach past the single surface cell water
+                         * can physically touch - every drop that freezes
+                         * the crust rolls again to freeze one cell deeper,
+                         * so the pool converts progressively for as long
+                         * as the pour keeps landing and simply stops the
+                         * moment it does not.
+                         *
+                         * Gated on KIND_LIQUID, not merely quench_to != 0
+                         * (already true to have reached this branch): fire
+                         * also has a quench_to (MAT_STEAM) but is
+                         * KIND_GAS, and a candle quenched by a splash of
+                         * water has no "pool" to chain into - only lava
+                         * quenches AS a liquid today. */
+                        if (mat->kind == KIND_LIQUID) {
+                            const int lava_cooloff = (s->lava_cooloff >= 0)
+                                                          ? s->lava_cooloff
+                                                          : SAND_LAVA_COOLOFF_CHANCE;
+                            cool_off_chain(s, x, y, w, h, product, lava_cooloff);
+                        }
                     } else {
                         row[x] = CELL_EMPTY;
                         mark_rows(s, y, y);
@@ -3515,10 +3484,16 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * the mirror of this reason. This is the same rule applied to the cell
      * doing the burning.
      *
-     * reaction_t.vent_chance, below, needs a DIFFERENT question for a
-     * burning LIQUID - not "is this buried on all 4 sides" but "is there
-     * a lid over it" - so it does not share this same smothered() call;
-     * see covered_from_above()'s own comment for why. */
+     * The burst gate below (covered_at(), sand_priv.h - bd esp32c6-mqt/
+     * esp32c6-a2j) needs a DIFFERENT question for a burning LIQUID than
+     * this smothered() call answers, and does not share it: smothered()
+     * can never be true for any cell in a lava pool wider than one cell,
+     * because a lava neighbour is KIND_LIQUID and neighbor_smothers()
+     * never counts one - the pool's own sides and floor are always more
+     * of the same liquid, never covering, no matter how completely a
+     * crust seals its surface. covered_at()'s gravity-relative semi-disc
+     * (cover_mask()/cover_seals(), sand_priv.h) is what actually answers
+     * "is there a lid over it" for a wide pool. */
     if (mat->kind != KIND_LIQUID && smothered(s, x, y, w, h, mat->density)) {
         /* Burying a burning log smothers the BURN, not the log. Same
          * reasoning as quenching one. */
@@ -3530,111 +3505,198 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
 
     bool acted = false;
 
-    /* TRAPPED HEAT VENTS UPWARD - see reaction_t.vent_chance's own comment
-     * (material.h). s->vent_chance mirrors s->flammability's/s->conduction's
-     * own override (see sand_set_vent_chance()): negative (the default)
-     * means "each material's own table figure", anything else overrides
-     * every material alike - what lets a test force this to 255 instead
-     * of looping a step count scaled to whatever the real, deliberately
-     * rare production figure happens to be tuned to.
+    /* A SUFFICIENTLY COVERED LAVA CELL CAN BURST - bd esp32c6-mqt, the
+     * chosen replacement for the vent machinery that used to sit right
+     * here (covered_from_above()/try_vent()/try_vent_chunk(), reaction_t.
+     * vent_chance - removed by bd esp32c6-0f2, once this replacement had
+     * shipped and proved out). Where venting used to throw the lid away,
+     * this converts the lava itself:
+     * the cell becomes MAT_STONE via place_reacted(), then sand_explode()
+     * fires at that same spot. sand_explode() FIRST fills a core of
+     * radius `radius / SAND_EXPLODE_CORE_DIVISOR` with fire (sand.h) - at
+     * SAND_LAVA_BURST_RADIUS(8) and divisor 5 that core radius is 1, so
+     * the stone cell just placed at the centre is immediately overwritten
+     * by fresh fire. That is expected, pinned behaviour, not a bug to
+     * chase - see test_buried_lava_bursts_into_stone_and_fire
+     * (suite_sand.c), which asserts the centre's real final material
+     * rather than assuming it.
      *
-     * Gated on the resolved chance FIRST, before covered_from_above() even
-     * runs and certainly before any random number is drawn - the same
-     * "check whether this could ever matter before rolling" discipline
-     * step_one_soaking_cell() and try_ignite() both document for the
-     * identical reason: on a board with no lava (or any other material
-     * that ever sets this field), this costs one predicted-false
-     * comparison per burning cell and shifts the RNG stream not at all.
-     * Independent of everything else this function does - the cell itself
-     * is untouched, so ignition, conduction and flaring below all still
-     * run exactly as if this had not fired. */
-    /* A SECOND, INDEPENDENT ROLL ON TOP OF vent_chance, applied only to
-     * the material's own natural per-material figure - the same
-     * evaporates precedent step_one_dissolver_cell() documents above.
-     * Briefly went all the way to `% 1` (unconditionally true) alongside
-     * vent_chance's own table figure (material.c) hitting its max, in
-     * pursuit of "venting as often as possible" - measured on device to
-     * fire before a crust could ever accumulate: a stream of water
-     * quenching lava creates a covered cell that gets thrown away the
-     * very next step, so it read as "material pops the instant water
-     * touches lava" rather than "a sealed slab breaks free". Pulled back
-     * to `% 8` alongside SAND_VENT_LAYER splitting a firing's throw into
-     * stages (sand.h), then watched live over the serial console again:
-     * confirmed the SAME covered cell now genuinely re-checks and re-
-     * fires repeatedly over time rather than only once - the mechanism
-     * this whole feature exists for, actually working. That same session
-     * also showed a wide active pour - many covered cells at once - firing
-     * a bit too often in aggregate, even though no single cell's own rate
-     * had changed; moved to `% 12` (~8.3%) to bring the aggregate down a
-     * notch without re-touching vent_chance's own figure. Combined this is
-     * roughly 9x the original design's rate (1-in-60 on a rarest-possible
-     * table figure, ~1-in-15,360) while still leaving several steps'
-     * worth of expected wait for a crust to actually exist before it
-     * vents. Not yet re-measured on device at this exact figure. Does not
-     * touch sand_set_vent_chance()'s override path - forcing this to a
-     * specific value for a test still gets a single, deterministic roll,
-     * exactly as sand_set_evaporates() does for acid.
+     * A WHOLE-CELL EVENT, NOT A PER-NEIGHBOUR PROBE - sits out here rather
+     * than inside the STAGE 2 cascade walk below, the same reason the
+     * vent block that used to precede it sat out here too: this asks one
+     * question about the cell itself, not one question per neighbour
+     * direction.
      *
-     * SAMPLED AT SAND_VENT_CHUNK GRANULARITY, ONLY IN PER-MATERIAL MODE -
-     * see that constant's own comment (sand.h) for the mechanism and why.
-     * Only a cell whose x lands on a multiple of SAND_VENT_CHUNK ever
-     * reaches covered_from_above() or draws a random number at all here
-     * IN PRODUCTION; every other covered lava cell only vents as a side
-     * effect of its own chunk's sampled cell succeeding (try_vent_chunk(),
-     * below). SKIPPED when overridden, same reasoning as the second roll
-     * just above: a test forcing this to 255 wants every covered cell it
-     * placed eligible to trigger on its own, not only the ones that
-     * happen to land on the sampling lattice.
+     * GATED ON THE SAME SHAPE cool_off_chain()'s own trigger (below) uses
+     * - burning KIND_LIQUID with a non-zero quench_to (lava's own
+     * MAT_STONE, material.c) - so only lava ever reaches this, resolved
+     * ONCE, here, before any neighbour work: a board with no lava (or any
+     * other burning liquid) costs one predicted-false compare and draws
+     * no random number at all.
      *
-     * X ONLY, NOT Y TOO - a measured fix, not the original design: this
-     * used to also require y % SAND_VENT_CHUNK == 0, but the only row of
-     * a lava pool that can ever BE covered_from_above() is its exposed
-     * top surface, and that row's absolute y is wherever the pool settled
-     * - not chosen by the player, not periodic, just whatever it is. Once
-     * SAND_VENT_CHUNK grew past 1-2 the odds of that one arbitrary y ever
-     * landing on the lattice got small enough (1 in SAND_VENT_CHUNK) that
-     * entire pools stopped venting for their whole lifetime, independent
-     * of vent_chance - a real on-device regression, not a rate this was
-     * meant to control. x alone still gives the same sampling win for a
-     * WIDE pool (the case the comment above and SAND_VENT_CHUNK's own in
-     * sand.h actually argue for), without ever gating on a coordinate the
-     * simulation has no way to arrange to be periodic.
+     * THE ROLL COMES BEFORE covered_at(), not after: at
+     * SAND_LAVA_BURST_CHANCE's odds (sand.h, deliberately the rarest a
+     * single byte-wide roll can express) the roll is the cheap rejection,
+     * the 5-neighbour cover_mask() walk is not - so the overwhelmingly
+     * common case, a covered cell that simply loses this step's roll,
+     * never pays for the walk.
      *
-     * try_vent_chunk() ITSELF IS NOT SKIPPED UNDER OVERRIDE, THOUGH -
-     * unlike the rate and the lattice sampling, GROUPING is not part of
-     * "how rare is this", it is part of "what happens once it fires",
-     * and a test forcing the rate has no more reason to want that
-     * changed than it has reason to want covered_from_above() itself
-     * swapped for something simpler. This costs nothing for the many
-     * existing single-cell scenes: try_vent_chunk() called on a lava
-     * cell with no OTHER covered lava sharing its chunk finds only
-     * itself and behaves exactly like the plain try_vent() this
-     * replaced. It only starts to matter - correctly - for a scene
-     * placing more than one covered cell inside the same chunk, where
-     * whichever one rolls first now brings its chunk-mates along
-     * immediately rather than leaving them to roll independently. */
-    const bool vent_per_material = s->vent_chance < 0;
-    const int vent_chance = vent_per_material ? rx->vent_chance : s->vent_chance;
-    if (vent_chance != 0 &&
-        (!vent_per_material || (x % SAND_VENT_CHUNK) == 0) &&
-        covered_from_above(s, x, y, w, h, mat->density) &&
-        (int)(rng_next(&s->rng) & 0xFF) < vent_chance &&
-        (!vent_per_material || (rng_next(&s->rng) % 12) == 0)) {
-        try_vent_chunk(s, x, y, w, h, mat_id, mat->density);
-        acted = true;
+     * covered_at() (sand_priv.h), NOT smothered()'s own all-4 == test -
+     * bd esp32c6-a2j, replacing cover_count() (bd esp32c6-mqt), which was
+     * wrong twice over: it counted four SCREEN-fixed cardinals instead of
+     * gravity-relative ones, and being built on neighbor_smothers()
+     * (which never counts a liquid neighbour) meant an interior cell of a
+     * pool wider than one cell could have at most one neighbour that
+     * ever counted - the crust directly above it - so a wide pool could
+     * never reach the threshold no matter how completely a crust sealed
+     * it. covered_at()'s gravity-relative semi-disc fixes that: the two
+     * diagonal crust cells beside "straight up" count too, so a crust
+     * alone gets an interior pool cell to 3 - see
+     * test_a_wide_pool_under_a_crust_bursts (suite_sand.c), the case that
+     * could not fire before this change. SAND_LAVA_BURST_COVER, not
+     * smothered()'s own all-5-would-be equivalent - a pocket with one
+     * open side (of the five gravity-relative ones) still qualifies
+     * (SAND_LAVA_BURST_COVER's own comment, sand.h).
+     *
+     * NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
+     * gas_ignite_confined() caller above, which skips straight to a plain
+     * ignition when impulses are off so gas still catches fire either
+     * way. There is no equivalent fallback needed here: with impulses
+     * off, sand_explode() is a documented no-op (its own first line,
+     * sand.c) and this cell simply becomes stone with nothing thrown -
+     * exactly right, since no impulses means no explosions anywhere else
+     * in the simulation either, and a bare conversion to stone is not a
+     * wrong answer on its own (see
+     * test_buried_lava_still_becomes_stone_with_impulses_off,
+     * suite_sand.c). */
+    const bool is_lava = mat->kind == KIND_LIQUID && rx->quench_to != 0;
+    /* NATURAL rate or an override, and the difference decides whether the
+     * second gate below applies at all - exactly the split
+     * step_one_dissolver_cell() already makes for `evaporates`. A test that
+     * pins this to 255 means 'fire on every covered cell', and having to
+     * know about a hidden 1-in-N on top of that would make every such test
+     * a lie. */
+    const bool burst_natural = s->lava_burst < 0;
+    const int burst_chance = burst_natural ? SAND_LAVA_BURST_CHANCE : s->lava_burst;
+    if (is_lava && burst_chance != 0 &&
+        (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
+        (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0) &&
+        covered_at(s, x, y, w, h, mat->density, SAND_LAVA_BURST_COVER)) {
+        /* rx->quench_to, not a hardcoded MAT_STONE: `is_lava` above IS
+         * "a burning liquid with a quench product", so the product is
+         * already named right there, and a second burning liquid with
+         * a different one would keep working. The same reasoning
+         * cool_off_chain() gives for not carrying a material id. */
+        place_reacted(s, x, y, at, rx->quench_to);
+        sand_explode(s, x, y, SAND_LAVA_BURST_RADIUS);
+        return true;
     }
 
+    /* STAGE 2 OF bd esp32c6-iu5's pair-matrix restructure: THE CASCADE.
+     * Bounds-check, load and classify each neighbour exactly ONCE per
+     * iteration - one cell load, one pair_bits[mat_id][theirs] byte load -
+     * and feed both probes from that one classification, instead of each
+     * of try_ignite()/try_heat_transform() separately re-deriving the same
+     * three facts about the same cell (their own former bodies, still
+     * intact in try_heat_transform()'s wrapper for its other three callers
+     * - see that function's own comment). try_ignite_given()/
+     * try_heat_transform_given() (both above) are exactly the OLD try_
+     * ignite()/try_heat_transform() bodies with that shared prologue cut
+     * away - nothing past this point differs from before, so the RNG draw
+     * sequence is unchanged cell by cell, direction by direction: ignite
+     * is still tried before heat transform, for every direction, in the
+     * same reaction_dirs[] order as always. See sand_step_reactions()'s
+     * own comment for why this is safe to gate on the pair byte alone:
+     * PAIR_IGNITABLE/PAIR_HEAT_RESPONSIVE mean exactly what try_ignite_
+     * given()'s/try_heat_transform_given()'s own first real checks would
+     * have decided anyway - the fingerprint gate this stage is committed
+     * under proves it, not just this comment.
+     *
+     * Explicitly still NOT merged with the quench walk above or the
+     * conduct_heat() walk below - see this file's own top comment on why
+     * those stay separate passes over the same four neighbours: merging
+     * them would reorder RNG draws between the three walks, which the bd
+     * issue calls out as reordering-territory, not this stage's job.
+     *
+     * my_pair_row HOISTED OUT OF THE LOOP: mat_id is loop-invariant (this
+     * cell's own material, fixed for all four directions), so pair_bits
+     * [mat_id] is one row-base address good for the whole loop, rather
+     * than a fresh pair_bits[mat_id][...] index - and therefore a fresh
+     * runtime multiply - every iteration. Tried BECAUSE the host probe
+     * (best of 7, twice) measured lava stress/four liquids/smoke+steam a
+     * couple percent SLOWER against stage 1 despite this stage's own
+     * objdump showing step_one_burning_cell() genuinely smaller - the
+     * multiply was the obvious suspect, since pair_theirs_bits()'s own
+     * MAT_EMPTY-row trick (stage 1) is a compile-time-zero offset the
+     * compiler folds away for free, and a runtime row index is not free
+     * the same way. Measured, not assumed to have fixed it: hoisting
+     * moved the host numbers by well under a percent, so the multiply was
+     * not the (or not the whole) explanation. Left in regardless - it is
+     * strictly no worse, plainly correct, and one less thing to suspect
+     * next time - but the regression itself is reported as-is below,
+     * unexplained, rather than claimed fixed. Per this project's own
+     * "host numbers mispredicting the device" lesson (docs/Sand/
+     * Performance-Tuning-Attempts.md): this stage removes real RNG-
+     * avoiding and load-avoiding work, which is exactly the shape of
+     * change host and device have disagreed on before - a device capture
+     * settles this, a host number alone does not. */
+    /* TRIGGER A of cool_off_chain() (above): doing the WORK of actually
+     * converting a neighbour costs a burning LIQUID a small chance of
+     * freezing itself. Resolved once, here, before the loop starts - not
+     * because the chance can change mid-loop, but so a cell that is not
+     * even a burning liquid (wood, ember, fire) never pays for this at
+     * all: 0 short-circuits the check inside the loop below before it
+     * ever reads the RNG, one predicted-false compare per burning cell on
+     * a board with no lava, the same "check whether this could ever
+     * matter before rolling" discipline the lava-burst gate and
+     * try_ignite() both already document above. */
+    const int lava_cooloff = (mat->kind == KIND_LIQUID && rx->quench_to != 0)
+                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff
+                                                             : SAND_LAVA_COOLOFF_CHANCE)
+                                  : 0;
+    const uint8_t* my_pair_row = pair_bits[mat_id];
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
-        if (try_ignite(s, nx, ny, w, h)) {
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        const uint8_t pair = my_pair_row[CELL_MATERIAL(n)];
+        if ((pair & PAIR_IGNITABLE) != 0 && try_ignite_given(s, nx, ny, w, h, nat, n)) {
             acted = true;
         }
         /* Separate from ignition, and reached whether or not that fired:
          * a neighbour is either fuel or something heat merely changes, and
          * nothing is both today, but there is no reason one could not be. */
-        if (try_heat_transform(s, nx, ny, w, h)) {
-            acted = true;
+        if ((pair & PAIR_HEAT_RESPONSIVE) != 0) {
+            /* Captured BEFORE the probe, because try_heat_transform_given()
+             * returning true does NOT mean the neighbour's material
+             * changed - the common case is a heat-ramping material (stone,
+             * glass) simply banking one more level of heat, same material,
+             * higher variant, and that happens on nearly every step lava
+             * sits next to a wall. Gating cool_off_chain() on the return
+             * value alone would roll on almost every one of those climbs,
+             * which is an ALWAYS-ON drain no pour or fuel is needed to
+             * trigger - a lava pool sitting in a stone bowl would
+             * self-extinguish with no water anywhere, which is wrong. Only
+             * a genuine change of CELL_MATERIAL - a real melt (stone ->
+             * lava, sand -> glass -> lava), or a thermal-shock crack via
+             * crack_run() - counts as the WORK this trigger charges for. */
+            const uint8_t before_mat = CELL_MATERIAL(n);
+            if (try_heat_transform_given(s, nx, ny, w, h, nat, n)) {
+                acted = true;
+                if (lava_cooloff != 0 && CELL_MATERIAL(s->cells[nat]) != before_mat &&
+                    (int)(rng_next(&s->rng) & 0xFF) < lava_cooloff) {
+                    place_reacted(s, x, y, at, rx->quench_to);
+                    cool_off_chain(s, x, y, w, h, rx->quench_to, lava_cooloff);
+                    return true;
+                }
+            }
         }
     }
 
@@ -3892,6 +3954,80 @@ sand_step_reactions(sand_t* s) {
     if (!s->may_have_burning && !s->may_have_dissolver && !s->may_have_temperature && !s->may_have_moisture
         && !s->may_have_faller && !s->may_have_withering && !s->may_have_condenser) {
         return;
+    }
+
+    /* pair_bits, REBUILT HERE, EVERY PASS - see this file's own top comment
+     * for the bit definitions and the honesty note on which ones are
+     * genuinely pairwise. Same discipline s->heat_mask/s->wet_mask used to
+     * document in this exact spot, unchanged by widening from two bits to
+     * five: written once per PASS from the live tables, read only by
+     * neighbour probes inside that same pass, never cached across steps -
+     * this is NOT the retired per-cell "can this material react at all"
+     * mask (docs/Sand/Performance-Tuning-Attempts.md, "Never retry",
+     * attempt 12), which went stale against a cell created behind the scan
+     * pointer in the SAME pass because it was written once per CELL. A
+     * sand_set_* table override between steps is picked up on the very
+     * next entry with nothing to invalidate.
+     *
+     * theirs_bits[] holds the five theirs-only bits (this file's own top
+     * comment: everything except PAIR_DENSER, which is not stored at all)
+     * per ordinary material id, exactly the two loops heat_mask/wet_mask
+     * used to run separately, now merged into one pass over reactions[]
+     * plus the same MAT_EXTENDED aggregate heat_mask always needed -
+     * PAIR_IGNITABLE and PAIR_DISSOLVABLE both need it too, since plant/
+     * leaf/metal (extended_reactions[]) carry real flammability/dissolvable
+     * figures the way ice's heats_to always did. PAIR_WETS and
+     * PAIR_QUENCHES need no such pass: every extended material shares
+     * materials[MAT_EXTENDED].kind == KIND_STATIC (material.c; see
+     * material.h's own comment on the one shared physics row), so neither
+     * bit can ever be true for MAT_EXTENDED, exactly what the tests they
+     * replace already decided.
+     *
+     * The final nested loop broadcasts theirs_bits[] into every row of
+     * pair_bits[][] - all sixteen rows read identically for a
+     * pair_theirs_bits() caller, which is the whole point (this file's own
+     * top comment on pair_theirs_bits()). At sixteen materials this is
+     * O(256), one to two cache lines of reactions[]/materials[] read once
+     * per pass rather than once per PROBE - cheaper than the single
+     * reaction_of() load any one of the five bits replaces on the very
+     * first neighbour it is asked about. */
+    uint8_t theirs_bits[MATERIAL_MAX] = {0};
+    for (int m = 1; m < MAT_COUNT; m++) {
+        const reaction_t* r = &reactions[m];
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+            theirs_bits[m] |= PAIR_HEAT_RESPONSIVE;
+        }
+        if (materials[m].kind == KIND_LIQUID) {
+            if (r->wets != 0) {
+                theirs_bits[m] |= PAIR_WETS;
+            }
+            if (r->flammability == 0 && r->burns == 0) {
+                theirs_bits[m] |= PAIR_QUENCHES;
+            }
+        }
+        if (r->flammability != 0) {
+            theirs_bits[m] |= PAIR_IGNITABLE;
+        }
+        if (r->dissolvable != 0) {
+            theirs_bits[m] |= PAIR_DISSOLVABLE;
+        }
+    }
+    for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
+        const reaction_t* r = &extended_reactions[k];
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+            theirs_bits[MAT_EXTENDED] |= PAIR_HEAT_RESPONSIVE;
+        }
+        if (r->flammability != 0) {
+            theirs_bits[MAT_EXTENDED] |= PAIR_IGNITABLE;
+        }
+        if (r->dissolvable != 0) {
+            theirs_bits[MAT_EXTENDED] |= PAIR_DISSOLVABLE;
+        }
+    }
+    for (int mine = 0; mine < MATERIAL_MAX; mine++) {
+        for (int theirs = 0; theirs < MATERIAL_MAX; theirs++) {
+            pair_bits[mine][theirs] = theirs_bits[theirs];
+        }
     }
 
     const int w = s->w;
