@@ -1,18 +1,17 @@
 /*=============================================================================
  * gfx_probe_stub - link-only stand-ins for the handful of gfx/ and app_sand.c
- * symbols suite_sand.c's DEVICE_BUILD blocks reference outside the ten
- * frame-budget scenes this probe actually runs (the present-cost section,
- * and the alloc-selfcheck test) - the whole translation unit still needs
- * every symbol it references to resolve at link time, even ones whose call
- * site never executes at runtime (their address is taken by the file's own
+ * symbols suite_sand.c's DEVICE_BUILD blocks reference outside the frame-
+ * budget scenes this probe actually runs (the present-cost section, and the
+ * alloc-selfcheck test) - the whole translation unit still needs every
+ * symbol it references to resolve at link time, even ones whose call site
+ * never executes at runtime (their address is taken by the file's own
  * RUN_TEST table, which is enough to need a definition). Nothing here is
- * exercised by any of this probe's own ten scenes.
+ * exercised by any scene probe_main.c can select.
  *
- * Same shape as perf_probe's own gfx_probe_stub.c (worktree-agent-
- * a167459b17fb4db71, commit 9de21aa) - copied rather than shared, and
- * re-verified against THIS branch's suite_sand.c (grep for gfx_/sand_app_
- * calls across the whole file, not just the ten scenes) rather than assumed
- * identical.
+ * Re-verify this against suite_sand.c (grep for gfx_/sand_app_ calls across
+ * the whole file, not just the SAND_HOST_PROBE scenes) whenever a new
+ * DEVICE_BUILD symbol shows up unresolved at link time - don't assume this
+ * file is still complete just because it built last round.
  *===========================================================================*/
 #include <stdbool.h>
 #include <stddef.h>

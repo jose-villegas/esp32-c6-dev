@@ -134,3 +134,7 @@ $RECYCLE.BIN/
 # scripts/perf-loop.sh working area: logs, per-candidate reports and the
 # quarantine pile. Regenerated per run, never worth committing.
 .perf-loop/
+
+# Structured prompts for handing work to another session or a local model.
+# Working notes, revised per round - not part of the shipped project.
+.prompts/

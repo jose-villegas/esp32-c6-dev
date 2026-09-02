@@ -29,7 +29,6 @@ merged), controls pinned at 5,907/6,002:
 | Gravity flip, settled pile | 6,002 µs | 5,900 | 102 µs |
 | Mixed scene flip | 15,347 µs | 11,700 | 3,647 µs |
 | Screen of water collapsing | 20,812 µs | 14,400 | 6,412 µs |
-| Vent spam | 25,436 µs | 23,000 | 2,436 µs |
 | Boiler, sustained boil | 30,422 µs | 28,500 | 1,922 µs |
 | Every material at once | 86,209 µs | 67,500 | 18,709 µs |
 | Wet earth (× 0.8 row) | 93,783 µs | 80,000 | 13,783 µs |
@@ -50,6 +49,13 @@ merged), controls pinned at 5,907/6,002:
   lottery ticket fails spuriously on the next roll.
 - One standing coverage gap: no budgeted row runs a tilted gravity, and
   attempt 14's off-axis cost (+29–37%) is therefore measured by nothing.
+- **Vent spam dropped from this table, not re-pegged.** The mechanism it
+  measured (lava venting through a covering) was removed and replaced by
+  a covered-lava burst (bd esp32c6-0f2/esp32c6-mqt); its scene was
+  rebuilt as a plain water-over-lava pour and awaits its own first device
+  capture before it can rejoin this table. Its old, retired number lives
+  in git history, not here - it is not a claim about the new scene's
+  cost, and the two must never be compared.
 
 ---
 
@@ -67,7 +73,6 @@ one experiment in the wrong pass.
 | Screen of water collapsing | −2.2% | **−39.1%** | −0.7% | −98.7% |
 | Mixed scene flip | +0.6% | **−32.5%** | +1.8% | −99.9% |
 | Wet earth | **−44.4%** | −8.9% | −7.8% | −100.0%¹ |
-| Vent spam | **−92.9%** | −9.0% | 0.0% | −16.8% |
 | Four liquids reacting | −33.8% | −16.1% | −6.1% | −72.7% |
 | Lava stress scene | −58.2% | −17.7% | −16.5% | −73.3% |
 | Every material at once | −44.3% | −14.7% | −33.8% | −25.5% |
@@ -83,9 +88,12 @@ are the gas pass**, which is where the seventeenth attempt's win came from.
 The every-material flip is genuinely diffuse: no pass owns more than 44%
 of it.
 
-The wet-earth and vent-spam rows were added by attempt 18 (host, best of
-10, same stub method, validated by reproducing the water/mixed columns
-above first). Both are reactions-owned. ¹ Wet earth's −100% main-sweep
+The wet-earth row was added by attempt 18 (host, best of 10, same stub
+method, validated by reproducing the water/mixed columns above first),
+reactions-owned. A vent-spam row sat here too, from the same attempt -
+dropped along with the vent mechanism it measured (bd esp32c6-0f2); its
+replacement scene (water over lava, bd esp32c6-mqt) has not yet had this
+same pass-attribution analysis run against it. ¹ Wet earth's −100% main-sweep
 column is a settle-phase confound — its 35 pre-window settle steps use
 the same stubbed `sand_step`, so nothing ever gains the adjacency its
 reactions need — read the reactions column, which has no such confound.
