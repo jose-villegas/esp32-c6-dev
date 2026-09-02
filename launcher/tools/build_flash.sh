@@ -7,11 +7,12 @@
 #
 #   --dev       build the DEVELOPMENT image instead of the release one, and
 #               leave it on the board: development-only logging and
-#               instrumentation (frame timings, the screenshot listener),
-#               no test suites, no Diagnostics app. See below.
+#               instrumentation (frame timings, the screenshot listener)
+#               plus the Diagnostics app, but no test suites. See below.
 #   --diag      build the DIAGNOSTICS image instead of the release one, and
 #               leave it on the board: everything --dev gets you, plus the
-#               on-device test suites and the Diagnostics app. See below.
+#               on-device test suites and Diagnostics' own button for
+#               running them. See below.
 #   COM_PORT    serial port the device is on. Default: COM3.
 #   IDF_EXPORT  path to ESP-IDF's export script - export.bat on Windows,
 #               export.sh elsewhere. Default: this project's usual install.
@@ -30,16 +31,20 @@
 #
 # CONFIG_LAUNCHER_DEVELOPMENT and CONFIG_LAUNCHER_SELFTEST answer different
 # questions - the first is "does this build carry anything meant only for a
-# developer at the console" (frame timings, the screenshot listener), the
-# second is "does this build carry the on-device test suites and the
-# Diagnostics app" (main/CMakeLists.txt excludes both by folder unless it is
-# set). SELFTEST `select`s DEVELOPMENT, so a diag build gets both; DEVELOPMENT
-# alone does not pull SELFTEST in (see main/Kconfig.projbuild). --dev and
-# --diag are what expose that same independence here, rather than only ever
-# being able to get instrumentation bundled with the test harness's own
-# footprint and side effects - POST re-running and cycling the audio rail,
-# the display dropping off SPI2 mid-session - which is fine on a bench and
-# unwanted just to watch a frame-timing log line or pull a screenshot.
+# developer at the console" (frame timings, the screenshot listener, and the
+# Diagnostics app, whose folder main/CMakeLists.txt excludes unless it is
+# set), the second is "does this build carry the on-device test suites",
+# which also brings Diagnostics' own button for re-running them. SELFTEST
+# `select`s DEVELOPMENT, so a diag build gets both; DEVELOPMENT alone does
+# not pull SELFTEST in (see main/Kconfig.projbuild). --dev and --diag are
+# what expose that same independence here, rather than only ever being able
+# to get instrumentation bundled with the test harness's own footprint -
+# every suite linked in, and run at boot before the shell starts - which is
+# fine on a bench and unwanted just to watch a frame-timing log line or pull
+# a screenshot. Note the Diagnostics app carries its own side effects in
+# EITHER build: entering it re-runs POST, cycling the audio rail and
+# dropping the display off SPI2 mid-session. That is the cost of the way in
+# being compiled at all, not of the test suites.
 #
 # Using either flag means putting that image on the board and leaving it.
 # Nothing else here does that: test/run_device_tests.sh builds and flashes
@@ -130,12 +135,14 @@ idf -B "$BUILD_DIR" -p "$COM_PORT" flash
 case "$VARIANT" in
     dev)
         echo "=== Done - the DEVELOPMENT image is on the device ==="
-        echo "    Development-only logging and instrumentation is on; no test suites,"
-        echo "    no Diagnostics app. Re-run without --dev to put release back."
+        echo "    Development-only logging and instrumentation is on, and the"
+        echo "    Diagnostics app is there (BOOT for its toggles page); no test"
+        echo "    suites. Re-run without --dev to put release back."
         ;;
     diag)
         echo "=== Done - the DIAGNOSTICS image is on the device ==="
-        echo "    It runs the test suites at boot and carries the Diagnostics app."
+        echo "    It runs the test suites at boot and adds Diagnostics' own"
+        echo "    button for re-running them."
         echo "    Re-run without --diag to put the release firmware back."
         ;;
     *)
