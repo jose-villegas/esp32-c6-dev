@@ -125,14 +125,28 @@ def find_bash():
     own top comment) - idf.py itself cannot run under Git Bash on Windows
     (see the project's CLAUDE.md), but build_flash.sh already routes around
     that itself (tools/idf.sh -> idf_shim.bat), so running the .sh under
-    Git Bash's own bash.exe is the one thing this needs to get right."""
-    found = shutil.which("bash")
-    if found:
-        return found
+    Git Bash's own bash.exe is the one thing this needs to get right.
+
+    Git Bash's own known install locations are checked BEFORE shutil.which,
+    not after - Windows ships its own "bash.exe" stub in System32 that
+    launches WSL, not Git Bash, and if that directory happens to sit
+    earlier on PATH than Git's own bin/usr\\bin (confirmed happening in
+    practice, not just theoretically possible), shutil.which silently
+    hands back the WSL one instead. A WSL bash has no concept of a
+    C:/Users/... path at all - it mounts drives under /mnt/c/... instead -
+    so every path this script ever passes it reports "No such file or
+    directory" no matter how correct that path actually is, and nothing
+    about that failure looks any different from a genuinely missing file
+    until you think to check $PWD/$MSYSTEM inside it (see build_and_flash()
+    below's own probe, added chasing exactly this)."""
     for candidate in (r"C:\Program Files\Git\bin\bash.exe",
                       r"C:\Program Files\Git\usr\bin\bash.exe"):
         if os.path.isfile(candidate):
             return candidate
+    found = shutil.which("bash")
+    if found and os.path.dirname(found).rstrip("\\/").lower() != \
+            r"c:\windows\system32":
+        return found
     return None
 
 
