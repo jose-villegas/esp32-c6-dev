@@ -389,6 +389,157 @@ changes its *kind* (fuel igniting into a gas, a liquid boiling into one)
 has to latch that kind's `may_have_*` flag, and getting it wrong is
 invisible to almost every other test.
 
+### Water cools, and lava can lose ground it cannot get back without a pour
+
+Stone and glass bank heat in the low nibble their `KIND_STATIC` never
+otherwise needed (material.h's own comment on the low nibble's per-material
+reuse - see "The grid is one byte per cell" above), 0-15 with
+`SAND_AMBIENT_HEAT` sitting in the middle rather than at the floor, so a
+pane has somewhere to go both when it warms and when it chills
+(`step_one_tempered_cell()`, `sand_reactions.c`). Left alone, that variant
+relaxes back toward ambient on its own, at a rate (`reaction_t.cools`) that
+gets harder to outrun the further off ambient the cell already sits - a
+single brush of fire makes a pane fragile quickly, while cooking it all the
+way to molten stays a long exposure.
+
+A quenching liquid (`PAIR_QUENCHES` - water and acid, never lava or oil,
+this file's own top comment in `sand_reactions.c`) sitting against a
+heat-ramping cell multiplies that same drain by `SAND_WET_COOLING_FACTOR`
+(sand.h), but ONLY in the above-ambient half of the ramp. Pouring water on
+a glowing wall is what makes its banked heat actually come back down in a
+reasonable number of steps rather than the many dozens plain ambient
+cooling alone would take - and the asymmetry is deliberate: nothing about
+being wet can ever push a cell below `SAND_AMBIENT_HEAT`. That is chilling's
+job (snow, ice, `reaction_t.chills`) alone, and letting water do it too
+would let an ordinary splash thermally shock glass the same way a
+deliberately-placed snowbank does.
+
+**Lava quenched into stone can take a neighbour down with it, which is what
+lets a sustained pour eat into a pool rather than only ever sealing its
+surface.** The one-touch quench any water-on-lava contact has always done
+(`neighbor_quenches()`, `quench_to`) now rolls a small, deliberately rare
+chance (`SAND_LAVA_COOLOFF_CHANCE`, sand.h) to freeze ONE further adjacent
+lava cell too, which rolls again in turn - an iterative walk
+(`cool_off_chain()`, `sand_reactions.c`), bounded at `SAND_LAVA_COOLOFF_MAX_CHAIN`
+links so one lucky roll can never run the whole pool to stone in a single
+event. Stop pouring, and the crust that formed simply sits there - nothing
+about it keeps spreading on its own.
+
+Lava pays the same small chance for a second reason: doing the WORK of
+actually melting a neighbour into something else (a genuine material
+change - sand fusing all the way to lava, a thermal-shock crack - not
+merely banking one more level of heat, which stone and glass do on nearly
+every step they touch lava and which never costs anything) rolls the same
+chain. Getting this distinction right mattered enough to be its own guarded
+test (`test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself`,
+`suite_sand.c`): gating on whether the heat-transform probe merely
+*returned true* rather than on whether `CELL_MATERIAL` actually changed
+would have made a lava pool sitting in an ordinary stone bowl slowly
+self-extinguish with no water and no fuel anywhere on the board - an
+always-on drain nobody asked for.
+
+### A sufficiently covered lava cell can burst
+
+Independent of water: a lava cell whose gravity-relative coverage
+(`covered_at()`, `sand_priv.h` - see "The shared 'am I covered' primitive"
+below) reaches at least `SAND_LAVA_BURST_COVER` (3) gets a tiny,
+deliberately rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in
+256, the rarest a single byte-wide roll can express) to convert to
+`MAT_STONE` and immediately `sand_explode()` at that spot, fire included.
+This is the replacement for the earlier vent mechanism
+(`reaction_t.vent_chance`, which threw whatever was covering the lava
+rather than touching the lava itself) and the mechanism that reopens a
+sealed pool's own crust so a sustained pour can keep reaching lava rather
+than the pour's own cool-off chain armouring the surface shut - see the
+cool-off section above.
+
+3, not `smothered()`'s own all-4 (a different, gravity-agnostic question -
+see below): a pocket with one open side still qualifies, which is what
+lets an ordinary hand-drawn vessel (which the `smothered()`-exemption
+story above already found has dozens of one-cell dimples) actually reopen
+over time rather than needing a fully sealed cell to ever do anything.
+
+#### The shared "am I covered" primitive
+
+The first version of this feature (`cover_count()`, retired) counted the
+four SCREEN-fixed cardinal neighbours, and was wrong twice over: what is
+BELOW a cell supports it rather than covering it, so the eligible set has
+to rotate with gravity; and because it was built on `neighbor_smothers()`
+(which never counts a liquid neighbour, on purpose - `smothered()` needs
+that exemption too, for the identical reason a big pocket of fire must
+not smother itself from the inside out), an interior cell of a pool wider
+than one cell had at most ONE neighbour that could ever count - the cell
+directly above it - so a wide pool sealed by a crust could never reach
+the threshold no matter how complete the seal was. Only an isolated lava
+cell sitting in its own solid pocket could ever burst.
+
+`cover_mask()`/`cover_seals()`/`covered_at()` (`sand_priv.h`, beside
+`ring_dir()`/`ring_of()`) fix both problems and are meant as a general
+"is this cell covered enough" primitive, not a burst-private helper - the
+confined-gas ignition check is a candidate to migrate onto it later (the
+vent machinery's own `covered_from_above()`, the other candidate this
+paragraph used to name, no longer exists - removed once the burst above
+replaced it). The eligible cells are a **semi-disc of the 8-ring, centred
+on anti-gravity**: the cell directly opposite gravity, the two diagonals
+either side of it, and the two perpendiculars beyond those - five cells,
+equivalently the ring minus the gravity direction itself and its two
+ring-neighbours. Gravity is read from `s->last_load_dx/dy` (the SETTLED
+direction - the nearest of the eight ring directions, stable while the
+board is held still) rather than `s->last_step_dx/dy` (the per-step
+DITHERED direction) or the raw tilt vector: dithering would alternate the
+eligible semi-disc between two adjacent orientations every step a tilt
+fell between two eighths, and a continuous test off the raw vector would
+give five eligible cells only at exact axis or exact diagonal alignment -
+the smoothed IMU vector is essentially never exactly aligned, so either
+alternative would flicker between a 5-cell and a 4-cell rule constantly.
+
+A cell is covered when at least `need` of those five are covering, AND
+the covered cells form **one contiguous run around the semi-disc** - with
+exactly one narrow exception: the three CARDINALS of the semi-disc (the
+two perpendiculars plus anti-gravity itself), which seal even though the
+diagonals between them are open, because two blocked cardinals seal the
+corner between them and an open diagonal between them is not a route
+out. That exception applies only when gravity itself is axis-aligned - a
+diagonal gravity's semi-disc holds only two cardinals, so the same three
+arc positions there are all diagonals and must not be let through. A
+broader version of the exception ("any single-diagonal gap flanked by two
+covered cardinals") was considered and rejected: it would also admit two
+patterns the settled acceptance data excludes - see
+`test_rejected_semi_disc_patterns_stay_rejected`, `suite_sand.c`.
+
+**`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
+DIVISOR` with fire before it queues a single flight entry** (see
+`SAND_EXPLODE_CORE_DIVISOR`'s own comment, sand.h). At `SAND_LAVA_BURST_
+RADIUS` (8, `SAND_GAS_IGNITE_BLAST_RADIUS`'s own figure - the only other
+reaction-driven burst that exists) and divisor 5, that core radius is 1 -
+so the `MAT_STONE` this feature just wrote at the centre is immediately
+overwritten by fresh fire. That is pinned, expected behaviour (see
+`test_buried_lava_bursts_into_stone_and_fire`, `suite_sand.c`), not a bug.
+
+Not gated on `sand_enable_impulses()` having been called: `sand_explode()`
+is a documented no-op without it, so with impulses off the cell simply
+becomes stone and nothing is thrown - correct, since no impulses means no
+explosions anywhere else in the simulation either.
+
+**The rate is per covered cell, per step, not per pool or per event** -
+the same multiplier trap the earlier vent mechanism's own rate fell into
+twice, back when it was tuned (see git history): a large sealed pool has
+many covered cells, each independently rolling this every step it stays
+covered, so a figure that reads as vanishingly rare in isolation is
+common in aggregate.
+A stress-tested "pool under a hand-drawn floor" scene (many one-cell
+dimples across a wide ceiling, deliberately packed tighter than the blast
+radius) confirmed the mechanism is self-limiting rather than a runaway
+chain: a burst's own explosion destroys the cover around it as it clears
+the pocket, so a freshly-uncovered neighbour is usually blown open rather
+than left standing and re-eligible. At the real production chance the
+scene lost roughly a sixth of its lava over 3000 steps in a slow trickle,
+never more than a handful of dimples in a single step; pinned to the
+maximum chance the same scene lost about half its lava in the first 20
+steps and then plateaued as the remaining pockets thinned out and
+scattered. Not a suppression mechanism - the tapering is an emergent
+consequence of the blast itself clearing cover, not a cap anyone added.
+
 ## Momentum and the wall-rebound splash
 
 Everything above reacts to where gravity *points*. Nothing reacted to how

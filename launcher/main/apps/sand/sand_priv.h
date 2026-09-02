@@ -432,6 +432,179 @@ static inline int ring_of(int dx, int dy)
     return 0;   /* unreachable for a unit direction */
 }
 
+/* Whether (nx, ny) is in bounds and holds something strictly denser than
+ * `density`, and is not a liquid - a liquid never counts as covering
+ * anything, whether the question is true burial (smothered(),
+ * sand_reactions.c) or gravity-relative coverage (cover_mask() below): a
+ * neighbour at the prober's own density or below (more fire, more gas,
+ * more of the same liquid) never counts, or a large pocket of any of
+ * those would seal itself from the inside out - only genuinely being
+ * buried under something heavier (sand, stone) should.
+ *
+ * Moved here from sand_reactions.c (bd esp32c6-a2j) - cover_mask() needed
+ * it too, and the brief for that change was explicit that this file
+ * should not grow a second predicate meaning the same thing. Its
+ * existing caller at the time (smothered(), still in sand_reactions.c)
+ * was unaffected: same name, same signature, same body, just visible
+ * from one file earlier in the include chain now. */
+static inline bool
+neighbor_smothers(const sand_t *s, int nx, int ny, int w, int h, uint8_t density)
+{
+    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+        return false;
+    }
+    const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+    if (CELL_IS_EMPTY(n)) {
+        return false;
+    }
+    const material_t *nm = material_of(n);
+    return nm->kind != KIND_LIQUID && nm->density > density;
+}
+
+/* THE SHARED "AM I COVERED" PRIMITIVE - bd esp32c6-a2j, replacing
+ * cover_count() (sand_reactions.c, shipped in b5e4a61 for esp32c6-mqt),
+ * which was wrong twice over: it counted the four SCREEN-fixed cardinals
+ * regardless of which way is down, and being built on
+ * neighbor_smothers() (which never counts a liquid neighbour, on
+ * purpose) meant an interior cell of a pool wider than one cell had at
+ * most one neighbour that could ever count - the cell directly above it -
+ * so a wide pool sealed by a crust could never reach the threshold no
+ * matter how complete the seal was. See bd esp32c6-a2j's own notes for
+ * the full story and the settled rule; this is that rule.
+ *
+ * ELIGIBLE CELLS ARE A SEMI-DISC OF THE 8-RING, CENTRED ON ANTI-GRAVITY -
+ * the cell directly opposite gravity, the two diagonals either side of
+ * it, and the two perpendiculars beyond those: five cells, equivalently
+ * the ring minus the gravity direction itself and its two ring-
+ * neighbours. What is BELOW a cell (gravity-relative) supports it, it
+ * does not cover it, which is the whole reason this has to rotate with
+ * gravity instead of being four fixed screen directions.
+ *
+ * `mask` is 5 bits, one per arc position, running from one perpendicular
+ * to the other with anti-gravity at the centre (arc position 2): bit i
+ * set means ring_dir(anti - 2 + i) covers this cell. That ordering is
+ * not arbitrary - it is what lets cover_seals() below treat the five
+ * bits as a straight LINE rather than a loop (see its own comment for
+ * why that is exactly right, not an approximation).
+ *
+ * SETTLED GRAVITY, NOT THE RAW TILT AND NOT THE DITHERED STEP -
+ * s->last_load_dx/dy (sand.h) is already an int pair and already one of
+ * the eight ring directions, and it is the SETTLED one: the nearest
+ * eighth, stable while the board is held still. Every other structural
+ * question in the sweep reads it for exactly that reason - this
+ * primitive, anchored(), growth's own "which way is up" - and this one
+ * is pinned by a test that drives it under sideways gravity specifically
+ * to stop it ever regressing to a fixed screen direction
+ * (test_a_wide_pool_under_a_sideways_crust_bursts, suite_sand.c).
+ *
+ * NOT s->last_step_dx/dy, which is the DITHERED direction of one step: a
+ * tilt falling between two eighths spends some steps on each, in
+ * proportion. That is right for a thing that accumulates over time (a
+ * growing stem at its true angle) and wrong here, because a seal is a
+ * fact about the geometry rather than a sample of it - dithering would
+ * alternate the eligible semi-disc between two adjacent orientations
+ * every step, so a cell genuinely sealed in one of them would read
+ * unsealed in the other and the whole rule would turn into
+ * orientation noise. A
+ * continuous `offset . gravity <= 0` test would give five eligible cells
+ * only at exact axis or exact diagonal alignment; a fraction of a degree
+ * off vertical drops a perpendicular and leaves four, and the smoothed
+ * IMU vector driving gx/gy is essentially never exactly aligned - so that
+ * version would silently flicker between a 5-cell and a 4-cell rule
+ * every single step. Working off the already-quantised ring direction
+ * both matches what the rest of the sweep does and cannot flicker: the
+ * eight ring directions are the only inputs this ever sees. */
+static inline unsigned
+cover_mask(const sand_t *s, int x, int y, int w, int h, uint8_t density)
+{
+    const int anti = ring_of(s->last_load_dx, s->last_load_dy) + 4;
+    unsigned mask = 0;
+    for (int i = 0; i < 5; i++) {
+        const int *d = ring_dir(anti - 2 + i);
+        if (neighbor_smothers(s, x + d[0], y + d[1], w, h, density)) {
+            mask |= 1u << i;
+        }
+    }
+    return mask;
+}
+
+/* Whether a cover_mask() reads as a real seal: at least `need` of the
+ * five bits set, AND the covered bits form ONE CONTIGUOUS RUN along the
+ * arc - with exactly one exception, the three CARDINALS of the semi-disc
+ * (arc positions 0, 2 and 4 - the two perpendiculars plus anti-gravity
+ * itself), which seal even though the diagonals between them (positions
+ * 1 and 3) are open. Physical reason: two blocked cardinals seal the
+ * corner between them, so an open diagonal between them is not a route
+ * out. Settled with the user 2026-09-02 against their own exhaustive
+ * portrait diagrams (bd esp32c6-a2j) - those diagrams turned out to be
+ * the complete exactly-3 set, not a sample, which is what the
+ * exhaustive-shape-table test in suite_sand.c checks directly.
+ *
+ * A LINE, NOT A LOOP - positions 0 and 4 are the two ends of the arc, not
+ * neighbours of each other, unlike an ordinary ring test. Each one's
+ * OTHER ring-neighbour (the one on the far side from position 1 or 3
+ * respectively) falls inside the 3 positions gravity itself excludes -
+ * see cover_mask()'s own comment - so within the eligible five, position
+ * 0 only ever borders position 1, and position 4 only ever borders
+ * position 3. Treating the five bits as a straight run (shift out the
+ * open cells at the low end, then check what remains is an unbroken run
+ * starting at bit 0) is therefore the right test, not a shortcut that
+ * happens to work: two covered cells at opposite ENDS of the arc (a
+ * perpendicular on each side, nothing between or above) are on opposite
+ * sides of the body with the whole gravity-ward gap between them, not
+ * adjacent to each other around some wraparound the rule does not have.
+ *
+ * THE EXCEPTION IS DELIBERATELY NARROW - checked by exact mask equality,
+ * not "any single-diagonal gap flanked by two covered cardinals". That
+ * broader version was considered and REJECTED: it would also accept
+ * {up-left, up, right} and {up, up-right, left} in portrait (each has an
+ * open diagonal flanked by two covered cardinals), and the user's own
+ * exhaustive list excludes both - see
+ * test_rejected_semi_disc_patterns_stay_rejected in suite_sand.c, which
+ * exists specifically to catch this exception being "helpfully"
+ * generalised back to that broader, wrong version later.
+ *
+ * ONLY VALID WHEN GRAVITY IS AXIS-ALIGNED - a diagonal gravity's
+ * semi-disc holds only two cardinals (arc positions 1 and 3; positions
+ * 0, 2 and 4 are all diagonals there), so mask 0b10101 at diagonal
+ * gravity means three covered DIAGONALS, not the cardinal-triple this
+ * exception is about, and must not be let through. Reading `s` is what
+ * this needs it for - the exception's validity depends on which kind of
+ * gravity produced the mask, not on the mask's bits alone. Inherent
+ * asymmetry, not a defect: axis-aligned gravity allows 7 valid shapes in
+ * total, diagonal gravity only 6, because diagonal gravity can never
+ * reach this exception at all. */
+static inline bool
+cover_seals(const sand_t *s, unsigned mask, int need)
+{
+    unsigned count = 0;
+    for (unsigned bit = 0; bit < 5u; bit++) {
+        count += (mask >> bit) & 1u;
+    }
+    if ((int)count < need) {
+        return false;
+    }
+
+    if (mask == 0x15u /* 0b10101: the three cardinals, diagonals open */ &&
+        (ring_of(s->last_load_dx, s->last_load_dy) & 1) == 0) {
+        return true;
+    }
+
+    while (mask != 0 && (mask & 1u) == 0) {
+        mask >>= 1;
+    }
+    return (mask & (mask + 1u)) == 0;
+}
+
+/* The common case: is (x, y) covered enough, gravity-relative, to seal
+ * it in - composes cover_mask()/cover_seals() above for a caller that
+ * has no reason to look at the mask itself. */
+static inline bool
+covered_at(const sand_t *s, int x, int y, int w, int h, uint8_t density, int need)
+{
+    return cover_seals(s, cover_mask(s, x, y, w, h, density), need);
+}
+
 static inline void clear_content_flags(sand_t *s)
 {
     s->may_have_liquid      = false;
