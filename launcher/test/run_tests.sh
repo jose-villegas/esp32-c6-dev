@@ -137,10 +137,16 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
 # mu_Rect and mu_Color, and those are plain declarations in microui.h with no
 # library behind them. Nothing here links microui.c - see suite_ui_style.c on
 # why a style's geometry was kept free of it.
+# -lm LAST, after the sources, because GNU ld resolves left to right and
+# would otherwise have discarded libm before seeing who needed it. Only
+# Linux actually needs it: the Windows toolchains this repo also builds on
+# fold the math functions into libc, so a suite using atan2() or fabs()
+# links clean locally and fails only in CI, which is exactly how it was
+# found. Harmless where libm is already part of libc.
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
     -I "$TEST_DIR/../components/microui/include" -include "$TEST_DIR/timing.h" \
-    $SOURCES "$UNITY_OBJ" -o "$OUT"
+    $SOURCES "$UNITY_OBJ" -o "$OUT" -lm
 
 # MinGW appends .exe; elsewhere the plain name is produced.
 [ -x "$OUT" ] || OUT="$OUT.exe"
