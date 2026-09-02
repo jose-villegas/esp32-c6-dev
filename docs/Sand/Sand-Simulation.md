@@ -476,18 +476,22 @@ cell sitting in its own solid pocket could ever burst.
 `cover_mask()`/`cover_seals()`/`covered_at()` (`sand_priv.h`, beside
 `ring_dir()`/`ring_of()`) fix both problems and are meant as a general
 "is this cell covered enough" primitive, not a burst-private helper - the
-vent machinery's own `covered_from_above()` and the confined-gas ignition
-check are both candidates to migrate onto it later. The eligible cells
-are a **semi-disc of the 8-ring, centred on anti-gravity**: the cell
-directly opposite gravity, the two diagonals either side of it, and the
-two perpendiculars beyond those - five cells, equivalently the ring minus
-the gravity direction itself and its two ring-neighbours. Gravity is read
-from `s->last_step_dx/dy` (the per-step DITHERED direction, already one
-of the eight ring directions) rather than the raw tilt vector: a
-continuous test would give five eligible cells only at exact axis or
-exact diagonal alignment, and the smoothed IMU vector is essentially
-never exactly aligned, so it would flicker between a 5-cell and a 4-cell
-rule every single step.
+confined-gas ignition check is a candidate to migrate onto it later (the
+vent machinery's own `covered_from_above()`, the other candidate this
+paragraph used to name, no longer exists - removed once the burst above
+replaced it). The eligible cells are a **semi-disc of the 8-ring, centred
+on anti-gravity**: the cell directly opposite gravity, the two diagonals
+either side of it, and the two perpendiculars beyond those - five cells,
+equivalently the ring minus the gravity direction itself and its two
+ring-neighbours. Gravity is read from `s->last_load_dx/dy` (the SETTLED
+direction - the nearest of the eight ring directions, stable while the
+board is held still) rather than `s->last_step_dx/dy` (the per-step
+DITHERED direction) or the raw tilt vector: dithering would alternate the
+eligible semi-disc between two adjacent orientations every step a tilt
+fell between two eighths, and a continuous test off the raw vector would
+give five eligible cells only at exact axis or exact diagonal alignment -
+the smoothed IMU vector is essentially never exactly aligned, so either
+alternative would flicker between a 5-cell and a 4-cell rule constantly.
 
 A cell is covered when at least `need` of those five are covering, AND
 the covered cells form **one contiguous run around the semi-disc** - with
@@ -518,10 +522,11 @@ becomes stone and nothing is thrown - correct, since no impulses means no
 explosions anywhere else in the simulation either.
 
 **The rate is per covered cell, per step, not per pool or per event** -
-the same multiplier trap `reaction_t.vent_chance`'s own comment
-(material.c) documents making twice: a large sealed pool has many covered
-cells, each independently rolling this every step it stays covered, so a
-figure that reads as vanishingly rare in isolation is common in aggregate.
+the same multiplier trap the earlier vent mechanism's own rate fell into
+twice, back when it was tuned (see git history): a large sealed pool has
+many covered cells, each independently rolling this every step it stays
+covered, so a figure that reads as vanishingly rare in isolation is
+common in aggregate.
 A stress-tested "pool under a hand-drawn floor" scene (many one-cell
 dimples across a wide ceiling, deliberately packed tighter than the blast
 radius) confirmed the mechanism is self-limiting rather than a runaway

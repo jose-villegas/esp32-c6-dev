@@ -6,10 +6,10 @@
  *
  * Deliberately NOT suites_run_all(): that would also compile and run every
  * other DEVICE_BUILD scene in suite_sand.c (fire, gas, boiler, thermal
- * shock, the present-cost section, the vent-cap sweep's 6000-step host
- * branch...), most of which have nothing to do with whatever pass a given
- * round is attributing and would cost minutes per build variant for no
- * value. Instead this file keeps its own name -> function table below, one
+ * shock, the present-cost section...), most of which have nothing to do
+ * with whatever pass a given round is attributing and would cost minutes
+ * per build variant for no value. Instead this file keeps its own name ->
+ * function table below, one
  * entry per SAND_HOST_PROBE wrapper (declared in suite_sand.c, right after
  * the real, unmodified test body each one calls), and runs only the scenes
  * asked for.
@@ -61,7 +61,7 @@ extern void sand_host_probe_run_mixed_flip(void);
 extern void sand_host_probe_run_lava_stress(void);
 extern void sand_host_probe_run_four_liquids(void);
 extern void sand_host_probe_run_wet_earth(void);
-extern void sand_host_probe_run_vent_spam(void);
+extern void sand_host_probe_run_water_over_lava(void);
 extern void sand_host_probe_run_every_material_flip(void);
 extern void sand_host_probe_run_smoke_and_steam(void);
 
@@ -81,7 +81,7 @@ static const probe_scene_t SCENES[] = {
     {"lava_stress", sand_host_probe_run_lava_stress},
     {"four_liquids", sand_host_probe_run_four_liquids},
     {"wet_earth", sand_host_probe_run_wet_earth},
-    {"vent_spam", sand_host_probe_run_vent_spam},
+    {"water_over_lava", sand_host_probe_run_water_over_lava},
     {"every_material_flip", sand_host_probe_run_every_material_flip},
     {"smoke_and_steam", sand_host_probe_run_smoke_and_steam},
 };
