@@ -104,12 +104,12 @@ static void draw_toggles_page(const input_t *input)
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
         int overlay_on = gfx_debug_overlay();
-        mu_checkbox(ctx, "gfx dirty-region overlay", &overlay_on);
+        mu_checkbox(ctx, "gfx panel-grid overlay", &overlay_on);
         gfx_set_debug_overlay(overlay_on);
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
         int leaf_on = gfx_debug_leaf_overlay();
-        mu_checkbox(ctx, "gfx leaf-grid overlay", &leaf_on);
+        mu_checkbox(ctx, "gfx leaf-rect overlay", &leaf_on);
         gfx_set_leaf_overlay(leaf_on);
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
