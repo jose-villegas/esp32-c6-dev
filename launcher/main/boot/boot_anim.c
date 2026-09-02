@@ -1061,14 +1061,48 @@ void boot_anim_draw_frame(uint32_t now_ms)
     }
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Windowed, not per-frame or once-at-the-end - main.c's own report_fps()
+ * (the shell's post-boot loop) already makes that case, and a log line
+ * costs several ms of UART, enough to throttle the very thing being
+ * measured. Duplicated here rather than shared: boot_anim_run() has its
+ * own loop, entirely separate from the shell's, so there is no one call
+ * site the two could share this from.
+ *
+ * 500ms windows, not main.c's 1.5s - short enough to actually localize a
+ * dip to a ~2s window (the photograph's own crossfade, draw_image()'s
+ * full-framebuffer blend loop - see that function's own comment) rather
+ * than average it away against six-odd seconds of much cheaper curve/grid
+ * drawing. `now_ms` in the log line, not just an fps number, so a dip can
+ * be read straight off against boot_anim_timeline.json's own authored
+ * ms values without having to count log lines to find it. */
+static void report_fps_windowed(int64_t now_us, uint32_t now_ms,
+                                int64_t *window_start, uint32_t *frames)
+{
+    (*frames)++;
+    const int64_t since = now_us - *window_start;
+    if (since >= 500000) {
+        ESP_LOGI(TAG, "t=%ums: %.1f fps", (unsigned)now_ms,
+                 (double)*frames * 1000000.0 / (double)since);
+        *frames = 0;
+        *window_start = now_us;
+    }
+}
+#endif
+
 #ifdef ESP_PLATFORM
 void boot_anim_run(void)
 {
     const int64_t started_us = esp_timer_get_time();
     uint32_t frames = 0;
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    int64_t fps_window_start = started_us;
+    uint32_t fps_window_frames = 0;
+#endif
 
     for (;;) {
-        const int64_t elapsed_us = esp_timer_get_time() - started_us;
+        const int64_t now_us = esp_timer_get_time();
+        const int64_t elapsed_us = now_us - started_us;
         const uint32_t now_ms = (uint32_t)(elapsed_us / 1000);
         if (now_ms >= BOOT_ANIM_MS) {
             break;
@@ -1077,6 +1111,10 @@ void boot_anim_run(void)
         boot_anim_draw_frame(now_ms);
         gfx_present();
         frames++;
+#if CONFIG_LAUNCHER_DEVELOPMENT
+        report_fps_windowed(now_us, now_ms, &fps_window_start,
+                            &fps_window_frames);
+#endif
 
         /* The same yield the shell's loop makes, for the same reason: the
          * idle task feeds the watchdog. */
