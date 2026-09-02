@@ -1,15 +1,15 @@
 # Shading and Colour
 
-How a cell's material and variant become a pixel, what has gone wrong doing
-that, and what is still unfinished - written so a fresh session (yours, or
-another agent's) can pick up shading or colour work on *any* material
-without re-discovering any of this from scratch. Read
+How a cell's material and variant become a pixel and what has gone wrong
+doing that - written so a fresh session (yours, or another agent's) can
+pick up shading or colour work on *any* material without re-discovering
+any of this from scratch. Read
 [`Sand-Simulation.md`](Sand-Simulation.md) first if you have not; this
 assumes you already know what a cell byte and a material row are.
 [`Adding-a-Material.md`](Adding-a-Material.md) is the sibling document -
 the checklist for adding a whole new material. This one is narrower and
-deeper: it is entirely about how an *existing* material is painted, the
-traps specific to that, and the one item still open.
+deeper: it is entirely about how an *existing* material is painted and the
+traps specific to that.
 
 Everything below was paid for on the device, not reasoned from a desk.
 Where a number appears, it was measured - either on a host-side probe
@@ -47,11 +47,13 @@ one costs to produce:
 - **`depth`** - a liquid's own notion of how deep this cell sits inside its
   body of liquid, 0 (surface) to `MATERIAL_LIQUID_DEPTH_BAND` (24, fully
   saturated), used only by a liquid's interior. Both per-axis accumulators
-  now saturate at that same constant *before* they are blended, not at a
+  saturate at that same fixed constant *before* they are combined, not at a
   byte's 255 - see "A value blended before it is clamped is blended on the
-  wrong scale" below. See the local-depth lessons generally; this is the
-  one signal that has been rebuilt the most times this session, and the
-  backlog item at the end is about it.
+  wrong scale" below. The two axes are no longer *blended* by weight - each
+  is *projected* onto gravity's own direction and the larger of the two is
+  taken - see "Liquid depth is now gravity-continuous" below for why. See
+  the local-depth lessons generally; this is the one signal that has been
+  rebuilt the most times this session.
 - **`out[3]`** - body / diagonal-line / crossing colour. A flat or
   speckled material sets all three the same; `MATERIAL_HATCHED` (glass) is
   the only pattern that uses all three for real.
@@ -231,9 +233,9 @@ affected cell at once, however rarely it fires, still pops. Leaving a
 device sitting near 45 degrees long enough guarantees at least one flip
 eventually, because real sensor noise is not perfectly bounded.
 
-**Second attempt, `05caadb`, current:** stop switching at all. Compute
-*both* vertical depth and horizontal depth for every liquid cell, every
-frame, unconditionally, and blend them by a continuous Q8 weight -
+**Second attempt, `05caadb`:** stop switching at all. Compute *both*
+vertical depth and horizontal depth for every liquid cell, every frame,
+unconditionally, and blend them by a continuous Q8 weight -
 `256 * |gx| / (|gx| + |gy|)`, one divide per *frame*, then one
 multiply-add-shift per *cell*, no per-cell divide. Modelled at the same
 worst-case, 11-cell-disagreement cell: sweeping gravity 30 to 60 degrees
@@ -242,10 +244,17 @@ step - a crossfade, not a pop. This also directly answers "single source
 of truth": the blend weight depends on nothing but gravity itself,
 continuously - no boolean state that can fall out of step with it.
 
-**What this does NOT yet fix - see the Backlog section below.** The blend
-interpolates between two *cardinal-axis* measurements (straight up/down,
-straight left/right); it does not measure along the true diagonal gravity
-actually points. That is deliberately left open, not overlooked.
+**What this did NOT fix, and how it was actually closed:** the blend still
+interpolated between two *cardinal-axis* measurements (straight up/down,
+straight left/right) by weight - it never measured along the true diagonal
+gravity actually points, and (a separate, later-discovered defect) blending
+two axis *counts* has no notion of projecting onto the direction that
+matters, so a fixed true depth read differently purely from tilt angle.
+This was left open as a backlog item for a long time, on the theory that
+the eventual fix would need genuine diagonal stepping (see `build_xflow()`
+in `sand.c`). It did not: see "Liquid depth is now gravity-continuous"
+below for the combiner that replaced this blend (`PROJECT then MAX`,
+current) and closed both defects without ever stepping off the x/y grid.
 
 ### Any distance-based effect must be scaled to what it is actually measuring
 
@@ -337,6 +346,14 @@ rendered on *before* you combine them, not after. And when two files share
 a constant so they "agree by construction", check that they actually do -
 one of them stating the invariant in a comment is not the same as either
 of them enforcing it.
+
+**This clamp stayed fixed at `MATERIAL_LIQUID_DEPTH_BAND`, unscaled, even
+after the combiner it feeds changed shape** (blend → project-then-max; see
+"Liquid depth is now gravity-continuous" below) - a *scaled* per-axis
+ceiling was tried there and rejected after it measurably reintroduced this
+exact bug. Worth cross-referencing rather than re-deriving: the reasoning
+for why the ceiling had to stay put, once there was a reason to consider
+moving it again, lives in that later section, not here.
 
 ### A dead array can survive its own mechanism, hidden by comments that kept describing it
 
@@ -470,49 +487,549 @@ material's shine.
 
 ---
 
-## Backlog: liquid depth still is not gravity-*continuous*
+## Closed: liquid depth is now gravity-continuous
 
-Banked explicitly, not forgotten. The current blend (`05caadb`) fixed the
-discrete-switch pop and is a real, shipped improvement - but it is still,
-underneath, an interpolation between two axis-*locked* proxies (a pure
-vertical walk and a pure horizontal walk), not a true measurement along
-the actual direction gravity points. At a strongly diagonal angle, each of
-the two proxies is itself a coarse stand-in for "distance toward the
-surface along this exact ray" - the blend smooths the *seam* between them,
-but a softer, lower-magnitude version of the same axis-aligned bias can
-still be there, because neither proxy ever steps diagonally.
+This used to be the backlog item at the end of this document - "liquid
+depth still is not gravity-*continuous*" - closed by replacing the blend
+above with a different combiner, prompted by two device-reported defects
+in the blend itself (not in the discrete-axis-switch it had already
+replaced):
 
-**What "fully gravity-aware" would need:** genuine diagonal stepping -
-walking each cell's local depth along the actual gravity ray rather than
-along the screen's own x/y axes. `build_xflow()` (`sand.c`) already solves
-a closely related problem for the *simulation's* own cross-flow levelling,
-bracketing a true diagonal with two rays (the dominant axis and the
-diagonal beside it) rather than snapping to one - the same idiom local
-depth already borrows for its *axis choice*, but not yet for the per-cell
-*walk itself*. That is very likely the shape the eventual fix takes:
-either a genuine two-ray accumulation (more state, more per-cell work,
-modelled cost unknown - has not been attempted) or some other continuous
-walk that does not commit to the screen's own grid axes at all.
+- **"Weird rectangles"** of wrongly-shallow water beside a submerged
+  obstacle, flipping which side with the sign of `gx`. The blend still gave
+  the axis whose walk got cut short by the obstacle a weight proportional
+  to its own share of gravity, instead of zero, so a cell several columns
+  away - genuinely no shallower than its neighbours at that depth - read
+  shallower purely because one walk, not the other, hit the obstacle first.
+  Measured on the device's own captures: 63.1 vs. 55.1 luminance beside all
+  5 obstacles (about 11 cells of visibly wrong depth), mirrored to the
+  opposite side when the tilt's sign flipped.
+- **"It creates a band to one side or the other and the shade just gains
+  length depending on which direction has more magnitude."** Each axis walk
+  counts cells along that *axis*, not distance along *gravity* - blending
+  two axis counts has no notion of projecting onto the direction that
+  actually matters, so a cell at a fixed true perpendicular depth read
+  differently purely from tilt angle. Modelled on an ideal planar surface,
+  true depth 10 cells, swept 0-90 degrees from vertical: the blend reported
+  10.0, 13.2, 14.6, 14.1, 14.6, 13.2, 10.0 - up to 46% inflation from tilt
+  alone, no obstacle, no staleness, nothing about the water changing at
+  all.
 
-Before starting on this: re-read the "single dominant axis" lesson above
-in full, re-run the same worst-case-cell modelling technique (an
-irregular pool with an obstacle, swept through a range of angles,
-measuring the actual rendered luminance step) against whatever new
-mechanism is tried, and compare it numerically to the current blend's
-already-measured one-index-per-3-degrees figure - a change here is only
-worth shipping if it measurably beats that, not merely if it sounds more
-correct.
+**The fix: project, then max, instead of blend.** Each axis's raw cell
+count is scaled by that axis's own share of the gravity *vector's length*
+(`256 * |gy| / im_len(gx, gy)` for the vertical count, `256 * |gx| /
+im_len(gx, gy)` for the horizontal one - `im_len()`, `util/intmath.h`, an
+integer approximate length, already used elsewhere in this app for the
+same reason: no square root on a chip with no hardware divider) rather
+than compared against the *other* axis's own share the way the blend's
+weight was. The two projected values are then combined with `max`, not a
+weighted average.
+
+**Why max, and not a blend of the projections - this is the load-bearing
+choice, not a stylistic one.** Each axis walk terminates at the first
+non-liquid neighbour toward the surface, so its projected value is a
+*lower bound* on the true perpendicular depth: it may stop early at an
+inclusion rather than at the real free surface, but it can never
+*overshoot*. Max-of-lower-bounds is the tighter estimate and recovers the
+true depth as soon as *either* axis reaches it; averaging instead lets
+whichever axis got blocked drag the combined result down, proportionally
+to its own weight - exactly what produced the shadow. On an ideal planar
+surface, both projections equal the true depth exactly (verified: 10.0 at
+every angle 0-90, not merely close), so max is also exact there, closing
+the tilt-inflation defect with no obstacle involved at all. It is also
+still a crossfade at the 45-degree tie point that motivated the *original*
+blend - both projections are continuous functions of gravity's own angle
+and equal each other exactly at the crossing, so their max is continuous
+too; re-verified against the same worst-case cell and the same 30-to-60
+degree sweep the blend was first proven against (`test_the_blend_has_no_
+jump_crossing_45_degrees`, kept its old name because it still pins the
+same property).
+
+**A third defect, found AFTER the two above had already shipped and every
+test was green: a saturated cell's shade still "breathed" with tilt.**
+This first shipped combiner clamped each axis's raw count at a FIXED
+`MATERIAL_LIQUID_DEPTH_BAND` (24) *before* projecting - `depth =
+max(min(vcount,24)*wv, min(hcount,24)*wh) >> 8`. That closes the shadow and
+the under-band tilt inflation above, but a column genuinely saturated on
+*both* axes still reports `(24 * weight) >> 8`, which is below 24 whenever
+weight is under 256 - i.e. whenever gravity is not exactly aligned with one
+axis. Measured through the real ramp, sweeping gravity 0-90 degrees against
+a cell saturated both ways: luminance read 55.1 flat from 0-30 and 60-90
+degrees, but 63.3 - one whole shade step brighter - from 35-55 degrees: the
+*entire deep interior of the pool* visibly brightening and dimming as the
+device rotates, no obstacle, no staleness, nothing about the water
+changing at all. The two device screenshots that motivated this whole fix
+were taken at 33.3 and 37.8 degrees - squarely inside that window.
+
+**Two fixes for the breathing were tried and rejected before the one that
+shipped - both are worth knowing by name, because both look obviously
+correct and both fail the same regression test for different reasons.**
+
+- *Scale the ceiling per axis* (`ceil(BAND*256/weight)`, capped at a
+  byte's own 255), so a low-weight axis's count can climb further before
+  clamping and still reach the band once projected: removes the breathing
+  completely, verified against an ideal planar surface (10.0 at every
+  angle, fixed ceiling or scaled). But scaling the ceiling up for a
+  low-weight axis *also* scales up the absolute size of the swing a broken
+  accumulator chain on that axis can produce (the same failure "A value
+  blended before it is clamped" above bounds), before that axis's own
+  weight gets a chance to damp it down - exactly cancelling the "low
+  weight damps a corrupted value" protection the scaling relies on.
+  Measured directly against the sparse-repaint regression test: 200 banded
+  pairs in the worst frame, indistinguishable from the pre-fix (no clamp
+  at all) case. Rejected.
+- *Move the projection from combine-time to climb-time*: instead of a
+  cell count, accumulate PROJECTED DEPTH directly, in eighths of a cell,
+  climbing by that frame's own per-step increment and saturating at a
+  fixed ceiling in those units - so a fully-saturated axis reads the same
+  value at every angle, by construction. This also removes the breathing
+  completely - but breaks something more fundamental: a plain cell *count*
+  is gravity-agnostic (it means the same thing regardless of when it was
+  accumulated), so projecting it fresh at combine time, from whatever the
+  *current* frame's weight is, is always correct. An eighths value has no
+  such property - each increment already has a specific frame's gravity
+  baked into it, so a value built up while gravity pointed one way carries
+  that angle, uncorrected, into a later frame where gravity has since
+  rotated. Measured directly against the same regression test: 52 banded
+  pairs (still failing), and critically, changing the ceiling this test
+  pins made *no difference at all* (255, no clamp, and the eighths design's
+  own cap both measured 52) - proving the regression was not about the
+  ceiling's value but about gravity's angle *drifting* while a stale value
+  was still live, confirmed by freezing the test's own gravity sway, which
+  dropped the count to 0. Rejected.
+
+**The fix that shipped keeps everything about the first (rejected) design
+- a plain count, projected at combine time exactly as before - and changes
+only the number the count saturates at**, raising `LOCAL_DEPTH_COUNT_CEILING`
+from the band itself (24) to 34 - `ceil(BAND*256/183)`, enough headroom
+that the projection still reaches the band at the worst (45-degree) tilt
+angle, where a Q8 weight bottoms out around 183 of 256. Because storage
+stayed a gravity-agnostic count, the eighths design's fatal flaw cannot
+recur - nothing about a count depends on when it was accumulated - while
+the raised headroom closes the breathing the same way the scaled ceiling
+tried to, without the scaled ceiling's own regression, because the ceiling
+is *fixed* (not scaled per axis, so it cannot inflate a stale swing's
+absolute size). The combiner now needs an *explicit* clamp to
+`MATERIAL_LIQUID_DEPTH_BAND` after the max - the raised ceiling means
+`count * weight >> 8` can exceed the band now, unlike the original design
+where it never could. Re-verified against every one of the three
+alternatives, same regression test throughout: 255 and the eighths design
+both measure RED (200 and 52 respectively), the scaled ceiling also
+measures RED (200), the raised fixed ceiling measures GREEN.
+
+The exact ceiling value has a floor below which the breathing becomes
+visible again, worth recording next to the constant rather than only
+here: `material_colours()`'s shade index is `4*(BAND-depth)/BAND`
+(`DEPTH_RANGE` is 4, integer division), so a projected depth anywhere from
+19 to 24 renders the *identical* shade as a true 24 would - the floor is
+the ceiling value whose worst-angle projection still lands at 19, which is
+27 (`27*183>>8 == 19`). Any future retune of `DEPTH_RANGE` or that integer
+division changes this floor and must be re-measured, not assumed.
+
+**Generalises to two lessons, not one.** First: combining two measurements
+taken along different axes requires projecting them onto the axis you
+actually mean *first* - a weighted average of the raw, un-projected
+measurements is not the same thing and can drift with an angle that has
+nothing to do with what is being measured; and when each input is a *lower
+bound* that can terminate early rather than an unconditionally trustworthy
+reading, `max` is the correct combiner where an average silently
+propagates whichever input happened to be wrong. Second, learned the hard
+way after the first fix already shipped: when a persisted value must stay
+correct while the thing it depends on keeps changing between the moments
+it is written and read (gravity's own angle, here, rotating between
+frames), keep that value in a form that does *not* bake in the
+circumstances of the frame that wrote it - a plain, context-free count
+survives being re-interpreted later; a value that already has an angle
+folded into it does not, and no amount of clamping fixes that after the
+fact. The more "obviously correct" fix (project every step, not once at
+combine time) was the one that broke this, and it took a second
+regression test - one built to catch a *third*, unrelated defect - to
+notice.
+
+**An open methodological question, found while re-proving the shadow
+regression test against the raised ceiling, worth recording rather than
+silently working around:** that test compares two columns at the *same
+screen row* to either side of a submerged obstacle, under tilted gravity.
+Close to the obstacle (1-3 cells) the two read within 2-3 units, comfortably
+under threshold. Swept further out, the gap does not converge back toward
+0 the way a real shadow's own signature should - it keeps growing, past 7
+units by 12 cells out, with real side walls added and ruled out as the
+cause. The likely explanation: "same row" and "same distance along gravity
+from the free surface" are only the same comparison when gravity points
+straight down. Under a genuine tilt the two diverge, growing with
+horizontal distance from wherever they happen to agree - which would
+produce exactly this non-converging drift, independent of any obstacle. If
+so, the test's own methodology (fixed-row comparison) measures an honest
+geometric fact about tilted-gravity pools once the compared columns are far
+enough apart, not a shading defect - and a test asserting two such columns
+must render identically would itself be the wrong claim. The regression
+test was narrowed to the distances where the obstacle's own effect still
+dominates (1-3 cells) rather than resolved further; a cleaner isolation of
+the shadow defect alone - comparing against the same scene rendered
+*without* the obstacle, or measuring along a gravity-aligned line instead
+of a fixed row - is banked for whoever next touches this test.
 
 The richer, reverted water-only version - fog colour blend plus animated
-sum-of-sines wave bands, both driven by the pre-blend local depth - is
-preserved, working, on the `water-wave-fog-depth-banked` branch (same
-base commit the simplification in `fde5769` builds on). It is not the fix
-for this backlog item - it was reverted because it read as a flat pale
-wash on any realistic pool and because its wave bands were a separate,
-resolved problem of their own - but the wave-table baking technique
-(`tools/gen_wave_table.c`) and the fog-blend arithmetic are both real,
-working code worth mining if a future effect (on water or elsewhere) wants
-either trick again.
+sum-of-sines wave bands, both driven by the pre-combiner local depth - is
+preserved, working, on the `water-wave-fog-depth-banked` branch (same base
+commit the simplification in `fde5769` builds on). Unrelated to this fix -
+it was reverted because it read as a flat pale wash on any realistic pool
+and because its wave bands were a separate, resolved problem of their own
+- but the wave-table baking technique (`tools/gen_wave_table.c`) and the
+fog-blend arithmetic are both real, working code worth mining if a future
+effect (on water or elsewhere) wants either trick again.
+
+---
+
+## Closed: the obstacle shadow now follows gravity, not the screen axes
+
+The projection-then-max combiner above closed two defects (the shadow beside
+a submerged obstacle, the tilt-dependent inflation on a flat surface) but
+left a third that turned out not to be a combiner defect at all: the
+shadow's own *direction*. Reported from the device after the combiner had
+shipped and closed both of its own defects: the shallow region behind a
+submerged obstacle still ran straight down or straight sideways, never
+along the actual tilt.
+
+**Why the combiner could never have fixed this.** Both walks the combiner
+combines are axis-aligned - one counts cells straight up/down, the other
+straight left/right - so whichever one an obstacle blocks resets to 0 and
+climbs back up walking along that same fixed axis. No projection or
+max-combiner downstream of that walk can rotate a shape neither walk ever
+drew in the first place. This is structural, not a tuning problem: an
+axis-aligned walk can only ever cast an axis-aligned shadow.
+
+**Measured** - a settled pool with a submerged 3x3 stone dead centre,
+comparing the shadow's own deficit-weighted centroid bearing against true
+gravity's bearing, across six tilts (SHIPPED = the projection-then-max
+combiner above; RAY = the walk that replaced it, below):
+
+```
+tilt from vertical   SHIPPED bearing        RAY bearing    true gravity
+     33.1 deg          -90.0 (33.1 off)      -124.6 (1.5 off)   -123.1
+     33.3 deg          +90.0 (33.3 off)       +57.6 (1.0 off)    +56.7
+     37.8 deg          +90.0 (37.8 off)      +128.1 (0.2 off)   +127.8
+     45.0 deg          no shadow at all       +45.0 (0.0 off)    +45.0
+     16.7 deg          +90.0 (16.7 off)       +72.6 (0.7 off)    +73.3
+     73.3 deg           +0.0 (16.7 off)       +17.9 (1.2 off)    +16.7
+```
+
+SHIPPED's bearing is always exactly +/-90 or 0, and its error always equals
+the tilt angle - the axis-aligned signature stated plainly. At 45 degrees
+SHIPPED has no shadow at all, not a small one: both projected axes reach
+the true surface equally there, so `max()` hides the shadow completely -
+which doubles as the reason the whole effect visibly appeared and
+disappeared as the device rotated through that angle. RAY stays within 1.5
+degrees of true gravity at every tilt tried, including the tie point where
+SHIPPED has nothing to measure at all.
+
+**The fix: one walk that steps along the gravity ray itself, by Bresenham,
+replacing the two axis-aligned walks and their combiner outright** - not a
+fourth combiner shape layered on top of the third. Two regimes, switching
+at 45 degrees on `|gy| >= |gx|`, the same tie-point split the very first
+(hysteresis) mechanism used:
+
+- **Vertical-dominant** (`|gy| >= |gx|`): one ROW per step toward the
+  surface. The cell one step back along the ray is `(cx + step, cy -
+  vdir)` - `vdir = sign(gy)`, `step` a value shared by every column in
+  that row (gravity does not change from one column to the next).
+- **Horizontal-dominant** (`|gx| > |gy|`): the transpose - one COLUMN per
+  step, source `(cx - hdir, cy + step)`, `step` now a per-cell value (0
+  most cells, +/-1 wherever the ray's own diagonal drift crosses a row
+  boundary).
+
+**Why this regime switch is safe where the first mechanism's own axis
+switch was not - the two are not the same shape of risk, even though both
+are a discrete pick with a real seam at 45 degrees.** The very first
+mechanism's two sides measured *different quantities* - a plain vertical
+cell count and a plain horizontal cell count, related to the true depth by
+two different, angle-dependent factors - so a flip between them was a jump
+in the reported value itself, however rarely hysteresis let it fire (see
+"Lessons" above for that mechanism's own history). Both regimes of the ray
+walk measure the *same* quantity - distance along the gravity ray, in
+cells - so a regime flip changes only *how* that quantity gets computed,
+not what it means; the two regimes agree exactly at the 45-degree crossing
+by construction, since both are walking the same ray there. Measured
+directly, the same 30-to-60-degree sweep `test_the_blend_has_no_jump_
+crossing_45_degrees` has used since the blend: worst single-degree step
+across the crossing, the old projection-then-max combiner 1, this walk 0.
+
+**Depth in cells is `count * |g| / |dominant axis|`, applied once, at
+combine time, to a raw step count** - not baked into the climb itself. The
+count staying a plain, gravity-agnostic count (never a pre-scaled
+accumulator) is the one property every earlier shape of this mechanism
+already proved load-bearing (see "A value blended before it is clamped" and
+the eighths-accumulator rejection above) - it survives this rewrite
+unchanged, for the identical reason.
+
+**The ceiling needs no raise this time - a load-bearing difference from the
+projection-then-max design's own scale, not an oversight carried over.**
+That design's own weight was `component / len`, always <= 256 (minimised at
+the 45-degree tie, around 183 of 256), so a count clamped at the plain band
+could project to *below* the band at every angle except perfect axis
+alignment - "breathing" - and the ceiling had to be raised past the band
+(to 34) so a saturated count still reached it once shrunk. This walk's own
+scale is the *reciprocal* shape, `len / dominant_axis`, always >= 256 (equal
+to 256 only at perfect axis alignment, growing at every other angle) - so a
+count clamped at the plain band *already* projects to at least the band at
+every angle, and the combiner's own explicit clamp to
+`MATERIAL_LIQUID_DEPTH_BAND` does the rest. Verified directly: a fully
+saturated cell swept across the same 0-90 degree range `test_a_saturated_
+liquid_body_reads_the_same_shade_at_every_tilt_angle` uses clamps to a flat
+`MATERIAL_LIQUID_DEPTH_BAND` at every sample, ceiling equal to the band,
+no raise at all.
+
+**Storage: one shared pair of arrays now, not two** -
+`local_depth_row_a[]`/`local_depth_row_b[]` (`app_sand.c`), a plain double
+buffer pointer-swapped at the end of every row, replace `col_stable_
+depth[]`/`row_stable_depth[]` together; `local_depth_top_row[]` replaces
+`col_top_row[]`/`row_top_col[]` together. Net `.bss`: two `GRID_H_MAX`
+(224-byte) arrays removed, three `GRID_W_MAX` (184-byte) arrays remain -
+552 bytes against the old 816, roughly 260 bytes saved, not spent, plus a
+handful of new per-frame scalars (~20 bytes: the frame's own `|gx|`/`|gy|`,
+two pointers, two booleans) too small to change that direction.
+
+**The debounce key means something different in each regime - found by
+testing, not designed in advance, and worth recording precisely because it
+is the one place a straightforward merge of the two old arrays does not
+work.** Vertical-dominant keeps the *old* convention exactly:
+`local_depth_top_row[cx]` holds the row index of column cx's most recent
+boundary request, committing only once the *same row* asks again on a
+later painted frame - this still works because `local_depth_row_a/b[]` is
+column-indexed and a given column's own row-sweep visits that column's slot
+roughly once per frame, so "the row" genuinely identifies a stable physical
+location across frames. Horizontal-dominant **cannot** reuse that key:
+unlike the vertical case, *every* row-call writes *every* column's slot (a
+row-call always walks its own full width), so a row-indexed key compares
+against a different row's own index on almost every successive write to
+the same slot - a column sitting permanently beside a real wall would ask
+for a reset from a different `cy` on every dirty row that touches it, so
+`top_row[cx] == cy` would almost never match twice, and the debounce would
+HOLD FOREVER instead of ever committing to the single most common case this
+mechanism has to get right: a column beside a permanent wall. Measured
+directly, reproducing exactly this geometry (a settled pool against a real
+side wall, gravity mostly horizontal): a row-indexed key left the
+wall-adjacent column's own reported depth stuck climbing indefinitely
+rather than reading near 0. The fix: horizontal-dominant instead stores a
+plain PENDING FLAG (any value other than 255 means "the immediately
+preceding write to this slot was also a boundary request, not yet confirmed
+a second time"), re-armed on every subsequent boundary request (so a
+permanent wall commits on every row that touches it, not merely the first)
+and explicitly cleared back to 255 on a confirmed same-material climb (so a
+stale flag from an unrelated earlier blink cannot pre-arm a later, different
+blink into an instant false commit). Both regimes share the *array*, not
+the convention - a regime flip resets it wholesale, so the two conventions
+never have to interpret a value the other one wrote.
+
+**A regime flip gets the same kind of reset the two scan-direction flips
+already had, and for the same reason**, extended to a third condition
+(`update_local_depth_gravity()`, `app_sand.c`): the same array slot carries
+a different recurrence depending on which regime is active, so a value left
+behind by one regime is not simply "the same count under different
+bookkeeping" to the other regime's own read pattern. Measured, host-side, a
+single sharp jostle across the 45-degree line in the middle of an otherwise
+steady near-horizontal hold: a small, self-healing blip immediately after -
+12 banded pairs the very next measured frame, 6 one frame later, 0 the
+frame after that (the periodic wake tick finishes the job) - bounded and
+gone within two frames at 30fps, against an artificially instantaneous
+gravity step no real hand-tremor input produces (the tilt filter's own
+smoothing means a real crossing ramps through several frames, not one).
+
+**Verification.** `test_a_submerged_obstacle_does_not_cast_a_depth_shadow`
+became `test_a_submerged_obstacle_casts_a_gravity_aligned_shadow` - the old
+name's own claim was the correct requirement for the projection-then-max
+combiner and is now the wrong one; the shadow is a kept, deliberate feature,
+and the new test asserts it is both present (unlike SHIPPED at 45 degrees)
+and aligned with gravity within 5 degrees, at every one of the six tilts in
+the table above. Every other local-depth test either transfers unchanged
+(the ones exercised only at `gx == 0`, where this walk's vertical-dominant
+regime with zero row-drift is exactly the old vertical-only mechanism) or
+was rewritten against the new mechanism directly:
+`test_the_blend_has_no_jump_crossing_45_degrees` (kept its name a second
+time, still pinning the same no-jump-at-the-crossing property against
+whichever mechanism ships), `test_a_fixed_depth_reads_the_same_at_every_
+tilt_angle`, `test_a_saturated_liquid_body_reads_the_same_shade_at_every_
+tilt_angle`, `test_a_sparse_repaint_does_not_band_a_tall_liquid_column`
+(0 banded pairs, same as the design it replaced), and the wake-tick test
+`test_a_settled_edge_does_not_flicker_stale_to_fresh`.
+
+---
+
+## Closed: a sweep's first row was reading a different row's count
+
+Reported from the device once the ray walk had shipped and fixed the shadow
+alignment, in two parts: **"a brief flip of colours"** the user could only
+catch in a single frame, and **"tilt flips into straight positions with the
+water settled seem to cause a huge spike."** Their own reproduction, adopted
+as the acceptance test: fill the screen to about 40% with water in portrait,
+let it settle, then turn the board to landscape.
+
+The two capture sidecars attached to the report
+(`launcher/tools/screenshots/screenshot_20260902_1626*.json`) read
+`app.tilt_x` -12 and -195 against `app.tilt_y` 3342 and 4190 - **portrait
+lock**, gravity essentially straight down in grid space with the horizontal
+component sitting on zero. That is nowhere near the 45-degree line, so this
+was never the regime-flip transient `update_local_depth_gravity()` already
+documents.
+
+### Three suspects, all ruled out by measurement first
+
+Ruling these out is what made the real mechanism findable, so they are worth
+recording rather than only the answer.
+
+| Suspect | Measured | Verdict |
+|---|---|---|
+| The state reset firing on hand tremor | 40 resets in 40 frames of portrait tremor, 39 in 40 of landscape - but 0 cells crossing a shade step, 0 staleness | Real, and a genuine second defect (below), but **not** the flash |
+| Wake-tick staleness (`LOCAL_DEPTH_WAKE_MS`) | Repainting every liquid row *every* frame instead made it **worse**: 1003 cells against 841 | Not the cause; pointed at the walk's bookkeeping rather than at how often it runs |
+| The walk arithmetic across 45 degrees | A fully coherent from-scratch sweep is smooth through the crossing - interior rows step by 1 or 2 of 24 per degree, 40 through 56 degrees | Not the cause |
+
+### The reproduction that isolated it
+
+A host model driving the real `sand_t`/`sand_step()` with the real dirty-row
+sparsity, the real wake tick, the real row-order reversal and the real reset
+logic, on the device's own NORMAL-quality 92x112 grid. The decisive
+experiment: settle the pool, then **freeze the simulation** - "with the water
+settled" is the reported condition, and a grid that cannot change makes every
+displayed change spurious by construction, so the measurement needs no
+oracle - and sweep gravity from 0 to 90 degrees at one degree per frame.
+
+Result: **841 interior cells - a quarter of the pool - crossed a full shade
+step in a single frame**, 23 of the 24-cell band, on the first wake tick
+after the regime flip. Disabling the reset entirely changed nothing (919).
+Waking every frame changed nothing for the better (1003).
+
+### The mechanism
+
+Every cross-row read in `paint_row_n()` treats `local_depth_prev_row[qx]` as
+"the count of the cell one step back along the ray, in row `cy - vdir`".
+That is only true when the row painted immediately before this one *was*
+that row. `draw_dirty_rows()` sweeps surface-first precisely so that it
+usually is - but it only ever paints **dirty** rows, and the wake tick marks
+only rows holding a **liquid** cell. So on a settled pool:
+
+1. The sweep's first row is the surface row.
+2. The empty row above it is never painted, so nothing zeroes the buffer.
+3. `local_depth_prev_row[]` still holds what the **last row of the previous
+   sweep** left there - the deepest row of the pool, saturated at
+   `LOCAL_DEPTH_COUNT_CEILING`.
+4. The surface row's source is air, so `same_material` is false and the walk
+   drops into the hold-then-commit debounce. A COMMIT writes 0 and all is
+   well; a **HOLD** "keeps climbing as if nothing happened" - climbing *from
+   a saturated count*.
+5. Every row beneath inherits that as a same-material climb.
+
+The whole body renders at maximum depth for a frame. Not a shade or two out:
+the gradient inverted end to end. The suite's own banding test carried the
+wrong assumption in a comment - "a pool that IS asleep takes every one of its
+repaints from the wake tick, which always walks the whole column in order and
+so can never break the chain" - which is exactly false, because the wake tick
+walks only the *liquid* rows.
+
+### The fix, and why that shape
+
+`local_depth_prev_cy` records which row `local_depth_prev_row[]` actually
+describes. `paint_row_n()` compares it against `cy - vdir` once per row
+(hoisted out of the cx loop), and on the **debounce HOLD path only**, a
+cross-row carry from a buffer that describes some other row is taken as 0
+instead - the same value the non-liquid row the chain should have started
+from would have written.
+
+**The guard is on the HOLD path only, deliberately.** A same-material climb
+reading a stale count is load-bearing: a row repainted in isolation deep
+inside a pool inherits a value that is stale but *saturated*, which is
+correct there, and is the property
+`test_a_sparse_repaint_does_not_band_a_tall_liquid_column` pins. Distrusting
+the buffer on that path too was tried in the same harness and is strictly
+worse - it makes an isolated deep row re-climb from 1, which is the banding
+that test exists to forbid. At a boundary the stale value is not
+approximately right; it belongs to a different body, so 0 is the only honest
+carry.
+
+Measured after: **83 cells** instead of 841 on the device grid. The residual
+83 are a one-to-five-column strip against the wall the ray exits through
+(`qx_ok` false, so the walk restarts from 0 by construction), whose rows
+shift as the per-row Bresenham drift changes with the tilt - the wall's own
+shadow moving, not a chain break, and left alone.
+
+An alternative fix was measured and rejected: having the wake tick also mark
+the row on the surface side of each liquid band, so the chain is always
+seeded by a non-liquid row. It reaches the same 83, but it only repairs
+*wake-driven* sweeps and leaves a simulation-driven sparse sweep whose first
+row is a boundary just as wrong, at the cost of extra repainted rows every
+tick. The guard fixes the invariant at the point of use instead.
+
+## Closed: tremor at axis lock was wiping the debounce every frame
+
+A second, separate defect found while chasing the flash - the one the flash
+was first blamed on.
+
+`local_depth_h_reverse` is just `gx < 0`. At portrait lock `gx` sits on zero
+(the sidecars' -12 against 3342), so ordinary hand tremor flips its **sign**
+many times a second. `update_local_depth_gravity()` treated any flip of any
+of its three flags as invalidating the whole walk state, so it wiped all
+three arrays on essentially every frame: 40 resets in 40 frames. Landscape is
+the mirror image with `local_depth_v_reverse` as the noisy flag, 39 in 40.
+
+**What that cost is not a flash** - the displayed depth moves by at most 1 of
+24 while the tremor runs. It is that the hold-then-commit debounce is
+disabled outright: `local_depth_top_row[]` is wiped back to "untracked"
+before every paint, so a boundary can never be asked a second time and can
+never COMMIT to 0. A settled pool's surface holds at 1 forever instead and
+every row beneath inherits the extra count. Measured over a 40-frame portrait
+tremor on a frozen 40% pool: **1472 interior cells' displayed depth moved**,
+and the pool's mean displayed depth sat at 18.12 against 17.58 without the
+resets, permanently - plus a three-array wipe every frame for a flag change
+nothing could observe.
+
+### A relevance gate, not a deadband
+
+This mechanism already removed one tuned dead zone, so the fix is exact
+arithmetic about whether the flipped flag can change a number *this grid's*
+walk actually computes. Nothing is tuned and there is no threshold to
+re-tune:
+
+- **Vertical-dominant:** `h_reverse` only supplies the *sign* of the per-row
+  drift. That drift's running total across the whole grid is
+  `floor(grid_h * ax / ay)`, so when `grid_h * ax < ay` every row's step is
+  0, and the sign of nothing is still nothing.
+- **Horizontal-dominant:** `v_reverse` only picks the cross-row source
+  (`toward_surface`, dereferenced only when `step != 0`) and the sweep order
+  that gives `local_depth_prev_row[]` its meaning. The within-row accumulator
+  adds `ay` per cell from 0 and fires at `ax`, so when `grid_w * ay < ax` no
+  cell in any row ever reads across a row and neither can be observed.
+- **A regime flip is never gated** - it always changes what the array slot
+  means, whatever the magnitudes are.
+
+Measured with the gate: portrait tremor 0 resets in 40 frames and 0 moved
+cells; landscape tremor 0 in 40; the genuine 45-degree crossing still resets,
+2 flips in a 12-frame portrait-to-landscape ramp, unchanged.
+
+### Tests
+
+- `test_turning_a_settled_pool_to_landscape_does_not_flash_the_whole_body` -
+  the user's scenario, simulation frozen after the settle, gravity swept
+  along a chord (no trigonometry) through the quarter turn. Measures **both**
+  sides in one run via `ray_walk_state_t::ignore_chain_break`, so
+  red-before-green is a permanent property of the test rather than a claim in
+  a commit message: 522 cells against 31 on the test's own 64x96 scene.
+- `test_axis_lock_tremor_does_not_wipe_the_depth_debounce` - 40 frames of
+  ±12 tremor on `gx` at portrait lock over a frozen pool. Asserts exactly
+  zero resets and exactly zero moved cells with the gate, and that the
+  ungated run still measures both, so the test cannot pass because the scene
+  stopped exercising the bug.
+- `test_turning_a_settled_pool_to_landscape_fits_in_the_frame_budget`
+  (DEVICE_BUILD) - the same turn, timed. **Its budget is UNPEGGED**: it needs
+  a `./launcher/test/run_device_tests.sh` capture and a re-peg at
+  `measured * 0.9` before it means anything. See the comment above the
+  assertion.
+
+The existing local-depth tests all stayed green through both changes:
+`test_a_submerged_obstacle_casts_a_gravity_aligned_shadow`,
+`test_a_sparse_repaint_does_not_band_a_tall_liquid_column` (still 0 banded
+pairs), `test_the_blend_has_no_jump_crossing_45_degrees`,
+`test_a_fixed_depth_reads_the_same_at_every_tilt_angle`,
+`test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle` and
+`test_a_settled_edge_does_not_flicker_stale_to_fresh`.
 
 ---
 
@@ -553,6 +1070,58 @@ either trick again.
   case, measured judgement, not a rule to apply blindly.
 
 ---
+
+## Reporting and hearing a visual defect
+
+**The through-line, and the first thing to check.** Four reports across
+separate sessions - `6a05faa` "hard horizontal or vertical lines... inside
+the volume, not at the rim", `fde5769` "straight columns of matching
+colour", `05caadb` "fighting multiple values", `c139ed7` a stone's shadow
+"not aligned to gravity" - are all one complaint: the interior carries
+structure aligned to the SCREEN rather than to gravity. The first three
+were answered in the combiner (hysteresis, then a blend, then a projection
+with `max`). None could work, because the WALK stepped along x or y, so
+everything it produced was axis-aligned by construction. **When structure
+follows the screen, fix the walk, not the combiner.**
+
+**Stop and ask rather than guess.** The reader is the one who knows a cue
+has not landed; guessing costs a delegation and a device round trip. Stop
+on: a directional word with no frame of reference; a term naming two
+mechanisms ("landscape lock" is physical tilt, but a screen-rotation
+quarter turn also exists); a shape word with no obvious metric; and a
+complaint about something the code does on purpose, where
+*wanted-but-wrong* and *unwanted* lead to opposite fixes - the costliest
+ambiguity in this feature's history.
+
+**Ask with an artifact, not an open question.** Best first: render two
+candidate hypotheses from the host probe and ask which matches - it turns
+description into multiple choice. Then an arrow drawing on a crop
+(direction is trivial to draw, near-impossible to write), or a capture at
+a named orientation with its `.json` sidecar, since `tilt_x`/`tilt_y` is
+what makes two captures comparable. Successive captures are NOT adjacent
+frames - the tool is slow to dump.
+
+**Treat your own reading of an image as a hypothesis.** This session read
+a screenshot as showing the shadows on the left; measurement showed right
+for `gx>0` and left for `gx<0`. Confidence does not track accuracy here,
+and small or downscaled images are worse. Two habits that worked every
+time: turn the image into numbers (find the obstacles programmatically,
+sample luminance either side, print it), and take the reference frame from
+the image itself - the free surface is perpendicular to gravity, so its
+normal gives gravity's screen direction without resolving any rotation
+convention. State the prediction before looking; a prediction that
+disagrees with your impression is the cue to go measure.
+
+**Match the metric to the complaint.** A mean-depth swing was measured for
+rounds against a complaint about *lines* - a mean cannot see brightness
+shuffled between rows. If a measurement contradicts the report, the probe
+is aimed wrong: a bulk-gradient probe read 1.6 degrees off while excluding
+the cells around the stone the report was about.
+
+**Cheapest discriminator, ask it first:** does the artifact move with the
+liquid, or stay fixed on screen? Liquid-fixed points at the walk;
+screen-fixed points at dirty-row staleness and transport.
+
 
 ## How to test a shading change
 
@@ -630,4 +1199,4 @@ either trick again.
   rather than how any of it is painted.
 - `water-wave-fog-depth-banked` (git branch) - the richer, reverted
   fog/wave version of water's interior, preserved working for reuse; see
-  the Backlog section above.
+  "Closed: liquid depth is now gravity-continuous" above.
