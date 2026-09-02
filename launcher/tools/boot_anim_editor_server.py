@@ -288,6 +288,20 @@ class Renderer:
                 500, "no bash.exe found - build_flash_dev.sh needs Git Bash "
                 "(see the project's CLAUDE.md). The timeline files were "
                 "still written to main/boot/ above.")
+        if not os.path.isfile(BUILD_FLASH_SCRIPT):
+            raise RenderError(
+                500, "build_flash_dev.sh not found at %s - the timeline "
+                "files were still written to main/boot/ above." %
+                BUILD_FLASH_SCRIPT)
+
+        # Forward slashes, not BUILD_FLASH_SCRIPT's own native backslashes -
+        # a "/bin/bash: <mangled path>: No such file or directory" turned
+        # up once with every backslash in the path gone, root cause not
+        # pinned down (reproducing find_bash()'s own resolution and the
+        # script's own dirname/cd/pwd logic directly did not reproduce it),
+        # but Git Bash accepts C:/... unambiguously and this removes the
+        # entire class of risk regardless of the exact mechanism.
+        script_for_bash = BUILD_FLASH_SCRIPT.replace(os.sep, "/")
 
         # stdin=DEVNULL: build_flash_dev.sh ends with an interactive "press
         # Enter to close" (it doubles as a double-clickable script) that
@@ -295,7 +309,7 @@ class Renderer:
         # on the `|| true` that makes stdin-at-EOF there a no-op, not a
         # reported failure.
         proc = subprocess.run(
-            [bash, BUILD_FLASH_SCRIPT, port],
+            [bash, script_for_bash, port],
             cwd=LAUNCHER_DIR, stdin=subprocess.DEVNULL,
             capture_output=True, text=True, timeout=BUILD_FLASH_TIMEOUT_S)
         log = proc.stdout + proc.stderr
