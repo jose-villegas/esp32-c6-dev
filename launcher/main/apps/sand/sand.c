@@ -1861,6 +1861,60 @@ static inline bool can_impulse_enter(cell_t target)
     return material_of(target)->kind != KIND_STATIC;
 }
 
+/* Fills `cand` with the three cells gravity-ward of (x, y) this step -
+ * straight down first, then the two diagonal slides either side of it -
+ * the same order and ring math an ordinary falling grain uses
+ * (step_one_grain(), this file). Pure geometry, no board access: shared by
+ * BOTH the gravity-drift move and the settled check inside step_impulses()
+ * below so the two can never again compute two different candidate lists
+ * for what is supposed to be the same question. See step_impulses()'s own
+ * comment for the bug that shipped when they quietly diverged - the drift
+ * accepted a diagonal opening can_impulse_enter() allowed, while the old
+ * settled check only ever looked straight down. */
+static void impulse_gravity_candidates(int x, int y, int dx, int dy,
+                                       int cand[3][2])
+{
+    const int i_dir = ring_of(dx, dy);
+    const int *slide_a = ring_dir(i_dir + 7);
+    const int *slide_b = ring_dir(i_dir + 1);
+    cand[0][0] = x + dx;          cand[0][1] = y + dy;
+    cand[1][0] = x + slide_a[0];  cand[1][1] = y + slide_a[1];
+    cand[2][0] = x + slide_b[0];  cand[2][1] = y + slide_b[1];
+}
+
+/* Is `index` still occupied by a TRACKED impulse entry, DURING
+ * step_impulses()'s own loop over s->impulse_buf - used only by that
+ * loop's in-flight-support check (see the "SUPPORT THAT IS ITSELF IN
+ * FLIGHT" comment there), and only in the rare case that check is even
+ * reached (its own three-way gate). O(entries) against a buffer that can
+ * hold up to 2048 (APP_IMPULSE_MAX, app_sand.c) in the worst case - which
+ * is exactly why that gate exists, so this never runs on the common path.
+ *
+ * Only two of s->impulse_buf's ranges hold valid data while the caller's
+ * loop is mid-compaction: [0, kept) already holds this step's finalized
+ * entries (this one's own turn already taken, possibly moved), and
+ * [self_i + 1, s->impulse_count) still holds this step's untouched
+ * originals (their turn not yet taken). The range in between, [kept,
+ * self_i), is scratch this same step already emptied - entries already
+ * decided, this same pass, not to keep - so it is deliberately skipped
+ * rather than scanned: whatever byte still sits there is not a tracked
+ * entry any more, no matter what it looks like. */
+static bool impulse_index_still_tracked(const sand_t *s, int kept, int self_i,
+                                        uint16_t index)
+{
+    for (int j = 0; j < kept; j++) {
+        if (s->impulse_buf[j].index == index) {
+            return true;
+        }
+    }
+    for (int j = self_i + 1; j < s->impulse_count; j++) {
+        if (s->impulse_buf[j].index == index) {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* The flight pass: every entry in s->impulse_buf either moves exactly one
  * cell along the direction it was queued with, waits another turn for its
  * way to clear, or is finally dropped. Called from sand_step(), immediately
@@ -2113,45 +2167,48 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * backwards - the whole point is that it keeps falling well
          * after the outward push has spent itself. */
         if (materials[mat_id].kind == KIND_STATIC) {
-            const int gi_dir = ring_of(dx, dy);
-            const int *g_slide_a = ring_dir(gi_dir + 7);
-            const int *g_slide_b = ring_dir(gi_dir + 1);
             const int gx = (int)((unsigned)entry.index % (unsigned)w);
             const int gy = (int)((unsigned)entry.index / (unsigned)w);
-            const int gcand[3][2] = {
-                { gx + dx,           gy + dy           },
-                { gx + g_slide_a[0], gy + g_slide_a[1] },
-                { gx + g_slide_b[0], gy + g_slide_b[1] },
-            };
+            int gcand[3][2];
+            impulse_gravity_candidates(gx, gy, dx, dy, gcand);
             for (int c = 0; c < 3; c++) {
                 const int cx = gcand[c][0];
                 const int cy = gcand[c][1];
                 if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
                     continue;
                 }
-                /* NOT can_impulse_enter() - that lets a flying entry
-                 * shoulder aside a LIQUID same as any other non-static
-                 * occupant, which is fine for a deliberate outward THROW
-                 * but wrong for this unconditional per-step fall: a
-                 * covering cell dislodged from directly beside lava has
-                 * one of its own settling-slide candidates land right
-                 * back on the lava cell it just came from (the two are
-                 * diagonally adjacent by construction), and lava is
-                 * KIND_LIQUID, so can_impulse_enter() would happily let
-                 * the falling chunk swap straight into it - overwriting
-                 * the very lava this feature exists to never touch (see
-                 * step_one_burning_cell()'s "a burning LIQUID is never
-                 * smothered" invariant). A falling solid should rest ON a
-                 * liquid surface, not sink into it - the same principle
-                 * already applied elsewhere (sand resting on oil instead
-                 * of sinking) - so gravity-drift treats a liquid target
-                 * as blocked, same as a wall, and only ever falls into
-                 * genuinely empty space or a non-liquid occupant. */
+                /* can_impulse_enter(), THE SAME PREDICATE THE ROLLED MOVE
+                 * BELOW USES - no more separate "but not liquid" exclusion
+                 * here. That exclusion used to read as protecting lava
+                 * from being overwritten ("a burning LIQUID is never
+                 * smothered", step_one_burning_cell()'s own invariant),
+                 * but this move is a SWAP (four lines down: gdisplaced is
+                 * read out of the target cell, then written back into the
+                 * entry's OLD cell), not an overwrite - the same move_to()
+                 * swap trick can_impulse_enter()'s own comment already
+                 * relies on for every other kind. A lava cell a thrown
+                 * chunk swaps into does not stop existing, it changes
+                 * which cell it occupies - conservation holds exactly, and
+                 * so does the "never smothered" invariant, since lava is
+                 * never replaced with something else, only relocated by
+                 * one cell. See
+                 * test_a_thrown_static_chunk_conserves_lava_mass_on_sink
+                 * (suite_sand.c), which asserts total lava mass unchanged
+                 * and no lava cell deleted across a chunk sinking through
+                 * a pool. Dropping the exclusion is a deliberate design
+                 * choice, not an oversight: a thrown, ENERGETIC chunk sinks
+                 * into a liquid (including lava) the same way a dense
+                 * powder already does under ordinary movement (lava's
+                 * density is 45 against sand's 60 and dirt's 62). An
+                 * ordinary, non-impulse KIND_STATIC cell earns none of
+                 * this: it never reaches this loop at all unless it is
+                 * being tracked as a flying entry, and the main sweep
+                 * skips KIND_STATIC outright, so a static cell with no
+                 * impulse behind it still just sits exactly where it was
+                 * placed - it is IMPULSE that earns the sinking, not being
+                 * a solid (see
+                 * test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder). */
                 const cell_t gtarget = sand_at(s, cx, cy);
-                if (!CELL_IS_EMPTY(gtarget) &&
-                    material_of(gtarget)->kind == KIND_LIQUID) {
-                    continue;
-                }
                 if (!can_impulse_enter(gtarget)) {
                     continue;
                 }
@@ -2307,26 +2364,107 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * "is there something under it" question try_flare()'s own
          * falling check already asks elsewhere in this feature, applied
          * here to the entry's OWN cell rather than a falling grain. Still
-         * airborne (empty beneath, gravity-relative) keeps the entry
-         * tracked - re-added to kept exactly as the blocked branch below
-         * already does - so next step gets another unconditional
-         * gravity-drift attempt AND another chance at the outward-push
-         * roll, however small `speed` has decayed to; the roll failing
-         * no longer ends the entry's only route to eventually landing.
-         * Genuinely supported (or, for every OTHER kind, any roll
-         * failure at all) still drops it exactly as before - this only
-         * closes the gap for a KIND_STATIC entry that has not actually
-         * come to rest. Bounded the same way an ordinary fall already
-         * is: the grid has a finite height, and sand_at()'s own off-grid-
-         * is-STONE convention means even a chunk thrown off the visible
-         * edge reads as supported once it would otherwise fall forever. */
+         * airborne keeps the entry tracked - re-added to kept exactly as
+         * the blocked branch below already does - so next step gets
+         * another unconditional gravity-drift attempt AND another chance
+         * at the outward-push roll, however small `speed` has decayed to;
+         * the roll failing no longer ends the entry's only route to
+         * eventually landing. Genuinely supported (or, for every OTHER
+         * kind, any roll failure at all) still drops it exactly as before
+         * - this only closes the gap for a KIND_STATIC entry that has not
+         * actually come to rest. Bounded the same way an ordinary fall
+         * already is: the grid has a finite height, and sand_at()'s own
+         * off-grid-is-STONE convention means even a chunk thrown off the
+         * visible edge reads as supported once it would otherwise fall
+         * forever.
+         *
+         * "SUPPORTED" MUST MEAN THE SAME THING THE DRIFT ABOVE MEANS BY
+         * IT, not a cheaper approximation of it - this used to check only
+         * CELL_IS_EMPTY() on the single straight-down cell, which
+         * disagreed with the gravity-drift block a few dozen lines up the
+         * moment that block's own can_impulse_enter() accepted a
+         * DIAGONAL opening: the drift would happily slide the chunk
+         * sideways-and-down onto open ground, while this check, asked
+         * about the very same step, saw the (occupied) straight-down cell
+         * and declared the chunk settled anyway - dropping it from
+         * tracking one loop before it ever got to take the move the drift
+         * had already found for it. impulse_gravity_candidates() plus
+         * can_impulse_enter() is now the ONE predicate both places ask,
+         * so the two cannot disagree again - see test_a_thrown_static_
+         * chunk_over_a_powder_keeps_falling_instead_of_settling_on_it
+         * (suite_sand.c), which is exactly the diagonal-opening case that
+         * regressed.
+         *
+         * A SUPPORT THAT IS ITSELF IN FLIGHT MEANS WAIT, NOT SETTLE. Even
+         * with the disagreement above fixed, "no opening" can still be
+         * true for the wrong reason: the straight-down cell may be
+         * occupied by ANOTHER tracked KIND_STATIC entry that merely
+         * hasn't taken ITS OWN gravity-drift turn yet this step (this
+         * loop processes entries in s->impulse_buf order, not bottom-to-
+         * top, so a lower chunk can easily still be sitting exactly where
+         * it was when this entry's turn comes around). Settling on top of
+         * it right now would freeze two flying chunks mid-air, stacked,
+         * neither one ever falling again once both are (wrongly) dropped
+         * from tracking. So when the drift found no opening AND the
+         * blocking cell is KIND_STATIC, one more check asks whether that
+         * specific cell is itself still a tracked entry
+         * (impulse_index_still_tracked(), just above this function) -
+         * O(entries) in the worst case, hence gated behind both of the
+         * above (push roll failed is the surrounding `if`, no drift
+         * opening and a KIND_STATIC blocker are the two checks right
+         * below) so it only ever runs for the rare entry that is both
+         * genuinely blocked AND blocked by exactly the one kind of
+         * neighbour that can still move out of the way next step. See
+         * test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_
+         * settling_and_both_eventually_land (suite_sand.c). */
         if (!rolled_move) {
             if (materials[mat_id].kind == KIND_STATIC) {
                 const int rx = (int)((unsigned)entry.index % (unsigned)w);
                 const int ry = (int)((unsigned)entry.index / (unsigned)w);
-                if (CELL_IS_EMPTY(sand_at(s, rx + dx, ry + dy))) {
+                int rcand[3][2];
+                impulse_gravity_candidates(rx, ry, dx, dy, rcand);
+
+                bool has_opening = false;
+                for (int c = 0; c < 3; c++) {
+                    if (can_impulse_enter(sand_at(s, rcand[c][0], rcand[c][1]))) {
+                        has_opening = true;
+                        break;
+                    }
+                }
+                if (has_opening) {
                     s->impulse_buf[kept++] = entry;
                     continue;   /* still airborne - keep falling */
+                }
+
+                /* No opening on any of the three candidates - the
+                 * straight-down one (rcand[0]) is what "supported"
+                 * ordinarily means. can_impulse_enter() only ever rejects
+                 * KIND_STATIC, so has_opening == false already guarantees
+                 * rcand[0] is occupied by a KIND_STATIC cell (empty, or
+                 * any other kind, would have opened it) - checked
+                 * explicitly anyway rather than trusted blind, so a future
+                 * change to can_impulse_enter()'s own rule cannot quietly
+                 * turn this into an O(entries) scan for a blocker that was
+                 * never actually KIND_STATIC. Off-grid is excluded first:
+                 * sand_at()'s synthetic edge-is-STONE cell reads as
+                 * KIND_STATIC too, but it has no real index for
+                 * impulse_index_still_tracked() to look up. */
+                const int bx = rcand[0][0];
+                const int by = rcand[0][1];
+                if ((unsigned)bx < (unsigned)w && (unsigned)by < (unsigned)h) {
+                    const cell_t blocker =
+                        s->cells[(size_t)by * (size_t)w + (size_t)bx];
+                    if (!CELL_IS_EMPTY(blocker) &&
+                        material_of(blocker)->kind == KIND_STATIC) {
+                        const uint16_t block_index =
+                            (uint16_t)((size_t)by * (size_t)w + (size_t)bx);
+                        if (impulse_index_still_tracked(s, kept, i,
+                                                        block_index)) {
+                            s->impulse_buf[kept++] = entry;
+                            continue;   /* support is itself still in
+                                         * flight - wait, don't settle */
+                        }
+                    }
                 }
             }
             continue;   /* settled - out of flight for good */
