@@ -1071,6 +1071,112 @@ pairs), `test_the_blend_has_no_jump_crossing_45_degrees`,
 
 ---
 
+## How to report - and hear - a visual defect
+
+This feature has cost more rounds than any other in the app, and reading
+its own history back, most of the excess was not in the code. The same
+symptom was described accurately, misheard, fixed in the wrong layer, and
+reported again - repeatedly, across separate sessions. This section is
+here so the next round starts further along.
+
+### The through-line: an axis-aligned artifact is a walk problem, not a shading problem
+
+Read these four reports in order. They span months and separate sessions:
+
+- `6a05faa` - "the water goes blocky, with hard horizontal or vertical
+  lines through it - worst at strong right or up angles. Inside the
+  volume, not at the rim."
+- `fde5769` - "looks too artifact prone" - straight columns of matching
+  colour, no organic break-up.
+- `05caadb` - "fighting multiple values", asking for a single source of
+  truth at the diagonal.
+- `c139ed7` - a stone's shadow "isn't aligned to gravity", drawn as two
+  vectors: the direction it points, and the direction it should.
+
+Every one of them is the same complaint - *the interior carries structure
+aligned to the screen axes rather than to gravity* - and the first three
+were answered in the wrong layer. The comb fix stopped showing a solver
+artifact. The axis switch got hysteresis, then a continuous blend, then a
+projection with `max`. All of those were real improvements and none of
+them could have worked, because the thing generating the structure was the
+WALK: it stepped along x or along y, so anything it produced - a gradient,
+an obstacle's shadow, a seam - was axis-aligned by construction. Only
+`c139ed7` moved the walk itself onto the gravity ray, and the measured
+shadow bearing went from *always exactly ±90° or 0°, error equal to the
+tilt angle*, to within 1.5° of gravity at every angle.
+
+**So: when a report describes structure that follows the screen rather
+than gravity, check what the walk steps along before touching the
+combiner.** A combiner can only reweight what the walk hands it. If the
+walk is axis-aligned, no weighting scheme fixes the geometry - it only
+changes how visible the seam is, which is exactly the loop this feature
+was stuck in for three rounds.
+
+### What makes a report land in one round
+
+Drawn from the reports that actually worked, not invented:
+
+1. **Shape.** A line, a band, a rectangle, a patch, the whole body? A
+   *line* and a *flat wash* are different bugs and different metrics -
+   see the metric warning below.
+2. **Where it lives.** `6a05faa` said it outright: "inside the volume,
+   not at the rim." Interior, rim, surface and edge-of-grid are four
+   different code paths.
+3. **Anchored to what.** Does it move with the liquid, or stay put on
+   screen while the liquid moves under it? This single question splits
+   the whole bug space: screen-fixed points at the dirty-row/staleness/
+   transport side, liquid-fixed points at the walk. It is the cheapest
+   discriminator available and it was not asked for until very late.
+4. **Trigger, including whether anything is moving.** "With the water
+   settled" is what cracked `142c6a2`: settled means nothing is dirty, so
+   only the periodic wake repaints, which is precisely where the chain
+   broke. A condition like that is worth more than a paragraph about
+   colours.
+5. **Orientation, as data.** Always attach the `.json` sidecar next to
+   the `.bmp`; `app.tilt_x`/`tilt_y` is what turns "looks wrong" into a
+   measured bearing error. Screenshots without it are much weaker
+   evidence. Note the capture tool is slow, so successive files are NOT
+   adjacent frames - do not reason about them as a sequence.
+6. **Is the effect wanted?** The most expensive ambiguity in this
+   feature's history. "The shading isn't aligned to gravity" was read as
+   *remove this artifact* and a fix was built that deleted the effect;
+   the actual request was *keep it, rotate it*. State which, because for
+   a cosmetic feature both readings are plausible and they lead to
+   opposite designs.
+
+**A vector drawing beats prose for anything directional.** Three rounds of
+words did not convey what one zoomed crop with a green arrow (intended)
+and a red arrow (actual) conveyed immediately. Direction is hard to write
+and trivial to draw.
+
+**Metaphors have been precise here, not vague.** "Almost like platinum"
+(`f9679df`) correctly identified the mechanism: a screen-position ramp is
+exactly what a sheen looks like. "Lost its depth blue colour"
+(`fde5769`) was a real bug - a fog blend still divided by 255 after the
+signal's range had collapsed - not a matter of taste. Take them as
+evidence and go measure what they imply.
+
+### What the reader of a report owes back
+
+- **Match the metric to the complaint.** Several rounds measured the
+  frame-to-frame swing in the pool's *mean* depth while the complaint was
+  a *line*. A mean cannot see brightness shuffled between rows; it was
+  structurally blind to the thing being reported. Spatial complaint,
+  spatial metric, measured against a ground-truth render of the same
+  frame.
+- **Reproduce against the real code before proposing anything.** Every
+  wrong turn in the recent history - a per-axis scaled ceiling, a
+  pre-scaled distance accumulator, removing the obstacle shadow - looked
+  correct on paper and died on contact with a measurement. Two of them
+  were caught only because the measurement was run before the change
+  shipped.
+- **Say when the evidence is thin.** "This is a hypothesis, here is what
+  I could not close" is worth more than a confident story. The
+  `h_reverse` tremor theory in `142c6a2` was a real trigger firing 40
+  times in 40 frames and still was not the reported flash; saying so up
+  front is what kept the search open long enough to find the actual
+  cause.
+
 ## How to test a shading change
 
 - **A host-side probe, no device needed.** Every investigation this
