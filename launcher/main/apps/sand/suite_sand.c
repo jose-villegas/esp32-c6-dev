@@ -19440,6 +19440,19 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
         "the simulation no longer fits in its share of the frame");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe (see main/apps/sand/tools/perf_probe_reactions/) -
+ * bd esp32c6-iu5's reactions-pass pair-matrix restructure. Exposes the
+ * actual official test function above under a plain name, so a probe
+ * harness can RUN_TEST() it directly on a laptop instead of hand-copying
+ * the scene - one of this round's two liquid-free controls. Never defined
+ * by any real build. */
+void sand_host_probe_run_full_step_control(void)
+{
+    test_a_full_size_step_fits_in_the_frame_budget();
+}
+#endif
+
 static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 {
     /* Measured separately from sand, because water takes an entirely different
@@ -19506,6 +19519,15 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
         "a screen-wide collapse of water must still land inside a frame or "
         "two - the search across the flow is the thing to suspect");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe (see the full-step control's own wrapper above,
+ * and main/apps/sand/tools/perf_probe_reactions/) - bd esp32c6-iu5. */
+void sand_host_probe_run_water(void)
+{
+    test_a_screen_of_water_fits_in_the_frame_budget();
+}
+#endif
 
 #endif /* DEVICE_BUILD */
 
@@ -19618,6 +19640,15 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
         "two - this is the real worst case pouring and tilting produces");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's other liquid-free control
+ * (see the full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_settled_flip_control(void)
+{
+    test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget();
+}
+#endif
+
 static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void)
 {
     /* A harder worst case than the single-material flip above: three
@@ -19713,6 +19744,15 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
         "reversing gravity over a mixed sand/water/stone scene should come "
         "down to this - a target to optimize toward, not yet the reality");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5 (see the full-step control's own
+ * wrapper for the pattern). */
+void sand_host_probe_run_mixed_flip(void)
+{
+    test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget();
+}
+#endif
 
 /* Every material at once, then a gravity flip.
  *
@@ -19849,6 +19889,15 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
         "as a reduction target - this failing means the work has not been "
         "done yet, not that something broke");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's every-material flip (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_every_material_flip(void)
+{
+    test_a_gravity_flip_on_every_material_at_once_stays_sane();
+}
+#endif
 
 static void test_fire_cascading_through_a_full_screen_of_gas_fits_in_the_frame_budget(void)
 {
@@ -20109,6 +20158,15 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
         "broke");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's four-liquids scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_four_liquids(void)
+{
+    test_four_liquids_reacting_at_once_fits_in_the_frame_budget();
+}
+#endif
+
 /* A lava reservoir, a water roof, and columns of sand, wood and oil between
  * them (build_lava_stress_scene() above, shared with
  * test_the_lava_stress_scene_reaches_every_reaction_it_claims, which
@@ -20162,6 +20220,15 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
         "number, as a reduction target - failing means the work is not "
         "done, not that something broke");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's lava stress scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_lava_stress(void)
+{
+    test_the_lava_stress_scene_fits_in_the_frame_budget();
+}
+#endif
 
 /* A full screen of smoke and steam with one spark of fire
  * (build_smoke_and_steam_scene() above, shared with
@@ -20229,6 +20296,15 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
         "measured number, as a reduction target - failing means the work "
         "is not done, not that something broke");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's smoke+steam scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_smoke_and_steam(void)
+{
+    test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget();
+}
+#endif
 
 /* 480 glass compartments (build_thermal_shock_scene() above, shared with
  * test_the_thermal_shock_scene_shatters_in_both_directions, which proves
@@ -20454,6 +20530,15 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
         "the rest of the file's x 0.9), not a loosened guard");
 }
 
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's wet earth scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_wet_earth(void)
+{
+    test_the_wet_earth_scene_fits_in_the_frame_budget();
+}
+#endif
+
 /* The vent-spam scene from this file's own vent-spam section above (see
  * that section's own top comment for why it exists: 462 of the device
  * suite's 664 seconds, about 70%, going entirely unmeasured before this
@@ -20532,6 +20617,15 @@ static void test_the_vent_spam_scene_fits_in_the_frame_budget(void)
         "here is the vent chunk throw or its sight scan, not the sim at "
         "large");
 }
+
+#ifdef SAND_HOST_PROBE
+/* Host-only timing probe - bd esp32c6-iu5's vent spam scene (see the
+ * full-step control's own wrapper for the pattern). */
+void sand_host_probe_run_vent_spam(void)
+{
+    test_the_vent_spam_scene_fits_in_the_frame_budget();
+}
+#endif
 
 /* --- gfx_present() cost against real sand scenes ------------------------
  *

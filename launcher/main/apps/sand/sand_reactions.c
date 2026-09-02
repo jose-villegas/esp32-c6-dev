@@ -202,6 +202,69 @@ static const int reaction_dirs[4][2] = {
     {1, 0},
 };
 
+/* PAIR_BITS - one byte per (mine, theirs) material-id ordered pair,
+ * classifying a neighbour probe before it ever loads reaction_of() or
+ * draws from the RNG. Replaces s->heat_mask/s->wet_mask (both folded in
+ * here) and adds three more of the same shape: sand_step_reactions()'s own
+ * top comment explains why an O(16x16) rebuild every PASS, never cached
+ * across steps, cannot go stale against a sand_set_* table override or a
+ * cell created mid-pass - everything said there applies here unchanged,
+ * this is that same mechanism widened to five probes instead of two.
+ *
+ * HONESTY NOTE, because it shapes what this table actually is: every bit
+ * below except PAIR_DENSER depends only on `theirs` - the neighbour being
+ * probed - never on `mine`. That is not an oversight; it is what this
+ * file's chemistry mostly IS (see this file's own top comment and
+ * docs/Sand/Reaction-Table.md): a probe's outcome today is almost always a
+ * fact about the neighbour's own reaction row, independent of what is
+ * doing the probing, which is exactly why the two 1-D masks this table
+ * absorbs already worked. Storing five theirs-only bits in a 16x16 shape
+ * costs nothing beyond the four-theirs-only-bits' own broadcast loop below
+ * (still O(16), same as heat_mask/wet_mask always cost) and buys one
+ * consistent lookup shape for every consumer in this file, including the
+ * one bit (PAIR_DENSER) that is genuinely pairwise. See pair_theirs_bits()
+ * just below for how a caller with no real `mine` (try_heat_transform has
+ * none - see its own call sites) reads the theirs-only bits without
+ * inventing one. */
+#define PAIR_HEAT_RESPONSIVE (1u << 0) /* theirs could pass try_heat_transform()'s first two gates - was heat_mask */
+#define PAIR_WETS            (1u << 1) /* theirs is a liquid whose reaction row wets - was wet_mask */
+#define PAIR_IGNITABLE       (1u << 2) /* theirs has a nonzero flammability - try_ignite()'s own first reject */
+#define PAIR_QUENCHES        (1u << 3) /* theirs is a liquid that is neither fuel nor a heat source - neighbor_quenches() */
+#define PAIR_DISSOLVABLE     (1u << 4) /* theirs has a nonzero dissolvable - step_one_dissolver_cell()'s own reject */
+/* PAIR_DENSER (theirs is non-liquid and strictly denser than mine -
+ * neighbor_smothers()'s own rule) is NOT packed into this table. It was
+ * measured against the table's own reason for existing rather than
+ * assumed: every other bit here exists to skip a reaction_of() load (a
+ * separate cache line off the reaction table) or an RNG draw, and this
+ * chip has no data cache at all (docs/Sand/Tuning-At-a-Glance.md, "There
+ * is no data cache") - SRAM is direct-access at every load whether the
+ * access is materials[]/reaction_of() or this table. neighbor_smothers()
+ * never touches reaction_of() or the RNG; it is one materials[] load and
+ * one compare already sitting in registers, so routing it through a
+ * second SRAM table adds a load without removing one. Threading `mine`
+ * through neighbor_smothers()/smothered()/covered_from_above() instead of
+ * the density byte they take today would still be a small, real
+ * simplification (see try_vent_chunk(), which already carries mat_id
+ * alongside the density it could derive from it) - left undone here,
+ * unmeasured, rather than folded in on the strength of the table's own
+ * naming. */
+static uint8_t pair_bits[MATERIAL_MAX][MATERIAL_MAX];
+
+/* Reads a theirs-only bit for a caller with no `mine` of its own -
+ * try_heat_transform() is reached from step_one_cold_cell() and
+ * conduct_heat() as well as the shared burning-cell walk, and none of the
+ * three have (or need) a prober material id, exactly as s->heat_mask
+ * never took one. Row MAT_EMPTY (0) carries every theirs-only bit just
+ * like every other row does - see the rebuild in sand_step_reactions() -
+ * so this is not a special case, just a fixed, documented row to read
+ * them from. Never test PAIR_DENSER through this: that bit is not stored
+ * (see the comment above) and every row would read it as "denser than
+ * empty space", which is not the question any caller here is asking. */
+static inline uint8_t
+pair_theirs_bits(uint8_t theirs) {
+    return pair_bits[MAT_EMPTY][theirs];
+}
+
 /* Write `mat` into the cell at (x, y) - at is its precomputed index, so
  * every caller that already looked the cell up once does not have to
  * multiply out y*w+x a second time - with every piece of bookkeeping a
@@ -292,11 +355,15 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
         return false;
     }
     const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-    if (CELL_IS_EMPTY(n) || material_of(n)->kind != KIND_LIQUID) {
+    if (CELL_IS_EMPTY(n)) {
         return false;
     }
-    const reaction_t* r = reaction_of(n);
-    return r->flammability == 0 && r->burns == 0;
+    /* PAIR_QUENCHES (this file's own top comment) packs exactly the three
+     * checks this used to make one at a time - liquid, not fuel, not a
+     * heat source - so a non-quenching neighbour never reaches reaction_of
+     * (n) at all now, the same win try_heat_transform()'s heat_mask
+     * already banked. */
+    return (pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0;
 }
 
 /* Whether (nx, ny) is in bounds and holds something strictly denser than
@@ -749,17 +816,17 @@ try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
     if (CELL_IS_EMPTY(n)) {
         return false;
     }
-    /* s->heat_mask (sand_step_reactions()'s own comment): a neighbour whose
-     * material bit is clear could never pass either of the two gates below
-     * even in principle, so this rejects it before ever loading reaction_of
-     * (n) - a whole cache line off the reaction table's own row - or
-     * touching the RNG. Bit-identical to falling through to "if (r->heat_
-     * ramp != 0) {...} if (r->heats_to == 0 || r->heat_chance == 0) return
-     * false;" below and taking the same false, for every material in the
-     * table today; see this file's own top comment for the device counters
-     * this exists to cheapen and sand_step_reactions()'s comment for why the
-     * mask can never go stale or misjudge an extended material. */
-    if ((s->heat_mask & (1u << CELL_MATERIAL(n))) == 0) {
+    /* PAIR_HEAT_RESPONSIVE (this file's own top comment, formerly
+     * s->heat_mask): a neighbour whose bit is clear could never pass either
+     * of the two gates below even in principle, so this rejects it before
+     * ever loading reaction_of(n) - a whole cache line off the reaction
+     * table's own row - or touching the RNG. Bit-identical to falling
+     * through to "if (r->heat_ramp != 0) {...} if (r->heats_to == 0 ||
+     * r->heat_chance == 0) return false;" below and taking the same false,
+     * for every material in the table today; see sand_step_reactions()'s
+     * comment for why the table can never go stale or misjudge an extended
+     * material. */
+    if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_HEAT_RESPONSIVE) == 0) {
         return false;
     }
     const reaction_t* r = reaction_of(n);
@@ -1029,14 +1096,14 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
              * else. Taking a unit of any KIND_LIQUID is the obvious rule
              * and it soaked oil, acid and lava into the ground alike.
              *
-             * s->wet_mask (sand_step_reactions()'s own comment) folds the
-             * old three-part test - empty, not KIND_LIQUID, wets == 0 -
-             * into one shift-and-test: bit 0 (empty) is never set, since
-             * materials[MAT_EMPTY].kind is KIND_NONE, so this single test
-             * covers CELL_IS_EMPTY() for free and never has to load
+             * PAIR_WETS (this file's own top comment, formerly s->wet_mask)
+             * folds the old three-part test - empty, not KIND_LIQUID, wets
+             * == 0 - into one shift-and-test: bit 0 (empty) is never set,
+             * since materials[MAT_EMPTY].kind is KIND_NONE, so this single
+             * test covers CELL_IS_EMPTY() for free and never has to load
              * materials[] or reaction_of(n) - two separate cache lines -
              * for a neighbour that was never going to wet anything. */
-            if ((s->wet_mask & (1u << CELL_MATERIAL(n))) == 0) {
+            if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_WETS) == 0) {
                 continue;
             }
             beside_liquid = true;
@@ -2768,6 +2835,18 @@ try_ignite(sand_t* s, int nx, int ny, int w, int h) {
     if (CELL_IS_EMPTY(n)) {
         return false;
     }
+    /* PAIR_IGNITABLE (this file's own top comment): a neighbour whose bit
+     * is clear has flammability == 0 in every ordinary material's own row,
+     * so this rejects it before reaction_of(n)'s load - new relative to
+     * before this table existed, this call had no pre-roll reject of its
+     * own. MAT_EXTENDED's bit is set the moment ANY extended material is
+     * flammable, so every extended cell still reaches the real check just
+     * below unconditionally - the `r->flammability == 0` line stays, it is
+     * what tells ice (never) from plant (sometimes) apart once bit 15 has
+     * already said "worth asking". */
+    if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_IGNITABLE) == 0) {
+        return false;
+    }
     const reaction_t* r = reaction_of(n);
     if (r->flammability == 0) {
         return false;
@@ -3287,6 +3366,15 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
         const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
         const cell_t n = s->cells[at];
         if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        /* PAIR_DISSOLVABLE (this file's own top comment): rejects a
+         * neighbour whose dissolvable figure is 0 in every ordinary
+         * material's own row before reaction_of(n) loads it - acid's own
+         * bite is already gated behind the r->dissolves roll above, so
+         * this only ever runs for a genuine acid cell, but the reject is
+         * free either way. */
+        if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_DISSOLVABLE) == 0) {
             continue;
         }
         const uint8_t give = reaction_of(n)->dissolvable;
@@ -3915,92 +4003,79 @@ sand_step_reactions(sand_t* s) {
         return;
     }
 
-    /* s->heat_mask/s->wet_mask, REBUILT HERE, EVERY PASS. Two 16-bit
-     * material-id-indexed masks that let try_heat_transform() and
-     * step_one_soaking_cell() reject a neighbour that could not possibly
-     * react with one shift-and-test against a small table already sitting
-     * in a register, instead of loading reaction_of(n) (a whole cache
-     * line, off the material table's own row) and walking its field chain,
-     * for every one of the many neighbours that turn out to be lava, fire,
-     * or another non-reacting material - see this file's own top comment
-     * and docs/Sand/Performance-Tuning-Attempts.md for the device
-     * counters that motivated this (a lava-heavy scene rejects 99.6% of
-     * try_heat_transform()'s probes and 99.65% of step_one_soaking_cell()'s
-     * wetness probes before any of them would have drawn a random number).
-     *
-     * O(16) work, done here rather than cached on sand_t across steps -
+    /* pair_bits, REBUILT HERE, EVERY PASS - see this file's own top comment
+     * for the bit definitions and the honesty note on which ones are
+     * genuinely pairwise. Same discipline s->heat_mask/s->wet_mask used to
+     * document in this exact spot, unchanged by widening from two bits to
+     * five: written once per PASS from the live tables, read only by
+     * neighbour probes inside that same pass, never cached across steps -
      * this is NOT the retired per-cell "can this material react at all"
-     * mask (docs/Sand/Performance-Tuning-Attempts.md, "Never retry", attempt
-     * 12), and the difference is exactly what makes this one safe where
-     * that one was not. That mask was written once per CELL and read again
-     * later in the SAME pass, so a cell created behind the scan pointer
-     * (place_reacted() promoting sand to glass, say) could be tested
-     * against a decision computed before it existed. This mask is written
-     * once per PASS, from the live tables, and read only by neighbour
-     * probes inside that same pass - it never survives from one
-     * sand_step_reactions() call to the next, so a sand_set_* table
-     * override between steps is picked up on the very next entry with
-     * nothing to invalidate. At sixteen materials the rebuild is between
-     * one and two cache lines of reactions[]/materials[], read once per
-     * pass rather than once per PROBE - cheaper than the single reaction_of()
-     * load it replaces on the very first neighbour it is asked about.
+     * mask (docs/Sand/Performance-Tuning-Attempts.md, "Never retry",
+     * attempt 12), which went stale against a cell created behind the scan
+     * pointer in the SAME pass because it was written once per CELL. A
+     * sand_set_* table override between steps is picked up on the very
+     * next entry with nothing to invalidate.
      *
-     * heat_mask: bit m set iff material m's reaction row could ever do
-     * anything at try_heat_transform()'s first two gates - heat_ramp != 0
-     * (banks heat) or heats_to != 0 && heat_chance != 0 (the memoryless
-     * form). Every heat_ramp material is kept by construction, which is
-     * what keeps the shock-crack test at that function's line "r->shatters_
-     * to != 0 && CELL_VARIANT(n) <= SAND_SHOCK_COLD" reachable - shock only
-     * ever fires from inside the heat_ramp != 0 branch, and this mask never
-     * excludes a heat_ramp material, so a frosted pane meeting lava still
-     * cracks on contact exactly as before; see the fingerprint check this
-     * change is gated on for the proof, not just the argument.
+     * theirs_bits[] holds the five theirs-only bits (this file's own top
+     * comment: everything except PAIR_DENSER, which is not stored at all)
+     * per ordinary material id, exactly the two loops heat_mask/wet_mask
+     * used to run separately, now merged into one pass over reactions[]
+     * plus the same MAT_EXTENDED aggregate heat_mask always needed -
+     * PAIR_IGNITABLE and PAIR_DISSOLVABLE both need it too, since plant/
+     * leaf/metal (extended_reactions[]) carry real flammability/dissolvable
+     * figures the way ice's heats_to always did. PAIR_WETS and
+     * PAIR_QUENCHES need no such pass: every extended material shares
+     * materials[MAT_EXTENDED].kind == KIND_STATIC (material.c; see
+     * material.h's own comment on the one shared physics row), so neither
+     * bit can ever be true for MAT_EXTENDED, exactly what the tests they
+     * replace already decided.
      *
-     * Ordinary materials (ids 1..MAT_COUNT-1) are read straight out of
-     * reactions[]. MAT_EXTENDED (id 15) is special: CELL_MATERIAL()
-     * collapses all sixteen extended materials (ice, plant, leaf, metal)
-     * onto that one nibble value, so no single reactions[] row can answer
-     * for the extended range the way it can for an ordinary material -
-     * reaction_of() only gets the right per-extended-material answer by
-     * decoding the low nibble through extended_reactions[]. So bit 15 is
-     * set the moment ANY extended material would pass the same test (ice
-     * does: heats_to = MAT_WATER, heat_chance = 90 - see material.c) -
-     * which means every extended cell reaches the real reaction_of() check
-     * unconditionally, exactly as it did before this mask existed. The
-     * mask only ever cheapens rejecting an ORDINARY material's neighbour;
-     * it can never reject an extended one, so it cannot desync from what
-     * extended_reactions[] actually contains.
-     *
-     * wet_mask: bit m set iff material m is KIND_LIQUID and its reaction
-     * row's wets != 0 - step_one_soaking_cell()'s "does this neighbour
-     * actually wet things" test. No extended-material special case is
-     * needed here: every extended material shares materials[MAT_EXTENDED]
-     * .kind == KIND_STATIC (material.c; see material.h's own comment on
-     * the one shared physics row), so bit 15 comes out clear on its own -
-     * never liquid, so never wet, exactly what the four-line test this
-     * replaces already decided for every extended cell. */
-    uint16_t heat_mask = 0;
+     * The final nested loop broadcasts theirs_bits[] into every row of
+     * pair_bits[][] - all sixteen rows read identically for a
+     * pair_theirs_bits() caller, which is the whole point (this file's own
+     * top comment on pair_theirs_bits()). At sixteen materials this is
+     * O(256), one to two cache lines of reactions[]/materials[] read once
+     * per pass rather than once per PROBE - cheaper than the single
+     * reaction_of() load any one of the five bits replaces on the very
+     * first neighbour it is asked about. */
+    uint8_t theirs_bits[MATERIAL_MAX] = {0};
     for (int m = 1; m < MAT_COUNT; m++) {
         const reaction_t* r = &reactions[m];
         if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
-            heat_mask |= (uint16_t)(1u << m);
+            theirs_bits[m] |= PAIR_HEAT_RESPONSIVE;
+        }
+        if (materials[m].kind == KIND_LIQUID) {
+            if (r->wets != 0) {
+                theirs_bits[m] |= PAIR_WETS;
+            }
+            if (r->flammability == 0 && r->burns == 0) {
+                theirs_bits[m] |= PAIR_QUENCHES;
+            }
+        }
+        if (r->flammability != 0) {
+            theirs_bits[m] |= PAIR_IGNITABLE;
+        }
+        if (r->dissolvable != 0) {
+            theirs_bits[m] |= PAIR_DISSOLVABLE;
         }
     }
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const reaction_t* r = &extended_reactions[k];
         if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
-            heat_mask |= (uint16_t)(1u << MAT_EXTENDED);
-            break;
+            theirs_bits[MAT_EXTENDED] |= PAIR_HEAT_RESPONSIVE;
+        }
+        if (r->flammability != 0) {
+            theirs_bits[MAT_EXTENDED] |= PAIR_IGNITABLE;
+        }
+        if (r->dissolvable != 0) {
+            theirs_bits[MAT_EXTENDED] |= PAIR_DISSOLVABLE;
         }
     }
-    uint16_t wet_mask = 0;
-    for (int m = 1; m < MATERIAL_MAX; m++) {
-        if (materials[m].kind == KIND_LIQUID && reactions[m].wets != 0) {
-            wet_mask |= (uint16_t)(1u << m);
+    for (int mine = 0; mine < MATERIAL_MAX; mine++) {
+        for (int theirs = 0; theirs < MATERIAL_MAX; theirs++) {
+            pair_bits[mine][theirs] = theirs_bits[theirs];
         }
     }
-    s->heat_mask = heat_mask;
-    s->wet_mask = wet_mask;
 
     const int w = s->w;
     const int h = s->h;
