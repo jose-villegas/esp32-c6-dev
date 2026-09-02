@@ -303,6 +303,25 @@ class Renderer:
         # entire class of risk regardless of the exact mechanism.
         script_for_bash = BUILD_FLASH_SCRIPT.replace(os.sep, "/")
 
+        # A fast (milliseconds, not a build) sanity probe using the exact
+        # same bash binary and exact same path the real invocation below
+        # uses - "/bin/bash: <path>: No such file or directory" turned up
+        # from the real invocation even after fixing the one concrete
+        # backslash-mangling issue already found (see script_for_bash's
+        # own comment above), for a file os.path.isfile() just confirmed
+        # exists - a second, still-unexplained failure mode. Only
+        # surfaced below if the real invocation ALSO fails with that same
+        # message, so a genuine compile/flash failure's own log stays
+        # undiluted the rest of the time.
+        probe = subprocess.run(
+            [bash, "-c",
+             'if [ -f "$1" ]; then echo FOUND; else echo MISSING; fi; '
+             'echo "MSYSTEM=$MSYSTEM"; echo "PWD=$(pwd)"; echo "PATH=$PATH"',
+             "probe", script_for_bash],
+            capture_output=True, text=True, timeout=10)
+        probe_info = ("bash's own view of that path just before this "
+                      "attempt:\n" + (probe.stdout + probe.stderr).strip())
+
         # stdin=DEVNULL: build_flash_dev.sh ends with an interactive "press
         # Enter to close" (it doubles as a double-clickable script) that
         # would otherwise hang this request forever - see its own comment
@@ -314,6 +333,8 @@ class Renderer:
             capture_output=True, text=True, timeout=BUILD_FLASH_TIMEOUT_S)
         log = proc.stdout + proc.stderr
         if proc.returncode != 0:
+            if "No such file or directory" in log and script_for_bash in log:
+                log = log.strip() + "\n\n" + probe_info
             raise RenderError(500, log.strip() or
                               "build_flash_dev.sh exited with code %d" %
                               proc.returncode)
