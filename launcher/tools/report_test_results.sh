@@ -97,7 +97,17 @@ echo "=== Capturing self-test output ==="
 # 1,125,726 ms - 18.8 minutes. A 300s window now times out every run and
 # produces a capture with no SELFTEST_COMPLETE in it, which the validator
 # below correctly rejects but which costs a full capture cycle to learn.
-python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout 1500
+#
+# 3000s, not 1500, from 2026-09-02, and for the SAME reason one more turn
+# along: two consecutive captures were cut off mid-suite at exactly 1500s,
+# both landing in the sand suites with no SELFTEST_COMPLETE and - the part
+# that actually costs something - no `us per step` line from any
+# frame-budget test, since those run late. Every budget in suite_sand.c is
+# pegged from a capture, so a window that never reaches them cannot peg or
+# re-peg anything. Overridable now rather than hard-coded, so a run that
+# only needs the early suites does not have to wait out the whole window.
+CAPTURE_TIMEOUT="${CAPTURE_TIMEOUT:-3000}"
+python "$SCRIPT_DIR/sweeps/capture_selftest.py" "$RAW_CAPTURE" --port "$COM_PORT" --timeout "$CAPTURE_TIMEOUT"
 
 echo "=== Generating report ==="
 # report_test_results.py exits 1 when the capture contains ANY failing
