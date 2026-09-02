@@ -1321,6 +1321,157 @@ static uint8_t row_stable_depth[GRID_H_MAX];
  * value can never be a real column). */
 static uint8_t row_top_col[GRID_H_MAX];
 
+/*=============================================================================
+ * THE SATURATING CLIMB - why col_stable_depth[]/row_stable_depth[] stop at
+ * MATERIAL_LIQUID_DEPTH_BAND (24) and not at a byte's own 255.
+ *
+ * Reported from the device against the commit right above this one (882f2e7,
+ * the v_reverse/h_reverse flip reset): "it's flickery even during normal
+ * movement sometimes, creating lines inside the water... it seems to be
+ * creating huge jumps in the depth color i think the flickering comes from
+ * trying to react to the rim, seems like its fighting between two shade
+ * values in a couple of frames of difference."
+ *
+ * THE FLIP RESET WAS NOT THE CAUSE, and this is worth writing down because
+ * the obvious next move - soften, delay or hysteresis-gate that reset -
+ * would have cost another device round trip for nothing. Measured directly,
+ * on a host model driving the REAL sand_t/sand_step() through the REAL
+ * dirty-row sparsity (sand_track_dirty_rows()), the real wake tick and the
+ * real row-order reversal, under landscape-lock gravity taken from the
+ * device's own capture sidecars (tilt_x steady at 3650-3932, tilt_y small
+ * and crossing zero: -204, 147, -175, 183, -115, 29, -135, -131): running
+ * that model WITH 882f2e7's reset and WITHOUT it produces the same banding
+ * to two decimal places - 2.81 versus 2.80 vertical shade transitions per
+ * water column, 10.09 versus 10.09 isolated one-cell lines per frame, across
+ * flip rates from 0.4 to 3.1 per second and repaint sparsities from 0 to 65
+ * rows per frame. The reset is, visually, a no-op. It stays (it still does
+ * real bookkeeping work - see update_local_depth_gravity() below), but it
+ * never had the blast radius the report was describing.
+ *
+ * WHAT THE BANDING ACTUALLY NEEDS, from the same model, by ablation - the
+ * severe artifact being a TWO-shade-step jump between vertically adjacent
+ * interior cells, of only four steps total (DEPTH_RANGE, material.c):
+ *
+ *     as shipped (882f2e7)                0.6 per frame, worst frame 51
+ *     every row repainted every frame     0.0 per frame, worst frame  0
+ *     vertical walk contributing nothing  0.0 per frame, worst frame  0
+ *     debounce removed entirely           0.7 per frame, worst frame 57
+ *
+ * Two necessary conditions, and the debounce is not one of them: the
+ * DIRTY-ROW SPARSITY, and the VERTICAL walk's contribution to the blend.
+ *
+ * THE MECHANISM. col_stable_depth[cx] is a RUNNING accumulator walked down a
+ * column - each painted row's value is the previous PAINTED row's plus one.
+ * That is only the cell's real depth if the rows are painted as a contiguous
+ * chain from the boundary, which is exactly what draw_dirty_rows() does NOT
+ * do: it paints only dirty rows. A row painted in isolation therefore
+ * inherits whatever row happened to be painted before it - possibly a
+ * distant row, possibly the last row of the previous frame - and gets a
+ * freshly computed value that is about a different cell entirely. Its
+ * vertical neighbours, meanwhile, still show the coherent values the last
+ * wake tick left them. That is not the "stale readings are accepted" trade
+ * LOCAL DEPTH's own comment above signs off on - a stale row keeps its last
+ * GOOD value - it is a wrong value landing on precisely the rows that are
+ * being repainted, i.e. the ones the eye is already watching. One row, one
+ * cell tall, several shades off its neighbours: a line inside the water.
+ *
+ * WHY IT IS A LANDSCAPE-LOCK REPORT specifically, and why portrait was
+ * always fine. Near landscape the water stands as a column against a side
+ * wall spanning the WHOLE screen height, so the vertical walk's range is the
+ * grid's own height (112 rows at this quality tier) and beyond - the
+ * accumulator is free to climb to 255. Near portrait the same walk runs down
+ * a settled pool perhaps 30 cells deep, so a broken chain can be wrong by at
+ * most 30. Modelled both: the portrait scene shows 0 two-step jumps and 0
+ * isolated lines with or without any of this, while the landscape scene
+ * shows up to 51.
+ *
+ * THE FIX, and why THIS shape rather than 882f2e7's. material_colours()
+ * (material.c) clamps `depth` to DEPTH_SATURATE_CELLS, which IS this
+ * constant, before shading with it: past 24 cells the panel cannot tell one
+ * depth from another. But the two axes are blended BEFORE that clamp, so an
+ * unsaturated value gets averaged against one that is far past saturation
+ * and the far one drags the result somewhere neither input would ever have
+ * rendered on its own. A cell sitting exactly ON the horizontal surface
+ * (hdepth 0) inside a full-height column (vdepth 200) renders at a blended
+ * depth of 7 rather than 0 - a surface cell painted as if it were seven
+ * cells under. Clamping each axis to the band BEFORE the blend makes the two
+ * numbers commensurable with the scale they are about to be rendered on, and
+ * bounds every error the broken chain can produce to 24 raw units instead of
+ * 255 - which, at landscape lock's own vertical blend weight (9-13 of 256),
+ * is at most 1.2 depth units, well under one of the four shade steps.
+ *
+ * IT IS THE INVARIANT sand_priv.h ALREADY CLAIMS. mark_depth_band()'s own
+ * comment states, as the reason it only ever dirties a band of
+ * MATERIAL_LIQUID_DEPTH_BAND rows around a new surface, that "anything
+ * further than that already saturates to the same flat body colour whether
+ * the true depth is one cell more or a hundred". That was simply not true of
+ * this file before this change - a cell a hundred rows away DID render
+ * differently, because its unclamped vdepth reached the blend intact - so
+ * the simulation's pour-staleness fix was under-marking against an
+ * assumption the renderer broke. MATERIAL_LIQUID_DEPTH_BAND's own comment
+ * (material.h) asks for exactly this: the two "have to agree by
+ * construction, not by coincidence". Now they do.
+ *
+ * MEASURED, same model, same scenes, WITH this clamp:
+ *
+ *     landscape, slow sway   2.81 -> 1.72 transitions/column (worst frame
+ *                            27.80 -> 13.53); 2-step jumps 51 -> 0
+ *     landscape, tremor only 1.50 -> 0.79 transitions/column (worst frame
+ *                            14.29 -> 4.00); 2-step jumps 14 -> 0;
+ *                            isolated lines 7.74 -> 4.16 (worst 183 -> 45)
+ *     portrait               3.02 -> 3.02, 0 -> 0 - a no-op, as it must be:
+ *                            that pool never reaches 24 in the first place
+ *
+ * For scale, the same transitions-per-column measurement run over the
+ * device's own captures reads 2.96-7.04 on the build before 882f2e7 and
+ * 3.57-25.31 on 882f2e7 itself (with up to 74 two-step jumps in one frame).
+ * The unclamped model lands in the second range and the clamped model in the
+ * first.
+ *
+ * IT ALSO GIVES THE GRADIENT BACK, which was not the goal and is the larger
+ * effect. Dumping the rendered shade index across the landscape-lock pool,
+ * one row per line, unclamped against clamped (4 = surface, 0 = fully
+ * saturated):
+ *
+ *     unclamped   .....211111100000000.   clamped   .....333332222221111.
+ *                 .....221111110000000.             .....333332222221111.
+ *                 .....222111111000000.             .....333332222221111.
+ *
+ * Unclamped, the vertical accumulator running to 255 down a full-height
+ * column pushed nearly the whole pool past the saturation point: the body
+ * renders as one flat darkest tone with a thin two-step rim, and the little
+ * variation left is exactly the row-to-row noise the report called lines.
+ * Clamped, the same frame reads as an even 3-2-1 ramp inward from the
+ * surface, the same on every row. The device captures show the crushed
+ * version - shade 1 covering most of the water body - which is the same
+ * symptom from the other end: this pool was not merely banded, it had lost
+ * most of the depth cue the whole feature exists to provide.
+ *
+ * THE BLEND ITSELF IS UNTOUCHED - still the continuous Q8 crossfade, still
+ * driven solely by gravity's own |gx|/|gy| ratio, with no discrete axis and
+ * nothing to chatter (LOCAL DEPTH's own top comment). Clamping only brings
+ * the two ENDS of that crossfade onto the scale it is interpolating for; if
+ * anything it makes the crossfade gentler, since the two endpoints can no
+ * longer be 231 apart.
+ *
+ * THE RAW WALKS ARE DELIBERATELY NOT CLAMPED. col_local_depth[] and
+ * h_running_depth keep their 255 ceiling: they are the undebounced walks the
+ * debounced pair rides on, and nothing rendered ever reads them - see
+ * col_local_depth[]'s own comment above for why it has to stay raw. Only the
+ * two values that actually reach the blend are brought onto the renderer's
+ * scale.
+ *
+ * WHAT THIS DOES NOT FIX, on purpose: a broken chain inside a pool SHALLOWER
+ * than the band still renders that one row wrong, by up to its own depth.
+ * Fixing that needs either a depth byte per CELL (41,216 bytes on top of the
+ * grid's own - unaffordable, the same trade col_stable_depth[]'s comment
+ * already refuses) or advancing the accumulator across skipped rows, which
+ * is a full-grid pass every frame and would need to be re-decided on the
+ * device against LOCAL DEPTH's own "do not fix this into a full-grid pass"
+ * note and measured there. This closes the case the device actually
+ * reported - a chain broken across a hundred rows - for the cost of a
+ * different constant in four comparisons. */
+
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
  * frame's own local-depth blend, not last frame's, and working out the
@@ -1401,7 +1552,21 @@ static void update_local_depth_gravity(int gx, int gy)
      * second at 30fps in the noisy-gy model above, trivial next to
      * paint_row_n()'s own per-cell cost. See
      * test_a_direction_flip_does_not_corrupt_the_boundary_debounce in
-     * suite_sand.c for the reproduction and the bound this closes. */
+     * suite_sand.c for the reproduction and the bound this closes.
+     *
+     * WHAT THIS RESET IS AND IS NOT, restated after the banding report that
+     * followed it (THE SATURATING CLIMB's own comment above): it is a
+     * BOOKKEEPING correction, not a rendering one. Modelling the device's
+     * own landscape-lock gravity through real physics and real dirty-row
+     * sparsity showed running WITH this reset and WITHOUT it to be visually
+     * indistinguishable - 2.81 versus 2.80 vertical shade transitions per
+     * water column - so it is not a knob to reach for when something looks
+     * wrong on the panel. It earns its place elsewhere: in a pool SHALLOWER
+     * than MATERIAL_LIQUID_DEPTH_BAND, in the orientation where that axis
+     * carries the large blend weight, the HOLD-compounding climb would
+     * otherwise pin a genuinely 6-cell-deep column at the saturating 24 and
+     * render it as fully deep. The clamp bounds how far that can go; this
+     * reset is what stops it going there at all. */
     if (new_v_reverse != local_depth_v_reverse_prev) {
         for (int cx = 0; cx < grid_w; cx++) {
             col_top_row[cx] = 255u;
@@ -1708,10 +1873,13 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             vdepth = 0u;
         } else if (v_same_material) {
             /* Confirmed continuation of a liquid body - climb exactly like
-             * the raw walk. Not a boundary request either, so
+             * the raw walk, but stopping at the SATURATION POINT rather than
+             * at a byte's own 255 - see THE SATURATING CLIMB's own comment
+             * above this function for why that difference is the whole fix
+             * for the banding report. Not a boundary request either, so
              * col_top_row[cx] is left alone here too. */
-            vdepth = col_stable_depth[cx] < 255u
-                ? col_stable_depth[cx] + 1u : 255u;
+            vdepth = col_stable_depth[cx] < MATERIAL_LIQUID_DEPTH_BAND
+                ? col_stable_depth[cx] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
         } else if (col_top_row[cx] == (uint8_t)cy) {
             /* THIS EXACT ROW asked for a reset the last time it was
              * painted too - a real, lasting boundary, not a blink.
@@ -1723,8 +1891,8 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
              * moved. HOLD: keep climbing as if nothing happened, and start
              * tracking THIS row, so it asking again next time it is
              * painted will match and commit. */
-            vdepth = col_stable_depth[cx] < 255u
-                ? col_stable_depth[cx] + 1u : 255u;
+            vdepth = col_stable_depth[cx] < MATERIAL_LIQUID_DEPTH_BAND
+                ? col_stable_depth[cx] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
             col_top_row[cx] = (uint8_t)cy;
         }
         col_stable_depth[cx] = (uint8_t)vdepth;
@@ -1757,10 +1925,12 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             hdepth = 0u;
         } else if (h_same_material) {
             /* Confirmed continuation of a liquid body - climb exactly like
-             * the raw walk. Not a boundary request, so row_top_col[cy] is
-             * left alone here too. */
-            hdepth = row_stable_depth[cy] < 255u
-                ? row_stable_depth[cy] + 1u : 255u;
+             * the raw walk, saturating at MATERIAL_LIQUID_DEPTH_BAND for the
+             * same reason the vertical branch above does (THE SATURATING
+             * CLIMB's own comment). Not a boundary request, so
+             * row_top_col[cy] is left alone here too. */
+            hdepth = row_stable_depth[cy] < MATERIAL_LIQUID_DEPTH_BAND
+                ? row_stable_depth[cy] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
         } else if (row_top_col[cy] == (uint8_t)cx) {
             /* THIS EXACT COLUMN asked for a reset the last time THIS ROW
              * was painted too - a real, lasting boundary, not a blink.
@@ -1772,8 +1942,8 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
              * yet, or the boundary moved. HOLD: keep climbing as if nothing
              * happened, and start tracking THIS column, so it asking again
              * next time this row is painted will match and commit. */
-            hdepth = row_stable_depth[cy] < 255u
-                ? row_stable_depth[cy] + 1u : 255u;
+            hdepth = row_stable_depth[cy] < MATERIAL_LIQUID_DEPTH_BAND
+                ? row_stable_depth[cy] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
             row_top_col[cy] = (uint8_t)cx;
         }
         row_stable_depth[cy] = (uint8_t)hdepth;

@@ -45,10 +45,13 @@ one costs to produce:
   already a rim (see the foam lesson below for why that gate exists and
   why it is safe).
 - **`depth`** - a liquid's own notion of how deep this cell sits inside its
-  body of liquid, 0 (surface) to 255 (deep), used only by a liquid's
-  interior. See the local-depth lessons below; this is the one signal that
-  has been rebuilt the most times this session, and the backlog item at
-  the end is about it.
+  body of liquid, 0 (surface) to `MATERIAL_LIQUID_DEPTH_BAND` (24, fully
+  saturated), used only by a liquid's interior. Both per-axis accumulators
+  now saturate at that same constant *before* they are blended, not at a
+  byte's 255 - see "A value blended before it is clamped is blended on the
+  wrong scale" below. See the local-depth lessons generally; this is the
+  one signal that has been rebuilt the most times this session, and the
+  backlog item at the end is about it.
 - **`out[3]`** - body / diagonal-line / crossing colour. A flat or
   speckled material sets all three the same; `MATERIAL_HATCHED` (glass) is
   the only pattern that uses all three for real.
@@ -261,6 +264,78 @@ to local, absolute to relative, whatever), re-derive every constant that
 was tuned against its old range - do not assume a divisor survives the
 signal it was calibrated for.
 
+### A value blended before it is clamped is blended on the wrong scale
+
+The same lesson as the one above, one step further along, and it took a
+device report to notice: rescaling the *renderer's* denominator to
+`DEPTH_SATURATE_CELLS` (24) is not enough if the two things being averaged
+into it are still free to run to 255 first.
+
+`material_colours()` clamps `depth` at 24 - past that the panel cannot
+tell one depth from another. But the vertical and horizontal accumulators
+were blended *before* that clamp, so an unsaturated value got averaged
+against one hundreds of cells past saturation, and the far one dragged the
+result somewhere neither input would ever have rendered alone. A cell
+sitting exactly *on* the horizontal surface (`hdepth` 0) inside a
+full-screen-height column (`vdepth` 200) rendered at a blended depth of 7:
+a surface cell painted as if it were seven cells under.
+
+What made it visible was the dirty-row optimisation. `col_stable_depth[]`
+is a *running* accumulator walked down a column - each painted row's value
+is the previous *painted* row's plus one - which is only the cell's real
+depth if the rows arrive as a contiguous chain from the boundary.
+`draw_dirty_rows()` does not deliver one. A row repainted in isolation
+inherits whatever row happened to be painted before it, so it renders a
+value describing a different cell entirely while its neighbours still show
+what the last wake tick left them: a one-cell-tall horizontal line across
+the water, reshuffling every few frames. Reported as "creating lines
+inside the water... huge jumps in the depth color".
+
+Landscape-lock only, and that is the tell: there the pool stands against a
+side wall spanning the whole screen height, so the vertical walk's range is
+the grid's own height and beyond. A settled portrait pool is perhaps 30
+cells deep, so a broken chain is wrong by at most 30 - modelled, portrait
+shows zero such jumps with or without any of this.
+
+Two things worth taking from the hunt itself. First, **the obvious suspect
+was innocent**: the commit immediately before (`882f2e7`, resetting the
+boundary debounce on a gravity-direction flip) was assumed to be the cause,
+and running the model with and without it produced the same banding to two
+decimal places - 2.81 against 2.80 shade transitions per water column,
+across flip rates from 0.4 to 3.1 per second. It stays, because it still
+does real bookkeeping work in pools *shallower* than the band, but it never
+had the blast radius the report described. Second, **the metric has to
+match the complaint**: every earlier harness in this chain measured the
+frame-to-frame swing in the pool's *mean* depth, which is exactly blind to
+a line - a mean does not move when brightness is shuffled between rows.
+Only a spatial measurement (disagreement between vertically adjacent
+interior cells, against a ground-truth render of the same frame) showed it.
+
+The larger effect was not the one being chased. Dumping the rendered shade
+index across the landscape-lock pool, one row per line (4 = surface, 0 =
+fully saturated): unclamped reads `.....211111100000000.`, clamped reads
+`.....333332222221111.`. The unclamped accumulator was pushing nearly the
+whole pool past saturation, so the body rendered as one flat darkest tone
+with a thin rim - and the little variation left in it was exactly the
+row-to-row noise the report called lines. The device captures show the same
+thing from the other end: one shade covering most of the water. That pool
+had not merely been banded, it had lost most of the depth cue the feature
+exists to provide.
+
+`sand_priv.h`'s `mark_depth_band()` had *already been asserting* the fixed
+behaviour as its reason for only dirtying a band of 24 rows around a new
+surface: "anything further than that already saturates to the same flat
+body colour whether the true depth is one cell more or a hundred". That was
+simply not true of the renderer until this fix, so the simulation's
+pour-staleness marking was under-marking against an assumption the renderer
+broke.
+
+**Generalises to:** clamp each input to the scale it is about to be
+rendered on *before* you combine them, not after. And when two files share
+a constant so they "agree by construction", check that they actually do -
+one of them stating the invariant in a comment is not the same as either
+of them enforcing it.
+
 ### Off-grid is solid, not empty - and screen y increases downward
 
 Two conventions worth stating plainly, because both are easy to get
@@ -419,6 +494,25 @@ either trick again.
   - build a real `sand_t`/`sand_step()` scene (a settled pool, an
     irregular one with an obstacle, a tilt sweep) to measure the actual
     signal a fix depends on before writing any code against it.
+- **Match the metric to the complaint, and render a ground truth to
+  measure against.** "Flickering" and "lines inside the water" are
+  different measurements, and a probe built for one is blind to the other:
+  the frame-to-frame swing in a pool's *mean* depth cannot see a line at
+  all, because a mean does not move when brightness is shuffled between
+  rows. For a *spatial* complaint, measure disagreement between adjacent
+  interior cells - and do it against a **reference render of the same
+  frame** (the depth field as it would be if every row repainted, in
+  coherent order, this frame), or legitimate depth contours get counted as
+  artifacts and swamp the signal. Two ablations are worth running before
+  theorising: repaint every row every frame, and force one axis's blend
+  weight to zero. If the artifact survives both, it is not the mechanism
+  you think it is.
+- **A probe that reproduces nothing may just be too tidy.** A pool that is
+  an exactly-filled rectangle at equilibrium settles to *zero* dirty rows,
+  so every repaint comes from the wake tick, which always walks a whole
+  column in order - which hides every sparsity bug there is. Give the
+  scene a free surface and a trickle, then check the actual number of rows
+  repainted on a non-wake frame before trusting a null result.
 - **`panel_luminance()`** (`suite_sand.c`) is the Rec.601 luminance helper
   already used throughout the suite - reuse it rather than writing a
   second one.
