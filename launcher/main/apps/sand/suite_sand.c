@@ -29,6 +29,17 @@
 #include "suites.h"
 
 #include "sand.h"
+/* Reaches past sand.h's own public surface on purpose - bd esp32c6-a2j's
+ * exhaustive-shape-table and rejected-pattern tests below exercise
+ * cover_mask()/cover_seals() (ring_dir() too) directly, and a rule that
+ * rotates with gravity and is only ever exercised indirectly, through the
+ * stochastic burst roll, at whatever gravity direction one scene happens
+ * to use, is not really tested. sand_priv.h is pure portable logic
+ * (static inline over a plain sand_t, no hardware) like the rest of what
+ * this file already links against - the same reason sand_liquid.c and
+ * sand_gas.c can include it too - so this is a wider view of the same
+ * portable surface, not a step outside it. */
+#include "sand_priv.h"
 #include "util/intmath.h"   /* im_len() - mirrors app_sand.c's own
                              * update_local_depth_gravity(), which projects
                              * gravity onto each axis with the same helper
@@ -5400,6 +5411,105 @@ static void test_stone_heats_up_next_to_lava(void)
         "the other");
 }
 
+/* Seals a single WATER cell at (4, 3) into a one-cell pocket, walled on
+ * every side except the face touching the hot stone this test cares
+ * about - stone at (3, 3), left open on purpose. Without this, water is
+ * KIND_LIQUID and falls: a bare CELL_MAKE(MAT_WATER, ...) placed beside
+ * the target drains away under gravity within the first step or two, and
+ * the "wet" test only ever sees the target cell for that first step - the
+ * rest of a long cooldown then runs at the plain DRY rate regardless of
+ * SAND_WET_COOLING_FACTOR, which is indistinguishable from the feature
+ * being absent (caught by this test itself: it failed exactly this way
+ * on the first pass, both runs converging to the same step count, before
+ * the pocket was added). */
+static void seal_water_beside(int wx, int wy)
+{
+    sand_set(&s, wx, wy, WATER);
+    sand_set(&s, wx + 1, wy, STONE);       /* blocks rightward cross-flow */
+    sand_set(&s, wx,     wy + 1, STONE);   /* blocks the straight-down fall */
+    sand_set(&s, wx + 1, wy + 1, STONE);   /* blocks the down-right diagonal */
+    sand_set(&s, wx - 1, wy + 1, STONE);   /* blocks the down-left diagonal -
+                                             * directly under the target cell
+                                             * this pocket sits beside, which
+                                             * is otherwise the one open
+                                             * gravity-ward move move_liquid_
+                                             * grain() would take, draining
+                                             * the pocket a little every step
+                                             * until nothing was left to be
+                                             * wet with */
+}
+
+/* Pour water on a hot wall and its banked heat drains back to room
+ * temperature far faster than ambient `cools` alone manages -
+ * SAND_WET_COOLING_FACTOR (sand.h), applied in step_one_tempered_cell()'s
+ * neighbour walk (sand_reactions.c). Proven by DERIVING the step budget
+ * from the wet cell's own run rather than guessing a constant: however
+ * SAND_WET_COOLING_FACTOR or stone's own `cools` are ever retuned, a dry
+ * twin given the exact same number of steps the wet cell needed to reach
+ * ambient must still be short of it - if it were not, the multiplier
+ * would not actually be doing anything. */
+static void test_water_cools_hot_stone_back_to_room_temperature(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    seal_water_beside(4, 3);
+
+    int wet_steps = 0;
+    while (wet_steps < 2000 &&
+           CELL_VARIANT(sand_at(&s, 3, 3)) != SAND_AMBIENT_HEAT) {
+        sand_step(&s, 0, 1000, 0);
+        wet_steps++;
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT,
+        CELL_VARIANT(sand_at(&s, 3, 3)),
+        "stone started at the top of its ramp with water beside it the "
+        "whole time - it must reach room temperature well inside this "
+        "budget, or SAND_WET_COOLING_FACTOR is not doing anything");
+
+    fixture();
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    for (int i = 0; i < wet_steps; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(SAND_AMBIENT_HEAT,
+        CELL_VARIANT(sand_at(&s, 3, 3)),
+        "a DRY control cell, given the exact same number of steps that "
+        "just cooled its wet twin all the way to ambient, must still be "
+        "warmer than room temperature - proving the water did the "
+        "cooling, not merely the passage of time");
+}
+
+/* Water is a coolant, not a chiller - it can knock banked heat back down
+ * to SAND_AMBIENT_HEAT, but never past it. Going below ambient is
+ * snow/ice's job (`chills`) alone; letting water do it too would let a
+ * splash thermally shock glass, which step_one_tempered_cell()'s own
+ * comment on the ABOVE-ambient gate explains is exactly what this design
+ * avoids. Run far longer than test_water_cools_hot_stone_back_to_room_
+ * temperature's own budget needs, on purpose - this is a floor, and it
+ * has to hold forever, not just until the cell first reaches ambient. */
+static void test_water_never_chills_stone_below_room_temperature(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    seal_water_beside(4, 3);
+
+    int lowest = MATERIAL_VARIANTS;
+    for (int i = 0; i < 2000; i++) {
+        sand_step(&s, 0, 1000, 0);
+        const int v = CELL_VARIANT(sand_at(&s, 3, 3));
+        if (v < lowest) {
+            lowest = v;
+        }
+    }
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, lowest,
+        "a quenching liquid must never push a heat-ramping cell's own "
+        "variant below SAND_AMBIENT_HEAT - that would let water thermally "
+        "shock glass the way only snow is supposed to be able to");
+}
+
 /* But it never melts, however hot it gets, and that is the point of it.
  *
  * Glass names MAT_LAVA in `heats_to` and stone names nothing. If both
@@ -10052,6 +10162,11 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
         }
     }
     sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    /* This scene is exactly SAND_LAVA_BURST_COVER-or-more covered (bd
+     * esp32c6-mqt) - pinned off so this test still isolates smothered()'s
+     * own exemption, the thing it actually names, rather than flickering
+     * on the unrelated burst roll every step this cell stays covered. */
+    sand_set_lava_burst(&s, 0);
     const int before = liquid_mass_of(MAT_LAVA);
     TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, before,
         "fixture check: one full cell of lava, walled in on all four sides");
@@ -10064,6 +10179,500 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
         "lava walled in by stone must still be there - smothering puts a "
         "FLAME out because burial starves it of air, and lava is not "
         "burning anything");
+}
+
+/* bd esp32c6-mqt: burial no longer means "lasts forever" either. A lava
+ * cell covered on SAND_LAVA_BURST_COVER or more of its 5 gravity-relative
+ * semi-disc cells (covered_at(), sand_priv.h - bd esp32c6-a2j) gets a
+ * tiny per-step chance to convert to MAT_STONE and burst - the chosen
+ * replacement for the vent machinery (bd esp32c6-0f2 removes that
+ * separately, later) and the mechanism that reopens a sealed pool's crust
+ * so a sustained pour can keep reaching lava (see cool_off_chain()'s own
+ * comment, sand_reactions.c).
+ *
+ * Exactly the same fully-walled scene test_lava_buried_in_stone_is_not_
+ * deleted uses, this time with the burst chance pinned to its maximum
+ * instead of pinned off - every one of the 8 surrounding cells is stone,
+ * so all 5 gravity-relative ones are covered regardless of which way is
+ * down.
+ *
+ * PINS THE ONE BEHAVIOUR THE BRIEF FOR THIS CHANGE CALLS OUT BY NAME:
+ * sand_explode() fills a core of radius `radius / SAND_EXPLODE_CORE_
+ * DIVISOR` with fire FIRST, unconditionally, before it queues a single
+ * flight entry (sand.h, SAND_EXPLODE_CORE_DIVISOR's own comment) - at
+ * SAND_LAVA_BURST_RADIUS(8) and divisor 5 that core radius is 1, so the
+ * MAT_STONE this feature just wrote at the centre is immediately
+ * overwritten by fresh fire. Asserted directly, not assumed - the same
+ * discipline test_a_confined_gas_pocket_bursts_instead_of_just_catching
+ * already applies to its own centre cell for gas's identical sand_
+ * explode() core fill. */
+static void test_buried_lava_bursts_into_stone_and_fire(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    const int cx = W / 2, cy = H / 2;
+    sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "buried-lava-burst impulse queue must fit in what the framebuffer "
+        "leaves");
+    sand_enable_impulses(&s, buf, W * H);
+    sand_set_lava_burst(&s, 255);
+
+    bool burst = false;
+    for (int i = 0; i < 10 && !burst; i++) {
+        sand_step(&s, 0, 1000, 0);
+        burst = CELL_MATERIAL(sand_at(&s, cx, cy)) != MAT_LAVA;
+    }
+
+    const uint8_t centre_material = CELL_MATERIAL(sand_at(&s, cx, cy));
+    const int impulse_count = s.impulse_count;
+    /* Cover disturbed - at least one of the four cells that were doing
+     * the covering must no longer be plain, undisturbed stone, or nothing
+     * actually exploded outward from the centre. */
+    int cover_disturbed = 0;
+    if (CELL_MATERIAL(sand_at(&s, cx - 1, cy)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx + 1, cy)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx, cy - 1)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx, cy + 1)) != MAT_STONE) cover_disturbed++;
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(buf);
+
+    TEST_ASSERT_TRUE_MESSAGE(burst,
+        "a lava cell covered on all four sides, with the burst chance "
+        "pinned to its maximum, must stop being lava within this budget");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, centre_material,
+        "sand_explode()'s own core fill (SAND_EXPLODE_CORE_DIVISOR, "
+        "sand.h) overwrites the centre cell with fire on its very first "
+        "line, occupied or not - the MAT_STONE this feature just wrote "
+        "there does not survive to be seen, and that is expected, pinned "
+        "behaviour, not a bug");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, impulse_count,
+        "a real burst must also queue its own outward annulus, not just "
+        "fill a core of fire in place");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, cover_disturbed,
+        "the burst must disturb at least one of the four cells that were "
+        "covering it, or nothing actually exploded outward");
+}
+
+/* THE THRESHOLD, REWRITTEN FOR THE GRAVITY-RELATIVE RULE (bd esp32c6-a2j).
+ * Exactly SAND_LAVA_BURST_COVER - 1 (2) of the five gravity-relative
+ * semi-disc cells covered must never burst, however long it runs and
+ * however high the chance is pinned - the test that fails silently (goes
+ * green when it should not) if covered_at()'s count or shape check were
+ * ever loosened by one.
+ *
+ * The old version of this test built a full-width tunnel walled top and
+ * bottom - under the CARDINAL rule that scene structurally pinned the
+ * count at 2 (up, down), but under THIS rule "down" is excluded (it is
+ * the gravity direction itself, not something that covers) and the
+ * DIAGONALS are included, so that same scene now has up-left/up/up-right
+ * all covered - exactly the wide-pool-under-a-crust case bd esp32c6-a2j
+ * exists to make burst, not the never-bursts case any more.
+ *
+ * A CEILING WITH ALTERNATING HOLES gives the new structural guarantee
+ * instead: stone at even columns, open at odd ones. A lava cell under an
+ * open column sees its "up" neighbour empty but BOTH ceiling diagonals
+ * (the even columns either side) covered - count 2, and not the
+ * cardinal-triple exception either (that needs all three of up-left/up/
+ * up-right, not two diagonals with the middle one open) - so it can
+ * never seal. A lava cell under a solid column sees only "up" covered -
+ * count 1, even further from the threshold. Every column in the scene is
+ * one of the two, so the whole row structurally never reaches 3,
+ * regardless of how the liquid itself moves - the same reasoning the
+ * original tunnel used, adapted to the rule that replaced it. */
+static void test_lava_with_only_two_covered_sides_never_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    const int y = H / 2;
+    for (int x = 0; x < W; x++) {
+        if (x % 2 == 0) {
+            sand_set(&s, x, y - 1, STONE);   /* solid ceiling column */
+        }                                    /* odd columns: left open */
+        sand_set(&s, x, y + 1, STONE);       /* floor, holds the pool down */
+        sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+    sand_set_lava_burst(&s, 255);
+    const int before = liquid_mass_of(MAT_LAVA);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W * MASS_MAX, before,
+        "fixture check: a full-width row of lava, floored throughout and "
+        "ceiled only on every other column");
+
+    for (int i = 0; i < 500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "a lava cell covered on only 2 of its 5 gravity-relative semi-disc "
+        "cells must never burst, no matter how high the chance is pinned "
+        "or how long it runs - SAND_LAVA_BURST_COVER is 3, not 2, and 2 "
+        "covered diagonals either side of an open 'up' is not the "
+        "cardinal-triple exception either");
+}
+
+/* THE REJECTED PATTERNS STAY REJECTED - bd esp32c6-a2j. A broader version
+ * of the cardinal-triple exception ("any single-diagonal gap flanked by
+ * two covered cardinals") was considered while settling this rule with
+ * the user and REJECTED: it would also let {up-left, up, right} and
+ * {up, up-right, left} seal, in portrait, and the user's own exhaustive
+ * diagrams excluded both. This is the test that catches the exception
+ * being "helpfully" generalised back to that wrong, broader version
+ * later - see cover_seals()'s own comment (sand_priv.h) for the full
+ * reasoning.
+ *
+ * Calls cover_mask()/cover_seals() directly rather than through a
+ * stepped scene: both patterns fail on SHAPE, not on count (each has
+ * exactly 3 of the 5 cells covered, meeting SAND_LAVA_BURST_COVER), so
+ * the only way to pin "count is enough but shape must still say no" down
+ * exactly is to ask the primitive the question directly rather than
+ * inferring it from whether a stochastic burst happened to fire within
+ * some step budget. */
+static void test_rejected_semi_disc_patterns_stay_rejected(void)
+{
+    fixture();
+    sand_clear(&s);
+    s.last_load_dx = 0;
+    s.last_step_dy = 1;   /* portrait: gravity straight down */
+
+    /* Arc order for gravity down (cover_mask()'s own comment): bit 0 =
+     * right, bit 1 = up-right, bit 2 = up, bit 3 = up-left, bit 4 = left. */
+    const unsigned up_left_up_right = (1u << 3) | (1u << 2) | (1u << 0);
+    const unsigned up_up_right_left = (1u << 2) | (1u << 1) | (1u << 4);
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        cover_seals(&s, up_left_up_right, SAND_LAVA_BURST_COVER),
+        "{up-left, up, right} covered, up-right and left open - an open "
+        "diagonal (up-right) flanked by two covered cardinals (up, "
+        "right), but NOT the exact cardinal-triple - must stay rejected");
+    TEST_ASSERT_FALSE_MESSAGE(
+        cover_seals(&s, up_up_right_left, SAND_LAVA_BURST_COVER),
+        "{up, up-right, left} covered, up-left and right open - the "
+        "mirror image of the pattern above, must also stay rejected");
+}
+
+/* THE EXHAUSTIVE SHAPE TABLE - bd esp32c6-a2j. A rule that rotates with
+ * gravity and is only ever exercised at one rotation is not really
+ * tested, so this drives cover_mask()/cover_seals() (sand_priv.h)
+ * directly, at each of the 8 ring directions, over every one of the 256
+ * ways to paint the full 8-neighbour ring covered or open - not just the
+ * 32 combinations of the 5 cells that end up eligible. Every combo first
+ * checks that cover_mask() equals a mask built independently from that
+ * combo's own bits at the 5 eligible ring positions (ring_of()/
+ * ring_dir(), not cover_mask()'s own logic checked against itself) -
+ * proving it genuinely ignores the 3 cells gravity excludes, not merely
+ * that it is never asked about them - and only the 32 combos where those
+ * 3 excluded bits are all 0 feed the count/shape tally below, so each of
+ * the 32 distinct 5-bit patterns is tallied exactly once despite
+ * appearing 8 times across the full 256.
+ *
+ * The counts checked are the user's own settled acceptance data (bd
+ * esp32c6-a2j's notes): the four axis-aligned gravity directions each
+ * admit exactly 4 valid shapes at exactly-3-covered (7 valid in total);
+ * the four diagonal directions admit only 3 at exactly-3 (6 total),
+ * because a diagonal gravity's semi-disc holds only two cardinals, so
+ * the cardinal-triple exception can never arise there - inherent to the
+ * rule, not a defect (see cover_seals()'s own comment). */
+static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
+{
+    fixture();
+    sand_clear(&s);
+    const int cx = W / 2, cy = H / 2;
+    sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    const uint8_t density = materials[MAT_LAVA].density;
+
+    for (int g = 0; g < 8; g++) {
+        const int *grav = ring_dir(g);
+        s.last_load_dx = grav[0];
+        s.last_load_dy = grav[1];
+        const bool axis_aligned = (g & 1) == 0;
+        const int anti = g + 4;   /* ring_of(grav) is just g */
+
+        int valid_at_3 = 0;
+        int valid_total = 0;
+        for (unsigned combo = 0; combo < 256u; combo++) {
+            for (int i = 0; i < 8; i++) {
+                const int *d = ring_dir(i);
+                sand_set(&s, cx + d[0], cy + d[1],
+                        (combo & (1u << i)) ? STONE : CELL_EMPTY);
+            }
+
+            const unsigned mask = cover_mask(&s, cx, cy, W, H, density);
+
+            /* PROVES THE 3 EXCLUDED RING POSITIONS ARE GENUINELY IGNORED,
+             * not merely never exercised: `expected` is built straight
+             * from `combo`'s own bits at the 5 eligible ring positions
+             * (ring_of()/ring_dir(), already covered by their own tests
+             * elsewhere - not cover_mask()'s own logic being checked
+             * against itself), independent of whatever the other 3 bits
+             * of this combo happen to be. */
+            unsigned expected = 0;
+            for (int i = 0; i < 5; i++) {
+                const int ring_pos = (anti - 2 + i) & 7;
+                if (combo & (1u << ring_pos)) {
+                    expected |= 1u << i;
+                }
+            }
+            TEST_ASSERT_EQUAL_INT_MESSAGE((int)expected, (int)mask,
+                "cover_mask() must depend only on the 5 eligible ring "
+                "positions, read in ring order, and nothing else");
+
+            /* Tallied once per distinct 5-bit PATTERN, not once per raw
+             * combo - each pattern reappears 8 times across the 256
+             * combos (once per setting of the 3 excluded bits, which the
+             * assertion just above already proved cannot change the
+             * mask), so only counting it when those 3 bits are 0 avoids
+             * inflating the counts eightfold. */
+            const unsigned excluded_bits =
+                (1u << ((anti + 3) & 7)) | (1u << ((anti + 4) & 7)) |
+                (1u << ((anti + 5) & 7));
+            if ((combo & excluded_bits) != 0) {
+                continue;
+            }
+
+            unsigned count = 0;
+            for (unsigned b = 0; b < 5u; b++) {
+                count += (mask >> b) & 1u;
+            }
+            if (cover_seals(&s, mask, SAND_LAVA_BURST_COVER)) {
+                valid_total++;
+                if (count == (unsigned)SAND_LAVA_BURST_COVER) {
+                    valid_at_3++;
+                }
+            }
+        }
+
+        const int expected_at_3 = axis_aligned ? 4 : 3;
+        const int expected_total = axis_aligned ? 7 : 6;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_at_3, valid_at_3,
+            "wrong count of exactly-3-covered valid shapes at this "
+            "gravity direction - ring_dir()'s index tells axis-aligned "
+            "(even) from diagonal (odd)");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_total, valid_total,
+            "wrong total count of valid (sealed) shapes at this gravity "
+            "direction");
+    }
+}
+
+/* THE HEADLINE CASE - bd esp32c6-a2j. An INTERIOR cell of a lava pool
+ * wider than one cell and more than one cell deep, sealed only by a
+ * crust directly above it, must still burst - the case cover_count()'s
+ * cardinal rule could never fire for at all (see this file's own header
+ * comment and bd esp32c6-a2j's own notes for why): the tested cell's
+ * left, right AND below neighbours are all more lava - KIND_LIQUID,
+ * which neighbor_smothers() never counts - so under the OLD screen-fixed
+ * cardinal rule only "up" ever counted, for a count of 1, nowhere near
+ * SAND_LAVA_BURST_COVER's 3. Under THIS rule the crust's two diagonal
+ * cells count too: up-left, up and up-right are all crust, for a count
+ * of 3, contiguous, sealed - regardless of what the pool does below or
+ * beside the tested cell. */
+static void test_a_wide_pool_under_a_crust_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 1, STONE);   /* the crust: a wide, solid lid */
+        sand_set(&s, x, 4, STONE);   /* floor, keeps the pool from draining */
+    }
+    for (int y = 2; y <= 3; y++) {
+        for (int x = 1; x <= 6; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+
+    const int tx = 3, ty = 2;   /* interior: not touching the pool's own
+                                  * left/right edge, so both diagonal
+                                  * neighbours above it are genuine crust */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty)),
+        "fixture check: lava at the cell under test");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx - 1, ty)),
+        "fixture check: more lava to its left, not stone or open air - a "
+        "genuine pool interior, not an isolated cell in a solid pocket");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx + 1, ty)),
+        "fixture check: more lava to its right too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
+        "fixture check: and more lava directly below it - this cell has "
+        "no support of its own, only the crust above seals it in");
+
+    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "wide-pool-burst impulse queue must fit in what the framebuffer "
+        "leaves");
+    sand_enable_impulses(&s, buf, W * H);
+    sand_set_lava_burst(&s, 255);
+
+    bool burst = false;
+    for (int i = 0; i < 10 && !burst; i++) {
+        sand_step(&s, 0, 1000, 0);
+        burst = CELL_MATERIAL(sand_at(&s, tx, ty)) != MAT_LAVA;
+    }
+
+    free(buf);
+    TEST_ASSERT_TRUE_MESSAGE(burst,
+        "an interior cell of a wide, deep lava pool, sealed only by a "
+        "crust directly above it, must still burst within this budget - "
+        "the case cover_count()'s screen-fixed cardinal rule could never "
+        "fire for, because it counted 'down' (more lava, never counted) "
+        "instead of the two upper diagonals (crust, which do)");
+}
+
+/* GRAVITY-RELATIVE, NOT SCREEN-RELATIVE - the risk covered_at() inherits
+ * from cover_mask() (bd esp32c6-a2j): the wide-pool-under-a-crust test
+ * just above only ever exercises this under ordinary downward gravity,
+ * so a regression that quietly swapped s->last_load_dx/dy for a fixed
+ * screen-up direction would still pass it. This is the direct
+ * descendant of the now-removed test_sealed_lava_vents_toward_gravity_
+ * relative_up (bd esp32c6-0f2 retired the vent mechanism it guarded;
+ * the behaviour it stopped from regressing - gravity, not the screen,
+ * decides "up" - survives here against the burst instead).
+ *
+ * The same wide-pool-under-a-crust shape, TRANSPOSED: a pool wide along
+ * screen-y instead of screen-x, sealed by a crust to its LEFT instead of
+ * above it, driven by genuine sideways gravity (gx=1000, gy=0) so
+ * gravity-relative "up" is screen-LEFT. Under the correct rule the
+ * interior test cell's three "above" neighbours (left, up-left,
+ * down-left, gravity-relative) are all crust - count 3, contiguous,
+ * sealed. Under a regression hardcoded to screen-up, the same cell would
+ * see only up-left and left as covered (screen-up and up-right are more
+ * lava) - count 2, never bursts. */
+static void test_a_wide_pool_under_a_sideways_crust_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        sand_set(&s, 1, y, STONE);   /* crust: a tall wall to the left */
+        sand_set(&s, 4, y, STONE);   /* wall, keeps the pool from draining */
+    }
+    for (int x = 2; x <= 3; x++) {
+        for (int y = 1; y <= 6; y++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+
+    const int tx = 2, ty = 3;   /* interior: touching the crust directly
+                                  * to its left, but not the pool's own
+                                  * top/bottom edge, so both diagonal
+                                  * neighbours toward the crust are
+                                  * genuine crust too */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty)),
+        "fixture check: lava at the cell under test");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty - 1)),
+        "fixture check: more lava above it - screen-up is NOT "
+        "gravity-relative up in this scene");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
+        "fixture check: and more lava below it too");
+
+    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "sideways-pool-burst impulse queue must fit in what the "
+        "framebuffer leaves");
+    sand_enable_impulses(&s, buf, W * H);
+    sand_set_lava_burst(&s, 255);
+
+    bool burst = false;
+    for (int i = 0; i < 10 && !burst; i++) {
+        sand_step(&s, 1000, 0, 0);   /* gravity pulls RIGHT, not down */
+        burst = CELL_MATERIAL(sand_at(&s, tx, ty)) != MAT_LAVA;
+    }
+
+    free(buf);
+    TEST_ASSERT_TRUE_MESSAGE(burst,
+        "under sideways gravity, a lava cell sealed by a crust to its "
+        "gravity-relative up (screen-LEFT here) must still burst - if "
+        "this fails while test_a_wide_pool_under_a_crust_bursts (its "
+        "downward-gravity sibling) still passes, the cover gate "
+        "regressed to a fixed screen direction instead of "
+        "s->last_load_dx/dy");
+}
+
+/* THE NEGATIVE COUNTERPART: an ordinary, uncovered open pool - a floor
+ * beneath it, open air above and to both sides - must never burst either,
+ * however high the chance is pinned. Guards against this firing on scenes
+ * it must not touch at all, not just against the threshold being wrong. */
+static void test_an_open_lava_pool_never_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 2; x < W - 2; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+    sand_set_lava_burst(&s, 255);
+    const int before = liquid_mass_of(MAT_LAVA);
+    TEST_ASSERT_TRUE_MESSAGE(before > 0,
+        "fixture check: an open pool of lava sitting on a floor");
+
+    for (int i = 0; i < 500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "an ordinary open lava pool - a floor beneath it, open air above "
+        "and to both sides - must never burst, however high the chance "
+        "is pinned");
+}
+
+/* sand_explode() is a documented no-op without sand_enable_impulses()
+ * (its own first line, sand.c) - so with impulses never enabled, a burst
+ * must still convert the cell to MAT_STONE (place_reacted() does not
+ * touch s->impulse_buf at all) and simply throw nothing. Not gated on
+ * impulses being enabled at all - see step_one_burning_cell()'s own new
+ * block for why that is correct rather than a gap: no impulses means no
+ * explosions anywhere else in the simulation either, and a bare
+ * conversion to stone is not a wrong answer on its own. */
+static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    const int cx = W / 2, cy = H / 2;
+    sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set_lava_burst(&s, 255);
+
+    bool converted = false;
+    for (int i = 0; i < 10 && !converted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        converted = CELL_MATERIAL(sand_at(&s, cx, cy)) != MAT_LAVA;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(converted,
+        "a covered lava cell must still convert away from lava within "
+        "this budget even with impulses never enabled");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, cx, cy)),
+        "with no impulse buffer, sand_explode() is a pure no-op - the "
+        "centre cell must become stone and stay stone, not fire, since "
+        "nothing was thrown to fill any core with");
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_FIRE,
+                CELL_MATERIAL(sand_at(&s, cx + dx, cy + dy)),
+                "no impulse buffer means no explosion at all - fire must "
+                "not appear anywhere around the converted cell either");
+        }
+    }
 }
 
 /* Nor does conducted heat boil it away.
@@ -14300,6 +14909,255 @@ static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(voi
         "it exists to guard");
 }
 
+/* A single-file shaft of lava, walled on both sides so the only cell a
+ * lava neighbour can ever be is the one straight down - which is what
+ * makes cool_off_chain()'s own walk (sand_reactions.c) deterministic here
+ * rather than wandering sideways through a wide pool. Water sits directly
+ * on top of the shaft's first cell; everything below it is stone, so the
+ * whole column can only ever be read as: the crust cool_off_chain() has
+ * reached so far, contiguous from the top. */
+#define LAVA_SHAFT_W    3
+#define LAVA_SHAFT_H    32
+#define LAVA_SHAFT_X    1
+#define LAVA_SHAFT_TOP  1
+#define LAVA_SHAFT_BOT  (LAVA_SHAFT_H - 2)  /* one cell above the floor */
+
+static void build_lava_shaft(sand_t *p, uint8_t *cells)
+{
+    /* 0u, not the 71u used elsewhere in this file as a generic fixed
+     * seed: with cool-off pinned to its own max (255/256 per link), seed
+     * 71 happens to roll a failure after only ~12 links regardless of how
+     * deep the shaft is - verified by brute-forcing seeds against this
+     * exact scene, where 0 (like most seeds) instead runs the walk all
+     * the way to the shaft's floor when nothing caps it. That makes 0 the
+     * one that actually exercises SAND_LAVA_COOLOFF_MAX_CHAIN in
+     * test_the_cool_off_chain_is_bounded below - 71 would leave that
+     * test passing for the wrong reason, bounded by luck rather than by
+     * the cap, for any cap above ~12. */
+    sand_init(p, cells, LAVA_SHAFT_W, LAVA_SHAFT_H, 0u);
+    for (int y = 0; y < LAVA_SHAFT_H; y++) {
+        sand_set(p, LAVA_SHAFT_X - 1, y, STONE);
+        sand_set(p, LAVA_SHAFT_X + 1, y, STONE);
+    }
+    sand_set(p, LAVA_SHAFT_X, LAVA_SHAFT_H - 1, STONE); /* floor */
+    /* MASS_MAX, not the LAVA macro's mass of 8 - every cell in the shaft
+     * is full, so move_liquid_grain() finds no room in the cell below and
+     * the column sits motionless from the first step. A column of
+     * UNDER-full liquid cells is not at rest: each has room to take more,
+     * so ordinary liquid movement pours mass downward through it every
+     * step regardless of anything this test cares about, scrambling
+     * which cell holds how much lava before the reactions pass ever gets
+     * a turn - caught by this test itself, which saw its water vanish
+     * and its crust depth read 0 before this was full mass. */
+    for (int y = LAVA_SHAFT_TOP; y <= LAVA_SHAFT_BOT; y++) {
+        sand_set(p, LAVA_SHAFT_X, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+}
+
+/* How many cells of MAT_STONE sit contiguous from the shaft's own top,
+ * i.e. how far the crust has eaten into what was a solid column of lava. */
+static int lava_shaft_crust_depth(sand_t *p)
+{
+    int depth = 0;
+    for (int y = LAVA_SHAFT_TOP; y <= LAVA_SHAFT_BOT; y++) {
+        if (CELL_MATERIAL(sand_at(p, LAVA_SHAFT_X, y)) != MAT_STONE) {
+            break;
+        }
+        depth++;
+    }
+    return depth;
+}
+
+/* A sustained pour reaches past the one cell water can physically touch.
+ * Water is re-sand_set() every step - the pour, sustained - directly onto
+ * whatever now sits at the shaft's top; with the cool-off chain pinned
+ * on, the first quench's own cool_off_chain() carries the freeze several
+ * cells deeper in that same event. Pinned OFF, the exact same scene must
+ * freeze only the one cell water ever actually touches - which is what
+ * proves the extra depth in the first half came from cool_off_chain()
+ * and not some other route lava has to cool. */
+static void test_a_water_pour_freezes_a_lava_pool_below_its_crust(void)
+{
+    uint8_t *cells = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells, "lava shaft grid must fit in what "
+        "the framebuffer leaves");
+
+    sand_t p;
+    build_lava_shaft(&p, cells);
+    sand_set_lava_cooloff(&p, 255);
+    for (int i = 0; i < 5; i++) {
+        sand_set(&p, LAVA_SHAFT_X, LAVA_SHAFT_TOP - 1, WATER);
+        sand_step(&p, 0, 1000, 0);
+    }
+    const int poured_depth = lava_shaft_crust_depth(&p);
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, poured_depth,
+        "a sustained pour with the cool-off chain pinned on must freeze "
+        "the pool below the single cell water actually touches - if this "
+        "is 1, cool_off_chain() never chained past the cell neighbor_"
+        "quenches() itself converts");
+
+    uint8_t *cells_off = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells_off, "lava shaft grid must fit in "
+        "what the framebuffer leaves");
+
+    sand_t p_off;
+    build_lava_shaft(&p_off, cells_off);
+    sand_set_lava_cooloff(&p_off, 0);
+    for (int i = 0; i < 5; i++) {
+        sand_set(&p_off, LAVA_SHAFT_X, LAVA_SHAFT_TOP - 1, WATER);
+        sand_step(&p_off, 0, 1000, 0);
+    }
+    const int off_depth = lava_shaft_crust_depth(&p_off);
+    free(cells_off);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, off_depth,
+        "with the cool-off chain pinned OFF, the same sustained pour must "
+        "still freeze the one cell water actually touches, and no "
+        "further - the baseline quench neither of these two variants "
+        "ever disabled");
+}
+
+/* The ALWAYS-ON-DRAIN GUARD. A single lava cell walled in by stone on all
+ * four sides, no water anywhere on the board, cool-off pinned to its
+ * maximum - the same scene test_lava_buried_in_stone_is_not_deleted uses
+ * to prove burial does not delete lava, with the one addition that
+ * matters here.
+ *
+ * Stone's own heat_ramp climb (banking one more level, same material, no
+ * melt - stone's heats_to is 0, see test_stone_never_melts_however_hot)
+ * returns TRUE from try_heat_transform_given() on nearly every step it
+ * still has room to climb. Gating cool_off_chain() on that return value
+ * ALONE, rather than on CELL_MATERIAL actually changing, would rack up a
+ * roll on almost every one of those climbs - an always-on drain that
+ * needs no pour and no fuel anywhere in the scene, which would empty this
+ * lava cell within the first handful of steps even though nothing here
+ * ever touches water. */
+static void test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set_lava_cooloff(&s, 255);
+    /* Same reasoning as test_lava_buried_in_stone_is_not_deleted's own
+     * addition: this scene is covered enough to be burst-eligible (bd
+     * esp32c6-mqt), and this test's job is trigger A/cool_off_chain's own
+     * ALWAYS-ON-DRAIN guard, not the unrelated burst roll. */
+    sand_set_lava_burst(&s, 0);
+    const int before = liquid_mass_of(MAT_LAVA);
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "lava buried in dry stone, with the cool-off chance pinned to its "
+        "maximum and no water anywhere on the board, must not freeze "
+        "itself at all - the only thing that may ever cost it that chance "
+        "is doing the WORK of a genuine melt, and nothing here ever melts");
+}
+
+/* THE POSITIVE HALF of the guard above - which only ever proves trigger A
+ * did NOT fire, and would pass just as well if it were dead code. Sand's
+ * own melt to glass is the MEMORYLESS heats_to/heat_chance form
+ * (material.c - sand carries no heat_ramp of its own, unlike stone or
+ * glass), so a single successful roll flips CELL_MATERIAL straight from
+ * sand to glass with no "banks heat forever, never actually melts"
+ * escape hatch to hide behind - the exact, unambiguous kind of WORK
+ * trigger A is meant to charge lava for.
+ *
+ * Same scene, twice, cool-off pinned to the two extremes: pinning it does
+ * not gate whether the melt itself happens - conversion is sand's own
+ * heat_chance roll, untouched by any of this - only whether that melt
+ * then costs lava anything. Pinned high, the lava cell must become
+ * stone; pinned off, the identical melt must leave lava as lava. */
+static void test_lava_that_melts_sand_into_glass_sometimes_freezes_itself(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, LAVA);
+    sand_set(&s, 4, 3, SAND);
+    sand_set_lava_cooloff(&s, 255);
+
+    bool melted = false;
+    for (int i = 0; i < 500 && !melted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        melted = CELL_MATERIAL(sand_at(&s, 4, 3)) == MAT_GLASS;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(melted,
+        "setup: sand beside lava must melt to glass within this budget, "
+        "or this test never reached the event trigger A exists to charge "
+        "for");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "with the cool-off chance pinned to its maximum, lava that just "
+        "did the WORK of a genuine melt must pay for it - the lava cell "
+        "itself must become stone in that same step, or trigger A is "
+        "dead code the negative guard above would never catch on its "
+        "own");
+
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, LAVA);
+    sand_set(&s, 4, 3, SAND);
+    sand_set_lava_cooloff(&s, 0);
+
+    melted = false;
+    for (int i = 0; i < 500 && !melted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        melted = CELL_MATERIAL(sand_at(&s, 4, 3)) == MAT_GLASS;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(melted,
+        "setup: sand beside lava must melt to glass within this budget "
+        "with the cool-off chance pinned OFF too, or the two halves of "
+        "this test are not actually comparable");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "with the cool-off chance pinned to zero, the exact same melt "
+        "must cost lava nothing - it must still be lava, not stone");
+}
+
+/* THE CHAIN IS BOUNDED. Pinned fully on, against a shaft deep enough that
+ * a chain running unbounded would eat the whole thing -
+ * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is well under the shaft's 30 lava
+ * cells, so retuning the cap leaves a wide, unambiguous margin either way. One quench event only: a single step
+ * is enough for cool_off_chain() to run its entire walk, since the chain
+ * itself is not spread across steps the way the sustained pour above is.
+ *
+ * SAND_LAVA_COOLOFF_MAX_CHAIN + 1, not the chain's own cap alone, because
+ * the cap only bounds the CHAIN cool_off_chain() itself walks - the one
+ * cell neighbor_quenches() converts before ever calling it is not part
+ * of that walk, and this test has to count it too. Asserted against the
+ * real constant, not a hand-copied literal, so raising the cap cannot
+ * leave this silently stale the way a bare `9` would have. */
+static void test_the_cool_off_chain_is_bounded(void)
+{
+    uint8_t *cells = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells, "lava shaft grid must fit in what "
+        "the framebuffer leaves");
+
+    sand_t p;
+    build_lava_shaft(&p, cells);
+    sand_set_lava_cooloff(&p, 255);
+    sand_set(&p, LAVA_SHAFT_X, LAVA_SHAFT_TOP - 1, WATER);
+    sand_step(&p, 0, 1000, 0);
+    const int depth = lava_shaft_crust_depth(&p);
+    free(cells);
+
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(SAND_LAVA_COOLOFF_MAX_CHAIN + 1, depth,
+        "one quench event, chained fully on, must not convert more than "
+        "the quenched cell plus SAND_LAVA_COOLOFF_MAX_CHAIN further links "
+        "- an unbounded walk would run to the floor of a shaft this deep");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(LAVA_SHAFT_BOT - LAVA_SHAFT_TOP + 1, depth,
+        "the shaft must still hold real, unconverted lava after one "
+        "event - if this fails the chain ate the WHOLE pool, which is "
+        "the failure mode the cap exists to rule out");
+}
+
 /* Lava burns, so it must not quench - the same rule oil needs, arrived
  * at from the other side (oil is fuel, lava is a heat source, and
  * neighbor_quenches() excludes both). */
@@ -14816,8 +15674,9 @@ static void test_boiling_converts_the_cell_nearest_the_heat(void)
  * comment in material.h. sand_set_boils(0) must be able to disable that
  * conversion completely, the same override discipline every other
  * chance field in this file already gives (sand_set_conduction(0) seals
- * a wall shut, sand_set_vent_chance(0) seals lava in for good, ...) -
- * proof this is a real second condition and not decoration. */
+ * a wall shut, sand_set_lava_burst(0) keeps a covered pool as lava
+ * forever, ...) - proof this is a real second condition and not
+ * decoration. */
 static void test_sand_set_boils_zero_disables_conducted_heat_boiling(void)
 {
     wide_cells = malloc((size_t)WIDE_W * WIDE_H);
@@ -15815,6 +16674,12 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
     sand_init(&rod, rod_cells, ROD_W, ROD_H, 3u);
     sand_set_mobility(&rod, 0);
     sand_set_conduction(&rod, 255);
+    /* The lava source sits boxed in on 3-4 sides for the whole run - more
+     * than enough cover to be burst-eligible (bd esp32c6-mqt) over 6000
+     * steps. Pinned off: this test's job is the rod's own growth/cap
+     * mechanism, not the unrelated chance of the source itself bursting
+     * away mid-growth. */
+    sand_set_lava_burst(&rod, 0);
 
     const int y = 2;
     const int lava_x = 1;
@@ -16007,843 +16872,6 @@ static void test_acid_eats_metal_between_stone_and_sand(void)
     TEST_ASSERT_LESS_THAN_MESSAGE(stone, sand,
         "and stone slower than sand - dissolvable 60 against 200, the "
         "obviously softest target on the board");
-}
-
-/* ===================================================================
- * Lava venting: a fully smothered lava cell (reaction_t.vent_chance,
- * material.h) gets a chance, per step, to punch a vent straight through
- * whatever is sealing it in - up to SAND_VENT_REACH cells thrown with
- * sand_impulse_dislodge() - rather than sitting inert forever. See
- * try_vent()'s own comment in sand_reactions.c for the mechanism.
- * =================================================================== */
-
-#define VENT_TEST_W  8
-#define VENT_TEST_H  16
-#define VENT_LAVA_X  4
-#define VENT_LAVA_Y  10
-
-/* A single lava cell boxed on all four cardinal sides by stone - fully
- * smothered, the precondition vent_chance is even rolled against.
- * `cap_height` stone cells sit directly above the roof (itself always
- * one of the four smothering walls, so cap_height is always >= 1),
- * stacked toward SCREEN-up; everything else in the grid is the default
- * empty sand_init() leaves it in, so there is open room on every side of
- * the box for a dislodged wall to actually fly into, in any direction
- * gravity ends up calling "up".
- *
- * ALL FOUR DIAGONAL CORNERS are sealed too, not just the four cardinals
- * smothered() itself checks - the same lesson lava_beside_dirt() and the
- * rod test elsewhere in this file already learned the hard way for
- * DOWNWARD gravity ("a liquid blocked straight down still tries a
- * diagonal fall, and leaving one open drains the source clean off the
- * grid within a single step"). This scene is tested under gravity in
- * more than one direction (test_sealed_lava_vents_toward_gravity_
- * relative_up pulls RIGHT, not down), and a full-width floor row only
- * ever covered the two DOWNWARD diagonals by accident - it says nothing
- * about the sideways ones a rightward-gravity test needs sealed instead.
- * Sealing all four once, unconditionally, is simpler than reasoning out
- * which two diagonals a given test's own gravity direction happens to
- * need and is correct for every direction any current or future test
- * here might use.
- *
- * A dedicated grid and impulse buffer, not the shared fixture: sand_
- * impulse_dislodge() (like sand_impulse() itself) is a silent no-op
- * without one - see sand_enable_impulses()'s own comment - and this
- * scene's precise vertical layout is its own, not something the shared
- * `s`/`W`/`H` fixture is shaped for. */
-static void sealed_lava(sand_t *s, uint8_t *cells, impulse_t *impulses,
-                        int impulse_max, int cap_height)
-{
-    sand_init(s, cells, VENT_TEST_W, VENT_TEST_H, 3u);
-    sand_enable_impulses(s, impulses, impulse_max);
-    /* Forced fast and deterministic - see sand_set_vent_chance()'s own
-     * comment (sand.h) for why the real, per-material figure (material.c,
-     * deliberately rare) is the wrong thing for a test to wait on. */
-    sand_set_vent_chance(s, 255);
-
-    for (int x = 0; x < VENT_TEST_W; x++) {
-        sand_set(s, x, VENT_LAVA_Y + 1, STONE);            /* floor */
-    }
-    sand_set(s, VENT_LAVA_X - 1, VENT_LAVA_Y, STONE);      /* left wall */
-    sand_set(s, VENT_LAVA_X + 1, VENT_LAVA_Y, STONE);      /* right wall */
-    sand_set(s, VENT_LAVA_X - 1, VENT_LAVA_Y - 1, STONE);  /* corners */
-    sand_set(s, VENT_LAVA_X + 1, VENT_LAVA_Y - 1, STONE);
-    sand_set(s, VENT_LAVA_X - 1, VENT_LAVA_Y + 1, STONE);
-    sand_set(s, VENT_LAVA_X + 1, VENT_LAVA_Y + 1, STONE);
-    for (int i = 0; i < cap_height; i++) {
-        sand_set(s, VENT_LAVA_X, VENT_LAVA_Y - 1 - i, STONE); /* the cap */
-    }
-    sand_set(s, VENT_LAVA_X, VENT_LAVA_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-}
-
-static void test_sealed_lava_vents_through_a_thin_cap(void)
-{
-    /* HEAP, not static file scope - see drop_impulse_buf's own comment
-     * above for why this file's static test fixtures cannot share the
-     * framebuffer's memory budget. */
-    uint8_t *cells = malloc((size_t)VENT_TEST_W * VENT_TEST_H);
-    impulse_t *impulses = malloc((size_t)VENT_TEST_W * VENT_TEST_H * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "thin-cap vent grid must fit in what the framebuffer leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-        "thin-cap vent impulse queue must fit in what the framebuffer "
-        "leaves");
-    sand_t v;
-    sealed_lava(&v, cells, impulses, VENT_TEST_W * VENT_TEST_H, 1);
-
-    bool roof_moved = false;
-    for (int i = 0; i < 10000 && !roof_moved; i++) {
-        sand_step(&v, 0, 1000, 0);
-
-        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-            CELL_MATERIAL(sand_at(&v, VENT_LAVA_X, VENT_LAVA_Y)),
-            "the lava cell itself must never change - venting moves "
-            "whatever is ON TOP of it, not the lava - see step_one_"
-            "burning_cell()'s own comment on why a burning LIQUID is "
-            "never smothered the way a solid is, which this feature "
-            "must not reopen");
-        roof_moved = CELL_MATERIAL(sand_at(&v, VENT_LAVA_X,
-                                           VENT_LAVA_Y - 1)) != MAT_STONE;
-    }
-
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. All reads of cells/impulses (via `v`) are done by this
-     * point. */
-    free(cells);
-    free(impulses);
-
-    TEST_ASSERT_TRUE_MESSAGE(roof_moved,
-        "a lava cell sealed under a single stone roof must eventually "
-        "vent it away - reaction_t.vent_chance (material.h) exists "
-        "precisely so a sealed pool does not stay inert forever; if this "
-        "never fires, vent_chance regressed to zero, or sand_impulse_"
-        "dislodge() stopped actually moving a KIND_STATIC cell (stone is "
-        "the one material that can actually seal lava in, so a vent "
-        "that only moved loose powder would never do anything a player "
-        "could see)");
-}
-
-/* SAND_VENT_REACH bounds how deep a SINGLE column can be relieved - each
- * of the up-to-3 queued cells only ever advances into the cell one step
- * further "up" from it (see vent_column()'s own loop), and
- * can_impulse_enter() (sand.c) refuses a KIND_STATIC destination
- * UNCONDITIONALLY, so a column with open air right beyond its own reach
- * empties out completely while one with no open boundary within reach at
- * all has nothing to work with. That part is exact and still checked
- * below (EXACT_PODS).
- *
- * WHAT ISN'T EXACT ANY MORE, since try_vent()'s straight "up" column
- * jitters its own throw direction by up to one ring step per firing
- * (vent_column()'s own comment) and step_impulses()'s gravity-drift lets
- * airborne KIND_STATIC material keep sliding sideways for as long as it
- * stays blocked straight down: "a seal thicker than the reach can never
- * lose a single cell, anywhere, ever" is no longer a small geometric fact
- * checkable from try_vent()'s own loop bound alone - it is now an
- * emergent property of thousands of random rolls compounding over a long
- * run, and pinning it to an exact zero turned a real, working feature
- * into a test that occasionally found the one rare path a fully random
- * process eventually finds given enough attempts. DEEP_PODS below checks
- * the claim this design can actually stand behind: a seal built a full
- * cell deeper than the reach, everywhere jitter could possibly reach,
- * stays overwhelmingly intact - the same statistical bar EXACT_PODS
- * already holds itself to, not a stricter one for the harder direction.
- *
- * TWO POD GROUPS sharing one grid, not one pod per case, so a single run
- * of this test demonstrates both halves of the claim against the same
- * seed and step budget.
- *
- * SPACING SCALED TO SAND_VENT_REACH, NOT A FIXED 4 - vented material can
- * travel up to SAND_VENT_REACH cells outward before its own push fizzles,
- * and then keeps drifting further under step_impulses()'s own gravity-
- * drift for airborne KIND_STATIC material. At a small REACH, 4 cells of
- * clearance between pods was plenty; at a large one, it let a pod's own
- * thrown material arc back down within reach of its OWN lava (or even a
- * neighbour's) and refill the very column it had just cleared - measured
- * as a pod repeatedly reaching depth 0 and then climbing straight back to
- * depth SAND_VENT_REACH, over and over, never staying clear. A margin a
- * healthy multiple of the reach itself is what actually gives thrown
- * material somewhere to land that does not feed back into this test's
- * own claim. */
-/* HOST keeps the full 10-pod statistical run (host time is free - see
- * CAP_POD_STEPS' own comment). DEVICE runs a shrunk 5, both because the
- * device suite is paying real wall-clock for every pod (this test's own
- * 462-second history) and because 5 keeps EXACT_PODS' own threshold
- * formula below (CAP_TEST_PODS / 4) meaningful: at 3 pods, integer
- * division gives 0, and "must be < 0" can never pass no matter what the
- * test measures - a floor the maintainer's own "at least 3" guidance
- * does not by itself protect against. 5 is the smallest pod count clear
- * of that trap while still - per its own top comment above - proving
- * MULTIPLE independent vents open rather than collapsing to one pod's
- * luck. */
-#ifdef DEVICE_BUILD
-#define CAP_TEST_PODS 5
-#else
-#define CAP_TEST_PODS 10
-#endif
-#define CAP_TEST_SPACING (SAND_VENT_REACH * 3 + 6)
-/* Scaled to SAND_VENT_REACH, not a fixed 16 - a cap one cell deeper than
- * the reach (DEEP_PODS, below) needs that many rows above the lava plus
- * genuine open margin beyond it, and a fixed height stopped fitting the
- * moment SAND_VENT_REACH grew past a small starting value. */
-#define CAP_TEST_H (SAND_VENT_REACH + 6)
-/* Restructured 2026-09-01: CAP_TEST_PODS pods used to be laid out side
- * by side on one CAP_TEST_W-wide grid (CAP_TEST_W scaling with
- * SAND_VENT_REACH via CAP_TEST_SPACING * PODS * 2 groups) - at the
- * shipped SAND_VENT_REACH (30) that combined grid's cells+impulses pair
- * cost 69,336 + 416,016 = 485,352 bytes, on its own dwarfing this
- * device's whole no-PSRAM heap budget and failing the firmware LINK
- * outright (`region 'sram_seg' overflowed`) rather than just this one
- * test. test_sealed_lava_vent_caps_at_three_cells() below now runs each
- * pod on its OWN POD_GRID_W x CAP_TEST_H grid instead, sequentially, one
- * at a time, accumulating the same pass/fail counts the old wide-grid
- * version did - still testing the SHIPPED SAND_VENT_REACH, not a shrunk
- * stand-in for it. POD_GRID_W reuses CAP_TEST_SPACING's own sizing
- * unchanged: that constant's own comment above (room for a pod's own
- * thrown material to land without arcing back into its OWN lava) applies
- * just as much to a single centred pod as it did to neighbouring ones on
- * the old shared grid. */
-#define POD_GRID_W CAP_TEST_SPACING
-
-/* THE GUARD THIS RESTRUCTURE ITSELF EXISTS TO NEED: the old side-by-side
- * layout only ever failed at RUNTIME, on real hardware, the hard way (see
- * this test's own git history - a 485,352-byte static pair that failed
- * the link outright). SAND_VENT_REACH growing again would just as
- * silently regrow POD_GRID_W/CAP_TEST_H back past what this device's
- * heap can serve, one call to malloc() at a time - this turns that into
- * a compile-time error naming the problem, instead of a test that starts
- * failing TEST_ASSERT_NOT_NULL_MESSAGE for a reason nobody diagnosing it
- * would think to connect back to SAND_VENT_REACH. 32768 (32 KiB) sits
- * comfortably above the ~24,192 bytes one pod's cells+impulses pair costs
- * at the shipped SAND_VENT_REACH (30); past it, restructure this scene
- * again - a smaller footprint, or fewer buffers alive at once - rather
- * than just raising the number. */
-_Static_assert(
-    (unsigned long)POD_GRID_W * CAP_TEST_H +
-    (unsigned long)POD_GRID_W * CAP_TEST_H * sizeof(impulse_t) <= 32768,
-    "sealed-lava vent-cap per-pod grid exceeds its 32768-byte budget - "
-    "SAND_VENT_REACH grew past what this test's restructure is sized "
-    "for; shrink the scene further (this test's own top comment explains "
-    "the sizing) rather than just tolerating a bigger malloc");
-
-/* Steps each pod simulates - HOST and DEVICE run different budgets now,
- * not because the claim differs, but because the two environments are
- * chasing different parts of the same leak curve. See DEEP_LEAK_BOUND_
- * PER_MILLE's own comment below for why the bound this budget is measured
- * against changed too - the old 15% bound could only ever be crossed by
- * the rare multi-thousand-step avalanche the HOST table just below
- * documents; the new, tight bound is crossed by a much faster, much
- * cheaper signal the DEVICE table further down measures instead.
- *
- * HOST (6000): halved from 12000 on 2026-09-01, when the sequential
- * restructure above made this test's cost real for the first time: the
- * old one-giant-grid version never allocated on device, so its 12000
- * steps were never actually paid there. Twenty pods paying them pushed
- * the whole device suite to 18.8 minutes - the 462-second problem this
- * whole HOST/DEVICE split exists to fix, without giving up the deep
- * statistical run entirely (host time is free; this suite runs here in
- * well under a second regardless of what these two tests cost). Measured
- * on host by widening vent_column()'s scan to SAND_VENT_REACH * 3 and
- * sweeping (10 pods, deep_block_cells 19530, correct build steady at
- * exactly 0 across the whole range):
- *
- *      steps    broken build     as a fraction of the block
- *        100    55                0.28%
- *        250    67                0.34%
- *        500    80                0.41%
- *       1000    196               1.00%
- *       2000    697               3.57%
- *       4000    3158              16.17%
- *       6000    3804              19.48%  <- chosen
- *
- * DEVICE (500): a different regime entirely, not a cut-down version of
- * the host sweep above. Waiting thousands of steps on real hardware for
- * the same rare avalanche is exactly the cost this split exists to avoid
- * paying at all - so the device budget is instead sized against the
- * fast, EARLY-onset leak that shows up in the first few hundred steps,
- * well before the avalanche the host table is chasing ever gets a chance
- * to fire. Measured the same way, at CAP_TEST_PODS' own device value (5
- * pods, deep_block_cells 9765), correct build steady at exactly 0 across
- * the whole range tested:
- *
- *      steps    broken build     as a fraction of the block
- *        100    28                0.29%
- *        150    28                0.29%
- *        200    28                0.29%
- *        300    31                0.32%
- *        500    33                0.34%  <- chosen
- *        750    33                0.34%
- *       1000    33                0.34%
- *
- * The broken build's leak plateaus by step 300 and holds flat through at
- * least 1000 - 500 sits comfortably inside that plateau rather than on
- * the still-rising 100-300 transition, so the exact step count is not
- * fighting for its margin the way landing right at the transition would
- * be. Below 100 the EXACT_PODS group above has not finished clearing yet
- * either (a fresh sweep at 50 steps found 2 of 5 pods still sealed), so
- * 500 clears both groups' own needs at once, not just this one's. */
-#ifdef DEVICE_BUILD
-#define CAP_POD_STEPS 500
-#else
-#define CAP_POD_STEPS 6000
-#endif
-
-/* Bound on deep_empty_cells, in parts-per-thousand of deep_block_cells -
- * replaces the old flat 15% (deep_block_cells * 15 / 100). That bound was
- * checked against an ACTUAL correct-build value of exactly 0 on every
- * measurement CAP_POD_STEPS' own comment tables above record, host and
- * device both, across every step count swept - so 15% was never really
- * testing "overwhelmingly intact", it was testing "has the one rare
- * avalanche the host table chases been found yet", which is a much
- * weaker claim that happened to need thousands of steps to even have a
- * chance of tripping.
- *
- * 2 (0.2%) is chosen against the SAME measured numbers, not a fresh
- * guess: on device (9765-cell block, 5 pods) it is 19 cells, against a
- * measured broken-build plateau of 33 - the regression clears it with
- * 74% to spare. On host (19530-cell block, 10 pods) it is 39, against a
- * measured 3804 at the full 6000-step budget - enormous headroom, since
- * host is still free to keep chasing the slow avalanche the device
- * budget above deliberately does not wait for. In both cases a single
- * legitimately-eroded stray cell (the failure mode this bound must not
- * flake on) sits at 1 - roughly a nineteenth of the tighter, device-side
- * bound - nowhere near enough on its own to trip it. */
-#define DEEP_LEAK_BOUND_PER_MILLE 2
-
-static void test_sealed_lava_vent_caps_at_three_cells(void)
-{
-    /* CAP_TEST_PODS independent trials PER GROUP, run sequentially on a
-     * freshly malloc'd pod-sized grid each time rather than laid out
-     * side by side on one huge one - see POD_GRID_W's own comment above
-     * for why.
-     *
-     * A DIFFERENT SEED EVERY ITERATION, NOT THE SAME CONSTANT REPLAYED -
-     * try_vent() jitters its own throw direction per firing
-     * (vent_column()'s own comment, sand_reactions.c), which is the
-     * entire reason CAP_TEST_PODS pods give "a real denominator to hold
-     * a real statistical claim against" (EXACT_PODS's own comment below)
-     * rather than a single pass/fail verdict. Re-seeding every iteration
-     * with the SAME constant would replay one identical trial
-     * CAP_TEST_PODS times over and collapse that denominator back down
-     * to one - the counts below would still look plausible on average,
-     * but they would no longer be counting anything statistical. Seeds
-     * 3 .. 3 + 2*CAP_TEST_PODS - 1 keep every one of the 2*CAP_TEST_PODS
-     * pods (both groups together, 20 on host, 10 on device) on its own
-     * distinct trial, with EXACT_PODS and DEEP_PODS never repeating a
-     * seed between them either. */
-    int exact_still_sealed = 0;
-    int deep_block_cells   = 0;
-    int deep_empty_cells   = 0;
-
-    /* EXACT_PODS: cap == SAND_VENT_REACH, open air right beyond it. */
-    for (int k = 0; k < CAP_TEST_PODS; k++) {
-        uint8_t *cells = malloc((size_t)POD_GRID_W * CAP_TEST_H);
-        impulse_t *impulses =
-            malloc((size_t)POD_GRID_W * CAP_TEST_H * sizeof *impulses);
-        TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-            "sealed-lava vent-cap pod grid must fit in what the "
-            "framebuffer leaves");
-        TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-            "sealed-lava vent-cap pod impulse queue must fit in what "
-            "the framebuffer leaves");
-        sand_t c;
-        sand_init(&c, cells, POD_GRID_W, CAP_TEST_H, 3u + (unsigned)k);
-        sand_enable_impulses(&c, impulses, POD_GRID_W * CAP_TEST_H);
-        sand_set_vent_chance(&c, 255);  /* see sealed_lava()'s own comment */
-
-        const int y  = SAND_VENT_REACH + 3;
-        const int lx = POD_GRID_W / 2;
-        for (int x = 0; x < POD_GRID_W; x++) {
-            sand_set(&c, x, y + 1, STONE);          /* this pod's floor */
-        }
-        sand_set(&c, lx - 1, y, STONE);
-        sand_set(&c, lx + 1, y, STONE);
-        sand_set(&c, lx - 1, y - 1, STONE);      /* diagonal corners - see */
-        sand_set(&c, lx + 1, y - 1, STONE);      /* sealed_lava()'s own */
-        sand_set(&c, lx - 1, y + 1, STONE);      /* comment for why these */
-        sand_set(&c, lx + 1, y + 1, STONE);      /* matter, not just the */
-        for (int i = 0; i < SAND_VENT_REACH; i++) {  /* four cardinals */
-            sand_set(&c, lx, y - 1 - i, STONE);
-        }
-        sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-
-        for (int i = 0; i < CAP_POD_STEPS; i++) {
-            sand_step(&c, 0, 1000, 0);
-        }
-
-        bool all_clear = true;
-        for (int i = 0; i < SAND_VENT_REACH; i++) {
-            if (CELL_MATERIAL(sand_at(&c, lx, y - 1 - i)) == MAT_STONE) {
-                all_clear = false;
-            }
-        }
-        if (!all_clear) {
-            exact_still_sealed++;
-        }
-
-        /* Freed BEFORE the next iteration mallocs again: Unity longjmps
-         * out of a failure, so a free() after one never runs - see
-         * drop_impulse_buf's own comment above. */
-        free(cells);
-        free(impulses);
-    }
-
-    /* DEEP_PODS: a SOLID BLOCK, not three thin lines - each pod its own
-     * grid, same as EXACT_PODS above, just with a different seed range so
-     * neither group ever replays the other's trials.
-     *
-     * A genuine, real-world "thick vessel" is a filled mass of rock, not
-     * a wireframe of three one-cell-wide rays with open air between
-     * them - and three individual rays turn out not to test "no escape"
-     * at all once try_vent()'s straight "up" column jitters its own
-     * throw direction by up to one ring step each firing (vent_column()'s
-     * own comment, sand_reactions.c): true diagonal rays fan OUTWARD
-     * from the lava as they climb, so the straight column's higher cells
-     * always have genuinely open air immediately beside them once the
-     * rays have fanned far enough away - a real gap, not a bug, that a
-     * sideways-jittered throw can correctly find. A solid rectangle,
-     * REACH+1 deep and wide enough to cover every direction jitter can
-     * reach, is what actually has no gap anywhere for it to find. */
-    for (int k = 0; k < CAP_TEST_PODS; k++) {
-        uint8_t *cells = malloc((size_t)POD_GRID_W * CAP_TEST_H);
-        impulse_t *impulses =
-            malloc((size_t)POD_GRID_W * CAP_TEST_H * sizeof *impulses);
-        TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-            "sealed-lava vent-cap deep-pod grid must fit in what the "
-            "framebuffer leaves");
-        TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-            "sealed-lava vent-cap deep-pod impulse queue must fit in "
-            "what the framebuffer leaves");
-        sand_t c;
-        sand_init(&c, cells, POD_GRID_W, CAP_TEST_H,
-                  3u + (unsigned)(CAP_TEST_PODS + k));
-        sand_enable_impulses(&c, impulses, POD_GRID_W * CAP_TEST_H);
-        sand_set_vent_chance(&c, 255);
-
-        const int y  = SAND_VENT_REACH + 3;
-        const int lx = POD_GRID_W / 2;
-        for (int x = 0; x < POD_GRID_W; x++) {
-            sand_set(&c, x, y + 1, STONE);          /* this pod's floor */
-        }
-        for (int dy = 1; dy <= SAND_VENT_REACH + 1; dy++) {
-            for (int dx = -(SAND_VENT_REACH + 1); dx <= SAND_VENT_REACH + 1; dx++) {
-                sand_set(&c, lx + dx, y - dy, STONE);
-            }
-        }
-        sand_set(&c, lx - 1, y, STONE);
-        sand_set(&c, lx + 1, y, STONE);
-        sand_set(&c, lx - 1, y + 1, STONE);
-        sand_set(&c, lx + 1, y + 1, STONE);
-        sand_set(&c, lx, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-
-        for (int i = 0; i < CAP_POD_STEPS; i++) {
-            sand_step(&c, 0, 1000, 0);
-        }
-
-        /* Fraction of the block's own cells, not "did any pod ever lose
-         * even one cell" - see this test's own top comment for why an
-         * exact zero stopped being the honest bar once jitter and
-         * gravity-drift made escape a matter of probability rather than
-         * geometry. Accumulated across all CAP_TEST_PODS deep pods -
-         * block size (2*(SAND_VENT_REACH+1)+1 wide, SAND_VENT_REACH+1
-         * deep) times CAP_TEST_PODS of them - gives a real denominator
-         * to hold a real statistical claim against, rather than a single
-         * rare cell flipping a per-pod yes/no verdict for the whole
-         * block around it. */
-        /* EMPTY specifically, not "not stone" - a material histogram
-         * taken while diagnosing this test showed the "not stone" count
-         * was mostly FIRE (517 of 713 cells, one run), not vent escapes
-         * at all: lava's OWN flare mechanic (material.c) licks flame
-         * into any empty neighbour, and fire is KIND_GAS, so once even a
-         * few genuine vent-driven gaps open up, ordinary gas-rise
-         * physics spreads fire through whatever connected empty pockets
-         * exist - a real, separate, working mechanic finding a path
-         * through this test's own leak, inflating the apparent damage
-         * well past what actually escaped. EMPTY is the honest count of
-         * cells the vent mechanism itself ever actually vacated. */
-        for (int dy = 1; dy <= SAND_VENT_REACH + 1; dy++) {
-            for (int dx = -(SAND_VENT_REACH + 1); dx <= SAND_VENT_REACH + 1; dx++) {
-                deep_block_cells++;
-                if (CELL_IS_EMPTY(sand_at(&c, lx + dx, y - dy))) {
-                    deep_empty_cells++;
-                }
-            }
-        }
-
-        /* Freed BEFORE the next iteration mallocs again: Unity longjmps
-         * out of a failure, so a free() after one never runs - see
-         * drop_impulse_buf's own comment above. */
-        free(cells);
-        free(impulses);
-    }
-
-    TEST_ASSERT_LESS_THAN_MESSAGE(CAP_TEST_PODS / 4, exact_still_sealed,
-        "a cap exactly SAND_VENT_REACH cells deep, with open air right "
-        "beyond it, must fully clear within this budget in nearly every "
-        "pod - if most pods are still sealed, vent_chance regressed to "
-        "zero or try_vent()/sand_impulse_dislodge() stopped moving stone");
-    /* DEEP_LEAK_BOUND_PER_MILLE, not 0 - see this test's own top comment
-     * on why an exact zero stopped being the honest bar once jitter and
-     * gravity-drift made escape a matter of probability. See that
-     * constant's own comment (above CAP_POD_STEPS) for why 15% - the
-     * bound this line used to check against - stopped being the honest
-     * bar too: every correct-build measurement ever taken for this test,
-     * host and device both, at every step count swept, came back exactly
-     * 0, so 15% was never actually checking "overwhelmingly intact" - it
-     * was only ever checking "not yet found by the one rare multi-
-     * thousand-step avalanche its own sweep chased down". A real
-     * regression (can_impulse_enter()'s STATIC refusal weakened, or
-     * SAND_VENT_REACH outgrowing this test's own block) reads as most of
-     * the block emptying out, not a residual few cells - this bound only
-     * needs to clear actual measured noise (zero) with real margin, not
-     * guess at a hypothetical one. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(
-        deep_block_cells * DEEP_LEAK_BOUND_PER_MILLE / 1000, deep_empty_cells,
-        "a seal built a full cell deeper than SAND_VENT_REACH everywhere "
-        "jitter could possibly reach must stay overwhelmingly intact - "
-        "can_impulse_enter() (sand.c) refuses a KIND_STATIC destination "
-        "unconditionally, so no queued cell can ever advance into a "
-        "destination that is still occupied; a large fraction emptying "
-        "out means that refusal was weakened, or SAND_VENT_REACH outgrew "
-        "this test's own block, not that this design tolerates a leak "
-        "this size");
-}
-
-/* "Above" is GRAVITY-RELATIVE, not a fixed screen direction - both
- * covered_from_above() (the vent's own trigger) and try_vent() (the push
- * itself) derive it from s->last_load_dx/dy, the same settled-gravity
- * vector anchored() and the wet-earth percolation code already use for
- * the identical reason. Reuses sealed_lava()'s own box unchanged: sealing
- * all four CARDINAL neighbours is a superset of "the three neighbours
- * above are sealed" for ANY gravity direction, so the same four-walled
- * box covers the cell from above no matter which way is currently "up" -
- * only WHICH wall the vent is supposed to punch through changes. */
-static void test_sealed_lava_vents_toward_gravity_relative_up(void)
-{
-    /* HEAP, not static file scope - see drop_impulse_buf's own comment
-     * above for why this file's static test fixtures cannot share the
-     * framebuffer's memory budget. */
-    uint8_t *cells = malloc((size_t)VENT_TEST_W * VENT_TEST_H);
-    impulse_t *impulses = malloc((size_t)VENT_TEST_W * VENT_TEST_H * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "gravity-relative vent grid must fit in what the framebuffer "
-        "leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-        "gravity-relative vent impulse queue must fit in what the "
-        "framebuffer leaves");
-    sand_t v;
-    sealed_lava(&v, cells, impulses, VENT_TEST_W * VENT_TEST_H, 1);
-
-    bool left_wall_moved = false;
-    for (int i = 0; i < 10000 && !left_wall_moved; i++) {
-        /* Gravity pulls RIGHT, not down: (gx, gy) = (1000, 0) settles to
-         * the ring8 direction (1, 0), so gravity-relative "up" - the
-         * opposite ring entry - is (-1, 0), the box's LEFT wall, not the
-         * screen-up roof every other test in this section vents through. */
-        sand_step(&v, 1000, 0, 0);
-
-        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
-            CELL_MATERIAL(sand_at(&v, VENT_LAVA_X, VENT_LAVA_Y - 1)),
-            "under sideways gravity, the SCREEN-UP roof is not gravity-"
-            "relative up any more and must not be the one that vents - "
-            "if this ever moves, try_vent() is using a fixed screen "
-            "direction instead of s->last_load_dx/dy");
-        left_wall_moved = CELL_MATERIAL(sand_at(&v, VENT_LAVA_X - 1,
-                                                VENT_LAVA_Y)) != MAT_STONE;
-    }
-
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. All reads of cells/impulses (via `v`) are done by this
-     * point. */
-    free(cells);
-    free(impulses);
-
-    TEST_ASSERT_TRUE_MESSAGE(left_wall_moved,
-        "under gravity pulling right, the vent must push through the "
-        "box's LEFT wall (gravity-relative up), not the screen-up roof - "
-        "try_vent() must follow s->last_load_dx/dy, not a fixed screen "
-        "direction");
-}
-
-/* THE ACTUAL MOTIVATING CASE: a POOL wider than one cell, not a one-wide
- * shaft - "a thin stone crust forms over the pool and it just stays
- * there forever" was the original, real-world complaint this whole field
- * exists to answer, and a wide pool is the shape any player's lava
- * actually takes. smothered() (all 4 cardinal neighbours strictly denser
- * and non-liquid) can NEVER be true for a cell in the interior of such a
- * pool - its sides and floor are more of the same liquid lava, and
- * neighbor_smothers() refuses to count a liquid neighbour on purpose (see
- * its own comment: the identical rule that stops a big pocket of fire
- * from smothering itself). Confirmed on-device: cranking vent_chance to
- * 255 changed nothing for a real multi-cell pool with a quenched crust,
- * because the OLD gate (smothered()) never went true no matter how high
- * the roll's odds got - the trigger itself, not the roll, was the dead
- * end. covered_from_above() exists to fix exactly this: it only asks
- * about the three neighbours actually sitting on top of a cell, so any
- * lava cell under a solid lid vents regardless of what is beside or below
- * it in the rest of the pool. */
-#define POOL_TEST_W 12
-#define POOL_TEST_H 16
-static void test_a_wide_pool_with_a_crust_vents_not_just_a_shaft(void)
-{
-    /* HEAP, not static file scope - see drop_impulse_buf's own comment
-     * above for why this file's static test fixtures cannot share the
-     * framebuffer's memory budget. */
-    uint8_t *cells = malloc((size_t)POOL_TEST_W * POOL_TEST_H);
-    impulse_t *impulses = malloc((size_t)POOL_TEST_W * POOL_TEST_H * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "wide-pool vent grid must fit in what the framebuffer leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-        "wide-pool vent impulse queue must fit in what the framebuffer "
-        "leaves");
-    sand_t p;
-    sand_init(&p, cells, POOL_TEST_W, POOL_TEST_H, 5u);
-    sand_enable_impulses(&p, impulses, POOL_TEST_W * POOL_TEST_H);
-    sand_set_vent_chance(&p, 255);  /* see sealed_lava()'s own comment */
-
-    /* A 3-wide, 1-deep pool (x=3..5, y=10) in a stone basin (floor y=11,
-     * walls x=2 and x=6), capped by a stone crust one row wider than the
-     * pool itself (x=2..6, y=9) so every pool cell's three "above"
-     * neighbours - including the two edge cells' diagonals - are crust,
-     * not open air. */
-    for (int x = 2; x <= 6; x++) {
-        sand_set(&p, x, 9, STONE);    /* crust */
-        sand_set(&p, x, 11, STONE);   /* floor */
-    }
-    sand_set(&p, 2, 10, STONE);       /* left wall */
-    sand_set(&p, 6, 10, STONE);       /* right wall */
-    for (int x = 3; x <= 5; x++) {
-        sand_set(&p, x, 10, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    }
-
-    bool any_crust_moved = false;
-    for (int i = 0; i < 10000 && !any_crust_moved; i++) {
-        sand_step(&p, 0, 1000, 0);
-
-        for (int x = 3; x <= 5; x++) {
-            TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
-                CELL_MATERIAL(sand_at(&p, x, 10)),
-                "lava must never itself change - venting moves the lid, "
-                "not the pool");
-        }
-        for (int x = 2; x <= 6; x++) {
-            if (CELL_MATERIAL(sand_at(&p, x, 9)) != MAT_STONE) {
-                any_crust_moved = true;
-            }
-        }
-    }
-
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. All reads of cells/impulses (via `p`) are done by this
-     * point. */
-    free(cells);
-    free(impulses);
-
-    TEST_ASSERT_TRUE_MESSAGE(any_crust_moved,
-        "a lava POOL three cells wide, sealed under a stone crust, must "
-        "eventually vent through it exactly like the one-wide shaft "
-        "sibling tests do - if this fails while those still pass, "
-        "vent_chance's trigger regressed back to smothered()'s all-4-"
-        "cardinal rule, which can never be true for any cell in a pool "
-        "wider than one column (see this test's own top comment)");
-}
-
-/* reaction_t.vent_chance's own trigger now samples SAND_VENT_CHUNK-
- * aligned cells rather than rolling every covered lava cell
- * independently (see that constant's own comment, sand.h, and try_vent_
- * chunk()'s, sand_reactions.c) - and when a sampled cell succeeds, it
- * throws EVERY covered lava cell in its own chunk together, not just
- * itself. This is the one behaviour sand_set_vent_chance()'s override
- * deliberately does NOT exercise (see the vent_chance gate's own
- * comment for why forcing the rate skips chunk sampling entirely, the
- * same as it already skips the second roll) - so this test runs
- * against the REAL per-material rate instead, the only way to actually
- * reach try_vent_chunk().
- *
- * COORDINATES DERIVED FROM SAND_VENT_CHUNK, not hardcoded, so changing
- * that constant (already done once, 3 -> 8) never needs this geometry
- * re-derived by hand again. The pool fills its own chunk's ENTIRE
- * width, CHUNK_TEST_X0 (== SAND_VENT_CHUNK, so it also lands exactly on
- * the lattice: X0 % SAND_VENT_CHUNK == 0) through CHUNK_TEST_X1
- * (X0 + SAND_VENT_CHUNK - 1, the chunk's own last column) - one lava
- * cell per column, all in the same row, all inside the SAME chunk
- * (x in [X0, X0 + SAND_VENT_CHUNK), y in [6, 6 + SAND_VENT_CHUNK)).
- *
- * WATCHING THE FAR CRUST CELL SPECIFICALLY, NOT ANY CRUST CELL -
- * try_vent()'s own three columns (up-left/up/up-right, try_vent()'s own
- * comment) already let a SINGLE lava cell's own throw reach more than
- * one crust cell at once (from X0: up-left=X0-1, up=X0, up-right=X0+1),
- * which would make a naive "did at least two crust cells clear" check
- * pass even WITHOUT chunk grouping, proving nothing about it - confirmed
- * by actually trying that check first and watching it pass regardless.
- * CHUNK_TEST_X1's own crust is deliberately OUTSIDE X0's own three-
- * column reach for any SAND_VENT_CHUNK >= 4 (X0's reach tops out at
- * X0+1) - it is only reachable via some OTHER column's own up/up-right
- * throw, and no column but X0 itself is chunk-aligned, so none of them
- * can ever roll vent_chance on its own. CHUNK_TEST_X1's crust clearing
- * is therefore unambiguous proof that try_vent_chunk() reached a
- * DIFFERENT lava cell than the one that actually rolled. */
-#define CHUNK_TEST_X0 SAND_VENT_CHUNK
-#define CHUNK_TEST_X1 (CHUNK_TEST_X0 + SAND_VENT_CHUNK - 1)
-#define CHUNK_TEST_ISO_X (CHUNK_TEST_X0 + 2 * SAND_VENT_CHUNK + 1)
-#define CHUNK_TEST_W (CHUNK_TEST_X0 + 3 * SAND_VENT_CHUNK + 4)
-/* THE LATTICE NEEDS BOTH COORDINATES ALIGNED, NOT JUST X - try_vent_
- * chunk()'s own sampling gate checks (x % SAND_VENT_CHUNK == 0) AND
- * (y % SAND_VENT_CHUNK == 0) together (step_one_burning_cell()'s own
- * comment, sand_reactions.c). The pool's row has to land on the same
- * lattice its column does, or the sampled cell never rolls at all -
- * measured directly: raising SAND_VENT_CHUNK from 3 to 8 broke both
- * tests below outright until the pool's row became a multiple of 8 too,
- * because row 6 (valid at chunk size 3) is not a multiple of 8. */
-#define CHUNK_TEST_Y SAND_VENT_CHUNK
-#define CHUNK_TEST_H (2 * SAND_VENT_CHUNK + 4)
-static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
-{
-    /* HEAP, not static file scope - see drop_impulse_buf's own comment
-     * above for why this file's static test fixtures cannot share the
-     * framebuffer's memory budget. */
-    uint8_t *cells = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H);
-    impulse_t *impulses = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "chunk-together vent grid must fit in what the framebuffer leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-        "chunk-together vent impulse queue must fit in what the "
-        "framebuffer leaves");
-    sand_t v;
-    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
-    sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
-
-    /* A SAND_VENT_CHUNK-wide, 1-deep pool (x=X0..X1, y=Y), sealed the
-     * same way POOL_TEST's own scene is: a crust one row wider than the
-     * pool (x=X0-1..X1+1, y=Y-1), a floor (y=Y+1), and side walls
-     * (x=X0-1, x=X1+1) so every pool cell's three "above" neighbours are
-     * crust, not open air. */
-    for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
-        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);   /* crust */
-        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);   /* floor */
-    }
-    sand_set(&v, CHUNK_TEST_X0 - 1, CHUNK_TEST_Y, STONE);   /* left wall */
-    sand_set(&v, CHUNK_TEST_X1 + 1, CHUNK_TEST_Y, STONE);   /* right wall */
-    for (int x = CHUNK_TEST_X0; x <= CHUNK_TEST_X1; x++) {
-        sand_set(&v, x, CHUNK_TEST_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    }
-
-    bool far_crust_moved = false;
-    for (int i = 0; i < 40000 && !far_crust_moved; i++) {
-        sand_step(&v, 0, 1000, 0);
-        far_crust_moved =
-            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
-            MAT_STONE;
-    }
-
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. All reads of cells/impulses (via `v`) are done by this
-     * point. */
-    free(cells);
-    free(impulses);
-
-    TEST_ASSERT_TRUE_MESSAGE(far_crust_moved,
-        "the crust above the chunk's own far column must eventually "
-        "clear even though that column is not itself chunk-aligned and "
-        "can never roll vent_chance on its own - only try_vent_chunk() "
-        "reaching it as part of the sampled column's own chunk explains "
-        "this; if it never clears, chunk sampling regressed back to "
-        "single-cell try_vent()");
-}
-
-/* THE OTHER HALF of the chunk claim - the sibling test above proves
- * try_vent_chunk() reaches every covered cell INSIDE its own chunk;
- * this proves it does not reach past that chunk's own bounds into a
- * neighbour's. A second, fully sealed lava cell sits at CHUNK_TEST_ISO_X
- * (== CHUNK_TEST_X0 + 2 * SAND_VENT_CHUNK + 1) - two whole chunks past
- * the tracked pool's own, so its own would-be chunk is disjoint from the
- * tracked one - but its LEFT WALL, at ISO_X - 1, lands exactly on THAT
- * chunk's own sampled corner (X0 + 2 * SAND_VENT_CHUNK), which is
- * therefore a plain STONE wall, not lava, so that chunk can never roll
- * vent_chance on its own either. The only way the isolated cell's crust
- * could ever move in this scene is try_vent_chunk() (fired from the
- * tracked pool's own chunk, repeatedly, over the whole run) scanning
- * wider than its own chunk bounds - a real risk to guard against given
- * cx1/cy1 are exclusive upper bounds computed by hand, not something the
- * type system checks. Sealed identically to the tracked pool's own
- * (crust, floor, side walls) so a bounds bug would find a genuinely
- * coverable cell to wrongly vent, not silently no-op against an
- * already-disqualified one. */
-static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
-{
-    /* HEAP, not static file scope - see drop_impulse_buf's own comment
-     * above for why this file's static test fixtures cannot share the
-     * framebuffer's memory budget. */
-    uint8_t *cells = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H);
-    impulse_t *impulses = malloc((size_t)CHUNK_TEST_W * CHUNK_TEST_H * sizeof *impulses);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "chunk-containment vent grid must fit in what the framebuffer "
-        "leaves");
-    TEST_ASSERT_NOT_NULL_MESSAGE(impulses,
-        "chunk-containment vent impulse queue must fit in what the "
-        "framebuffer leaves");
-    sand_t v;
-    /* A DIFFERENT SEED FROM THE SIBLING TEST ABOVE (13, not 7) - measured,
-     * not derived: the extra isolated pod this test adds shifts the
-     * shared RNG stream enough (its own reactions still get scanned and
-     * decided against every step, even though its own trigger never
-     * fires) that seed 7's own tracked chunk did not roll a success
-     * within this test's 40000-step budget, while this test's own
-     * scene otherwise fires exactly as reliably as the sibling's. */
-    sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 13u);
-    sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
-
-    for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
-        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
-        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);
-    }
-    sand_set(&v, CHUNK_TEST_X0 - 1, CHUNK_TEST_Y, STONE);
-    sand_set(&v, CHUNK_TEST_X1 + 1, CHUNK_TEST_Y, STONE);
-    for (int x = CHUNK_TEST_X0; x <= CHUNK_TEST_X1; x++) {
-        sand_set(&v, x, CHUNK_TEST_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    }
-
-    for (int x = CHUNK_TEST_ISO_X - 1; x <= CHUNK_TEST_ISO_X + 1; x++) {
-        sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
-        sand_set(&v, x, CHUNK_TEST_Y + 1, STONE);
-    }
-    sand_set(&v, CHUNK_TEST_ISO_X - 1, CHUNK_TEST_Y, STONE);
-    sand_set(&v, CHUNK_TEST_ISO_X + 1, CHUNK_TEST_Y, STONE);
-    sand_set(&v, CHUNK_TEST_ISO_X, CHUNK_TEST_Y,
-            CELL_MAKE(MAT_LAVA, MASS_MAX));
-
-    bool chunk_a_fired = false;
-    for (int i = 0; i < 40000 && !chunk_a_fired; i++) {
-        sand_step(&v, 0, 1000, 0);
-
-        TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
-            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_ISO_X, CHUNK_TEST_Y - 1)),
-            "the neighbouring chunk's own crust must never move just "
-            "because the tracked pool's own chunk fired - the isolated "
-            "cell sits outside that chunk's own bounds, and its own "
-            "chunk's sampled corner is stone, not lava, so nothing in "
-            "this scene should ever be able to vent it");
-        chunk_a_fired =
-            CELL_MATERIAL(sand_at(&v, CHUNK_TEST_X1, CHUNK_TEST_Y - 1)) !=
-            MAT_STONE;
-    }
-
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. All reads of cells/impulses (via `v`) are done by this
-     * point. */
-    free(cells);
-    free(impulses);
-
-    TEST_ASSERT_TRUE_MESSAGE(chunk_a_fired,
-        "setup check: the tracked pool's own chunk must actually fire "
-        "within this budget (see the sibling test's own comment on why "
-        "its far column is the honest signal for that), or the loop "
-        "above proved nothing about containment - it never got a "
-        "chance to leak");
 }
 
 static void test_wood_and_steam_grain_count_is_conserved(void)
@@ -19756,10 +19784,15 @@ static void test_the_thermal_shock_scene_shatters_in_both_directions(void)
      * the many lava payloads on the right half advances that stream
      * faster on every step this scene has lava under a lid, which pulled
      * family C's own melt roll earlier - measured at step 9 now, not 16.
+     * THE VENT MECHANISM DESCRIBED ABOVE IS GONE (bd esp32c6-0f2); this
+     * paragraph is the recorded history of why the bound was widened,
+     * not live behaviour. The bound stays for the reason the last
+     * sentence gives, which never depended on venting.
+     *
      * A small, single-digit residual by step 10 is exactly that timing
      * shift, not a new leak between the two families (lava is never
-     * itself thrown by a vent - see reaction_t.vent_chance's own comment,
-     * material.h - so this is always a LOCAL glass-to-lava conversion,
+     * itself thrown by a vent - so this is always a LOCAL glass-to-lava
+     * conversion,
      * never material crossing over from the right half). What this must
      * still catch is a real regression widening that leak far past a
      * timing nudge - the original, unbounded run measured 123 left-half
@@ -19935,21 +19968,19 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
      * has nothing to do with what this test exists to measure. Forced
      * off here; condensation gets its own dedicated test instead. */
     sand_set_condenses(&s, 0);
-    /* Vent_chance is the same kind of orthogonal mechanic, for the same
-     * reason: this scene's lava burner sits directly under the stone
-     * slab that traps the water above it (build_boiler_scene(), above),
-     * which is exactly a sealed pool as far as reaction_t.vent_chance is
-     * concerned. Left at its real figure, a vent firing partway through
-     * the measured window disrupts the slab that is supposed to hold
-     * steady for the whole test - measured directly: this scene passed
-     * with vent_chance briefly at its own maximum (255) only because the
-     * disruption finished during the 20-step settle phase, before
-     * measurement even starts; at a moderate figure the same disruption
-     * can land inside the measured window instead and pull a quarter's
-     * water loss below the steady-state floor below. What this test
-     * exists to measure is boiling, not venting; forced off here for the
-     * same reason condensation is, just above. */
-    sand_set_vent_chance(&s, 0);
+    /* The lava-burst chance (bd esp32c6-mqt) is the same kind of
+     * orthogonal mechanic, for the same reason the now-removed vent
+     * mechanism was (bd esp32c6-0f2): this scene's lava burner sits
+     * fully enclosed - side walls, a stone slab above, the grid floor
+     * below (build_boiler_scene(), above) - which comfortably clears
+     * SAND_LAVA_BURST_COVER's threshold on every burner cell regardless
+     * of which way is down. Left at its real figure, a burst partway
+     * through the measured window disrupts the slab that is supposed to
+     * hold steady for the whole test, the same disruption vent_chance
+     * used to risk here before it was removed. What this test exists to
+     * measure is boiling, not bursting; forced off here for the same
+     * reason condensation is, just above. */
+    sand_set_lava_burst(&s, 0);
 
     build_boiler_scene(&s);
 
@@ -21503,142 +21534,107 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
         "scene's own claim again, not displaced LAYERS specifically");
 }
 
-/* --- vent spam: many simultaneously-covered lava pockets ---------------
+/* --- water over lava: a continuous pour onto a sealed pool --------------
  *
- * test_sealed_lava_vent_caps_at_three_cells() (this file's own vent
- * section, above) exists to prove the vent mechanism NEVER leaks a
- * properly sealed vessel - a correctness claim, checked with thousands of
- * steps across many independent trials because the thing being ruled out
- * is statistical. Before CAP_TEST_PODS/CAP_POD_STEPS were split by build
- * variant (that test's own comments), that same correctness test was ALSO
- * the only place anything in this file paid for vent_column()'s own cost
- * at all - one to three columns of scanning and impulse-queuing per
- * covered lava cell, per step, times up to ten pods, times up to 12000
- * steps - and nothing was counting it: 462 of the device suite's 664
- * seconds, about 70%, with no row in the performance report to show for
- * it.
+ * REPLACES the vent-spam scene that used to occupy this section (bd
+ * esp32c6-0f2 removed the vent machinery it measured; asked for
+ * 2026-09-02, "we would just need to rebuild the vent scene it's simple,
+ * water over lava, and re-peg the performance"). Its replacement -
+ * covered lava converting to stone and bursting (bd esp32c6-mqt) - has no
+ * mechanism left anywhere near as expensive as the vent scan this scene
+ * used to hold open: one roll per covered lava cell per step, at odds of
+ * roughly 1 in 256, with a 5-neighbour cover_mask() walk only after the
+ * roll passes. A "burst spam" scene built the same way (many cells
+ * forced-covered, chance pinned to maximum) would measure a real cost,
+ * but not a REPRESENTATIVE one - production never pins the chance, and
+ * the walk it is paying for is cheap. This scene instead measures the
+ * ordinary, sustained thing a player actually does: pour water onto
+ * lava. That single act chains through three separate reactions -
+ * quench (direct water-lava contact converting to stone),
+ * cool_off_chain() (that conversion's own cost paid outward into
+ * neighbouring lava, sand_reactions.c), and the burst gate (once enough
+ * of a stone crust has formed over what's left) - so a regression in any
+ * of the three shows up here, not only in its own narrower correctness
+ * test.
  *
- * This scene is the fix for THAT gap, not a replacement for the
- * correctness test above: a real, if deliberately synthetic, worst case -
- * VENT_SPAM_COUNT lava pockets packed edge to edge, each capped deep
- * enough that none of them ever finish clearing within the measured
- * window, with sand_set_vent_chance(255) forcing the same deterministic
- * firing the correctness test already relies on (the real, per-material
- * chance in material.c is deliberately rare, and a benchmark that mostly
- * rolls "no" would not be measuring the mechanism it claims to). */
+ * DO NOT compare this row's numbers against the old vent-spam capture
+ * that used to sit here. This is a different scene measuring a different
+ * mechanism; the old figure describes a machinery that no longer exists,
+ * not a slower or faster version of what replaced it. See test_the_
+ * water_over_lava_scene_fits_in_the_frame_budget's own comment (below,
+ * beside the other frame-budget tests) for the first-capture convention
+ * this file already has for exactly this situation. */
 
-#define VENT_SPAM_UNIT_W    3  /* wall, lava, wall - see build_vent_spam_
-                                * scene()'s own comment for why packed
-                                * with no gap is the point here */
-#define VENT_SPAM_MARGIN    2
-/* (REAL_W - 2*VENT_SPAM_MARGIN) / VENT_SPAM_UNIT_W == 60 pockets across
- * the real grid's width - the same "deliberately synthetic worst case,
- * not something the pour brush can practically sustain" framing the
- * full-screen fire and gas benchmarks below already use, applied to the
- * vent path instead. */
-#define VENT_SPAM_COUNT ((REAL_W - 2 * VENT_SPAM_MARGIN) / VENT_SPAM_UNIT_W)
-/* Four rows up from the grid's own bottom edge - enough clearance below
- * for the shared floor line (build_vent_spam_scene()'s own comment) with
- * no other reason behind the exact number; VENT_SPAM_CAP_DEPTH below is
- * what actually has to fit, and REAL_H (224) leaves it enormous headroom
- * either way. */
-#define VENT_SPAM_Y (REAL_H - 4)
-/* SAND_VENT_REACH + 1, not just SAND_VENT_REACH - one cell deeper than
- * vent_column()'s own scan (sand_reactions.c) ever reaches, the same
- * depth DEEP_PODS uses above and for the same reason: depth beyond the
- * reach is pointless to add (the scan physically never sees it), and one
- * cell short of it would let a pocket fully clear on its very first
- * firing instead of staying covered - and therefore actively
- * re-triggering the vent path - for the whole measured window. */
-#define VENT_SPAM_CAP_DEPTH (SAND_VENT_REACH + 1)
-/* Same real device impulse budget DUNE_IMPULSE_MAX (above) already
- * mirrors - that constant's own comment has the full account. app_sand.c's
- * own buffer is sized APP_IMPULSE_MAX (2048), and this scene should be
- * fighting the same memory ceiling a real device vent actually has, not a
- * looser one a differently-sized test buffer would hide. Comfortably
- * covers a single step's worst case here too: up to VENT_SPAM_COUNT
- * pockets, each queuing at most SAND_VENT_LAYER cells per column across
- * up to three columns (vent_column()'s own comment, sand_reactions.c) -
- * 60 * 3 * 3 = 540, well under 2048 - and step_impulses() resets the
- * count to zero on entry (sand.c), so this budget only ever has to cover
- * one step at a time, never the whole run. */
-#define VENT_SPAM_IMPULSE_MAX 2048
+/* Half the grid lava, half water, in direct contact along one full-width
+ * seam - not vent-spam's many small sealed pockets, because nothing here
+ * needs to stay sealed: quench and cool_off_chain() only need lava
+ * touching water at all, and the burst gate only needs enough of a crust
+ * to form, which a wide, deep pool supplies on its own as the interface
+ * quenches. A single seam this wide puts as many lava cells in
+ * simultaneous contact with water as the grid can hold, which is the
+ * worst case for the quench pass; the crust it leaves behind covers the
+ * pool beneath it just as completely, which is the worst case for the
+ * burst gate. */
+#define WATER_LAVA_LAVA_TOP (REAL_H / 2)
 
-/* One lava cell every VENT_SPAM_UNIT_W columns, each boxed on both sides
- * (and, since the box columns run the cap's full height, on both upper
- * diagonals too - the same box sealed_lava() and the EXACT_PODS/DEEP_PODS
- * pods above build by hand for one pocket at a time, just stamped
- * VENT_SPAM_COUNT times in a row) and capped VENT_SPAM_CAP_DEPTH deep -
- * see that constant's own comment for why deeper is pointless and
- * shallower would let a pocket empty out and go quiet.
- *
- * TIGHT-PACKED ON PURPOSE, NOT SPACED LIKE CAP_TEST_SPACING ABOVE - that
- * spacing exists so a correctness test's own thrown debris cannot arc
- * back into its own or a neighbour's column and quietly invalidate what
- * is being measured (that constant's own comment has the account).
- * Nothing here cares whether any given throw succeeds, lands on a
- * neighbour, or fails outright - this is a cost benchmark, not a leak
- * count, so neighbouring pockets sharing a wall and colliding debris is a
- * MORE representative worst case, not a confound to design around.
- *
- * A single shared floor line under every pocket, not one floor per
- * pocket - see build_lava_stress_scene()'s own reservoir and build_
- * boiler_scene()'s own basin (above) for the same shortcut: a full-width
- * stone row is simpler than VENT_SPAM_COUNT individual three-cell floors
- * and behaves identically, since none of them are meant to be a reachable
- * gap. */
-static void build_vent_spam_scene(sand_t *s)
+/* Same real device impulse budget the vent-spam scene this replaces used
+ * (that scene's own comment, git history, has the full account) - the
+ * app's own buffer is sized APP_IMPULSE_MAX (2048), and this scene should
+ * be fighting the same memory ceiling a real device pour actually has,
+ * not a looser one a differently-sized test buffer would hide. */
+#define WATER_LAVA_IMPULSE_MAX 2048
+
+/* sand_set_lava_cooloff()/sand_set_lava_burst() forced to their maximum,
+ * the same reasoning the vent-spam scene this replaces gave for forcing
+ * sand_set_vent_chance(255) (git history): production leaves both
+ * deliberately rare (SAND_LAVA_COOLOFF_CHANCE, SAND_LAVA_BURST_CHANCE,
+ * sand.h), and a benchmark that mostly rolls "no" would not be measuring
+ * the mechanisms it claims to. Quench itself has no chance to force - a
+ * burning liquid touching a quenching one always converts - so only
+ * these two need it. */
+static void build_water_over_lava_scene(sand_t *s)
 {
-    for (int x = 0; x < REAL_W; x++) {
-        sand_set(s, x, VENT_SPAM_Y + 1, STONE);
-    }
+    sand_set_lava_cooloff(s, 255);
+    sand_set_lava_burst(s, 255);
 
-    for (int p = 0; p < VENT_SPAM_COUNT; p++) {
-        const int lx = VENT_SPAM_MARGIN + p * VENT_SPAM_UNIT_W;
-
-        for (int dy = 0; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
-            sand_set(s, lx - 1, VENT_SPAM_Y - dy, STONE);
-            sand_set(s, lx + 1, VENT_SPAM_Y - dy, STONE);
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const cell_t c = (y < WATER_LAVA_LAVA_TOP)
+                                  ? CELL_MAKE(MAT_WATER, MASS_MAX)
+                                  : CELL_MAKE(MAT_LAVA, MASS_MAX);
+            sand_set(s, x, y, c);
         }
-        for (int dy = 1; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
-            sand_set(s, lx, VENT_SPAM_Y - dy, STONE);
-        }
-        sand_set(s, lx, VENT_SPAM_Y, CELL_MAKE(MAT_LAVA, MASS_MAX));
     }
 }
 
-/* This scene really does reach the vent path it claims to, checked the
- * same way the other scenes in this section are: build it through the
- * same function the device test uses, step it the same number of times,
- * and count - not "did the frame-budget test merely run without
- * crashing", which would say nothing about whether covered_from_above()
- * and try_vent_chunk() (sand_reactions.c) were ever actually reached.
+/* This scene really does reach the three paths it claims to, checked the
+ * same way this file's other scene tests are: build it through the same
+ * function the device test uses, step it the same number of times, and
+ * count - not "did the frame-budget test merely run without crashing".
  *
- * TWO INDEPENDENT SIGNALS, the same split EXACT_PODS/DEEP_PODS use above:
- * a lava count proves the mechanism's own "the originating cell never
- * changes" guarantee held (reaction_t.vent_chance's own comment,
- * material.h - if this ever comes back short, something is destroying
- * lava outright, not venting past it), and an eroded-cell count proves
- * material actually moved rather than the scene silently sitting
- * covered-but-never-firing for the whole window.
+ * THREE INDEPENDENT SIGNALS, one per claimed path:
  *
- * TEN STEPS, NO SETTLING - the same shape test_a_screen_of_smoke_and_
- * steam_fits_in_the_frame_budget and test_the_thermal_shock_scene_fits_
- * in_the_frame_budget (below) already use, and for a related reason: ten
- * is not an arbitrary round number here, it is SAND_VENT_REACH /
- * SAND_VENT_LAYER (30 / 3, sand.h) - the exact number of firings it takes
- * a single column to walk its own reachable window from the outside in.
- * Measuring anything short of that would catch pockets only part-way
- * through their busiest stretch; measuring much past it would start
- * timing pockets that have already gone quiet in their outer three
- * columns, the opposite of the worst case this scene exists to hold
- * open. */
-static void test_the_vent_spam_scene_reaches_the_vent_path_it_claims(void)
+ * - STONE PRESENT AT ALL proves quench fired - water touching lava
+ *   converts it, and nothing else in this scene produces stone.
+ *
+ * - STONE COUNT BEYOND ONE SEAM'S WORTH proves cool_off_chain() carried
+ *   the conversion beyond direct contact - a single interface exactly
+ *   REAL_W cells wide is what quench alone could ever reach on its own
+ *   in one pass, so a count past that many can only be the chain
+ *   reaching cells that were never themselves touching water.
+ *
+ * - FIRE PRESENT proves the burst path fired - ordinary quench only ever
+ *   produces stone (material.c's quench_to), so the only source of fire
+ *   anywhere in this scene is sand_explode()'s own core fill on a burst
+ *   (bd esp32c6-mqt's own comment, sand_reactions.c, pins that the
+ *   centre cell ends up as fire, not the stone the burst itself just
+ *   wrote). */
+static void test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims(void)
 {
     uint8_t *big    = malloc((size_t)REAL_W * REAL_H);
     uint8_t *blocks = malloc(((REAL_W + SAND_BLOCK_W - 1) / SAND_BLOCK_W) *
                               ((REAL_H + SAND_BLOCK_H - 1) / SAND_BLOCK_H));
-    impulse_t *impulses = malloc((size_t)VENT_SPAM_IMPULSE_MAX * sizeof *impulses);
+    impulse_t *impulses = malloc((size_t)WATER_LAVA_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(impulses);
@@ -21649,30 +21645,20 @@ static void test_the_vent_spam_scene_reaches_the_vent_path_it_claims(void)
     sand_set_scatter(&s, SAND_SCATTER_PER_MATERIAL);
     sand_set_decay(&s, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
-    sand_enable_impulses(&s, impulses, VENT_SPAM_IMPULSE_MAX);
-    sand_set_vent_chance(&s, 255);  /* see this section's own top comment */
+    sand_enable_impulses(&s, impulses, WATER_LAVA_IMPULSE_MAX);
 
-    build_vent_spam_scene(&s);
+    build_water_over_lava_scene(&s);
 
-    for (int i = 0; i < 10; i++) {
+    for (int i = 0; i < 20; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
-    int lava = 0, structure_cells = 0, eroded_cells = 0;
-    for (int p = 0; p < VENT_SPAM_COUNT; p++) {
-        const int lx = VENT_SPAM_MARGIN + p * VENT_SPAM_UNIT_W;
-
-        if (CELL_MATERIAL(sand_at(&s, lx, VENT_SPAM_Y)) == MAT_LAVA) {
-            lava++;
-        }
-        for (int dy = 0; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
-            structure_cells += 2;
-            if (CELL_IS_EMPTY(sand_at(&s, lx - 1, VENT_SPAM_Y - dy))) eroded_cells++;
-            if (CELL_IS_EMPTY(sand_at(&s, lx + 1, VENT_SPAM_Y - dy))) eroded_cells++;
-        }
-        for (int dy = 1; dy <= VENT_SPAM_CAP_DEPTH; dy++) {
-            structure_cells++;
-            if (CELL_IS_EMPTY(sand_at(&s, lx, VENT_SPAM_Y - dy))) eroded_cells++;
+    int stone = 0, fire = 0;
+    for (int y = 0; y < REAL_H; y++) {
+        for (int x = 0; x < REAL_W; x++) {
+            const int m = CELL_MATERIAL(sand_at(&s, x, y));
+            if (m == MAT_STONE) stone++;
+            else if (m == MAT_FIRE) fire++;
         }
     }
 
@@ -21680,36 +21666,17 @@ static void test_the_vent_spam_scene_reaches_the_vent_path_it_claims(void)
     free(blocks);
     free(impulses);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(VENT_SPAM_COUNT, lava,
-        "the lava cell in every pocket must never change - venting moves "
-        "whatever is ON TOP of it, not the lava itself (see reaction_t."
-        "vent_chance's own comment, material.h); a short count here means "
-        "something is destroying or converting lava outright rather than "
-        "venting past it");
-    /* Not the claim under test, but its own precondition: each pocket's
-     * wall+cap footprint is 2*(CAP_DEPTH+1) cells of wall plus CAP_DEPTH
-     * of cap. A mismatch here means the counting loop above and
-     * build_vent_spam_scene() have drifted apart from each other, which
-     * would make the eroded-cell count below meaningless without saying
-     * so - this catches that before it does. */
-    TEST_ASSERT_EQUAL_INT_MESSAGE(
-        VENT_SPAM_COUNT * (3 * VENT_SPAM_CAP_DEPTH + 2), structure_cells,
-        "this test's own wall+cap cell count no longer matches what "
-        "build_vent_spam_scene() actually builds - the counting loop "
-        "above and the scene builder have drifted apart");
-    /* Measured 24 eroded cells out of 5700 at these settings - tight
-     * packing means most throws collide with a NEIGHBOURING pocket's own
-     * wall and fail, by design (this section's own top comment), so a
-     * low absolute count is expected, not a sign of something wrong. 10
-     * is well under that measured value while staying far enough above
-     * zero that only a real stall - covered_from_above()/try_vent_chunk()
-     * (sand_reactions.c) no longer firing for this scene at all, not
-     * ordinary run-to-run packing friction - could fail it. */
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(10, eroded_cells,
-        "the vent path must actually be moving material for this scene, "
-        "not merely rolling successfully and finding nowhere to put it - "
-        "a near-zero count means covered_from_above()/try_vent_chunk() "
-        "(sand_reactions.c) stopped firing for this scene");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, stone,
+        "water touching lava must convert some of it to stone - if none "
+        "appeared, quench itself stopped firing");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(REAL_W, stone,
+        "the stone count must exceed one seam's worth (REAL_W) of direct "
+        "contact - if it does not, cool_off_chain() stopped carrying the "
+        "conversion into lava that was never itself touching water");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, fire,
+        "no burst means no fire anywhere in this scene - ordinary quench "
+        "only ever produces stone, so a zero count here means the burst "
+        "gate never fired at all");
 }
 
 #ifdef DEVICE_BUILD
@@ -21814,12 +21781,11 @@ static void test_a_full_size_step_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe (see main/apps/sand/tools/perf_probe_reactions/) -
- * bd esp32c6-iu5's reactions-pass pair-matrix restructure. Exposes the
- * actual official test function above under a plain name, so a probe
- * harness can RUN_TEST() it directly on a laptop instead of hand-copying
- * the scene - one of this round's two liquid-free controls. Never defined
- * by any real build. */
+/* Host-only timing probe (see main/apps/sand/tools/perf_probe/, the
+ * canonical host attribution harness - bd esp32c6-o2s). Exposes the actual
+ * official test function above under a plain name, so probe_main.c can run
+ * it directly on a laptop instead of hand-copying the scene - one of the
+ * two liquid-free controls. Never defined by any real build. */
 void sand_host_probe_run_full_step_control(void)
 {
     test_a_full_size_step_fits_in_the_frame_budget();
@@ -21895,7 +21861,7 @@ static void test_a_screen_of_water_fits_in_the_frame_budget(void)
 
 #ifdef SAND_HOST_PROBE
 /* Host-only timing probe (see the full-step control's own wrapper above,
- * and main/apps/sand/tools/perf_probe_reactions/) - bd esp32c6-iu5. */
+ * and main/apps/sand/tools/perf_probe/). */
 void sand_host_probe_run_water(void)
 {
     test_a_screen_of_water_fits_in_the_frame_budget();
@@ -22014,8 +21980,8 @@ static void test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget(voi
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's other liquid-free control
- * (see the full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the other liquid-free control (see the
+ * full-step control's own wrapper for the pattern). */
 void sand_host_probe_run_settled_flip_control(void)
 {
     test_flipping_gravity_on_a_settled_pile_fits_in_the_frame_budget();
@@ -22257,8 +22223,8 @@ static void test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget(void
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5 (see the full-step control's own
- * wrapper for the pattern). */
+/* Host-only timing probe (see the full-step control's own wrapper for the
+ * pattern). */
 void sand_host_probe_run_mixed_flip(void)
 {
     test_flipping_gravity_on_a_mixed_scene_fits_in_the_frame_budget();
@@ -22402,7 +22368,7 @@ static void test_a_gravity_flip_on_every_material_at_once_stays_sane(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's every-material flip (see the
+/* Host-only timing probe - the every-material flip scene (see the
  * full-step control's own wrapper for the pattern). */
 void sand_host_probe_run_every_material_flip(void)
 {
@@ -22670,8 +22636,8 @@ static void test_four_liquids_reacting_at_once_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's four-liquids scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the four-liquids scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_four_liquids(void)
 {
     test_four_liquids_reacting_at_once_fits_in_the_frame_budget();
@@ -22733,8 +22699,8 @@ static void test_the_lava_stress_scene_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's lava stress scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the lava stress scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_lava_stress(void)
 {
     test_the_lava_stress_scene_fits_in_the_frame_budget();
@@ -22809,8 +22775,8 @@ static void test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's smoke+steam scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the smoke+steam scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_smoke_and_steam(void)
 {
     test_a_screen_of_smoke_and_steam_fits_in_the_frame_budget();
@@ -23042,46 +23008,47 @@ static void test_the_wet_earth_scene_fits_in_the_frame_budget(void)
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's wet earth scene (see the
- * full-step control's own wrapper for the pattern). */
+/* Host-only timing probe - the wet earth scene (see the full-step
+ * control's own wrapper for the pattern). */
 void sand_host_probe_run_wet_earth(void)
 {
     test_the_wet_earth_scene_fits_in_the_frame_budget();
 }
 #endif
 
-/* The vent-spam scene from this file's own vent-spam section above (see
- * that section's own top comment for why it exists: 462 of the device
- * suite's 664 seconds, about 70%, going entirely unmeasured before this
- * row and CAP_TEST_PODS/CAP_POD_STEPS' own split existed), run as a
- * frame-budget test.
+/* The water-over-lava scene from this file's own section above (see that
+ * section's own top comment for why it replaces the vent-spam scene that
+ * used to sit here), run as a frame-budget test.
  *
- * TEN STEPS, NO SETTLING - matching test_the_vent_spam_scene_reaches_the_
- * vent_path_it_claims (above) exactly, so what this times is the same
- * scene that test already proved really does reach covered_from_above()/
- * try_vent_chunk() (sand_reactions.c) rather than sitting quiet. See that
- * test's own comment for why ten specifically - SAND_VENT_REACH /
- * SAND_VENT_LAYER (sand.h), not an arbitrary round number - and why no
- * settling step: the scene is already at its busiest the instant it is
- * painted, and waiting would only let pockets start winding down toward
- * the plateau that test's own comment measures.
+ * TWENTY STEPS, NO SETTLING - matching test_the_water_over_lava_scene_
+ * reaches_the_quench_cooloff_and_burst_paths_it_claims (above) exactly,
+ * so what this times is the same scene that test already proved really
+ * does reach quench, cool_off_chain() and the burst gate rather than
+ * sitting quiet. No settling step: the scene is already at its busiest
+ * the instant it is painted (the whole seam touching for the first time),
+ * and waiting would only let the pour burn through more of its own lava
+ * before the window closes.
  *
  * THE ASSERTION BELOW IS NOT A BUDGET - nobody has run this scene on a
- * device yet. It is a deliberately loose SANITY CEILING, not extrapolated
- * from host timings: this file has already been burned once by an
- * extrapolated figure that came out four times too pessimistic against
- * the real device number (see git history, and test_the_lava_stress_
- * scene_fits_in_the_frame_budget's own account of it when IT was new).
- * Replace it with a real figure the first time this runs on a device:
- * measured * 0.9, rounded - the same reduction-target method every other
- * row in this section now uses (FULL_STEP_BUDGET_US's own comment has the
- * full account of why the file moved to it) - and say what was measured,
- * not a number picked to keep this row passing. */
-static void test_the_vent_spam_scene_fits_in_the_frame_budget(void)
+ * device yet. It is a deliberately loose PROVISIONAL ceiling, not
+ * extrapolated from host timings: this file has already been burned once
+ * by an extrapolated figure that came out four times too pessimistic
+ * against the real device number (see git history, and test_the_lava_
+ * stress_scene_fits_in_the_frame_budget's own account of it when IT was
+ * new), and a second time by the vent-spam scene this replaces, whose own
+ * provisional ceiling was 15.7x looser than its eventual measured figure
+ * (git history, e7d3a0a). Replace this with a real figure the first time
+ * this runs on a device: measured * 0.9, rounded - the same reduction-
+ * target method every other row in this section uses - and say what was
+ * measured, not a number picked to keep this row passing. Do NOT carry
+ * the old vent-spam figure forward in any form - this is a different
+ * scene measuring a different mechanism, not a faster or slower version
+ * of the one it replaced. */
+static void test_the_water_over_lava_scene_fits_in_the_frame_budget(void)
 {
     uint8_t   *big      = malloc((size_t)REAL_W * REAL_H);
     uint8_t   *blocks   = malloc(REAL_BLOCK_COLS * REAL_BLOCK_ROWS);
-    impulse_t *impulses = malloc((size_t)VENT_SPAM_IMPULSE_MAX * sizeof *impulses);
+    impulse_t *impulses = malloc((size_t)WATER_LAVA_IMPULSE_MAX * sizeof *impulses);
     TEST_ASSERT_NOT_NULL(big);
     TEST_ASSERT_NOT_NULL(blocks);
     TEST_ASSERT_NOT_NULL(impulses);
@@ -23092,49 +23059,38 @@ static void test_the_vent_spam_scene_fits_in_the_frame_budget(void)
     sand_set_scatter(&real, SAND_SCATTER_PER_MATERIAL);
     sand_set_decay(&real, SAND_DECAY_PER_MATERIAL);
     sand_set_mobility(&real, SAND_MOBILITY_PER_MATERIAL);
-    sand_enable_impulses(&real, impulses, VENT_SPAM_IMPULSE_MAX);
-    sand_set_vent_chance(&real, 255);  /* see the vent-spam section's own
-                                         * top comment */
+    sand_enable_impulses(&real, impulses, WATER_LAVA_IMPULSE_MAX);
 
-    build_vent_spam_scene(&real);
+    build_water_over_lava_scene(&real);
 
     const int64_t start = esp_timer_get_time();
-    const int steps = 10;
+    const int steps = 20;
     for (int i = 0; i < steps; i++) {
         sand_step(&real, 0, 1000, 0);
     }
     const int64_t per_step = (esp_timer_get_time() - start) / steps;
 
-    ESP_LOGI("device_tests", "vent spam scene, %dx%d: %lld us per step",
+    ESP_LOGI("device_tests", "water over lava scene, %dx%d: %lld us per step",
              REAL_W, REAL_H, (long long)per_step);
 
     free(big);
     free(blocks);
     free(impulses);
 
-    /* PEGGED 2026-09-01 from this scene's first device capture: 25,514 us
-     * for 10 steps, so 23000 is measured * 0.9 rounded - the same
-     * reduction target every other row in this file carries, and like
-     * them it is expected to FAIL until the work is done.
-     *
-     * The provisional 400000 it replaces was 15.7x looser than the truth.
-     * That is not a criticism of the guess - a provisional ceiling exists
-     * to avoid failing before a measurement exists, and it did that - but
-     * it is the reason a provisional number must never be read as a claim
-     * about cost. Nothing was learned about this scene until it ran. */
-    TEST_ASSERT_LESS_THAN_MESSAGE(23000, (int)per_step,
-        "sealed-lava vent spam got more expensive - this scene forces the "
-        "vent path every step across 60 sealed pockets, so a regression "
-        "here is the vent chunk throw or its sight scan, not the sim at "
-        "large");
+    TEST_ASSERT_LESS_THAN_MESSAGE(400000, (int)per_step,
+        "PROVISIONAL ceiling, not yet measured on a device - see this "
+        "test's own comment. Once measured this row becomes measured x "
+        "0.9, rounded, the same reduction-target method every other row "
+        "in this section uses - not a number chosen to keep this row "
+        "passing");
 }
 
 #ifdef SAND_HOST_PROBE
-/* Host-only timing probe - bd esp32c6-iu5's vent spam scene (see the
- * full-step control's own wrapper for the pattern). */
-void sand_host_probe_run_vent_spam(void)
+/* Host-only timing probe - the water-over-lava scene (see the full-step
+ * control's own wrapper for the pattern). */
+void sand_host_probe_run_water_over_lava(void)
 {
-    test_the_vent_spam_scene_fits_in_the_frame_budget();
+    test_the_water_over_lava_scene_fits_in_the_frame_budget();
 }
 #endif
 
@@ -24087,6 +24043,8 @@ void run_sand_suite(void)
     RUN_TEST(test_extended_materials_get_their_own_reactions);
     RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_stone_heats_up_next_to_lava);
+    RUN_TEST(test_water_cools_hot_stone_back_to_room_temperature);
+    RUN_TEST(test_water_never_chills_stone_below_room_temperature);
     RUN_TEST(test_stone_never_melts_however_hot);
     RUN_TEST(test_snow_cracks_glass_but_not_stone);
     RUN_TEST(test_an_edge_shows_less_temperature_than_the_body);
@@ -24129,6 +24087,14 @@ void run_sand_suite(void)
     RUN_TEST(test_foam_never_stalls_between_frames);
     RUN_TEST(test_foam_blobs_are_bigger_than_one_cell);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
+    RUN_TEST(test_buried_lava_bursts_into_stone_and_fire);
+    RUN_TEST(test_lava_with_only_two_covered_sides_never_bursts);
+    RUN_TEST(test_rejected_semi_disc_patterns_stay_rejected);
+    RUN_TEST(test_cover_primitive_matches_the_exhaustive_shape_table);
+    RUN_TEST(test_a_wide_pool_under_a_crust_bursts);
+    RUN_TEST(test_a_wide_pool_under_a_sideways_crust_bursts);
+    RUN_TEST(test_an_open_lava_pool_never_bursts);
+    RUN_TEST(test_buried_lava_still_becomes_stone_with_impulses_off);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
     RUN_TEST(test_the_four_liquid_scene_keeps_reacting_after_settling);
@@ -24142,7 +24108,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_vessel_scene_lets_nothing_reach_outside_it);
     RUN_TEST(test_the_wood_floor_scene_catches_fire);
     RUN_TEST(test_the_layered_dune_scene_throws_more_than_one_band);
-    RUN_TEST(test_the_vent_spam_scene_reaches_the_vent_path_it_claims);
+    RUN_TEST(test_the_water_over_lava_scene_reaches_the_quench_cooloff_and_burst_paths_it_claims);
     RUN_TEST(test_reinitialising_forgets_the_old_board);
     RUN_TEST(test_the_brush_and_the_setter_agree_about_every_material);
     RUN_TEST(test_snow_painted_into_water_melts);
@@ -24164,6 +24130,10 @@ void run_sand_suite(void)
     RUN_TEST(test_lava_does_not_decay_away);
     RUN_TEST(test_water_freezes_lava_into_stone);
     RUN_TEST(test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag);
+    RUN_TEST(test_a_water_pour_freezes_a_lava_pool_below_its_crust);
+    RUN_TEST(test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself);
+    RUN_TEST(test_lava_that_melts_sand_into_glass_sometimes_freezes_itself);
+    RUN_TEST(test_the_cool_off_chain_is_bounded);
     RUN_TEST(test_lava_does_not_put_fire_out);
     RUN_TEST(test_falling_lava_does_not_flare);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);
@@ -24194,12 +24164,6 @@ void run_sand_suite(void)
     RUN_TEST(test_a_metal_run_conducts_further_than_a_stone_one);
     RUN_TEST(test_the_rod_terminates_at_conduct_reach_not_the_far_wall);
     RUN_TEST(test_acid_eats_metal_between_stone_and_sand);
-    RUN_TEST(test_sealed_lava_vents_through_a_thin_cap);
-    RUN_TEST(test_sealed_lava_vent_caps_at_three_cells);
-    RUN_TEST(test_sealed_lava_vents_toward_gravity_relative_up);
-    RUN_TEST(test_a_wide_pool_with_a_crust_vents_not_just_a_shaft);
-    RUN_TEST(test_a_sampled_vent_throws_its_whole_chunk_together);
-    RUN_TEST(test_a_sampled_vent_does_not_reach_the_next_chunk);
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
     RUN_TEST(test_a_2x2_block_of_steam_condenses_into_one_water_cell);
     RUN_TEST(test_condensation_needs_a_genuine_2x2_square);
@@ -24278,7 +24242,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_thermal_shock_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_boiler_scene_fits_in_the_frame_budget);
     RUN_TEST(test_the_wet_earth_scene_fits_in_the_frame_budget);
-    RUN_TEST(test_the_vent_spam_scene_fits_in_the_frame_budget);
+    RUN_TEST(test_the_water_over_lava_scene_fits_in_the_frame_budget);
 
     RUN_TEST(test_present_cost_against_a_falling_sand_scene);
     RUN_TEST(test_present_cost_against_the_lava_stress_scene);

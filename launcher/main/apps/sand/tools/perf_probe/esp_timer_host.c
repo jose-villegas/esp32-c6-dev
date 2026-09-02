@@ -2,18 +2,15 @@
  * esp_timer_host - a REAL host implementation of esp_timer_get_time(), for
  * this probe only.
  *
- * Same file as launcher/main/apps/sand/tools/perf_probe/esp_timer_host.c on
- * the branch this round's harness pattern is adapted from (worktree-agent-
- * a167459b17fb4db71, commit 9de21aa) - copied rather than shared because
- * that branch is not merged into this one. launcher/test/stubs/esp_timer.h
- * (used by the ordinary host suite) only DECLARES esp_timer_get_time() -
- * timing.c never calls it there, because the ordinary host build does not
- * define DEVICE_BUILD and uses clock() instead (coarse: 1 ms ticks on this
- * platform's CLOCKS_PER_SEC, nowhere near enough resolution to compare a
- * handful of microsecond-scale probes against each other). This probe DOES
- * define DEVICE_BUILD (to compile suite_sand.c's frame-budget scenes at
- * all), so timing.c takes the esp_timer_get_time() branch for real - this
- * file is what makes that link.
+ * launcher/test/stubs/esp_timer.h (used by the ordinary host suite) only
+ * DECLARES esp_timer_get_time() - timing.c never calls it there, because
+ * the ordinary host build does not define DEVICE_BUILD and uses clock()
+ * instead (coarse: 1 ms ticks on this platform's CLOCKS_PER_SEC, nowhere
+ * near enough resolution to compare a handful of microsecond-scale probes
+ * against each other). This probe DOES define DEVICE_BUILD (to compile
+ * suite_sand.c's frame-budget scenes at all), so timing.c takes the
+ * esp_timer_get_time() branch for real - this file is what makes that
+ * link.
  *===========================================================================*/
 #include <stdint.h>
 
