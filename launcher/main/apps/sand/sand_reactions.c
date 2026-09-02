@@ -366,67 +366,39 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
     return (pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0;
 }
 
-/* Whether (nx, ny) is in bounds and holds something strictly denser than
- * `density` (the burning cell's own), and is not a liquid - liquid
- * already has its own, more generous single-touch extinguish rule,
- * checked separately and first, so it should not also count here.
- * Strictly denser mirrors can_enter()'s own displacement rule: a
- * neighbour at the burning cell's own density or below (more fire, or
- * plain gas) never counts, or a large, dense pocket of fire/gas would
- * smother itself from the inside out - only genuinely being buried
- * under something heavier (sand, stone) should. */
-static inline bool
-neighbor_smothers(const sand_t* s, int nx, int ny, int w, int h, uint8_t density) {
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-        return false;
-    }
-    const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
-    if (CELL_IS_EMPTY(n)) {
-        return false;
-    }
-    const material_t* nm = material_of(n);
-    return nm->kind != KIND_LIQUID && nm->density > density;
-}
-
-/* How many of (x, y)'s 4 cardinal neighbours smother it - see
- * neighbor_smothers()'s own comment just above for exactly what that
- * means (in bounds, non-empty, not a liquid, strictly denser than
- * `density`). Out-of-bounds never counts, matching neighbor_smothers()'s
- * own out-of-bounds return.
- *
- * Backs two callers with two different thresholds: smothered() below
- * wants ALL 4 (true burial, for extinguishing a burning solid);
- * step_one_burning_cell()'s lava-burst gate (SAND_LAVA_BURST_COVER,
- * sand.h, bd esp32c6-mqt) wants merely "at least 3" - a pocket with one
- * open side still counts. A single counting walk serves both rather than
- * a bespoke loop for the second.
- *
- * WALKS ALL 4 DIRECTIONS EVEN AFTER AN EARLY MISS - smothered() used to
- * return false the moment the first uncovered direction was found;
- * folding that into a full count instead is a behaviour-NEUTRAL cost
- * change for smothered()'s own callers, not a behaviour change: its test
- * below is still exactly "all 4 covered", it just gets there by summing
- * instead of short-circuiting, at most 3 extra neighbor_smothers() reads
- * on the cells this ever runs on. Confirmed against the full host suite -
- * no test moved. */
-static inline int
-cover_count(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
-    int n = 0;
-    for (int d = 0; d < 4; d++) {
-        if (neighbor_smothers(s, x + reaction_dirs[d][0], y + reaction_dirs[d][1], w, h, density)) {
-            n++;
-        }
-    }
-    return n;
-}
+/* neighbor_smothers() moved to sand_priv.h (bd esp32c6-a2j) - cover_mask()
+ * there needs the identical predicate, and the brief for that change was
+ * explicit that this file should not end up with two functions meaning
+ * the same thing. See its own comment there; nothing about what it does
+ * changed, only where it lives. */
 
 /* Whether every one of the 4 cardinal neighbours smothers this cell -
- * true burial, not a single denser touch. See cover_count()'s own
- * comment for why this is now expressed as a full count compared
- * against 4 rather than an early-exit loop. */
+ * true burial, not a single denser touch. An ALL-of-4 predicate, unlike
+ * neighbor_quenches()'s/try_ignite()'s own per-neighbour ANY/EACH loops
+ * above and below - a gap on even one side means real air still reaches
+ * it, so it returns false the moment any direction fails rather than
+ * accumulating across all four.
+ *
+ * DELIBERATELY NOT cover_mask()/cover_seals() (sand_priv.h) - this used
+ * to be built on cover_count() (bd esp32c6-mqt) and briefly shared
+ * plumbing with the lava-burst gate below; bd esp32c6-a2j split them back
+ * apart on purpose. Burial is a genuinely different question from
+ * gravity-relative coverage: a burning SOLID (fire, ember) is starved of
+ * air by being surrounded on every side, screen-fixed cardinals and all -
+ * "what is below it" smothers a flame exactly as much as what is above
+ * it does, so this has no business rotating with gravity or exempting a
+ * cardinal-triple crust the way the burst gate does. Keeping one
+ * predicate answering two different questions is exactly the mistake
+ * cover_count() made the first time; this stays its own, plain,
+ * gravity-agnostic all-4 test. */
 static inline bool
 smothered(const sand_t* s, int x, int y, int w, int h, uint8_t density) {
-    return cover_count(s, x, y, w, h, density) == 4;
+    for (int d = 0; d < 4; d++) {
+        if (!neighbor_smothers(s, x + reaction_dirs[d][0], y + reaction_dirs[d][1], w, h, density)) {
+            return false;
+        }
+    }
+    return true;
 }
 
 /* Whether ANY of the three neighbours "above" this cell - gravity-
@@ -3955,18 +3927,29 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * other burning liquid) costs one predicted-false compare and draws
      * no random number at all.
      *
-     * THE ROLL COMES BEFORE cover_count(), not after: at
+     * THE ROLL COMES BEFORE covered_at(), not after: at
      * SAND_LAVA_BURST_CHANCE's odds (sand.h, deliberately the rarest a
      * single byte-wide roll can express) the roll is the cheap rejection,
-     * the 4-neighbour cover_count() walk is not - so the overwhelmingly
+     * the 5-neighbour cover_mask() walk is not - so the overwhelmingly
      * common case, a covered cell that simply loses this step's roll,
      * never pays for the walk.
      *
-     * cover_count() >= SAND_LAVA_BURST_COVER, NOT smothered()'s own
-     * all-4 == comparison - a pocket with one open side still qualifies
-     * (SAND_LAVA_BURST_COVER's own comment, sand.h), which is the whole
-     * point of adding cover_count() as a real count rather than reusing
-     * smothered() as-is.
+     * covered_at() (sand_priv.h), NOT smothered()'s own all-4 == test -
+     * bd esp32c6-a2j, replacing cover_count() (bd esp32c6-mqt), which was
+     * wrong twice over: it counted four SCREEN-fixed cardinals instead of
+     * gravity-relative ones, and being built on neighbor_smothers()
+     * (which never counts a liquid neighbour) meant an interior cell of a
+     * pool wider than one cell could have at most one neighbour that
+     * ever counted - the crust directly above it - so a wide pool could
+     * never reach the threshold no matter how completely a crust sealed
+     * it. covered_at()'s gravity-relative semi-disc fixes that: the two
+     * diagonal crust cells beside "straight up" count too, so a crust
+     * alone gets an interior pool cell to 3 - see
+     * test_a_wide_pool_under_a_crust_bursts (suite_sand.c), the case that
+     * could not fire before this change. SAND_LAVA_BURST_COVER, not
+     * smothered()'s own all-5-would-be equivalent - a pocket with one
+     * open side (of the five gravity-relative ones) still qualifies
+     * (SAND_LAVA_BURST_COVER's own comment, sand.h).
      *
      * NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
      * gas_ignite_confined() caller above, which skips straight to a plain
@@ -3984,7 +3967,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         (s->lava_burst >= 0) ? s->lava_burst : SAND_LAVA_BURST_CHANCE;
     if (is_lava && burst_chance != 0 &&
         (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
-        cover_count(s, x, y, w, h, mat->density) >= SAND_LAVA_BURST_COVER) {
+        covered_at(s, x, y, w, h, mat->density, SAND_LAVA_BURST_COVER)) {
         /* rx->quench_to, not a hardcoded MAT_STONE: `is_lava` above IS
          * "a burning liquid with a quench product", so the product is
          * already named right there, and a second burning liquid with

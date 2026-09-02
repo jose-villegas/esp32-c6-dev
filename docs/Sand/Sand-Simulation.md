@@ -440,24 +440,68 @@ always-on drain nobody asked for.
 
 ### A sufficiently covered lava cell can burst
 
-Independent of water: a lava cell whose 4 cardinal neighbours include at
-least `SAND_LAVA_BURST_COVER` (3) that are non-liquid and strictly denser
-than lava (`cover_count()`, `sand_reactions.c` - the same walk `smothered()`
-uses, at a lower threshold than its own all-4) gets a tiny, deliberately
-rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in 256, the
-rarest a single byte-wide roll can express) to convert to `MAT_STONE` and
-immediately `sand_explode()` at that spot, fire included. This is the
-replacement for the earlier vent mechanism (`reaction_t.vent_chance`,
-which threw whatever was covering the lava rather than touching the lava
-itself) and the mechanism that reopens a sealed pool's own crust so a
-sustained pour can keep reaching lava rather than the pour's own cool-off
-chain armouring the surface shut - see the cool-off section above.
+Independent of water: a lava cell whose gravity-relative coverage
+(`covered_at()`, `sand_priv.h` - see "The shared 'am I covered' primitive"
+below) reaches at least `SAND_LAVA_BURST_COVER` (3) gets a tiny,
+deliberately rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in
+256, the rarest a single byte-wide roll can express) to convert to
+`MAT_STONE` and immediately `sand_explode()` at that spot, fire included.
+This is the replacement for the earlier vent mechanism
+(`reaction_t.vent_chance`, which threw whatever was covering the lava
+rather than touching the lava itself) and the mechanism that reopens a
+sealed pool's own crust so a sustained pour can keep reaching lava rather
+than the pour's own cool-off chain armouring the surface shut - see the
+cool-off section above.
 
-3, not `smothered()`'s own all-4: a pocket with one open side still
-qualifies, which is what lets an ordinary hand-drawn vessel (which the
-`smothered()`-exemption story above already found has dozens of one-cell
-dimples) actually reopen over time rather than needing a fully sealed
-cell to ever do anything.
+3, not `smothered()`'s own all-4 (a different, gravity-agnostic question -
+see below): a pocket with one open side still qualifies, which is what
+lets an ordinary hand-drawn vessel (which the `smothered()`-exemption
+story above already found has dozens of one-cell dimples) actually reopen
+over time rather than needing a fully sealed cell to ever do anything.
+
+#### The shared "am I covered" primitive
+
+The first version of this feature (`cover_count()`, retired) counted the
+four SCREEN-fixed cardinal neighbours, and was wrong twice over: what is
+BELOW a cell supports it rather than covering it, so the eligible set has
+to rotate with gravity; and because it was built on `neighbor_smothers()`
+(which never counts a liquid neighbour, on purpose - `smothered()` needs
+that exemption too, for the identical reason a big pocket of fire must
+not smother itself from the inside out), an interior cell of a pool wider
+than one cell had at most ONE neighbour that could ever count - the cell
+directly above it - so a wide pool sealed by a crust could never reach
+the threshold no matter how complete the seal was. Only an isolated lava
+cell sitting in its own solid pocket could ever burst.
+
+`cover_mask()`/`cover_seals()`/`covered_at()` (`sand_priv.h`, beside
+`ring_dir()`/`ring_of()`) fix both problems and are meant as a general
+"is this cell covered enough" primitive, not a burst-private helper - the
+vent machinery's own `covered_from_above()` and the confined-gas ignition
+check are both candidates to migrate onto it later. The eligible cells
+are a **semi-disc of the 8-ring, centred on anti-gravity**: the cell
+directly opposite gravity, the two diagonals either side of it, and the
+two perpendiculars beyond those - five cells, equivalently the ring minus
+the gravity direction itself and its two ring-neighbours. Gravity is read
+from `s->last_step_dx/dy` (the per-step DITHERED direction, already one
+of the eight ring directions) rather than the raw tilt vector: a
+continuous test would give five eligible cells only at exact axis or
+exact diagonal alignment, and the smoothed IMU vector is essentially
+never exactly aligned, so it would flicker between a 5-cell and a 4-cell
+rule every single step.
+
+A cell is covered when at least `need` of those five are covering, AND
+the covered cells form **one contiguous run around the semi-disc** - with
+exactly one narrow exception: the three CARDINALS of the semi-disc (the
+two perpendiculars plus anti-gravity itself), which seal even though the
+diagonals between them are open, because two blocked cardinals seal the
+corner between them and an open diagonal between them is not a route
+out. That exception applies only when gravity itself is axis-aligned - a
+diagonal gravity's semi-disc holds only two cardinals, so the same three
+arc positions there are all diagonals and must not be let through. A
+broader version of the exception ("any single-diagonal gap flanked by two
+covered cardinals") was considered and rejected: it would also admit two
+patterns the settled acceptance data excludes - see
+`test_rejected_semi_disc_patterns_stay_rejected`, `suite_sand.c`.
 
 **`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
 DIVISOR` with fire before it queues a single flight entry** (see

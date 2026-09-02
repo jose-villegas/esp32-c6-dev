@@ -17,6 +17,17 @@
 #include "suites.h"
 
 #include "sand.h"
+/* Reaches past sand.h's own public surface on purpose - bd esp32c6-a2j's
+ * exhaustive-shape-table and rejected-pattern tests below exercise
+ * cover_mask()/cover_seals() (ring_dir() too) directly, and a rule that
+ * rotates with gravity and is only ever exercised indirectly, through the
+ * stochastic burst roll, at whatever gravity direction one scene happens
+ * to use, is not really tested. sand_priv.h is pure portable logic
+ * (static inline over a plain sand_t, no hardware) like the rest of what
+ * this file already links against - the same reason sand_liquid.c and
+ * sand_gas.c can include it too - so this is a wider view of the same
+ * portable surface, not a step outside it. */
+#include "sand_priv.h"
 
 /* Big enough for every case here, small enough to write out by hand. */
 #define W 8
@@ -9131,16 +9142,19 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
 }
 
 /* bd esp32c6-mqt: burial no longer means "lasts forever" either. A lava
- * cell covered on SAND_LAVA_BURST_COVER or more of its 4 cardinal sides
- * gets a tiny per-step chance to convert to MAT_STONE and burst - the
- * chosen replacement for the vent machinery (bd esp32c6-0f2 removes that
+ * cell covered on SAND_LAVA_BURST_COVER or more of its 5 gravity-relative
+ * semi-disc cells (covered_at(), sand_priv.h - bd esp32c6-a2j) gets a
+ * tiny per-step chance to convert to MAT_STONE and burst - the chosen
+ * replacement for the vent machinery (bd esp32c6-0f2 removes that
  * separately, later) and the mechanism that reopens a sealed pool's crust
  * so a sustained pour can keep reaching lava (see cool_off_chain()'s own
  * comment, sand_reactions.c).
  *
  * Exactly the same fully-walled scene test_lava_buried_in_stone_is_not_
  * deleted uses, this time with the burst chance pinned to its maximum
- * instead of pinned off.
+ * instead of pinned off - every one of the 8 surrounding cells is stone,
+ * so all 5 gravity-relative ones are covered regardless of which way is
+ * down.
  *
  * PINS THE ONE BEHAVIOUR THE BRIEF FOR THIS CHANGE CALLS OUT BY NAME:
  * sand_explode() fills a core of radius `radius / SAND_EXPLODE_CORE_
@@ -9210,48 +9224,269 @@ static void test_buried_lava_bursts_into_stone_and_fire(void)
         "covering it, or nothing actually exploded outward");
 }
 
-/* THE THRESHOLD. Exactly SAND_LAVA_BURST_COVER - 1 (2) covered sides must
- * never burst, however long it runs and however high the chance is
- * pinned - this is the test that fails silently (goes green when it
- * should not) if cover_count() were ever compared with the wrong operator
- * (> instead of >=, or against 4 instead of SAND_LAVA_BURST_COVER).
+/* THE THRESHOLD, REWRITTEN FOR THE GRAVITY-RELATIVE RULE (bd esp32c6-a2j).
+ * Exactly SAND_LAVA_BURST_COVER - 1 (2) of the five gravity-relative
+ * semi-disc cells covered must never burst, however long it runs and
+ * however high the chance is pinned - the test that fails silently (goes
+ * green when it should not) if covered_at()'s count or shape check were
+ * ever loosened by one.
  *
- * A HORIZONTAL TUNNEL, NOT A SINGLE CELL - built so cover_count() is
- * structurally pinned at 2 for every lava cell in the scene regardless of
- * how the lava itself moves: the whole row is walled by stone above and
- * below, and the sideways neighbours of any lava cell in it are either
- * more of the SAME liquid (neighbor_smothers() never counts a liquid
- * neighbour - see its own comment, sand_reactions.c) or off the edge of
- * the board (also never counted - covered_from_above()'s/gas_ignite_
- * confined()'s own "the board edge is not a container a player built").
- * A single isolated cell with two open sides would not give this
- * guarantee - liquid movement into the open sides could change its own
- * cover_count from step to step, and the test would only be pinning
- * "usually stays under 3", not "structurally cannot reach 3". */
+ * The old version of this test built a full-width tunnel walled top and
+ * bottom - under the CARDINAL rule that scene structurally pinned the
+ * count at 2 (up, down), but under THIS rule "down" is excluded (it is
+ * the gravity direction itself, not something that covers) and the
+ * DIAGONALS are included, so that same scene now has up-left/up/up-right
+ * all covered - exactly the wide-pool-under-a-crust case bd esp32c6-a2j
+ * exists to make burst, not the never-bursts case any more.
+ *
+ * A CEILING WITH ALTERNATING HOLES gives the new structural guarantee
+ * instead: stone at even columns, open at odd ones. A lava cell under an
+ * open column sees its "up" neighbour empty but BOTH ceiling diagonals
+ * (the even columns either side) covered - count 2, and not the
+ * cardinal-triple exception either (that needs all three of up-left/up/
+ * up-right, not two diagonals with the middle one open) - so it can
+ * never seal. A lava cell under a solid column sees only "up" covered -
+ * count 1, even further from the threshold. Every column in the scene is
+ * one of the two, so the whole row structurally never reaches 3,
+ * regardless of how the liquid itself moves - the same reasoning the
+ * original tunnel used, adapted to the rule that replaced it. */
 static void test_lava_with_only_two_covered_sides_never_bursts(void)
 {
     fixture();
     sand_clear(&s);
     const int y = H / 2;
     for (int x = 0; x < W; x++) {
-        sand_set(&s, x, y - 1, STONE);
-        sand_set(&s, x, y + 1, STONE);
+        if (x % 2 == 0) {
+            sand_set(&s, x, y - 1, STONE);   /* solid ceiling column */
+        }                                    /* odd columns: left open */
+        sand_set(&s, x, y + 1, STONE);       /* floor, holds the pool down */
         sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
     }
     sand_set_lava_burst(&s, 255);
     const int before = liquid_mass_of(MAT_LAVA);
     TEST_ASSERT_EQUAL_INT_MESSAGE(W * MASS_MAX, before,
-        "fixture check: a full-width tunnel of lava, walled top and "
-        "bottom only");
+        "fixture check: a full-width row of lava, floored throughout and "
+        "ceiled only on every other column");
 
     for (int i = 0; i < 500; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
-        "a lava cell covered on only 2 of its 4 cardinal sides must never "
-        "burst, no matter how high the chance is pinned or how long it "
-        "runs - SAND_LAVA_BURST_COVER is 3, not 2");
+        "a lava cell covered on only 2 of its 5 gravity-relative semi-disc "
+        "cells must never burst, no matter how high the chance is pinned "
+        "or how long it runs - SAND_LAVA_BURST_COVER is 3, not 2, and 2 "
+        "covered diagonals either side of an open 'up' is not the "
+        "cardinal-triple exception either");
+}
+
+/* THE REJECTED PATTERNS STAY REJECTED - bd esp32c6-a2j. A broader version
+ * of the cardinal-triple exception ("any single-diagonal gap flanked by
+ * two covered cardinals") was considered while settling this rule with
+ * the user and REJECTED: it would also let {up-left, up, right} and
+ * {up, up-right, left} seal, in portrait, and the user's own exhaustive
+ * diagrams excluded both. This is the test that catches the exception
+ * being "helpfully" generalised back to that wrong, broader version
+ * later - see cover_seals()'s own comment (sand_priv.h) for the full
+ * reasoning.
+ *
+ * Calls cover_mask()/cover_seals() directly rather than through a
+ * stepped scene: both patterns fail on SHAPE, not on count (each has
+ * exactly 3 of the 5 cells covered, meeting SAND_LAVA_BURST_COVER), so
+ * the only way to pin "count is enough but shape must still say no" down
+ * exactly is to ask the primitive the question directly rather than
+ * inferring it from whether a stochastic burst happened to fire within
+ * some step budget. */
+static void test_rejected_semi_disc_patterns_stay_rejected(void)
+{
+    fixture();
+    sand_clear(&s);
+    s.last_load_dx = 0;
+    s.last_step_dy = 1;   /* portrait: gravity straight down */
+
+    /* Arc order for gravity down (cover_mask()'s own comment): bit 0 =
+     * right, bit 1 = up-right, bit 2 = up, bit 3 = up-left, bit 4 = left. */
+    const unsigned up_left_up_right = (1u << 3) | (1u << 2) | (1u << 0);
+    const unsigned up_up_right_left = (1u << 2) | (1u << 1) | (1u << 4);
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        cover_seals(&s, up_left_up_right, SAND_LAVA_BURST_COVER),
+        "{up-left, up, right} covered, up-right and left open - an open "
+        "diagonal (up-right) flanked by two covered cardinals (up, "
+        "right), but NOT the exact cardinal-triple - must stay rejected");
+    TEST_ASSERT_FALSE_MESSAGE(
+        cover_seals(&s, up_up_right_left, SAND_LAVA_BURST_COVER),
+        "{up, up-right, left} covered, up-left and right open - the "
+        "mirror image of the pattern above, must also stay rejected");
+}
+
+/* THE EXHAUSTIVE SHAPE TABLE - bd esp32c6-a2j. A rule that rotates with
+ * gravity and is only ever exercised at one rotation is not really
+ * tested, so this drives cover_mask()/cover_seals() (sand_priv.h)
+ * directly, at each of the 8 ring directions, over every one of the 256
+ * ways to paint the full 8-neighbour ring covered or open - not just the
+ * 32 combinations of the 5 cells that end up eligible. Every combo first
+ * checks that cover_mask() equals a mask built independently from that
+ * combo's own bits at the 5 eligible ring positions (ring_of()/
+ * ring_dir(), not cover_mask()'s own logic checked against itself) -
+ * proving it genuinely ignores the 3 cells gravity excludes, not merely
+ * that it is never asked about them - and only the 32 combos where those
+ * 3 excluded bits are all 0 feed the count/shape tally below, so each of
+ * the 32 distinct 5-bit patterns is tallied exactly once despite
+ * appearing 8 times across the full 256.
+ *
+ * The counts checked are the user's own settled acceptance data (bd
+ * esp32c6-a2j's notes): the four axis-aligned gravity directions each
+ * admit exactly 4 valid shapes at exactly-3-covered (7 valid in total);
+ * the four diagonal directions admit only 3 at exactly-3 (6 total),
+ * because a diagonal gravity's semi-disc holds only two cardinals, so
+ * the cardinal-triple exception can never arise there - inherent to the
+ * rule, not a defect (see cover_seals()'s own comment). */
+static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
+{
+    fixture();
+    sand_clear(&s);
+    const int cx = W / 2, cy = H / 2;
+    sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    const uint8_t density = materials[MAT_LAVA].density;
+
+    for (int g = 0; g < 8; g++) {
+        const int *grav = ring_dir(g);
+        s.last_load_dx = grav[0];
+        s.last_load_dy = grav[1];
+        const bool axis_aligned = (g & 1) == 0;
+        const int anti = g + 4;   /* ring_of(grav) is just g */
+
+        int valid_at_3 = 0;
+        int valid_total = 0;
+        for (unsigned combo = 0; combo < 256u; combo++) {
+            for (int i = 0; i < 8; i++) {
+                const int *d = ring_dir(i);
+                sand_set(&s, cx + d[0], cy + d[1],
+                        (combo & (1u << i)) ? STONE : CELL_EMPTY);
+            }
+
+            const unsigned mask = cover_mask(&s, cx, cy, W, H, density);
+
+            /* PROVES THE 3 EXCLUDED RING POSITIONS ARE GENUINELY IGNORED,
+             * not merely never exercised: `expected` is built straight
+             * from `combo`'s own bits at the 5 eligible ring positions
+             * (ring_of()/ring_dir(), already covered by their own tests
+             * elsewhere - not cover_mask()'s own logic being checked
+             * against itself), independent of whatever the other 3 bits
+             * of this combo happen to be. */
+            unsigned expected = 0;
+            for (int i = 0; i < 5; i++) {
+                const int ring_pos = (anti - 2 + i) & 7;
+                if (combo & (1u << ring_pos)) {
+                    expected |= 1u << i;
+                }
+            }
+            TEST_ASSERT_EQUAL_INT_MESSAGE((int)expected, (int)mask,
+                "cover_mask() must depend only on the 5 eligible ring "
+                "positions, read in ring order, and nothing else");
+
+            /* Tallied once per distinct 5-bit PATTERN, not once per raw
+             * combo - each pattern reappears 8 times across the 256
+             * combos (once per setting of the 3 excluded bits, which the
+             * assertion just above already proved cannot change the
+             * mask), so only counting it when those 3 bits are 0 avoids
+             * inflating the counts eightfold. */
+            const unsigned excluded_bits =
+                (1u << ((anti + 3) & 7)) | (1u << ((anti + 4) & 7)) |
+                (1u << ((anti + 5) & 7));
+            if ((combo & excluded_bits) != 0) {
+                continue;
+            }
+
+            unsigned count = 0;
+            for (unsigned b = 0; b < 5u; b++) {
+                count += (mask >> b) & 1u;
+            }
+            if (cover_seals(&s, mask, SAND_LAVA_BURST_COVER)) {
+                valid_total++;
+                if (count == (unsigned)SAND_LAVA_BURST_COVER) {
+                    valid_at_3++;
+                }
+            }
+        }
+
+        const int expected_at_3 = axis_aligned ? 4 : 3;
+        const int expected_total = axis_aligned ? 7 : 6;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_at_3, valid_at_3,
+            "wrong count of exactly-3-covered valid shapes at this "
+            "gravity direction - ring_dir()'s index tells axis-aligned "
+            "(even) from diagonal (odd)");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_total, valid_total,
+            "wrong total count of valid (sealed) shapes at this gravity "
+            "direction");
+    }
+}
+
+/* THE HEADLINE CASE - bd esp32c6-a2j. An INTERIOR cell of a lava pool
+ * wider than one cell and more than one cell deep, sealed only by a
+ * crust directly above it, must still burst - the case cover_count()'s
+ * cardinal rule could never fire for at all (see this file's own header
+ * comment and bd esp32c6-a2j's own notes for why): the tested cell's
+ * left, right AND below neighbours are all more lava - KIND_LIQUID,
+ * which neighbor_smothers() never counts - so under the OLD screen-fixed
+ * cardinal rule only "up" ever counted, for a count of 1, nowhere near
+ * SAND_LAVA_BURST_COVER's 3. Under THIS rule the crust's two diagonal
+ * cells count too: up-left, up and up-right are all crust, for a count
+ * of 3, contiguous, sealed - regardless of what the pool does below or
+ * beside the tested cell. */
+static void test_a_wide_pool_under_a_crust_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 1, STONE);   /* the crust: a wide, solid lid */
+        sand_set(&s, x, 4, STONE);   /* floor, keeps the pool from draining */
+    }
+    for (int y = 2; y <= 3; y++) {
+        for (int x = 1; x <= 6; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+
+    const int tx = 3, ty = 2;   /* interior: not touching the pool's own
+                                  * left/right edge, so both diagonal
+                                  * neighbours above it are genuine crust */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty)),
+        "fixture check: lava at the cell under test");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx - 1, ty)),
+        "fixture check: more lava to its left, not stone or open air - a "
+        "genuine pool interior, not an isolated cell in a solid pocket");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx + 1, ty)),
+        "fixture check: more lava to its right too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA,
+        CELL_MATERIAL(sand_at(&s, tx, ty + 1)),
+        "fixture check: and more lava directly below it - this cell has "
+        "no support of its own, only the crust above seals it in");
+
+    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "wide-pool-burst impulse queue must fit in what the framebuffer "
+        "leaves");
+    sand_enable_impulses(&s, buf, W * H);
+    sand_set_lava_burst(&s, 255);
+
+    bool burst = false;
+    for (int i = 0; i < 10 && !burst; i++) {
+        sand_step(&s, 0, 1000, 0);
+        burst = CELL_MATERIAL(sand_at(&s, tx, ty)) != MAT_LAVA;
+    }
+
+    free(buf);
+    TEST_ASSERT_TRUE_MESSAGE(burst,
+        "an interior cell of a wide, deep lava pool, sealed only by a "
+        "crust directly above it, must still burst within this budget - "
+        "the case cover_count()'s screen-fixed cardinal rule could never "
+        "fire for, because it counted 'down' (more lava, never counted) "
+        "instead of the two upper diagonals (crust, which do)");
 }
 
 /* THE NEGATIVE COUNTERPART: an ordinary, uncovered open pool - a floor
@@ -16240,6 +16475,18 @@ static void test_a_sampled_vent_throws_its_whole_chunk_together(void)
     sand_t v;
     sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 7u);
     sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
+    /* Isolates try_vent_chunk()'s own sampling behaviour from the
+     * unrelated lava-burst mechanic (bd esp32c6-mqt/esp32c6-a2j) - the
+     * same isolation vent_chance and lava_cooloff already get elsewhere
+     * in this file. This scene's pool cells are gravity-relative COVERED
+     * (bd esp32c6-a2j's own fix - a wide pool under a crust really is
+     * covered now, unlike the cardinal rule this replaced), and this
+     * test deliberately runs against the REAL, uncontrolled vent_chance
+     * rate (see this test's own top comment) for up to 40000 steps - long
+     * enough that the burst mechanic's own real, independent per-cell
+     * roll fires first and converts a tracked cell away from lava,
+     * which is not what this test exists to watch. */
+    sand_set_lava_burst(&v, 0);
 
     /* A SAND_VENT_CHUNK-wide, 1-deep pool (x=X0..X1, y=Y), sealed the
      * same way POOL_TEST's own scene is: a crust one row wider than the
@@ -16321,6 +16568,9 @@ static void test_a_sampled_vent_does_not_reach_the_next_chunk(void)
      * scene otherwise fires exactly as reliably as the sibling's. */
     sand_init(&v, cells, CHUNK_TEST_W, CHUNK_TEST_H, 13u);
     sand_enable_impulses(&v, impulses, CHUNK_TEST_W * CHUNK_TEST_H);
+    /* Same isolation as the sibling test above, and for the same reason -
+     * see its own comment. */
+    sand_set_lava_burst(&v, 0);
 
     for (int x = CHUNK_TEST_X0 - 1; x <= CHUNK_TEST_X1 + 1; x++) {
         sand_set(&v, x, CHUNK_TEST_Y - 1, STONE);
@@ -23521,6 +23771,9 @@ void run_sand_suite(void)
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_buried_lava_bursts_into_stone_and_fire);
     RUN_TEST(test_lava_with_only_two_covered_sides_never_bursts);
+    RUN_TEST(test_rejected_semi_disc_patterns_stay_rejected);
+    RUN_TEST(test_cover_primitive_matches_the_exhaustive_shape_table);
+    RUN_TEST(test_a_wide_pool_under_a_crust_bursts);
     RUN_TEST(test_an_open_lava_pool_never_bursts);
     RUN_TEST(test_buried_lava_still_becomes_stone_with_impulses_off);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
