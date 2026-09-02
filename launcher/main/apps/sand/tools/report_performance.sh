@@ -150,9 +150,14 @@ trap cleanup EXIT
 # all - this correctly prints nothing for that case, not the wrong field).
 extract_measured() {
     local name="$1" report="$2"
+    # `|| true`: awk exits nonzero if $report can't even be opened, and
+    # that failure inside a `var=$(...)` assignment would otherwise abort
+    # the whole script under `set -e` - the same false-failure class as
+    # the heap parsing above, just triggered by a missing file instead of
+    # an unexpected log line.
     awk -F'|' -v name="$name" '
         $0 ~ "^\\| *`" name "`" { v = $4; gsub(/^[ \t]+|[ \t]+$/, "", v); print v; exit }
-    ' "$report"
+    ' "$report" 2>/dev/null || true
 }
 
 # The four-command ritual from docs/Sand/Perf-Round-Guide.md's "Reading a
@@ -170,8 +175,14 @@ print_summary() {
     if [ -z "$heap_line" ]; then
         echo "WARNING: no 'free heap after framebuffer' line found in $raw"
     else
-        heap="$(printf '%s\n' "$heap_line" | grep -o '[0-9]\+ bytes' | grep -o '[0-9]\+')"
-        echo "free heap after framebuffer: $heap bytes"
+        # `|| true`: under `set -e`, a `grep -o` that matches nothing
+        # inside a `var=$(...)` assignment aborts the whole script right
+        # here, mid-summary - a log-line wording change would then read
+        # as a capture failure (cleanup() sees a nonzero status) even
+        # though the capture and report both genuinely succeeded. Exactly
+        # the false-failure this script's exit code was just fixed for.
+        heap="$(printf '%s\n' "$heap_line" | grep -o '[0-9]\+ bytes' | grep -o '[0-9]\+' || true)"
+        echo "free heap after framebuffer: ${heap:-?} bytes"
         if [ -n "$heap" ] && [ "$heap" -lt 50000 ]; then
             echo "WARNING: free heap ($heap bytes) is below ~50,000 - frame-budget"
             echo "fixtures likely failed to allocate their grids and measured"
