@@ -114,12 +114,14 @@ def format_duration(ms: int) -> str:
 
 def make_slow_tests_section(capture: dict, total_ms, top_n: int = 15) -> list:
     """The slowest tests by wall time, across every suite - not just the
-    frame-budget ones. A test with no declared budget (like the sand suite's
-    own sealed-vent test, ~7.7 minutes and the single biggest cost in the
-    whole run - see docs/Sand/Sand-Simulation.md) is otherwise invisible to
-    this report: it never enters `known`, and the "measured in this capture"
-    table above only lists tests with a device_tests log line, which most
-    tests don't print. This is the only place that ranks the whole suite.
+    frame-budget ones. A test with no declared budget (the sand suite's own
+    statistical vent-cap correctness test used to be exactly this: no budget
+    of its own, ~7.7 minutes, and the single biggest cost in the whole run,
+    until the mechanism it tested was removed along with it - bd
+    esp32c6-0f2) is otherwise invisible to this report: it never enters
+    `known`, and the "measured in this capture" table above only lists tests
+    with a device_tests log line, which most tests don't print. This is the
+    only place that ranks the whole suite.
 
     Returns [] when the capture predates per-test timing (test/timing.c) -
     an older raw capture still produces every other section of this report
