@@ -18656,6 +18656,310 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
         "step, not lose its push the instant gravity also touches it");
 }
 
+/* --- KIND_STATIC support agreeing with the drift, not merely CELL_IS_EMPTY
+ * on the one cell straight below (bd - "a thrown static chunk settles too
+ * eagerly") -------------------------------------------------------------- */
+
+/* THE CORE BUG, IN ITS SIMPLEST FORM: a thrown KIND_STATIC chunk directly
+ * over a powder column. can_impulse_enter() (sand.c) only ever refuses
+ * KIND_STATIC - a powder is not static, so the gravity-drift ("AIRBORNE
+ * SOLIDS FALL TOO", step_impulses(), sand.c) has always been willing to
+ * swap the falling chunk straight into the sand beneath it, one row per
+ * step. The OLD settled check disagreed with its own drift: it asked only
+ * CELL_IS_EMPTY() on that same straight-down cell, saw sand (not empty),
+ * and declared the chunk settled - dropping it from impulse tracking after
+ * a single row of fall, even though the very next step's drift would have
+ * happily swapped it another row down had it still been tracked. speed 0
+ * (via sand_impulse_dislodge()) forces every push-roll to fail, so this
+ * scene is driven entirely by gravity-drift plus the settled check - no
+ * lateral movement to confound the result. */
+static void test_a_thrown_static_chunk_over_a_powder_keeps_falling_instead_of_settling_on_it(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 3, 0, STONE);
+    for (int y = 1; y < H; y++) {
+        sand_set(&s, 3, y, SAND);
+    }
+    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
+        "a thrown KIND_STATIC chunk directly over a powder column must "
+        "keep sinking through it, one row per step, until it reaches the "
+        "bottom - settling after only one row means the old CELL_IS_EMPTY "
+        "support check disagreed with the drift's own can_impulse_enter() "
+        "rule and dropped the chunk from tracking too early");
+}
+
+/* THE SAME DISAGREEMENT, OVER A LIQUID - and the user's own explicit call
+ * (see step_impulses()'s own comment on the gravity-drift block, sand.c):
+ * a thrown, ENERGETIC chunk sinks into water (and lava, its own dedicated
+ * test below) rather than resting on the surface the way an ordinary,
+ * never-thrown KIND_STATIC cell would (see
+ * test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder,
+ * this file, for that other half of the distinction). */
+static void test_a_thrown_static_chunk_sinks_into_water_instead_of_resting_on_its_surface(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 3, 0, STONE);
+    for (int y = 1; y < H; y++) {
+        sand_set(&s, 3, y, WATER);
+    }
+    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
+        "a thrown KIND_STATIC chunk over a water column must sink all the "
+        "way to the bottom rather than stopping at the surface - the old "
+        "drift's own liquid exclusion (deleted) plus the old CELL_IS_EMPTY "
+        "support check both would have stopped it at row 1");
+}
+
+/* THE INVARIANT GUARD. Deleting the drift's liquid exclusion is only safe
+ * because the move it gates is a SWAP, not an overwrite - four lines below
+ * the can_impulse_enter() check in step_impulses(), `gdisplaced` is read
+ * out of the target cell and written back into the entry's OLD cell, the
+ * same move_to() trick every other kind here already relies on. A lava
+ * cell a thrown chunk swaps into does not stop existing, it changes which
+ * cell it occupies. This test is what turns that claim from an argument
+ * into a measurement.
+ *
+ * MASS, NOT CELL COUNT, IS THE EXACT INVARIANT - see mass_of()'s own
+ * comment for why: a liquid's cell count is free to change even under
+ * ordinary, unrelated movement (one full cell splitting into several
+ * shallower ones as it spreads is not a leak), while the sum of every
+ * lava cell's own CELL_VARIANT is not. MEASURED, not assumed: an early
+ * version of this test asserted the cell count unchanged too, and it
+ * failed - 48 before, 55 after - which looked at first like exactly the
+ * duplication this test exists to catch. It was not. Instrumenting the
+ * scene (a full material-by-material dump, kept out of the final test)
+ * showed mass staying exactly 720 throughout, and the extra 7 cells were
+ * two genuinely unrelated, pre-existing mechanics, neither one anything
+ * to do with step_impulses(): the swap itself displaces lava upward one
+ * cell at a time as the chunk sinks, ordinary sand_step_liquids()
+ * equalisation then spreads that displaced lava sideways across the row
+ * (see mass_of()'s own comment on this being expected for ANY liquid,
+ * lava included), and once spread that lava's own top surface sits
+ * exposed to open air for the first time - which is exactly what lets
+ * reaction_t.flare (sand_reactions.c, "the flame licking up off it") roll
+ * and place a handful of fresh MAT_FIRE cells above it, cells that were
+ * never lava mass in the first place. Cell count is therefore checked
+ * only as "did not go DOWN" below - a genuine deletion would still be
+ * caught, a legitimate spread or an unrelated flare above the exposed
+ * surface would not be mistaken for one. The row assertion first confirms
+ * the scene actually exercises a sink (not "stayed on the surface because
+ * the exclusion is still there," which would make the conservation
+ * assertions vacuous). */
+static void test_a_thrown_static_chunk_conserves_lava_mass_on_sink(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { POOL_TOP = 2 };
+    sand_set(&s, 3, 0, STONE);
+    for (int y = POOL_TOP; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+
+    const long lava_mass_before  = mass_of(&s, W, H, MAT_LAVA);
+    const int  lava_count_before = count_of(MAT_LAVA);
+
+    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(POOL_TOP, first_row_holding(MAT_STONE),
+        "the chunk must actually have sunk past the pool's own surface for "
+        "the conservation assertions below to mean anything - stopping at "
+        "or above POOL_TOP would mean the exclusion never actually got "
+        "exercised by this scene");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(lava_mass_before,
+        mass_of(&s, W, H, MAT_LAVA),
+        "total lava mass must be exactly conserved - a thrown chunk "
+        "swapping into a lava cell relocates that cell, it does not "
+        "destroy it, and this is the measurement that makes dropping the "
+        "drift's old liquid exclusion safe rather than merely assumed");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(lava_count_before, count_of(MAT_LAVA),
+        "and no lava cell may have been deleted outright either - checked "
+        "as 'did not go down' rather than 'stayed identical', because a "
+        "displaced lava cell legitimately splitting across more, shallower "
+        "cells as it spreads (ordinary sand_step_liquids() equalisation,"
+        " same as any liquid) is not a deletion - see this test's own top "
+        "comment for the measurement that ruled out a genuine duplication");
+}
+
+/* A SUPPORT THAT IS ITSELF IN FLIGHT MEANS WAIT, NOT SETTLE. Two KIND_
+ * STATIC chunks, A directly above B, both dislodged into impulse tracking
+ * this same step - A queued first, so step_impulses()'s own loop gives A
+ * its turn before B gets a chance to move out from under it. A's three
+ * gravity-ward candidates are ALL blocked: straight down is B (still
+ * sitting exactly where it started, its own turn not yet taken), and both
+ * diagonals are walled off with WOOD (KIND_STATIC, but never dislodged -
+ * an ordinary immovable wall, not a competing impulse entry) so A cannot
+ * simply slide around the problem. Naively, "no opening this step" reads
+ * as settled - but B is not a wall, it is a chunk that is about to move
+ * out of the way in this very same step (open floor below it, columns 4-7
+ * clear). Settling A right there would freeze it stacked in mid-air over
+ * B forever, since nothing else in this engine ever revisits a settled
+ * KIND_STATIC cell.
+ *
+ * WOOD, not more STONE, for the side walls - so a stray STONE cell can
+ * never be mistaken for one of the two chunks this test is actually
+ * tracking when scanning the board afterward. */
+static void test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling_and_both_eventually_land(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { COL = 3, TOP_ROW = 2, BOTTOM_ROW = 3 };
+
+    sand_set(&s, COL, TOP_ROW, STONE);
+    sand_set(&s, COL, BOTTOM_ROW, STONE);
+    sand_set(&s, COL - 1, BOTTOM_ROW, WOOD);
+    sand_set(&s, COL + 1, BOTTOM_ROW, WOOD);
+
+    /* A first, THEN B - see this test's own top comment for why the order
+     * matters: it is what puts A's turn before B's in step_impulses()'s
+     * own loop. */
+    sand_impulse_dislodge(&s, COL, TOP_ROW, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+    sand_impulse_dislodge(&s, COL, BOTTOM_ROW, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+
+    /* One step is enough to show the bug: A's own support check runs
+     * before B has moved, so a settle-on-first-failure design drops A
+     * from tracking on literally this first call. */
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, COL, TOP_ROW)),
+        "the upper chunk must still be exactly where it started after "
+        "just one step - it was blocked on every side this step, so it "
+        "must have WAITED, not moved; the regression this guards against "
+        "is not motion, it is losing impulse TRACKING while waiting");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, s.impulse_count,
+        "and it must still be TRACKED - dropped from s->impulse_buf here "
+        "means settled, which is exactly what must not happen while its "
+        "own support (the lower chunk) is itself still in flight and "
+        "about to move out from under it");
+
+    /* Now run it out. Both chunks have a clear path to the bottom - B
+     * immediately, A one step behind once B has moved - so both must
+     * eventually come to rest with nothing left flying. */
+    for (int i = 0; i < 4 * H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
+        "both chunks must eventually land - if the upper one were still "
+        "frozen waiting on a support that can never again change, "
+        "tracking would never clear");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, COL, TOP_ROW)),
+        "and the upper chunk must not have settled back at its OWN "
+        "starting cell either - both chunks had a clear run to the "
+        "bottom, so ending up frozen at the top is itself a sign "
+        "something settled prematurely");
+
+    /* BOTH REACHED THE FLOOR - checked by ROW alone, not by column too.
+     * An earlier version of this test asserted the upper chunk lands
+     * DIRECTLY ON TOP of the lower one (same column, one row up) and it
+     * failed: measurement (a full-board dump, not left in this test)
+     * showed both chunks side by side in the bottom row instead, columns
+     * 2 and 3. That is not a bug - once B has landed at (COL, H-1), A's
+     * OWN straight-down candidate at that same cell is blocked (B is
+     * KIND_STATIC and, once settled, no longer a tracked entry for
+     * impulse_index_still_tracked() to find), so the SAME shared
+     * candidate list this whole feature is built on tries the next
+     * candidate in line - the diagonal slide - exactly as it would for
+     * any other obstacle, and that cell is open. Sliding around a landed
+     * neighbour instead of freezing above it is the correct behaviour of
+     * the shared predicate, not a special case; this test only ever
+     * existed to prove neither chunk freezes mid-air, not to pin an exact
+     * final column, so it checks exactly that. */
+    int found_rows[2];
+    int found = 0;
+    for (int y = 0; y < H && found < 2; y++) {
+        for (int x = 0; x < W && found < 2; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STONE) {
+                found_rows[found++] = y;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, found,
+        "both KIND_STATIC chunks must still exist somewhere on the board "
+        "- this test is about WHEN they settle, not whether either one "
+        "survives");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, found_rows[0],
+        "both chunks had a clear run all the way to the floor once B "
+        "moved out from under A, so both must have reached it - one "
+        "still short of H - 1 would mean it froze somewhere on the way "
+        "down instead of following once its support cleared");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, found_rows[1],
+        "same for the second chunk found - see the previous assertion");
+}
+
+/* --- the other half of the distinction: IMPULSE earns the sinking, being
+ * a solid does not ------------------------------------------------------- */
+
+/* AN ORDINARY, NEVER-THROWN KIND_STATIC CELL gets none of the above - no
+ * sand_impulse()/sand_impulse_dislodge() call here at all, so this cell is
+ * never added to s->impulse_buf and step_impulses() never looks at it. The
+ * main sweep (sand_step(), sand.c) skips KIND_STATIC outright by design -
+ * that is what makes stone or glass hold its shape - so a static cell
+ * placed directly on top of a liquid or a powder, with no impulse behind
+ * it, has no mechanism in this engine that could ever move it at all, let
+ * alone sink it. This is the test that fails if a future change moves the
+ * new can_impulse_enter()-based sinking rule out of step_impulses() and
+ * into ordinary movement instead - see the drift block's own comment
+ * (step_impulses(), sand.c) for why that generalisation is explicitly not
+ * what this feature is. */
+static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    sand_set(&s, 2, 0, STONE);
+    for (int y = 1; y < H; y++) {
+        sand_set(&s, 2, y, WATER);
+    }
+
+    sand_set(&s, 5, 0, STONE);
+    for (int y = 1; y < H; y++) {
+        sand_set(&s, 5, y, SAND);
+    }
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, 2, 0)),
+        "an ordinary KIND_STATIC cell resting on a liquid, with no "
+        "impulse behind it, must not move at all - it is IMPULSE that "
+        "earns the sinking this feature adds, not merely being a solid");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&s, 5, 0)),
+        "same for a powder - an ordinary KIND_STATIC cell must still just "
+        "sit exactly where it was placed");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count,
+        "nothing here was ever thrown, so nothing should ever have been "
+        "queued into impulse tracking in the first place");
+}
+
 /* THE REGRESSION GUARD. Every test above this line already existed the day
  * a real device reported: "in water nothing happens, in sand also no
  * holes, i can see some faint movement when near pixels they do move but
@@ -24217,6 +24521,11 @@ void run_sand_suite(void)
     RUN_TEST(test_two_overlapping_blasts_share_the_buffer_evenly);
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
     RUN_TEST(test_a_flying_grain_keeps_its_outward_push_while_falling);
+    RUN_TEST(test_a_thrown_static_chunk_over_a_powder_keeps_falling_instead_of_settling_on_it);
+    RUN_TEST(test_a_thrown_static_chunk_sinks_into_water_instead_of_resting_on_its_surface);
+    RUN_TEST(test_a_thrown_static_chunk_conserves_lava_mass_on_sink);
+    RUN_TEST(test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling_and_both_eventually_land);
+    RUN_TEST(test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder);
     RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);
     RUN_TEST(test_a_blast_queues_impulses_on_every_side_of_the_centre);
     RUN_TEST(test_detonating_empty_space_still_flashes_the_core);
