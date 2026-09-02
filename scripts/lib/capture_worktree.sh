@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Sourced, not copied - see tools/find_cc.sh's own top comment for the
 # same pattern used elsewhere in this repo. Shared logic for "the one
 # persistent capture worktree": where it lives, and the create-once /
