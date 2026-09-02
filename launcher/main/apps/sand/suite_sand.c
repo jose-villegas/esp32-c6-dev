@@ -13568,8 +13568,8 @@ static void test_lava_that_melts_sand_into_glass_sometimes_freezes_itself(void)
 
 /* THE CHAIN IS BOUNDED. Pinned fully on, against a shaft deep enough that
  * a chain running unbounded would eat the whole thing -
- * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is 16, so the shaft's 30 lava cells
- * leave a wide, unambiguous margin. One quench event only: a single step
+ * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is well under the shaft's 30 lava
+ * cells, so retuning the cap leaves a wide, unambiguous margin either way. One quench event only: a single step
  * is enough for cool_off_chain() to run its entire walk, since the chain
  * itself is not spread across steps the way the sustained pour above is.
  *
