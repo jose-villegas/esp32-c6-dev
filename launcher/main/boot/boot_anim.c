@@ -169,17 +169,31 @@ static int32_t units(int n)
 #define BOOT_ANIM_GRID_CIRCLE_STEPS 12
 
 /* How finely a SPOKE is walked, unlike a ring's own CIRCLE_STEPS above -
- * a spoke's own vertices span a real distance (0 to `far`), not one
- * shared radius, so a growing reach (boot_anim_grid_spoke_reach()) needs
- * several steps to read as smoothly extending outward rather than
- * jumping in visible chunks, and a dashed spoke (BOOT_ANIM_GRID_SPOKE_
- * DASH) needs at least a couple of segments per dash/gap pair - NOT the
- * wave (see draw_grid_spoke()'s own comment on why a spoke stays flat
- * regardless of it). Not per-spoke: BOOT_ANIM_GRID_SPOKES (generated -
- * "Grid" in tools/boot_anim_editor.html, 0 hides them outright) is rarely
- * more than a handful, so even a step count this fine stays cheap
- * regardless of how many spokes are actually drawn. */
+ * a spoke's own vertices span a real distance (0 to BOOT_ANIM_GRID_SPOKE_
+ * FAR_UNITS below), not one shared radius, so a growing reach
+ * (boot_anim_grid_spoke_reach()) needs several steps to read as smoothly
+ * extending outward rather than jumping in visible chunks, and a dashed
+ * spoke (BOOT_ANIM_GRID_SPOKE_DASH) needs at least a couple of segments
+ * per dash/gap pair - NOT the wave (see draw_grid_spoke()'s own comment
+ * on why a spoke stays flat regardless of it). Not per-spoke:
+ * BOOT_ANIM_GRID_SPOKES (generated - "Grid" in tools/boot_anim_editor.html,
+ * 0 hides them outright) is rarely more than a handful, so even a step
+ * count this fine stays cheap regardless of how many spokes are actually
+ * drawn. */
 #define BOOT_ANIM_GRID_SPOKE_STEPS 32
+
+/* How far out a spoke is walked - NOT related to the grid's own reach
+ * (BOOT_ANIM_GRID_RINGS * BOOT_ANIM_GRID_STEP_Q12, `far` below): a spoke
+ * is a structural guide line, not the ring data the wave is actually
+ * about, so its own limit is wherever the projected line crosses the
+ * panel's edge, not a fixed distance in world space. gfx_line_ex()'s own
+ * clip_line() already computes exactly that x,y crossing for any segment
+ * reaching past the panel - this only has to be far enough that the
+ * unclipped end is ALWAYS past it, for every camera framing this project
+ * uses, and let clipping do the rest. Fixed, not authored: how far
+ * "effectively forever" needs to be is an engineering margin, not a
+ * creative choice a keyframe should be tuning. */
+#define BOOT_ANIM_GRID_SPOKE_FAR_UNITS 500
 
 /* A point at zeta-distance `radius` from the origin, `turn`/BOOT_ANIM_ONE
  * of the way round a full turn - boot_anim_sin()/cos() take a phase in
@@ -341,23 +355,19 @@ static void draw_floor(uint32_t now_ms, uint8_t ink,
     if (spoke_reach > 0) {
         /* A spoke is a structural guide line, the same as an axis - not
          * the ring data the wave is actually about, which is what
-         * BOOT_ANIM_GRID_RINGS's own finite count is really describing -
-         * so it gets the same "run it well past the panel and let
-         * clipping do the work" treatment BOOT_ANIM_AXIS_FAR_UNITS
-         * already is for the axes (see its own comment in boot_anim.h):
-         * always overflowing the canvas regardless of camera framing,
-         * rather than visibly ending mid-frame. MAX with `far` itself,
-         * not AXIS_FAR_UNITS alone - whatever the authored grid_rings *
-         * grid_step_m reach actually comes out to, a spoke passing
-         * through every ring in turn should never look shorter than the
-         * rings it radiates through. */
-        const int32_t axis_far = units(BOOT_ANIM_AXIS_FAR_UNITS);
-        const int32_t spoke_far = far > axis_far ? far : axis_far;
-
+         * BOOT_ANIM_GRID_RINGS's own finite count is really describing.
+         * Not bounded by (or even related to) `far` at all: the actual
+         * limit is wherever the projected line crosses the panel's own
+         * edge - gfx_line_ex()'s own clip_line() already computes exactly
+         * that x,y intersection for any segment reaching past it, so a
+         * radius this far out is "effectively forever" for every camera
+         * framing this project uses, not a guess at a specific reach that
+         * happens to usually be enough. */
         for (int i = 0; i < BOOT_ANIM_GRID_SPOKES; i++) {
             const uint16_t turn = (uint16_t)((i * 65536) / BOOT_ANIM_GRID_SPOKES);
-            draw_grid_spoke(turn, spoke_far, spoke_c,
-                            BOOT_ANIM_GRID_SPOKE_DASH != 0, spoke_reach, view);
+            draw_grid_spoke(turn, units(BOOT_ANIM_GRID_SPOKE_FAR_UNITS),
+                            spoke_c, BOOT_ANIM_GRID_SPOKE_DASH != 0,
+                            spoke_reach, view);
         }
     }
 }
@@ -419,16 +429,24 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
 
     /* T's own scale is Q8, not Q12 like re/im - units() (Q12) has no
      * business appearing here, which is exactly the mix-up the header's own
-     * "FIXED POINT, AND FOUR SCALES OF IT" warns about. Both ends are a
-     * plain unit count shifted into Q8 directly.
+     * "FIXED POINT, AND FOUR SCALES OF IT" warns about.
      *
      * short_top is sized from BOOT_ANIM_T_MAX_PHASE1, not BOOT_ANIM_T_MAX -
      * see that constant's own comment in boot_anim.h: this is the SHORT,
      * labelled arm drawn before the finale unbounds it, and it must stay
      * the length it was tuned to fit the panel at even though the climb
-     * itself now reaches twice as high. */
+     * itself now reaches twice as high. long_top used to be its own
+     * separate guess (BOOT_ANIM_T_MAX * 3) in t's own native scale,
+     * completely unrelated to long_arm above - measured NOT far enough
+     * even after long_arm's own reach was fixed (an axis is unbounded in
+     * all three of its own arms or it is not really unbounded). Now
+     * boot_anim_zeta_to_t_q8() - already built for exactly this "the same
+     * reach along t as along re/im" conversion, see its own comment - so
+     * this arm gets the identical guaranteed-past-the-panel reach the
+     * other two do, not a shorter one just because it happens to live in
+     * a different native scale. */
     const int32_t short_top = (BOOT_ANIM_T_MAX_PHASE1 + 1) << BOOT_ANIM_TQ;
-    const int32_t long_top  = (BOOT_ANIM_T_MAX * 3) << BOOT_ANIM_TQ;
+    const int32_t long_top  = boot_anim_zeta_to_t_q8(long_arm);
     const int32_t top = tween_lerp_i32(short_top, long_top, finale);
 
     draw_arm(arm, 0, 0, reach, ink, view);      /* real      */

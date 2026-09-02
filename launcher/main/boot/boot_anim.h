@@ -1541,14 +1541,26 @@ static inline uint8_t boot_anim_finale_reach(uint32_t now_ms)
         now_ms, BOOT_ANIM_FADE_START_MS, BOOT_ANIM_MS - BOOT_ANIM_FADE_START_MS));
 }
 
-/* How far the two floor-plane axes reach once unbounded - the same
- * "run it well past the panel and let clipping do the work" reasoning
- * draw_floor()'s own spokes in boot_anim.c now reuse this exact constant
- * for (a spoke is a structural guide line, same as an axis - see that
- * function's own comment). The rings themselves stay bounded on purpose:
- * BOOT_ANIM_GRID_RINGS is the actual, finite data the wave is about, not
- * a guide line with nothing to lose by running off-panel. */
-#define BOOT_ANIM_AXIS_FAR_UNITS 24
+/* How far the two floor-plane axes reach once unbounded - "run it well
+ * past the panel and let clipping do the work". draw_floor()'s own spokes
+ * in boot_anim.c follow the identical reasoning through their own
+ * separate BOOT_ANIM_GRID_SPOKE_FAR_UNITS (a spoke is a structural guide
+ * line, same as an axis - see that function's own comment), not this
+ * constant reused - the two lines have no reason to share one number just
+ * because they share a philosophy. The rings themselves stay bounded on
+ * purpose: BOOT_ANIM_GRID_RINGS is the actual, finite data the wave is
+ * about, not a guide line with nothing to lose by running off-panel.
+ *
+ * 24 measured NOT far enough - an axis whose own direction happens to
+ * point close to a given camera's vanishing point can still end visibly
+ * inside the panel at that reach, however "unbounded" the intent (the
+ * same failure mode chasing BOOT_ANIM_GRID_SPOKE_FAR_UNITS up to 500
+ * already fixed for spokes - see its own comment on why "far enough" has
+ * to be a real margin, not a guess). Matching that same value here, not a
+ * smaller one - both lines need the identical guarantee, and 500 is
+ * already confirmed numerically safe (a fixed-point overflow risk in
+ * principle) up to the largest space scale this project's own seed uses. */
+#define BOOT_ANIM_AXIS_FAR_UNITS 500
 
 /*---------------------------------------------------------------------------
  * Entry points into boot_anim.c
