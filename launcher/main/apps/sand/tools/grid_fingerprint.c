@@ -183,11 +183,15 @@ static void scene_fire_gas(sand_t *s)
  * the way to find out which those are is to break a mechanism on purpose
  * and check this tool goes red.
  *
- * No impulse buffer is enabled anywhere in this file, so sand_explode()
- * is a documented no-op here (its own first line, sand.c) - each covered
- * cell still deterministically converts to stone, it just throws
- * nothing, which is enough to exercise and hash the conversion this
- * scene exists to cover. */
+ * STALE CLAIM CORRECTED: this used to say no impulse buffer is enabled
+ * anywhere in this file, making sand_explode() here a documented no-op.
+ * main() (below) now calls sand_enable_impulses() unconditionally for
+ * every scene, itself explicitly - "the throw paths (explosions, bursts,
+ * splashes) are part of the behaviour being fingerprinted" - so a burst
+ * here converts the covered cell to stone AND throws debris, same as any
+ * other scene. That is still enough to exercise and hash the conversion
+ * this scene exists to cover; it is simply no longer the ONLY thing this
+ * scene exercises. */
 static void scene_sealed_lava(sand_t *s)
 {
     sand_set_lava_burst(s, 255);
