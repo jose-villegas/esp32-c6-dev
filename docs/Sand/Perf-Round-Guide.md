@@ -75,6 +75,29 @@ generated `.md` table and the raw serial capture (`*_raw.txt`) beside it.
 Read the raw capture, not just the table, when a row looks wrong; the table
 generator can only report what it was pointed at.
 
+### One command from a ref to a device verdict
+
+Evaluating a candidate branch used to mean: create or enter a worktree,
+detach it at the ref, sit through a cold build, run `report_performance.sh`
+by hand, and read four commands' worth of capture output yourself.
+`scripts/capture_ref.sh` does all of that as one call, against one
+persistent worktree reused across every ref you evaluate in a sitting so
+the build stays warm (`.claude/capture-worktree/` by default; see the
+script's own top comment for exactly where and why):
+
+```sh
+sh scripts/capture_ref.sh some-branch --baseline <report>.md
+sh scripts/capture_ref.sh some-branch --build-only        # build only, never flashes
+```
+
+`--build-only` builds `build.diag` in the capture worktree and stops before
+any flash or capture — useful on its own to check a candidate even LINKS
+(an `aligned(64)` candidate once failed only at link time) before spending
+a device round on it. `--baseline` and `--no-restore` are passed straight
+through to `report_performance.sh`'s own flags, described above — this
+script does not re-validate, re-summarize, or re-derive a verdict; it only
+turns a ref into a warm checkout that script can run against.
+
 ### The capture must be validated before it is read
 
 `report_performance.sh` runs `launcher/tools/sweeps/validate_capture.py`
@@ -134,7 +157,17 @@ and is built so a candidate cannot be accepted for the wrong reason:
 ```sh
 sh scripts/perf-loop.sh --baseline <report>.md --candidates <file>
 sh scripts/perf-loop.sh --host-only --candidate "sed -i ... sand.c"
+sh scripts/perf-loop.sh --baseline <report>.md --candidate-ref some-branch
 ```
+
+A candidate is normally a shell command applied to the working tree in
+place. `--candidate-ref` instead names a git ref, checked out into
+`capture_ref.sh`'s own persistent worktree and run through the same five
+gates below - gate A adapted to diff the ref against its merge-base rather
+than read `git status --porcelain` (which reads clean for a committed ref
+regardless of what it touches), so a ref cannot buy a pass by rewriting a
+budget or a scene any more than a sed candidate can. See `scripts/perf-
+loop.sh`'s own "REF CANDIDATES" comment for the full reasoning.
 
 Five gates, cheapest first - allowlist, host suite, fingerprint, device
 capture, measured verdict - then one of three outcomes: ACCEPT (won, and
