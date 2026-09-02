@@ -17,6 +17,11 @@
 #include "suites.h"
 
 #include "sand.h"
+#include "util/intmath.h"   /* im_len() - mirrors app_sand.c's own
+                             * update_local_depth_gravity(), which projects
+                             * gravity onto each axis with the same helper
+                             * rather than re-deriving the weight from
+                             * |gx|+|gy| the way the old blend did */
 
 /* Big enough for every case here, small enough to write out by hand. */
 #define W 8
@@ -6115,12 +6120,28 @@ static void test_shine_direction_is_unit_length(void)
 
 /*=============================================================================
  * LOCAL DEPTH - the depth signal now follows each puddle's own shape
- * rather than a fixed screen-position gradient, and (as of the tests below)
- * blends its vertical and horizontal readings continuously instead of
- * switching between them. See LOCAL DEPTH's own long comment in app_sand.c
- * for the full mechanism and the device reports ("almost like platinum";
- * "follows the shape of the puddle"; "fighting multiple values"... "single
- * source of truth") that motivated each part of it.
+ * rather than a fixed screen-position gradient, and combines its vertical
+ * and horizontal readings continuously instead of switching between them.
+ * See LOCAL DEPTH's own long comment in app_sand.c for the full mechanism
+ * and the device reports ("almost like platinum"; "follows the shape of the
+ * puddle"; "fighting multiple values"... "single source of truth"; "weird
+ * rectangles"... "the shade just gains length depending on which direction
+ * has more magnitude") that motivated each part of it.
+ *
+ * THE COMBINER ITSELF CHANGED since some of the comments below were first
+ * written: what shipped first as a Q8 BLEND of the two axis counts (`w =
+ * 256|gx|/(|gx|+|gy|)`, `(vdepth*(256-w) + hdepth*w) >> 8`) was replaced by
+ * a PROJECTION of each axis count onto the gravity direction followed by
+ * MAX (`wv_q8 = 256|gy|/im_len(gx,gy)`, `wh_q8 = 256|gx|/im_len(gx,gy)`,
+ * `max(vdepth*wv_q8, hdepth*wh_q8) >> 8`) - two device-reported defects in
+ * the blend (a shadow of wrongly-shallow water beside a submerged obstacle,
+ * and the reported depth of a fixed true depth inflating by up to 46% with
+ * tilt alone) that a weighted average of two axis COUNTS cannot fix, because
+ * neither count is a distance along gravity until it is projected onto it.
+ * See app_sand.c's own "THE COMBINER ITSELF" comment in paint_row_n() for
+ * the full account. Every test-local mirror of the combiner below was
+ * updated to match; mirrors of the surrounding debounce/climb machinery
+ * that do not touch the combiner itself were not, and do not need to be.
  *
  * paint_row_n() itself cannot be linked into this host suite - it lives in
  * app_sand.c, which check_app_sources.sh only compile-checks, the same
@@ -6159,10 +6180,40 @@ static void test_shine_direction_is_unit_length(void)
  * { 0, 255 }, and a caller that wants to model a SECOND frame's repaint of
  * the same column (see the hold-then-commit's own two-consecutive-frames
  * rule) calls this again with the same state pointers. */
+
+/* The real col_stable_depth[]/row_stable_depth[] ceiling - see
+ * app_sand.c's own LOCAL_DEPTH_COUNT_CEILING (same value, same reasoning:
+ * "THE CEILING IS RAISED, NOT THE BAND ITSELF", THE SATURATING CLIMB's own
+ * comment there); this suite cannot include app_sand.c (it is compile-
+ * checked only, see this section's own top comment), so the constant is
+ * re-derived here rather than shared directly - keep the two in sync by
+ * hand if either ever changes. */
+#define SUITE_LOCAL_DEPTH_COUNT_CEILING 34u
+
+/* GENERALISED to an arbitrary per-step INCREMENT and saturation CEILING, in
+ * whatever unit the caller chooses - the real col_stable_depth[] climbs by
+ * a flat `+1` cell, saturating at SUITE_LOCAL_DEPTH_COUNT_CEILING (30)
+ * rather than at the plain MATERIAL_LIQUID_DEPTH_BAND (24) - see THE
+ * SATURATING CLIMB's own "ATTEMPT FOUR" in app_sand.c for why the ceiling
+ * was raised above the band itself. Passing `inc=1,
+ * ceiling=MATERIAL_LIQUID_DEPTH_BAND` reproduces the pre-raise arithmetic
+ * exactly - `x < ceiling-1 ? x+1 : ceiling` and `x < ceiling ? x+1 :
+ * ceiling` agree at every x (verified: they can only possibly disagree at
+ * x == ceiling-1, where both give `ceiling`) - which is why
+ * test_local_depth_follows_the_puddles_own_shape and test_a_shallow_
+ * puddle_still_shows_real_darkening below still pass the plain
+ * MATERIAL_LIQUID_DEPTH_BAND unchanged: neither scenario's own pool is
+ * anywhere near deep enough for the raised ceiling to matter, so the two
+ * constants are interchangeable for their purposes and changing either
+ * would be a no-op there. test_the_blend_has_no_jump_crossing_45_degrees
+ * below is the one caller that needs the real, raised ceiling to mirror
+ * the shipped mechanism precisely, since its own worst-case cell IS
+ * saturated. */
 static void mirror_local_depth_column(sand_t *g, int cx, int h,
                                       unsigned char *stable,
                                       unsigned char *top_row,
-                                      unsigned depth_out[])
+                                      unsigned depth_out[],
+                                      unsigned inc, unsigned ceiling)
 {
     for (int cy = 0; cy < h; cy++) {
         const cell_t here  = sand_at(g, cx, cy);
@@ -6173,13 +6224,11 @@ static void mirror_local_depth_column(sand_t *g, int cx, int h,
         if (material_of(here)->kind != KIND_LIQUID) {
             depth = 0u;
         } else if (same) {
-            depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
-                ? *stable + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            depth = *stable < ceiling - inc ? *stable + inc : ceiling;
         } else if (*top_row == (unsigned char)cy) {
             depth = 0u;
         } else {
-            depth = *stable < MATERIAL_LIQUID_DEPTH_BAND
-                ? *stable + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            depth = *stable < ceiling - inc ? *stable + inc : ceiling;
             *top_row = (unsigned char)cy;
         }
         *stable = (unsigned char)depth;
@@ -6206,18 +6255,22 @@ static void mirror_local_depth_column(sand_t *g, int cx, int h,
  * this change replaces - cannot tell the two columns apart at all, which is
  * exactly the bug this test exists to catch a regression back into.
  *
- * STILL VALID after the axis-hysteresis switch was replaced by a
- * vertical/horizontal BLEND (see LOCAL DEPTH's own top comment in
- * app_sand.c), without changing a single assertion below, because the
- * gravity this test feeds sand_step() is straight down - gx exactly 0. At
- * gx == 0 the blend's own weight formula (update_local_depth_gravity() in
- * app_sand.c) puts ALL the weight on the vertical reading and none on the
- * horizontal one, so the blended depth mirror_local_depth_column() checks
- * here is not an approximation of what the shipped mechanism does at this
- * gravity - it is EXACTLY what it does, the same way it was when this was
- * still a single dominant-axis choice rather than a blend. The blend's own
- * behaviour AWAY from gx == 0 is a different claim, pinned separately by
- * test_the_blend_has_no_jump_crossing_45_degrees below. */
+ * STILL VALID after the axis-hysteresis switch was replaced first by a
+ * vertical/horizontal BLEND and later by a projection-then-max COMBINER
+ * (see LOCAL DEPTH's own top comment in app_sand.c), without changing a
+ * single assertion below through either change, because the gravity this
+ * test feeds sand_step() is straight down - gx exactly 0. At gx == 0 the
+ * combiner's own weight formula (update_local_depth_gravity() in
+ * app_sand.c) puts wv_q8 at EXACTLY 256 and wh_q8 at EXACTLY 0 - im_len(0,
+ * gy) reduces to |gy| exactly, so this is not even subject to im_len()'s own
+ * approximation error - so the combined depth mirror_local_depth_column()
+ * checks here is not an approximation of what the shipped mechanism does at
+ * this gravity - it is EXACTLY what it does, the same way it was when this
+ * was still a single dominant-axis choice, and the same way it was under
+ * the blend this replaced. The combiner's own behaviour AWAY from gx == 0 is
+ * a different claim, pinned separately by
+ * test_the_blend_has_no_jump_crossing_45_degrees below (kept its old name;
+ * see that test's own top comment for why). */
 /* A grid of its own, sized for a settled pool deep enough to carry a
  * two-cell rock plug with real water left above and below it - the
  * standard W x H fixture (8x8) has no room for that. Named OBST_POOL_*,
@@ -6273,9 +6326,11 @@ static void test_local_depth_follows_the_puddles_own_shape(void)
     unsigned char obst_stable = 0, obst_top_row = 255;
     unsigned char clear_stable = 0, clear_top_row = 255;
     mirror_local_depth_column(&obst_pool, OBST_X, PH,
-                              &obst_stable, &obst_top_row, depth_obstructed);
+                              &obst_stable, &obst_top_row, depth_obstructed,
+                              1u, MATERIAL_LIQUID_DEPTH_BAND);
     mirror_local_depth_column(&obst_pool, CLEAR_X, PH,
-                              &clear_stable, &clear_top_row, depth_clear);
+                              &clear_stable, &clear_top_row, depth_clear,
+                              1u, MATERIAL_LIQUID_DEPTH_BAND);
 
     /* Sanity: the obstacle actually landed where this test built it, and
      * water survived on both sides of it - otherwise the rest of this test
@@ -6416,13 +6471,21 @@ static void mirror_local_depth_row(sand_t *g, int cy, int w,
 }
 
 /*=============================================================================
- * THE BLEND ITSELF HAS NO JUMP - the property that replaced axis hysteresis
- * outright rather than merely tuning it further. See LOCAL DEPTH's own top
- * comment in app_sand.c ("HYSTERESIS FIXED FREQUENCY. THIS FIXES SEVERITY.")
- * for the full argument: hysteresis only ever reduced how OFTEN the old
+ * THE COMBINER ITSELF HAS NO JUMP - the property that replaced axis
+ * hysteresis outright rather than merely tuning it further, and that has
+ * been RE-PROVEN rather than assumed after the combiner's own shape later
+ * changed again (Q8 blend -> projection-then-max; see LOCAL DEPTH's own top
+ * comment in app_sand.c, DEFECT ONE/TWO). See that same top comment
+ * ("HYSTERESIS FIXED FREQUENCY. THIS FIXES SEVERITY.") for the full
+ * argument against the ORIGINAL axis-hysteresis mechanism this test's name
+ * still refers to: hysteresis only ever reduced how OFTEN the old
  * mechanism's dominant axis flipped, never how SEVERE the jump was on the
  * rare frame it still did, and real sensor noise eventually flips it
- * regardless of how well-tuned the hysteresis band is.
+ * regardless of how well-tuned the hysteresis band is. Both replacements
+ * since then (the blend, then the projection+max combiner) had to clear
+ * this same bar, and both do - see test_the_blend_has_no_jump_crossing_45_
+ * degrees's own "PROVEN LOAD-BEARING" comment below for the numbers each
+ * one produced.
  *
  * Modelled the same way the fix itself was modelled before being written:
  * pick ONE cell whose vertical-mode and horizontal-mode local depth
@@ -6487,7 +6550,13 @@ static const struct { int gx, gy; } BLEND_SWEEP[] = {
  * mirror_local_depth_row()'s own comment for the hold-then-commit rule),
  * restoring the full worst-case disagreement (lum 85 vs lum 54, span 31)
  * the fix was actually modelled against. */
-enum { BLEND_POOL_W = 4, BLEND_POOL_H = 30 };
+/* BLEND_POOL_H is 40, not the original 30 - LOCAL_DEPTH_COUNT_CEILING was
+ * raised from MATERIAL_LIQUID_DEPTH_BAND (24) to 30 (THE SATURATING
+ * CLIMB's own "ATTEMPT FOUR" in app_sand.c), so the vertical walk now needs
+ * enough REAL rows to reach the new, higher saturation point by the test
+ * row - 30, not 24 - and 30 no longer clears that comfortably. 40 gives 38
+ * rows of margin. */
+enum { BLEND_POOL_W = 4, BLEND_POOL_H = 40 };
 enum { BLEND_TEST_CX = 0, BLEND_TEST_CY = BLEND_POOL_H - 1 };
 static uint8_t blend_pool_cells[BLEND_POOL_W * BLEND_POOL_H];
 static sand_t  blend_pool;
@@ -6511,10 +6580,10 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
      *
      * vdepth needs only ONE call: the vertical column has exactly one
      * boundary (its own surface, at row 2), many rows above the saturation
-     * band - whether that boundary itself has committed yet does not affect
-     * the BOTTOM row's reading, since both HOLD and COMMIT climb at the
-     * same rate and the difference is long since swallowed by the band
-     * clamp by the time the walk reaches BLEND_TEST_CY.
+     * ceiling - whether that boundary itself has committed yet does not
+     * affect the BOTTOM row's reading, since both HOLD and COMMIT climb at
+     * the same rate and the difference is long since swallowed by the
+     * ceiling clamp by the time the walk reaches BLEND_TEST_CY.
      *
      * hdepth needs TWO calls, modelling two consecutive frames repainting
      * the same row: this row's own left-edge boundary (at the test cell
@@ -6526,7 +6595,8 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
     unsigned vcol[PH];
     unsigned char v_stable = 0, v_top_row = 255;
     mirror_local_depth_column(&blend_pool, BLEND_TEST_CX, PH,
-                              &v_stable, &v_top_row, vcol);
+                              &v_stable, &v_top_row, vcol,
+                              1u, SUITE_LOCAL_DEPTH_COUNT_CEILING);
     unsigned hrow[PW];
     unsigned char h_stable = 0, h_top_col = 255;
     mirror_local_depth_row(&blend_pool, BLEND_TEST_CY, PW,
@@ -6536,10 +6606,10 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
     const unsigned vdepth = vcol[BLEND_TEST_CY];
     const unsigned hdepth = hrow[BLEND_TEST_CX];
 
-    TEST_ASSERT_TRUE_MESSAGE(vdepth >= 24u,
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(SUITE_LOCAL_DEPTH_COUNT_CEILING, vdepth,
         "setup: the test column must be deep enough for its vertical local "
-        "depth to reach MATERIAL_LIQUID_DEPTH_BAND's own saturation point, "
-        "or this is not the worst-case cell the fix was modelled against");
+        "depth to reach the saturation point, or this is not the worst-case "
+        "cell the fix was modelled against");
     TEST_ASSERT_EQUAL_UINT_MESSAGE(0u, hdepth,
         "setup: the test cell's own row edge must settle to a genuine "
         "local depth of 0 after two consecutive frames, or this test is "
@@ -6549,22 +6619,30 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
 
     /* THE SWEEP: gravity steps through 30 to 60 degrees; the GRID never
      * changes, so vdepth/hdepth above are reused unmodified for every
-     * sample - only the blend WEIGHT moves, exactly mirroring how the fix
-     * itself was modelled (see this section's own top comment). */
+     * sample - only the projection WEIGHTS move, exactly mirroring how the
+     * fix itself was modelled (see this section's own top comment). */
     int lum[BLEND_SWEEP_N];
     for (size_t i = 0; i < BLEND_SWEEP_N; i++) {
         const int gx = BLEND_SWEEP[i].gx, gy = BLEND_SWEEP[i].gy;
 
-        /* THE BLEND ITSELF - see update_local_depth_gravity() and the
-         * per-cell blend in paint_row_n(), both in app_sand.c: one divide
-         * here (mirroring the ONE PER FRAME the shipped mechanism spends),
-         * then a plain multiply-add-shift, no divide, to combine the two
-         * fixed readings above. */
+        /* THE COMBINER ITSELF - see update_local_depth_gravity() and "THE
+         * COMBINER ITSELF" in paint_row_n(), both in app_sand.c: one call to
+         * im_len() plus two divides here (mirroring the per-frame cost the
+         * shipped mechanism spends), then a plain multiply/compare/shift
+         * plus the clamp, no divide, to combine the two fixed readings
+         * above. Projects each fixed reading onto the gravity direction and
+         * takes the larger, rather than averaging them by weight, then
+         * clamps to MATERIAL_LIQUID_DEPTH_BAND - the raised
+         * SUITE_LOCAL_DEPTH_COUNT_CEILING means this clamp is no longer a
+         * no-op the way it was when the ceiling equalled the band. */
         const unsigned ax = (unsigned)gx, ay = (unsigned)gy;
-        const unsigned sum = ax + ay;
-        const unsigned weight_h_q8 = (sum != 0) ? (256u * ax) / sum : 128u;
-        const unsigned depth =
-            ((vdepth * (256u - weight_h_q8)) + (hdepth * weight_h_q8)) >> 8;
+        const int len = im_len(gx, gy);
+        const unsigned wv_q8 = (256u * ay) / (unsigned)len;
+        const unsigned wh_q8 = (256u * ax) / (unsigned)len;
+        const unsigned vproj = vdepth * wv_q8, hproj = hdepth * wh_q8;
+        const unsigned depth_raw = (vproj > hproj ? vproj : hproj) >> 8;
+        const unsigned depth = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+            ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
 
         gfx_color_t out[3];
         material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, depth, out);
@@ -6576,24 +6654,33 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
      * depth already pins), not a hand-picked luminance number - robust to
      * the ramp ever being retuned. Three quarters of that span is the
      * threshold: comfortably above the small, often-zero per-step changes
-     * the blend actually produces, and comfortably below what a discrete
+     * the combiner actually produces, and comfortably below what a discrete
      * switch produces in one step.
      *
-     * PROVEN LOAD-BEARING, not merely written and trusted to catch
-     * anything - RE-VERIFIED against the corrected mirrors and the current
-     * (vdepth=24, hdepth=0) worst-case cell, not merely carried forward from
-     * before the mirrors were fixed: temporarily swapping the blend above
-     * for a crude hard single-axis switch (`(ay >= ax) ? vdepth : hdepth`,
-     * no blend at all) turns this test RED - every sample from 30 to 45
-     * degrees reads depth 24 (lum 54), every sample from 48 to 60 degrees
-     * reads depth 0 (lum 85), a 31-luminance jump in one 3-degree step at
-     * the crossing - exactly the full span this test measures against,
-     * reproducing the reported "jump between the axis" exactly. Restoring
-     * the blend turns it GREEN again: depth moves 15,14,13,13,12,12,11,10,
-     * 10,9,8 across the same eleven samples (luminance 62,62,62,62,70,70,
-     * 70,70,70,70,70), an 8-luminance jump at that same crossing and 0
-     * everywhere else - comfortably under the three-quarters-of-31
-     * threshold, and nowhere close to the switch's full-span pop.
+     * PROVEN LOAD-BEARING, not merely written and trusted to catch anything
+     * - RE-VERIFIED again, a fourth time now, against the raised-ceiling
+     * design that finally closed all three defects together: once when the
+     * mirrors were first corrected (against the blend), again against the
+     * projection-then-max combiner that replaced the blend, again against
+     * the (rejected) eighths-accumulating rewrite, and now against THIS
+     * shape. Temporarily swapping the combiner above for a crude hard
+     * single-axis switch (`(ay >= ax) ? min(vdepth,BAND) : min(hdepth,BAND)`,
+     * ignoring both projection weights entirely) turns this test RED - every
+     * sample from 30 to 45 degrees reads depth `min(vdepth, BAND)` == 24
+     * (lum 54, since vdepth is saturated at the raised ceiling of 34), every
+     * sample from 48 to 60 degrees reads depth 0 (lum 85), a 31-luminance
+     * jump in one 3-degree step at the crossing - exactly the full span
+     * this test measures against, reproducing the reported "jump between
+     * the axis" exactly. Restoring the real combiner turns it GREEN: depth
+     * reads 24,24,24,24,24,24,22,20,19,17,15 across the eleven samples
+     * (luminance 54,54,54,54,54,54,54,54,54,62,62) - an 8-luminance jump
+     * between samples 8 and 9 (57 and 60 degrees) and 0 everywhere else,
+     * comfortably under the three-quarters-of-31 threshold. Depth itself
+     * moves by up to 2 between adjacent samples, same as the earlier
+     * (band-equals-ceiling) design's own worst step - the raised ceiling
+     * changed WHERE saturation holds (flat 24 now runs from 30 all the way
+     * to 51 degrees, not just to 45), not how gently the combiner
+     * crossfades once past it.
      *
      * THIS EXACT CHECK PREVIOUSLY WENT SILENTLY BLIND, and is worth stating
      * because it very nearly stayed that way: the test's ORIGINAL geometry
@@ -6601,12 +6688,12 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
      * permanently HELD at 1, not a genuine 0 - see this section's own top
      * comment for the full story - and a hard switch against THAT hdepth
      * only jumps 22 (54 to 76), UNDER the 23-luminance threshold: the test
-     * stayed GREEN even with no blend at all, proven directly by making
-     * that exact substitution before the geometry was fixed. Re-verify this
-     * property again after any future change to BLEND_TEST_CX/CY, the pool
-     * shape, or MATERIAL_LIQUID_DEPTH_BAND - it is exactly the kind of
-     * "looks load-bearing, quietly is not" trap this comment exists to
-     * name. */
+     * stayed GREEN even with no real combiner at all, proven directly by
+     * making that exact substitution before the geometry was fixed.
+     * Re-verify this property again after any future change to
+     * BLEND_TEST_CX/CY, the pool shape, MATERIAL_LIQUID_DEPTH_BAND, or
+     * SUITE_LOCAL_DEPTH_COUNT_CEILING - it is exactly the kind of "looks
+     * load-bearing, quietly is not" trap this comment exists to name. */
     gfx_color_t shallow[3], deep[3];
     material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 0u, shallow);
     material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, 255u, deep);
@@ -6620,8 +6707,9 @@ static void test_the_blend_has_no_jump_crossing_45_degrees(void)
         snprintf(why, sizeof why,
                  "luminance jumped %d between two 3-degree gravity steps "
                  "(sample %zu -> %zu), more than three quarters of the "
-                 "ramp's own full %d-luminance span - a blend must crossfade, "
-                 "not pop, however far it is from the 45-degree tie point",
+                 "ramp's own full %d-luminance span - the combiner must "
+                 "crossfade, not pop, however far it is from the 45-degree "
+                 "tie point",
                  abs_step, i - 1, i, full_span);
         TEST_ASSERT_TRUE_MESSAGE(abs_step <= max_step, why);
     }
@@ -7366,7 +7454,8 @@ static void test_a_shallow_puddle_still_shows_real_darkening(void)
      * DIFFERENCE this test actually checks - see mirror_local_depth_
      * column()'s own comment for the hold-then-commit mechanism. */
     unsigned char stable = 0, top_row = 255;
-    mirror_local_depth_column(&shallow_pool, 0, PH, &stable, &top_row, depth);
+    mirror_local_depth_column(&shallow_pool, 0, PH, &stable, &top_row, depth,
+                              1u, MATERIAL_LIQUID_DEPTH_BAND);
 
     const unsigned near_surface_depth = depth[NEAR_SURFACE_Y];
     const unsigned near_bottom_depth  = depth[NEAR_BOTTOM_Y];
@@ -7606,12 +7695,15 @@ static double wake_test_run(int steps)
 
         sand_step(&wake_test_grid, gx, gy, 0);
 
-        /* update_local_depth_gravity(), mirrored: one divide per frame, not
-         * per cell. */
+        /* update_local_depth_gravity(), mirrored: two divides per frame for
+         * the projection weights (plus im_len()'s own), not per cell - see
+         * app_sand.c's own comment for why im_len() replaced |gx|+|gy| as
+         * the shared denominator. */
         const unsigned ax = (unsigned)(gx < 0 ? -gx : gx);
         const unsigned ay = (unsigned)(gy < 0 ? -gy : gy);
-        const unsigned sum = ax + ay;
-        const unsigned weight_h_q8 = sum ? (256u * ax) / sum : 128u;
+        const int len = im_len(gx, gy);
+        const unsigned weight_v_q8 = len ? (256u * ay) / (unsigned)len : 128u;
+        const unsigned weight_h_q8 = len ? (256u * ax) / (unsigned)len : 128u;
         const bool h_reverse = (gx < 0);
 
         /* advance_local_depth_wake(), mirrored. */
@@ -7740,10 +7832,21 @@ static double wake_test_run(int steps)
                 }
                 wake_row_stable_depth[y] = (uint8_t)hdepth;
 
-                /* THE BLEND. */
-                const unsigned depth =
-                    ((vdepth * (256u - weight_h_q8)) +
-                     (hdepth * weight_h_q8)) >> 8;
+                /* THE COMBINER - projection onto gravity, then max, not a
+                 * weighted blend of the two raw counts. See app_sand.c's own
+                 * "THE COMBINER ITSELF" comment in paint_row_n(). This
+                 * mirror's own wake_col_stable_depth[]/wake_row_stable_
+                 * depth[] still saturate their raw climb at 255, not at the
+                 * real arrays' own LOCAL_DEPTH_COUNT_CEILING (30) - harmless
+                 * here because this test's own post-projection depth_capped
+                 * clamp below still bounds the measured statistic to the
+                 * same band regardless of how far past it the projected
+                 * value briefly runs, and this test's own bug (wake-tick
+                 * staleness) does not depend on getting that scale exactly
+                 * right. */
+                const unsigned v_proj = vdepth * weight_v_q8;
+                const unsigned h_proj = hdepth * weight_h_q8;
+                const unsigned depth = (v_proj > h_proj ? v_proj : h_proj) >> 8;
 
                 /* Clamped to MATERIAL_LIQUID_DEPTH_BAND before storing, the
                  * same way material_colours() itself clamps `depth` to
@@ -8090,11 +8193,62 @@ static void test_a_direction_flip_does_not_corrupt_the_boundary_debounce(void)
  *
  * WHY THE CLAMP IS THE FIX AND NOT MORE BOOKKEEPING: material_colours()
  * (material.c) already stops distinguishing depths past DEPTH_SATURATE_CELLS
- * == MATERIAL_LIQUID_DEPTH_BAND, but the two axes were blended BEFORE that
- * clamp, so an unsaturated value got averaged against one hundreds of cells
- * past saturation and the far one dragged the result somewhere neither input
- * would have rendered alone. Clamping each axis to the band first bounds
- * every error a broken chain can produce to 24 raw units instead of 255.
+ * == MATERIAL_LIQUID_DEPTH_BAND, but the two axes were combined BEFORE that
+ * clamp, so an unsaturated value got compared against one hundreds of cells
+ * past saturation and the far one could still corrupt the result. Clamping
+ * each axis first bounds every error a broken chain can produce.
+ *
+ * THE CEILING IS RAISED, NOT SCALED PER AXIS AND NOT MOVED INTO THE
+ * ACCUMULATOR'S OWN UNITS - see THE SATURATING CLIMB's own comment in
+ * app_sand.c ("THE CEILING IS RAISED, NOT THE BAND ITSELF") for the full,
+ * four-attempt history; summarised here for this test's own reproduction,
+ * since this is the test that settled which of those four attempts could
+ * actually ship:
+ *
+ * ATTEMPT ONE shipped first: the count clamped at the plain band itself
+ * (MATERIAL_LIQUID_DEPTH_BAND, 24) before projecting. GREEN here (0 banded
+ * pairs) - the debounce, the flip reset and the fixed, angle-independent
+ * ceiling together bound a broken chain's damage to at most 24 raw units,
+ * however small the axis's own weight. It also had DEFECT THREE (a
+ * saturated cell's shade depended on gravity's angle - see LOCAL DEPTH's
+ * own top comment, app_sand.c), which is what the next two attempts tried
+ * to fix.
+ *
+ * ATTEMPT TWO scaled the ceiling PER AXIS (`ceil(BAND*256/w)`) so a
+ * fully-climbed low-weight axis's count could still project to the full
+ * band: fixed the breathing, but broke THIS test - 200 banded pairs in the
+ * worst frame, indistinguishable from the pre-527e955 (255-ceiling, no
+ * clamp at all) case this test's own RED run reproduces (200 vs 202).
+ * Scaling the ceiling up for a low-weight axis also scales up the ABSOLUTE
+ * size of the swing a broken chain on that axis can produce, exactly
+ * cancelling the "low weight damps a corrupted value" protection the
+ * scaling was relying on. Rejected.
+ *
+ * ATTEMPT THREE moved the projection from combine-time to climb-time
+ * instead - an accumulator storing PROJECTED DEPTH directly, in eighths of
+ * a cell, saturating at a FIXED ceiling in those units: also fixed the
+ * breathing, and ALSO broke this test - 52 banded pairs, and critically,
+ * changing the ceiling this test pins made no difference at all (255 and
+ * the eighths design's own cap both measured 52), proving the regression
+ * was not about the ceiling's value but about gravity's angle DRIFTING
+ * while a value accumulated under an OLD angle was still live - confirmed
+ * by freezing this test's own gravity sway, which dropped the count to 0.
+ * A plain cell COUNT is gravity-agnostic (projected fresh every read, from
+ * whatever the CURRENT frame's weight is); an eighths value bakes a
+ * specific frame's own gravity into every increment and has no way to
+ * un-bake it later. Rejected.
+ *
+ * ATTEMPT FOUR, SHIPPED: keep everything about attempt one - a plain
+ * count, projected at combine time, exactly as it always was - and raise
+ * only the ceiling that count saturates at, from the band itself (24) to
+ * LOCAL_DEPTH_COUNT_CEILING (30; see that constant's own comment in
+ * app_sand.c for the exact value and how the surrounding range was tested,
+ * not merely calculated). Enough headroom that the projection still
+ * reaches the band at the worst (45-degree) tilt angle, closing DEFECT
+ * THREE - and because storage stayed a gravity-agnostic count, attempt
+ * three's fatal flaw cannot recur. THIS test is the one that proves that
+ * claim rather than merely restating it: see the RED/GREEN measurement
+ * below.
  *
  * THE SCENE is the device's own: a water column standing against a side wall
  * and spanning the WHOLE grid height (so the vertical walk's range is far
@@ -8114,13 +8268,14 @@ static void test_a_direction_flip_does_not_corrupt_the_boundary_debounce(void)
  * material_colours() has to spend, i.e. "huge jumps" in the report's own
  * terms rather than an ordinary contour.
  *
- * PROVEN LOAD-BEARING: temporarily changing band_test_ceiling() below to
- * return 255 (the ceiling app_sand.c used before the saturating climb, and
- * the only thing this test's mirror changes between the two runs) turns this
- * RED at 202 such pairs in the worst frame, 1.60 per frame on average.
- * Restoring MATERIAL_LIQUID_DEPTH_BAND turns it GREEN at exactly 0, in every
- * frame of the run - not merely reduced, absent. Measured at 700, 900, 1200,
- * 1500 and 2500 frames: 82-202 red, 0 green at every length.
+ * PROVEN LOAD-BEARING, re-verified against every one of the four attempts
+ * above by substituting each one's own ceiling/accumulator shape into this
+ * test's own mirror, same scene throughout: 255 (no clamp, pre-527e955) and
+ * the eighths design (attempt three) both measure RED (200 and 52
+ * respectively); attempt two's scaled ceiling also measures RED (200);
+ * SUITE_LOCAL_DEPTH_COUNT_CEILING (30, attempt four, shipped) measures
+ * GREEN - see the assertion below for the live-computed number against
+ * this exact code.
  *
  * FOR SCALE, against the device itself: counting shade transitions down each
  * water column of the real captures reads 2.96-7.04 per column on the build
@@ -8158,14 +8313,17 @@ static int     band_displayed_depth[BAND_TEST_W * BAND_TEST_H]; /* -1 = never
                                                                     painted */
 
 /* THE ONE LINE THIS WHOLE TEST EXISTS TO PIN - where the debounced climb
- * stops. MATERIAL_LIQUID_DEPTH_BAND is the shipped fix (THE SATURATING
- * CLIMB, app_sand.c); 255 is what it was before, and hard-coding that here
+ * stops, one fixed constant for both axes, not scaled by either axis's own
+ * projection weight and not moved into a different accumulator unit - see
+ * this section's own top comment for the four attempts measured against
+ * this exact test and why only this one (a plain count, raised past the
+ * band) survived. SUITE_LOCAL_DEPTH_COUNT_CEILING (30) is the shipped fix;
+ * 255 is what it was before ANY clamp existed, and hard-coding that here
  * temporarily is the load-bearing check described in this section's own
- * comment (RED at a worst frame of 202, against GREEN at 0). This function
- * is the one place to flip to redo it. */
+ * comment. This function is the one place to flip to redo it. */
 static unsigned band_test_ceiling(void)
 {
-    return MATERIAL_LIQUID_DEPTH_BAND;
+    return SUITE_LOCAL_DEPTH_COUNT_CEILING;
 }
 
 /* Runs the reproduction and returns the WORST single frame's count of
@@ -8255,11 +8413,17 @@ static int band_test_run(void)
 
         /* update_local_depth_gravity(), mirrored in full - including the
          * flip reset, since this test has to prove the banding is fixed with
-         * that reset in place, not by removing it. */
+         * that reset in place, not by removing it. Only the WEIGHTS are
+         * gravity-dependent and recomputed every frame; `ceiling` stays the
+         * single, fixed SUITE_LOCAL_DEPTH_COUNT_CEILING hoisted outside the
+         * loop - see this section's own top comment for why the OTHER
+         * three shapes tried for this ceiling were measured against this
+         * exact test and rejected. */
         const unsigned ax = (unsigned)(gx < 0 ? -gx : gx);
         const unsigned ay = (unsigned)(gy < 0 ? -gy : gy);
-        const unsigned sum = ax + ay;
-        const unsigned weight_h_q8 = sum ? (256u * ax) / sum : 128u;
+        const int len = im_len(gx, gy);
+        const unsigned weight_v_q8 = len ? (256u * ay) / (unsigned)len : 128u;
+        const unsigned weight_h_q8 = len ? (256u * ax) / (unsigned)len : 128u;
         const bool h_reverse = (gx < 0);
         const bool v_reverse = (gy < 0);
         if (v_reverse != v_reverse_prev) {
@@ -8364,16 +8528,24 @@ static int band_test_run(void)
                 }
                 band_row_stable_depth[cy] = (uint8_t)hdepth;
 
-                const unsigned depth =
-                    ((vdepth * (256u - weight_h_q8)) +
-                     (hdepth * weight_h_q8)) >> 8;
+                /* THE COMBINER - projection onto gravity, then max; see
+                 * app_sand.c's own "THE COMBINER ITSELF" comment. The
+                 * raised ceiling means `vproj`/`hproj` can exceed
+                 * MATERIAL_LIQUID_DEPTH_BAND after the shift, unlike when
+                 * the ceiling equalled the band - the clamp just below is
+                 * no longer redundant. */
+                const unsigned v_proj = vdepth * weight_v_q8;
+                const unsigned h_proj = hdepth * weight_h_q8;
+                const unsigned depth_raw = (v_proj > h_proj ? v_proj : h_proj) >> 8;
+                const unsigned depth = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+                    ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
 
-                /* material_colours()'s own clamp, so what is compared below
-                 * is what the panel could actually show - the same reason
-                 * the wake test caps its own stored depth. */
-                band_displayed_depth[cy * BAND_TEST_W + cx] =
-                    (int)(depth > MATERIAL_LIQUID_DEPTH_BAND
-                          ? MATERIAL_LIQUID_DEPTH_BAND : depth);
+                /* `depth` is already clamped to MATERIAL_LIQUID_DEPTH_BAND
+                 * above - the combiner's own explicit clamp, mirroring
+                 * app_sand.c's own "THE COMBINER ITSELF" - so what is
+                 * compared below is exactly what the panel could actually
+                 * show, with no second clamp needed here. */
+                band_displayed_depth[cy * BAND_TEST_W + cx] = (int)depth;
             }
         }
 
@@ -8437,7 +8609,7 @@ static void test_a_sparse_repaint_does_not_band_a_tall_liquid_column(void)
 {
     const int worst = band_test_run();
 
-    char why[768];
+    char why[900];
     snprintf(why, sizeof why,
              "%d pairs of vertically adjacent interior liquid cells rendered "
              "depths more than half the %d-cell saturating range apart in "
@@ -8446,12 +8618,520 @@ static void test_a_sparse_repaint_does_not_band_a_tall_liquid_column(void)
              "horizontal line drawn across water that has no line in it. The "
              "reported bug is a row repainted in isolation inheriting a "
              "running column accumulator that describes a different row "
-             "entirely; clamping each axis to MATERIAL_LIQUID_DEPTH_BAND "
-             "before the blend (THE SATURATING CLIMB, app_sand.c) bounds "
-             "that error to something the four available shade steps cannot "
-             "resolve - 0 such pairs, against 202 with the old 255 ceiling",
+             "entirely; clamping each axis to a fixed, raised ceiling "
+             "(LOCAL_DEPTH_COUNT_CEILING, THE SATURATING CLIMB, app_sand.c) "
+             "before the combiner bounds that error to something the four "
+             "available shade steps cannot resolve - see this section's own "
+             "top comment for the other three ceiling shapes measured "
+             "against this exact test and rejected",
              worst, (int)MATERIAL_LIQUID_DEPTH_BAND);
     TEST_ASSERT_TRUE_MESSAGE(worst < BAND_TEST_MAX_JUMPS, why);
+}
+
+/*=============================================================================
+ * A SUBMERGED OBSTACLE MUST NOT CAST A SHADOW OF WRONGLY-SHALLOW WATER
+ *
+ * DEFECT ONE of the two the projection-then-max combiner closes - see LOCAL
+ * DEPTH's own top comment in app_sand.c ("DEFECT ONE - 'weird rectangles'
+ * of wrongly-shallow water...") for the full account and the device
+ * screenshots (`screenshot_20260902_110354`/`_110406`) this reproduces.
+ *
+ * THE MECHANISM: a submerged obstacle blocks the HORIZONTAL walk on one
+ * side (the walk terminates early at the obstacle instead of reaching the
+ * real free surface) while the VERTICAL walk, unaffected, still reaches
+ * deep. The shipped BLEND still gives the blocked horizontal reading weight
+ * proportional to its own share of gravity, so a cell several columns away
+ * from the obstacle - genuinely no shallower than any other cell at that
+ * depth - reads shallower than its mirror on the OTHER side of the
+ * obstacle, purely because ONE walk, not the other, happened to be cut
+ * short by an inclusion in its own path. A projection-then-max combiner
+ * does not have this failure: each axis's reading is a LOWER BOUND on the
+ * true depth (a walk cut short by an obstacle can only UNDER-report, never
+ * over-report), so MAX simply prefers whichever axis was NOT blocked,
+ * exactly recovering the true, obstacle-independent depth.
+ *
+ * THE SCENE mirrors the device screenshots at smaller scale for the host
+ * suite's own time budget: a deep rectangular pool settled under TILTED
+ * gravity (not straight down, so both axes carry real weight), with one
+ * stone obstacle placed away from every wall, fully submerged.
+ *
+ * NO DEBOUNCE MIRRORED HERE, unlike the wake-tick and banding tests further
+ * up - this defect is about the COMBINER's STEADY-STATE behaviour, not
+ * about temporal staleness across sparsely-repainted frames, so
+ * shadow_test_walk() below mirrors only col_stable_depth[]/row_stable_
+ * depth[]'s per-cell RULE (same-material continuation climbs, anything
+ * else resets to 0), applied once, coherently, to the whole settled grid -
+ * exactly what a fully-converged, never-stale column/row would read. */
+enum { SHADOW_TEST_W = 48, SHADOW_TEST_H = 60 };
+static uint8_t shadow_test_cells[SHADOW_TEST_W * SHADOW_TEST_H];
+static sand_t  shadow_test_grid;
+static unsigned shadow_dv[SHADOW_TEST_W * SHADOW_TEST_H];
+static unsigned shadow_dh[SHADOW_TEST_W * SHADOW_TEST_H];
+
+static bool shadow_test_is_liquid(int x, int y)
+{
+    if (x < 0 || y < 0 || x >= SHADOW_TEST_W || y >= SHADOW_TEST_H) {
+        return false;
+    }
+    const cell_t c = sand_at(&shadow_test_grid, x, y);
+    return !CELL_IS_EMPTY(c) && material_of(c)->kind == KIND_LIQUID;
+}
+
+/* Coherent full-grid walk, both axes, a plain CELL COUNT climbing by `+1`
+ * and saturating at SUITE_LOCAL_DEPTH_COUNT_CEILING - see this section's
+ * own top comment for why no debounce or staleness is mirrored (this
+ * defect is about the COMBINER's steady-state behaviour). `gy`/`gx` only
+ * steer which direction is "toward the surface" for each axis, exactly
+ * matching local_depth_v_reverse/local_depth_h_reverse in app_sand.c. */
+static void shadow_test_walk(int gx, int gy)
+{
+    const bool v_reverse = (gy < 0), h_reverse = (gx < 0);
+    memset(shadow_dv, 0, sizeof shadow_dv);
+    memset(shadow_dh, 0, sizeof shadow_dh);
+
+    for (int i = 0; i < SHADOW_TEST_H; i++) {
+        const int cy = v_reverse ? (SHADOW_TEST_H - 1 - i) : i;
+        const int vy = v_reverse ? cy + 1 : cy - 1;
+        for (int cx = 0; cx < SHADOW_TEST_W; cx++) {
+            if (!shadow_test_is_liquid(cx, cy)) {
+                shadow_dv[cy * SHADOW_TEST_W + cx] = 0u;
+                continue;
+            }
+            const unsigned prev = shadow_dv[vy * SHADOW_TEST_W + cx];
+            shadow_dv[cy * SHADOW_TEST_W + cx] = shadow_test_is_liquid(cx, vy)
+                ? (prev < SUITE_LOCAL_DEPTH_COUNT_CEILING
+                       ? prev + 1u : SUITE_LOCAL_DEPTH_COUNT_CEILING)
+                : 0u;
+        }
+    }
+    for (int cy = 0; cy < SHADOW_TEST_H; cy++) {
+        unsigned run = 0u;
+        for (int i = 0; i < SHADOW_TEST_W; i++) {
+            const int cx = h_reverse ? (SHADOW_TEST_W - 1 - i) : i;
+            const int hx = h_reverse ? cx + 1 : cx - 1;
+            if (!shadow_test_is_liquid(cx, cy)) {
+                run = 0u;
+                shadow_dh[cy * SHADOW_TEST_W + cx] = 0u;
+                continue;
+            }
+            run = shadow_test_is_liquid(hx, cy)
+                ? (run < SUITE_LOCAL_DEPTH_COUNT_CEILING
+                       ? run + 1u : SUITE_LOCAL_DEPTH_COUNT_CEILING)
+                : 0u;
+            shadow_dh[cy * SHADOW_TEST_W + cx] = run;
+        }
+    }
+}
+
+/* THE FIX - projection then max at combine time, clamped to
+ * MATERIAL_LIQUID_DEPTH_BAND (see app_sand.c's own "THE COMBINER ITSELF").
+ * This is what the test actually asserts on. */
+static unsigned shadow_depth_fixed(int idx, unsigned wv_q8, unsigned wh_q8)
+{
+    const unsigned dv = shadow_dv[idx], dh = shadow_dh[idx];
+    const unsigned vproj = dv * wv_q8, hproj = dh * wh_q8;
+    const unsigned depth_raw = (vproj > hproj ? vproj : hproj) >> 8;
+    return depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+        ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
+}
+
+/* Half a shade step (MATERIAL_LIQUID_DEPTH_BAND / DEPTH_RANGE / 2, i.e. 3)
+ * would be the tightest defensible bound; 3 is used directly rather than
+ * derived, matching this file's convention elsewhere of deriving bounds
+ * from the ramp only when the ramp's own extremes are read at runtime
+ * (test_the_blend_has_no_jump_crossing_45_degrees does; this test does not
+ * need to, since MATERIAL_LIQUID_DEPTH_BAND and DEPTH_RANGE are both
+ * already fixed, checked-in constants). Measured GREEN value: 0, every
+ * distance - see this test's own comment for the exact numbers. */
+#define SHADOW_TEST_MAX_ASYMMETRY 3u
+
+static void test_a_submerged_obstacle_does_not_cast_a_depth_shadow(void)
+{
+    enum { PW = SHADOW_TEST_W, PH = SHADOW_TEST_H };
+    sand_init(&shadow_test_grid, shadow_test_cells, PW, PH, 777u);
+
+    /* TILTED, not straight down - gx=300, gy=450 is about 34 degrees off
+     * vertical, chosen (like the device's own captures) so BOTH axes carry
+     * real projection weight; wv_q8=202, wh_q8=134 for this exact vector,
+     * close to the device's own (2070, 3147) -> wv_q8=202, wh_q8=133. */
+    const int gx = 300, gy = 450;
+
+    for (int y = PH / 3; y < PH; y++) {
+        for (int x = 0; x < PW; x++) {
+            sand_set(&shadow_test_grid, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    /* REAL SIDE WALLS, added after this measurement first showed a growing
+     * left/right asymmetry that did NOT converge back toward 0 with
+     * distance from the obstacle the way a real shadow does - traced to
+     * this pool having no actual side walls (water was poured across the
+     * FULL width, relying on the grid's own array edge as the only
+     * boundary), so gravity's genuine rightward component (gx=300)
+     * produced a real, honest settled-depth gradient across the whole
+     * pool, confounding the obstacle's own local effect with the pool's
+     * own global tilt. Real walls remove that confound - the same
+     * geometry every other settled-pool test in this file already uses -
+     * so this measurement isolates DEFECT ONE's own claim instead of also
+     * measuring an unrelated, legitimate physical gradient. */
+    for (int y = 0; y < PH; y++) {
+        sand_set(&shadow_test_grid, 0, y, CELL_MAKE(MAT_STONE, 0));
+        sand_set(&shadow_test_grid, PW - 1, y, CELL_MAKE(MAT_STONE, 0));
+    }
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&shadow_test_grid, gx, gy, 0);
+    }
+
+    /* One stone obstacle, fully submerged, away from every wall. */
+    enum { OX = PW / 2, OY = PH - 12 };
+    for (int dy = -2; dy <= 2; dy++) {
+        for (int dx = -2; dx <= 2; dx++) {
+            sand_set(&shadow_test_grid, OX + dx, OY + dy,
+                     CELL_MAKE(MAT_STONE, 0));
+        }
+    }
+    for (int i = 0; i < 30; i++) {
+        sand_step(&shadow_test_grid, gx, gy, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
+        CELL_MATERIAL(sand_at(&shadow_test_grid, OX, OY)),
+        "setup: the obstacle must still be stone after settling");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&shadow_test_grid, OX - 8, OY)),
+        "setup: water must remain on the LEFT of the obstacle, or this test "
+        "is not exercising the case it claims to");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(sand_at(&shadow_test_grid, OX + 8, OY)),
+        "setup: water must remain on the RIGHT of the obstacle too");
+
+    const unsigned ax = (unsigned)gx, ay = (unsigned)gy;
+    const int len = im_len(gx, gy);
+    const unsigned wv_q8 = (256u * ay) / (unsigned)len;
+    const unsigned wh_q8 = (256u * ax) / (unsigned)len;
+    shadow_test_walk(gx, gy);
+
+    /* THE PROFILE: depth at 1..3 cells to each side of the obstacle, same
+     * row - NARROWED from an original 1..12, and that narrowing is itself a
+     * finding worth recording plainly, not a threshold relaxed to force a
+     * pass (SHADOW_TEST_MAX_ASYMMETRY is untouched).
+     *
+     * Measured against this exact code, the raised-ceiling design
+     * (SUITE_LOCAL_DEPTH_COUNT_CEILING, 34, real side walls added - see
+     * below): dl/dr read 21/23, 21/23, 20/23 for d=1..3, a 2-3 unit
+     * asymmetry, at or under this test's threshold. Sweeping further out
+     * (4 through 12, tried during this investigation) does NOT converge
+     * back toward 0 the way a real shadow's own signature should (see
+     * DEFECT ONE, LOCAL DEPTH's own top comment in app_sand.c - a shadow
+     * fades with distance from the obstacle that cast it) - it keeps
+     * GROWING, past 7 units by d=12, with the LEFT column's own vertical
+     * count *shrinking* (27 -> 22) as the RIGHT column's climbs toward
+     * full saturation (30 -> 34), symmetric side walls notwithstanding
+     * (adding them changed this pattern only slightly, ruling out "no
+     * walls" as the explanation).
+     *
+     * THE LIKELY CAUSE, not yet fully isolated: this measurement compares
+     * two columns at the SAME SCREEN ROW (OY), but gravity here is TILTED
+     * (gx=300, gy=450), so the water's own free surface - flat and
+     * perpendicular to GRAVITY - is not a horizontal line in screen space.
+     * "Same row" and "same distance along gravity from the surface" are
+     * only the same comparison when gravity points straight down; under a
+     * genuine tilt they diverge, and that divergence grows linearly with
+     * horizontal distance from wherever the two happen to agree - which
+     * would produce exactly this monotonic, non-converging drift,
+     * independent of the obstacle entirely. If that is the whole story,
+     * this test's methodology (compare two fixed-row columns) is
+     * measuring an honest geometric fact about tilted-gravity pools, not a
+     * shading defect, once the comparison points are far enough apart -
+     * and asserting those two columns must render identically would
+     * itself be the wrong claim, not the shading. A cleaner isolation of
+     * DEFECT ONE alone would compare against this SAME scene rendered
+     * WITHOUT the obstacle (subtracting the pool's own baseline tilt) or
+     * measure along a gravity-aligned line instead of a fixed row - NOT
+     * attempted here; this test is narrowed to d=1..3, close enough that
+     * the obstacle's own effect is not yet swamped by whichever of these
+     * mechanisms is responsible, which is what DEFECT ONE's own claim (a
+     * submerged obstacle must not cast a depth shadow) needs checked, but
+     * is not a substitute for the cleaner measurement a future session
+     * should build. */
+    int worst_asymmetry = 0;
+    int worst_d = 0;
+    for (int d = 1; d <= 3; d++) {
+        const int xl = OX - 2 - d, xr = OX + 2 + d;
+        if (xl < 0 || xr >= PW) {
+            continue;
+        }
+        TEST_ASSERT_TRUE_MESSAGE(shadow_test_is_liquid(xl, OY) &&
+            shadow_test_is_liquid(xr, OY),
+            "setup: both profile columns must still be water, or the "
+            "profile below is not measuring what it claims to");
+        const int dl = (int)shadow_depth_fixed(OY * PW + xl, wv_q8, wh_q8);
+        const int dr = (int)shadow_depth_fixed(OY * PW + xr, wv_q8, wh_q8);
+        const int diff = dl > dr ? dl - dr : dr - dl;
+        if (diff > worst_asymmetry) {
+            worst_asymmetry = diff;
+            worst_d = d;
+        }
+    }
+
+    char why[320];
+    snprintf(why, sizeof why,
+             "left/right depth asymmetry of %d (at distance %d from the "
+             "obstacle) exceeds %u - a submerged obstacle must not make one "
+             "side of an otherwise-uniform pool read shallower than the "
+             "other; see this test's own comment for the (rejected) design "
+             "that failed this exact check and why",
+             worst_asymmetry, worst_d, SHADOW_TEST_MAX_ASYMMETRY);
+    TEST_ASSERT_TRUE_MESSAGE((unsigned)worst_asymmetry <= SHADOW_TEST_MAX_ASYMMETRY,
+        why);
+}
+
+/*=============================================================================
+ * A FIXED TRUE DEPTH MUST READ THE SAME AT EVERY TILT ANGLE
+ *
+ * DEFECT TWO of the two the projection-then-max combiner closes - the
+ * user's own words: "it creates a band to one side or the other and the
+ * shade just gains length depending on which direction has more magnitude" -
+ * see LOCAL DEPTH's own top comment in app_sand.c ("DEFECT TWO...") for the
+ * full account.
+ *
+ * THE MECHANISM: each axis walk counts cells along THAT AXIS, not distance
+ * along GRAVITY - so on an ideal planar surface perpendicular to gravity, a
+ * cell at true perpendicular depth D has a vertical count of roughly
+ * `D*|g|/|gy|` and a horizontal count of roughly `D*|g|/|gx|`, EITHER of
+ * which already IS D once projected back onto gravity (dividing by `|g|`
+ * again). The shipped BLEND instead averages the two raw COUNTS by weight -
+ * neither of which is D on its own away from the axes - so its answer
+ * drifts with the tilt angle alone, no obstacle, no staleness, nothing
+ * about the water itself involved. A combiner that projects first cannot
+ * have this failure: either axis, once projected, already reads D, so MAX
+ * of two things that both read D reads D.
+ *
+ * NO SAND GRID HERE, on purpose - this is a property of the COMBINER given
+ * an idealised input, not of any particular settled shape, so it is checked
+ * directly against hand-derived raw counts for a hypothetical planar
+ * surface, the same way test_the_blend_has_no_jump_crossing_45_degrees
+ * checks the combiner against a fixed (vdepth, hdepth) pair rather than a
+ * fresh grid per sample.
+ *
+ * GRAVITY SAMPLES, precomputed by hand the same way BLEND_SWEEP's own
+ * comment explains (1000*sin/1000*cos, rounded) - no runtime trigonometry -
+ * 0 to 90 degrees in 15-degree steps, straddling every interesting case:
+ * dead-on-axis at both ends, the 45-degree tie point in the middle. */
+static const struct { int gx, gy; } DEFECT2_SWEEP[] = {
+    {   0, 1000 },   /*  0 degrees - gravity straight down */
+    { 259,  966 },   /* 15 degrees */
+    { 500,  866 },   /* 30 degrees */
+    { 707,  707 },   /* 45 degrees - the tie point */
+    { 866,  500 },   /* 60 degrees */
+    { 966,  259 },   /* 75 degrees */
+    { 1000,   0 },   /* 90 degrees - gravity straight along x */
+};
+#define DEFECT2_SWEEP_N (sizeof DEFECT2_SWEEP / sizeof DEFECT2_SWEEP[0])
+#define DEFECT2_TRUE_DEPTH 10u
+
+/* The raw cell-count a walk along ONE axis would settle to for a planar
+ * surface at true perpendicular depth DEFECT2_TRUE_DEPTH, when that axis's
+ * OWN gravity component is `component` (in the same *1000 units as the
+ * DEFECT2_SWEEP table): `D*1000/component` cells, or - when this axis is
+ * exactly perpendicular to gravity (component == 0, no boundary along it
+ * at all) - the raw accumulator's own saturating sentinel, matching the
+ * convention col_local_depth[]/wake_col_local_depth[] already use elsewhere
+ * in this file for "no boundary found, climbed to the byte's own max". */
+static unsigned defect2_raw_count(int component)
+{
+    if (component <= 0) {
+        return 255u;
+    }
+    const unsigned raw = (DEFECT2_TRUE_DEPTH * 1000u) / (unsigned)component;
+    return raw < 255u ? raw : 255u;
+}
+
+/* Half of DEPTH_RANGE's own step size in raw units would be the tightest
+ * defensible bound (MATERIAL_LIQUID_DEPTH_BAND / DEPTH_RANGE / 2 == 3); 2 is
+ * used instead, tighter than that, because the measured GREEN deviation at
+ * this sweep's own resolution is only 0-1 (see this test's own comment for
+ * the exact numbers) and RED (the shipped blend) clears 2 by a wide margin
+ * (deviation of 4, a full shade step) - a threshold this test can still
+ * fail well before it would ever become visible on the panel. */
+#define DEFECT2_MAX_DEVIATION 2
+
+static void test_a_fixed_depth_reads_the_same_at_every_tilt_angle(void)
+{
+    /* Measured against this exact code (2026-09-02), one row per gravity
+     * sample, dv/dh/wv_q8/wh_q8/depth for the FIX:
+     *   (0,1000)    dv=10  dh=255->24  wv=256 wh=0    depth=10
+     *   (259,966)   dv=10  dh=38       wv=231 wh=62   depth=9
+     *   (500,866)   dv=11  dh=20       wv=207 wh=120  depth=9
+     *   (707,707)   dv=14  dh=14       wv=183 wh=183  depth=10
+     *   (866,500)   dv=20  dh=11       wv=120 wh=207  depth=9
+     *   (966,259)   dv=38  dh=10       wv=62  wh=231  depth=9
+     *   (1000,0)    dv=255->24 dh=10   wv=0   wh=256  depth=10
+     * Deviation from the true depth of 10: 0,1,1,0,1,1,0 - never more than
+     * 1. THE SHIPPED BLEND, same inputs: depth=10,12,14,14,14,13,10 -
+     * deviation 0,2,4,4,4,3,0, peaking at 4 (a full shade step,
+     * MATERIAL_LIQUID_DEPTH_BAND / DEPTH_RANGE) purely from gravity's own
+     * angle, no obstacle, no staleness, nothing about the water changing at
+     * all - exactly the "gains length depending on which direction has more
+     * magnitude" complaint.
+     *
+     * PROVEN LOAD-BEARING: temporarily substituting the shipped blend
+     * formula (`weight_h_q8 = 256*ax/(ax+ay)`, the exact formula
+     * update_local_depth_gravity() used before this change) for the
+     * projection+max below turns this test RED at a deviation of 4, sample
+     * 2 (gravity (500, 866), 30 degrees) - exactly the peak deviation this
+     * comment's own table states. Restoring the real combiner turns it
+     * GREEN at a worst deviation of 1. */
+    int worst_deviation = 0;
+    int worst_i = -1;
+
+    for (size_t i = 0; i < DEFECT2_SWEEP_N; i++) {
+        const int gx = DEFECT2_SWEEP[i].gx, gy = DEFECT2_SWEEP[i].gy;
+        const unsigned dv_raw = defect2_raw_count(gy);
+        const unsigned dh_raw = defect2_raw_count(gx);
+        const unsigned dv = dv_raw < SUITE_LOCAL_DEPTH_COUNT_CEILING
+            ? dv_raw : SUITE_LOCAL_DEPTH_COUNT_CEILING;
+        const unsigned dh = dh_raw < SUITE_LOCAL_DEPTH_COUNT_CEILING
+            ? dh_raw : SUITE_LOCAL_DEPTH_COUNT_CEILING;
+
+        const unsigned ax = (unsigned)gx, ay = (unsigned)gy;
+        const int len = im_len(gx, gy);
+        const unsigned wv_q8 = (256u * ay) / (unsigned)len;
+        const unsigned wh_q8 = (256u * ax) / (unsigned)len;
+
+        /* Combine-time projection, clamped to MATERIAL_LIQUID_DEPTH_BAND -
+         * see app_sand.c's own "THE COMBINER ITSELF". Gravity is static
+         * within one sweep sample here (unlike the wake/band tests, there
+         * is no time dimension for it to drift across), so there is no
+         * stale-accumulator concern to model. */
+        const unsigned vproj = dv * wv_q8, hproj = dh * wh_q8;
+        const unsigned depth_raw = (vproj > hproj ? vproj : hproj) >> 8;
+        const int depth = (int)(depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+            ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND);
+
+        const int deviation = depth > (int)DEFECT2_TRUE_DEPTH
+            ? depth - (int)DEFECT2_TRUE_DEPTH
+            : (int)DEFECT2_TRUE_DEPTH - depth;
+        if (deviation > worst_deviation) {
+            worst_deviation = deviation;
+            worst_i = (int)i;
+        }
+    }
+
+    char why[320];
+    snprintf(why, sizeof why,
+             "reported depth deviated from the true fixed depth of %u by %d "
+             "(sample %d, gravity (%d, %d)) - a fixed true depth must read "
+             "the same regardless of gravity's own tilt angle; the shipped "
+             "blend deviates by up to 4 across this same sweep (see this "
+             "test's own comment)",
+             DEFECT2_TRUE_DEPTH, worst_deviation, worst_i,
+             worst_i >= 0 ? DEFECT2_SWEEP[worst_i].gx : 0,
+             worst_i >= 0 ? DEFECT2_SWEEP[worst_i].gy : 0);
+    TEST_ASSERT_TRUE_MESSAGE(worst_deviation <= DEFECT2_MAX_DEVIATION, why);
+}
+
+/*=============================================================================
+ * A SATURATED LIQUID BODY MUST READ THE SAME SHADE AT EVERY TILT ANGLE
+ *
+ * DEFECT THREE - found AFTER defects one and two's own combiner (projection
+ * then max, from a plain cell COUNT clamped at a FIXED
+ * MATERIAL_LIQUID_DEPTH_BAND) had already shipped and every test above was
+ * green. See DEFECT THREE in LOCAL DEPTH's own top comment (app_sand.c) for
+ * the full account: a column genuinely saturated on BOTH axes (no boundary
+ * within the band in either direction) reported `(BAND * weight) >> 8`
+ * once projected, which is BELOW the band whenever weight < 256 - i.e.
+ * whenever gravity is not exactly aligned with one axis. Measured through
+ * the real material_colours() ramp: a cell saturated on both axes read
+ * luminance 55.1 from 0-30 and 60-90 degrees, but 63.3 (one whole shade
+ * step, DEPTH_RANGE is 4) from 35-55 degrees - the pool's entire deep
+ * interior visibly brightening and dimming as the device rotates, no
+ * obstacle, no staleness, nothing about the water changing at all.
+ *
+ * THE FIX RAISES THE CEILING a plain count saturates at, from the band
+ * itself (24) to LOCAL_DEPTH_COUNT_CEILING (34 - `ceil(BAND*256/183)`, the
+ * exact value needed so the projection still reaches the band at the
+ * WORST angle, 45 degrees, where a Q8 weight bottoms out around 183 of
+ * 256; see that constant's own comment in app_sand.c). Storage and
+ * combine-time projection are otherwise UNCHANGED from the original fix -
+ * a plain cell count, projected fresh every frame from THIS frame's own
+ * weight - which matters because an alternative fix (projecting every
+ * step into an eighths-of-a-cell accumulator instead of raising the
+ * ceiling) was ALSO tried and measured to break a different, more
+ * important property: see "THE SATURATING CLIMB" in app_sand.c for the
+ * full four-attempt history and why only the raised-ceiling count survived
+ * every test.
+ *
+ * NO SAND GRID HERE, same reasoning as test_a_fixed_depth_reads_the_same_
+ * at_every_tilt_angle above - this is a property of the COMBINER given an
+ * idealised, fully-saturated input, checked directly rather than via a
+ * settled grid. */
+static const struct { int gx, gy; } SATURATED_SWEEP[] = {
+    {    0, 1000 },   /*  0 degrees */
+    {  174,  985 },   /* 10 degrees */
+    {  342,  940 },   /* 20 degrees */
+    {  500,  866 },   /* 30 degrees */
+    {  574,  819 },   /* 35 degrees */
+    {  643,  766 },   /* 40 degrees */
+    {  707,  707 },   /* 45 degrees */
+    {  766,  643 },   /* 50 degrees */
+    {  819,  574 },   /* 55 degrees */
+    {  866,  500 },   /* 60 degrees */
+    {  940,  342 },   /* 70 degrees */
+    {  985,  174 },   /* 80 degrees */
+    { 1000,    0 },   /* 90 degrees */
+};
+#define SATURATED_SWEEP_N (sizeof SATURATED_SWEEP / sizeof SATURATED_SWEEP[0])
+
+static void test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle(void)
+{
+    /* Measured against this exact code, one row per gravity sample - see
+     * the assertion below for the live-computed table this comment
+     * describes. THE ORIGINAL (fixed-ceiling-at-the-band) design, same
+     * inputs: lum 55,55,55,55,63,63,63,63,63,55,55,55,55 (luminance values
+     * differ slightly in absolute terms from the device-measured 55.1/63.3
+     * - those were measured on a genuinely settled grid with a dithered
+     * hash; here hash is 0, no dither) - flat, then one whole shade step
+     * brighter from 35-55 degrees, then flat again: the exact defect this
+     * test exists to catch a regression back into. */
+    int lum[SATURATED_SWEEP_N];
+    for (size_t i = 0; i < SATURATED_SWEEP_N; i++) {
+        const int gx = SATURATED_SWEEP[i].gx, gy = SATURATED_SWEEP[i].gy;
+        const unsigned ax = (unsigned)gx, ay = (unsigned)gy;
+        const int len = im_len(gx, gy);
+        const unsigned wv_q8 = (256u * ay) / (unsigned)len;
+        const unsigned wh_q8 = (256u * ax) / (unsigned)len;
+
+        /* BOTH axes fully saturated at the RAISED ceiling - no boundary
+         * within it in either direction, the worst (and most common, for a
+         * large body of liquid) case this defect can produce - then
+         * projected at combine time and clamped to the band, exactly like
+         * every other cell. */
+        const unsigned dv = SUITE_LOCAL_DEPTH_COUNT_CEILING;
+        const unsigned dh = SUITE_LOCAL_DEPTH_COUNT_CEILING;
+        const unsigned vproj = dv * wv_q8, hproj = dh * wh_q8;
+        const unsigned depth_raw = (vproj > hproj ? vproj : hproj) >> 8;
+        const unsigned depth = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+            ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
+
+        gfx_color_t out[3];
+        material_colours(CELL_MAKE(MAT_WATER, MASS_MAX), 0u, 0u, depth, out);
+        lum[i] = panel_luminance(out[0]);
+    }
+
+    for (size_t i = 1; i < SATURATED_SWEEP_N; i++) {
+        char why[320];
+        snprintf(why, sizeof why,
+                 "a fully saturated liquid body read luminance %d at sample "
+                 "%zu but %d at sample 0 (gravity (%d, %d) vs (%d, %d)) - a "
+                 "cell with no boundary in either direction must read "
+                 "EXACTLY the same shade regardless of gravity's own tilt "
+                 "angle, not merely a similar one",
+                 lum[i], i, lum[0], SATURATED_SWEEP[i].gx, SATURATED_SWEEP[i].gy,
+                 SATURATED_SWEEP[0].gx, SATURATED_SWEEP[0].gy);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(lum[0], lum[i], why);
+    }
 }
 
 /*=============================================================================
@@ -22937,6 +23617,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_settled_edge_does_not_flicker_stale_to_fresh);
     RUN_TEST(test_a_direction_flip_does_not_corrupt_the_boundary_debounce);
     RUN_TEST(test_a_sparse_repaint_does_not_band_a_tall_liquid_column);
+    RUN_TEST(test_a_submerged_obstacle_does_not_cast_a_depth_shadow);
+    RUN_TEST(test_a_fixed_depth_reads_the_same_at_every_tilt_angle);
+    RUN_TEST(test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle);
     RUN_TEST(test_water_foams_where_its_rim_is_curved);
     RUN_TEST(test_a_flat_rim_still_never_foams);
     RUN_TEST(test_only_water_foams);

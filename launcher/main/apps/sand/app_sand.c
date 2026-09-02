@@ -57,10 +57,11 @@
 #include "sand.h"
 #include "sand_ui.h"
 #include "tilt.h"
-#include "util/intmath.h"   /* im_abs() - see update_local_depth_gravity()
-                             * below, which turns gravity's own |gx|/|gy|
-                             * ratio into the vertical/horizontal blend
-                             * weight LOCAL DEPTH's own comment describes */
+#include "util/intmath.h"   /* im_abs(), im_len() - see
+                             * update_local_depth_gravity() below, which
+                             * projects gravity's own direction into the
+                             * vertical/horizontal weights LOCAL DEPTH's own
+                             * comment describes */
 
 static const char *TAG = "sand";
 
@@ -1104,16 +1105,145 @@ static uint32_t foam_elapsed_ms;
  * left to pop, however gravity moves. Both the vertical-mode depth and the
  * horizontal-mode depth are now computed for EVERY liquid cell, EVERY
  * frame, unconditionally - no flag, no "which regime am I in" state of any
- * kind - and BLENDED, weighted by gravity's own |gx|/|gy| ratio. Gravity
- * itself becomes the sole, continuous input to that weight: there is no
- * separate boolean state that can ever fall out of step with it, which is
- * the "single source of truth" the report above asked for. Modelled before
- * writing this: at the SAME worst-case cell (the 11-cell disagreement
- * above), stepping gravity from 30 to 60 degrees in 3-degree increments,
- * the blended value moves by at most ONE index step per 3 degrees of tilt
- * across the entire sweep - a crossfade, not a jump. See suite_sand.c's
- * test proving this load-bearing (red against a reintroduced hard
- * single-axis switch, green against the blend actually shipped here).
+ * kind - and COMBINED. Gravity itself becomes the sole, continuous input to
+ * that combination: there is no separate boolean state that can ever fall
+ * out of step with it, which is the "single source of truth" the report
+ * above asked for.
+ *
+ * THIS SHIPPED FIRST AS A BLEND - a plain Q8 crossfade, `(vdepth*(256-w) +
+ * hdepth*w) >> 8` with `w = 256|gx|/(|gx|+|gy|)` - and stayed that shape
+ * through the debounce fix below, THE SATURATING CLIMB's own clamp, and the
+ * direction-flip reset, all still exactly as the rest of this comment
+ * describes them. Modelled before writing THAT version: at the SAME
+ * worst-case cell (the 11-cell disagreement above), stepping gravity from 30
+ * to 60 degrees in 3-degree increments, the blended value moved by at most
+ * ONE index step per 3 degrees of tilt across the sweep - a crossfade, not a
+ * jump.
+ *
+ * IT IS NOT WHAT SHIPS NOW. Reported from the device, again, against the
+ * blend itself this time rather than against the axis choice it replaced -
+ * two DIFFERENT defects, both caught on annotated screenshots
+ * (`screenshot_20260902_110354`/`_110406`, see their own .json sidecars for
+ * the exact tilt every number below was measured at, and app_tilt_x/
+ * app_tilt_y for the gravity this file actually saw).
+ *
+ * DEFECT ONE - "weird rectangles" of wrongly-shallow water beside every
+ * submerged obstacle, flipping which SIDE with the sign of gx: the
+ * signature of the horizontal walk, specifically, getting blocked by the
+ * obstacle while the vertical walk still reaches the real surface fine, and
+ * the BLEND still handing the blocked walk weight proportional to its own
+ * axis's share of gravity rather than zero. Measured luminance of the water
+ * beside all 5 obstacles in both device frames: 63.1 vs 55.1 (about 11
+ * cells) on the RIGHT at tilt_x=+2070, the mirror image on the LEFT at
+ * tilt_x=-2366 - exactly where a walk that looks toward the surface gets cut
+ * short by an inclusion in its own path.
+ *
+ * DEFECT TWO - the blend has no notion of a PROJECTION: each axis walk
+ * counts cells along that AXIS, not distance along GRAVITY, so blending two
+ * axis counts makes the reported depth of a cell at a fixed true
+ * perpendicular depth change with tilt angle alone, no obstacle involved at
+ * all. Modelled on an ideal planar surface perpendicular to gravity, true
+ * depth 10 cells: the blend reports 10.0, 13.2, 14.6, 14.1, 14.6, 13.2, 10.0
+ * across 0, 15, 30, 45, 60, 75, 90 degrees from vertical - up to 46%
+ * inflation from tilt alone, exactly the "it creates a band... the shade
+ * just gains length depending on which direction has more magnitude"
+ * complaint.
+ *
+ * THE FIX, replacing the blend outright rather than patching it: PROJECT
+ * each axis walk onto the gravity direction, then take the MAX of the two
+ * projections rather than a weighted average of them. See update_local_
+ * depth_gravity() and paint_row_n()'s own "THE COMBINER ITSELF" comment for
+ * the mechanism as it stands now, and why max - not a blend of the
+ * projections - is the combiner defect one actually needed: each axis walk
+ * is a LOWER BOUND on the true depth (it can terminate early at an
+ * inclusion rather than at the free surface), and max-of-lower-bounds is
+ * the tighter estimate, where averaging instead lets either blocked axis
+ * drag the result down. Re-measured on the same worst-case cell and the
+ * same 30-to-60-degree sweep the blend was originally proven against: the
+ * max combiner is still a crossfade at the 45-degree crossing, not a jump,
+ * because both projections are continuous functions of gravity's own angle
+ * and equal each other exactly at the crossing - see the re-verified
+ * "PROVEN LOAD-BEARING" block in test_the_blend_has_no_jump_crossing_45_
+ * degrees (suite_sand.c), a test that keeps its old name because it still
+ * pins the same property, even though the mechanism inside it no longer is
+ * one.
+ *
+ * DEFECT THREE - found by measurement AFTER defects one and two's own fix
+ * had already shipped and every test above was green, so worth recording as
+ * its own defect rather than folded silently into the fix history: THE
+ * FIRST SHAPE OF THIS FIX projected once, AT COMBINE TIME, from a plain
+ * CELL COUNT that saturated at a FIXED MATERIAL_LIQUID_DEPTH_BAND (24)
+ * regardless of gravity's angle - i.e. `depth = max(min(vcount,24)*wv_q8,
+ * min(hcount,24)*wh_q8) >> 8`. That fixed the shadow and the under-band
+ * tilt inflation (defects one and two), but a FULLY SATURATED cell (both
+ * counts clamped at the same 24) still reports `(24 * w) >> 8`, which is
+ * BELOW 24 whenever w < 256 - so the entire interior of a deep pool dims
+ * and brightens as the device rotates, even far from any obstacle. Measured
+ * through the real material_colours() ramp, sweeping gravity 0 to 90
+ * degrees against a cell saturated on both axes: rendered luminance reads
+ * 55.1 flat from 0-30 and 60-90 degrees, but 63.3 - one whole shade step
+ * brighter, DEPTH_RANGE is 4 - from 35-55 degrees, a global "breathing" of
+ * the pool's entire body across the exact tilt window (33.3 and 37.8
+ * degrees) the device's own two screenshots were captured at. A SCALED
+ * per-axis ceiling was tried next, to let a low-weight axis's own count
+ * climb further before clamping - it removes this breathing but was
+ * measured to reintroduce THE SATURATING CLIMB's own banding defect at
+ * full strength (see that section's own comment further down for the
+ * numbers); rejected for that reason.
+ *
+ * A SECOND DESIGN WAS TRIED AND ALSO REJECTED: project EVERY STEP instead
+ * of once at the end - col_stable_depth[]/row_stable_depth[] holding
+ * PROJECTED DEPTH DIRECTLY, in eighths of a cell, climbing by that frame's
+ * own per-step increment (0-8 eighths) instead of a flat `+1`, saturating
+ * at a FIXED ceiling in the SAME eighths units (so a fully-saturated axis
+ * reads the same value at every angle, closing the breathing completely -
+ * measured flat luminance across the full 0-90 sweep, confirmed by
+ * test_a_saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle,
+ * suite_sand.c, which still exists and still must stay flat). IT WAS
+ * REJECTED FOR A DIFFERENT, MORE FUNDAMENTAL REASON than the scaled
+ * ceiling: a plain CELL COUNT is gravity-agnostic - it means the same thing
+ * (some number of consecutive same-material cells) no matter what gravity
+ * is doing, so projecting it FRESH at combine time, every time, from
+ * whatever the CURRENT frame's own weight is, is always correct regardless
+ * of when the count was accumulated. An EIGHTHS accumulator has no such
+ * property: each increment already has a specific frame's gravity baked
+ * into it, so a value built up while gravity pointed one way carries that
+ * angle with it, uncorrected, into a later frame where gravity has since
+ * rotated - and nothing at read time can undo that, because the stale
+ * angle is not stored anywhere separately, only its effect is. That is
+ * fatal for a mechanism whose entire storage model is "values persist
+ * across frames while gravity continuously rotates" (col_stable_depth[]'s
+ * own comment above, VERTICAL DEPTH). Measured directly: test_a_sparse_
+ * repaint_does_not_band_a_tall_liquid_column (suite_sand.c) - the exact
+ * regression test THE SATURATING CLIMB's own fix exists to guard - failed
+ * again under the eighths design at 52 banded pairs (threshold 8), and
+ * critically, changing that test's own ceiling parameter between 255 (no
+ * clamp) and the eighths design's own fixed cap made NO DIFFERENCE (both
+ * measured 52) - proving the regression was not about WHERE the ceiling
+ * sat at all, but about gravity's angle drifting while stale eighths
+ * values were still live: freezing the test's own gravity sway to a fixed
+ * angle dropped the failure to 0. Rejected.
+ *
+ * THE ACTUAL FIX keeps EVERYTHING from the first (rejected) design above -
+ * col_stable_depth[]/row_stable_depth[] hold a plain CELL COUNT again,
+ * climbing by a flat `+1`, and the combiner projects AT COMBINE TIME,
+ * exactly as it did when defects one and two were first closed - and
+ * changes exactly one number: the ceiling that count saturates at.
+ * LOCAL_DEPTH_COUNT_CEILING (defined with THE SATURATING CLIMB below)
+ * replaces the plain MATERIAL_LIQUID_DEPTH_BAND the first attempt used,
+ * raised just far enough that `ceiling * min(wv_q8, wh_q8 at the worst
+ * angle) >> 8` still reaches MATERIAL_LIQUID_DEPTH_BAND even at the worst
+ * (45-degree) tilt, where a Q8 weight bottoms out around 183 of 256 - see
+ * that constant's own comment for the exact value and how it was measured,
+ * not merely calculated. Because storage is back to a gravity-agnostic
+ * COUNT, DEFECT THREE (breathing) is still closed - a saturated count now
+ * has enough headroom that its projection reaches the band at every angle
+ * - but the eighths design's fatal flaw cannot recur, because nothing
+ * about a count depends on when it was accumulated. THE COMBINER now needs
+ * an EXPLICIT clamp to MATERIAL_LIQUID_DEPTH_BAND after the max (the raised
+ * ceiling means `count * weight >> 8` can exceed the band, unlike the
+ * original 24-cap design where it never could) - see "THE COMBINER ITSELF"
+ * in paint_row_n() for where that clamp lives now.
  *
  * VERTICAL DEPTH needs a value that persists ACROSS paint_row_n() CALLS - a
  * column's vertical depth depends on the row above (or below) it, painted
@@ -1155,8 +1285,8 @@ static uint32_t foam_elapsed_ms;
  * call again. row_stable_depth[] below (the horizontal counterpart to
  * col_stable_depth[], keyed by ROW instead of column) is that memory. It
  * ALSO always runs now, walked in the direction matching gx's OWN sign,
- * independent of whether horizontal ends up mattering to the blend this
- * frame.
+ * independent of whether horizontal ends up mattering to the combined
+ * result this frame.
  *
  * WHICH WAY A ROW OR COLUMN SCAN HAS TO GO, so that "the neighbour toward
  * the surface" is always the one already processed: ascending for the
@@ -1209,15 +1339,53 @@ static uint32_t foam_elapsed_ms;
  * frame left there) cannot happen when the array is never skipped in the
  * first place. */
 
-/* This frame's blend weight for the HORIZONTAL depth, in Q8 (0 = pure
- * vertical, 256 = pure horizontal), and which way each of the two
- * independent scans has to run so "the neighbour toward the surface" is
- * always the one already processed - descending when that axis's OWN
- * gravity component is negative (gravity up for the vertical scan, gravity
- * left for the horizontal one), ascending otherwise. See LOCAL DEPTH's own
- * comment above for the full mechanism these feed, and
- * update_local_depth_gravity() below for where they are set, once a
- * frame. */
+/* THIS FRAME'S PROJECTION WEIGHTS, in Q8 - how much of the VERTICAL walk's
+ * raw COUNT and how much of the HORIZONTAL walk's raw COUNT each represents
+ * of a distance measured along the gravity vector itself (0 = "this axis is
+ * perpendicular to gravity, contributes nothing", 256 = "this axis IS
+ * gravity, its raw count already is the distance"). `wv_q8 =
+ * 256|gy|/im_len(gx,gy)`, `wh_q8 = 256|gx|/im_len(gx,gy)` - see
+ * update_local_depth_gravity() below for where they are set, once a frame,
+ * and LOCAL DEPTH's own top comment for DEFECT TWO, the tilt-scale bug a
+ * plain blend of two axis COUNTS produced and this projection closes.
+ *
+ * PROJECTED AT COMBINE TIME, deliberately, not baked into the climb itself -
+ * see LOCAL DEPTH's own top comment for why an EIGHTHS accumulator (project
+ * every step, store the result) was tried and rejected: it broke the
+ * gravity-agnostic property a plain cell COUNT has, which is load-bearing
+ * for THE SATURATING CLIMB's own protection below. col_stable_depth[]/
+ * row_stable_depth[] hold a COUNT and nothing else; these weights are read
+ * fresh, from THIS frame's own gravity, every time that count is projected
+ * - never stored alongside it.
+ *
+ * NOTE THESE DO NOT NECESSARILY SUM TO 256 the way a complementary blend
+ * pair always did by construction - im_len() is only an approximate length
+ * (~1% short on the diagonal, ~8% over near a 2:1 ratio; see its own
+ * comment in intmath.h), so wv_q8 + wh_q8 drifts a little either side of
+ * 256 depending on gravity's own angle. This does not matter to the
+ * combiner below: each weight is used only to scale ITS OWN axis's count,
+ * never against the other's, so a uniform scale error in the shared
+ * denominator becomes a uniform scale error in the final depth (at most
+ * about 2 of the 24-cell band, under half of one of the four rendered shade
+ * steps - acceptable and in keeping with this file's integer-only
+ * convention, but worth stating rather than leaving unexamined).
+ *
+ * AT GX == 0 (straight-down or straight-up gravity), wv_q8 is EXACTLY 256
+ * and wh_q8 is EXACTLY 0 - im_len(0, gy) reduces to |gy| exactly (the
+ * approximation only bites when both components are nonzero) - which makes
+ * the combiner below collapse to `depth == vdepth`, identical to the
+ * mechanism's behaviour before this file had a horizontal axis at all.
+ * test_local_depth_follows_the_puddles_own_shape (suite_sand.c) depends on
+ * exactly this and is unaffected by any of this section's history for
+ * exactly this reason - see that test's own comment.
+ *
+ * ALSO SET HERE: which way each of the two independent scans has to run so
+ * "the neighbour toward the surface" is always the one already processed -
+ * descending when that axis's OWN gravity component is negative (gravity up
+ * for the vertical scan, gravity left for the horizontal one), ascending
+ * otherwise. See LOCAL DEPTH's own comment above for the full mechanism
+ * these feed. */
+static unsigned local_depth_weight_v_q8;
 static unsigned local_depth_weight_h_q8;
 static bool local_depth_v_reverse;
 static bool local_depth_h_reverse;
@@ -1390,9 +1558,41 @@ static uint8_t row_stable_depth[GRID_H_MAX];
  * value can never be a real column). */
 static uint8_t row_top_col[GRID_H_MAX];
 
+/* col_stable_depth[]/row_stable_depth[] hold a plain CELL COUNT - see LOCAL
+ * DEPTH's own top comment for why an eighths-of-a-cell accumulator was
+ * tried instead and rejected (it broke the gravity-agnostic property a
+ * count has, which THE SATURATING CLIMB's own protection below depends on).
+ * This is that count's saturation point - MATERIAL_LIQUID_DEPTH_BAND (24)
+ * itself, RAISED, not the plain band constant any more; see THE SATURATING
+ * CLIMB's own comment just below, "THE CEILING IS RAISED, NOT THE BAND
+ * ITSELF", for the exact value, the reasoning, and how it was measured
+ * rather than only calculated.
+ *
+ * 34 IS chosen so the projection reaches the band EXACTLY at the worst
+ * (45-degree) tilt angle - `ceil(MATERIAL_LIQUID_DEPTH_BAND*256/183)` - but
+ * the true FLOOR below which the breathing this fixes becomes VISIBLE
+ * again is lower, 27, and that floor depends on constants that live
+ * elsewhere and could silently drift out of sync with this one: material_
+ * colours()'s shade index is `DEPTH_RANGE*(MATERIAL_LIQUID_DEPTH_BAND -
+ * depth)/MATERIAL_LIQUID_DEPTH_BAND` (material.c, `DEPTH_RANGE` == 4,
+ * integer division), so any projected depth from 19 up to
+ * MATERIAL_LIQUID_DEPTH_BAND itself renders the IDENTICAL shade - the floor
+ * is whichever ceiling's own worst-angle projection still lands at 19
+ * (`27 * 183 >> 8 == 19`). If DEPTH_RANGE, that integer division, or the
+ * worst-angle weight (183, itself a consequence of im_len()'s own
+ * approximation) ever changes, this floor has to be RE-MEASURED against
+ * test_a_sparse_repaint_does_not_band_a_tall_liquid_column and test_a_
+ * saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle (suite_
+ * sand.c), not assumed to still be 27. 34 was kept over a smaller in-range
+ * value (down to 27) because it is the value with no shortfall at all at
+ * the worst angle, not merely one that stays under the visible-step floor -
+ * see THE SATURATING CLIMB's own comment for the measurement that confirmed
+ * 34 does not reopen the sparse-repaint regression either. */
+#define LOCAL_DEPTH_COUNT_CEILING 34u
+
 /*=============================================================================
  * THE SATURATING CLIMB - why col_stable_depth[]/row_stable_depth[] stop at
- * MATERIAL_LIQUID_DEPTH_BAND (24) and not at a byte's own 255.
+ * LOCAL_DEPTH_COUNT_CEILING and not at a byte's own 255.
  *
  * Reported from the device against the commit right above this one (882f2e7,
  * the v_reverse/h_reverse flip reset): "it's flickery even during normal
@@ -1516,12 +1716,20 @@ static uint8_t row_top_col[GRID_H_MAX];
  * symptom from the other end: this pool was not merely banded, it had lost
  * most of the depth cue the whole feature exists to provide.
  *
- * THE BLEND ITSELF IS UNTOUCHED - still the continuous Q8 crossfade, still
- * driven solely by gravity's own |gx|/|gy| ratio, with no discrete axis and
- * nothing to chatter (LOCAL DEPTH's own top comment). Clamping only brings
- * the two ENDS of that crossfade onto the scale it is interpolating for; if
- * anything it makes the crossfade gentler, since the two endpoints can no
- * longer be 231 apart.
+ * THE BLEND ITSELF IS UNTOUCHED BY THIS COMMIT - still the continuous Q8
+ * crossfade, still driven solely by gravity's own |gx|/|gy| ratio, with no
+ * discrete axis and nothing to chatter (LOCAL DEPTH's own top comment).
+ * Clamping only brings the two ENDS of that crossfade onto the scale it is
+ * interpolating for; if anything it makes the crossfade gentler, since the
+ * two endpoints can no longer be 231 apart.
+ *
+ * (THE BLEND ITSELF WAS LATER REPLACED, by a projection-then-max combiner -
+ * see LOCAL DEPTH's own top comment, DEFECT ONE/TWO, and "THE CEILING
+ * STOPPED BEING A FIXED CONSTANT" further below for why a fixed
+ * MATERIAL_LIQUID_DEPTH_BAND ceiling, correct for this commit's own blend,
+ * had to become gravity-aware once the combiner started scaling each axis
+ * down by its own projection weight. This paragraph is left as it was
+ * written, describing accurately what THIS commit did and did not touch.)
  *
  * WHAT THIS DOES NOT FIX, on purpose: a broken chain inside a pool SHALLOWER
  * than the band still renders that one row wrong, by up to its own depth.
@@ -1532,29 +1740,119 @@ static uint8_t row_top_col[GRID_H_MAX];
  * device against LOCAL DEPTH's own "do not fix this into a full-grid pass"
  * note and measured there. This closes the case the device actually
  * reported - a chain broken across a hundred rows - for the cost of a
- * different constant in four comparisons. */
+ * different constant in four comparisons.
+ *
+ * THE CEILING IS RAISED, NOT THE BAND ITSELF - LOCAL_DEPTH_COUNT_CEILING
+ * (30) is a bigger number than MATERIAL_LIQUID_DEPTH_BAND (24), but the
+ * combiner still clamps its OUTPUT to MATERIAL_LIQUID_DEPTH_BAND (see THE
+ * COMBINER ITSELF, paint_row_n() below) - the band itself, and everything
+ * downstream of it (DEPTH_SATURATE_CELLS in material.c, mark_depth_band()
+ * in sand_priv.h), is completely unchanged. Only how far the RAW COUNT is
+ * allowed to climb before that clamp moved. Three other shapes were tried
+ * first and rejected, each after being measured against THIS SECTION's own
+ * test (test_a_sparse_repaint_does_not_band_a_tall_liquid_column, suite_
+ * sand.c) - not out of caution, out of a reproduced failure each time:
+ *
+ * ATTEMPT ONE, the count clamped at the plain band itself (`depth =
+ * max(min(vcount,24)*wv_q8, min(hcount,24)*wh_q8) >> 8`, no further clamp
+ * needed since 24*256>>8 never exceeds 24): closed DEFECT ONE and DEFECT
+ * TWO (LOCAL DEPTH's own top comment) but left DEFECT THREE - a fully-
+ * saturated cell's reported depth still depended on gravity's angle,
+ * because clamping the RAW COUNT at 24 and THEN projecting by a sub-256
+ * weight always reports below 24. Device-measured as a global "breathing"
+ * of the whole pool's saturated interior, one whole shade step, across the
+ * exact tilt window the device's own screenshots were taken at - see
+ * DEFECT THREE in LOCAL DEPTH's own top comment for the numbers.
+ *
+ * ATTEMPT TWO, scaling the ceiling ITSELF per axis (`ceil(BAND*256/w)`,
+ * capped at 255) so a fully-climbed low-weight axis's count could still
+ * project to the full band: fixed the breathing, but scaling the ceiling
+ * up for a low-weight axis ALSO scales up the ABSOLUTE SIZE of the swing a
+ * BROKEN CHAIN on that axis can produce, before its own weight gets a
+ * chance to damp it down - a stale value inherited from an unrelated row
+ * (exactly the failure this section's own fix bounds) can land anywhere
+ * from 0 to the ceiling, and a ceiling chosen so `ceiling * w ~= BAND*256`
+ * keeps that swing's PROJECTED size close to the FULL BAND for every
+ * weight, including small ones - exactly cancelling the protection this
+ * section's own fixed ceiling relies on. Measured directly: substituting
+ * the scaled formula into this test's own mirror, same landscape-lock scene
+ * (gravity mostly horizontal, vertical axis low-weight and long-running -
+ * no real boundary within the grid's own height): 200 banded pairs in the
+ * worst frame, indistinguishable from this test's own RED case (255
+ * ceiling, i.e. no clamp at all). Rejected.
+ *
+ * ATTEMPT THREE, stop projecting a COUNT at combine time at all - col_
+ * stable_depth[]/row_stable_depth[] accumulating PROJECTED DEPTH directly,
+ * in eighths of a cell, climbing by that frame's own per-step increment
+ * (0-8 eighths) instead of a flat `+1`, saturating at a fixed ceiling in
+ * the SAME eighths units: closed the breathing completely (a saturated
+ * axis reads the identical value at every angle, by construction) but was
+ * REJECTED for a more fundamental reason than attempt two's: a plain cell
+ * COUNT is gravity-agnostic (it means the same thing regardless of when it
+ * was accumulated), so projecting it fresh at combine time is always
+ * correct; an eighths value bakes a specific frame's own gravity into every
+ * increment, so a value built up under an OLD angle carries that angle,
+ * uncorrected, into a LATER frame where gravity has since rotated. Measured
+ * directly against this exact section's own test: 52 banded pairs in the
+ * worst frame (threshold 8), and critically, changing the test's ceiling
+ * parameter between 255 and the eighths design's own cap made NO
+ * DIFFERENCE (both measured 52) - proving the regression was about
+ * gravity's angle DRIFTING while stale values were still live, not about
+ * where the ceiling sat; freezing the test's own gravity sway to a fixed
+ * angle dropped the failure to 0, confirming it. Rejected.
+ *
+ * ATTEMPT FOUR, SHIPPED: keep everything about attempt one - col_stable_
+ * depth[]/row_stable_depth[] hold a plain CELL COUNT again, climbing by a
+ * flat `+1`, projected at COMBINE TIME exactly as before - and change
+ * exactly one number: raise the ceiling that count saturates at, from the
+ * band itself (24) to LOCAL_DEPTH_COUNT_CEILING (34), enough headroom that
+ * `ceiling * w >> 8` still reaches the band even at the WORST angle (45
+ * degrees, where a Q8 weight bottoms out around 183 of 256 for either
+ * axis - `ceil(24*256/183) == 34`, and `34 * 183 >> 8 == 24` exactly; see
+ * this constant's own comment for the exact value chosen and how the
+ * range it was tested against was measured, not merely calculated from
+ * that one number in isolation). Because
+ * storage stayed a gravity-agnostic COUNT, attempt three's fatal flaw
+ * cannot recur - nothing about a count depends on when it was accumulated
+ * - while the raised headroom closes attempt one's breathing the same way
+ * attempt two tried to, without attempt two's own regression, because the
+ * ceiling is FIXED (not scaled per axis, so it cannot inflate a stale
+ * swing's absolute size the way a scaled ceiling did). THE COMBINER now
+ * needs an EXPLICIT clamp to MATERIAL_LIQUID_DEPTH_BAND after the max (the
+ * raised ceiling means `count * weight >> 8` CAN exceed the band now,
+ * unlike attempt one's design where it never could) - see THE COMBINER
+ * ITSELF in paint_row_n() for where that clamp lives. */
 
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
- * frame's own local-depth blend, not last frame's, and working out the
- * blend weight and both scan directions once here is what keeps
- * paint_row_n() itself down to one multiply-add-shift per cell, no divide,
- * for LOCAL DEPTH's own comment above to budget against. */
+ * frame's own local-depth projection weights, not last frame's, and working
+ * out the weights and both scan directions once here is what keeps
+ * paint_row_n() itself down to two multiplies, a compare and a shift (plus
+ * the clamp) per cell, no divide, for LOCAL DEPTH's own comment above to
+ * budget against. */
 static void update_local_depth_gravity(int gx, int gy)
 {
     const int ax = im_abs(gx), ay = im_abs(gy);
 
-    /* ONE DIVIDE PER FRAME, not per cell - the same budget class
+    /* TWO DIVIDES PER FRAME, not per cell - the same budget class
      * build_xflow() (sand.c) already spends on its own per-frame q_q8, and
      * the class material_set_gravity()'s own setup already spends
-     * elsewhere in this app. At gx == gy == 0 (flat, or free fall) there is
-     * no gravity direction for either depth to mean anything against, so
-     * the weight is an arbitrary, harmless 128 (an even split) rather than
-     * a division by zero - nothing meaningfully "settles" with no gravity
-     * direction anyway, so it does not matter which way this tie is
-     * broken. */
-    const unsigned sum = (unsigned)(ax + ay);
-    local_depth_weight_h_q8 = (sum != 0) ? (256u * (unsigned)ax) / sum : 128u;
+     * elsewhere in this app; material_set_gravity() calls im_len() too, on
+     * the same (gx, gy), so this is the second such call this frame, not
+     * the first (im_len() has no state of its own to share between them,
+     * so there is nothing to hoist). At gx == gy == 0 (flat, or free fall)
+     * there is no gravity direction for either projection to mean anything
+     * against, so both weights fall back to an arbitrary, harmless 128
+     * (half of a full-weight axis) rather than a division by zero -
+     * nothing meaningfully "settles" with no gravity direction anyway, so
+     * it does not matter which way this tie is broken; see the "wv_q8 ==
+     * 256, wh_q8 == 0" invariant local_depth_weight_v_q8/_h_q8's own
+     * comment relies on above for straight-down gravity - that invariant
+     * only has to hold when len is nonzero, which this fallback is not
+     * pretending to satisfy. */
+    const int len = im_len(gx, gy);
+    local_depth_weight_v_q8 = (len != 0) ? (256u * (unsigned)ay) / (unsigned)len : 128u;
+    local_depth_weight_h_q8 = (len != 0) ? (256u * (unsigned)ax) / (unsigned)len : 128u;
 
     /* Two independent sign checks, one per axis - not one flag gating
      * whichever axis used to be dominant - because both scans run every
@@ -1664,13 +1962,14 @@ static void update_local_depth_gravity(int gx, int gy)
  * PIXELS get repainted). A block can wake for physics, find nothing
  * actually needs to move, and go back to sleep without ever touching
  * dirty_rows[]. Ordinary hand wobble drifts gravity continuously - smoothed
- * by the tilt filter but never perfectly still - so local_depth_weight_h_q8
- * above keeps changing, frame after frame, with no cell in a settled pool
- * ever moving to earn that pool's rows a repaint. The result: a sleeping
- * block's blend is stuck at whatever it was the last time something nearby
- * genuinely disturbed it, while a neighbouring block still being redrawn
- * for an unrelated reason repaints with the CURRENT blend - a hard,
- * rectangular seam between "stale" and "fresh" exactly where one block's
+ * by the tilt filter but never perfectly still - so local_depth_weight_v_q8/
+ * _h_q8 above keep changing, frame after frame, with no cell in a settled
+ * pool ever moving to earn that pool's rows a repaint. The result: a
+ * sleeping block's displayed depth is stuck at whatever it was the last
+ * time something nearby genuinely disturbed it, while a neighbouring block
+ * still being redrawn for an unrelated reason repaints with the CURRENT
+ * combiner output - a hard, rectangular seam between "stale" and "fresh"
+ * exactly where one block's
  * sleep boundary meets another's, in place of the smooth gradient a
  * puddle's own surface should read as.
  *
@@ -1874,7 +2173,7 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             : material_grain_hash(cx, cy);
 
         /* THE PER-CELL COST OF LOCAL DEPTH, in full, now that BOTH walks run
-         * unconditionally and get BLENDED: two comparisons against a
+         * unconditionally and get COMBINED: two comparisons against a
          * neighbour's material id (one per axis), one array read+write for
          * the vertical hold-then-commit debounce (col_stable_depth[]/
          * col_top_row[] - see that array's own comment above this function
@@ -1882,27 +2181,29 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * of it had and the dead second array an even earlier version
          * carried alongside it for nothing), one more array read+write for
          * the horizontal debounce (row_stable_depth[]/row_top_col[] - see
-         * that array's own comment for the mechanism, transposed onto
-         * rows), plus the blend itself - one multiply, one add, one shift,
-         * no divide (the only divide is update_local_depth_gravity()'s,
-         * once a frame, not here). Computed for every cell, liquid or not -
-         * the same as the old depth_acc was - because material_colours() is
-         * the only consumer that ever reads the result (only for a liquid's
+         * that array's own comment for the mechanism, transposed onto rows),
+         * plus the combiner itself - two multiplies, one compare, one shift,
+         * plus the clamp (one more compare), no divide (the only divides are
+         * update_local_depth_gravity()'s, once a frame, not here) - see THE
+         * COMBINER ITSELF's own comment below for the exact arithmetic and
+         * why the clamp is new. Computed for every cell, liquid or not - the
+         * same as the old depth_acc was - because material_colours() is the
+         * only consumer that ever reads the result (only for a liquid's
          * interior), and a branch to skip this for non-liquids would cost
          * more than the comparisons it would save. */
         const bool v_same_material = (v_toward_surface != NULL) &&
             (CELL_MATERIAL(v_toward_surface[cx]) == CELL_MATERIAL(row[cx]));
 
-        /* THE VERTICAL HOLD-THEN-COMMIT DEBOUNCE ITSELF, feeding the BLEND
-         * below directly - see col_stable_depth[]'s own comment above this
-         * function for the full mechanism (and the two bugs an earlier
-         * version of this block had, found from exactly this kind of
-         * trace). There is no freeze branch here any more: the diagonal
+        /* THE VERTICAL HOLD-THEN-COMMIT DEBOUNCE ITSELF, feeding THE
+         * COMBINER below directly - see col_stable_depth[]'s own comment
+         * above this function for the full mechanism (and the two bugs an
+         * earlier version of this block had, found from exactly this kind
+         * of trace). There is no freeze branch here any more: the diagonal
          * dead zone and the axis Schmitt trigger it used to protect are
-         * both gone (LOCAL DEPTH's own top comment) - the blend never has a
-         * "wrong regime" reading for a freeze to guard against, so this is
-         * exactly main's original debounce, just no longer wrapped in a
-         * branch that could suspend it. */
+         * both gone (LOCAL DEPTH's own top comment) - the combiner never
+         * has a "wrong regime" reading for a freeze to guard against, so
+         * this is exactly main's original debounce, just no longer wrapped
+         * in a branch that could suspend it. */
         unsigned vdepth;
         if (material_of(row[cx])->kind != KIND_LIQUID) {
             /* NOT a liquid cell: depth is irrelevant here - material_
@@ -1918,10 +2219,14 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
              * stopping at the SATURATION POINT rather than at a byte's own
              * 255 - see THE SATURATING CLIMB's own comment above this
              * function for why that clamp is the whole fix for the banding
-             * report. Not a boundary request either, so col_top_row[cx] is
-             * left alone here too. */
-            vdepth = col_stable_depth[cx] < MATERIAL_LIQUID_DEPTH_BAND
-                ? col_stable_depth[cx] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+             * report, why it is now LOCAL_DEPTH_COUNT_CEILING rather than
+             * the plain MATERIAL_LIQUID_DEPTH_BAND (raised to fix DEFECT
+             * THREE's breathing without the two rejected designs' own
+             * regressions), and for why it stays FIXED rather than scaling
+             * with this axis's own weight either way. Not a boundary
+             * request either, so col_top_row[cx] is left alone here too. */
+            vdepth = col_stable_depth[cx] < LOCAL_DEPTH_COUNT_CEILING
+                ? col_stable_depth[cx] + 1u : LOCAL_DEPTH_COUNT_CEILING;
         } else if (col_top_row[cx] == (uint8_t)cy) {
             /* THIS EXACT ROW asked for a reset the last time it was
              * painted too - a real, lasting boundary, not a blink.
@@ -1933,8 +2238,8 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
              * moved. HOLD: keep climbing as if nothing happened, and start
              * tracking THIS row, so it asking again next time it is
              * painted will match and commit. */
-            vdepth = col_stable_depth[cx] < MATERIAL_LIQUID_DEPTH_BAND
-                ? col_stable_depth[cx] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            vdepth = col_stable_depth[cx] < LOCAL_DEPTH_COUNT_CEILING
+                ? col_stable_depth[cx] + 1u : LOCAL_DEPTH_COUNT_CEILING;
             col_top_row[cx] = (uint8_t)cy;
         }
         col_stable_depth[cx] = (uint8_t)vdepth;
@@ -1946,9 +2251,9 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             (CELL_MATERIAL(row[h_neighbour_cx]) == CELL_MATERIAL(row[cx]));
 
         /* THE HORIZONTAL HOLD-THEN-COMMIT DEBOUNCE, transposed onto rows -
-         * feeding the BLEND below directly, exactly the same shape as the
-         * vertical block above. See row_stable_depth[]/row_top_col[]'s own
-         * comment above this function for the full mechanism and its
+         * feeding THE COMBINER below directly, exactly the same shape as
+         * the vertical block above. See row_stable_depth[]/row_top_col[]'s
+         * own comment above this function for the full mechanism and its
          * accepted limitation; this block mirrors the vertical debounce
          * block above line for line, with cy standing in for "this axis's
          * own coordinate" (cx there) and cx standing in for "the other
@@ -1961,12 +2266,13 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             hdepth = 0u;
         } else if (h_same_material) {
             /* Confirmed continuation of a liquid body - climb by one,
-             * saturating at MATERIAL_LIQUID_DEPTH_BAND for the same reason
+             * saturating at LOCAL_DEPTH_COUNT_CEILING for the same reason
              * the vertical branch above does (THE SATURATING CLIMB's own
-             * comment). Not a boundary request, so row_top_col[cy] is left
+             * comment) - fixed, not scaled by this axis's own weight
+             * either. Not a boundary request, so row_top_col[cy] is left
              * alone here too. */
-            hdepth = row_stable_depth[cy] < MATERIAL_LIQUID_DEPTH_BAND
-                ? row_stable_depth[cy] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            hdepth = row_stable_depth[cy] < LOCAL_DEPTH_COUNT_CEILING
+                ? row_stable_depth[cy] + 1u : LOCAL_DEPTH_COUNT_CEILING;
         } else if (row_top_col[cy] == (uint8_t)cx) {
             /* THIS EXACT COLUMN asked for a reset the last time THIS ROW
              * was painted too - a real, lasting boundary, not a blink.
@@ -1978,24 +2284,62 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
              * yet, or the boundary moved. HOLD: keep climbing as if nothing
              * happened, and start tracking THIS column, so it asking again
              * next time this row is painted will match and commit. */
-            hdepth = row_stable_depth[cy] < MATERIAL_LIQUID_DEPTH_BAND
-                ? row_stable_depth[cy] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
+            hdepth = row_stable_depth[cy] < LOCAL_DEPTH_COUNT_CEILING
+                ? row_stable_depth[cy] + 1u : LOCAL_DEPTH_COUNT_CEILING;
             row_top_col[cy] = (uint8_t)cx;
         }
         row_stable_depth[cy] = (uint8_t)hdepth;
 
-        /* THE BLEND ITSELF - see LOCAL DEPTH's own top comment for why a
-         * crossfade replaces a discrete switch. `local_depth_weight_h_q8`
-         * is 0-256, computed once per frame; this is the whole reason a
-         * per-cell divide is never needed: it is a fixed Q8 fraction, not a
-         * ratio recomputed here. Blends the two DEBOUNCED values, vdepth and
-         * hdepth - both now go through the same class of row/column-keyed
-         * debounce before reaching here, closing the asymmetry that used to
-         * let a single-frame horizontal blink swing straight into the
-         * blended result wherever horizontal carried real weight. */
-        const unsigned depth =
-            ((vdepth * (256u - local_depth_weight_h_q8)) +
-             (hdepth * local_depth_weight_h_q8)) >> 8;
+        /* THE COMBINER ITSELF - PROJECTS each axis's raw COUNT onto the
+         * gravity direction (multiplying by THIS FRAME'S OWN Q8 weight,
+         * local_depth_weight_v_q8/_h_q8), then takes the MAX of the two
+         * projections rather than a weighted average. See LOCAL DEPTH's own
+         * top comment for DEFECT ONE and DEFECT TWO, the device-measured
+         * shadow and tilt-scale bugs this closes, and why max - not a blend
+         * of the projections - is the combiner the fix actually needs: each
+         * axis walk is a LOWER BOUND on the true depth (it can terminate
+         * early at an inclusion rather than at the free surface), so
+         * max-of-lower-bounds is the tighter estimate, where an average
+         * instead lets either blocked axis drag the result down
+         * proportionally to its own weight - exactly the "shadow" defect
+         * one is. On an ideal planar surface both projections equal the
+         * true depth exactly, so max is also exact there, closing defect
+         * two's tilt-dependent inflation.
+         *
+         * `local_depth_weight_v_q8`/`_h_q8` are each 0-256, computed once
+         * per frame - the whole reason a per-cell divide is never needed.
+         * Shifting AFTER the max rather than shifting each product
+         * separately saves one of the two shifts the naive order would
+         * cost (right shift by a fixed amount is monotonic, so
+         * max(a,b)>>8 == max(a>>8, b>>8) for the non-negative values here) -
+         * two multiplies, one compare, one shift, plus the clamp below.
+         *
+         * AN EXPLICIT CLAMP TO MATERIAL_LIQUID_DEPTH_BAND NOW FOLLOWS THE
+         * MAX, unlike the ORIGINAL shape of this combiner (before
+         * LOCAL_DEPTH_COUNT_CEILING was raised above the band itself) - see
+         * THE SATURATING CLIMB's own comment above this function, "THE
+         * CEILING IS RAISED, NOT THE BAND ITSELF", for why: vdepth/hdepth
+         * are now bounded to [0, LOCAL_DEPTH_COUNT_CEILING], a number BIGGER
+         * than MATERIAL_LIQUID_DEPTH_BAND, specifically so a low-weight
+         * axis's projection can still reach the band at the worst tilt
+         * angle - which means a HIGH-weight axis's own projection, at the
+         * SAME raised ceiling, CAN exceed the band, and must be clamped
+         * back down here. material_colours() (material.c) also clamps
+         * `depth` to DEPTH_SATURATE_CELLS independently regardless - a
+         * second, unrelated safety net - but this clamp is no longer
+         * redundant the way it was before the ceiling was raised: without
+         * it, an unsaturated but high-weight cell could report a depth
+         * ABOVE the band, which material_colours() would still clamp for
+         * SHADING purposes but which nothing else in this file expects to
+         * see past MATERIAL_LIQUID_DEPTH_BAND (col_top_row[]/row_top_col[]
+         * store row/column indices, not depths, so this is purely about
+         * `depth` itself staying in the range every comment in this file
+         * already assumes it does). */
+        const unsigned v_proj = vdepth * local_depth_weight_v_q8;
+        const unsigned h_proj = hdepth * local_depth_weight_h_q8;
+        const unsigned depth_raw = (v_proj > h_proj ? v_proj : h_proj) >> 8;
+        const unsigned depth = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+            ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
 
         /* row_has_liquid[]'s own population point - see that array's
          * comment above paint_row_n() for the mechanism this feeds. ANY
@@ -2254,10 +2598,10 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
         }
     }
 
-    /* THE SAME MECHANISM, for a liquid interior's local-depth blend instead
-     * of a hatched material's shine - see LOCAL_DEPTH_WAKE_MS's own comment
-     * above paint_row_n() for the bug this closes (gravity drifting a
-     * settled, sleeping block's blend stale with nothing left to mark its
+    /* THE SAME MECHANISM, for a liquid interior's local depth instead of a
+     * hatched material's shine - see LOCAL_DEPTH_WAKE_MS's own comment above
+     * paint_row_n() for the bug this closes (gravity drifting a settled,
+     * sleeping block's displayed depth stale with nothing left to mark its
      * rows dirty) and why it needs the same unconditional periodic tick the
      * shine already uses. Only the rows that actually held a liquid cell
      * last time they were painted, for the same affordability reason
@@ -3544,9 +3888,10 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * reads whatever shine_ux_q8/shine_uy_q8 hold at the time it runs. */
     material_shine_direction(gx, gy, &shine_ux_q8, &shine_uy_q8);
 
-    /* The liquid interior's LOCAL DEPTH blend needs its own per-frame facts
-     * from this same gravity vector - the blend weight, and which way each
-     * of the two independent scans runs - but it is not material_set_
+    /* The liquid interior's LOCAL DEPTH combiner needs its own per-frame
+     * facts from this same gravity vector - the projection weights and
+     * which way each of the two independent scans runs - but it is not
+     * material_set_
      * gravity()'s to compute: the persistent per-column and per-row arrays
      * it feeds belong to THIS file, which owns the row-by-row paint call
      * sequence they are carried across (see col_stable_depth[]'s own
