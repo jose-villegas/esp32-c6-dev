@@ -57,10 +57,11 @@
 #include "sand.h"
 #include "sand_ui.h"
 #include "tilt.h"
-#include "util/intmath.h"   /* im_abs() - see update_local_depth_gravity()
-                             * below, which turns gravity's own |gx|/|gy|
-                             * ratio into the vertical/horizontal blend
-                             * weight LOCAL DEPTH's own comment describes */
+#include "util/intmath.h"   /* im_abs(), im_len() - see
+                             * update_local_depth_gravity() below, which
+                             * projects gravity's own direction into the
+                             * vertical/horizontal weights LOCAL DEPTH's own
+                             * comment describes */
 
 static const char *TAG = "sand";
 
@@ -1063,587 +1064,577 @@ static uint32_t foam_elapsed_ms;
  * puddle", asking, in so many words, for exactly what this is.
  *
  * LOCAL DEPTH, for a liquid cell: 0 if the neighbour one step TOWARD THE
- * SURFACE (one step in the -gravity direction) is not the SAME MATERIAL - a
- * different liquid, empty space, or solid all count as "not the same", the
- * boundary of THIS material's own body - otherwise, one more than that
- * neighbour's own local depth, clamped to 255. A puddle with a rock poking
- * through it now dips back to a small depth right where the rock breaks its
- * surface, instead of painting straight through the rock as if it were not
- * there - exactly the "follows the shape of the puddle" the second report
- * asked for. See suite_sand.c's test_local_depth_follows_the_puddles_own_
- * shape for the actual before/after comparison, run through real
- * sand_t/sand_step(), that motivated this.
+ * SURFACE is not the SAME MATERIAL - a different liquid, empty space, or
+ * solid all count as "not the same", the boundary of THIS material's own
+ * body - otherwise, one more than that neighbour's own local depth. A
+ * puddle with a rock poking through it dips back to a small depth right
+ * where the rock breaks its surface, instead of painting straight through
+ * the rock as if it were not there - "follows the shape of the puddle",
+ * exactly what the second report above asked for. See suite_sand.c's
+ * test_local_depth_follows_the_puddles_own_shape for the actual
+ * before/after comparison, run through real sand_t/sand_step(), that
+ * motivated this. THE OBSTACLE'S SHADOW THIS PRODUCES IS A KEPT, DELIBERATE
+ * FEATURE, not a bug - see "THE SHADOW MUST FOLLOW GRAVITY" below for the
+ * one requirement on it that changed.
  *
- * THIS USED TO PICK ONE DOMINANT AXIS - `|gy| >= |gx|`, with hysteresis
- * against the previous frame's own pick near the tie point - and compute
- * ONLY that axis's depth, the same single-ray idiom sand.c's build_xflow()
- * and sand_gravity_direction() use to bracket a genuinely diagonal gravity
- * for the SIMULATION's own movement. NOT ANY MORE. Reported from the
- * device, AFTER the hysteresis fix had already landed: "if i leave the
- * device near a 45 degree position i can see artifacts for both direction
- * trying to reconcile, and the jump between the axis is also quickly
- * reflected in the bands... we should have a single source of truth for
- * this vector."
+ * THIS MECHANISM HAS BEEN THROUGH FOUR SHAPES, each replacing the last after
+ * a device report the previous one could not explain away. In order:
  *
- * Hysteresis only ever reduced how OFTEN the axis flipped - it did nothing
- * about how SEVERE each flip was on the rare frame it still fired. Measured
- * directly, on an irregular pool (water with a stone island in it, settled
- * at 45 degrees): the vertical-mode depth and the horizontal-mode depth are
- * DIFFERENT QUANTITIES computed from the same grid, and they disagreed by a
- * MEAN of 3.4 cells and a MAX of 11 cells across the pool's own liquid
- * cells, worst right at the obstacle's edges. With only DEPTH_RANGE (4)
- * discrete brightness steps total, an 11-cell disagreement firing all at
- * once, across every cell near that boundary simultaneously, is a visible
- * "pop" no matter how rarely hysteresis lets it happen - and real sensor
- * noise is not perfectly bounded, so a device left sitting near 45 degrees
- * long enough will eventually see at least one flip regardless.
+ *   (1) a single dominant axis (`|gy| >= |gx|`) with hysteresis at the tie
+ *       point - replaced because hysteresis only reduced how OFTEN the axis
+ *       flipped, not how SEVERE the jump was on the rare frame it still
+ *       did ("if i leave the device near a 45 degree position i can see
+ *       artifacts for both direction trying to reconcile... we should have
+ *       a single source of truth for this vector") - measured an 11-cell
+ *       disagreement between the two axes' own readings on the same grid,
+ *       all of it landing on-screen at once whenever the flip fired;
+ *   (2) both axes computed unconditionally and BLENDED (a Q8 crossfade by
+ *       gravity's own |gx|/|gy| ratio) - fixed the chatter (nothing left to
+ *       flip) but introduced two of its own defects, a shadow beside every
+ *       submerged obstacle and a depth that "breathed" with tilt angle on a
+ *       flat surface;
+ *   (3) both axes PROJECTED onto gravity, then combined with MAX rather
+ *       than a blend - closed the shadow (a lower bound can only
+ *       under-report, so max recovers the true depth from whichever axis
+ *       was not blocked) and the tilt-inflation (a projected count already
+ *       reads the true depth on a flat surface, so max of two things that
+ *       both read it still reads it) - the full account of shapes (2) and
+ *       (3), every defect, every rejected ceiling design, and the exact
+ *       numbers behind each, is preserved in git log up to commit 3376c8e
+ *       and is NOT repeated here; read it there before proposing another
+ *       combiner-only fix, because an axis-aligned walk was ALWAYS going to
+ *       hit the wall shape (4) exists to fix, however the two readings get
+ *       combined;
+ *   (4) THIS ONE - one walk that steps ALONG GRAVITY ITSELF, replacing the
+ *       two axis-aligned walks and their combiner outright.
  *
- * HYSTERESIS FIXED FREQUENCY. THIS FIXES SEVERITY. And fixing severity
- * means frequency stops mattering at all: there is no longer a discrete
- * axis to flip between, so there is nothing left to chatter and nothing
- * left to pop, however gravity moves. Both the vertical-mode depth and the
- * horizontal-mode depth are now computed for EVERY liquid cell, EVERY
- * frame, unconditionally - no flag, no "which regime am I in" state of any
- * kind - and BLENDED, weighted by gravity's own |gx|/|gy| ratio. Gravity
- * itself becomes the sole, continuous input to that weight: there is no
- * separate boolean state that can ever fall out of step with it, which is
- * the "single source of truth" the report above asked for. Modelled before
- * writing this: at the SAME worst-case cell (the 11-cell disagreement
- * above), stepping gravity from 30 to 60 degrees in 3-degree increments,
- * the blended value moves by at most ONE index step per 3 degrees of tilt
- * across the entire sweep - a crossfade, not a jump. See suite_sand.c's
- * test proving this load-bearing (red against a reintroduced hard
- * single-axis switch, green against the blend actually shipped here).
+ * THE SHADOW MUST FOLLOW GRAVITY - the defect shape (3) could not fix
+ * because it is not a combiner defect at all. An axis-aligned walk can only
+ * ever produce an axis-aligned SHADOW: whichever axis the obstacle blocks
+ * resets to 0 and climbs back up walking straight along that axis, so the
+ * shallow region behind a submerged obstacle is always a horizontal or
+ * vertical band, never a diagonal one - no projection or combiner
+ * downstream of that walk can rotate a shape the walk itself never drew.
+ * Reported from the device after shape (3) had already shipped and closed
+ * both of its own defects: the shadow's own direction still ran straight
+ * down or straight sideways, never along the tilt. MEASURED, on a settled
+ * pool with a submerged 3x3 stone, comparing the shadow's own deficit-
+ * weighted centroid bearing against true gravity's bearing, across six
+ * tilts (SHIPPED = shape (3), the two projected-axis walks; RAY = this
+ * walk):
  *
- * VERTICAL DEPTH needs a value that persists ACROSS paint_row_n() CALLS - a
- * column's vertical depth depends on the row above (or below) it, painted
- * in a SEPARATE call - so col_stable_depth[] below (declared alongside its
- * own row-tracking array a little further down; see that array's own
- * comment for the full mechanism) is a plain file-static array, GRID_W_MAX
- * entries, the same pattern row_has_shine[] above already uses for the same
- * reason (sized for the finest quality tier; a coarser one just uses less
- * of it). It is walked UNCONDITIONALLY every row, every frame now - not
- * gated on "vertical happens to be dominant" - in the direction matching
- * gy's OWN sign, because there is no dominant axis left to gate it on.
+ *     tilt from vertical   SHIPPED bearing        RAY bearing    true gravity
+ *          33.1 deg          -90.0 (33.1 off)      -124.6 (1.5 off)   -123.1
+ *          33.3 deg          +90.0 (33.3 off)       +57.6 (1.0 off)    +56.7
+ *          37.8 deg          +90.0 (37.8 off)      +128.1 (0.2 off)   +127.8
+ *          45.0 deg          no shadow at all       +45.0 (0.0 off)    +45.0
+ *          16.7 deg          +90.0 (16.7 off)       +72.6 (0.7 off)    +73.3
+ *          73.3 deg           +0.0 (16.7 off)       +17.9 (1.2 off)    +16.7
  *
- * AN EARLIER VERSION OF THIS SPLIT THE VERTICAL WALK INTO TWO ARRAYS: a
- * raw, undebounced col_local_depth[] that a separate col_stable_depth[]
- * supposedly "rode on" as a debounced parallel. It did not, by the time
- * anyone re-checked the code against the comment describing it:
- * col_stable_depth[cx]'s own climb read only its OWN prior stored value
- * (and the v_same_material test both blocks happened to share) - never
- * col_local_depth[cx], never the value written into it. A closed loop,
- * written and read by nothing outside itself, kept alive only by comments
- * that kept describing an intent the code had stopped carrying out.
- * Removed entirely once found, along with its horizontal counterpart
- * (h_running_depth, paint_row_n() below); col_stable_depth[] is now the
- * ONLY array for the vertical case, and every comment in this section
- * describes what it actually computes rather than a two-stage design that
- * quietly stopped existing without its own comments noticing. See
- * suite_sand.c's own history at the same discovery for the matching
- * test-mirror lesson: its mirrors of this mechanism had drifted the same
- * way, for the same reason, and needed the same correction.
+ * SHIPPED's bearing is always exactly +/-90 or 0 and its error always
+ * equals the tilt angle - the axis-aligned signature stated plainly. The 45
+ * degree row shows SHIPPED with no shadow at all, not a small one: at the
+ * exact tie point both projected axes reach the true surface equally, so
+ * max() hides the shadow entirely there - which is also why the whole
+ * effect visibly appears and disappears as the device rotates through that
+ * angle, on top of never pointing the right way anywhere else. RAY is
+ * within 1.5 degrees of true gravity at every tilt tried, INCLUDING the tie
+ * point where SHIPPED loses the shadow completely.
  *
- * HORIZONTAL DEPTH needs a persisting array too, for a DIFFERENT reason
- * than the vertical case: not because it chains across separate
- * paint_row_n() calls made for DIFFERENT ROWS within one frame (it does
- * not - the neighbour toward the surface is one column over in the SAME
- * row, which one call already walks start to finish) but because the
- * hold-then-commit debounce every axis here uses needs to remember, from
- * the last time THIS ROW was painted, what it last decided - a fact that
- * has to survive until the NEXT FRAME repaints the same row, a separate
- * call again. row_stable_depth[] below (the horizontal counterpart to
- * col_stable_depth[], keyed by ROW instead of column) is that memory. It
- * ALSO always runs now, walked in the direction matching gx's OWN sign,
- * independent of whether horizontal ends up mattering to the blend this
- * frame.
+ * THE FIX: ONE walk that steps along the gravity ray by Bresenham, in place
+ * of the two axis-aligned walks - not a third combiner shape layered on top
+ * of them. Two regimes, switching at 45 degrees on `|gy| >= |gx|` exactly
+ * like shape (1)'s own dominant-axis pick once did:
  *
- * WHICH WAY A ROW OR COLUMN SCAN HAS TO GO, so that "the neighbour toward
- * the surface" is always the one already processed: ascending for the
- * vertical walk unless gy is NEGATIVE (gravity up), and ascending for the
- * horizontal walk unless gx is NEGATIVE (gravity left) - two independent
- * sign checks now, one per axis, rather than one flag gating whichever axis
- * used to be dominant. See local_depth_v_reverse/local_depth_h_reverse's
- * own comment below.
+ *   - VERTICAL-DOMINANT (`|gy| >= |gx|`): one ROW per step toward the
+ *     surface. The cell one step back along the ray from (cx, cy) is
+ *     `(cx + step, cy - vdir)`, `vdir = sign(gy)` (the real, already-
+ *     adjacent grid row `vdir` steps away - `above`/`below` below, same
+ *     pointers this file has always read for the vertical case), `step` a
+ *     PER-ROW value shared by every column in that row (gravity does not
+ *     change from one column to the next), computed fresh from `cy` alone
+ *     every time this row is painted - see "THE ROW OFFSET, WITHOUT AN
+ *     ACCUMULATOR" below for why it must be, and cannot be carried as
+ *     running state, under this file's own sparse-repaint discipline.
+ *   - HORIZONTAL-DOMINANT (`|gx| > |gy|`): the transpose - one COLUMN per
+ *     step, source cell `(cx - hdir, cy + step)`, `hdir = sign(gx)`, `step`
+ *     now a PER-CELL value (0 most cells, +/-1 wherever the ray's own
+ *     diagonal drift crosses a row boundary), walked by a plain Bresenham
+ *     accumulator reset at the start of every row - safe to reset per row
+ *     BECAUSE a row-call always processes its own full width in one pass
+ *     (see "THE HORIZONTAL WITHIN-ROW ACCUMULATOR" below), unlike the
+ *     vertical case's per-row value, which spans separate calls and needs
+ *     the closed form instead.
  *
- * ROW ORDER, SPECIFICALLY: draw_dirty_rows() below normally walks cy
- * ascending; this is safe to reverse for a gravity-up frame instead of
- * needing a trickier fix inside the depth bookkeeping itself, because
- * nothing else that loop does depends on row order - dirty_rows[cy],
- * row_run_x0/x1/n, row_has_shine[cy] and row_has_liquid[cy] are all
- * indexed by cy directly and read/written independently per row, and
- * gfx_mark_dirty() only ever unions a bounding box of (y, height) pairs
- * (dirty_mark(), gfx_dirty.h), which does not care what order the boxes
- * arrive in either - the same reasoning
- * f9679df's own commit already established still holds, unchanged; only the
- * CONDITION under which the reversal fires got simpler, since it is now
- * just "does gravity point up" with no "and is vertical dominant this
- * frame" to ask alongside it. See draw_dirty_rows() itself for where the
- * reversal actually happens, and col_stable_depth[]'s own comment below for
- * WHY the vertical walk specifically needs it - the horizontal walk does
- * not, see row_stable_depth[]'s own comment for why not.
+ * THIS IS NOT SHAPE (1) AGAIN, even though it is once more a single,
+ * discrete regime pick with a real seam at 45 degrees - the two prior
+ * rejections do not apply here, and the reason is worth stating precisely
+ * rather than assumed: shape (1)'s two sides measured DIFFERENT quantities
+ * (a plain vertical cell count and a plain horizontal cell count, related
+ * to the true depth by two different, angle-dependent factors), so a flip
+ * between them was a jump in the reported value itself, however rarely it
+ * fired. Both regimes here measure the SAME quantity - distance along the
+ * gravity ray, in cells - so a regime flip changes only HOW that quantity
+ * gets computed, not what it means; the two sides agree exactly at the
+ * 45-degree crossing by construction (both walk the same ray there), so
+ * there is no discrete jump in the reported depth to chatter on, only a
+ * discrete change in bookkeeping mechanics, reset cleanly the same way a
+ * `local_depth_v_reverse`/`local_depth_h_reverse` flip already was.
+ * Measured directly, the same 30-to-60-degree sweep test_the_blend_has_no_
+ * jump_crossing_45_degrees has used since shape (2): worst single-degree
+ * step across the crossing, SHIPPED (shape 3) 1, THIS WALK 0.
  *
- * STALE READINGS UNDER THE DIRTY-ROW OPTIMISATION ARE ACCEPTED, not a bug to
- * chase down: only dirty rows call paint_row_n() at all (draw_dirty_rows()
- * below skips any row whose dirty_rows[cy] is not set), so a column's
- * stored local depth for a row that has not repainted in a while reflects
- * whatever the puddle looked like the last time that row WAS painted, not
- * necessarily its current shape. This costs nothing extra to accept - no new
- * full-grid pass, which is the entire reason this stays cheap - and it
- * matches the precedent already established and accepted for foam's own
- * drift: only dirty rows repaint, so the animation (or, here, the depth
- * reading) shows where the water is actually moving, which is nearly
- * everywhere it is worth seeing. This was already accepted back when only
- * the vertical case existed; it now applies in exactly the same way,
- * unconditionally, to both the vertical and the horizontal walk, rather
- * than only when vertical happened to be dominant. Do not "fix" this into a
- * full-grid pass without re-deciding that trade-off on purpose.
+ * DEPTH IN CELLS IS `count * |g| / |dominant axis|`, applied ONCE, AT
+ * COMBINE TIME, to a raw STEP COUNT - not baked into the climb itself. See
+ * "THE COUNT MUST STAY A RAW COUNT" below for why: this is the one property
+ * every prior shape's own history (git log, commit 3376c8e and earlier)
+ * already proved is load-bearing, and it survives this rewrite unchanged.
  *
- * THERE IS NO AXIS TO FLIP BETWEEN FRAMES ANY MORE, and so no reset to
- * perform: col_stable_depth[] is written every frame, unconditionally, by
- * the same vertical walk regardless of what gravity's horizontal component
- * is doing, so there is no "other regime" whose stale readings could ever
- * leak in - the failure mode the old per-frame axis-flip's memset used to
- * guard against (a horizontal-dominant frame silently skipping the array
- * for many frames, then a flip back exposing whatever a long-past vertical
- * frame left there) cannot happen when the array is never skipped in the
- * first place. */
+ * STORAGE: ONE walk now needs only ONE shared pair of arrays, not two -
+ * local_depth_row_a[]/local_depth_row_b[] below (a plain double buffer,
+ * pointer-swapped at the end of every row, never copied) replace
+ * col_stable_depth[]/row_stable_depth[] together, and local_depth_top_row[]
+ * replaces col_top_row[]/row_top_col[] together. See each array's own
+ * comment for the mechanism and, for local_depth_top_row[] specifically,
+ * for why the DEBOUNCE KEY it stores means something different in each
+ * regime - a genuine finding from writing this, not a stylistic choice. */
 
-/* This frame's blend weight for the HORIZONTAL depth, in Q8 (0 = pure
- * vertical, 256 = pure horizontal), and which way each of the two
- * independent scans has to run so "the neighbour toward the surface" is
- * always the one already processed - descending when that axis's OWN
- * gravity component is negative (gravity up for the vertical scan, gravity
- * left for the horizontal one), ascending otherwise. See LOCAL DEPTH's own
- * comment above for the full mechanism these feed, and
- * update_local_depth_gravity() below for where they are set, once a
- * frame. */
-static unsigned local_depth_weight_h_q8;
+/* THIS FRAME'S SCALE, in Q8 - how many eighths... no, straight Q8 units of
+ * TRUE distance (along gravity) one raw STEP COUNT is worth, for whichever
+ * regime is active this frame: `local_depth_scale_q8 = 256 * im_len(gx, gy)
+ * / dominant_axis` (`dominant_axis` is `|gy|` when vertical-dominant, `|gx|`
+ * when horizontal-dominant) - see update_local_depth_gravity() below for
+ * where it is set, once a frame, and LOCAL DEPTH's own top comment for why
+ * a single walk along the ray needs only ONE scale, not two weights blended
+ * or maxed together.
+ *
+ * NOTE THE DIRECTION OF THIS RATIO IS THE OPPOSITE OF THE OLD BLEND/MAX
+ * DESIGN'S OWN WEIGHT - worth stating plainly, because copying the old
+ * formula's shape here silently, without re-deriving it, is exactly the
+ * mistake this file's own host-side validation caught once already (see
+ * git log for the commit this comment describes: a first draft reused the
+ * old `component / len` ratio unchanged and read a fixed 10-cell planar
+ * depth as 19 at 45 degrees). The OLD axis count walked a fixed SCREEN AXIS
+ * regardless of gravity's own angle, so recovering true depth from it meant
+ * SHRINKING the count by that axis's own share of gravity (`component /
+ * len`, always <= 256, minimised at the 45-degree tie). THIS walk already
+ * follows the gravity ray itself - each step of the count already covers
+ * `len / dominant_axis` cells of TRUE distance, not one screen cell - so
+ * recovering true depth means GROWING the count by that same ratio instead
+ * (`len / dominant_axis`, always >= 256, exactly 256 only when gravity is
+ * perfectly axis-aligned and the ray IS the screen axis). This is also
+ * WHY LOCAL_DEPTH_COUNT_CEILING NEEDS NO RAISE THIS TIME - see that
+ * constant's own comment below.
+ *
+ * PROJECTED AT COMBINE TIME, deliberately, not baked into the climb itself
+ * - see "THE COUNT MUST STAY A RAW COUNT" in LOCAL DEPTH's own top comment
+ * for why: a raw count is gravity-agnostic (means the same thing no matter
+ * when it was accumulated), so scaling it fresh, from THIS frame's own
+ * gravity, at the moment it is read, is always correct regardless of when
+ * the count was built up - the property every earlier shape of this
+ * mechanism already proved is load-bearing (git log, commit 3376c8e and
+ * earlier) and this rewrite does not get to relitigate.
+ *
+ * ALSO SET HERE: `local_depth_vertical_dominant` (which regime is active
+ * this frame, `|gy| >= |gx|`) and the two scan-direction flags this file
+ * has always needed - `local_depth_v_reverse`/`local_depth_h_reverse`,
+ * UNCHANGED in meaning from every earlier shape of this mechanism (descend
+ * instead of ascend when that axis's own gravity component is negative).
+ * Both flags now feed BOTH regimes, not one each - see LOCAL DEPTH's own
+ * top comment, "THIS IS NOT SHAPE (1) AGAIN", for why `local_depth_v_
+ * reverse` alone is also the correct row-processing order for the
+ * horizontal-dominant regime's own cross-row reads, not merely the
+ * vertical one's. */
+static unsigned local_depth_scale_q8;
+static bool local_depth_vertical_dominant;
 static bool local_depth_v_reverse;
 static bool local_depth_h_reverse;
 
-/* Last frame's local_depth_v_reverse/local_depth_h_reverse - not read by
- * paint_row_n() at all, only by update_local_depth_gravity() itself, to
- * detect the ONE frame a reversal actually happens on. See that function's
- * own comment for why a flip needs to invalidate col_stable_depth[]/col_
- * top_row[] (or row_stable_depth[]/row_top_col[]) and why "no reset needed"
- * - true for which AXIS is dominant - does not extend to this. */
+/* |gx|, |gy| for THIS frame, stashed alongside the scale above for the same
+ * reason - paint_row_n() below needs the exact integer RATIO between the
+ * two axes (not `local_depth_scale_q8`, which already divides by
+ * `im_len()`, a different quantity) to walk the vertical-dominant regime's
+ * own per-row Bresenham offset, and the horizontal-dominant regime's own
+ * within-row accumulator, without either needing gravity passed in as a
+ * parameter. See "THE ROW OFFSET, WITHOUT AN ACCUMULATOR" and "THE
+ * HORIZONTAL WITHIN-ROW ACCUMULATOR" in paint_row_n() for exactly how
+ * these two are used. */
+static unsigned local_depth_ax;
+static unsigned local_depth_ay;
+
+/* Last frame's local_depth_vertical_dominant/local_depth_v_reverse/local_
+ * depth_h_reverse - not read by paint_row_n() at all, only by update_local_
+ * depth_gravity() itself, to detect the ONE frame any of the three actually
+ * changes. See that function's own comment for why a change in ANY of them
+ * invalidates local_depth_row_a[]/local_depth_row_b[]/local_depth_top_row[]
+ * together, as one unit, rather than each flag guarding its own separate
+ * piece of state the way the two-walk design's v_reverse/h_reverse flips
+ * once did. */
+static bool local_depth_vertical_dominant_prev;
 static bool local_depth_v_reverse_prev;
 static bool local_depth_h_reverse_prev;
 
-/* THE VERTICAL LOCAL DEPTH ITSELF - a hold-then-commit debounce over an
- * unconditional column-wise climb, feeding the BLEND's vertical component
- * directly. GRID_W_MAX entries, file-static for the same cross-call-
- * persistence reason VERTICAL DEPTH's own comment above gives.
+/* THE WALK'S OWN STORAGE - a plain double buffer, GRID_W_MAX entries each,
+ * the same file-static persistence-across-calls pattern row_has_shine[]
+ * above already uses for the same reason (sized for the finest quality
+ * tier; a coarser one just uses less of it). Replaces BOTH col_stable_
+ * depth[]/row_stable_depth[] together - one walk needs one chain, not two -
+ * see LOCAL DEPTH's own top comment for why a SINGLE cx-indexed pair works
+ * for EITHER regime, not only the vertical one.
  *
- * (AN EARLIER VERSION OF THIS COMMENT described this array as "debouncing"
- * a separate raw walk, col_local_depth[], that supposedly fed it. It did
- * not: the climb below reads only its OWN prior stored value, never a raw
- * array's - see VERTICAL DEPTH's own comment above for the full story of
- * that dead array's removal. What follows describes what this array has
- * always actually computed.)
+ * `local_depth_cur_row`/`local_depth_prev_row` are pointers into these two
+ * buffers, POINTER-SWAPPED at the end of every paint_row_n() call (see that
+ * function's own tail) rather than copied - "the row painted before this
+ * one" always means whichever buffer `local_depth_prev_row` names at the
+ * moment a new row starts, and "this row's own emerging values" always
+ * means whichever buffer `local_depth_cur_row` names, however many frames
+ * apart the two calls that used them actually were under this file's own
+ * sparse-repaint discipline (STALE READINGS ARE ACCEPTED here exactly as
+ * they always have been for this mechanism - see LOCAL DEPTH's own top
+ * comment's forebears in git log for the accepted trade-off this inherits
+ * unchanged).
  *
- * Only ever accumulates through LIQUID cells
- * (`material_of(row[cx])->kind == KIND_LIQUID` gates it, see paint_row_n()
- * below) - any non-liquid cell resets it to a clean 0 rather than letting a
- * run of open air pollute the value a real boundary inherits - and a RESET
- * only commits once the SAME ROW has asked for it on two consecutive
- * painted frames, tracked by row index in col_top_row[cx], not by
- * column-chain position.
+ * VERTICAL-DOMINANT reads `local_depth_prev_row[cx + step]` - a genuinely
+ * DIFFERENT row's data, always (the source cell is one whole row away along
+ * the ray) - so the buffer this function is currently WRITING into
+ * (`local_depth_cur_row`) is never also read from during the same call;
+ * there is no read/write aliasing to worry about, and the CX scan order
+ * inside one call does not matter to this regime's own correctness (see
+ * `cx_first`/`cx_step` below for the reason those still exist anyway).
  *
- * Row-keyed on purpose: a settled pool's topmost cell blinking empty/full
- * for one frame never gets its neighbour row to ask twice from the SAME
- * row index, so it is absorbed; a genuine, lasting change (the pool
- * draining, an obstacle appearing) keeps asking from the same new row and
- * commits within one extra frame - not something a human eye can tell
- * from immediate. That "one extra frame" claim holds for a column with
- * exactly ONE reset point; see KNOWN LIMITATION below for what happens
- * with two.
- *
- * WHY draw_dirty_rows() BELOW REVERSES ROW ORDER FOR A GRAVITY-UP FRAME:
- * this array is shared across every row of the SAME column, updated once
- * per row as draw_dirty_rows() below sweeps cy across the whole grid
- * within a single frame - the climb at row cy reads whatever this same
- * array held after the PREVIOUS row painted, so "the previous row" has to
- * mean the row nearer the surface, or a dirty row far from the surface
- * reads a stale value some other, farther row left behind the last time
- * IT happened to be nearer the front of the sweep. That is exactly why the
- * reversal exists (see draw_dirty_rows()'s own comment on
- * local_depth_v_reverse for where it fires) - it is THIS array's own
- * cross-row dependency the reversal protects, nothing to do with a raw
- * walk. row_stable_depth[]/row_top_col[] below have no equivalent
- * requirement - see that array's own comment for why not.
- *
- * KNOWN LIMITATION - NOT MERELY "A FRAME'S LAG": a column with TWO
- * persistent reset points (a pool's own surface, and an obstacle poking
- * through its interior, say) has both competing for the single
- * col_top_row[cx] slot - and, traced exactly through
- * test_local_depth_follows_the_puddles_own_shape's own obstructed column
- * (surface boundary at row 2, resume-point at row 9 just below a two-cell
- * rock plug): NEITHER ever commits, not merely one lagging the other by a
- * frame. Every pass, the LATER point in scan order (row 9) ends the pass
- * holding the tracker; on every following pass, the EARLIER point (row 2)
- * is checked first, finds a mismatch (tracker says 9, not 2), holds, and
- * overwrites the tracker to 2 - so by the time row 9 is reached again in
- * that SAME pass, the tracker no longer says 9 either, and it holds too.
- * This is a permanent, deterministic oscillation once both points exist,
- * not a transient one more frame would resolve: nothing about repeating
- * the same pass again changes which point the scan visits first. In THIS
- * geometry it costs little in practice - the obstacle's own non-liquid
- * cells reset col_stable_depth[cx] to a clean 0 immediately before row 9's
- * request either way, so a permanent HOLD (climbing once from that fresh
- * 0) reads as "depth 1, forever" at that row rather than "depth 0,
- * forever" a genuine commit would give: every row below the plug reads
- * exactly one unit deeper than a true reset would show, a constant offset,
- * not a growing or unbounded error. True per-row memory would remove the
- * limitation entirely, at the cost of one byte per CELL rather than per
- * column - unaffordable on this device's heap (grid itself already costs
- * 41,216 bytes, see start_sim()'s own comment on that allocation), so this
- * is where the trade lands. See test_local_depth_follows_the_puddles_own_
- * shape's own comments in suite_sand.c for the exact traced numbers this
- * paragraph states.
- *
- * A REAL GRAVITY-REVERSAL RESET IS STILL NEEDED, and is not the same thing
- * as the competing-boundary limitation just above: when
- * local_depth_v_reverse itself flips, the row this column's boundary sits
- * at relocates (top of the column versus bottom), and the two candidate
- * rows compete forever for the single col_top_row[cx] slot in exactly the
- * way just described, holding instead of ever committing - see
- * update_local_depth_gravity()'s own comment below for the measured
- * corruption this produced and the reset that closes it. */
-static uint8_t col_stable_depth[GRID_W_MAX];
+ * HORIZONTAL-DOMINANT reads either `local_depth_cur_row[cx - hdir]` (the
+ * common case, `step == 0`: the source is the PREVIOUSLY-PROCESSED column
+ * of THIS SAME row, already written earlier in this same call's own scan -
+ * this is where the scan order set by `cx_first`/`cx_step` below actually
+ * matters) or `local_depth_prev_row[cx - hdir]` (`step != 0`: the ray
+ * crossed a row boundary at this column, so the source is the row
+ * processed immediately before this one instead). Genuinely no aliasing
+ * either way: the `cur_row` read only ever looks at an EARLIER cx in the
+ * SAME scan, never the slot about to be written this same iteration, and
+ * the `prev_row` read is a wholly separate buffer from whichever one is
+ * being written this call. Verified in a host model before this was wired
+ * in here, per this rewrite's own instructions - not assumed. */
+static uint8_t local_depth_row_a[GRID_W_MAX];
+static uint8_t local_depth_row_b[GRID_W_MAX];
+static uint8_t *local_depth_cur_row = local_depth_row_a;
+static uint8_t *local_depth_prev_row = local_depth_row_b;
 
-/* The row index of column cx's most recent boundary request, confirmed or
- * still just a one-frame candidate - see col_stable_depth[]'s own comment
- * above for the full mechanism. 255 means "nothing tracked yet" (GRID_H_MAX
- * is 224, comfortably under 255, so that value can never be a real row). */
-static uint8_t col_top_row[GRID_W_MAX];
+/* WHICH ROW local_depth_prev_row[] ACTUALLY DESCRIBES - the one fact the
+ * double buffer above never carried, and whose absence turned out to be the
+ * whole of a reported device artifact: "a brief flip of colours" on a
+ * settled pool, and "a huge spike" flipping the board to a straight
+ * orientation. LOCAL_DEPTH_NO_ROW means "nothing painted yet, or the chain
+ * was deliberately broken" (chosen outside 0..GRID_H_MAX-1 so no real row
+ * can ever collide with it, the same trick local_depth_top_row[]'s own 255
+ * uses).
+ *
+ * THE DEFECT, exactly. Every cross-row read in paint_row_n() below treats
+ * local_depth_prev_row[qx] as "the count belonging to the cell one step
+ * back along the ray, in row cy - vdir". That is only true when the row
+ * painted immediately before this one WAS row cy - vdir. draw_dirty_rows()
+ * sweeps surface-first precisely so that it usually is - but it only ever
+ * paints DIRTY rows, and LOCAL_DEPTH_WAKE_MS's own tick marks only rows
+ * that hold a LIQUID cell. So on a settled pool the sweep's FIRST row is
+ * the surface row, the (empty) row above it is never painted, and
+ * local_depth_prev_row[] still holds what the LAST row of the PREVIOUS
+ * sweep left there - the DEEPEST row of the pool, saturated at
+ * LOCAL_DEPTH_COUNT_CEILING.
+ *
+ * WHY THAT IS CATASTROPHIC RATHER THAN MERELY STALE. The surface row's
+ * source is air, so `same_material` is false and the walk drops into the
+ * hold-then-commit debounce below. A COMMIT writes 0 and all is well. A
+ * HOLD instead "keeps climbing as if nothing happened" - and climbing FROM
+ * A SATURATED COUNT means the surface itself reads fully saturated, which
+ * every row beneath it then inherits as a same-material climb. The entire
+ * body renders at maximum depth in one frame: not a shade or two out, the
+ * gradient inverted end to end. Measured, host-side, on the user's own
+ * scenario (a pool filling 40% of a 92x112 grid, settled under portrait
+ * gravity, the SIMULATION THEN FROZEN so that every displayed change is
+ * spurious by construction, gravity swept 0 to 90 degrees at one degree per
+ * frame): 841 interior cells - a quarter of the pool - crossed a full shade
+ * step in a single frame, 23 of the 24-cell band, at the first wake tick
+ * after the 45-degree regime flip. With this guard: 83, and none of them in
+ * the body of the pool (see the residual note below).
+ *
+ * WHY THE GUARD IS ON THE HOLD PATH ONLY, and not on every cross-row read.
+ * A same-material climb reading a stale count is DELIBERATE and load-
+ * bearing: a row repainted in isolation deep inside a pool inherits a value
+ * that is stale but SATURATED, which is exactly right there, and is the
+ * property test_a_sparse_repaint_does_not_band_a_tall_liquid_column pins
+ * (still 0 banded pairs). Distrusting the buffer on that path too was tried
+ * in the same harness and is strictly worse: it makes an isolated deep row
+ * re-climb from 1, which is the banding that test exists to forbid. At a
+ * BOUNDARY the stale value is not approximately right - it belongs to a
+ * different body entirely - so 0 is the only honest carry, and it is also
+ * what a coherent sweep would have produced, since the non-liquid row the
+ * chain should have started from writes 0 into every column.
+ *
+ * THE RESIDUAL 83 CELLS are a one-to-five-column strip against the left
+ * wall, where the ray leaves the grid (`qx_ok` false) and the walk restarts
+ * from 0 by construction; which rows that happens on shifts as the per-row
+ * Bresenham drift changes with the tilt. That is the wall's own shadow
+ * moving, not a chain break, and it is left alone.
+ *
+ * -2, NOT -1, and the difference is load-bearing rather than stylistic: the
+ * value this is compared against is `cy - vdir`, which ranges over
+ * [-1, grid_h] as cy sweeps [0, grid_h) with vdir either sign. -1 is
+ * therefore a REAL value that comparison can produce - the top row of the
+ * grid with gravity pointing down - so a -1 sentinel would read as "the
+ * chain is intact" for exactly the cells whose neighbour is off the top of
+ * the screen, which is precisely the surface-flood case above. -2 is
+ * outside that range at both ends. */
+#define LOCAL_DEPTH_NO_ROW (-2)
+static int local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
 
-/* THE HORIZONTAL LOCAL DEPTH ITSELF - mirrors col_stable_depth[]/
- * col_top_row[] exactly, transposed: keyed by ROW (cy) instead of column
- * (cx). What needs to persist ACROSS FRAMES for the horizontal case is
- * state keyed by THIS ROW, remembering what happened the last time this
- * same row was painted - exactly mirroring what col_top_row[cx] remembers
- * about the last time this same COLUMN was painted.
+/* THE DEBOUNCE KEY - one array now, not two, but NOT a plain merge of
+ * col_top_row[]/row_top_col[]'s own two conventions: the two regimes need
+ * DIFFERENT things stored here, and forcing one convention onto both was
+ * tried, found broken, and is worth recording precisely rather than only
+ * the working design that replaced it.
  *
- * (AN EARLIER VERSION OF THIS COMMENT described this array as debouncing a
- * separate raw walk, h_running_depth, that supposedly fed it. It did not -
- * see col_stable_depth[]'s own comment above for the matching correction on
- * the vertical side; h_running_depth was removed once this was noticed.)
+ * VERTICAL-DOMINANT keeps the OLD convention exactly: `local_depth_top_
+ * row[cx]` holds the ROW INDEX of column cx's most recent boundary
+ * request, and a reset only COMMITS once the SAME row asks for it again on
+ * a later painted frame (255 = "nothing tracked yet", chosen the same way
+ * the old arrays did - GRID_H_MAX is 224, comfortably under 255). This
+ * still works for exactly the reason it always did: `local_depth_cur_row[]`
+ * is column-indexed and a GIVEN column's own row-sweep visits that column's
+ * slot roughly once per frame (once per row painted, chained down the
+ * column across separate calls) - "the row" genuinely identifies a stable
+ * physical location for that column across frames.
  *
- * NO ROW-ORDER REVERSAL DEPENDENCY, UNLIKE col_stable_depth[] - this is the
- * one place the vertical/horizontal symmetry breaks, worth stating
- * explicitly rather than leaving a reader to assume it is needed here too.
- * col_stable_depth[cx]'s climb chains ACROSS ROWS: it is shared by every
- * row of the same column, and draw_dirty_rows() below visits those rows
- * one paint_row_n() call at a time within a single frame's sweep, so which
- * row is visited FIRST matters (see that array's own comment). row_stable_
- * depth[cy]'s climb never chains across rows at all - a single call to
- * paint_row_n() walks every column of ITS OWN row start to finish in one
- * pass, so the only ordering this array ever depends on is the CX scan
- * direction inside that one call (governed by cx_first/cx_step below,
- * already correct by construction), never which ROW draw_dirty_rows()
- * paints before which other row. draw_dirty_rows()'s row-order reversal
- * exists entirely for col_stable_depth[]'s sake; this array would read
- * identically whichever order rows happened to be visited in.
+ * HORIZONTAL-DOMINANT CANNOT REUSE THAT KEY, and this was found by testing,
+ * not reasoned out in advance: unlike the vertical case, EVERY row-call
+ * writes EVERY column's slot in local_depth_cur_row[] (a row-call always
+ * walks its own full width), so a row-indexed key compares against a
+ * DIFFERENT row's own index on almost every successive write to the same
+ * slot - a column sitting permanently beside a real wall would ask for a
+ * reset from a different `cy` on every single dirty row that touches it,
+ * so `top_row[cx] == cy` would almost never match twice, and the debounce
+ * would HOLD FOREVER instead of ever committing to a genuine, permanent
+ * boundary. Measured directly, reproducing exactly this geometry (a
+ * settled pool against a real side wall, gravity mostly horizontal): a
+ * row-indexed key left the wall-adjacent column's own reported depth stuck
+ * climbing indefinitely rather than reading near 0, the column beside a
+ * REAL, PERMANENT wall - the single most common case this debounce has to
+ * get right, not an edge case.
  *
- * Same reset rule as the vertical version: a RESET only commits once the
- * SAME ROW has asked for it from the SAME COLUMN on two consecutive painted
- * frames, tracked by column index in row_top_col[cy]. A one-frame blink of a
- * horizontal neighbour (the same class of transient col_stable_depth[] was
- * built to catch on the vertical side) is absorbed instead of swinging
- * straight into the blend, which is exactly the gap that made the diagonal
- * dead zone's removal visible as flicker in the first place: with no freeze
- * left to hide behind, this undebounced reading used to reach the screen
- * raw wherever horizontal carried real blend weight - significant well
- * before 45 degrees and growing toward 90.
+ * THE FIX FOR THIS REGIME: `local_depth_top_row[cx]` instead stores a
+ * PLAIN PENDING FLAG - any value other than 255 means "the immediately
+ * preceding write to this slot was ALSO a boundary request, not yet
+ * confirmed a second time"; 255 means "the preceding write was a genuine
+ * same-material climb, or nothing has been written yet." A reset commits
+ * once this flag is already pending, and STAYS pending (re-armed) on every
+ * subsequent boundary request too - so a permanent wall commits to 0 on
+ * every row that touches it after the first, while a single stray blink
+ * (one row's own grain-settling noise misreading a boundary that is not
+ * really there) still gets held rather than trusted immediately, and the
+ * flag is explicitly cleared back to 255 on the very next confirmed
+ * same-material climb so a long-past, unrelated blink cannot pre-arm a
+ * later, different blink into an instant false commit. This is a genuine
+ * REINTERPRETATION of what the stored byte means, not a coincidental reuse
+ * - see paint_row_n()'s own "THE WALK ITSELF" comment for the exact
+ * comparison each regime makes against this same array.
  *
- * KNOWN LIMITATION - NOT MERELY "LAST WRITER WINS FOR A FRAME": the SAME
- * permanent-oscillation limitation col_stable_depth[]'s own comment
- * describes for two competing reset points in a column applies here,
- * transposed onto a row: a ROW that crosses more than one separate liquid
- * boundary side by side (two puddles divided by dry ground, or simply the
- * row's own left/right edge alongside an interior obstacle) has all of
- * them competing for the single row_top_col[cy] slot, and by the same
- * argument traced there, NONE of them ever commits while all persist - not
- * just the earliest-scanned one losing out for a single frame. See
- * test_the_blend_has_no_jump_crossing_45_degrees's own comments in
- * suite_sand.c for a traced instance of exactly this (that test row's own
- * left edge permanently competing with the deliberately placed obstacle).
- *
- * NO "WHICH AXIS IS DOMINANT" RESET IS NEEDED, for the same reason col_
- * stable_depth[]/col_top_row[] need none: both arrays here are computed the
- * same way every frame, for every row, regardless of the blend weight -
- * there is no "other regime" whose stale reading could ever leak in the way
- * the old single-axis-choice design's flip used to. That is a DIFFERENT
- * question from whether REVERSING THIS AXIS'S OWN WALK DIRECTION needs an
- * invalidation - it does; see update_local_depth_gravity()'s own comment
- * below for the bug that showed up when it was missing (two different, both
- * legitimate, boundary rows/columns alternately asking for a reset as
- * local_depth_h_reverse itself flips, forever competing for one tracking
- * slot) and the reset that closes it. */
-static uint8_t row_stable_depth[GRID_H_MAX];
+ * BOTH REGIMES SHARE THE ARRAY, NOT JUST THE TYPE, because a REGIME FLIP
+ * (see update_local_depth_gravity() below) always resets it wholesale
+ * alongside local_depth_row_a[]/local_depth_row_b[] - the two regimes never
+ * read a value the OTHER one wrote, by construction, so there is no
+ * cross-regime confusion for either convention to guard against. */
+static uint8_t local_depth_top_row[GRID_W_MAX];
 
-/* The column index of row cy's most recent boundary request - see row_
- * stable_depth[]'s own comment above for the full mechanism. 255 means
- * "nothing tracked yet" (GRID_W_MAX is 184, comfortably under 255, so that
- * value can never be a real column). */
-static uint8_t row_top_col[GRID_H_MAX];
-
-/*=============================================================================
- * THE SATURATING CLIMB - why col_stable_depth[]/row_stable_depth[] stop at
- * MATERIAL_LIQUID_DEPTH_BAND (24) and not at a byte's own 255.
+/* local_depth_cur_row[]/local_depth_prev_row[] hold a plain CELL COUNT -
+ * see LOCAL DEPTH's own top comment, "THE COUNT MUST STAY A RAW COUNT",
+ * for why an eighths-of-a-cell (or any pre-scaled) accumulator was tried
+ * for an earlier shape of this mechanism and rejected; that lesson
+ * transfers unchanged. This is that count's saturation point.
  *
- * Reported from the device against the commit right above this one (882f2e7,
- * the v_reverse/h_reverse flip reset): "it's flickery even during normal
- * movement sometimes, creating lines inside the water... it seems to be
- * creating huge jumps in the depth color i think the flickering comes from
- * trying to react to the rim, seems like its fighting between two shade
- * values in a couple of frames of difference."
- *
- * THE FLIP RESET WAS NOT THE CAUSE, and this is worth writing down because
- * the obvious next move - soften, delay or hysteresis-gate that reset -
- * would have cost another device round trip for nothing. Measured directly,
- * on a host model driving the REAL sand_t/sand_step() through the REAL
- * dirty-row sparsity (sand_track_dirty_rows()), the real wake tick and the
- * real row-order reversal, under landscape-lock gravity taken from the
- * device's own capture sidecars (tilt_x steady at 3650-3932, tilt_y small
- * and crossing zero: -204, 147, -175, 183, -115, 29, -135, -131): running
- * that model WITH 882f2e7's reset and WITHOUT it produces the same banding
- * to two decimal places - 2.81 versus 2.80 vertical shade transitions per
- * water column, 10.09 versus 10.09 isolated one-cell lines per frame, across
- * flip rates from 0.4 to 3.1 per second and repaint sparsities from 0 to 65
- * rows per frame. The reset is, visually, a no-op. It stays (it still does
- * real bookkeeping work - see update_local_depth_gravity() below), but it
- * never had the blast radius the report was describing.
- *
- * WHAT THE BANDING ACTUALLY NEEDS, from the same model, by ablation - the
- * severe artifact being a TWO-shade-step jump between vertically adjacent
- * interior cells, of only four steps total (DEPTH_RANGE, material.c):
- *
- *     as shipped (882f2e7)                0.6 per frame, worst frame 51
- *     every row repainted every frame     0.0 per frame, worst frame  0
- *     vertical walk contributing nothing  0.0 per frame, worst frame  0
- *     debounce removed entirely           0.7 per frame, worst frame 57
- *
- * Two necessary conditions, and the debounce is not one of them: the
- * DIRTY-ROW SPARSITY, and the VERTICAL walk's contribution to the blend.
- *
- * THE MECHANISM. col_stable_depth[cx] is a RUNNING accumulator walked down a
- * column - each painted row's value is the previous PAINTED row's plus one.
- * That is only the cell's real depth if the rows are painted as a contiguous
- * chain from the boundary, which is exactly what draw_dirty_rows() does NOT
- * do: it paints only dirty rows. A row painted in isolation therefore
- * inherits whatever row happened to be painted before it - possibly a
- * distant row, possibly the last row of the previous frame - and gets a
- * freshly computed value that is about a different cell entirely. Its
- * vertical neighbours, meanwhile, still show the coherent values the last
- * wake tick left them. That is not the "stale readings are accepted" trade
- * LOCAL DEPTH's own comment above signs off on - a stale row keeps its last
- * GOOD value - it is a wrong value landing on precisely the rows that are
- * being repainted, i.e. the ones the eye is already watching. One row, one
- * cell tall, several shades off its neighbours: a line inside the water.
- *
- * WHY IT IS A LANDSCAPE-LOCK REPORT specifically, and why portrait was
- * always fine. Near landscape the water stands as a column against a side
- * wall spanning the WHOLE screen height, so the vertical walk's range is the
- * grid's own height (112 rows at this quality tier) and beyond - the
- * accumulator is free to climb to 255. Near portrait the same walk runs down
- * a settled pool perhaps 30 cells deep, so a broken chain can be wrong by at
- * most 30. Modelled both: the portrait scene shows 0 two-step jumps and 0
- * isolated lines with or without any of this, while the landscape scene
- * shows up to 51.
- *
- * THE FIX, and why THIS shape rather than 882f2e7's. material_colours()
- * (material.c) clamps `depth` to DEPTH_SATURATE_CELLS, which IS this
- * constant, before shading with it: past 24 cells the panel cannot tell one
- * depth from another. But the two axes are blended BEFORE that clamp, so an
- * unsaturated value gets averaged against one that is far past saturation
- * and the far one drags the result somewhere neither input would ever have
- * rendered on its own. A cell sitting exactly ON the horizontal surface
- * (hdepth 0) inside a full-height column (vdepth 200) renders at a blended
- * depth of 7 rather than 0 - a surface cell painted as if it were seven
- * cells under. Clamping each axis to the band BEFORE the blend makes the two
- * numbers commensurable with the scale they are about to be rendered on, and
- * bounds every error the broken chain can produce to 24 raw units instead of
- * 255 - which, at landscape lock's own vertical blend weight (9-13 of 256),
- * is at most 1.2 depth units, well under one of the four shade steps.
- *
- * IT IS THE INVARIANT sand_priv.h ALREADY CLAIMS. mark_depth_band()'s own
- * comment states, as the reason it only ever dirties a band of
- * MATERIAL_LIQUID_DEPTH_BAND rows around a new surface, that "anything
- * further than that already saturates to the same flat body colour whether
- * the true depth is one cell more or a hundred". That was simply not true of
- * this file before this change - a cell a hundred rows away DID render
- * differently, because its unclamped vdepth reached the blend intact - so
- * the simulation's pour-staleness fix was under-marking against an
- * assumption the renderer broke. MATERIAL_LIQUID_DEPTH_BAND's own comment
- * (material.h) asks for exactly this: the two "have to agree by
- * construction, not by coincidence". Now they do.
- *
- * MEASURED, same model, same scenes, WITH this clamp:
- *
- *     landscape, slow sway   2.81 -> 1.72 transitions/column (worst frame
- *                            27.80 -> 13.53); 2-step jumps 51 -> 0
- *     landscape, tremor only 1.50 -> 0.79 transitions/column (worst frame
- *                            14.29 -> 4.00); 2-step jumps 14 -> 0;
- *                            isolated lines 7.74 -> 4.16 (worst 183 -> 45)
- *     portrait               3.02 -> 3.02, 0 -> 0 - a no-op, as it must be:
- *                            that pool never reaches 24 in the first place
- *
- * For scale, the same transitions-per-column measurement run over the
- * device's own captures reads 2.96-7.04 on the build before 882f2e7 and
- * 3.57-25.31 on 882f2e7 itself (with up to 74 two-step jumps in one frame).
- * The unclamped model lands in the second range and the clamped model in the
- * first.
- *
- * IT ALSO GIVES THE GRADIENT BACK, which was not the goal and is the larger
- * effect. Dumping the rendered shade index across the landscape-lock pool,
- * one row per line, unclamped against clamped (4 = surface, 0 = fully
- * saturated):
- *
- *     unclamped   .....211111100000000.   clamped   .....333332222221111.
- *                 .....221111110000000.             .....333332222221111.
- *                 .....222111111000000.             .....333332222221111.
- *
- * Unclamped, the vertical accumulator running to 255 down a full-height
- * column pushed nearly the whole pool past the saturation point: the body
- * renders as one flat darkest tone with a thin two-step rim, and the little
- * variation left is exactly the row-to-row noise the report called lines.
- * Clamped, the same frame reads as an even 3-2-1 ramp inward from the
- * surface, the same on every row. The device captures show the crushed
- * version - shade 1 covering most of the water body - which is the same
- * symptom from the other end: this pool was not merely banded, it had lost
- * most of the depth cue the whole feature exists to provide.
- *
- * THE BLEND ITSELF IS UNTOUCHED - still the continuous Q8 crossfade, still
- * driven solely by gravity's own |gx|/|gy| ratio, with no discrete axis and
- * nothing to chatter (LOCAL DEPTH's own top comment). Clamping only brings
- * the two ENDS of that crossfade onto the scale it is interpolating for; if
- * anything it makes the crossfade gentler, since the two endpoints can no
- * longer be 231 apart.
- *
- * WHAT THIS DOES NOT FIX, on purpose: a broken chain inside a pool SHALLOWER
- * than the band still renders that one row wrong, by up to its own depth.
- * Fixing that needs either a depth byte per CELL (41,216 bytes on top of the
- * grid's own - unaffordable, the same trade col_stable_depth[]'s comment
- * already refuses) or advancing the accumulator across skipped rows, which
- * is a full-grid pass every frame and would need to be re-decided on the
- * device against LOCAL DEPTH's own "do not fix this into a full-grid pass"
- * note and measured there. This closes the case the device actually
- * reported - a chain broken across a hundred rows - for the cost of a
- * different constant in four comparisons. */
+ * UNLIKE THE TWO-WALK DESIGN'S OWN LOCAL_DEPTH_COUNT_CEILING (34, raised
+ * above MATERIAL_LIQUID_DEPTH_BAND's own 24), THIS ONE NEEDS NO RAISE - and
+ * that is a genuine, load-bearing difference from this walk's own scale,
+ * not an oversight carried over. The two-walk design's own weight was
+ * `component / len`, ALWAYS <= 256 (minimised at the 45-degree tie, around
+ * 183 of 256), so a count clamped at the plain band (24) could project to
+ * BELOW the band at every angle except perfect axis alignment - "breathing"
+ * - and the ceiling had to be raised past the band so a saturated count
+ * still reached it after being shrunk. THIS walk's own scale is `len /
+ * dominant_axis`, ALWAYS >= 256 (equal to 256 only at perfect axis
+ * alignment, growing at every other angle) - so a count clamped at the
+ * plain band ALREADY projects to AT LEAST the band at every angle, and the
+ * combiner's own explicit clamp to MATERIAL_LIQUID_DEPTH_BAND (see "THE
+ * WALK ITSELF" below) does the rest. Verified directly, host-side, against
+ * a fully saturated cell swept across the same 0-90 degree range test_a_
+ * saturated_liquid_body_reads_the_same_shade_at_every_tilt_angle uses:
+ * projected depth clamps to a flat MATERIAL_LIQUID_DEPTH_BAND at every
+ * sample, with the ceiling equal to the band and no raise at all - the same
+ * flatness the raised ceiling existed to buy back, without needing to buy
+ * it back, because this walk's own scale points the opposite way. */
+#define LOCAL_DEPTH_COUNT_CEILING MATERIAL_LIQUID_DEPTH_BAND
 
 /* Called once per frame, alongside material_set_gravity() - same gravity
  * vector, same reason: material_colours()'s liquid interior needs THIS
- * frame's own local-depth blend, not last frame's, and working out the
- * blend weight and both scan directions once here is what keeps
- * paint_row_n() itself down to one multiply-add-shift per cell, no divide,
- * for LOCAL DEPTH's own comment above to budget against. */
+ * frame's own local-depth scale, not last frame's, and working out the
+ * scale, the active regime and both scan directions once here is what
+ * keeps paint_row_n() itself down to one multiply, one shift and one
+ * compare per cell for the projection (plus the walk's own debounce/climb
+ * work), no divide there - the only divide this mechanism spends is the one
+ * below, once a frame, plus one more per PAINTED ROW for the vertical-
+ * dominant regime's own row offset (see "THE ROW OFFSET, WITHOUT AN
+ * ACCUMULATOR" in paint_row_n() for why that one cannot be hoisted up to
+ * here too). */
 static void update_local_depth_gravity(int gx, int gy)
 {
     const int ax = im_abs(gx), ay = im_abs(gy);
 
-    /* ONE DIVIDE PER FRAME, not per cell - the same budget class
-     * build_xflow() (sand.c) already spends on its own per-frame q_q8, and
-     * the class material_set_gravity()'s own setup already spends
-     * elsewhere in this app. At gx == gy == 0 (flat, or free fall) there is
-     * no gravity direction for either depth to mean anything against, so
-     * the weight is an arbitrary, harmless 128 (an even split) rather than
-     * a division by zero - nothing meaningfully "settles" with no gravity
-     * direction anyway, so it does not matter which way this tie is
+    /* ONE DIVIDE PER FRAME here (plus one more per PAINTED ROW for the
+     * vertical-dominant regime - see paint_row_n()'s own "THE ROW OFFSET,
+     * WITHOUT AN ACCUMULATOR"), the same budget class build_xflow()
+     * (sand.c) already spends on its own per-frame q_q8, and the class
+     * material_set_gravity()'s own setup already spends elsewhere in this
+     * app; material_set_gravity() calls im_len() too, on the same (gx, gy),
+     * so this is the second such call this frame, not the first (im_len()
+     * has no state of its own to share between them, so there is nothing to
+     * hoist). At gx == gy == 0 (flat, or free fall) there is no gravity
+     * direction for the scale to mean anything against, so it falls back to
+     * an arbitrary, harmless 256 (a straight 1:1, no scaling at all) rather
+     * than a division by zero - nothing meaningfully "settles" with no
+     * gravity direction anyway, so it does not matter which way this tie is
      * broken. */
-    const unsigned sum = (unsigned)(ax + ay);
-    local_depth_weight_h_q8 = (sum != 0) ? (256u * (unsigned)ax) / sum : 128u;
+    const int len = im_len(gx, gy);
+    const bool new_vertical_dominant = (ay >= ax);
+    const unsigned dom_axis = new_vertical_dominant ? (unsigned)ay : (unsigned)ax;
+    local_depth_scale_q8 = (dom_axis != 0u)
+        ? (256u * (unsigned)len) / dom_axis : 256u;
+    local_depth_ax = (unsigned)ax;
+    local_depth_ay = (unsigned)ay;
 
-    /* Two independent sign checks, one per axis - not one flag gating
-     * whichever axis used to be dominant - because both scans run every
-     * frame now. See local_depth_v_reverse/local_depth_h_reverse's own
-     * comment above. */
+    /* Same meaning as every earlier shape of this mechanism - see local_
+     * depth_v_reverse/local_depth_h_reverse's own comment above. */
     const bool new_v_reverse = (gy < 0);
     const bool new_h_reverse = (gx < 0);
 
-    /* A REVERSAL OF THIS AXIS'S OWN WALK DIRECTION invalidates the debounce
-     * that rides on it - a DIFFERENT failure from the "which axis is
-     * dominant" flip LOCAL DEPTH's own top comment already explains
-     * is a non-issue now. Measured directly, reproducing a device report of
-     * a visible pop specifically near the "landscape lock" orientation:
-     * hold the device close to landscape (gx large and steady, pressed
-     * against the wall; gy small and hand-tremor-noisy, so it crosses zero
-     * often - 829 sign flips over a 6000-frame model) against a tall water
-     * column standing against that wall. Every time local_depth_v_reverse
-     * flips, "the neighbour toward the surface" (v_toward_surface below)
-     * swaps from `above` to `below` or back, which relocates WHICH ROW in
-     * the column is the genuine boundary - the top row when ascending, the
-     * bottom row when descending - between two candidates that are BOTH
-     * real, not one real boundary and one blip. col_top_row[cx] has only one
-     * slot, shared by both: because the tracked row keeps changing out from
-     * under it every ~7 frames (this noisy a gy crosses zero that often),
-     * the "same row asked twice -> commit" branch almost never fires, so
-     * col_stable_depth[cx] takes the HOLD branch on nearly every encounter -
-     * climbing (`+1`) instead of resetting - and compounds without bound.
-     * Traced at one column across five consecutive flips: 40, 119, 199, 200,
-     * before finally, by chance, landing two consecutive asks on the same
-     * row and dropping to 0. That is a raw-accumulator swing of up to 200
-     * (of a 0-255 range) leaking into the displayed, BLENDED depth as a real
-     * jump - small in this axis's own blend weight near landscape lock, but
-     * still visible, which is exactly why the report was specific to that
-     * orientation: near landscape, gy is the small/noisy component (so this
-     * axis's own reverse flag flips often) while vdepth still carries a
-     * nonzero blend weight; near portrait the symmetric risk sits on
-     * local_depth_h_reverse, but there hdepth's blend weight is the one near
-     * zero, so the same corruption stays invisible.
+    /* A CHANGE IN ANY OF THE THREE - which regime is dominant, or either
+     * scan's own direction - invalidates the walk's shared state as ONE
+     * unit, not three separately guarded pieces. Argued through, regime by
+     * regime, for why each one earns a reset on its own (not merely copied
+     * from the two-walk design's own two resets):
      *
-     * THE FIX: the moment this axis's OWN reverse flag actually changes
-     * value, the debounce state it feeds is stale by construction - the
-     * "row most recently asked" and "depth accumulated so far" both describe
-     * a boundary relationship that direction no longer has - so both get
-     * invalidated before any cell paints under the new direction: the
-     * tracker back to its "untracked" sentinel (255, matching col_top_row[]/
-     * row_top_col[]'s existing convention) and the accumulator back to a
-     * clean 0, exactly the same clean reset already used above for "not a
-     * liquid cell at all" - not a partial fix that clears only the tracker
-     * and lets HOLD keep climbing from an old, direction-stale value. A
-     * clean 0 is not itself a visible defect: draw_dirty_rows() below wakes
-     * every liquid row on its own periodic tick (LOCAL_DEPTH_WAKE_MS) in
-     * ascending/descending order matching this same reversal, so a settled
-     * column's real depth is rebuilt row-by-row within that same tick,
-     * bounded by the pool's own depth range rather than by how many
-     * consecutive flips have happened. O(grid_w) (or grid_h) work, but only
-     * on the frame a reversal actually lands - measured at roughly 5 times a
-     * second at 30fps in the noisy-gy model above, trivial next to
-     * paint_row_n()'s own per-cell cost. See
-     * test_a_direction_flip_does_not_corrupt_the_boundary_debounce in
-     * suite_sand.c for the reproduction and the bound this closes.
+     * A REVERSAL OF EITHER SCAN DIRECTION is the same failure the two-walk
+     * design's own v_reverse/h_reverse flips already fixed, unchanged in
+     * kind: "the neighbour toward the surface" relocates (above/below swap,
+     * or the within-row scan direction swaps), so a row or column index
+     * this array's debounce was tracking under the OLD direction describes
+     * a boundary relationship the NEW direction does not have. Reproducing
+     * the ORIGINAL device report this fixed (landscape lock, gy small and
+     * tremor-noisy against a tall water column) against THIS mechanism
+     * shows the identical shape of corruption without the reset: a raw
+     * count compounding unboundedly across repeated direction flips instead
+     * of resetting where it should.
      *
-     * WHAT THIS RESET IS AND IS NOT, restated after the banding report that
-     * followed it (THE SATURATING CLIMB's own comment above): it is a
-     * BOOKKEEPING correction, not a rendering one. Modelling the device's
-     * own landscape-lock gravity through real physics and real dirty-row
-     * sparsity showed running WITH this reset and WITHOUT it to be visually
-     * indistinguishable - 2.81 versus 2.80 vertical shade transitions per
-     * water column - so it is not a knob to reach for when something looks
-     * wrong on the panel. It earns its place elsewhere: in a pool SHALLOWER
-     * than MATERIAL_LIQUID_DEPTH_BAND, in the orientation where that axis
-     * carries the large blend weight, the HOLD-compounding climb would
-     * otherwise pin a genuinely 6-cell-deep column at the saturating 24 and
-     * render it as fully deep. The clamp bounds how far that can go; this
-     * reset is what stops it going there at all. */
-    if (new_v_reverse != local_depth_v_reverse_prev) {
+     * A REGIME FLIP (vertical-dominant <-> horizontal-dominant) is new to
+     * THIS shape - shapes (2) and (3) never had it, because both regimes
+     * ran every frame unconditionally there. Here, the SAME array slot
+     * (indexed by cx) carries a different RECURRENCE depending on which
+     * regime is active - a vertical-dominant count chains down rows at a
+     * fixed column; a horizontal-dominant count chains across columns
+     * within a row, only occasionally borrowing a value from the row above
+     * or below. A value left behind by one regime is not simply "the same
+     * count under different bookkeeping" to the other regime's own read
+     * pattern - it is a value about a physically different neighbour
+     * relationship. Reset here for the same reason the two scan-direction
+     * flips already are: a brief, bounded bookkeeping correction rather
+     * than trusting a stale interpretation across the switch.
+     *
+     * MEASURED, host-side, a single sharp jostle across the 45-degree line
+     * in the middle of an otherwise steady near-horizontal hold (the
+     * regime-flip analogue of the landscape-lock model already used to
+     * measure the two scan-direction resets): the reset itself produces a
+     * small, SELF-HEALING blip immediately after the jostle ends and
+     * gravity returns to near-horizontal - 12 banded pairs the very next
+     * measured frame, falling to 6 one frame later, 0 the frame after that
+     * (LOCAL_DEPTH_WAKE_MS's own periodic wake finishes the job) - not the
+     * "visually a no-op" result the scan-direction resets measured, but
+     * bounded, transient, and gone within two frames at 30fps (well under
+     * 100ms), against an artificially instantaneous gravity step no real
+     * hand-tremor input produces (the tilt filter's own smoothing means a
+     * real crossing ramps through several frames, not one). Worth
+     * re-measuring on the device if a "brief pop near 45 degrees" report
+     * ever comes back in about this mechanism specifically.
+     *
+     * A SCAN-DIRECTION FLIP ONLY EARNS THE RESET IF THE ACTIVE REGIME CAN
+     * SEE IT, and that turned out to matter at exactly the orientations a
+     * hand actually holds this board at. AT AXIS LOCK ONE COMPONENT SITS ON
+     * ZERO: the device's own capture sidecars from the report this block was
+     * re-examined for read tilt_x -12 and -195 against tilt_y 3342 and 4190
+     * - portrait, with gx hovering either side of zero. `new_h_reverse` is
+     * just `gx < 0`, so ordinary hand tremor flips it many times a second,
+     * and EVERY ONE of those flips wiped the whole walk state. Measured,
+     * host-side, over 40 frames of that exact tremor against a settled 40%
+     * pool: 40 resets in 40 frames. Landscape is the mirror image with
+     * `new_v_reverse` as the noisy flag: 39 in 40.
+     *
+     * WHAT THOSE RESETS COST, measured rather than assumed - they are NOT
+     * the "flip of colours" this file's own local_depth_prev_cy comment
+     * tracks down (with the tremor running and nothing else changing, the
+     * displayed depth moved by at most 1 of 24 and no cell crossed a shade
+     * step). What they do is DISABLE THE DEBOUNCE OUTRIGHT: local_depth_top_
+     * row[] is wiped to "untracked" before every single frame's paint, so a
+     * boundary can never be asked for a second time and can never COMMIT.
+     * The surface of a settled pool holds at 1 instead of committing to 0
+     * forever, and every row beneath inherits it - mean displayed depth over
+     * the pool's 3956 interior cells measured 18.12 with the resets against
+     * 17.58 without, permanently, plus a three-array wipe every frame for a
+     * flag change nothing can observe.
+     *
+     * THE GATE IS EXACT ARITHMETIC, NOT A DEADBAND - deliberately, because
+     * this mechanism already removed one tuned dead zone and should not
+     * quietly grow another. Each condition below is a statement about
+     * whether the flipped flag can change a number THIS grid's walk actually
+     * computes, derived from the Bresenham arithmetic itself:
+     *
+     *   VERTICAL-DOMINANT: `new_h_reverse` only supplies `xsign`, the SIGN
+     *     of the per-row drift. That drift's running total across the whole
+     *     grid is floor(grid_h * ax / ay) (see paint_row_n()'s "THE ROW
+     *     OFFSET, WITHOUT AN ACCUMULATOR"), so when `grid_h * ax < ay` every
+     *     row's step is 0, and the sign of nothing is still nothing.
+     *   HORIZONTAL-DOMINANT: `new_v_reverse` only picks the cross-row source
+     *     (`toward_surface`, dereferenced only when `step != 0`) and the
+     *     sweep order that gives `local_depth_prev_row[]` its meaning. The
+     *     within-row accumulator adds ay per cell from 0 and fires at ax, so
+     *     when `grid_w * ay < ax` no cell in any row ever reads across a row
+     *     at all, and neither of those two can be observed.
+     *
+     * A REGIME FLIP is never gated - it always changes what the array slot
+     * means, whatever the magnitudes are. Measured with the gate in place,
+     * same harness: portrait tremor 0 resets in 40 frames and the mean back
+     * to 17.58; landscape tremor 0 in 40; the genuine 45-degree crossing
+     * still resets, 2 flips in the 12-frame portrait-to-landscape ramp,
+     * unchanged. */
+    const bool drift_observable = ((long)grid_h * (long)ax >= (long)ay);
+    const bool cross_row_observable = ((long)grid_w * (long)ay >= (long)ax);
+    const bool v_reverse_matters = (new_v_reverse != local_depth_v_reverse_prev) &&
+        (new_vertical_dominant || cross_row_observable);
+    const bool h_reverse_matters = (new_h_reverse != local_depth_h_reverse_prev) &&
+        (!new_vertical_dominant || drift_observable);
+
+    if (new_vertical_dominant != local_depth_vertical_dominant_prev ||
+        v_reverse_matters || h_reverse_matters) {
         for (int cx = 0; cx < grid_w; cx++) {
-            col_top_row[cx] = 255u;
-            col_stable_depth[cx] = 0u;
+            local_depth_row_a[cx] = 0u;
+            local_depth_row_b[cx] = 0u;
+            local_depth_top_row[cx] = 255u;
         }
+        /* The wiped buffers describe no row at all now - say so, rather than
+         * leaving the next painted row to chain off two arrays of zeroes as
+         * if they were its real neighbour. See local_depth_prev_cy's own
+         * comment above paint_row_n(). */
+        local_depth_prev_cy = LOCAL_DEPTH_NO_ROW;
+        local_depth_vertical_dominant_prev = new_vertical_dominant;
         local_depth_v_reverse_prev = new_v_reverse;
-    }
-    if (new_h_reverse != local_depth_h_reverse_prev) {
-        for (int cy = 0; cy < grid_h; cy++) {
-            row_top_col[cy] = 255u;
-            row_stable_depth[cy] = 0u;
-        }
         local_depth_h_reverse_prev = new_h_reverse;
     }
 
+    local_depth_vertical_dominant = new_vertical_dominant;
     local_depth_v_reverse = new_v_reverse;
     local_depth_h_reverse = new_h_reverse;
 }
@@ -1653,7 +1644,7 @@ static void update_local_depth_gravity(int gx, int gy)
  * above, and advance_shine() below, for the pattern this mirrors almost
  * exactly).
  *
- * THE BUG: the blend above is recomputed from THIS FRAME's gravity, every
+ * THE BUG: the walk above is recomputed from THIS FRAME's gravity, every
  * frame paint_row_n() runs for a row - but a settled, sleeping block does
  * not run it again once nothing is moving, because nothing calls
  * paint_row_n() for a row draw_dirty_rows() never marks dirty.
@@ -1664,13 +1655,14 @@ static void update_local_depth_gravity(int gx, int gy)
  * PIXELS get repainted). A block can wake for physics, find nothing
  * actually needs to move, and go back to sleep without ever touching
  * dirty_rows[]. Ordinary hand wobble drifts gravity continuously - smoothed
- * by the tilt filter but never perfectly still - so local_depth_weight_h_q8
- * above keeps changing, frame after frame, with no cell in a settled pool
- * ever moving to earn that pool's rows a repaint. The result: a sleeping
- * block's blend is stuck at whatever it was the last time something nearby
- * genuinely disturbed it, while a neighbouring block still being redrawn
- * for an unrelated reason repaints with the CURRENT blend - a hard,
- * rectangular seam between "stale" and "fresh" exactly where one block's
+ * by the tilt filter but never perfectly still - so local_depth_scale_q8
+ * above keeps changing, frame after frame, with no cell in a settled
+ * pool ever moving to earn that pool's rows a repaint. The result: a
+ * sleeping block's displayed depth is stuck at whatever it was the last
+ * time something nearby genuinely disturbed it, while a neighbouring block
+ * still being redrawn for an unrelated reason repaints with the CURRENT
+ * walk output - a hard, rectangular seam between "stale" and "fresh"
+ * exactly where one block's
  * sleep boundary meets another's, in place of the smooth gradient a
  * puddle's own surface should read as.
  *
@@ -1778,31 +1770,93 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
     const uint8_t *above = (cy > 0) ? row - grid_w : NULL;
     const uint8_t *below = (cy < grid_h - 1) ? row + grid_w : NULL;
 
-    /* LOCAL DEPTH's vertical walk reads a FIXED neighbour row - "above" or
+    /* THE WALK ITSELF - ONE regime, chosen once a frame
+     * (local_depth_vertical_dominant, update_local_depth_gravity() above),
+     * not per cell. `toward_surface` is the one real, already-adjacent grid
+     * row either regime's own cross-row read ever looks at - "above" or
      * "below", whichever is toward the surface this frame, per gy's OWN
-     * sign - chosen ONCE for the whole row, not per cell: gravity does not
-     * change from one column to the next. NULL exactly when that neighbour
-     * is off the grid (the top or bottom edge), which the per-cell check
-     * below reads as "not the same material" - the same off-grid-is-a-wall
-     * convention `mask` above already relies on. Read UNCONDITIONALLY now,
-     * every row, every frame - there is no "vertical is dominant" gate left
-     * to ask about. See col_stable_depth[]'s own comment above this
-     * function for the full mechanism. */
-    const uint8_t *v_toward_surface = local_depth_v_reverse ? below : above;
+     * sign, same NULL-off-the-grid convention `mask` above already relies
+     * on. Read UNCONDITIONALLY, same as the vertical case has always been -
+     * but now ALSO the horizontal-dominant regime's own occasional
+     * cross-row source (see "THE HORIZONTAL WITHIN-ROW ACCUMULATOR"
+     * below). */
+    const uint8_t *toward_surface = local_depth_v_reverse ? below : above;
 
-    /* LOCAL DEPTH's horizontal walk needs the whole ROW scanned
-     * surface-first, so each cell's read of row_stable_depth[cy] (the
-     * running value carried across this whole scan - see that array's own
-     * comment) always sees an already-processed neighbour's own result -
-     * exactly why this direction, and only this one, needs the SCAN itself
-     * reversed rather than which array slot is read. This now governs the
-     * loop's own iteration order UNCONDITIONALLY, by gx's OWN sign: the
-     * vertical walk does not care what order cx takes (each column's depth
-     * is independent of every other column's, via col_stable_depth[]), so
-     * reordering the scan for the horizontal walk's sake never disturbs
-     * it. */
+    /* IS local_depth_prev_row[] ACTUALLY THE ROW `toward_surface` POINTS
+     * AT? - one compare, once per row, hoisted out of the cx loop entirely;
+     * see local_depth_prev_cy's own comment above this function for the
+     * device artifact this answers and the measured 841-to-83 it buys. Only
+     * the hold-then-commit debounce below reads it: a same-material climb
+     * deliberately keeps trusting a stale count (that is what makes a
+     * sparsely repainted deep row read saturated rather than banded), and
+     * only a BOUNDARY's carry is nonsense when the buffer belongs to some
+     * other row. */
+    const int local_depth_vdir = local_depth_v_reverse ? -1 : 1;
+    const bool local_depth_chain_ok =
+        (local_depth_prev_cy == cy - local_depth_vdir);
+
+    /* Scan order for THIS row's own cx loop - unchanged in meaning from
+     * every earlier shape of this mechanism (ascending unless gravity
+     * points left), but now needed by BOTH regimes: the horizontal-
+     * dominant regime's own within-row chain (`step == 0` below) reads an
+     * EARLIER cx in this same scan, so the scan has to start from whichever
+     * end `hdir` points away from. The vertical-dominant regime's own read
+     * never depends on cx order (each column's source lives in a different
+     * row's already-complete buffer), so sharing this same order for it
+     * costs nothing and needs no separate flag. */
+    const int hdir = local_depth_h_reverse ? -1 : 1;
     const int cx_first = local_depth_h_reverse ? grid_w - 1 : 0;
     const int cx_step  = local_depth_h_reverse ? -1 : 1;
+
+    /* THE ROW OFFSET, WITHOUT AN ACCUMULATOR - the vertical-dominant
+     * regime's own per-row horizontal drift ("step" in LOCAL DEPTH's own
+     * top comment). Every column in this row shares the SAME step (gravity
+     * does not change from one column to the next), so this is computed
+     * ONCE per row-call - but it must NOT be a running Bresenham
+     * accumulator carried across separate paint_row_n() calls the way a
+     * naive port of a reference model would do it: paint_row_n() is only
+     * ever called for DIRTY rows (LOCAL DEPTH's own top comment, "STALE
+     * READINGS...ARE ACCEPTED"), so a row-to-row accumulator would silently
+     * skip every row in between and drift out of sync with whichever row
+     * is actually being painted. `cum(n) = floor(n * minor / dominant)` is
+     * the exact total Bresenham drift after `n` row-steps starting from a
+     * clean 0 - verified by hand against a plain step-by-step Bresenham
+     * march before this was written this way, both give identical
+     * sequences - so THIS row's own step is simply `cum(n) - cum(n - 1)`
+     * for whatever `n` (this row's own distance, in the scan's own
+     * direction, from the surface-most row) this particular row happens to
+     * be, computable directly from `cy` alone with no memory of which rows
+     * were painted before it. One divide, but once per PAINTED row here,
+     * not once per cell - see update_local_depth_gravity()'s own comment
+     * for the budget this spends against. Meaningless (and left 0) when
+     * horizontal-dominant, or when gravity has no direction at all
+     * (`local_depth_ay == 0` only happens together with `local_depth_ax ==
+     * 0`, since vertical-dominant requires `ay >= ax`). */
+    int local_depth_row_step = 0;
+    if (local_depth_vertical_dominant && local_depth_ay > 0u) {
+        const int vdir = local_depth_vdir;
+        const int xsign = local_depth_h_reverse ? 1 : -1;
+        const int n = (vdir > 0) ? cy : (grid_h - 1 - cy);
+        const int cum_n  = (int)(((long)(n)     * (long)local_depth_ax) / (long)local_depth_ay);
+        const int cum_n1 = (int)(((long)(n + 1) * (long)local_depth_ax) / (long)local_depth_ay);
+        local_depth_row_step = xsign * (cum_n1 - cum_n);
+    }
+
+    /* THE HORIZONTAL WITHIN-ROW ACCUMULATOR - the horizontal-dominant
+     * regime's own per-CELL row drift, a plain Bresenham march reset to 0
+     * HERE, at the start of every row-call, and walked forward as the cx
+     * loop below sweeps `cx_first`, `cx_first + cx_step`, ... in order.
+     * Safe to reset per row-call, UNLIKE the vertical case's own per-row
+     * value above: this accumulator's own state never needs to survive
+     * PAST one call, because a single call always processes this row's
+     * FULL width in one pass (there is no sparser granularity than "the
+     * whole row" to worry about losing track of between calls). Emits 0
+     * most cells and +/-1 (`ysign`) wherever the ray's own diagonal drift
+     * crosses a row boundary - see LOCAL DEPTH's own top comment for the
+     * two-regime split this and the row offset above are the two halves
+     * of. */
+    int local_depth_herr = 0;
+    const int ysign = local_depth_v_reverse ? 1 : -1;
 
     for (int cx_i = 0; cx_i < grid_w; cx_i++) {
         const int cx = cx_first + cx_i * cx_step;
@@ -1873,129 +1927,147 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             ? material_grain_hash(cx >> FOAM_BLOB_SHIFT, cy >> FOAM_BLOB_SHIFT)
             : material_grain_hash(cx, cy);
 
-        /* THE PER-CELL COST OF LOCAL DEPTH, in full, now that BOTH walks run
-         * unconditionally and get BLENDED: two comparisons against a
-         * neighbour's material id (one per axis), one array read+write for
-         * the vertical hold-then-commit debounce (col_stable_depth[]/
-         * col_top_row[] - see that array's own comment above this function
-         * for the full mechanism, including the two bugs an earlier version
-         * of it had and the dead second array an even earlier version
-         * carried alongside it for nothing), one more array read+write for
-         * the horizontal debounce (row_stable_depth[]/row_top_col[] - see
-         * that array's own comment for the mechanism, transposed onto
-         * rows), plus the blend itself - one multiply, one add, one shift,
-         * no divide (the only divide is update_local_depth_gravity()'s,
-         * once a frame, not here). Computed for every cell, liquid or not -
-         * the same as the old depth_acc was - because material_colours() is
-         * the only consumer that ever reads the result (only for a liquid's
-         * interior), and a branch to skip this for non-liquids would cost
-         * more than the comparisons it would save. */
-        const bool v_same_material = (v_toward_surface != NULL) &&
-            (CELL_MATERIAL(v_toward_surface[cx]) == CELL_MATERIAL(row[cx]));
+        /* THE PER-CELL COST OF LOCAL DEPTH, in full, now that only ONE
+         * regime's walk runs per cell instead of two: one array read for
+         * the source count, one array read+write for the debounce
+         * (local_depth_top_row[] - see that array's own comment above this
+         * function for why the comparison it makes differs by regime),
+         * plus the combiner - one multiply, one shift, one compare for the
+         * clamp, no divide (the only divides this mechanism spends are
+         * update_local_depth_gravity()'s once-a-frame one and, for the
+         * vertical-dominant regime only, one more per PAINTED ROW above,
+         * not here). Computed for every cell, liquid or not - the same as
+         * every earlier shape of this mechanism did - because material_
+         * colours() is the only consumer that ever reads the result (only
+         * for a liquid's interior), and a branch to skip this for
+         * non-liquids would cost more than the comparisons it would save.
+         *
+         * `step` is this CELL's own horizontal-dominant row drift (0 most
+         * cells) - meaningless, and left 0, when vertical-dominant, where
+         * the row offset is instead the single `local_depth_row_step`
+         * computed once above for the whole row. */
+        int step = 0;
+        if (!local_depth_vertical_dominant) {
+            local_depth_herr += (int)local_depth_ay;
+            if (local_depth_ax > 0u && local_depth_herr >= (int)local_depth_ax) {
+                local_depth_herr -= (int)local_depth_ax;
+                step = ysign;
+            }
+        }
 
-        /* THE VERTICAL HOLD-THEN-COMMIT DEBOUNCE ITSELF, feeding the BLEND
-         * below directly - see col_stable_depth[]'s own comment above this
-         * function for the full mechanism (and the two bugs an earlier
-         * version of this block had, found from exactly this kind of
-         * trace). There is no freeze branch here any more: the diagonal
-         * dead zone and the axis Schmitt trigger it used to protect are
-         * both gone (LOCAL DEPTH's own top comment) - the blend never has a
-         * "wrong regime" reading for a freeze to guard against, so this is
-         * exactly main's original debounce, just no longer wrapped in a
-         * branch that could suspend it. */
-        unsigned vdepth;
-        if (material_of(row[cx])->kind != KIND_LIQUID) {
+        /* THE SOURCE CELL, one step back along the ray - see LOCAL DEPTH's
+         * own top comment for the two regimes' own formulas this computes.
+         * `qx` is the source COLUMN either way; `src_ptr` the real grid row
+         * to read its MATERIAL from (for the same-material continuation
+         * test); `src_arr` the buffer to read its COUNT from - `local_
+         * depth_cur_row[]` only in the horizontal-dominant regime's own
+         * common (`step == 0`) case, where the source is an EARLIER column
+         * of THIS SAME row, already written earlier in this same scan;
+         * `local_depth_prev_row[]` (the row painted immediately before this
+         * one) otherwise. Genuinely no read/write aliasing either way - see
+         * local_depth_row_a[]/local_depth_row_b[]'s own comment above this
+         * function for why, verified in a host model before this was wired
+         * in here. */
+        const int qx = local_depth_vertical_dominant
+            ? (cx + local_depth_row_step) : (cx - hdir);
+        const bool qx_ok = (qx >= 0 && qx < grid_w);
+        const bool cross_row = local_depth_vertical_dominant || (step != 0);
+        const uint8_t *src_ptr = cross_row ? toward_surface : row;
+        const uint8_t *src_arr = cross_row
+            ? local_depth_prev_row : local_depth_cur_row;
+
+        const bool here_liquid = material_of(row[cx])->kind == KIND_LIQUID;
+        const bool same_material = here_liquid && qx_ok && src_ptr != NULL &&
+            (CELL_MATERIAL(src_ptr[qx]) == CELL_MATERIAL(row[cx]));
+        const unsigned src_count = qx_ok ? src_arr[qx] : 0u;
+
+        /* THE HOLD-THEN-COMMIT DEBOUNCE ITSELF - see local_depth_top_row[]'s
+         * own comment above this function for the full mechanism, why the
+         * comparison below differs by regime, and the measured case (a
+         * permanent wall) that the row-indexed key alone cannot get right
+         * for the horizontal-dominant regime. */
+        unsigned count;
+        if (!here_liquid) {
             /* NOT a liquid cell: depth is irrelevant here - material_
              * colours() never reads it for anything but a liquid interior
-             * - and must not be allowed to accumulate through this cell,
-             * or a run of open air (or any other non-liquid material)
-             * above a real boundary corrupts the value that boundary
-             * inherits. Clean reset, and col_top_row[cx] is left alone -
-             * this cell is not a boundary request of any kind. */
-            vdepth = 0u;
-        } else if (v_same_material) {
+             * - and must not be allowed to accumulate through this cell, or
+             * a run of open air (or any other non-liquid material) above a
+             * real boundary corrupts the value that boundary inherits.
+             * Clean reset, and local_depth_top_row[cx] is left alone - this
+             * cell is not a boundary request of any kind. */
+            count = 0u;
+        } else if (same_material) {
             /* Confirmed continuation of a liquid body - climb by one,
              * stopping at the SATURATION POINT rather than at a byte's own
-             * 255 - see THE SATURATING CLIMB's own comment above this
-             * function for why that clamp is the whole fix for the banding
-             * report. Not a boundary request either, so col_top_row[cx] is
-             * left alone here too. */
-            vdepth = col_stable_depth[cx] < MATERIAL_LIQUID_DEPTH_BAND
-                ? col_stable_depth[cx] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
-        } else if (col_top_row[cx] == (uint8_t)cy) {
-            /* THIS EXACT ROW asked for a reset the last time it was
-             * painted too - a real, lasting boundary, not a blink.
-             * Commit. */
-            vdepth = 0u;
+             * 255 - see LOCAL_DEPTH_COUNT_CEILING's own comment for why
+             * this needs no raise this time, unlike every earlier shape of
+             * this mechanism. Not a boundary request, so vertical-dominant
+             * leaves local_depth_top_row[cx] alone here, exactly as
+             * before; horizontal-dominant instead clears it back to
+             * "untracked" (255) - see that array's own comment for why a
+             * stale pending flag from an unrelated earlier blink must not
+             * be allowed to pre-arm a later, different blink into an
+             * instant false commit. */
+            count = src_count < LOCAL_DEPTH_COUNT_CEILING
+                ? src_count + 1u : LOCAL_DEPTH_COUNT_CEILING;
+            if (!local_depth_vertical_dominant) {
+                local_depth_top_row[cx] = 255u;
+            }
         } else {
-            /* A reset is being asked for at a row that was NOT the tracked
-             * boundary - either nothing was tracked yet, or the boundary
-             * moved. HOLD: keep climbing as if nothing happened, and start
-             * tracking THIS row, so it asking again next time it is
-             * painted will match and commit. */
-            vdepth = col_stable_depth[cx] < MATERIAL_LIQUID_DEPTH_BAND
-                ? col_stable_depth[cx] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
-            col_top_row[cx] = (uint8_t)cy;
+            const bool committed = local_depth_vertical_dominant
+                ? (local_depth_top_row[cx] == (uint8_t)cy)
+                : (local_depth_top_row[cx] != 255u);
+            if (committed) {
+                /* Vertical-dominant: THIS EXACT ROW asked for a reset the
+                 * last time it was painted too - a real, lasting boundary,
+                 * not a blink. Horizontal-dominant: the immediately
+                 * preceding write to this slot was ALSO a boundary request
+                 * - same verdict, different key. Commit. */
+                count = 0u;
+            } else {
+                /* HOLD: keep climbing as if nothing happened, and arm this
+                 * slot's tracker so the NEXT write (vertical-dominant: the
+                 * next time THIS row is painted; horizontal-dominant: the
+                 * very next write to this slot, whichever row it comes
+                 * from) will match and commit if the boundary is real and
+                 * lasting.
+                 *
+                 * "AS IF NOTHING HAPPENED" MEANS CLIMBING FROM THE
+                 * NEIGHBOUR'S OWN COUNT - which requires the buffer to
+                 * actually hold that neighbour's count. When the chain is
+                 * broken (`local_depth_prev_row[]` describes some other row
+                 * entirely, because the row toward the surface was not
+                 * painted immediately before this one) a cross-row carry
+                 * here would import a number belonging to a different body:
+                 * on a settled pool that number is the DEEPEST row's
+                 * saturated count, and importing it at the surface floods
+                 * the whole body to maximum depth in one frame. Carry 0
+                 * instead - the same value the non-liquid row this chain
+                 * should have started from would have written. See local_
+                 * depth_prev_cy's own comment above this function for the
+                 * device report, the measured 841-to-83, and why this guard
+                 * belongs here and NOT on the same-material climb above. The
+                 * compare is off the hot path by construction: only a
+                 * boundary cell ever reaches this branch. */
+                const unsigned carry =
+                    (cross_row && !local_depth_chain_ok) ? 0u : src_count;
+                count = carry < LOCAL_DEPTH_COUNT_CEILING
+                    ? carry + 1u : LOCAL_DEPTH_COUNT_CEILING;
+                local_depth_top_row[cx] = local_depth_vertical_dominant
+                    ? (uint8_t)cy : 0u;
+            }
         }
-        col_stable_depth[cx] = (uint8_t)vdepth;
+        local_depth_cur_row[cx] = (uint8_t)count;
 
-        const bool has_h_neighbour =
-            local_depth_h_reverse ? (cx < grid_w - 1) : (cx > 0);
-        const int h_neighbour_cx = local_depth_h_reverse ? cx + 1 : cx - 1;
-        const bool h_same_material = has_h_neighbour &&
-            (CELL_MATERIAL(row[h_neighbour_cx]) == CELL_MATERIAL(row[cx]));
-
-        /* THE HORIZONTAL HOLD-THEN-COMMIT DEBOUNCE, transposed onto rows -
-         * feeding the BLEND below directly, exactly the same shape as the
-         * vertical block above. See row_stable_depth[]/row_top_col[]'s own
-         * comment above this function for the full mechanism and its
-         * accepted limitation; this block mirrors the vertical debounce
-         * block above line for line, with cy standing in for "this axis's
-         * own coordinate" (cx there) and cx standing in for "the other
-         * axis's coordinate being tracked" (cy there). */
-        unsigned hdepth;
-        if (material_of(row[cx])->kind != KIND_LIQUID) {
-            /* NOT a liquid cell - same reasoning as the vertical branch
-             * above: must not accumulate through it, and row_top_col[cy] is
-             * left alone since this is not a boundary request. */
-            hdepth = 0u;
-        } else if (h_same_material) {
-            /* Confirmed continuation of a liquid body - climb by one,
-             * saturating at MATERIAL_LIQUID_DEPTH_BAND for the same reason
-             * the vertical branch above does (THE SATURATING CLIMB's own
-             * comment). Not a boundary request, so row_top_col[cy] is left
-             * alone here too. */
-            hdepth = row_stable_depth[cy] < MATERIAL_LIQUID_DEPTH_BAND
-                ? row_stable_depth[cy] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
-        } else if (row_top_col[cy] == (uint8_t)cx) {
-            /* THIS EXACT COLUMN asked for a reset the last time THIS ROW
-             * was painted too - a real, lasting boundary, not a blink.
-             * Commit. */
-            hdepth = 0u;
-        } else {
-            /* A reset is being asked for at a column that was NOT the
-             * tracked boundary for this row - either nothing was tracked
-             * yet, or the boundary moved. HOLD: keep climbing as if nothing
-             * happened, and start tracking THIS column, so it asking again
-             * next time this row is painted will match and commit. */
-            hdepth = row_stable_depth[cy] < MATERIAL_LIQUID_DEPTH_BAND
-                ? row_stable_depth[cy] + 1u : MATERIAL_LIQUID_DEPTH_BAND;
-            row_top_col[cy] = (uint8_t)cx;
-        }
-        row_stable_depth[cy] = (uint8_t)hdepth;
-
-        /* THE BLEND ITSELF - see LOCAL DEPTH's own top comment for why a
-         * crossfade replaces a discrete switch. `local_depth_weight_h_q8`
-         * is 0-256, computed once per frame; this is the whole reason a
-         * per-cell divide is never needed: it is a fixed Q8 fraction, not a
-         * ratio recomputed here. Blends the two DEBOUNCED values, vdepth and
-         * hdepth - both now go through the same class of row/column-keyed
-         * debounce before reaching here, closing the asymmetry that used to
-         * let a single-frame horizontal blink swing straight into the
-         * blended result wherever horizontal carried real weight. */
-        const unsigned depth =
-            ((vdepth * (256u - local_depth_weight_h_q8)) +
-             (hdepth * local_depth_weight_h_q8)) >> 8;
+        /* THE PROJECTION - `count * local_depth_scale_q8 >> 8`, applied
+         * ONCE, here, then clamped to MATERIAL_LIQUID_DEPTH_BAND. No max, no
+         * blend: there is only one reading this frame, from whichever
+         * regime is active, so nothing else to combine it with - see LOCAL
+         * DEPTH's own top comment for why a single walk along the true
+         * gravity ray needs no combiner at all, not merely a simpler one. */
+        const unsigned depth_raw = (count * local_depth_scale_q8) >> 8;
+        const unsigned depth = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+            ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
 
         /* row_has_liquid[]'s own population point - see that array's
          * comment above paint_row_n() for the mechanism this feeds. ANY
@@ -2003,8 +2075,10 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * at all, unlike material_colours()'s own interior test (KIND_
          * LIQUID and `(mask & MATERIAL_EDGE_CARDINAL) == 0`, material.c) -
          * see row_has_liquid[]'s own comment for why the wider condition is
-         * the fix, not an oversight. */
-        if (material_of(row[cx])->kind == KIND_LIQUID) {
+         * the fix, not an oversight. Reuses `here_liquid`, computed just
+         * above for the walk itself, rather than asking material_of()
+         * again. */
+        if (here_liquid) {
             row_has_liquid[cy] = 1;
         }
 
@@ -2124,6 +2198,28 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
             }
         }
     }
+
+    /* THE DOUBLE BUFFER'S OWN SWAP - once per row-call, after every column
+     * has been read from and written to, not once per cell: local_depth_
+     * cur_row[] just finished holding THIS row's own emerging values (the
+     * horizontal-dominant regime's own within-row reads above needed it to
+     * keep meaning "this row" for the whole scan), and now becomes "the row
+     * painted before this one" for whichever row is processed NEXT - a
+     * pointer swap, not a copy, so this costs two loads and two stores
+     * regardless of grid_w. See local_depth_row_a[]/local_depth_row_b[]'s
+     * own comment above this function for why swapping (rather than always
+     * writing into the same array) is what keeps the two regimes' own reads
+     * from ever aliasing the slot currently being written. */
+    uint8_t *local_depth_tmp = local_depth_cur_row;
+    local_depth_cur_row = local_depth_prev_row;
+    local_depth_prev_row = local_depth_tmp;
+
+    /* ...and record WHICH ROW that buffer now describes, so the next call
+     * can tell whether its own cross-row read is looking at a real
+     * neighbour or at whatever the last sweep happened to leave behind -
+     * see local_depth_prev_cy's own comment above this function. One store
+     * per painted row, beside a swap that already costs four. */
+    local_depth_prev_cy = cy;
 }
 
 /* cell is chosen on the boot menu, so it is a runtime value here - but the
@@ -2254,10 +2350,10 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
         }
     }
 
-    /* THE SAME MECHANISM, for a liquid interior's local-depth blend instead
-     * of a hatched material's shine - see LOCAL_DEPTH_WAKE_MS's own comment
-     * above paint_row_n() for the bug this closes (gravity drifting a
-     * settled, sleeping block's blend stale with nothing left to mark its
+    /* THE SAME MECHANISM, for a liquid interior's local depth instead of a
+     * hatched material's shine - see LOCAL_DEPTH_WAKE_MS's own comment above
+     * paint_row_n() for the bug this closes (gravity drifting a settled,
+     * sleeping block's displayed depth stale with nothing left to mark its
      * rows dirty) and why it needs the same unconditional periodic tick the
      * shine already uses. Only the rows that actually held a liquid cell
      * last time they were painted, for the same affordability reason
@@ -2281,27 +2377,31 @@ static void draw_dirty_rows(bool shine_moved, bool local_depth_woke)
     int redrawn = 0;
 #endif
 
-    /* Ordinarily ascending - but see col_stable_depth[]'s own comment in
-     * paint_row_n() ("WHY draw_dirty_rows() BELOW REVERSES ROW ORDER...")
-     * for why a gravity-UP frame walks this loop in the OPPOSITE order
-     * instead: col_stable_depth[cx]'s climb is shared across every row of
-     * the SAME column, so it needs the row nearer the surface (here, the
-     * BOTTOM of the screen) painted first, or a dirty row further from the
-     * surface reads whatever a DIFFERENT, farther row left behind the last
-     * time IT was nearer the front of the sweep, not last frame's own value
-     * for the row actually being painted. row_stable_depth[] has no such
-     * dependency (see its own comment for why not), so this reversal is
-     * entirely for the vertical array's sake. THE CONDITION IS SIMPLER now
-     * than it used to be: the vertical walk runs every frame unconditionally
-     * (see LOCAL DEPTH's own top comment), so this is just "does gravity
-     * point up" - `local_depth_v_reverse` alone - with no "and is vertical
-     * dominant this frame" to ask alongside it any more. Reversing here,
-     * rather than juggling which array slot means "toward the surface"
-     * inside the depth bookkeeping itself, is safe because nothing else in
-     * this loop depends on row order - dirty_rows[cy], row_run_x0/x1/n,
-     * row_has_shine[cy] and row_has_liquid[cy] are all indexed by cy
-     * directly, and gfx_mark_dirty() below only ever unions a bounding box,
-     * which does not care what order the boxes arrive in either. */
+    /* Ordinarily ascending - but see local_depth_row_a[]/local_depth_row_b[]'s
+     * own comment in paint_row_n() for why a gravity-UP frame walks this
+     * loop in the OPPOSITE order instead: local_depth_cur_row[]/local_
+     * depth_prev_row[]'s own pointer swap means "the row painted before this
+     * one" is only meaningful if rows are actually visited surface-first, or
+     * a dirty row far from the surface reads whatever a DIFFERENT, farther
+     * row left behind the last time IT was nearer the front of the sweep,
+     * not last frame's own value for the row actually being painted. UNLIKE
+     * the two-walk design (where only the vertical array needed this and
+     * the horizontal one never did), BOTH regimes of the single ray walk
+     * depend on row order now - see LOCAL DEPTH's own top comment for why
+     * one row-order rule (driven by gy's sign alone) turns out to serve
+     * both the vertical-dominant regime's own per-row chain AND the
+     * horizontal-dominant regime's own occasional cross-row reads. Just
+     * "does gravity point up" - `local_depth_v_reverse` alone - with no
+     * "and which regime is active this frame" to ask alongside it: the same
+     * rule the two-walk design would have needed one flag for, this one
+     * needs for a different, cleaner reason (see paint_row_n()'s own "THE
+     * ROW OFFSET, WITHOUT AN ACCUMULATOR"). Reversing here, rather than
+     * juggling which array slot means "toward the surface" inside the depth
+     * bookkeeping itself, is safe because nothing else in this loop depends
+     * on row order - dirty_rows[cy], row_run_x0/x1/n, row_has_shine[cy] and
+     * row_has_liquid[cy] are all indexed by cy directly, and
+     * gfx_mark_dirty() below only ever unions a bounding box, which does
+     * not care what order the boxes arrive in either. */
     const bool reverse_rows = local_depth_v_reverse;
 
     for (int i = 0; i < grid_h; i++) {
@@ -3544,14 +3644,14 @@ static void sand_frame(uint32_t dt_ms, const input_t *input)
      * reads whatever shine_ux_q8/shine_uy_q8 hold at the time it runs. */
     material_shine_direction(gx, gy, &shine_ux_q8, &shine_uy_q8);
 
-    /* The liquid interior's LOCAL DEPTH blend needs its own per-frame facts
-     * from this same gravity vector - the blend weight, and which way each
-     * of the two independent scans runs - but it is not material_set_
-     * gravity()'s to compute: the persistent per-column and per-row arrays
-     * it feeds belong to THIS file, which owns the row-by-row paint call
-     * sequence they are carried across (see col_stable_depth[]'s own
-     * comment in paint_row_n() below for the full mechanism, and why
-     * material.c has nothing left to do with depth at all). */
+    /* The liquid interior's LOCAL DEPTH walk needs its own per-frame facts
+     * from this same gravity vector - the scale, which regime is dominant,
+     * and which way each scan runs - but it is not material_set_gravity()'s
+     * to compute: the persistent, cx-indexed arrays it feeds belong to THIS
+     * file, which owns the row-by-row paint call sequence they are carried
+     * across (see local_depth_row_a[]/local_depth_row_b[]'s own comment
+     * above paint_row_n() for the full mechanism, and why material.c has
+     * nothing left to do with depth at all). */
     update_local_depth_gravity(gx, gy);
 
     /* Water's foam gets its own per-frame fact, deliberately a separate

@@ -2373,24 +2373,24 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
      * THIS USED TO also accept the same single-dominant-axis approximation
      * build_xflow() (sand.c) takes for the simulation's own movement -
      * `|gy| >= |gx|` picking a straight vertical or horizontal "toward the
-     * surface" rather than bracketing a genuinely diagonal gravity with two
-     * rays. NOT ANY MORE: that discrete switch, even with hysteresis added
-     * against chatter right at the tie point, still meant a rare flip could
-     * swap in a very different depth reading for every cell near an
-     * obstacle all at once, reading as a visible pop no matter how seldom it
-     * fired. app_sand.c now computes BOTH the vertical and horizontal
-     * reading for every cell, every frame, and blends them continuously by
-     * gravity's own |gx|/|gy| ratio - see LOCAL DEPTH's own comment there
-     * for the full mechanism. This function still has no idea any of that
-     * is happening, which is the point: `depth` arrives as one already-
-     * blended number, exactly as ignorant of where it came from as it was
-     * of the single-axis switch before it. The other accepted trade-off is
+     * surface" rather than bracketing a genuinely diagonal gravity properly.
+     * That discrete switch went through two more shapes after this comment
+     * was last true here - a blend of two axis-aligned walks, then a
+     * projection-then-max combiner over the same two walks, both replaced in
+     * turn by a single walk that steps ALONG the gravity ray itself, by
+     * Bresenham (see LOCAL DEPTH's own top comment in app_sand.c for why:
+     * an axis-aligned walk, however its two readings get combined, can only
+     * ever cast an axis-aligned obstacle shadow, never one that follows the
+     * actual tilt). This function still has no idea any of that history
+     * happened, which is the point: `depth` arrives as one already-computed
+     * number, exactly as ignorant of where it came from as it was of the
+     * single-axis switch before any of it. The other accepted trade-off is
      * staleness under the dirty-row optimisation - only rows something else
      * marked dirty ever get repainted, so a column's stored depth for a row
      * that has not repainted in a while can lag the puddle's current shape
-     * - see col_stable_depth[]'s own comment in app_sand.c for why that costs
-     * nothing extra to accept and matches the precedent already established
-     * for foam's own drift.
+     * - see local_depth_row_a[]/local_depth_row_b[]'s own comment in
+     * app_sand.c for why that costs nothing extra to accept and matches the
+     * precedent already established for foam's own drift.
      *
      * INTERIOR ONLY, DELIBERATELY NOT THE RIM. A rim cell already carries
      * two terms - its own fill level, and liquid_spec[]'s specular shift -
