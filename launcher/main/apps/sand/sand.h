@@ -368,6 +368,7 @@ typedef struct {
     int      boils;        /* see sand_set_boils() */
     int      condenses;    /* see sand_set_condenses() */
     int      lava_cooloff; /* see sand_set_lava_cooloff() */
+    int      lava_burst;   /* see sand_set_lava_burst() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1820,6 +1821,56 @@ void sand_set_lava_cooloff(sand_t *s, int chance);
  * other five sentinels above answer "whose rate", this one only ever
  * answers "which constant". */
 #define SAND_LAVA_COOLOFF_DEFAULT (-1)
+
+/* How many of a lava cell's 4 cardinal neighbours (cover_count(),
+ * sand_reactions.c) must be a powder or solid - not a liquid, strictly
+ * denser than lava, exactly neighbor_smothers()'s own test - before the
+ * cell is eligible to burst (bd esp32c6-mqt). 3, not smothered()'s own
+ * all-4: a pocket with one open side still counts as "covered enough",
+ * which is what lets a hand-built vessel with a single gap still be a
+ * container worth bursting out of, rather than requiring the airtight
+ * seal smothering a flame needs. Out-of-bounds never counts as cover -
+ * the board edge is not a container a player built, the same rule
+ * gas_ignite_confined() states for its own neighbour scan. */
+#define SAND_LAVA_BURST_COVER    3
+
+/* Chance in 256 a sufficiently-covered lava cell converts to MAT_STONE
+ * and bursts, PER COVERED CELL, PER STEP - not per pool, not per event.
+ * This is the exact multiplier mistake reaction_t.vent_chance's own
+ * comment (material.c) documents making TWICE: a figure that reads as
+ * "extremely low" in isolation is anything but, once a large sealed pool
+ * has dozens of covered cells each independently rolling this every
+ * single step they stay covered. 1 is deliberately the rarest a single
+ * byte-wide roll (rng_next(&s->rng) & 0xFF, this file's usual shape) can
+ * express - start at the floor, not at whatever "feels right" in
+ * isolation, and tune upward on device with the aggregate in mind, not
+ * the single-cell figure. If device play says this is still too frequent
+ * even at 1, the documented next move is a SECOND, independent gate in
+ * step_one_dissolver_cell()'s own 1-in-60-on-`.evaporates` style (this
+ * file), not a new field alongside this one - vent_chance already tried
+ * "add a knob" once, in the form of its own second roll, and that is not
+ * a pattern to repeat casually. */
+#define SAND_LAVA_BURST_CHANCE   1
+
+/* SAND_GAS_IGNITE_BLAST_RADIUS's own figure (sand_reactions.c) - the only
+ * other reaction-driven sand_explode() caller that exists today, so
+ * there is no reason yet for this one to differ from it. A starting
+ * point to tune on device, not a considered figure of its own. */
+#define SAND_LAVA_BURST_RADIUS   8
+
+/* Overrides SAND_LAVA_BURST_CHANCE for every lava cell alike - the same
+ * shape as sand_set_lava_cooloff() just above, for the same reason: a
+ * test that wants a burst to fire (or never fire) deterministically
+ * cannot wait out a 1-in-256 roll and stay fast. Clamped to [0, 255]
+ * exactly like every other chance-in-256 setter in this file. */
+void sand_set_lava_burst(sand_t *s, int chance);
+
+/* The sentinel sand_set_lava_burst(s, chance < 0) restores, and what
+ * sand_init() itself starts every sand_t at - "use
+ * SAND_LAVA_BURST_CHANCE", named _DEFAULT rather than _PER_MATERIAL for
+ * the same reason SAND_LAVA_COOLOFF_DEFAULT is: this has no per-material
+ * table figure to fall back to, only the one constant. */
+#define SAND_LAVA_BURST_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,

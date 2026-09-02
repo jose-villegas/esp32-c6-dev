@@ -9111,6 +9111,11 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
         }
     }
     sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    /* This scene is exactly SAND_LAVA_BURST_COVER-or-more covered (bd
+     * esp32c6-mqt) - pinned off so this test still isolates smothered()'s
+     * own exemption, the thing it actually names, rather than flickering
+     * on the unrelated burst roll every step this cell stays covered. */
+    sand_set_lava_burst(&s, 0);
     const int before = liquid_mass_of(MAT_LAVA);
     TEST_ASSERT_EQUAL_INT_MESSAGE(MASS_MAX, before,
         "fixture check: one full cell of lava, walled in on all four sides");
@@ -9123,6 +9128,204 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
         "lava walled in by stone must still be there - smothering puts a "
         "FLAME out because burial starves it of air, and lava is not "
         "burning anything");
+}
+
+/* bd esp32c6-mqt: burial no longer means "lasts forever" either. A lava
+ * cell covered on SAND_LAVA_BURST_COVER or more of its 4 cardinal sides
+ * gets a tiny per-step chance to convert to MAT_STONE and burst - the
+ * chosen replacement for the vent machinery (bd esp32c6-0f2 removes that
+ * separately, later) and the mechanism that reopens a sealed pool's crust
+ * so a sustained pour can keep reaching lava (see cool_off_chain()'s own
+ * comment, sand_reactions.c).
+ *
+ * Exactly the same fully-walled scene test_lava_buried_in_stone_is_not_
+ * deleted uses, this time with the burst chance pinned to its maximum
+ * instead of pinned off.
+ *
+ * PINS THE ONE BEHAVIOUR THE BRIEF FOR THIS CHANGE CALLS OUT BY NAME:
+ * sand_explode() fills a core of radius `radius / SAND_EXPLODE_CORE_
+ * DIVISOR` with fire FIRST, unconditionally, before it queues a single
+ * flight entry (sand.h, SAND_EXPLODE_CORE_DIVISOR's own comment) - at
+ * SAND_LAVA_BURST_RADIUS(8) and divisor 5 that core radius is 1, so the
+ * MAT_STONE this feature just wrote at the centre is immediately
+ * overwritten by fresh fire. Asserted directly, not assumed - the same
+ * discipline test_a_confined_gas_pocket_bursts_instead_of_just_catching
+ * already applies to its own centre cell for gas's identical sand_
+ * explode() core fill. */
+static void test_buried_lava_bursts_into_stone_and_fire(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    const int cx = W / 2, cy = H / 2;
+    sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "buried-lava-burst impulse queue must fit in what the framebuffer "
+        "leaves");
+    sand_enable_impulses(&s, buf, W * H);
+    sand_set_lava_burst(&s, 255);
+
+    bool burst = false;
+    for (int i = 0; i < 10 && !burst; i++) {
+        sand_step(&s, 0, 1000, 0);
+        burst = CELL_MATERIAL(sand_at(&s, cx, cy)) != MAT_LAVA;
+    }
+
+    const uint8_t centre_material = CELL_MATERIAL(sand_at(&s, cx, cy));
+    const int impulse_count = s.impulse_count;
+    /* Cover disturbed - at least one of the four cells that were doing
+     * the covering must no longer be plain, undisturbed stone, or nothing
+     * actually exploded outward from the centre. */
+    int cover_disturbed = 0;
+    if (CELL_MATERIAL(sand_at(&s, cx - 1, cy)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx + 1, cy)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx, cy - 1)) != MAT_STONE) cover_disturbed++;
+    if (CELL_MATERIAL(sand_at(&s, cx, cy + 1)) != MAT_STONE) cover_disturbed++;
+
+    /* Freed BEFORE the assertions: Unity longjmps out of a failure, so a
+     * free() after one never runs - see drop_impulse_buf's own comment
+     * above. */
+    free(buf);
+
+    TEST_ASSERT_TRUE_MESSAGE(burst,
+        "a lava cell covered on all four sides, with the burst chance "
+        "pinned to its maximum, must stop being lava within this budget");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_FIRE, centre_material,
+        "sand_explode()'s own core fill (SAND_EXPLODE_CORE_DIVISOR, "
+        "sand.h) overwrites the centre cell with fire on its very first "
+        "line, occupied or not - the MAT_STONE this feature just wrote "
+        "there does not survive to be seen, and that is expected, pinned "
+        "behaviour, not a bug");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, impulse_count,
+        "a real burst must also queue its own outward annulus, not just "
+        "fill a core of fire in place");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, cover_disturbed,
+        "the burst must disturb at least one of the four cells that were "
+        "covering it, or nothing actually exploded outward");
+}
+
+/* THE THRESHOLD. Exactly SAND_LAVA_BURST_COVER - 1 (2) covered sides must
+ * never burst, however long it runs and however high the chance is
+ * pinned - this is the test that fails silently (goes green when it
+ * should not) if cover_count() were ever compared with the wrong operator
+ * (> instead of >=, or against 4 instead of SAND_LAVA_BURST_COVER).
+ *
+ * A HORIZONTAL TUNNEL, NOT A SINGLE CELL - built so cover_count() is
+ * structurally pinned at 2 for every lava cell in the scene regardless of
+ * how the lava itself moves: the whole row is walled by stone above and
+ * below, and the sideways neighbours of any lava cell in it are either
+ * more of the SAME liquid (neighbor_smothers() never counts a liquid
+ * neighbour - see its own comment, sand_reactions.c) or off the edge of
+ * the board (also never counted - covered_from_above()'s/gas_ignite_
+ * confined()'s own "the board edge is not a container a player built").
+ * A single isolated cell with two open sides would not give this
+ * guarantee - liquid movement into the open sides could change its own
+ * cover_count from step to step, and the test would only be pinning
+ * "usually stays under 3", not "structurally cannot reach 3". */
+static void test_lava_with_only_two_covered_sides_never_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    const int y = H / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, y - 1, STONE);
+        sand_set(&s, x, y + 1, STONE);
+        sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+    sand_set_lava_burst(&s, 255);
+    const int before = liquid_mass_of(MAT_LAVA);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(W * MASS_MAX, before,
+        "fixture check: a full-width tunnel of lava, walled top and "
+        "bottom only");
+
+    for (int i = 0; i < 500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "a lava cell covered on only 2 of its 4 cardinal sides must never "
+        "burst, no matter how high the chance is pinned or how long it "
+        "runs - SAND_LAVA_BURST_COVER is 3, not 2");
+}
+
+/* THE NEGATIVE COUNTERPART: an ordinary, uncovered open pool - a floor
+ * beneath it, open air above and to both sides - must never burst either,
+ * however high the chance is pinned. Guards against this firing on scenes
+ * it must not touch at all, not just against the threshold being wrong. */
+static void test_an_open_lava_pool_never_bursts(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 2; x < W - 2; x++) {
+        sand_set(&s, x, H - 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+    sand_set_lava_burst(&s, 255);
+    const int before = liquid_mass_of(MAT_LAVA);
+    TEST_ASSERT_TRUE_MESSAGE(before > 0,
+        "fixture check: an open pool of lava sitting on a floor");
+
+    for (int i = 0; i < 500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "an ordinary open lava pool - a floor beneath it, open air above "
+        "and to both sides - must never burst, however high the chance "
+        "is pinned");
+}
+
+/* sand_explode() is a documented no-op without sand_enable_impulses()
+ * (its own first line, sand.c) - so with impulses never enabled, a burst
+ * must still convert the cell to MAT_STONE (place_reacted() does not
+ * touch s->impulse_buf at all) and simply throw nothing. Not gated on
+ * impulses being enabled at all - see step_one_burning_cell()'s own new
+ * block for why that is correct rather than a gap: no impulses means no
+ * explosions anywhere else in the simulation either, and a bare
+ * conversion to stone is not a wrong answer on its own. */
+static void test_buried_lava_still_becomes_stone_with_impulses_off(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    const int cx = W / 2, cy = H / 2;
+    sand_set(&s, cx, cy, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set_lava_burst(&s, 255);
+
+    bool converted = false;
+    for (int i = 0; i < 10 && !converted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        converted = CELL_MATERIAL(sand_at(&s, cx, cy)) != MAT_LAVA;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(converted,
+        "a covered lava cell must still convert away from lava within "
+        "this budget even with impulses never enabled");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, cx, cy)),
+        "with no impulse buffer, sand_explode() is a pure no-op - the "
+        "centre cell must become stone and stay stone, not fire, since "
+        "nothing was thrown to fill any core with");
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            TEST_ASSERT_NOT_EQUAL_INT_MESSAGE(MAT_FIRE,
+                CELL_MATERIAL(sand_at(&s, cx + dx, cy + dy)),
+                "no impulse buffer means no explosion at all - fire must "
+                "not appear anywhere around the converted cell either");
+        }
+    }
 }
 
 /* Nor does conducted heat boil it away.
@@ -13495,6 +13698,11 @@ static void test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself(void)
     }
     sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
     sand_set_lava_cooloff(&s, 255);
+    /* Same reasoning as test_lava_buried_in_stone_is_not_deleted's own
+     * addition: this scene is covered enough to be burst-eligible (bd
+     * esp32c6-mqt), and this test's job is trigger A/cool_off_chain's own
+     * ALWAYS-ON-DRAIN guard, not the unrelated burst roll. */
+    sand_set_lava_burst(&s, 0);
     const int before = liquid_mass_of(MAT_LAVA);
 
     for (int i = 0; i < 400; i++) {
@@ -15118,6 +15326,12 @@ static void test_the_rod_terminates_at_conduct_reach_not_the_far_wall(void)
     sand_init(&rod, rod_cells, ROD_W, ROD_H, 3u);
     sand_set_mobility(&rod, 0);
     sand_set_conduction(&rod, 255);
+    /* The lava source sits boxed in on 3-4 sides for the whole run - more
+     * than enough cover to be burst-eligible (bd esp32c6-mqt) over 6000
+     * steps. Pinned off: this test's job is the rod's own growth/cap
+     * mechanism, not the unrelated chance of the source itself bursting
+     * away mid-growth. */
+    sand_set_lava_burst(&rod, 0);
 
     const int y = 2;
     const int lava_x = 1;
@@ -15653,6 +15867,11 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
         sand_init(&c, cells, POD_GRID_W, CAP_TEST_H, 3u + (unsigned)k);
         sand_enable_impulses(&c, impulses, POD_GRID_W * CAP_TEST_H);
         sand_set_vent_chance(&c, 255);  /* see sealed_lava()'s own comment */
+        /* This test is specifically about the vent machinery (bd
+         * esp32c6-0f2 replaces it later; untouched here) - pinned off so
+         * a burst (bd esp32c6-mqt) never fires its own sand_explode() and
+         * blows a hole through the seal this test is measuring. */
+        sand_set_lava_burst(&c, 0);
 
         const int y  = SAND_VENT_REACH + 3;
         const int lx = POD_GRID_W / 2;
@@ -15722,6 +15941,10 @@ static void test_sealed_lava_vent_caps_at_three_cells(void)
                   3u + (unsigned)(CAP_TEST_PODS + k));
         sand_enable_impulses(&c, impulses, POD_GRID_W * CAP_TEST_H);
         sand_set_vent_chance(&c, 255);
+        /* Same reasoning as EXACT_PODS above: pinned off so a burst (bd
+         * esp32c6-mqt) never detonates its own hole through this deep
+         * seal. */
+        sand_set_lava_burst(&c, 0);
 
         const int y  = SAND_VENT_REACH + 3;
         const int lx = POD_GRID_W / 2;
@@ -20954,6 +21177,12 @@ static void test_the_vent_spam_scene_reaches_the_vent_path_it_claims(void)
     sand_set_mobility(&s, SAND_MOBILITY_PER_MATERIAL);
     sand_enable_impulses(&s, impulses, VENT_SPAM_IMPULSE_MAX);
     sand_set_vent_chance(&s, 255);  /* see this section's own top comment */
+    /* VENT_SPAM_COUNT covered pockets over 10 steps is enough rolls for
+     * even burst's (bd esp32c6-mqt) deliberately rare per-cell chance to
+     * land a few times, converting lava this test's own "the originating
+     * cell never changes" assertion (below) is not about - pinned off so
+     * this test still isolates the vent path it claims to measure. */
+    sand_set_lava_burst(&s, 0);
 
     build_vent_spam_scene(&s);
 
@@ -23290,6 +23519,10 @@ void run_sand_suite(void)
     RUN_TEST(test_foam_never_stalls_between_frames);
     RUN_TEST(test_foam_blobs_are_bigger_than_one_cell);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
+    RUN_TEST(test_buried_lava_bursts_into_stone_and_fire);
+    RUN_TEST(test_lava_with_only_two_covered_sides_never_bursts);
+    RUN_TEST(test_an_open_lava_pool_never_bursts);
+    RUN_TEST(test_buried_lava_still_becomes_stone_with_impulses_off);
     RUN_TEST(test_lava_is_not_boiled_by_its_own_conducted_heat);
     RUN_TEST(test_the_mixed_scene_puts_every_material_pair_in_contact);
     RUN_TEST(test_the_four_liquid_scene_keeps_reacting_after_settling);
