@@ -754,6 +754,12 @@ static void crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from,
  * earlier of its two callers. */
 static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int h, uint8_t spec);
 
+/* Defined just below try_heat_transform() itself - the wrapper needs to
+ * call forward into the core it hands off to (stage 2 of bd esp32c6-iu5's
+ * pair-matrix restructure - see try_heat_transform()'s own comment). */
+static inline __attribute__((always_inline)) bool try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h,
+                                                                           size_t at, cell_t n);
+
 /* How many consecutive successful dry smelts share one flaw/no-flaw
  * decision - see reaction_t.flaw_to's own comment (material.h) for what
  * this exists to fix, and try_heat_transform()'s SMELT FLAW comment below
@@ -799,11 +805,25 @@ static inline bool emit_into_empty_neighbor(sand_t* s, int x, int y, int w, int 
 /* Turns (nx, ny) into whatever reaction_t.heats_to names, if it is in
  * bounds and the roll succeeds - heat WITHOUT burning.
  *
- * Sand into glass is the only use today. Kept apart from try_ignite()
+ * Sand into glass is the only use today. Kept apart from try_ignite_given()
  * rather than folded into it because the two are different events that
  * happen to share a trigger: one is combustion and consumes fuel, the
  * other is a phase change and consumes nothing. A material can sensibly
  * have both, neither, or one.
+ *
+ * SPLIT IN TWO for stage 2 of bd esp32c6-iu5's pair-matrix restructure -
+ * this self-contained wrapper (bounds check, cell load, PAIR_HEAT_
+ * RESPONSIVE gate) for the three call sites that have no neighbour of
+ * their own already loaded (step_one_cold_cell()'s two, conduct_heat()'s
+ * one - all completely unchanged by this split, same signature, same
+ * bytes at the source level), and try_heat_transform_given() below for the
+ * fourth: the shared ignite+heat walk in step_one_burning_cell(), which
+ * loads the neighbour and its pair_bits[][] byte once for BOTH probes and
+ * has no reason to pay this wrapper's redundant second load and second
+ * gate test. Every call this wrapper makes to the core below happens
+ * after this wrapper has done its own three prologue steps, so nothing
+ * about what a neighbour must pass to reach the core changed - only who
+ * does the checking, and how many times.
  *
  * Returns whether it changed anything. */
 static inline __attribute__((always_inline)) bool
@@ -829,6 +849,25 @@ try_heat_transform(sand_t* s, int nx, int ny, int w, int h) {
     if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_HEAT_RESPONSIVE) == 0) {
         return false;
     }
+    return try_heat_transform_given(s, nx, ny, w, h, at, n);
+}
+
+/* The core try_heat_transform() above hands off to once its own three
+ * prologue checks pass - GIVEN a neighbour already known non-empty and
+ * already known PAIR_HEAT_RESPONSIVE, not re-deriving either. FORCED
+ * INLINE for the same reason the wrapper above always was (see git blame
+ * on this comment's previous home): this now has two real call sites -
+ * the wrapper's own body, and the shared walk in step_one_burning_cell()
+ * - but always_inline is unconditional regardless of call-site count, the
+ * same bet the wrapper's four call sites were already making before this
+ * split existed. The wrapper's own four call sites are untouched by this
+ * split (same source, same signature), so whatever they cost before they
+ * cost now; the shared walk's direct call is the new one, and the one the
+ * device object gate below has to confirm actually shrank
+ * step_one_burning_cell() the way the bd issue expected rather than just
+ * moving bytes around. */
+static inline __attribute__((always_inline)) bool
+try_heat_transform_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     const reaction_t* r = reaction_of(n);
 
     /* A material that BANKS heat climbs one level instead of transforming,
@@ -2819,34 +2858,27 @@ gas_ignite_confined(const sand_t* s, int x, int y, int w, int h) {
     return false;
 }
 
-/* Ignites (nx, ny) in place if it is in bounds, holds a non-empty
- * flammable material, and the roll for it succeeds. Returns whether it
- * did - the caller needs this to know whether this burning cell reacted
- * at all. Wake/dirty bookkeeping targets (nx, ny), the cell that
- * actually changed - not whatever burning cell called this, which did
- * not. */
+/* Ignites (nx, ny) in place if it holds a flammable material and the roll
+ * for it succeeds. Returns whether it did - the caller needs this to know
+ * whether this burning cell reacted at all. Wake/dirty bookkeeping targets
+ * (nx, ny), the cell that actually changed - not whatever burning cell
+ * called this, which did not.
+ *
+ * STAGE 2 OF bd esp32c6-iu5's pair-matrix restructure: GIVEN a neighbour
+ * already loaded and classified, not loading or classifying it itself.
+ * This used to be self-contained (bounds check, cell load, PAIR_IGNITABLE
+ * gate, all inline here) - it had exactly ONE call site, the shared
+ * ignite+heat walk in step_one_burning_cell(), and that walk is the only
+ * caller of try_heat_transform_given() (below) too. Cascading both from
+ * one bounds-check + one cell load + one pair_bits[][] byte, done once by
+ * the walk instead of twice (once per probe), is the whole point of this
+ * stage - see step_one_burning_cell()'s own comment on the walk for the
+ * exact shape. Safe to do here without touching call-site count anywhere:
+ * this function had one call site before and has the same one now, so
+ * -finline-functions-called-once still applies unconditionally regardless
+ * of this function's size, the same guarantee it always had. */
 static inline bool
-try_ignite(sand_t* s, int nx, int ny, int w, int h) {
-    if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-        return false;
-    }
-    const size_t at = (size_t)ny * (size_t)w + (size_t)nx;
-    const cell_t n = s->cells[at];
-    if (CELL_IS_EMPTY(n)) {
-        return false;
-    }
-    /* PAIR_IGNITABLE (this file's own top comment): a neighbour whose bit
-     * is clear has flammability == 0 in every ordinary material's own row,
-     * so this rejects it before reaction_of(n)'s load - new relative to
-     * before this table existed, this call had no pre-roll reject of its
-     * own. MAT_EXTENDED's bit is set the moment ANY extended material is
-     * flammable, so every extended cell still reaches the real check just
-     * below unconditionally - the `r->flammability == 0` line stays, it is
-     * what tells ice (never) from plant (sometimes) apart once bit 15 has
-     * already said "worth asking". */
-    if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_IGNITABLE) == 0) {
-        return false;
-    }
+try_ignite_given(sand_t* s, int nx, int ny, int w, int h, size_t at, cell_t n) {
     const reaction_t* r = reaction_of(n);
     if (r->flammability == 0) {
         return false;
@@ -3733,16 +3765,74 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         acted = true;
     }
 
+    /* STAGE 2 OF bd esp32c6-iu5's pair-matrix restructure: THE CASCADE.
+     * Bounds-check, load and classify each neighbour exactly ONCE per
+     * iteration - one cell load, one pair_bits[mat_id][theirs] byte load -
+     * and feed both probes from that one classification, instead of each
+     * of try_ignite()/try_heat_transform() separately re-deriving the same
+     * three facts about the same cell (their own former bodies, still
+     * intact in try_heat_transform()'s wrapper for its other three callers
+     * - see that function's own comment). try_ignite_given()/
+     * try_heat_transform_given() (both above) are exactly the OLD try_
+     * ignite()/try_heat_transform() bodies with that shared prologue cut
+     * away - nothing past this point differs from before, so the RNG draw
+     * sequence is unchanged cell by cell, direction by direction: ignite
+     * is still tried before heat transform, for every direction, in the
+     * same reaction_dirs[] order as always. See sand_step_reactions()'s
+     * own comment for why this is safe to gate on the pair byte alone:
+     * PAIR_IGNITABLE/PAIR_HEAT_RESPONSIVE mean exactly what try_ignite_
+     * given()'s/try_heat_transform_given()'s own first real checks would
+     * have decided anyway - the fingerprint gate this stage is committed
+     * under proves it, not just this comment.
+     *
+     * Explicitly still NOT merged with the quench walk above or the
+     * conduct_heat() walk below - see this file's own top comment on why
+     * those stay separate passes over the same four neighbours: merging
+     * them would reorder RNG draws between the three walks, which the bd
+     * issue calls out as reordering-territory, not this stage's job.
+     *
+     * my_pair_row HOISTED OUT OF THE LOOP: mat_id is loop-invariant (this
+     * cell's own material, fixed for all four directions), so pair_bits
+     * [mat_id] is one row-base address good for the whole loop, rather
+     * than a fresh pair_bits[mat_id][...] index - and therefore a fresh
+     * runtime multiply - every iteration. Tried BECAUSE the host probe
+     * (best of 7, twice) measured lava stress/four liquids/smoke+steam a
+     * couple percent SLOWER against stage 1 despite this stage's own
+     * objdump showing step_one_burning_cell() genuinely smaller - the
+     * multiply was the obvious suspect, since pair_theirs_bits()'s own
+     * MAT_EMPTY-row trick (stage 1) is a compile-time-zero offset the
+     * compiler folds away for free, and a runtime row index is not free
+     * the same way. Measured, not assumed to have fixed it: hoisting
+     * moved the host numbers by well under a percent, so the multiply was
+     * not the (or not the whole) explanation. Left in regardless - it is
+     * strictly no worse, plainly correct, and one less thing to suspect
+     * next time - but the regression itself is reported as-is below,
+     * unexplained, rather than claimed fixed. Per this project's own
+     * "host numbers mispredicting the device" lesson (docs/Sand/
+     * Performance-Tuning-Attempts.md): this stage removes real RNG-
+     * avoiding and load-avoiding work, which is exactly the shape of
+     * change host and device have disagreed on before - a device capture
+     * settles this, a host number alone does not. */
+    const uint8_t* my_pair_row = pair_bits[mat_id];
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
         const int ny = y + reaction_dirs[d][1];
-        if (try_ignite(s, nx, ny, w, h)) {
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        const uint8_t pair = my_pair_row[CELL_MATERIAL(n)];
+        if ((pair & PAIR_IGNITABLE) != 0 && try_ignite_given(s, nx, ny, w, h, nat, n)) {
             acted = true;
         }
         /* Separate from ignition, and reached whether or not that fired:
          * a neighbour is either fuel or something heat merely changes, and
          * nothing is both today, but there is no reason one could not be. */
-        if (try_heat_transform(s, nx, ny, w, h)) {
+        if ((pair & PAIR_HEAT_RESPONSIVE) != 0 && try_heat_transform_given(s, nx, ny, w, h, nat, n)) {
             acted = true;
         }
     }
