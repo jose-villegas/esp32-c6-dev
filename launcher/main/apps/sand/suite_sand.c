@@ -5383,6 +5383,105 @@ static void test_stone_heats_up_next_to_lava(void)
         "the other");
 }
 
+/* Seals a single WATER cell at (4, 3) into a one-cell pocket, walled on
+ * every side except the face touching the hot stone this test cares
+ * about - stone at (3, 3), left open on purpose. Without this, water is
+ * KIND_LIQUID and falls: a bare CELL_MAKE(MAT_WATER, ...) placed beside
+ * the target drains away under gravity within the first step or two, and
+ * the "wet" test only ever sees the target cell for that first step - the
+ * rest of a long cooldown then runs at the plain DRY rate regardless of
+ * SAND_WET_COOLING_FACTOR, which is indistinguishable from the feature
+ * being absent (caught by this test itself: it failed exactly this way
+ * on the first pass, both runs converging to the same step count, before
+ * the pocket was added). */
+static void seal_water_beside(int wx, int wy)
+{
+    sand_set(&s, wx, wy, WATER);
+    sand_set(&s, wx + 1, wy, STONE);       /* blocks rightward cross-flow */
+    sand_set(&s, wx,     wy + 1, STONE);   /* blocks the straight-down fall */
+    sand_set(&s, wx + 1, wy + 1, STONE);   /* blocks the down-right diagonal */
+    sand_set(&s, wx - 1, wy + 1, STONE);   /* blocks the down-left diagonal -
+                                             * directly under the target cell
+                                             * this pocket sits beside, which
+                                             * is otherwise the one open
+                                             * gravity-ward move move_liquid_
+                                             * grain() would take, draining
+                                             * the pocket a little every step
+                                             * until nothing was left to be
+                                             * wet with */
+}
+
+/* Pour water on a hot wall and its banked heat drains back to room
+ * temperature far faster than ambient `cools` alone manages -
+ * SAND_WET_COOLING_FACTOR (sand.h), applied in step_one_tempered_cell()'s
+ * neighbour walk (sand_reactions.c). Proven by DERIVING the step budget
+ * from the wet cell's own run rather than guessing a constant: however
+ * SAND_WET_COOLING_FACTOR or stone's own `cools` are ever retuned, a dry
+ * twin given the exact same number of steps the wet cell needed to reach
+ * ambient must still be short of it - if it were not, the multiplier
+ * would not actually be doing anything. */
+static void test_water_cools_hot_stone_back_to_room_temperature(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    seal_water_beside(4, 3);
+
+    int wet_steps = 0;
+    while (wet_steps < 2000 &&
+           CELL_VARIANT(sand_at(&s, 3, 3)) != SAND_AMBIENT_HEAT) {
+        sand_step(&s, 0, 1000, 0);
+        wet_steps++;
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT,
+        CELL_VARIANT(sand_at(&s, 3, 3)),
+        "stone started at the top of its ramp with water beside it the "
+        "whole time - it must reach room temperature well inside this "
+        "budget, or SAND_WET_COOLING_FACTOR is not doing anything");
+
+    fixture();
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    for (int i = 0; i < wet_steps; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(SAND_AMBIENT_HEAT,
+        CELL_VARIANT(sand_at(&s, 3, 3)),
+        "a DRY control cell, given the exact same number of steps that "
+        "just cooled its wet twin all the way to ambient, must still be "
+        "warmer than room temperature - proving the water did the "
+        "cooling, not merely the passage of time");
+}
+
+/* Water is a coolant, not a chiller - it can knock banked heat back down
+ * to SAND_AMBIENT_HEAT, but never past it. Going below ambient is
+ * snow/ice's job (`chills`) alone; letting water do it too would let a
+ * splash thermally shock glass, which step_one_tempered_cell()'s own
+ * comment on the ABOVE-ambient gate explains is exactly what this design
+ * avoids. Run far longer than test_water_cools_hot_stone_back_to_room_
+ * temperature's own budget needs, on purpose - this is a floor, and it
+ * has to hold forever, not just until the cell first reaches ambient. */
+static void test_water_never_chills_stone_below_room_temperature(void)
+{
+    fixture();
+    sand_set(&s, 3, 3, CELL_MAKE(MAT_STONE, MATERIAL_VARIANTS - 1));
+    seal_water_beside(4, 3);
+
+    int lowest = MATERIAL_VARIANTS;
+    for (int i = 0; i < 2000; i++) {
+        sand_step(&s, 0, 1000, 0);
+        const int v = CELL_VARIANT(sand_at(&s, 3, 3));
+        if (v < lowest) {
+            lowest = v;
+        }
+    }
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(SAND_AMBIENT_HEAT, lowest,
+        "a quenching liquid must never push a heat-ramping cell's own "
+        "variant below SAND_AMBIENT_HEAT - that would let water thermally "
+        "shock glass the way only snow is supposed to be able to");
+}
+
 /* But it never melts, however hot it gets, and that is the point of it.
  *
  * Glass names MAT_LAVA in `heats_to` and stone names nothing. If both
@@ -11925,6 +12024,240 @@ static void test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag(voi
         "setup: lava next to water must have quenched into stone within "
         "5 steps, or this test never exercised the mid-pass creation case "
         "it exists to guard");
+}
+
+/* A single-file shaft of lava, walled on both sides so the only cell a
+ * lava neighbour can ever be is the one straight down - which is what
+ * makes cool_off_chain()'s own walk (sand_reactions.c) deterministic here
+ * rather than wandering sideways through a wide pool. Water sits directly
+ * on top of the shaft's first cell; everything below it is stone, so the
+ * whole column can only ever be read as: the crust cool_off_chain() has
+ * reached so far, contiguous from the top. */
+#define LAVA_SHAFT_W    3
+#define LAVA_SHAFT_H    20
+#define LAVA_SHAFT_X    1
+#define LAVA_SHAFT_TOP  1
+#define LAVA_SHAFT_BOT  (LAVA_SHAFT_H - 2)  /* one cell above the floor */
+
+static void build_lava_shaft(sand_t *p, uint8_t *cells)
+{
+    sand_init(p, cells, LAVA_SHAFT_W, LAVA_SHAFT_H, 71u);
+    for (int y = 0; y < LAVA_SHAFT_H; y++) {
+        sand_set(p, LAVA_SHAFT_X - 1, y, STONE);
+        sand_set(p, LAVA_SHAFT_X + 1, y, STONE);
+    }
+    sand_set(p, LAVA_SHAFT_X, LAVA_SHAFT_H - 1, STONE); /* floor */
+    /* MASS_MAX, not the LAVA macro's mass of 8 - every cell in the shaft
+     * is full, so move_liquid_grain() finds no room in the cell below and
+     * the column sits motionless from the first step. A column of
+     * UNDER-full liquid cells is not at rest: each has room to take more,
+     * so ordinary liquid movement pours mass downward through it every
+     * step regardless of anything this test cares about, scrambling
+     * which cell holds how much lava before the reactions pass ever gets
+     * a turn - caught by this test itself, which saw its water vanish
+     * and its crust depth read 0 before this was full mass. */
+    for (int y = LAVA_SHAFT_TOP; y <= LAVA_SHAFT_BOT; y++) {
+        sand_set(p, LAVA_SHAFT_X, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    }
+}
+
+/* How many cells of MAT_STONE sit contiguous from the shaft's own top,
+ * i.e. how far the crust has eaten into what was a solid column of lava. */
+static int lava_shaft_crust_depth(sand_t *p)
+{
+    int depth = 0;
+    for (int y = LAVA_SHAFT_TOP; y <= LAVA_SHAFT_BOT; y++) {
+        if (CELL_MATERIAL(sand_at(p, LAVA_SHAFT_X, y)) != MAT_STONE) {
+            break;
+        }
+        depth++;
+    }
+    return depth;
+}
+
+/* A sustained pour reaches past the one cell water can physically touch.
+ * Water is re-sand_set() every step - the pour, sustained - directly onto
+ * whatever now sits at the shaft's top; with the cool-off chain pinned
+ * on, the first quench's own cool_off_chain() carries the freeze several
+ * cells deeper in that same event. Pinned OFF, the exact same scene must
+ * freeze only the one cell water ever actually touches - which is what
+ * proves the extra depth in the first half came from cool_off_chain()
+ * and not some other route lava has to cool. */
+static void test_a_water_pour_freezes_a_lava_pool_below_its_crust(void)
+{
+    uint8_t *cells = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells, "lava shaft grid must fit in what "
+        "the framebuffer leaves");
+
+    sand_t p;
+    build_lava_shaft(&p, cells);
+    sand_set_lava_cooloff(&p, 255);
+    for (int i = 0; i < 5; i++) {
+        sand_set(&p, LAVA_SHAFT_X, LAVA_SHAFT_TOP - 1, WATER);
+        sand_step(&p, 0, 1000, 0);
+    }
+    const int poured_depth = lava_shaft_crust_depth(&p);
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, poured_depth,
+        "a sustained pour with the cool-off chain pinned on must freeze "
+        "the pool below the single cell water actually touches - if this "
+        "is 1, cool_off_chain() never chained past the cell neighbor_"
+        "quenches() itself converts");
+
+    uint8_t *cells_off = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells_off, "lava shaft grid must fit in "
+        "what the framebuffer leaves");
+
+    sand_t p_off;
+    build_lava_shaft(&p_off, cells_off);
+    sand_set_lava_cooloff(&p_off, 0);
+    for (int i = 0; i < 5; i++) {
+        sand_set(&p_off, LAVA_SHAFT_X, LAVA_SHAFT_TOP - 1, WATER);
+        sand_step(&p_off, 0, 1000, 0);
+    }
+    const int off_depth = lava_shaft_crust_depth(&p_off);
+    free(cells_off);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, off_depth,
+        "with the cool-off chain pinned OFF, the same sustained pour must "
+        "still freeze the one cell water actually touches, and no "
+        "further - the baseline quench neither of these two variants "
+        "ever disabled");
+}
+
+/* The ALWAYS-ON-DRAIN GUARD. A single lava cell walled in by stone on all
+ * four sides, no water anywhere on the board, cool-off pinned to its
+ * maximum - the same scene test_lava_buried_in_stone_is_not_deleted uses
+ * to prove burial does not delete lava, with the one addition that
+ * matters here.
+ *
+ * Stone's own heat_ramp climb (banking one more level, same material, no
+ * melt - stone's heats_to is 0, see test_stone_never_melts_however_hot)
+ * returns TRUE from try_heat_transform_given() on nearly every step it
+ * still has room to climb. Gating cool_off_chain() on that return value
+ * ALONE, rather than on CELL_MATERIAL actually changing, would rack up a
+ * roll on almost every one of those climbs - an always-on drain that
+ * needs no pour and no fuel anywhere in the scene, which would empty this
+ * lava cell within the first handful of steps even though nothing here
+ * ever touches water. */
+static void test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself(void)
+{
+    fixture();
+    sand_clear(&s);
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
+    sand_set_lava_cooloff(&s, 255);
+    const int before = liquid_mass_of(MAT_LAVA);
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
+        "lava buried in dry stone, with the cool-off chance pinned to its "
+        "maximum and no water anywhere on the board, must not freeze "
+        "itself at all - the only thing that may ever cost it that chance "
+        "is doing the WORK of a genuine melt, and nothing here ever melts");
+}
+
+/* THE POSITIVE HALF of the guard above - which only ever proves trigger A
+ * did NOT fire, and would pass just as well if it were dead code. Sand's
+ * own melt to glass is the MEMORYLESS heats_to/heat_chance form
+ * (material.c - sand carries no heat_ramp of its own, unlike stone or
+ * glass), so a single successful roll flips CELL_MATERIAL straight from
+ * sand to glass with no "banks heat forever, never actually melts"
+ * escape hatch to hide behind - the exact, unambiguous kind of WORK
+ * trigger A is meant to charge lava for.
+ *
+ * Same scene, twice, cool-off pinned to the two extremes: pinning it does
+ * not gate whether the melt itself happens - conversion is sand's own
+ * heat_chance roll, untouched by any of this - only whether that melt
+ * then costs lava anything. Pinned high, the lava cell must become
+ * stone; pinned off, the identical melt must leave lava as lava. */
+static void test_lava_that_melts_sand_into_glass_sometimes_freezes_itself(void)
+{
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, LAVA);
+    sand_set(&s, 4, 3, SAND);
+    sand_set_lava_cooloff(&s, 255);
+
+    bool melted = false;
+    for (int i = 0; i < 500 && !melted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        melted = CELL_MATERIAL(sand_at(&s, 4, 3)) == MAT_GLASS;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(melted,
+        "setup: sand beside lava must melt to glass within this budget, "
+        "or this test never reached the event trigger A exists to charge "
+        "for");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "with the cool-off chance pinned to its maximum, lava that just "
+        "did the WORK of a genuine melt must pay for it - the lava cell "
+        "itself must become stone in that same step, or trigger A is "
+        "dead code the negative guard above would never catch on its "
+        "own");
+
+    fire_room(3, 4);
+    sand_set(&s, 3, 3, LAVA);
+    sand_set(&s, 4, 3, SAND);
+    sand_set_lava_cooloff(&s, 0);
+
+    melted = false;
+    for (int i = 0; i < 500 && !melted; i++) {
+        sand_step(&s, 0, 1000, 0);
+        melted = CELL_MATERIAL(sand_at(&s, 4, 3)) == MAT_GLASS;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(melted,
+        "setup: sand beside lava must melt to glass within this budget "
+        "with the cool-off chance pinned OFF too, or the two halves of "
+        "this test are not actually comparable");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_LAVA, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "with the cool-off chance pinned to zero, the exact same melt "
+        "must cost lava nothing - it must still be lava, not stone");
+}
+
+/* THE CHAIN IS BOUNDED. Pinned fully on, against a shaft deep enough that
+ * a chain running unbounded would eat the whole thing -
+ * SAND_LAVA_COOLOFF_MAX_CHAIN (sand.h) is 8, so the shaft's 18 lava cells
+ * leave a wide, unambiguous margin. One quench event only: a single step
+ * is enough for cool_off_chain() to run its entire walk, since the chain
+ * itself is not spread across steps the way the sustained pour above is.
+ *
+ * SAND_LAVA_COOLOFF_MAX_CHAIN + 1, not the chain's own cap alone, because
+ * the cap only bounds the CHAIN cool_off_chain() itself walks - the one
+ * cell neighbor_quenches() converts before ever calling it is not part
+ * of that walk, and this test has to count it too. Asserted against the
+ * real constant, not a hand-copied literal, so raising the cap cannot
+ * leave this silently stale the way a bare `9` would have. */
+static void test_the_cool_off_chain_is_bounded(void)
+{
+    uint8_t *cells = malloc((size_t)LAVA_SHAFT_W * LAVA_SHAFT_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells, "lava shaft grid must fit in what "
+        "the framebuffer leaves");
+
+    sand_t p;
+    build_lava_shaft(&p, cells);
+    sand_set_lava_cooloff(&p, 255);
+    sand_set(&p, LAVA_SHAFT_X, LAVA_SHAFT_TOP - 1, WATER);
+    sand_step(&p, 0, 1000, 0);
+    const int depth = lava_shaft_crust_depth(&p);
+    free(cells);
+
+    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(SAND_LAVA_COOLOFF_MAX_CHAIN + 1, depth,
+        "one quench event, chained fully on, must not convert more than "
+        "the quenched cell plus SAND_LAVA_COOLOFF_MAX_CHAIN further links "
+        "- an unbounded walk would run to the floor of a shaft this deep");
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(LAVA_SHAFT_BOT - LAVA_SHAFT_TOP + 1, depth,
+        "the shaft must still hold real, unconverted lava after one "
+        "event - if this fails the chain ate the WHOLE pool, which is "
+        "the failure mode the cap exists to rule out");
 }
 
 /* Lava burns, so it must not quench - the same rule oil needs, arrived
@@ -21576,6 +21909,8 @@ void run_sand_suite(void)
     RUN_TEST(test_extended_materials_get_their_own_reactions);
     RUN_TEST(test_ice_cracks_hot_glass_and_stays_where_it_is_put);
     RUN_TEST(test_stone_heats_up_next_to_lava);
+    RUN_TEST(test_water_cools_hot_stone_back_to_room_temperature);
+    RUN_TEST(test_water_never_chills_stone_below_room_temperature);
     RUN_TEST(test_stone_never_melts_however_hot);
     RUN_TEST(test_snow_cracks_glass_but_not_stone);
     RUN_TEST(test_an_edge_shows_less_temperature_than_the_body);
@@ -21645,6 +21980,10 @@ void run_sand_suite(void)
     RUN_TEST(test_lava_does_not_decay_away);
     RUN_TEST(test_water_freezes_lava_into_stone);
     RUN_TEST(test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag);
+    RUN_TEST(test_a_water_pour_freezes_a_lava_pool_below_its_crust);
+    RUN_TEST(test_a_lava_pool_in_a_dry_stone_bowl_does_not_freeze_itself);
+    RUN_TEST(test_lava_that_melts_sand_into_glass_sometimes_freezes_itself);
+    RUN_TEST(test_the_cool_off_chain_is_bounded);
     RUN_TEST(test_lava_does_not_put_fire_out);
     RUN_TEST(test_falling_lava_does_not_flare);
     RUN_TEST(test_steam_bubbles_up_through_standing_water);

@@ -1095,6 +1095,78 @@ crack_run(sand_t* s, int x, int y, int w, int h, material_id_t from, material_id
     }
 }
 
+/* Walks a chain of lava-cooling events outward from (x, y), where the
+ * burning liquid that stood there has already become `product` (this
+ * chain's own caller placed it, immediately before calling this). Each
+ * link rolls `chance`; on success it picks ONE cardinal neighbour still
+ * holding the SAME burning liquid, freezes it to `product` too, and
+ * repeats from there. A failed roll, no eligible neighbour, or
+ * SAND_LAVA_COOLOFF_MAX_CHAIN links stop it - see that constant's own
+ * comment (sand.h) for why it lives there rather than here.
+ *
+ * "Still the same burning liquid" is answered by comparing the
+ * neighbour's OWN quench_to against `product`, rather than by carrying a
+ * `from` material id through every link - reaction_of(n)->quench_to ==
+ * product is true for exactly the same cells CELL_MATERIAL(n) == (the
+ * original lava's id) would have picked out, since only a burning LIQUID
+ * whose own quench product is `product` can be the thing this chain
+ * started from (see the KIND_LIQUID gate at both call sites, which is
+ * what keeps fire - quench_to MAT_STEAM, KIND_GAS - from ever reaching
+ * here at all). Lava is the only material satisfying that today, but the
+ * test itself makes no assumption of being the only one - it would keep
+ * meaning the right thing if a second burning liquid arrived with its own
+ * distinct quench_to.
+ *
+ * ITERATIVE, NOT RECURSIVE. A chain through a real pool can legitimately
+ * want to run several cells deep, and recursion would grow the call stack
+ * by one frame per link - on a chip with 368 KB of usable RAM and no
+ * MMU-backed guard page (docs/Notes/README.md), a chain long enough to
+ * matter is also long enough to be dangerous. This only ever has one
+ * live cursor (the current end of the chain), unlike crack_run()'s
+ * frontier array above, which explores several directions in parallel -
+ * so a plain loop is enough; there is nothing here for a stack to help
+ * with. */
+static void
+cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chance) {
+    int cx = x, cy = y;
+    for (int link = 0; link < SAND_LAVA_COOLOFF_MAX_CHAIN; link++) {
+        if (chance == 0 || (int)(rng_next(&s->rng) & 0xFF) >= chance) {
+            return;
+        }
+        /* Count-then-index, the same shape step_one_soaking_cell() above
+         * uses to pick among its own three gravity-ward candidates:
+         * collect the eligible neighbours first, so the pick is uniform
+         * among however many of the (up to four) cardinal directions
+         * actually qualify, rather than biased toward whichever direction
+         * happens to be tried first. */
+        int cand_x[4], cand_y[4], n_cand = 0;
+        for (int d = 0; d < 4; d++) {
+            const int nx = cx + reaction_dirs[d][0];
+            const int ny = cy + reaction_dirs[d][1];
+            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+                continue;
+            }
+            const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+            if (CELL_IS_EMPTY(n)) {
+                continue;
+            }
+            if (material_of(n)->kind != KIND_LIQUID || reaction_of(n)->quench_to != product) {
+                continue;
+            }
+            cand_x[n_cand] = nx;
+            cand_y[n_cand] = ny;
+            n_cand++;
+        }
+        if (n_cand == 0) {
+            return;
+        }
+        const int pick = rng_below(&s->rng, n_cand);
+        cx = cand_x[pick];
+        cy = cand_y[pick];
+        place_reacted(s, cx, cy, (size_t)cy * (size_t)w + (size_t)cx, product);
+    }
+}
+
 /* One cell that soaks up liquid, or holds what it soaked.
  *
  * Two halves that belong together because they are the same quantity going
@@ -2747,31 +2819,55 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
      * so a smooth gradient across a wall survives instead of collapsing to
      * a single flat temperature - which would erase the hot-inside,
      * cold-outside difference the whole mechanic runs on. */
-    if (r->conducts != 0) {
-        for (int d = 0; d < 4; d++) {
-            const int nx = x + reaction_dirs[d][0];
-            const int ny = y + reaction_dirs[d][1];
-            if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
-                continue;
-            }
-            const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
-            const cell_t n = s->cells[nat];
-            if (CELL_IS_EMPTY(n) || reaction_of(n)->heat_ramp == 0) {
-                continue;
-            }
-            const uint8_t nt = CELL_VARIANT(n);
-            const int gap = (int)temp - (int)nt;
-            if (gap > -2 && gap < 2) {
-                continue;
-            }
-            if ((int)(rng_next(&s->rng) & 0xFF) >= (r->conducts >> SPREAD_SHIFT)) {
-                continue;
-            }
-            s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
-            s->may_have_temperature = true;
-            mark_rows(s, ny, ny);
-            wake_block_and_neighbors(s, nx, ny);
+    /* THE WET TEST RIDES THIS SAME WALK. Hoisted out from under `if
+     * (r->conducts != 0)`, which now guards only the spread body below -
+     * every heat_ramp material also sets conducts today, so this changes
+     * no behaviour and draws no different RNG, it only stops the wet
+     * probe silently depending on a coupling that happened to be true
+     * rather than one that is actually guaranteed.
+     *
+     * Not on water's own row, on purpose: water is the most numerous
+     * material on almost any board and would pay a four-neighbour scan
+     * per cell per step for a feature that only ever matters while
+     * something nearby is hot. Hot cells are scarce, and this pass
+     * already scans them - "push the question to where it is already
+     * cheap" (see this file's own performance notes elsewhere). */
+    bool wet = false;
+    for (int d = 0; d < 4; d++) {
+        const int nx = x + reaction_dirs[d][0];
+        const int ny = y + reaction_dirs[d][1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
         }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n)) {
+            continue;
+        }
+        /* PAIR_QUENCHES (this file's own top comment) already means
+         * exactly "a liquid that is neither fuel nor a heat source" -
+         * water and acid, never lava or oil - which is precisely the set
+         * that should be able to cool something down rather than add to
+         * it. Reusing it costs no new table and no reaction_of(n) load
+         * just to answer this. Draws no random number of its own. */
+        if ((pair_theirs_bits(CELL_MATERIAL(n)) & PAIR_QUENCHES) != 0) {
+            wet = true;
+        }
+        if (r->conducts == 0 || reaction_of(n)->heat_ramp == 0) {
+            continue;
+        }
+        const uint8_t nt = CELL_VARIANT(n);
+        const int gap = (int)temp - (int)nt;
+        if (gap > -2 && gap < 2) {
+            continue;
+        }
+        if ((int)(rng_next(&s->rng) & 0xFF) >= (r->conducts >> SPREAD_SHIFT)) {
+            continue;
+        }
+        s->cells[nat] = CELL_MAKE(CELL_MATERIAL(n), (uint8_t)(gap > 0 ? nt + 1 : nt - 1));
+        s->may_have_temperature = true;
+        mark_rows(s, ny, ny);
+        wake_block_and_neighbors(s, nx, ny);
     }
 
     /* COOLING GETS HARDER TO OUTRUN THE HOTTER IT IS. The drain scales with
@@ -2791,10 +2887,28 @@ step_one_tempered_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, cons
      * Scaled, the same ramp does both: near ambient the drain is small and
      * a single source climbs quickly, while near the top it grows until
      * only several adjacent sources can push through it. One flame makes
-     * glass shatterable; a lava bath melts it. */
+     * glass shatterable; a lava bath melts it.
+     *
+     * WET MAKES THE ABOVE-AMBIENT HALF STEEPER, ONLY. A quenching liquid
+     * sitting on a hot cell (see `wet`, above) multiplies this same drain
+     * by SAND_WET_COOLING_FACTOR (sand.h) - pouring water on hot stone or
+     * hot glass is what lets its banked heat actually come back down in a
+     * reasonable number of steps instead of the many dozens plain ambient
+     * cooling alone would take.
+     *
+     * GATED TO temp > SAND_AMBIENT_HEAT ON PURPOSE - the branch below this
+     * one, which warms a frosted cell back UP, is untouched by `wet`. That
+     * is what floors water at ambient rather than letting it act like
+     * snow: nothing here can ever push a cell below room temperature, so
+     * water can never reach SAND_SHOCK_COLD and thermally shock glass the
+     * way an actual chill (snow) can. Going below ambient stays snow/ice's
+     * job alone. */
     unsigned drain = r->cools;
     if (temp > SAND_AMBIENT_HEAT) {
         drain *= (unsigned)(temp - SAND_AMBIENT_HEAT);
+        if (wet) {
+            drain *= SAND_WET_COOLING_FACTOR;
+        }
         if (drain > 255u) {
             drain = 255u;
         }
@@ -3623,6 +3737,29 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
                     }
                     if (leaves_residue) {
                         place_reacted(s, x, y, at, product);
+                        /* TRIGGER B of cool_off_chain() (above): a cell of
+                         * burning LIQUID that just got quenched takes one
+                         * neighbouring cell of the same liquid with it, a
+                         * chance at a time. This is what makes a SUSTAINED
+                         * pour reach past the single surface cell water
+                         * can physically touch - every drop that freezes
+                         * the crust rolls again to freeze one cell deeper,
+                         * so the pool converts progressively for as long
+                         * as the pour keeps landing and simply stops the
+                         * moment it does not.
+                         *
+                         * Gated on KIND_LIQUID, not merely quench_to != 0
+                         * (already true to have reached this branch): fire
+                         * also has a quench_to (MAT_STEAM) but is
+                         * KIND_GAS, and a candle quenched by a splash of
+                         * water has no "pool" to chain into - only lava
+                         * quenches AS a liquid today. */
+                        if (mat->kind == KIND_LIQUID) {
+                            const int lava_cooloff = (s->lava_cooloff >= 0)
+                                                          ? s->lava_cooloff
+                                                          : SAND_LAVA_COOLOFF_CHANCE;
+                            cool_off_chain(s, x, y, w, h, product, lava_cooloff);
+                        }
                     } else {
                         row[x] = CELL_EMPTY;
                         mark_rows(s, y, y);
@@ -3813,6 +3950,20 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * avoiding and load-avoiding work, which is exactly the shape of
      * change host and device have disagreed on before - a device capture
      * settles this, a host number alone does not. */
+    /* TRIGGER A of cool_off_chain() (above): doing the WORK of actually
+     * converting a neighbour costs a burning LIQUID a small chance of
+     * freezing itself. Resolved once, here, before the loop starts - not
+     * because the chance can change mid-loop, but so a cell that is not
+     * even a burning liquid (wood, ember, fire) never pays for this at
+     * all: 0 short-circuits the check inside the loop below before it
+     * ever reads the RNG, one predicted-false compare per burning cell on
+     * a board with no lava, the same "check whether this could ever
+     * matter before rolling" discipline vent_chance and try_ignite() both
+     * already document above. */
+    const int lava_cooloff = (mat->kind == KIND_LIQUID && rx->quench_to != 0)
+                                  ? ((s->lava_cooloff >= 0) ? s->lava_cooloff
+                                                             : SAND_LAVA_COOLOFF_CHANCE)
+                                  : 0;
     const uint8_t* my_pair_row = pair_bits[mat_id];
     for (int d = 0; d < 4; d++) {
         const int nx = x + reaction_dirs[d][0];
@@ -3832,8 +3983,30 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
         /* Separate from ignition, and reached whether or not that fired:
          * a neighbour is either fuel or something heat merely changes, and
          * nothing is both today, but there is no reason one could not be. */
-        if ((pair & PAIR_HEAT_RESPONSIVE) != 0 && try_heat_transform_given(s, nx, ny, w, h, nat, n)) {
-            acted = true;
+        if ((pair & PAIR_HEAT_RESPONSIVE) != 0) {
+            /* Captured BEFORE the probe, because try_heat_transform_given()
+             * returning true does NOT mean the neighbour's material
+             * changed - the common case is a heat-ramping material (stone,
+             * glass) simply banking one more level of heat, same material,
+             * higher variant, and that happens on nearly every step lava
+             * sits next to a wall. Gating cool_off_chain() on the return
+             * value alone would roll on almost every one of those climbs,
+             * which is an ALWAYS-ON drain no pour or fuel is needed to
+             * trigger - a lava pool sitting in a stone bowl would
+             * self-extinguish with no water anywhere, which is wrong. Only
+             * a genuine change of CELL_MATERIAL - a real melt (stone ->
+             * lava, sand -> glass -> lava), or a thermal-shock crack via
+             * crack_run() - counts as the WORK this trigger charges for. */
+            const uint8_t before_mat = CELL_MATERIAL(n);
+            if (try_heat_transform_given(s, nx, ny, w, h, nat, n)) {
+                acted = true;
+                if (lava_cooloff != 0 && CELL_MATERIAL(s->cells[nat]) != before_mat &&
+                    (int)(rng_next(&s->rng) & 0xFF) < lava_cooloff) {
+                    place_reacted(s, x, y, at, rx->quench_to);
+                    cool_off_chain(s, x, y, w, h, rx->quench_to, lava_cooloff);
+                    return true;
+                }
+            }
         }
     }
 

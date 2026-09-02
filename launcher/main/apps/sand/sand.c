@@ -186,6 +186,7 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->vent_spread  = SAND_VENT_SPREAD_RANDOM;         /* see sand_set_vent_spread() */
     s->boils        = SAND_BOILS_PER_MATERIAL;         /* see sand_set_boils() */
     s->condenses    = SAND_CONDENSES_PER_MATERIAL;     /* see sand_set_condenses() */
+    s->lava_cooloff = SAND_LAVA_COOLOFF_DEFAULT; /* see sand_set_lava_cooloff() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1372,6 +1373,15 @@ void sand_set_condenses(sand_t *s, int chance)
         s->condenses = SAND_CONDENSES_PER_MATERIAL;
     } else {
         s->condenses = chance > 255 ? 255 : chance;
+    }
+}
+
+void sand_set_lava_cooloff(sand_t *s, int chance)
+{
+    if (chance < 0) {
+        s->lava_cooloff = SAND_LAVA_COOLOFF_DEFAULT;
+    } else {
+        s->lava_cooloff = chance > 255 ? 255 : chance;
     }
 }
 

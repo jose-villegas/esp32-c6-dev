@@ -383,6 +383,7 @@ typedef struct {
     int      vent_spread;  /* see sand_set_vent_spread() */
     int      boils;        /* see sand_set_boils() */
     int      condenses;    /* see sand_set_condenses() */
+    int      lava_cooloff; /* see sand_set_lava_cooloff() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -823,6 +824,25 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * fully clear rather than one. Not yet measured on device at this
  * figure - a starting point for the next round. */
 #define SAND_VENT_LAYER  3
+
+/* How far a single cool_off_chain() (sand_reactions.c) walk reaches
+ * before it stops on its own, independent of how many rolls in a row it
+ * wins. The same reasoning CRACK_MAX (sand_reactions.c) gives, at a much
+ * smaller scale: this only ever has to bound ONE cold pass, not claim
+ * anything about how far a chain could really go, and a sustained pour
+ * re-triggers this every step anyway - the pour rate is what should set
+ * how fast a pool actually dies, not this cap. A generous number here
+ * would let a single lucky roll eat a whole pool in one step, which is
+ * exactly the "dry bowl paving itself" failure mode the design has to
+ * avoid.
+ *
+ * PUBLIC, unlike CRACK_MAX - alongside SAND_VENT_LAYER/SAND_VENT_REACH
+ * just above, for the same reason those two are: docs/Sand/Reaction-
+ * Table.md already names this constant as part of the described
+ * contract, and test_the_cool_off_chain_is_bounded (suite_sand.c) has to
+ * assert against its real value rather than a hand-copied literal that
+ * silently goes stale the next time this is retuned. */
+#define SAND_LAVA_COOLOFF_MAX_CHAIN 8
 
 /* The initial speed vent_column() (sand_reactions.c) hands to sand_
  * impulse_dislodge() for each cell it throws - see SAND_EXPLODE_INITIAL_
@@ -1753,6 +1773,56 @@ void sand_set_boils(sand_t *s, int chance);
  * up being tuned. */
 void sand_set_condenses(sand_t *s, int chance);
 #define SAND_CONDENSES_PER_MATERIAL (-1)
+
+/* How much faster a heat-ramping cell's own `cools` drain runs while a
+ * QUENCHING liquid (PAIR_QUENCHES, sand_reactions.c's own top comment -
+ * water and acid, never lava or oil) is touching it - see
+ * step_one_tempered_cell()'s own comment for the neighbour test this
+ * multiplies and why it only ever applies in the ABOVE-ambient branch,
+ * which is what stops water from chilling anything past room temperature
+ * the way snow does. Not a new per-material field: `cools` already means
+ * "how fast this material sheds heat", and a wet surface is the same
+ * drain, just faster - there is no reason a stone pane's own cooling rate
+ * and its cooling rate WHILE WET would ever want to be two independently
+ * tuned numbers. One figure, because water is the only coolant anyone
+ * actually pours - acid also satisfies PAIR_QUENCHES, and gets the same
+ * speed-up as a side effect, but nobody has asked for acid to cool a wall
+ * differently from water, and inventing a second multiplier before that
+ * is a real request would be tuning a knob nobody turns. */
+#define SAND_WET_COOLING_FACTOR 8
+
+/* How often a burning LIQUID (lava, today) that has just done the WORK of
+ * actually converting a neighbour into something else - a real melt, not
+ * merely banking one more level of heat, see step_one_burning_cell()'s
+ * and cool_off_chain()'s own comments (sand_reactions.c) for the check
+ * that tells the two apart - freezes ITSELF as the cost, and the same
+ * chance a frozen cell's own cool_off_chain() reaches for at each further
+ * link into the pool beside it.
+ *
+ * Chance in 256, per EVENT, not per step - unlike vent_chance's own
+ * per-step gate. This only ever rolls on something that is already rare
+ * (a genuine material change, or a successful water quench), so a small
+ * figure here still adds up to real, visible progress under a sustained
+ * pour without needing anywhere near the once-a-step rates the heat ramp
+ * itself is tuned to. Starting point, tune on device like every other
+ * constant in this file.
+ *
+ * NO SECOND ROLL TO SKIP - unlike vent_chance's own override, nothing
+ * stacks on top of this one, so sand_set_lava_cooloff(255) gets a single,
+ * deterministic firing on every qualifying event, exactly like every
+ * other value this accepts. */
+void sand_set_lava_cooloff(sand_t *s, int chance);
+#define SAND_LAVA_COOLOFF_CHANCE 12
+
+/* The sentinel sand_set_lava_cooloff(s, chance < 0) restores, and what
+ * sand_init() itself starts every sand_t at - "use SAND_LAVA_COOLOFF_
+ * CHANCE", not "use each material's own row", since (unlike vent_chance/
+ * flammability/conduction/boils/condenses) this has no per-material
+ * figure to fall back to; SAND_LAVA_COOLOFF_CHANCE IS the only figure.
+ * Named _DEFAULT rather than _PER_MATERIAL for exactly that reason - the
+ * other five sentinels above answer "whose rate", this one only ever
+ * answers "which constant". */
+#define SAND_LAVA_COOLOFF_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
