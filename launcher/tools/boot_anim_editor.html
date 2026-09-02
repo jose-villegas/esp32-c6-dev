@@ -634,9 +634,27 @@ async function renderNow() {
   originEl.textContent = origin ? `origin: ${origin}px` : '';
 }
 
-function showError(msg) {
+/* `scrollTo`: the error panel sits at the very bottom of the whole page,
+ * after the entire Other Consts list (see #renderError's own grid-area) -
+ * fine for a render error, which fires on nearly every keystroke while
+ * editing a field and would be actively disruptive to jump the page away
+ * from whatever is still being typed, but a Build & Flash failure is a
+ * single deliberate action with nothing else on screen competing for
+ * attention, and "failed" next to the button with the actual reason
+ * scrolled out of view below several screens of consts is exactly what
+ * was hard to notice. */
+function showError(msg, scrollTo) {
   errorEl.textContent = msg;
   errorEl.style.display = 'block';
+  if (scrollTo) {
+    /* 'auto', not 'smooth' - the animated version is the nicer-looking
+     * one but does not reliably complete in every rendering context
+     * (measured: it never moves at all in at least one automated
+     * browser environment), and the whole point of scrolling this into
+     * view at all is that the user actually sees it, not that the
+     * transition looks good. */
+    errorEl.scrollIntoView({ behavior: 'auto', block: 'center' });
+  }
 }
 function hideError() {
   errorEl.style.display = 'none';
@@ -1315,7 +1333,7 @@ btnBuildFlash.addEventListener('click', async () => {
     if (!res.ok) {
       flashStatusEl.textContent = 'failed';
       flashStatusEl.style.color = 'var(--danger)';
-      showError(body.error || ('HTTP ' + res.status));
+      showError(body.error || ('HTTP ' + res.status), true);
       return;
     }
     flashStatusEl.textContent = 'flashed to ' + port;
@@ -1323,7 +1341,7 @@ btnBuildFlash.addEventListener('click', async () => {
   } catch (err) {
     flashStatusEl.textContent = 'failed';
     flashStatusEl.style.color = 'var(--danger)';
-    showError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err);
+    showError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err, true);
   } finally {
     btnBuildFlash.disabled = false;
   }

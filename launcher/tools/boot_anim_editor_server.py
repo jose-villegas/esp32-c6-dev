@@ -81,7 +81,14 @@ GENERATOR = os.path.join(TOOLS_DIR, "gen_boot_anim_timeline.py")
 TIMELINE_JSON = os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.json")
 TIMELINE_HEADER = os.path.join(MAIN_DIR, "boot", "boot_anim_timeline.h")
 BUILD_FLASH_SCRIPT = os.path.join(TOOLS_DIR, "build_flash_dev.sh")
-BUILD_FLASH_TIMEOUT_S = 300
+# 300 measured too short in practice - a from-scratch (or even mostly-
+# cached) dev build going through this script's own Git-Bash -> cmd-shim
+# -> idf.py chain (see build_flash_dev.sh/idf.sh's own comments on why
+# that chain exists at all) runs noticeably slower than the same build
+# invoked directly, and blew past 300s on a machine with a real device
+# attached. 600 is a guess at "generous enough", not a measurement of a
+# worst case - raise it again if it is still not enough.
+BUILD_FLASH_TIMEOUT_S = 600
 
 DEFAULT_PORT = 8934
 
