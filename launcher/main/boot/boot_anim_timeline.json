@@ -23,7 +23,7 @@
         "grid_whiten_max": 32,
         "grid_ceiling_max": 64,
         "grid_max": 64,
-        "pen_finish_ms": 4900,
+        "pen_finish_ms": 4800,
         "wave_start_ms": 4200,
         "wave_end_ms": 5800,
         "grid_spokes": 4,
