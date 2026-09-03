@@ -640,6 +640,27 @@ typedef struct {
     uint8_t heats_to;
     uint8_t heat_chance;
 
+    /* MELTS: chance in 256 per step of becoming `heats_to` while in direct
+     * contact with a burning LIQUID - lava - and only that. `heat_chance`
+     * above answers to any heat at all: fire, an ember, lava, or heat that
+     * has crossed a conductor. This is the narrower door, for a material
+     * that has to shrug off a flame and still give way to molten rock.
+     *
+     * Glass already draws that exact line, but it does it with a ramp:
+     * fire can raise a pane to shatterable and never to molten, because
+     * `cools` drains faster than a flame can bank (see glass's own row).
+     * That needs a variant to bank INTO, and an extended material has
+     * none - its low nibble is which material it is. So the distinction
+     * has to be made at the source instead of in the target's memory:
+     * lava is the one heat source that is a liquid, and contact with it
+     * is what this rolls on.
+     *
+     * Contact only - not through a conductor. Heat conducted through a
+     * wall has lost its source by the time it arrives, and "lava on the
+     * far side of stone melts what fire on the far side would not" is a
+     * distinction nobody could see the reason for on the panel. */
+    uint8_t melts;
+
     /* THE IMPURE YIELD. Rolled off the SAME successful heat_chance roll
      * above, not a trigger of its own: chance in 256 that a bone-dry cell
      * converts into `flaw_to` instead of `heats_to`. 0, the default, means
@@ -912,6 +933,39 @@ typedef struct {
      * actually happens. */
     uint8_t clings_to;
 
+    /* ROOTING: one field, two readings, by which material's row it sits
+     * on - the same table-reuse `hardens_to` and `clings_to` already
+     * practise elsewhere in this struct.
+     *
+     * ON A GROWER (plant, wood): chance in 256 that SPENDING this
+     * material's own soil moisture (growing, budding, sprouting - see
+     * each of their own comments) also welds the CONTACT cell - the
+     * collar, where the stem actually touches ground - into `roots_to`.
+     * It exists because dirt is a powder and shifts: when the soil
+     * directly under a tree's collar slides away, find_water()'s walk
+     * down the stem finds neither stem nor ground below it and the tree
+     * simply stops growing, stranded above water it can no longer reach.
+     * A root embeds the tree in the bed instead of resting it on top of
+     * that bed, so a shifting surface cannot disconnect the two. This is
+     * a ONE-TIME SEED, gated (spend_soil_moisture(), sand_reactions.c) to
+     * `root_depth == 0` - it plants the first root under a bare collar
+     * and then gets out of the way; everything the root system becomes
+     * after that first cell grows the other way, below.
+     *
+     * ON ROOT ITSELF: chance in 256 that a root cell, touching a moist
+     * dirt neighbour, converts that neighbour into more root - see
+     * step_one_rooting_cell() (sand_reactions.c) and MATX_ROOT's own row
+     * (material.c) for the shape this produces. The conversion IS the
+     * water cost: a dirt cell's moisture lives in its own variant, and
+     * turning it into root discards that variant along with everything
+     * else the old cell was, so there is nothing left to separately
+     * spend. A root that already has several root neighbours does not
+     * roll at all - see ROOT_SURFACE_MAX (sand_reactions.c) - which is
+     * most of what keeps the system a filigree of roots instead of a
+     * block of them growing to fill the bed. */
+    uint8_t roots;
+    uint8_t roots_to;
+
     /* What SHELTERS this from withering: touch a cell of it and a dry
      * spell cannot take you.
      *
@@ -1078,8 +1132,17 @@ typedef enum {
     /* METAL: dirt smelted by sustained heat - see
      * docs/Sand/Metal-Smelting-Plan.md. Briefly slot 5 while the leaf
      * ageing chain held slots 3 and 4; back to 3 now that chain is gone.
-     * Twelve extended slots remain after it. */
+     * Eleven extended slots remain after it. */
     MATX_METAL,
+
+    /* ROOT: what a plant welds itself to the soil with as it drinks - see
+     * reaction_t.roots. Not more wood: wood's variant is burn progress
+     * (reactions[MAT_WOOD].burn_decay), so a root wearing a wood cell
+     * would read as a nearly-burnt-out log rather than as buried anchor.
+     * An extended material needs no variant of its own - the low nibble
+     * IS the identity - so ROOT costs a slot rather than a byte, the same
+     * trade METAL made above. Ten extended slots remain after it. */
+    MATX_ROOT,
 } material_extended_t;
 
 /* What to call one cell, decoding the extended range. materials[].name is
@@ -1315,9 +1378,54 @@ typedef enum {
  * no longer does (a genuine bug in the fog blend's own arithmetic, plus a
  * column-artifact risk from riding straight over local depth's own axis
  * seam - both still exist, untouched, on the water-wave-fog-depth-banked
- * branch for anyone who wants to revisit that approach). */
+ * branch for anyone who wants to revisit that approach).
+ *
+ * FOR A ROOT CELL, `depth` MEANS SOMETHING ELSE: how many of its eight
+ * neighbours are also root - material_root_neighbours() below, which the
+ * painter substitutes for the liquid walk's number on exactly that one
+ * material. A root has no variant to carry an age in (its low nibble is
+ * which extended material it is), and the ordinary table is full, so
+ * "how old is this root" cannot be stored. It can be READ off the shape,
+ * though: a fresh tip touches one other root, a cell that has put out
+ * children touches two or three, the collar touches more. Shading by that
+ * count is what the maintainer asked for - "as one root grows from
+ * another, it darkens its parent" - with no state at all, and it heals in
+ * the direction stored age never could: lose a child to rot or lava and
+ * the parent lightens again. Reusing `depth` rather than adding a
+ * parameter keeps the painter's call and this function's signature exactly
+ * as measured. */
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     unsigned depth, gfx_color_t out[3]);
+
+/* How many of (cx)'s eight neighbours, across the three grid rows handed
+ * in, are root. `above`/`below` may be NULL at the top and bottom of the
+ * grid, exactly as paint_row_n() already passes them for the edge mask.
+ * Eight reads, paid only for a root cell - the painter gates the call on
+ * the cell's own byte, one compare, the same cost metal's own leading
+ * equality test already added to that path. Header-inline so app_sand.c
+ * and the host suite compile the one definition. */
+static inline unsigned material_root_neighbours(const uint8_t *above,
+                                                const uint8_t *row,
+                                                const uint8_t *below,
+                                                int cx, int w)
+{
+    const cell_t root = MATX(MATX_ROOT);
+    unsigned n = 0;
+    const int l = cx - 1, r = cx + 1;
+    if (l >= 0) {
+        n += (row[l] == root);
+        if (above) n += (above[l] == root);
+        if (below) n += (below[l] == root);
+    }
+    if (r < w) {
+        n += (row[r] == root);
+        if (above) n += (above[r] == root);
+        if (below) n += (below[r] == root);
+    }
+    if (above) n += (above[cx] == root);
+    if (below) n += (below[cx] == root);
+    return n;
+}
 
 /* Called once per frame, before painting, with the same gravity vector
  * this frame's sand_step() was given.

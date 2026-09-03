@@ -1852,13 +1852,52 @@ static void build_xflow(xflow_t *f, int gx, int gy)
  * obstacle this rule exists to open, only the packed interior it contains.
  * sand_at()'s out-of-bounds-reads-as-STONE convention folds the grid edge
  * into the same guarantee for free, exactly as it already did for
- * can_enter()'s own callers. */
-static inline bool can_impulse_enter(cell_t target)
+ * can_enter()'s own callers.
+ *
+ * A FLYING LIQUID IS THE ONE EXCEPTION TO "ANY OCCUPIED, NON-STATIC CELL" -
+ * added after measurement showed the powder-free case above was not the
+ * whole story. Reported bug: pouring water over a settled dirt bed made the
+ * submerged dirt "move a lot". The obvious suspect - splash_displace()'s
+ * ring kick (sand_liquid.c) - was measured directly (a 40-row dirt bed under
+ * 0/2/8 rows of water, poured on for 600 steps, seed 0xC0FFEE) and hit a
+ * dirt cell 60, 2 and 0 times out of ~7,500 firings: not the cause. The
+ * actual cause was this function - every water grain the splash throws
+ * flies through can_impulse_enter()'s blanket "any non-static occupant"
+ * rule above and swaps with whatever dirt sits in its path, which is not
+ * settling, it is impulse tunnelling through a powder bed one dirt-water
+ * pair at a time. Same scene: impulse-driven dirt-cell changes measured
+ * 1207 / 704 / 281 across the three pool depths. Refusing the swap when
+ * `mover` is KIND_LIQUID and `target` is occupied by anything other than
+ * another KIND_LIQUID dropped that to 0 / 0 / 0 - every last bit of the
+ * churn, because ordinary movement already refuses this exact swap
+ * (can_enter(), sand_priv.h: water's density 30 is well under dirt's 62).
+ * Liquid-into-liquid is still open, so water splashing into oil, acid or
+ * lava keeps working exactly as it does today.
+ *
+ * SCOPED TO KIND_LIQUID MOVERS, NOT A GENERAL DENSITY GATE, and that is a
+ * deliberate narrowing, not laziness. The principled generalisation is to
+ * make this whole function defer to can_enter()'s own density comparison
+ * for every kind, and it measures identically in the scene above - but it
+ * would also reach into how an explosion behaves inside a powder bank,
+ * where sand (60) and dirt (62) sit almost tied, and that mechanic already
+ * carries its own extensively swept tuning (SAND_IMPULSE_SPEED_RAMP,
+ * SAND_EXPLODE_CORE_DIVISOR in sand.h). Changing what a thrown powder grain
+ * can shoulder aside deserves its own round with device evidence, not a
+ * rider on a liquid-only fix. Considered, and deliberately deferred.
+ *
+ * A KIND_STATIC mover (a thrown chunk) is untouched by any of this - the
+ * check below only ever fires for a KIND_LIQUID `mover`, so a flying chunk
+ * of stone or glass keeps displacing exactly what it always could. */
+static inline bool can_impulse_enter(cell_t target, cell_t mover)
 {
     if (CELL_IS_EMPTY(target)) {
         return true;
     }
-    return material_of(target)->kind != KIND_STATIC;
+    const material_t *t = material_of(target);
+    if (t->kind == KIND_STATIC) {
+        return false;
+    }
+    return material_of(mover)->kind != KIND_LIQUID || t->kind == KIND_LIQUID;
 }
 
 /* Fills `cand` with the three cells gravity-ward of (x, y) this step -
@@ -2209,7 +2248,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
                  * a solid (see
                  * test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder). */
                 const cell_t gtarget = sand_at(s, cx, cy);
-                if (!can_impulse_enter(gtarget)) {
+                if (!can_impulse_enter(gtarget, entry.cell)) {
                     continue;
                 }
                 const size_t gat  = entry.index;
@@ -2426,7 +2465,8 @@ static void step_impulses(sand_t *s, int dx, int dy)
 
                 bool has_opening = false;
                 for (int c = 0; c < 3; c++) {
-                    if (can_impulse_enter(sand_at(s, rcand[c][0], rcand[c][1]))) {
+                    if (can_impulse_enter(sand_at(s, rcand[c][0], rcand[c][1]),
+                                          entry.cell)) {
                         has_opening = true;
                         break;
                     }
@@ -2438,15 +2478,18 @@ static void step_impulses(sand_t *s, int dx, int dy)
 
                 /* No opening on any of the three candidates - the
                  * straight-down one (rcand[0]) is what "supported"
-                 * ordinarily means. can_impulse_enter() only ever rejects
-                 * KIND_STATIC, so has_opening == false already guarantees
-                 * rcand[0] is occupied by a KIND_STATIC cell (empty, or
-                 * any other kind, would have opened it) - checked
-                 * explicitly anyway rather than trusted blind, so a future
-                 * change to can_impulse_enter()'s own rule cannot quietly
-                 * turn this into an O(entries) scan for a blocker that was
-                 * never actually KIND_STATIC. Off-grid is excluded first:
-                 * sand_at()'s synthetic edge-is-STONE cell reads as
+                 * ordinarily means. `entry` is KIND_STATIC in this branch
+                 * (the `if` two dozen lines up), and can_impulse_enter()
+                 * only ever rejects a KIND_STATIC mover for a KIND_STATIC
+                 * target - the liquid-vs-liquid carve-out it also carries
+                 * never applies to a static mover - so has_opening == false
+                 * already guarantees rcand[0] is occupied by a KIND_STATIC
+                 * cell (empty, or any other kind, would have opened it) -
+                 * checked explicitly anyway rather than trusted blind, so a
+                 * future change to can_impulse_enter()'s own rule cannot
+                 * quietly turn this into an O(entries) scan for a blocker
+                 * that was never actually KIND_STATIC. Off-grid is excluded
+                 * first: sand_at()'s synthetic edge-is-STONE cell reads as
                  * KIND_STATIC too, but it has no real index for
                  * impulse_index_still_tracked() to look up. */
                 const int bx = rcand[0][0];
@@ -2479,15 +2522,19 @@ static void step_impulses(sand_t *s, int dx, int dy)
         /* can_impulse_enter(), NOT a bare CELL_IS_EMPTY() check any more -
          * see that function's own comment for why a flying grain now
          * shoulders aside any non-static occupant instead of waiting on
-         * only a genuinely empty cell. STATIC still blocks unconditionally,
-         * so containment still falls out of this one check with no
-         * raycast: a blast inside a sealed vessel throws its grains up to
-         * the wall and they wait there, exactly as before - only the
-         * packed interior on the way there stopped being a wall too.
-         * sand_at() reading out-of-bounds as STONE (KIND_STATIC) folds the
-         * grid edge into the same guarantee for free. */
+         * only a genuinely empty cell, EXCEPT a flying liquid against a
+         * non-liquid occupant (dirt, sand, ...), which still waits exactly
+         * as it did before displacement existed - see can_impulse_enter()'s
+         * own comment for the measured dirt-stirring bug that carve-out
+         * fixes. STATIC still blocks unconditionally, so containment still
+         * falls out of this one check with no raycast: a blast inside a
+         * sealed vessel throws its grains up to the wall and they wait
+         * there, exactly as before - only the packed interior on the way
+         * there stopped being a wall too. sand_at() reading out-of-bounds
+         * as STONE (KIND_STATIC) folds the grid edge into the same
+         * guarantee for free. */
         const cell_t target = sand_at(s, nx, ny);
-        if (!can_impulse_enter(target)) {
+        if (!can_impulse_enter(target, entry.cell)) {
             /* Blocked means WAIT: keep the entry exactly as it is - same
              * position, same direction, already-ramped speed and all - so
              * it gets another turn next step rather than being dropped for
