@@ -17,7 +17,7 @@
 #include <stdint.h>
 
 /* how long the whole animation runs, start to black */
-#define BOOT_ANIM_MS 6500
+#define BOOT_ANIM_MS 5500
 
 /* the axes grow out of the origin */
 #define BOOT_ANIM_AXES_MS 450
@@ -53,22 +53,22 @@
 #define BOOT_ANIM_PEN_MS 1980
 
 /* when the curve reaches the table's true end - independent of fade_start_ms, so it can keep drawing well past phase 1 */
-#define BOOT_ANIM_PEN_FINISH_MS 5800
+#define BOOT_ANIM_PEN_FINISH_MS 4900
 
 /* the title arrives after the curve, not during it */
-#define BOOT_ANIM_TITLE_START_MS 2700
+#define BOOT_ANIM_TITLE_START_MS 2450
 
 /* each letter starts this much after the one before it */
-#define BOOT_ANIM_TITLE_STAGGER_MS 250
+#define BOOT_ANIM_TITLE_STAGGER_MS 170
 
 /* how long ONE letter's flight is */
-#define BOOT_ANIM_TITLE_FLIGHT_MS 1100
+#define BOOT_ANIM_TITLE_FLIGHT_MS 500
 
 /* how far off-panel a letter starts */
 #define BOOT_ANIM_TITLE_ENTRY_PX 420
 
 /* wobble oscillations packed into the early part of the flight */
-#define BOOT_ANIM_TITLE_TURNS_PHASE 229376
+#define BOOT_ANIM_TITLE_TURNS_PHASE 92000
 
 /* peak wobble swing right at the start */
 #define BOOT_ANIM_TITLE_AMPLITUDE_PX 24
@@ -79,7 +79,10 @@
 #define BOOT_ANIM_TITLE_WAVE_PERIOD_MS 900
 #define BOOT_ANIM_TITLE_WAVE_STAGGER_MS 75
 /* how far down the viewer's frame the title's own centre lands - see boot_anim.h's own comment on this section for the frame it is in */
-#define BOOT_ANIM_TITLE_VIEW_Y 75
+#define BOOT_ANIM_TITLE_VIEW_Y 60
+
+/* how far into the viewer's frame the title's own left edge starts - see boot_anim.h's own comment on this section for where the default came from */
+#define BOOT_ANIM_TITLE_VIEW_X 99
 
 /* drop shadow offset, pixels right (negative is left) - 0/0 disables it */
 #define BOOT_ANIM_TITLE_SHADOW_DX -7
@@ -91,13 +94,13 @@
 #define BOOT_ANIM_TITLE_SHADOW_ALPHA 128
 
 /* the photograph starts crossing in as the function crosses out */
-#define BOOT_ANIM_IMAGE_START_MS 4200
+#define BOOT_ANIM_IMAGE_START_MS 3500
 
 /* how long that one shared crossfade takes - 0 cuts straight to the photo */
-#define BOOT_ANIM_IMAGE_FADE_MS 2300
+#define BOOT_ANIM_IMAGE_FADE_MS 800
 
 /* dissolve into the launcher */
-#define BOOT_ANIM_FADE_START_MS 5800
+#define BOOT_ANIM_FADE_START_MS 4800
 
 /* one whole hue-wheel turn takes this long */
 #define BOOT_ANIM_GRID_HUE_MS 700
@@ -161,12 +164,12 @@ typedef struct {
     uint8_t  ease;
 } boot_anim_keyframe_t;
 
-#define BOOT_ANIM_KEYFRAME_COUNT 10
+#define BOOT_ANIM_KEYFRAME_COUNT 7
 
 static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] = {
     {     0,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {   5632,      0,      0 }, {      0,      0,      0 }, {    512,    512,    512 },
+      {   5120,      0,      0 }, {   -192,    -64,    128 }, {    512,    512,    512 },
       BOOT_ANIM_EASE_LINEAR },
     {   700,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
@@ -188,20 +191,8 @@ static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] 
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
       {  -1024,   4096,      0 }, {   -256,    -64,      0 }, {    512,    512,    512 },
       BOOT_ANIM_EASE_LINEAR },
-    {  3300,
+    {  4300,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1024,   4096,      0 }, {   -256,    -64,      0 }, {    563,    563,    563 },
-      BOOT_ANIM_EASE_LINEAR },
-    {  4200,
-      {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1536,   6144,   3584 }, {   -299,    -64,     43 }, {    512,    512,    512 },
-      BOOT_ANIM_EASE_LINEAR },
-    {  4700,
-      {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1536,  10240,   7680 }, {   -294,    -64,     43 }, {   1536,   1536,   1536 },
-      BOOT_ANIM_EASE_LINEAR },
-    {  5500,
-      {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {      0,   9728,   2560 }, {   -256,   -128,     -7 }, {    589,    589,    589 },
+      {  -1024,   4096,      0 }, {   -256,   -384,      0 }, {    307,    307,    307 },
       BOOT_ANIM_EASE_LINEAR },
 };
