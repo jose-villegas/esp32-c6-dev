@@ -6,14 +6,19 @@
  * table can be built and tested without the panel - see gfx_color.h's own
  * top comment for why that split matters on this project.
  *
- * Today there is exactly one font: the 8x8 bitmap in font8x8_basic.h,
- * wrapped below as gfx_font_8x8 so it is an ordinary entry in this scheme
- * rather than a special case something else routes around. The scheme is
- * shaped for a second font that does not exist yet - a coverage atlas with
- * anti-aliasing and proportional advances - which is why `bpp` is a field
- * rather than an assumption and why advances are per-glyph-capable even
- * though nothing uses that yet. Drawing anything but 1bpp is out of scope
- * here: see gfx_text_font()'s own comment in gfx.c for why.
+ * Two fonts exist: the 8x8 bitmap in font8x8_basic.h, wrapped below as
+ * gfx_font_8x8 so it is an ordinary entry in this scheme rather than a
+ * special case something else routes around, and an 8bpp coverage atlas
+ * with anti-aliasing and real proportional advances - generated from a TTF
+ * by tools/gen_font.py, e.g. main/gfx/fonts/font_lmroman_40.h - which is
+ * exactly the "second font" this scheme was originally shaped for before
+ * one existed: `bpp` was a field rather than an assumption, and advances
+ * were per-glyph-capable, specifically so a font like that could slot in
+ * as an ordinary gfx_font_t with no change here. See gfx.c's
+ * draw_glyph_font() for how a bpp==8 atlas is actually drawn (blended, not
+ * masked) and gfx_font.h - this file - stays exactly what it always was:
+ * pure metrics, no drawing, so both fonts' widths/advances/heights are
+ * computable and testable on a host with neither gfx.h nor a framebuffer.
  *===========================================================================*/
 #pragma once
 
@@ -31,13 +36,15 @@
  * packed cell by cell, one glyph after another starting at codepoint
  * `first`; within a cell, a 1bpp glyph is `cell_h` bytes, one byte per row,
  * bit 0 (LSB) the LEFTMOST pixel of that row - see gfx_font_8x8 below for
- * how the existing 8x8 font matches this exactly. A future coverage atlas at
- * bpp=8 would instead need `cell_w * cell_h` bytes per glyph, one byte per
- * pixel; nothing here assumes that layout yet because nothing draws it yet
- * (see gfx_text_font()'s bpp!=1 guard in gfx.c). */
+ * how the existing 8x8 font matches this exactly. An 8bpp coverage atlas
+ * instead uses `cell_w * cell_h` bytes per glyph, one byte per pixel,
+ * row-major, 0 background .. 255 full ink - see tools/gen_font.py's own
+ * top comment for how that layout is built from a TTF, and gfx.c's
+ * draw_glyph_font() for how it is drawn (blended through
+ * gfx_fill_rect_blend(), not masked). */
 typedef struct {
     const uint8_t *atlas;      /* glyph bitmaps, cell by cell */
-    uint8_t  bpp;              /* 1 today; 8 when a coverage atlas arrives */
+    uint8_t  bpp;              /* 1 = bitmask (gfx_font_8x8); 8 = coverage */
     uint8_t  cell_w, cell_h;   /* one glyph's cell, in atlas pixels */
     uint8_t  first;            /* first codepoint the atlas covers */
     uint16_t count;            /* how many glyphs follow it, from `first` */

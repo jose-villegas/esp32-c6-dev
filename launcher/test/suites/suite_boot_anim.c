@@ -27,6 +27,7 @@
 #include "suites.h"
 
 #include "boot/boot_anim.h"
+#include "gfx/fonts/font_lmroman_40.h"
 
 /* The panel these numbers are laid out for. Named here rather than pulled
  * from gfx.h, which needs the BSP; gfx_dirty.h mirrors the same two numbers
@@ -706,6 +707,45 @@ static void test_wave_envelope_is_still_full_at_wave_out_ms_itself(void)
         boot_anim_wave_envelope(BOOT_ANIM_WAVE_OUT_MS));
 }
 
+/* The title's idle wave calming down - a different wave entirely from the
+ * floor ripple above (see boot_anim_title_wave()), but the same "255 minus
+ * a ramp" envelope, so the same three moments are worth pinning: full
+ * swing before it starts, still full AT the start (that instant is when
+ * the ramp begins, not when it has finished), and nothing left once the
+ * fade window has passed. */
+static void test_the_title_wave_is_at_full_swing_before_it_calms(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_title_wave_reach(0));
+    TEST_ASSERT_EQUAL_UINT8(255,
+        boot_anim_title_wave_reach(BOOT_ANIM_TITLE_WAVE_OUT_MS));
+}
+
+static void test_the_title_wave_reaches_stillness_after_its_fade(void)
+{
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_title_wave_reach(
+        BOOT_ANIM_TITLE_WAVE_OUT_MS + BOOT_ANIM_TITLE_WAVE_FADE_MS));
+}
+
+/* The point of scaling the AMPLITUDE rather than gating the wave off: the
+ * motion has to shrink monotonically through the window, so a letter
+ * caught mid-bob rides its own arc down instead of snapping straight. The
+ * envelope is what carries that, so it is what gets swept - the wave
+ * itself keeps oscillating underneath and would not be monotonic. */
+static void test_the_title_wave_never_swings_wider_as_it_calms(void)
+{
+    const uint32_t out = BOOT_ANIM_TITLE_WAVE_OUT_MS;
+    const uint32_t fade = BOOT_ANIM_TITLE_WAVE_FADE_MS;
+    int prev = 256;
+
+    for (uint32_t t = out; t <= out + fade; t += (fade / 32) + 1) {
+        const int now = boot_anim_title_wave_reach(t);
+        TEST_ASSERT_TRUE_MESSAGE(now <= prev,
+            "the title wave's own envelope grew back while it was "
+            "supposed to be calming");
+        prev = now;
+    }
+}
+
 static void test_wave_envelope_fades_back_to_zero_by_the_end(void)
 {
     TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(BOOT_ANIM_MS));
@@ -1363,7 +1403,18 @@ static void test_the_live_end_of_the_curve_is_drawn_thicker(void)
 
 /*---------------------------------------------------------------------------
  * The title
+ *
+ * boot_anim_title_letter() now takes the font it is laying out - see its
+ * own comment in boot_anim.h - so the layout tests below exercise the REAL
+ * shipped font (gfx_font_lmroman_40, font_lmroman_40.h) rather than a
+ * synthetic stand-in: these are checks against the actual authored
+ * geometry (BOOT_ANIM_TITLE_VIEW_X/Y, the real "Autana" advances), not
+ * just the layout FORMULA in the abstract - suite_gfx_font.c already
+ * covers gfx_font_text_width()/gfx_font_advance() themselves against a
+ * synthetic proportional font, so there is no need to repeat that here.
  *-------------------------------------------------------------------------*/
+
+#define TITLE_FONT (&gfx_font_lmroman_40)
 
 static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
 {
@@ -1420,7 +1471,7 @@ static void test_a_letter_lands_exactly_on_its_final_position(void)
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const boot_anim_title_pos_t p =
-            boot_anim_title_letter(i, arrived);
+            boot_anim_title_letter(TITLE_FONT, i, arrived);
         const int expected_y = BOOT_ANIM_TITLE_VIEW_Y +
                                boot_anim_title_wave(i, arrived);
         TEST_ASSERT_EQUAL_INT_MESSAGE(expected_y, p.y,
@@ -1443,7 +1494,7 @@ static void test_letters_are_staggered_left_to_right(void)
     int last_x = -100000;
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const boot_anim_title_pos_t here =
-            boot_anim_title_letter(i, never);
+            boot_anim_title_letter(TITLE_FONT, i, never);
         TEST_ASSERT_TRUE_MESSAGE(here.x > last_x,
             "letters should be laid out left to right in their resting "
             "row, whatever moment they are drawn at");
@@ -1460,9 +1511,9 @@ static void test_letters_are_staggered_left_to_right(void)
                                  (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS -
                                  BOOT_ANIM_TITLE_STAGGER_MS / 2;
             const boot_anim_title_pos_t at =
-                boot_anim_title_letter(i, mid);
+                boot_anim_title_letter(TITLE_FONT, i, mid);
             const boot_anim_title_pos_t prev_at =
-                boot_anim_title_letter(i - 1, mid);
+                boot_anim_title_letter(TITLE_FONT, i - 1, mid);
             TEST_ASSERT_TRUE_MESSAGE(prev_at.x >= at.x,
                 "an earlier letter should be at least as far along as a "
                 "later one at the same moment");
@@ -1473,10 +1524,45 @@ static void test_letters_are_staggered_left_to_right(void)
 static void test_a_letter_starts_off_panel_to_the_left(void)
 {
     const boot_anim_title_pos_t p =
-        boot_anim_title_letter(0, BOOT_ANIM_TITLE_START_MS);
+        boot_anim_title_letter(TITLE_FONT, 0, BOOT_ANIM_TITLE_START_MS);
     TEST_ASSERT_TRUE_MESSAGE(p.x < 0,
         "a letter should begin off the left edge of the panel, not merely "
         "at it");
+}
+
+/* Regression guard for the bug boot_anim_title_letter()'s own comment in
+ * boot_anim.h describes: final_x used to be `i * (8 * SCALE + GAP)`, a
+ * fixed per-letter cell, which is only correct for a MONOSPACE font. This
+ * checks the real formula directly against gfx_font_text_width() - the
+ * same pure sum-of-advances function gfx_font.h's own suite already pins
+ * against a synthetic proportional font - rather than against a second,
+ * hand-derived copy of the arithmetic that could make the same mistake
+ * twice. Watching this fail against the pre-fix `i * (8*SCALE+GAP)`
+ * formula (temporarily restore it to see) is what proves this test can
+ * catch the bug it exists for, not just describe it. */
+static void test_final_x_matches_the_advance_sum(void)
+{
+    /* Any moment past every letter's own flight is fine: only the FINAL
+     * resting x matters here, and test_a_letter_lands_exactly_on_its_final_
+     * position() already covers y/wobble/wave separately. */
+    const uint32_t arrived = BOOT_ANIM_TITLE_START_MS +
+                             (uint32_t)BOOT_ANIM_TITLE_LEN *
+                                 BOOT_ANIM_TITLE_STAGGER_MS +
+                             BOOT_ANIM_TITLE_FLIGHT_MS + 1000;
+
+    for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
+        const boot_anim_title_pos_t p =
+            boot_anim_title_letter(TITLE_FONT, i, arrived);
+        const int prefix_w = gfx_font_text_width(TITLE_FONT, BOOT_ANIM_TITLE,
+                                                 i, BOOT_ANIM_TITLE_SCALE);
+        const int expected_x = BOOT_ANIM_TITLE_VIEW_X + prefix_w +
+                               i * BOOT_ANIM_TITLE_GAP;
+        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_x, p.x,
+            "a landed letter's x must be VIEW_X plus the ADVANCE SUM of "
+            "every letter before it (gfx_font_text_width(), proportional) "
+            "plus i*GAP of tracking - not a fixed per-letter cell, which "
+            "is only correct for a monospace font");
+    }
 }
 
 /* The layout guard, in the same spirit as
@@ -1493,8 +1579,13 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
 {
     /* The full glyph cell, not just its anchor corner - (x, y) is where a
      * glyph's cell BEGINS, so the cell's far edge is what actually has to
-     * stay on the panel. */
-    const int cell = 8 * BOOT_ANIM_TITLE_SCALE;
+     * stay on the panel. cell_w and cell_h separately, not one shared
+     * `cell` - font_lmroman_40's cell is NOT square (51x58), unlike the
+     * old gfx_font_8x8 this test used to size itself off; conflating the
+     * two axes here would silently check the wrong bound on whichever axis
+     * differs. */
+    const int cell_w = TITLE_FONT->cell_w * BOOT_ANIM_TITLE_SCALE;
+    const int cell_h = TITLE_FONT->cell_h * BOOT_ANIM_TITLE_SCALE;
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
         const uint32_t start = BOOT_ANIM_TITLE_START_MS +
@@ -1502,14 +1593,14 @@ static void test_the_title_stays_on_the_panel_once_visible(void)
         for (uint32_t t = start; t <= start + BOOT_ANIM_TITLE_FLIGHT_MS;
              t += 15) {
             const boot_anim_title_pos_t p =
-                boot_anim_title_letter(i, t);
-            if (p.x + cell < 0) {
+                boot_anim_title_letter(TITLE_FONT, i, t);
+            if (p.x + cell_w < 0) {
                 continue;   /* still off-panel to the left - not visible yet */
             }
-            TEST_ASSERT_TRUE_MESSAGE(p.x + cell <= BOOT_ANIM_TITLE_VIEW_W,
+            TEST_ASSERT_TRUE_MESSAGE(p.x + cell_w <= BOOT_ANIM_TITLE_VIEW_W,
                 "a letter drifted off the right edge of the viewer's frame");
             TEST_ASSERT_TRUE_MESSAGE(
-                p.y >= 0 && p.y + cell < BOOT_ANIM_TITLE_VIEW_H,
+                p.y >= 0 && p.y + cell_h < BOOT_ANIM_TITLE_VIEW_H,
                 "a letter's wobble carried it off the top or bottom of "
                 "the viewer's frame");
         }
@@ -1590,6 +1681,9 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_wave_envelope_plateaus_between_in_and_out);
     RUN_TEST(test_wave_envelope_is_still_full_at_wave_out_ms_itself);
     RUN_TEST(test_wave_envelope_fades_back_to_zero_by_the_end);
+    RUN_TEST(test_the_title_wave_is_at_full_swing_before_it_calms);
+    RUN_TEST(test_the_title_wave_reaches_stillness_after_its_fade);
+    RUN_TEST(test_the_title_wave_never_swings_wider_as_it_calms);
     RUN_TEST(test_the_seeds_spokes_reach_full_length_instantly);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
@@ -1637,6 +1731,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_a_letter_lands_exactly_on_its_final_position);
     RUN_TEST(test_letters_are_staggered_left_to_right);
     RUN_TEST(test_a_letter_starts_off_panel_to_the_left);
+    RUN_TEST(test_final_x_matches_the_advance_sum);
     RUN_TEST(test_the_title_stays_on_the_panel_once_visible);
     RUN_TEST(test_title_shadow_offset_turns_reader_frame_into_panel_frame);
 }

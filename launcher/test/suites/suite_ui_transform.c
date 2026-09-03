@@ -190,6 +190,128 @@ static void test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn(void)
 }
 
 /*---------------------------------------------------------------------------
+ * ui_text_glyph0_origin() - where a string's first glyph belongs, under a
+ * quarter turn, for a PROPORTIONAL font
+ *
+ * gfx_font_8x8 (the only font that existed when this function's formula was
+ * first written) is square - cell_w == cell_h == 8 - so it could never have
+ * exposed a cell_w/cell_h mixup: whichever of the two a bug read, the
+ * number would come out the same. Every test below uses glyph0_font
+ * instead, deliberately non-square (cell_w=6, cell_h=10) AND proportional
+ * (advances 3/5/4/6, none equal to cell_w), the same kind of synthetic
+ * descriptor suite_gfx_font.c already uses for the same reason. Its atlas
+ * is unread (nothing here draws) and left zeroed.
+ *-------------------------------------------------------------------------*/
+
+static const uint8_t glyph0_atlas[4 * 10] = { 0 };   /* 4 glyphs * cell_h rows, unread */
+static const uint8_t glyph0_advance[4] = { 3, 5, 4, 6 };
+static const gfx_font_t glyph0_font = {
+    .atlas   = glyph0_atlas,
+    .bpp     = 1,
+    .cell_w  = 6,
+    .cell_h  = 10,
+    .first   = (uint8_t)'A',
+    .count   = 4,
+    .advance = glyph0_advance,
+};
+
+/* The ground truth ui_text_glyph0_origin()'s own comment claims it matches:
+ * glyph 0's OWN logical cell (cell_w x cell_h, at the string's logical
+ * origin) mapped straight through ui_transform_rect() - the one function
+ * every other MU_COMMAND (_RECT, _ICON, _CLIP) already trusts without
+ * dispute - must describe exactly where the function under test says
+ * glyph 0 belongs, at every quarter, not just the two (2 and 3) that get an
+ * explicit correction. */
+static void assert_glyph0_matches_ground_truth(int logical_x, int logical_y,
+                                               const char *text, int quarter,
+                                               const char *msg)
+{
+    const ui_transform_t t =
+        ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
+    const int tw = gfx_font_text_width(&glyph0_font, text, -1, 1);
+    const int th = gfx_font_height(&glyph0_font, 1);
+    const mu_Rect box = ui_transform_rect(
+        t, (mu_Rect){ logical_x, logical_y, tw, th });
+
+    int mx, my;
+    ui_text_glyph0_origin(&glyph0_font, box, quarter, 1, &mx, &my);
+
+    const mu_Rect truth = ui_transform_rect(
+        t, (mu_Rect){ logical_x, logical_y, glyph0_font.cell_w,
+                      glyph0_font.cell_h });
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(truth.x, mx, msg);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(truth.y, my, msg);
+}
+
+static void test_glyph0_origin_matches_ground_truth_at_every_quarter(void)
+{
+    for (int quarter = 0; quarter < 4; quarter++) {
+        assert_glyph0_matches_ground_truth(20, 30, "ABCD", quarter,
+            "glyph 0's origin must land exactly where mapping its own "
+            "cell independently through ui_transform_rect() says it "
+            "should, for a non-square proportional font");
+    }
+
+    /* And again with strings of every length 1..4, including the single-
+     * glyph case (no OTHER glyph to walk past, the case most likely to
+     * expose an off-by-one in whichever correction is applied). */
+    for (int len = 1; len <= 4; len++) {
+        for (int quarter = 0; quarter < 4; quarter++) {
+            assert_glyph0_matches_ground_truth(20, 30, "ABCD" + (4 - len),
+                quarter, "same check, at a shorter string length");
+        }
+    }
+}
+
+/* Turns 0 and 1 walk FORWARD, so the box's own corner already IS glyph 0's
+ * origin - no correction applied, checked directly against the box rather
+ * than against ui_transform_rect() ground truth (which the test above
+ * already covers) so THIS test states the "no correction" contract in the
+ * plainest possible terms. */
+static void test_glyph0_origin_needs_no_correction_at_turn_0_or_1(void)
+{
+    const mu_Rect box = { 50, 60, 30, 12 };
+    int mx, my;
+
+    ui_text_glyph0_origin(&glyph0_font, box, 0, 1, &mx, &my);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(box.x, mx, "turn 0: origin is box.x");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(box.y, my, "turn 0: origin is box.y");
+
+    ui_text_glyph0_origin(&glyph0_font, box, 1, 1, &mx, &my);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(box.x, mx, "turn 1: origin is box.x");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(box.y, my, "turn 1: origin is box.y");
+}
+
+/* Direct demonstration of the mistake this function's own comment warns
+ * against: swapping cell_w for cell_h at quarter 3 LOOKS plausible (quarter
+ * 3 corrects box.h, the "other" dimension from quarter 2's box.w) but is
+ * wrong - see that comment for the derivation of why "col" always maps to
+ * the walk axis regardless of turn. This does not need to break the source
+ * to prove the point: cell_w (6) and cell_h (10) are different enough in
+ * glyph0_font that the two formulas provably disagree, so showing the real
+ * function's answer is NOT the cell_h one is itself evidence this test
+ * could catch that exact mistake. */
+static void test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake(void)
+{
+    const int quarter = 3;
+    const ui_transform_t t =
+        ui_transform_quarter_turn(quarter, VIEW_W, VIEW_H);
+    const int tw = gfx_font_text_width(&glyph0_font, "ABCD", -1, 1);
+    const int th = gfx_font_height(&glyph0_font, 1);
+    const mu_Rect box = ui_transform_rect(t, (mu_Rect){ 20, 30, tw, th });
+
+    int mx, my;
+    ui_text_glyph0_origin(&glyph0_font, box, quarter, 1, &mx, &my);
+
+    const int wrong_my_using_cell_h = box.y + box.h - glyph0_font.cell_h;
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(wrong_my_using_cell_h, my,
+        "cell_w (6) != cell_h (10) in this font - a function that read "
+        "cell_h here instead of cell_w would land on `wrong_my_using_"
+        "cell_h`, not on the real answer");
+}
+
+/*---------------------------------------------------------------------------
  * Composition and the quarter turn a transform represents
  *-------------------------------------------------------------------------*/
 
@@ -314,6 +436,9 @@ void suite_ui_transform(void)
     RUN_TEST(test_turn_3_rotates_corners_three_steps_clockwise);
     RUN_TEST(test_a_mapped_rect_stays_axis_aligned_and_inside_the_viewport);
     RUN_TEST(test_a_mapped_rect_swaps_width_and_height_on_an_odd_turn);
+    RUN_TEST(test_glyph0_origin_matches_ground_truth_at_every_quarter);
+    RUN_TEST(test_glyph0_origin_needs_no_correction_at_turn_0_or_1);
+    RUN_TEST(test_glyph0_origin_at_turn_3_is_not_the_cell_h_mistake);
     RUN_TEST(test_quarter_reports_the_turn_each_matrix_represents);
     RUN_TEST(test_composing_two_quarter_turns_sums_mod_4);
     RUN_TEST(test_axis_preserving_accepts_identity_and_every_quarter_turn);
