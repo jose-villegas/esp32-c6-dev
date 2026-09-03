@@ -66,10 +66,23 @@ import device_profile  # noqa: E402  (path must be set up first)
 # once (esp32c6 profile, 2026-09-03) so the gate can land without either
 # raising the ceiling to match the worst of them or leaving every one of
 # them permanently red. This is NOT a permission slip: each value is the
-# exact frame size measured when the entry was recorded, and a function only
+# frame size measured when the entry was recorded, and a function only
 # leaves this list by shrinking its frame below the ceiling - never by
 # bumping the recorded number to match a regrowth. A function that grows
-# past its recorded size fails exactly like a brand-new offender would.
+# meaningfully past its recorded size fails exactly like a brand-new
+# offender would.
+#
+# "Meaningfully" because these are HOST frames, and host compilers disagree
+# with each other about them: the same test_the_blend_has_no_jump_crossing_45_degrees
+# measured 1,216 bytes on the Windows MinGW gcc the list was recorded with
+# and 1,456 bytes (+19.7%) on the Linux gcc in CI, for identical source.
+# So a recorded value is compared with STACK_FRAME_TOOLCHAIN_TOLERANCE of
+# headroom rather than exactly - enough to absorb one compiler's opinion of
+# another's frame, nowhere near enough to hide the class this gate exists
+# for (the three historical offenders were 4 KB, 24 KB and 41 KB against a
+# ~1.5 KB record). The device's own frames, which are what actually matter,
+# are checked separately and exactly by check_stack_usage_device.sh.
+STACK_FRAME_TOOLCHAIN_TOLERANCE = 0.25
 #
 # Keyed by (source file basename, function name) rather than a full path, so
 # this survives being checked out to a different absolute location.
@@ -234,7 +247,7 @@ def main(argv):
         recorded = PRE_EXISTING_STACK_DEBT.get(key)
         if recorded is None:
             new_offenders.append(r)
-        elif r.bytes > recorded:
+        elif r.bytes > recorded * (1.0 + STACK_FRAME_TOOLCHAIN_TOLERANCE):
             grown_offenders.append((r, recorded))
         else:
             known_debt.append(r)
