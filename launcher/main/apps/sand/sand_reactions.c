@@ -1768,6 +1768,33 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
  * genuine fixed point, not merely a slowdown. */
 #define ROOT_SURFACE_MAX 2
 
+/* The two skews step_one_rooting_cell()'s pick lays over the moisture -
+ * see the pick itself for what each means. Both sit on a base of 1 per
+ * candidate, so a candidate that continues away from its parent AND
+ * reaches down weighs 1 + AWAY + DOWN against 1 for one that does
+ * neither.
+ *
+ * DOWN was 1 at first, with AWAY the larger on the reasoning that the
+ * parent-relative skew was the thing asked for; the device still read as
+ * roots not going deep enough, so DOWN came up to match AWAY and the
+ * trunk now counts as a parent (see the pick), which is what points the
+ * very first root downward.
+ *
+ * MEASURED HONESTLY, AND THE WEIGHTS ARE NOT THE DEPTH LEVER. Over thirty
+ * seeds on a saturated 19-row bed (root_shape harness, 20,000 steps),
+ * DOWN 1 -> 2 plus the trunk term moved mean deepest root 7.2 -> 7.4 rows
+ * and mean half-width 8.5 -> 7.9: a real narrowing, no real deepening.
+ * What stops a finger is WATER, not heading - every one of those beds was
+ * 98-99% dry by the end and not a single live tip had moist dirt beside
+ * it. A root can only eat moist soil, and a bed watered from the top
+ * dries from the top, so the moist front the fingers chase is gone
+ * before they reach the floor. Deeper roots need deeper water; the
+ * weights only decide which moist cell a tip takes next. Six seeds had
+ * suggested a doubling from the earlier step (4.2 -> 8.8) - that was
+ * per-seed RNG scatter of +/-10 rows, which thirty seeds average away. */
+#define ROOT_WEIGHT_AWAY 2
+#define ROOT_WEIGHT_DOWN 2
+
 /* One cell of ROOT, eating into the moist soil it touches - PART 2 of the
  * roots feature (docs/Sand/Sand-Simulation.md), and the whole growth
  * rule: find a neighbour that is dirt (reaction_of(c)->dries != 0) and
@@ -1853,11 +1880,16 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
      *   GRAVITY-WARD - what actually buys depth: a root reaching for the
      *     water percolating down beneath it rather than the water
      *     diffusing beside it.
-     * Weights are base 1, +2 for continuing away, +1 for going down. A
-     * tip growing straight on and down weighs 4 against 1 for turning
-     * back sideways; the away term is the larger on purpose, since it is
-     * the parent-relative skew that was asked for and gravity alone had
-     * been measured to make a taproot (the four-neighbour finding above).
+     * THE TRUNK COUNTS AS A PARENT TOO. The first root a tree puts down
+     * has no root neighbours at all, so its away-vector was zero and it
+     * was left to the gravity term alone - and it is the one root whose
+     * heading matters most, since everything else grows from it. The
+     * wood standing directly on top of it is what it grew from, so it
+     * enters the away-vector exactly as a parent root does (`clings_to`,
+     * the material the row says a root is part of), and the collar's
+     * first move is down and out from under the trunk rather than a
+     * coin-toss along the wet surface. Reported as roots still not going
+     * deep enough with the parent skew alone.
      *
      * Two draws, both after every gate: the `roots` roll, then the pick -
      * the second is only ever drawn once the first has said a conversion
@@ -1870,7 +1902,8 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
             continue;
         }
-        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == (cell_t)r->roots_to) {
+        const cell_t c = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (c == (cell_t)r->roots_to || (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == r->clings_to)) {
             away_x -= nd[0];
             away_y -= nd[1];
         }
@@ -1892,10 +1925,10 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         }
         int wgt = 1;
         if (nd[0] * away_x + nd[1] * away_y > 0) {
-            wgt += 2; /* carries on away from its parent */
+            wgt += ROOT_WEIGHT_AWAY; /* carries on away from its parent */
         }
         if (nd[0] * gx + nd[1] * gy > 0) {
-            wgt += 1; /* reaches down */
+            wgt += ROOT_WEIGHT_DOWN; /* reaches down */
         }
         cand_at[n_cand] = (int)nat;
         cand_x[n_cand] = nx;

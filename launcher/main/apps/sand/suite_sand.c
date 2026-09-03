@@ -14578,6 +14578,66 @@ static void test_a_root_tip_grows_on_away_from_its_parent_and_down(void)
         "system stays as sideways as the moisture that feeds it");
 }
 
+/* The FIRST root under a trunk heads down, not along the surface.
+ *
+ * A lone collar root has no root neighbours, so with parents alone its
+ * away-vector was zero and it was left to the gravity term - and it is
+ * the one root whose heading matters most, since the whole system grows
+ * from it. Now the trunk it grew from counts as a parent too (`clings_to`
+ * in step_one_rooting_cell()'s away scan), so "away from what I grew
+ * from" points straight down from under the wood.
+ *
+ * Same statistical shape as the tip test above, same classification of
+ * the first conversion adjacent to the root. The trunk is not a candidate
+ * (wood is not dirt), so the root's seven candidates split three below at
+ * 1 + AWAY + DOWN, two beside at 1, two up-diagonals at 1: "below" is
+ * predicted at 15 in 17. Watched red with the trunk term and DOWN both
+ * stubbed to nothing - a uniform pick over the same seven lands "below"
+ * 3 in 5 against the same 75% bar. */
+static void test_the_first_root_under_a_trunk_heads_down(void)
+{
+    const int cx = W / 2, ry = H - 4;
+    int below = 0, beside = 0;
+
+    for (uint32_t seed = 1; seed <= 120u; seed++) {
+        sand_init(&s, cells, W, H, seed);
+        sand_clear(&s);
+        sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+            for (int y = H - 7; y <= H - 2; y++) {
+                sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
+        }
+        sand_set(&s, cx, ry - 1, CELL_MAKE(MAT_WOOD, 0)); /* the trunk */
+        sand_set(&s, cx, ry, MATX(MATX_ROOT));            /* its first root */
+
+        int verdict = 0;
+        for (int i = 0; i < 600 && verdict == 0; i++) {
+            sand_step(&s, 0, 1000, 0);
+            for (int dx = -1; dx <= 1 && verdict == 0; dx++) {
+                if (sand_at(&s, cx + dx, ry + 1) == MATX(MATX_ROOT)) {
+                    verdict = 1;
+                }
+            }
+            if (verdict == 0 && (sand_at(&s, cx - 1, ry) == MATX(MATX_ROOT) ||
+                                 sand_at(&s, cx + 1, ry) == MATX(MATX_ROOT))) {
+                verdict = 2;
+            }
+        }
+        if (verdict == 1) below++;
+        if (verdict == 2) beside++;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(below + beside >= 100,
+        "setup failure, not the claim under test: the collar root must "
+        "actually grow in most seeds for the ratio to mean anything");
+    TEST_ASSERT_TRUE_MESSAGE(below * 100 >= 75 * (below + beside),
+        "the first root under a trunk must mostly head DOWN - the trunk it "
+        "grew from has to count as the parent it grows away from, or the "
+        "seed of every root system starts with a coin-toss along the wet "
+        "surface");
+}
+
 static void test_a_thickly_rooted_cell_stops_growing(void)
 {
     TEST_ASSERT_TRUE_MESSAGE(surface_rule_lets_growth_through(2),
@@ -25972,6 +26032,7 @@ void run_sand_suite(void)
     RUN_TEST(test_a_root_eats_a_moist_neighbour_and_only_spends_its_own_moisture);
     RUN_TEST(test_a_root_never_eats_dry_dirt_sand_or_empty_space);
     RUN_TEST(test_a_root_tip_grows_on_away_from_its_parent_and_down);
+    RUN_TEST(test_the_first_root_under_a_trunk_heads_down);
     RUN_TEST(test_a_thickly_rooted_cell_stops_growing);
     RUN_TEST(test_roots_grow_toward_the_wet_side_only);
     RUN_TEST(test_a_continuously_watered_root_system_still_saturates);
