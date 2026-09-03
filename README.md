@@ -25,9 +25,11 @@ removing one touches no other file. Currently:
   a wall-rebound splash, and a device-verified performance budget for every
   hot path. See `docs/Sand/Sand-Simulation.md`.
 - **3D Cube** — a Gouraud-shaded software rasterizer, no GPU.
-- **Diagnostics** — a bench-only hardware self-test report; ships only in
-  the diagnostics build, the same one that carries the test suites, never
-  in release.
+- **Diagnostics** — a bench tool: a hardware self-test (POST) report plus a
+  developer-toggles page; ships in any development build (`--dev` or the
+  diagnostics build), never release. The on-device self-test *runner* on
+  that page is narrower still — only the diagnostics build, the one that
+  also carries the test suites.
 
 A power-on self-test (`launcher/main/boot/post.c`) runs in every build, release included,
 and checks storage, memory, sensors and the display on every boot.

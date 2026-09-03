@@ -78,8 +78,14 @@ identically built by the RISC-V toolchain and executed on this chip.
 ### Release builds contain no test code
 
 `CONFIG_LAUNCHER_SELFTEST` defaults **off**, and the CMake conditional leaves
-the suites, the runner and **the Diagnostics app** out of the build entirely —
-not `#ifdef`-ed out, simply never compiled.
+the suites and the runner out of the build entirely — not `#ifdef`-ed out,
+simply never compiled. `build/launcher.elf` (release) is neither DEVELOPMENT
+nor SELFTEST, so **the Diagnostics app** is out of it too, for a related but
+separate reason: it is gated on `CONFIG_LAUNCHER_DEVELOPMENT`, a strictly
+broader flag than `CONFIG_LAUNCHER_SELFTEST` (see
+[Launcher-Architecture.md](Launcher-Architecture.md#an-app-is-a-folder) and
+`main/CMakeLists.txt`) — it also ships in a `--dev` build, which carries no
+test suites at all.
 
 Verified rather than assumed, by counting symbols in the two images:
 
@@ -88,15 +94,28 @@ riscv32-esp-elf-nm build/launcher.elf      | grep -ci 'unity\|suite_\|selftest\|
 riscv32-esp-elf-nm build.diag/launcher.elf | grep -ci 'unity\|suite_\|selftest\|app_diagnostics'   # 39
 ```
 
+`build/launcher.elf` is still release, so this check is unaffected by
+Diagnostics moving to DEVELOPMENT — `app_diagnostics` stays at 0 there
+either way. What changed is the reason it belongs in the same count as
+`unity`/`suite_`/`selftest`: not because the app is selftest-shaped (most of
+it never was), but because release is neither DEVELOPMENT nor SELFTEST, so
+every one of those symbols is absent from it regardless of which of the two
+flags actually gates it.
+
 That matters for more than size. The suites draw to the framebuffer and drive
 the panel, which is fine in diagnostics and unacceptable in a product; and test
 hooks in a shipped image are a liability rather than a feature.
 
-The **Diagnostics app** is gated the same way, for the same reason. It is a
-bench tool: entering it re-runs POST, which cycles the audio power rail and
-drops the display off SPI2 mid-session. Reasonable while debugging, not
-something to leave reachable in a shipped product. The boot POST still runs in
-release — only this way *in* is compiled out.
+The **Diagnostics app** is a bench tool: entering it re-runs POST, which
+cycles the audio power rail and drops the display off SPI2 mid-session.
+Reasonable while debugging, not something to leave reachable in a shipped
+product — hence DEVELOPMENT, not left ungated. The boot POST still runs in
+release — only this way *in* is compiled out. The self-test *runner* inside
+Diagnostics (the button, its result line, the `selftest_run()` call) is
+narrower still: gated on `CONFIG_LAUNCHER_SELFTEST` specifically, inside
+`app_diagnostics.c`, because `selftest_run()` is not even a linkable symbol
+outside a SELFTEST build (`boot/selftest.c` is only added to `app_srcs`
+under `CONFIG_LAUNCHER_SELFTEST` — see `main/CMakeLists.txt`).
 
 ### Development-only instrumentation is its own flag, not SELFTEST
 
@@ -423,10 +442,11 @@ against.
   codebase; this is what it is actually testing.
 - `docs/Notes/` — the hardware constraints behind the device-only
   performance tests. Start at `docs/Notes/README.md`.
-- `docs/Settings-App-Plan.md` — planned follow-up to the DEVELOPMENT/SELFTEST
-  split this guide documents: the Diagnostics app's toggle page mixes both,
-  and untangling that is what would let the SELFTEST/"diagnostics" naming
-  mismatch actually resolve rather than just get renamed over.
+- `docs/Settings-App-Plan.md` — the Diagnostics app itself now follows the
+  DEVELOPMENT/SELFTEST split this guide documents (whole app on
+  DEVELOPMENT, the self-test runner alone on SELFTEST); what remains open
+  is extracting its surviving DEVELOPMENT-only rows into their own Settings
+  app, and the SELFTEST/"diagnostics" naming mismatch this guide describes.
 - `docs/Log-Level-Plan.md` — planned compile-time log-severity ceiling per
   build variant, complementing the DEVELOPMENT/SELFTEST split above rather
   than replacing it.

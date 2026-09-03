@@ -79,6 +79,38 @@ static void histogram(const uint8_t *cells, int n, int counts[16])
 
 typedef void (*scene_fn)(sand_t *s);
 
+/* ONE MACRO PER MATERIAL, because MASS_MAX is not a general "a full cell of
+ * this" idiom and using it as one built four different kinds of wrong cell.
+ * A cell's low nibble means whatever its own material says it means:
+ *
+ *     water, lava, oil    MASS - MASS_MAX is correct, and only here
+ *     stone, glass        HEAT - MASS_MAX is the TOP of the ramp, so every
+ *                         floor and wall in this file started white-hot
+ *     wood                BURN PROGRESS - cell_is_burning() is variant != 0
+ *                         for anything with burn_decay, so the wood wall in
+ *                         scene_fire_gas started ALIGHT, which is why that
+ *                         scene never actually tested ignition spreading
+ *     sand, dirt          MOISTURE (plus a tone bit) - MASS_MAX is fully
+ *                         saturated, so the "dry grains" control was wet
+ *     gas, fire, smoke    REMAINING LIFE - MASS_MAX happens to be the right
+ *                         VALUE here, but only by coincidence of both being
+ *                         MATERIAL_VARIANTS - 1; spelled honestly instead
+ *
+ * Naming them mirrors suite_sand.c, which has always done this correctly and
+ * is why the same bug never reached the test suite. Regenerating the baseline
+ * alongside this is expected: the SCENES changed, not the simulation.
+ */
+#define FP_STONE  CELL_MAKE(MAT_STONE, SAND_AMBIENT_HEAT)
+#define FP_SAND   CELL_MAKE(MAT_SAND,  0)   /* dry */
+#define FP_DIRT   CELL_MAKE(MAT_DIRT,  0)   /* dry */
+#define FP_WOOD   CELL_MAKE(MAT_WOOD,  0)   /* not alight */
+#define FP_WATER  CELL_MAKE(MAT_WATER, MASS_MAX)
+#define FP_LAVA   CELL_MAKE(MAT_LAVA,  MASS_MAX)
+#define FP_OIL    CELL_MAKE(MAT_OIL,   MASS_MAX)
+#define FP_GAS    CELL_MAKE(MAT_GAS,   MATERIAL_VARIANTS - 1)
+#define FP_FIRE   CELL_MAKE(MAT_FIRE,  MATERIAL_VARIANTS - 1)
+
+
 /* Scene 1: dry grains over a floor. The main sweep and nothing else - no
  * liquid, no reactions, no gas. This is the control: a change that alters
  * THIS hash altered the core movement rule, whatever else it claimed to
@@ -86,12 +118,12 @@ typedef void (*scene_fn)(sand_t *s);
 static void scene_dry_fall(sand_t *s)
 {
     for (int x = 0; x < FP_W; x++) {
-        sand_set(s, x, FP_H - 1, CELL_MAKE(MAT_STONE, MASS_MAX));
+        sand_set(s, x, FP_H - 1, FP_STONE);
     }
     for (int y = 4; y < 28; y++) {
         for (int x = 3; x < FP_W - 3; x++) {
             if (((x * 7 + y * 13) & 3) == 0) {
-                sand_set(s, x, y, CELL_MAKE(MAT_SAND, MASS_MAX));
+                sand_set(s, x, y, FP_SAND);
             }
         }
     }
@@ -103,16 +135,16 @@ static void scene_dry_fall(sand_t *s)
 static void scene_water_pool(sand_t *s)
 {
     for (int x = 0; x < FP_W; x++) {
-        sand_set(s, x, FP_H - 1, CELL_MAKE(MAT_STONE, MASS_MAX));
+        sand_set(s, x, FP_H - 1, FP_STONE);
     }
     for (int y = FP_H - 20; y < FP_H - 1; y++) {
-        sand_set(s, 8, y, CELL_MAKE(MAT_STONE, MASS_MAX));
+        sand_set(s, 8, y, FP_STONE);
         for (int x = 9; x < 40; x++) {
-            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(s, x, y, FP_WATER);
         }
     }
     for (int x = 12; x < 30; x++) {
-        sand_set(s, x, 6, CELL_MAKE(MAT_SAND, MASS_MAX));
+        sand_set(s, x, 6, FP_SAND);
     }
 }
 
@@ -122,21 +154,21 @@ static void scene_water_pool(sand_t *s)
 static void scene_lava_quench(sand_t *s)
 {
     for (int x = 0; x < FP_W; x++) {
-        sand_set(s, x, FP_H - 1, CELL_MAKE(MAT_STONE, MASS_MAX));
+        sand_set(s, x, FP_H - 1, FP_STONE);
     }
     for (int y = FP_H - 12; y < FP_H - 1; y++) {
         for (int x = 2; x < 30; x++) {
-            sand_set(s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(s, x, y, FP_WATER);
         }
     }
     for (int y = 8; y < 16; y++) {
         for (int x = 6; x < 24; x++) {
-            sand_set(s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+            sand_set(s, x, y, FP_LAVA);
         }
     }
     for (int x = 34; x < 60; x++) {
-        sand_set(s, x, FP_H - 2, CELL_MAKE(MAT_SAND, MASS_MAX));
-        sand_set(s, x, FP_H - 3, CELL_MAKE(MAT_DIRT, MASS_MAX));
+        sand_set(s, x, FP_H - 2, FP_SAND);
+        sand_set(s, x, FP_H - 3, FP_DIRT);
     }
 }
 
@@ -145,24 +177,24 @@ static void scene_lava_quench(sand_t *s)
 static void scene_fire_gas(sand_t *s)
 {
     for (int x = 0; x < FP_W; x++) {
-        sand_set(s, x, FP_H - 1, CELL_MAKE(MAT_STONE, MASS_MAX));
+        sand_set(s, x, FP_H - 1, FP_STONE);
     }
     for (int y = FP_H - 10; y < FP_H - 1; y++) {
         for (int x = 4; x < 44; x++) {
-            sand_set(s, x, y, CELL_MAKE(MAT_WOOD, MASS_MAX));
+            sand_set(s, x, y, FP_WOOD);
         }
     }
     for (int x = 10; x < 20; x++) {
-        sand_set(s, x, FP_H - 11, CELL_MAKE(MAT_FIRE, MASS_MAX));
+        sand_set(s, x, FP_H - 11, FP_FIRE);
     }
     for (int y = 18; y < 30; y++) {
         for (int x = 20; x < 50; x++) {
-            sand_set(s, x, y, CELL_MAKE(MAT_GAS, MASS_MAX));
+            sand_set(s, x, y, FP_GAS);
         }
     }
     for (int y = 30; y < 36; y++) {
         for (int x = 44; x < 58; x++) {
-            sand_set(s, x, y, CELL_MAKE(MAT_OIL, MASS_MAX));
+            sand_set(s, x, y, FP_OIL);
         }
     }
 }
@@ -183,17 +215,21 @@ static void scene_fire_gas(sand_t *s)
  * the way to find out which those are is to break a mechanism on purpose
  * and check this tool goes red.
  *
- * No impulse buffer is enabled anywhere in this file, so sand_explode()
- * is a documented no-op here (its own first line, sand.c) - each covered
- * cell still deterministically converts to stone, it just throws
- * nothing, which is enough to exercise and hash the conversion this
- * scene exists to cover. */
+ * STALE CLAIM CORRECTED: this used to say no impulse buffer is enabled
+ * anywhere in this file, making sand_explode() here a documented no-op.
+ * main() (below) now calls sand_enable_impulses() unconditionally for
+ * every scene, itself explicitly - "the throw paths (explosions, bursts,
+ * splashes) are part of the behaviour being fingerprinted" - so a burst
+ * here converts the covered cell to stone AND throws debris, same as any
+ * other scene. That is still enough to exercise and hash the conversion
+ * this scene exists to cover; it is simply no longer the ONLY thing this
+ * scene exercises. */
 static void scene_sealed_lava(sand_t *s)
 {
     sand_set_lava_burst(s, 255);
 
     for (int x = 0; x < FP_W; x++) {
-        sand_set(s, x, FP_H - 1, CELL_MAKE(MAT_STONE, MASS_MAX));
+        sand_set(s, x, FP_H - 1, FP_STONE);
     }
 
     /* Three separate pockets, each a lava cell boxed on all 4 cardinal
@@ -208,10 +244,10 @@ static void scene_sealed_lava(sand_t *s)
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
                 if (dx == 0 && dy == 0) continue;
-                sand_set(s, cx + dx, lava_y + dy, CELL_MAKE(MAT_STONE, MASS_MAX));
+                sand_set(s, cx + dx, lava_y + dy, FP_STONE);
             }
         }
-        sand_set(s, cx, lava_y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        sand_set(s, cx, lava_y, FP_LAVA);
     }
 }
 

@@ -145,11 +145,18 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
 # suite_boot_anim.c, testing the pure math) because every small3dlib symbol
 # is `static inline` - see small3dlib.h's own "PATCHED" comment for why that
 # had to be true before this could work at all.
+#
+# -lm LAST, after the sources, because GNU ld resolves left to right and
+# would otherwise have discarded libm before seeing who needed it. Only
+# Linux actually needs it: the Windows toolchains this repo also builds on
+# fold the math functions into libc, so a suite using atan2() or fabs()
+# links clean locally and fails only in CI, which is exactly how it was
+# found. Harmless where libm is already part of libc.
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
     -I "$TEST_DIR/../components/microui/include" \
     -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
-    $SOURCES "$UNITY_OBJ" -o "$OUT"
+    $SOURCES "$UNITY_OBJ" -o "$OUT" -lm
 
 # MinGW appends .exe; elsewhere the plain name is produced.
 [ -x "$OUT" ] || OUT="$OUT.exe"

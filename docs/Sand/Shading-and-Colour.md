@@ -1071,6 +1071,58 @@ pairs), `test_the_blend_has_no_jump_crossing_45_degrees`,
 
 ---
 
+## Reporting and hearing a visual defect
+
+**The through-line, and the first thing to check.** Four reports across
+separate sessions - `6a05faa` "hard horizontal or vertical lines... inside
+the volume, not at the rim", `fde5769` "straight columns of matching
+colour", `05caadb` "fighting multiple values", `c139ed7` a stone's shadow
+"not aligned to gravity" - are all one complaint: the interior carries
+structure aligned to the SCREEN rather than to gravity. The first three
+were answered in the combiner (hysteresis, then a blend, then a projection
+with `max`). None could work, because the WALK stepped along x or y, so
+everything it produced was axis-aligned by construction. **When structure
+follows the screen, fix the walk, not the combiner.**
+
+**Stop and ask rather than guess.** The reader is the one who knows a cue
+has not landed; guessing costs a delegation and a device round trip. Stop
+on: a directional word with no frame of reference; a term naming two
+mechanisms ("landscape lock" is physical tilt, but a screen-rotation
+quarter turn also exists); a shape word with no obvious metric; and a
+complaint about something the code does on purpose, where
+*wanted-but-wrong* and *unwanted* lead to opposite fixes - the costliest
+ambiguity in this feature's history.
+
+**Ask with an artifact, not an open question.** Best first: render two
+candidate hypotheses from the host probe and ask which matches - it turns
+description into multiple choice. Then an arrow drawing on a crop
+(direction is trivial to draw, near-impossible to write), or a capture at
+a named orientation with its `.json` sidecar, since `tilt_x`/`tilt_y` is
+what makes two captures comparable. Successive captures are NOT adjacent
+frames - the tool is slow to dump.
+
+**Treat your own reading of an image as a hypothesis.** This session read
+a screenshot as showing the shadows on the left; measurement showed right
+for `gx>0` and left for `gx<0`. Confidence does not track accuracy here,
+and small or downscaled images are worse. Two habits that worked every
+time: turn the image into numbers (find the obstacles programmatically,
+sample luminance either side, print it), and take the reference frame from
+the image itself - the free surface is perpendicular to gravity, so its
+normal gives gravity's screen direction without resolving any rotation
+convention. State the prediction before looking; a prediction that
+disagrees with your impression is the cue to go measure.
+
+**Match the metric to the complaint.** A mean-depth swing was measured for
+rounds against a complaint about *lines* - a mean cannot see brightness
+shuffled between rows. If a measurement contradicts the report, the probe
+is aimed wrong: a bulk-gradient probe read 1.6 degrees off while excluding
+the cells around the stone the report was about.
+
+**Cheapest discriminator, ask it first:** does the artifact move with the
+liquid, or stay fixed on screen? Liquid-fixed points at the walk;
+screen-fixed points at dirty-row staleness and transport.
+
+
 ## How to test a shading change
 
 - **A host-side probe, no device needed.** Every investigation this

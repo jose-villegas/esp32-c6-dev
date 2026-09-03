@@ -18,8 +18,11 @@ each living entirely in its own `launcher/main/apps/<name>/` folder:
   mass-diffusion liquid model, gyroscope momentum, chemistry/reactions. The
   most substantial code in the repo. See `docs/Sand/Sand-Simulation.md`.
 - **cube** — a Gouraud-shaded software rasterizer (small3dlib), no GPU.
-- **diagnostics** — bench-only hardware self-test report; compiled only into
-  the diagnostics build, never release.
+- **diagnostics** — bench tool: hardware self-test (POST) report plus a
+  developer-toggles page (gfx debug overlays, interlace, show-orientation);
+  compiled into any development build (`--dev` or `--diag`), never release.
+  The on-device self-test *runner* (the button, its result line,
+  `selftest_run()`) is narrower still — `CONFIG_LAUNCHER_SELFTEST` only.
 
 ## Commands
 
@@ -94,8 +97,12 @@ makes a falling-sand automaton testable on a laptop.
 `WHOLE_ARCHIVE` force-links whatever the glob finds, so a stray `main()`
 under `tools/` would otherwise get compiled into firmware.
 
-`apps/diagnostics/` is excluded by folder when `CONFIG_LAUNCHER_SELFTEST` is
-off (bench-only; re-entering it re-runs POST and cycles the audio rail).
+`apps/diagnostics/` is excluded by folder when `CONFIG_LAUNCHER_DEVELOPMENT`
+is off (bench-only; re-entering it re-runs POST and cycles the audio rail) —
+release never sees it. Within the app itself, the self-test runner (button,
+result line, `selftest_run()`) is guarded further, on
+`CONFIG_LAUNCHER_SELFTEST`, since that symbol only exists in a SELFTEST
+build.
 
 ### Includes are layer-qualified
 
@@ -130,11 +137,13 @@ one frame (~24 ms) of tap latency, applies to every control. See
 `CONFIG_LAUNCHER_RELEASE` / `CONFIG_LAUNCHER_DEVELOPMENT` /
 `CONFIG_LAUNCHER_SELFTEST` in `main/Kconfig.projbuild`. `SELFTEST` implies
 `DEVELOPMENT` but not vice versa. Guard anything whose only reader is a
-developer (log lines, rolling averages, debug overlays) with
-`CONFIG_LAUNCHER_DEVELOPMENT`; guard the test suites and Diagnostics app
-itself with `CONFIG_LAUNCHER_SELFTEST`. Release strips both entirely (not
-`#ifdef` — simply never compiled), verified by symbol counts in the two
-`.elf` files. `unity` must stay **unconditional** in `REQUIRES` (not gated on
+developer (log lines, rolling averages, debug overlays, the Diagnostics app
+itself) with `CONFIG_LAUNCHER_DEVELOPMENT`; guard the test suites — and the
+self-test *runner* inside Diagnostics (button, result line,
+`selftest_run()`) specifically — with `CONFIG_LAUNCHER_SELFTEST`. Release
+strips all of it entirely (not `#ifdef` — simply never compiled), verified
+by symbol counts in the two `.elf` files. `unity` must stay **unconditional**
+in `REQUIRES` (not gated on
 `CONFIG_LAUNCHER_SELFTEST`) — Kconfig-gated `REQUIRES` is evaluated before
 `CONFIG_*` exists and silently no-ops, which only breaks on a clean build
 directory. `build/` is release, `build.diag/` is diagnostics — separate
