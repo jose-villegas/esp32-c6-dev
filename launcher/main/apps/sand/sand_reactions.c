@@ -860,6 +860,30 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
     }
 }
 
+/* How fast wet soil runs DOWNHILL - see the PERCOLATION branch below.
+ *
+ * Its own constant rather than reusing `spread` (= reaction_t.soaks),
+ * which used to be doing THREE jobs off one number: how fast this
+ * material drinks an adjacent liquid, how fast it diffuses sideways into
+ * a drier neighbour, and how fast it runs downhill. Reported as wet dirt
+ * "running down" through dirt too fast, and there was no separate knob to
+ * answer with - turning down `soaks` itself would have slowed drinking
+ * and lateral spread by the same amount, which nobody asked for; those
+ * two still read `spread` directly below and are unaffected by this.
+ *
+ * A `#define` rather than a new reaction_t field: dirt is the only
+ * material with `dries != 0`, so it is the only one that can ever reach
+ * this branch at all, and a byte on every material's row for something
+ * only one of them can use is exactly the shape
+ * reactions[MAT_DIRT].flaw_to's own comment (material.c) already rejected
+ * once - "a new field serving exactly one material" - for the identical
+ * reason.
+ *
+ * 15 is a quarter of dirt's implicit old rate: before this constant
+ * existed, the downward branch used `spread` too, so dirt's effective
+ * percolation figure was reactions[MAT_DIRT].soaks = 60. */
+#define SOIL_PERCOLATE_CHANCE 15
+
 /* One cell that soaks up liquid, or holds what it soaked.
  *
  * Two halves that belong together because they are the same quantity going
@@ -1088,7 +1112,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 open[n_open++] = i;
             }
         }
-        if (n_open != 0 && (int)(rng_next(&s->rng) & 0xFF) < spread) {
+        if (n_open != 0 && (int)(rng_next(&s->rng) & 0xFF) < SOIL_PERCOLATE_CHANCE) {
             const int pick = open[rng_below(&s->rng, n_open)];
             const int* fd = ring_dir(down + (pick == 0 ? 0 : pick == 1 ? 1 : 7));
             const int nx = x + fd[0], ny = y + fd[1];
@@ -1441,6 +1465,17 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * an unbounded tree is not slow, it is explosive. */
 #define TREE_LIFT   10
 
+/* How many cells deep, below the collar, a tree's roots may run - see
+ * reaction_t.roots and spend_soil_moisture() below. Together with the
+ * small `roots` chance itself, this is the whole thing stopping a
+ * watered bed from turning into timber below ground the way TREE_LIFT
+ * stops it above ground: without a cap, a tree that never stops spending
+ * soil moisture would eventually weld its way to the bottom of any bed
+ * it stands on. 4 is a starting point, not a measurement - deep enough
+ * to survive a shifting surface, short enough that a root column reads
+ * as a root rather than as a second trunk running underground. */
+#define ROOT_DEPTH_MAX 4
+
 /* And how wide a trunk may get. Thickening is what turns a sapling into
  * something that reads as a trunk, and left alone it is the one direction
  * with nothing to stop it: the cells that thicken are the ones nearest the
@@ -1462,16 +1497,43 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  *
  * Both are bounded, and the whole thing runs in the cold pass for cells
  * that grow - which is a handful on any board that has any. */
+/* `contact_at` is the grid index of the FIRST soil cell the stem walk
+ * reaches - the collar, where the tree actually stands - or -1 if the
+ * walk never gets there. `root_depth` is how many cells of root (see
+ * reaction_t.roots) the stem walk passed through on the way down.
+ *
+ * Both exist for PART 1 of the roots feature (spend_soil_moisture()
+ * below): the collar is where a new root has to form for a root column to
+ * grow contiguously downward from the tree, and root_depth is what
+ * ROOT_DEPTH_MAX is measured against. Neither is `lift` - a root cell is
+ * below the water line and must not cost the tree any of TREE_LIFT, which
+ * is why it gets its own counter rather than folding into the existing
+ * one. */
 static int
-find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self, int* lift, bool wants_room) {
+find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self, int* lift, int* contact_at,
+           int* root_depth, bool wants_room) {
     const int dx = s->last_load_dx, dy = s->last_load_dy;
     const int down = ring_of(dx, dy);
 
+    *contact_at = -1;
+
     int cx = x, cy = y;
+    int lift_count = 0;
+    int roots_passed = 0;
     for (int step = 0; step < GROW_REACH; step++) {
-        *lift = step;
+        /* `step` is the walk's own budget counter and bounds BOTH kinds
+         * of cell it can cross; `lift_count` is a separate tally that
+         * only ever counts STEM transitions. Reusing `step` for `*lift`
+         * directly - as this used to - looks right and is not: `step`
+         * advances once per loop iteration regardless of whether that
+         * iteration crossed a stem cell or a root one, so a root would
+         * still cost lift by riding along on the shared counter even
+         * though it is never counted in `roots_passed` either. */
+        *lift = lift_count;
+        *root_depth = roots_passed;
         int nx = -1, ny = -1;
         bool on_soil = false;
+        bool via_root = false;
 
         for (int i = 0; i < 3; i++) {
             const int* fd = ring_dir(down + (i == 0 ? 0 : i == 1 ? 1 : 7));
@@ -1492,26 +1554,52 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
             if (nx < 0 && (c == self || (r->clings_to != 0 && CELL_MATERIAL(c) == r->clings_to))) {
                 nx = tx;
                 ny = ty; /* more stem, keep it as a fallback */
+            } else if (nx < 0 && r->roots_to != 0 && c == (cell_t)r->roots_to) {
+                /* A ROOT counts as stem too. Without this, the very bug
+                 * roots exist to fix - a stem finding neither stem nor
+                 * ground below it once the ground it stood on has moved -
+                 * would come straight back the moment a root actually
+                 * grew there. */
+                nx = tx;
+                ny = ty;
+                via_root = true;
             }
         }
         if (nx < 0) {
             return -1; /* neither stem nor ground below */
         }
         if (!on_soil) {
+            if (via_root) {
+                roots_passed++; /* below the water line - see this
+                                  * function's own top comment */
+            } else {
+                lift_count++;
+            }
             cx = nx;
             cy = ny; /* carry on down the stem */
             continue;
         }
 
-        /* Into the soil. */
+        /* Into the soil. This is the collar. */
         cx = nx;
         cy = ny;
+        *contact_at = (int)((size_t)cy * (size_t)w + (size_t)cx);
         for (int depth = 0; depth < ROOT_REACH; depth++) {
             if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
                 return -1;
             }
             const size_t at = (size_t)cy * (size_t)w + (size_t)cx;
             const cell_t c = s->cells[at];
+            /* A root is TRANSPARENT to the soil walk. Dirt shifts, so a
+             * root can end up with soil piled back on top of it - and
+             * without this, a root would cut the tree off from the water
+             * below its own root, which is the exact bug this feature
+             * exists to fix, reintroduced from the other side. */
+            if (r->roots_to != 0 && c == (cell_t)r->roots_to) {
+                cx += dx;
+                cy += dy;
+                continue;
+            }
             if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
                 return -1;
             }
@@ -1527,6 +1615,43 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
         return -1;
     }
     return -1;
+}
+
+/* Every grower that spends a cell of soil moisture pays through here -
+ * growing, budding and sprouting alike - see PART 1 of the roots
+ * feature. It spends the moisture exactly as each site used to do
+ * inline, then - separately, and only once the spend itself has already
+ * happened - rolls whether the CONTACT cell (the collar, where the stem
+ * actually touches ground) welds into a root.
+ *
+ * `soil_at` is never the cell that gets converted. It can be several
+ * rows down the ROOT_REACH walk in find_water(), and a root planted
+ * there would be a disconnected woody speck in the middle of the bed,
+ * anchoring nothing. Converting the CONTACT cell instead means the next
+ * conversion happens one cell deeper - the stem walk now passes straight
+ * through the new root, so the collar itself moves down with it - and a
+ * root column grows downward from the tree on its own, contiguous with
+ * it. `contact_at` is -1 for a caller that never reaches soil at all
+ * (step_one_drinking_cell()'s find_water() call, which passes a scratch
+ * int instead of caring); this function is simply not called in that
+ * case, since drinking never spends soil moisture. */
+static void
+spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
+                     int root_depth) {
+    const cell_t soil = s->cells[soil_at];
+    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - amount));
+    mark_rows(s, soil_at / w, soil_at / w);
+
+    if (r->roots == 0 || contact_at < 0 || root_depth >= ROOT_DEPTH_MAX) {
+        return;
+    }
+    /* Roll AFTER every other gate, the same discipline this whole file
+     * uses everywhere else - drawing a random number for a root that
+     * cannot happen shifts every decision downstream of it. */
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
+        return;
+    }
+    place_reacted(s, contact_at % w, contact_at / w, (size_t)contact_at, r->roots_to);
 }
 
 /* One cell of something that DRINKS: touching a liquid, and rooted in
@@ -1561,8 +1686,11 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
         return false; /* nothing to drink */
     }
 
-    int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, true);
+    int lift = 0, contact_at = -1, root_depth = 0; /* drinking never spends
+                                                     * soil moisture, so
+                                                     * nothing here roots -
+                                                     * scratch values */
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, true);
     if (soil_at < 0) {
         return true; /* thirsty, but nowhere to put it */
     }
@@ -1625,9 +1753,11 @@ step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
 
     place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
 
-    const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - 1));
-    mark_rows(s, soil_at / w, soil_at / w);
+    /* `soil_at` here IS the contact cell - this is a direct neighbour
+     * scan, not a stem walk, so there is no deeper collar to name and no
+     * existing root column to measure: root_depth is simply 0, the same
+     * as a wood cell touching soil for the first time anywhere else. */
+    spend_soil_moisture(s, w, r, soil_at, 1, soil_at, 0);
     return true;
 }
 
@@ -1693,8 +1823,8 @@ step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         return true; /* crowned, but boxed in */
     }
 
-    int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
+    int lift = 0, contact_at = -1, root_depth = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false);
     if (soil_at < 0) {
         return true; /* nothing to drink */
     }
@@ -1715,8 +1845,7 @@ step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
 
     place_reacted(s, bx, by, (size_t)at, r->buds_to);
 
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - BUD_COST));
-    mark_rows(s, soil_at / w, soil_at / w);
+    spend_soil_moisture(s, w, r, soil_at, BUD_COST, contact_at, root_depth);
     return true;
 }
 
@@ -1859,8 +1988,11 @@ step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
         }
     }
 
-    int lift = 0;
-    if (find_water(s, x, y, w, h, r, self, &lift, false) >= 0) {
+    int lift = 0, contact_at = -1, root_depth = 0; /* just a reachability
+                                                     * check - nothing here
+                                                     * spends, so nothing
+                                                     * roots */
+    if (find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false) >= 0) {
         return false; /* it can still drink */
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->withers) {
@@ -1968,8 +2100,8 @@ step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         return true; /* inside the crowd, not at its edge */
     }
 
-    int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
+    int lift = 0, contact_at = -1, root_depth = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false);
     if (soil_at < 0) {
         return true; /* nothing to drink */
     }
@@ -2140,9 +2272,7 @@ step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
     mark_rows(s, gy, gy);
     wake_block_and_neighbors(s, gx, gy);
 
-    const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - 1));
-    mark_rows(s, soil_at / w, soil_at / w);
+    spend_soil_moisture(s, w, r, soil_at, 1, contact_at, root_depth);
 
     /* HARDENING. Counted from the bottom of the column - the cell whose
      * gravity-ward neighbour is not more of the same - so a run is
