@@ -23,7 +23,7 @@
         "grid_whiten_max": 32,
         "grid_ceiling_max": 64,
         "grid_max": 64,
-        "pen_finish_ms": 5800,
+        "pen_finish_ms": 4900,
         "wave_start_ms": 4200,
         "wave_end_ms": 5800,
         "grid_spokes": 4,
@@ -33,8 +33,8 @@
         "wave_in_ms": 750,
         "wave_out_ms": 5500,
         "title_height_px": 75,
-        "image_start_ms": 4200,
-        "image_fade_ms": 2300,
+        "image_start_ms": 3500,
+        "image_fade_ms": 1300,
         "title_shadow_dx": -7,
         "title_shadow_dy": 7,
         "title_shadow_alpha": 128
@@ -66,14 +66,14 @@
             },
             "space": {
                 "pos": [
-                    11,
+                    10,
                     0,
                     0
                 ],
                 "rot": [
-                    0,
-                    0,
-                    0
+                    -135,
+                    -45,
+                    90
                 ],
                 "scale": [
                     1,
@@ -274,7 +274,7 @@
             "ease": "linear"
         },
         {
-            "ms": 3300,
+            "ms": 5000,
             "camera": {
                 "pos": [
                     0,
@@ -300,127 +300,13 @@
                 ],
                 "rot": [
                     -180,
-                    -45,
+                    -270,
                     0
                 ],
                 "scale": [
-                    1.1,
-                    1.1,
-                    1.1
-                ]
-            },
-            "ease": "linear"
-        },
-        {
-            "ms": 4200,
-            "camera": {
-                "pos": [
-                    0,
-                    0,
-                    -10
-                ],
-                "rot": [
-                    0,
-                    0,
-                    0
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "space": {
-                "pos": [
-                    -3,
-                    12,
-                    7
-                ],
-                "rot": [
-                    -210,
-                    -45,
-                    30
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "ease": "linear"
-        },
-        {
-            "ms": 4700,
-            "camera": {
-                "pos": [
-                    0,
-                    0,
-                    -10
-                ],
-                "rot": [
-                    0,
-                    0,
-                    0
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "space": {
-                "pos": [
-                    -3,
-                    20,
-                    15
-                ],
-                "rot": [
-                    -207,
-                    -45,
-                    30
-                ],
-                "scale": [
-                    3,
-                    3,
-                    3
-                ]
-            },
-            "ease": "linear"
-        },
-        {
-            "ms": 5500,
-            "camera": {
-                "pos": [
-                    0,
-                    0,
-                    -10
-                ],
-                "rot": [
-                    0,
-                    0,
-                    0
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "space": {
-                "pos": [
-                    0,
-                    19,
-                    5
-                ],
-                "rot": [
-                    -180,
-                    -90,
-                    -5
-                ],
-                "scale": [
-                    1.15,
-                    1.15,
-                    1.15
+                    0.6,
+                    0.6,
+                    0.6
                 ]
             },
             "ease": "linear"
