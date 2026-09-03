@@ -52,8 +52,9 @@ _Static_assert(BOOT_ANIM_IMAGE_W == GFX_WIDTH && BOOT_ANIM_IMAGE_H == GFX_HEIGHT
     "python tools/gen_boot_anim_image.py ../design/boot/boot.png");
 _Static_assert(sizeof(boot_anim_image) ==
                    (size_t)GFX_WIDTH * GFX_HEIGHT * sizeof(gfx_color_t),
-    "the photo is not exactly one framebuffer - draw_image()'s memcpy "
-    "fast path assumes it is");
+    "the photo is not exactly one framebuffer - draw_image() hands it to "
+    "gfx_blit_dither() as a full-screen source, which reads exactly that "
+    "many pixels");
 
 /* Only boot_anim_run() itself, at the bottom of this file, touches
  * ESP-IDF/FreeRTOS - see gfx.c's own ESP_PLATFORM comment for why that is
@@ -1204,147 +1205,66 @@ void draw_title(uint32_t now_ms, uint8_t ink)
  * deliberate departure from this file's "one multiply takes the whole
  * picture down together" design elsewhere.
  *
- * Writes through gfx_framebuffer() directly rather than 164,864
- * gfx_pixel() calls - the same bulk path app_cube.c and app_sand.c's own
- * dirty-row writer already take for a full-frame write, and with it the
- * same obligation gfx.h's own dirty-tracking comment states: gfx cannot
- * see a write through this pointer, so the caller marks it. gfx_clear()
- * has already marked everything dirty this frame, so the call below is
- * redundant today - it is here because the contract says so regardless,
- * and because that redundancy is not guaranteed to still hold if this
- * frame ever grows a partial clear. */
-/* Dither the photograph over whatever the scene left in the framebuffer, at
- * coverage `alpha` - the shared body of draw_image()'s two dithered branches
- * below.
- *
- * BY ROW-PATTERN, not per pixel: gfx_dither_covers(x, y, alpha) depends on x
- * only through x & 3 and on y only through y & 3, and alpha is one value for
- * the whole frame - so within one row the decision is fully described by
- * FOUR booleans (one per Bayer column), computed once per row instead of a
- * table read and compare per pixel. Identical output to calling
- * gfx_dither_covers() at every pixel - same table, same gfx_dither_level()
- * rounding (suite_gfx_color.c pins the two agreeing) - at a fraction of the
- * per-pixel work; per suite_boot_anim_perf.c this loop was one of the two
- * largest phases of a crossfade frame, and unlike the drawing around it,
- * every one of its 164,864 iterations was identical bookkeeping.
- *
- * The two degenerate rows come out free: a row none of whose four columns
- * are covered is skipped whole, and a row with all four covered is a plain
- * memcpy - which at the top and bottom of the alpha range is MOST rows
- * (Bayer rows saturate at different levels), so the cost tapers toward the
- * cheap ends of the fade instead of staying flat across it. */
-static void dither_photo_over(gfx_color_t *fb, uint8_t alpha)
-{
-    const int level = gfx_dither_level(alpha);
-
-    for (int y = 0; y < GFX_HEIGHT; y++) {
-        const uint8_t *cells = gfx_dither4x4[y & 3];
-        const bool p0 = level > cells[0];
-        const bool p1 = level > cells[1];
-        const bool p2 = level > cells[2];
-        const bool p3 = level > cells[3];
-
-        if (!p0 && !p1 && !p2 && !p3) {
-            continue;
-        }
-
-        gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
-        const gfx_color_t *photo_row =
-            (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
-
-        if (p0 && p1 && p2 && p3) {
-            memcpy(row, photo_row, (size_t)GFX_WIDTH * sizeof *row);
-            continue;
-        }
-
-        /* The group loop is exact, no remainder handling - pinned below
-         * rather than assumed. */
-        _Static_assert(GFX_WIDTH % 4 == 0,
-            "the Bayer-column unroll walks the row four pixels at a time");
-        for (int x = 0; x < GFX_WIDTH; x += 4) {
-            if (p0) row[x]     = photo_row[x];
-            if (p1) row[x + 1] = photo_row[x + 1];
-            if (p2) row[x + 2] = photo_row[x + 2];
-            if (p3) row[x + 3] = photo_row[x + 3];
-        }
-    }
-}
-
+ * The compositing itself is gfx_blit_dither() - a gfx primitive now, not
+ * boot-local code: it started life as this file's own row-pattern loop and
+ * was extracted once it was clear the technique (cheap dithered image-over-
+ * live-content) is exactly what an app transition or image viewer will
+ * want, which is this whole animation's real job - proving out the
+ * machinery the apps get to keep. See its contract in gfx.h; it marks its
+ * own dirty band, so there is no gfx_mark_all_dirty() here any more. */
 void draw_image(uint8_t ink, uint8_t reveal)
 {
     if (reveal == 0) {
         return;
     }
 
-    gfx_color_t *fb = gfx_framebuffer();
-    const size_t n = (size_t)GFX_WIDTH * GFX_HEIGHT;
+    const gfx_color_t *photo = (const gfx_color_t *)boot_anim_image;
 
-    if (reveal == 255 && ink == 255) {
-        /* Fully arrived and not yet dissolving - which is most of the
-         * photograph's time on screen. gfx_dither_covers() is exact at
-         * alpha 255 (its own unconditional path, not the dither test -
-         * see that function's own comment in gfx_color.h), so this is
-         * the identical result the dithered loop below would produce,
-         * for a plain row-major copy of one framebuffer's worth of
-         * already-panel-format pixels - true only because the two
-         * _Static_asserts near this file's own includes make it true,
-         * not merely likely. */
-        memcpy(fb, boot_anim_image, n * sizeof *fb);
-    } else if (ink == 255) {
-        /* The crossfade itself, the common case: ink is 255 for the
+    if (ink == 255) {
+        /* Arriving (and, at reveal 255, fully arrived - alpha 255 makes
+         * every row of the blit its own memcpy, so the plateau after the
+         * crossfade needs no separate fast path here): ink is 255 for the
          * whole of it unless a timeline is deliberately authored to
          * overlap the two dissolves.
          *
          * DITHERED, not blended - the same "no framebuffer-read blend
          * hardware, so fake transparency with an ordered dither" trade
          * this file already makes for the title's own shadow (see
-         * draw_title()'s own comment, and gfx_fill_rect_dither()'s in
-         * gfx.c). A per-pixel gfx_color_mix() over all 164,864 pixels
-         * was measurably the single most expensive part of a crossfade
-         * frame - see suite_boot_anim_perf.c's own measured numbers,
-         * where this loop alone outweighed gfx_present()'s own full-
-         * panel QSPI transfer. gfx_dither_covers() is the exact per-
-         * pixel decision gfx_fill_rect_dither() makes internally, reused
-         * here so both call sites stay in phase off one table (gfx_
-         * color.h) rather than each keeping its own copy. A covered
-         * pixel becomes the photo outright - no multiply, no div255,
-         * just the pixel that was already sitting in boot_anim_image[].
-         * An uncovered one is left exactly as the scene already drew it;
-         * skipping the write there is not an approximation, it is the
-         * whole point - the photo and the scene never actually blend,
-         * only their coverage does, which is what "dither" has always
-         * meant since long before this chip's own class of hardware
-         * could afford a real blend. The walk itself lives in
-         * dither_photo_over() above - see its comment for why it goes by
-         * row pattern rather than testing gfx_dither_covers() per pixel. */
-        dither_photo_over(fb, reveal);
+         * draw_title()'s own comment). A per-pixel gfx_color_mix() over
+         * all 164,864 pixels was measurably the single most expensive
+         * part of a crossfade frame - see suite_boot_anim_perf.c's own
+         * measured numbers, where that loop alone outweighed
+         * gfx_present()'s full-panel QSPI transfer. A covered pixel
+         * becomes the photo outright, an uncovered one stays exactly as
+         * the scene drew it; the two pictures never actually blend, only
+         * their coverage does, which is what "dither" has always meant
+         * since long before this chip's own class of hardware could
+         * afford a real blend. */
+        gfx_blit_dither(0, 0, GFX_WIDTH, GFX_HEIGHT, photo, GFX_WIDTH,
+                        reveal);
     } else {
-        /* Dissolving, and possibly still arriving at once - a dither test
-         * in place of ink's own lift off black, rather than gfx_color_mix
-         * (COL_BG, photo_row[x], ink). Both `reveal` and `ink` would read
-         * the same gfx_dither4x4 table at the same (x, y), so a pixel only
-         * ever shows the photo when it clears BOTH coverage levels; since
-         * gfx_dither_covers()'s own `level` is monotonic non-decreasing in
-         * alpha, testing against the lower of the two is exactly that same
-         * result (covers(a) && covers(b) == covers(min(a, b)) for the same
-         * cell), not merely an approximation of it - one test instead of
-         * two, same outcome. Replaces the last gfx_color_mix() call left in
-         * this function - near_end's own Image cost dropped from ~55ms to
-         * ~25ms on real hardware.
+        /* Dissolving, and possibly still arriving at once - one dither
+         * coverage at the LOWER of the two alphas, in place of ink's own
+         * lift off black via gfx_color_mix(COL_BG, photo[i], ink): a
+         * pixel should show the photo only when it clears BOTH levels,
+         * and since dither coverage is monotonic non-decreasing in alpha
+         * at a fixed cell, covers(a) && covers(b) == covers(min(a, b)) -
+         * exactly, not approximately (suite_gfx_color.c pins the
+         * property). Replacing the last gfx_color_mix() here dropped
+         * near_end's own Image cost from ~55ms to ~25ms on real
+         * hardware.
          *
          * A dithered fade-to-black is a visibly different look from a
          * smooth one - checkering the photo against pure black is
          * higher-contrast than the crossfade's own photo-vs-scene dither
-         * (see gfx_dither_covers()'s own comment on the ink==255 branch
-         * above for that one), and reads as a genuinely stippled/starlit
-         * fade rather than a soft dissolve, especially through the
-         * middle of the fade window. A deliberate choice, on-panel, not
-         * an oversight - see git history around when this landed for the
-         * visual comparison that decided it. */
-        dither_photo_over(fb, reveal < ink ? reveal : ink);
+         * above, and reads as a genuinely stippled/starlit fade rather
+         * than a soft dissolve, especially through the middle of the
+         * fade window. A deliberate choice, on-panel, not an oversight -
+         * see git history around when this landed for the visual
+         * comparison that decided it. */
+        gfx_blit_dither(0, 0, GFX_WIDTH, GFX_HEIGHT, photo, GFX_WIDTH,
+                        reveal < ink ? reveal : ink);
     }
-
-    gfx_mark_all_dirty();
 }
 
 /*---------------------------------------------------------------------------

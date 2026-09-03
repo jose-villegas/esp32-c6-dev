@@ -18,6 +18,7 @@
  *===========================================================================*/
 
 #include <stdint.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "unity.h"
@@ -304,6 +305,110 @@ void test_dither_stays_in_phase_across_separate_calls(void)
                 "own pattern at the second rect's own corner");
         }
     }
+}
+
+/* --- gfx_blit_dither: image-over-live-content compositing ---------------- */
+
+/* One synthetic source pixel per index - every value distinct from its
+ * neighbours and never equal to the black background (the | 1), so a blit
+ * writing the WRONG source pixel (stride bug, fringe misalignment) reads as
+ * a value mismatch, not a coincidental pass. Heap, not stack (this suite
+ * runs on the 3584-byte main-task stack - see the dithered-text test's own
+ * comment below) and not static (permanent .bss on this board is what the
+ * selftest OOM incident was made of - see suite_cube_perf.c). */
+#define BLIT_SRC_STRIDE 70
+#define BLIT_SRC_ROWS   40
+
+static gfx_color_t blit_src_pixel(int i)
+{
+    return (gfx_color_t)(((unsigned)i * 7u) | 1u);
+}
+
+static gfx_color_t *make_blit_src(void)
+{
+    gfx_color_t *src =
+        malloc(sizeof(gfx_color_t) * BLIT_SRC_STRIDE * BLIT_SRC_ROWS);
+    TEST_ASSERT_NOT_NULL_MESSAGE(src,
+        "need a heap source image for the blit tests");
+    for (int i = 0; i < BLIT_SRC_STRIDE * BLIT_SRC_ROWS; i++) {
+        src[i] = blit_src_pixel(i);
+    }
+    return src;
+}
+
+void test_blit_dither_at_alpha_zero_changes_nothing(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    gfx_color_t *src = make_blit_src();
+
+    gfx_clear(bg);
+    gfx_blit_dither(13, 10, 61, BLIT_SRC_ROWS, src, BLIT_SRC_STRIDE, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(GFX_WIDTH * GFX_HEIGHT, count_pixels(bg),
+        "alpha 0 should write nothing at all - not even one dither cell");
+    free(src);
+}
+
+void test_blit_dither_at_alpha_255_matches_the_source_exactly(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    gfx_color_t *src = make_blit_src();
+    const int x = 13, y = 10, w = 61, h = BLIT_SRC_ROWS;
+
+    gfx_clear(bg);
+    gfx_blit_dither(x, y, w, h, src, BLIT_SRC_STRIDE, 255);
+
+    for (int row = 0; row < h; row++) {
+        for (int col = 0; col < w; col++) {
+            TEST_ASSERT_EQUAL_HEX16_MESSAGE(
+                blit_src_pixel(row * BLIT_SRC_STRIDE + col),
+                pixel_at(x + col, y + row),
+                "alpha 255 must reproduce the source rect exactly, stride "
+                "and all - same guarantee gfx_fill_rect_dither() makes");
+        }
+    }
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(bg, pixel_at(x - 1, y),
+        "a blit must not touch pixels left of its own rect");
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(bg, pixel_at(x + w, y + h - 1),
+        "a blit must not touch pixels right of its own rect");
+    free(src);
+}
+
+/* The primitive's whole correctness claim (see its comment in gfx.c): the
+ * row-pattern walk, fringes and memcpy shortcuts included, is bit-identical
+ * to asking gfx_dither_covers() at every pixel. Checked at a deliberately
+ * UNALIGNED rect (x = 13, so the unrolled group loop's prologue and
+ * epilogue both actually run) across alphas that exercise a sparse, a
+ * half, and a dense pattern. */
+void test_blit_dither_matches_per_pixel_covers_reference(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    gfx_color_t *src = make_blit_src();
+    const int x = 13, y = 10, w = 61, h = BLIT_SRC_ROWS;
+    const uint8_t alphas[3] = { 32, 128, 200 };
+
+    for (int a = 0; a < 3; a++) {
+        gfx_clear(bg);
+        gfx_blit_dither(x, y, w, h, src, BLIT_SRC_STRIDE, alphas[a]);
+
+        for (int row = 0; row < h; row++) {
+            for (int col = 0; col < w; col++) {
+                const gfx_color_t want =
+                    gfx_dither_covers(x + col, y + row, alphas[a])
+                        ? blit_src_pixel(row * BLIT_SRC_STRIDE + col)
+                        : bg;
+                TEST_ASSERT_EQUAL_HEX16_MESSAGE(want,
+                    pixel_at(x + col, y + row),
+                    "gfx_blit_dither() must agree with gfx_dither_covers() "
+                    "at every pixel - fringes and full-row shortcuts "
+                    "included");
+            }
+        }
+    }
+    free(src);
 }
 
 /* "A" at scale 5 fits a single 8x8 font cell scaled up - a 40x40 box, the
@@ -1366,6 +1471,9 @@ void run_gfx_suite(void)
     RUN_TEST(test_dither_at_alpha_255_matches_a_solid_fill_exactly);
     RUN_TEST(test_dither_coverage_is_monotonic_and_graduated);
     RUN_TEST(test_dither_stays_in_phase_across_separate_calls);
+    RUN_TEST(test_blit_dither_at_alpha_zero_changes_nothing);
+    RUN_TEST(test_blit_dither_at_alpha_255_matches_the_source_exactly);
+    RUN_TEST(test_blit_dither_matches_per_pixel_covers_reference);
     RUN_TEST(test_dithered_text_at_alpha_255_matches_solid_text_exactly);
     RUN_TEST(test_dithered_text_at_low_alpha_draws_fewer_pixels_than_solid);
     RUN_TEST(test_fill_rect_is_clipped_to_the_screen);
