@@ -586,12 +586,23 @@ IS the water cost: `place_reacted()` overwrites the whole cell with a
 fresh root byte, so the dirt's moisture nibble is simply gone along with
 everything else the cell used to be, rather than separately debited.
 
-No direction weights of any kind. Moisture itself already has a shape - it
+Almost no direction weights. Moisture itself already has a shape - it
 percolates down through a bed and diffuses out from anything drinking or
 pouring nearby - so a root that simply reaches for whichever neighbour
 still has water in it spreads wide near a wet surface and fingers downward
-through a bed drying from the top, without the rule itself needing to know
-which way is down. An earlier draft of this feature reused
+through a bed drying from the top. The first cut had no weights at all on
+exactly that reasoning, and on the device the sideways spread near a wet
+surface won so completely that depth only happened at the angles the
+geometry favoured. So there is one SMALL skew, read off the grid with no
+state: a candidate that continues AWAY from the cell's own root neighbours
+weighs +2, one that reaches gravity-ward +1, over a base of 1. A tip has
+one parent and keeps going the way it was going - what `holds_line` does
+for a stem, without remembering anything; a junction's neighbours partly
+cancel and it is free to turn; a lone seed is left to gravity. Measured
+over six seeds, mean deepest root 4.2 rows without the skew and 8.8 with,
+systems about twice the size (a directed tip keeps finding fresh moist
+cells instead of re-hitting the crowd), and the runaway scene still pins
+at a fixed point. An earlier draft of this feature reused
 `step_one_growing_cell()`'s own stem-walk machinery - a site roll (tip,
 lean, branch, widen) walking a run outward from the collar - the same way
 a limb grows; it was replaced by the local eating rule because a root does
@@ -705,7 +716,8 @@ collar near the top centre):
 Wide near the collar, a wandering single-cell thread through the middle of
 the bed, and a wider fan again at the bottom where moisture pools against
 the stone floor - the shape moisture's own distribution gives it, for
-free, with no direction weights anywhere in the rule that grew it.
+free, with only the small away-from-parent and gravity-ward skew above
+laid over it.
 
 **Why a new material, not more wood.** The obvious shortcut - give wood a
 "rooted" variant, the way glass spends its variant on temperature - does

@@ -14505,6 +14505,79 @@ surface_rule_lets_growth_through(int satellite_roots)
     return grew;
 }
 
+/* A tip keeps going the way it was going - away from its parent - and
+ * down. Reported from the device: the uniform pick let moisture's own
+ * sideways spread near the surface decide everything, so deeper roots
+ * only happened at the angles the geometry favoured. Now a candidate that
+ * continues away from the cell's root neighbours weighs +2 and one that
+ * reaches gravity-ward +1, over a base of 1 (step_one_rooting_cell()).
+ *
+ * STATISTICAL, over many seeds, because a weighted roll is a tendency and
+ * not a rule. The scene is a tip with its parent directly ABOVE it in a
+ * moist bed, so "away from parent" and "down" point the same way: the
+ * three cells below the tip weigh 4 each, the two beside it 1 each -
+ * 12 against 2. Only the first conversion adjacent to the tip is
+ * classified, per seed.
+ *
+ * THE PARENT IS SILENCED, and that is the whole difficulty of this scene.
+ * A live parent competes for the tip's two side cells (they touch both),
+ * and its own away-vector points UP, so it reaches them with no penalty
+ * at all: measured with the parent free to grow, the weights only moved
+ * "below" from 49% to 59%, which is a real skew drowned in a confound.
+ * Three roots above the parent give it four root neighbours, past
+ * ROOT_SURFACE_MAX, so it never rolls; the three extras can only reach
+ * rows above the tip, never the cells classified here. What is left is
+ * the tip's own pick and nothing else.
+ *
+ * Watched red with both weights stubbed to zero - the tip's uniform pick
+ * over five candidates, three of them below, lands "below" 3 in 5. The
+ * bar is 75%: well above 60%, well below the 86% the weights predict. */
+static void test_a_root_tip_grows_on_away_from_its_parent_and_down(void)
+{
+    const int cx = W / 2, ty = H - 4;
+    int below = 0, beside = 0;
+
+    for (uint32_t seed = 1; seed <= 120u; seed++) {
+        sand_init(&s, cells, W, H, seed);
+        sand_clear(&s);
+        sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+            for (int y = H - 7; y <= H - 2; y++) {
+                sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
+        }
+        sand_set(&s, cx - 1, ty - 2, MATX(MATX_ROOT)); /* three above the parent: */
+        sand_set(&s, cx, ty - 2, MATX(MATX_ROOT));     /* with the tip that is four */
+        sand_set(&s, cx + 1, ty - 2, MATX(MATX_ROOT)); /* neighbours, so it never rolls */
+        sand_set(&s, cx, ty - 1, MATX(MATX_ROOT));     /* the parent, above */
+        sand_set(&s, cx, ty, MATX(MATX_ROOT));         /* the tip */
+
+        int verdict = 0;
+        for (int i = 0; i < 600 && verdict == 0; i++) {
+            sand_step(&s, 0, 1000, 0);
+            for (int dx = -1; dx <= 1 && verdict == 0; dx++) {
+                if (sand_at(&s, cx + dx, ty + 1) == MATX(MATX_ROOT)) {
+                    verdict = 1; /* below the tip */
+                }
+            }
+            if (verdict == 0 && (sand_at(&s, cx - 1, ty) == MATX(MATX_ROOT) ||
+                                 sand_at(&s, cx + 1, ty) == MATX(MATX_ROOT))) {
+                verdict = 2; /* beside it */
+            }
+        }
+        if (verdict == 1) below++;
+        if (verdict == 2) beside++;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(below + beside >= 100,
+        "setup failure, not the claim under test: the tip must actually "
+        "grow in most seeds for the ratio to mean anything");
+    TEST_ASSERT_TRUE_MESSAGE(below * 100 >= 75 * (below + beside),
+        "a tip with its parent above it must mostly grow ON and DOWN, not "
+        "sideways - the weighted pick has to actually skew the roll, or the "
+        "system stays as sideways as the moisture that feeds it");
+}
+
 static void test_a_thickly_rooted_cell_stops_growing(void)
 {
     TEST_ASSERT_TRUE_MESSAGE(surface_rule_lets_growth_through(2),
@@ -25898,6 +25971,7 @@ void run_sand_suite(void)
     RUN_TEST(test_root_conversion_never_creates_moisture);
     RUN_TEST(test_a_root_eats_a_moist_neighbour_and_only_spends_its_own_moisture);
     RUN_TEST(test_a_root_never_eats_dry_dirt_sand_or_empty_space);
+    RUN_TEST(test_a_root_tip_grows_on_away_from_its_parent_and_down);
     RUN_TEST(test_a_thickly_rooted_cell_stops_growing);
     RUN_TEST(test_roots_grow_toward_the_wet_side_only);
     RUN_TEST(test_a_continuously_watered_root_system_still_saturates);
