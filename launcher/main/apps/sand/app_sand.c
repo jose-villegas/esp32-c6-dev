@@ -2066,8 +2066,20 @@ static inline void paint_row_n(gfx_color_t *fb, const gfx_color_t *pal,
          * DEPTH's own top comment for why a single walk along the true
          * gravity ray needs no combiner at all, not merely a simpler one. */
         const unsigned depth_raw = (count * local_depth_scale_q8) >> 8;
-        const unsigned depth = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+        const unsigned depth_liquid = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
             ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
+
+        /* A ROOT borrows `depth` for its own reading - how many of its
+         * eight neighbours are root - see material_colours()'s own comment
+         * in material.h on why that number stands in for an age a root
+         * has nowhere to store. One byte-compare per cell to decide, the
+         * same price metal's leading equality test already charges inside
+         * material_colours(); the eight reads behind it are paid by root
+         * cells only, on rows that are being repainted at all - and a
+         * root, once grown, changes about as often as stone does. */
+        const unsigned depth = (row[cx] == MATX(MATX_ROOT))
+            ? material_root_neighbours(above, row, below, cx, grid_w)
+            : depth_liquid;
 
         /* row_has_liquid[]'s own population point - see that array's
          * comment above paint_row_n() for the mechanism this feeds. ANY

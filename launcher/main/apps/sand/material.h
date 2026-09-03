@@ -1366,9 +1366,54 @@ typedef enum {
  * no longer does (a genuine bug in the fog blend's own arithmetic, plus a
  * column-artifact risk from riding straight over local depth's own axis
  * seam - both still exist, untouched, on the water-wave-fog-depth-banked
- * branch for anyone who wants to revisit that approach). */
+ * branch for anyone who wants to revisit that approach).
+ *
+ * FOR A ROOT CELL, `depth` MEANS SOMETHING ELSE: how many of its eight
+ * neighbours are also root - material_root_neighbours() below, which the
+ * painter substitutes for the liquid walk's number on exactly that one
+ * material. A root has no variant to carry an age in (its low nibble is
+ * which extended material it is), and the ordinary table is full, so
+ * "how old is this root" cannot be stored. It can be READ off the shape,
+ * though: a fresh tip touches one other root, a cell that has put out
+ * children touches two or three, the collar touches more. Shading by that
+ * count is what the maintainer asked for - "as one root grows from
+ * another, it darkens its parent" - with no state at all, and it heals in
+ * the direction stored age never could: lose a child to rot or lava and
+ * the parent lightens again. Reusing `depth` rather than adding a
+ * parameter keeps the painter's call and this function's signature exactly
+ * as measured. */
 material_pattern_t material_colours(cell_t c, unsigned hash, unsigned mask,
                                     unsigned depth, gfx_color_t out[3]);
+
+/* How many of (cx)'s eight neighbours, across the three grid rows handed
+ * in, are root. `above`/`below` may be NULL at the top and bottom of the
+ * grid, exactly as paint_row_n() already passes them for the edge mask.
+ * Eight reads, paid only for a root cell - the painter gates the call on
+ * the cell's own byte, one compare, the same cost metal's own leading
+ * equality test already added to that path. Header-inline so app_sand.c
+ * and the host suite compile the one definition. */
+static inline unsigned material_root_neighbours(const uint8_t *above,
+                                                const uint8_t *row,
+                                                const uint8_t *below,
+                                                int cx, int w)
+{
+    const cell_t root = MATX(MATX_ROOT);
+    unsigned n = 0;
+    const int l = cx - 1, r = cx + 1;
+    if (l >= 0) {
+        n += (row[l] == root);
+        if (above) n += (above[l] == root);
+        if (below) n += (below[l] == root);
+    }
+    if (r < w) {
+        n += (row[r] == root);
+        if (above) n += (above[r] == root);
+        if (below) n += (below[r] == root);
+    }
+    if (above) n += (above[cx] == root);
+    if (below) n += (below[cx] == root);
+    return n;
+}
 
 /* Called once per frame, before painting, with the same gravity vector
  * this frame's sand_step() was given.
