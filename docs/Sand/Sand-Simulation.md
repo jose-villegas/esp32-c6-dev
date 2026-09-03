@@ -540,7 +540,7 @@ steps and then plateaued as the remaining pockets thinned out and
 scattered. Not a suppression mechanism - the tapering is an emergent
 consequence of the blast itself clearing cover, not a cap anyone added.
 
-## Roots: a tree welds itself to the soil it drinks from
+## Roots: a tree welds itself to the soil it drinks from, then spreads through it
 
 The plant/wood/leaf family (`MATX_PLANT`, `MAT_WOOD`, `MATX_LEAF`) is not
 otherwise covered in this document - its growth, hardening and budding
@@ -548,7 +548,8 @@ rules live in the extensive comments on `extended_reactions[MATX_PLANT]`
 and `reactions[MAT_WOOD]` in `material.c`, which is the source of truth for
 how a tree grows tall, thickens, and buds new limbs. This section covers
 one narrower piece: how a tree stays connected to the ground it drinks
-from once the ground itself starts moving.
+from once the ground itself starts moving, and how the root SYSTEM that
+grows from that connection gets its shape.
 
 **The problem.** Dirt is a powder and shifts. A tree finds water by
 walking down its own stem to the ground and on down into the soil
@@ -558,23 +559,139 @@ that walk finds neither more stem nor ground below it and simply returns
 failure. The tree is stranded, sometimes with plenty of water two rows
 down, because the one cell it needed to reach it is gone.
 
-**The fix.** As a plant or a trunk spends the soil moisture it grows,
-buds or sprouts on, there is a small chance (`reaction_t.roots`, ~3%) that
-the CONTACT cell - the collar itself, not wherever the moisture actually
-came from - welds into a `ROOT` cell instead of staying an ordinary grain
-of dirt. A root is `KIND_STATIC`: it does not fall, slide, or get
-displaced the way loose dirt does, so once a collar has rooted, nothing
-about the bed shifting can carry it away from under the tree. Converting
-the contact cell rather than the (possibly much deeper) cell the moisture
-was actually taken from matters for a second reason: the very next
-conversion then happens one cell deeper, since `find_water()`'s stem walk
-now passes straight through the new root and the collar effectively moves
-down with it - so a root column grows downward from the collar on its
-own, contiguous with the tree, exactly the shape a real root system has.
-It is capped at `ROOT_DEPTH_MAX` (4) cells below the collar, the
-below-ground twin of `TREE_LIFT` above it: without a cap, a tree that
-never stops spending soil moisture would eventually weld its way to the
-bottom of any bed it stands on.
+**PART 1: the seed.** As a plant or a trunk spends the soil moisture it
+grows, buds or sprouts on, there is a small chance (`reaction_t.roots` on
+the PLANT/WOOD rows, 40 in 256) that the CONTACT cell - the collar itself,
+not wherever the moisture actually came from - welds into a `ROOT` cell
+instead of staying an ordinary grain of dirt. A root is `KIND_STATIC`: it
+does not fall, slide, or get displaced the way loose dirt does, so once a
+collar has rooted, nothing about the bed shifting can carry it away from
+under the tree.
+
+This roll fires ONLY ONCE per tree - gated in `spend_soil_moisture()` to
+`root_depth == 0`, meaning `find_water()`'s stem walk crossed no root at
+all on the way down. The moment the first root exists, PART 1 gets out of
+the way for good and PART 2 takes over growing the system; without that
+gate, every later grow/bud/sprout event would keep re-rolling here too,
+seeding fresh disconnected root cells at whatever the current deepest
+contact happens to be, fighting PART 2 over the same collar.
+
+**PART 2: the system.** A root cell is not otherwise inert - it eats.
+Every step, a root cell scans its own eight neighbours (`step_one_rooting_cell()`)
+for one that is dirt and still holds moisture, rolls a small chance
+(`reaction_t.roots` on `MATX_ROOT`'s OWN row - the same field, a second
+reading of it, the way `hardens_to` and `clings_to` already do double duty
+elsewhere in `reaction_t`), and converts it into more root. The conversion
+IS the water cost: `place_reacted()` overwrites the whole cell with a
+fresh root byte, so the dirt's moisture nibble is simply gone along with
+everything else the cell used to be, rather than separately debited.
+
+No direction weights of any kind. Moisture itself already has a shape - it
+percolates down through a bed and diffuses out from anything drinking or
+pouring nearby - so a root that simply reaches for whichever neighbour
+still has water in it spreads wide near a wet surface and fingers downward
+through a bed drying from the top, without the rule itself needing to know
+which way is down. An earlier draft of this feature reused
+`step_one_growing_cell()`'s own stem-walk machinery - a site roll (tip,
+lean, branch, widen) walking a run outward from the collar - the same way
+a limb grows; it was replaced by the local eating rule because a root does
+not need a stem's machinery to look like a root, and because eating rests
+on the same scarce-resource philosophy (spend the moisture, and that is
+the whole bound) the rest of this feature already uses, rather than adding
+depth and spread caps as a second, separate kind of bound beside it.
+
+**What actually bounds it.** Three things, in the order that matters:
+
+1. **The moisture itself.** A cell with nothing to spend has nothing to
+   grow into, and the total on a board is finite unless something keeps
+   pouring more in.
+2. **`ROOT_SURFACE_MAX`, 2.** A root already touching more than 2 other
+   roots does not roll to grow at all. This is what actually gives the
+   system its shape - without it, a well-watered bed converts every moist
+   cell it can reach into a solid slab of root rather than a filigree of
+   it. Measured against a runaway scene - a root pre-planted so the rare
+   PART 1 lottery cannot confound the reading, its collar rewatered to
+   SOIL_MOISTURE_MAX every single step for 20,000 steps, root count
+   sampled every 2000: at `ROOT_SURFACE_MAX = 1` the system starved
+   itself shut at 4 cells (a bare stub); at 3 it never stopped growing -
+   99 roots by step 2000, still climbing at 220 by step 20000, no sign of
+   levelling off; at 2 it climbed to the low forties by step 2000 and then
+   sat there BYTE-IDENTICAL through the remaining 18,000 steps, seed after
+   seed - a genuine fixed point.
+3. **`reaction_t.roots` itself, 8 in 256 on the root row** - a small
+   chance, the same discipline every roll in `sand_reactions.c` follows.
+
+No depth or spread cap was needed in the end - the walk-shaped first
+draft's `ROOT_DEPTH_MAX` is retired entirely (see its own RETIRED comment
+in `sand_reactions.c`, where the constant used to live). A local rule with
+no notion of "the collar" has nothing to measure a depth cap FROM in the
+first place, and `ROOT_SURFACE_MAX` alone already produces a genuine fixed
+point at the scale this feature actually runs at.
+
+**Eight neighbours, not four.** `step_one_rooting_cell()`'s scan walks all
+eight ring directions rather than the four cardinals `reaction_dirs[]`
+uses elsewhere in this file. Compared directly, both ways, over the same
+six seeds: four gave a near-straight taproot, one or two cells wide, that
+only fanned out where moisture happened to pool against the stone floor;
+eight let a root step diagonally as it reaches for water, which is what
+actually produces the wandering, forking shape a root system is supposed
+to have. The difference was qualitative, not a rounding error.
+
+**Measured, before and after** (60 wide, 70 tall; stone floor; 20 rows of
+saturated dirt; one seed on the surface; the 13 cells around the collar
+rewatered every 20 steps; 20,000 steps; `sand_step(&s, 0, 1000, 0)`):
+
+```
+                     BEFORE (PART 1 only)         AFTER (PART 1 + PART 2)
+seed    roots depth  half-width  wood      roots depth  half-width  wood
+11        7     3        7       141         0     0        0       83
+909       4     2        3       82         35    19        9       88
+4242      3     2        1       78         48    19       12       69
+77        1     1        1       71         76    19       13       58
+5150      7     2        9       148        55    19       12      298
+31337     2     2        2       116        29     8        7       104
+```
+
+Before, a root system was a short column near the collar, one to seven
+cells, capped by `ROOT_DEPTH_MAX` and starved by how rarely a single
+un-replanted tree spends soil moisture at all. After, the same scene
+grows a genuine branching system reaching most of the bed's own depth,
+spreading well past the collar. Seed 11 growing zero roots either side is
+not a regression - PART 1's lottery (~16% per eligible spend, and a single
+tree spends only a few dozen times in its life) simply missed for that
+seed within 20,000 steps; the suite's own tests replant every 40 steps
+specifically to give that roll many independent tries, the way this raw
+harness does not.
+
+One seed's soil, picture (`seed 4242`, `R` root, `W` wood, `.` dirt,
+collar near the top centre):
+
+```
+.............................RR.RR..........................
+.............................RR.RR..........................
+.............................R..............................
+.............................R..............................
+.............................RR.............................
+.............................R..............................
+.............................R..............................
+.............................RR.............................
+.............................RR.............................
+..............................R.............................
+..............................R.............................
+..............................RR............................
+..............................R.............................
+..............................R.............................
+..............................RR............................
+..............................R.............................
+..............................R.............................
+..............................RR..R..R.R.RR..................
+..............................RRRRRRRRRRRRR..................
+```
+
+Wide near the collar, a wandering single-cell thread through the middle of
+the bed, and a wider fan again at the bottom where moisture pools against
+the stone floor - the shape moisture's own distribution gives it, for
+free, with no direction weights anywhere in the rule that grew it.
 
 **Why a new material, not more wood.** The obvious shortcut - give wood a
 "rooted" variant, the way glass spends its variant on temperature - does
@@ -597,6 +714,22 @@ A root is buried, and a fire that could reach down and burn out a tree's
 own anchor from under it would undo the whole point of the feature: the
 tree would be exactly as vulnerable to a shifting bed as it was before
 roots existed, just one fire away.
+
+**A root competing with its own tree.** PART 2 gave the feature one new
+and genuinely surprising failure mode: a root sitting directly on its
+tree's ONLY reachable water can, given enough steps, eat that exact cell
+itself and convert it to more root - and if nothing lies beyond it but
+stone, the tree's own water access is gone, spent on growing the root
+system instead of ever reaching the trunk above. This is not a bug in
+`find_water()`'s transparency (untouched by PART 2, and still correct);
+it is root and tree genuinely competing for the same scarce moisture,
+first roll wins. `test_a_buried_root_does_not_cut_off_the_water_below_it`
+(`suite_sand.c`) used to rest on a single row of water directly under the
+root, and PART 2 made that scene racy against this exact competition
+(measured: FAILED, deterministically, for this suite's fixed seed) - the
+fix was a deeper wet reserve below the root, not a change to the
+mechanism, since a real root system does not get to consume literally
+every cell of water below it before the tree it belongs to can use any.
 
 ## Momentum and the wall-rebound splash
 

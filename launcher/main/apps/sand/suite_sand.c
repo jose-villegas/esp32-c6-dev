@@ -13477,7 +13477,7 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
  * near enough independent tries at a ~3% root roll (reaction_t.roots).
  * Clearing the canopy and planting a fresh seed on the same spot gives
  * that roll a fresh, independent attempt at the SAME collar every cycle -
- * see test_roots_never_go_deeper_than_the_depth_cap's own top comment,
+ * see test_a_rooted_collar_survives_the_bed_shifting_away's own scene 1,
  * which hits the identical wall and fixes it the same way. */
 static void test_a_watered_plant_roots_into_the_soil_it_drinks_from(void)
 {
@@ -13569,113 +13569,21 @@ static void test_a_trunk_standing_on_its_own_root_is_anchored(void)
         "come down");
 }
 
-/* A deep bed, and a trunk that keeps budding off it for thousands of
- * steps - budding is the one part of growth with no TREE_LIFT to stop it
- * (see test_a_crowned_trunk_buds_and_a_bare_one_does_not above), so it is
- * the reliable way to give the root roll many independent chances at the
- * same collar. Without a depth cap of its own, that same lack of a limit
- * would let a trunk that never stops spending soil moisture weld its way
- * to the bottom of any bed it stands on - ROOT_DEPTH_MAX
- * (sand_reactions.c) is what stops it, the below-ground twin of
- * TREE_LIFT above ground. */
-#define ROOT_DEPTH_TEST_W 10
-#define ROOT_DEPTH_TEST_H 20
-
-static void test_roots_never_go_deeper_than_the_depth_cap(void)
-{
-    uint8_t *grid = malloc((size_t)ROOT_DEPTH_TEST_W * ROOT_DEPTH_TEST_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
-        "root-depth grid must fit in what the framebuffer leaves");
-
-    sand_t t;
-    sand_init(&t, grid, ROOT_DEPTH_TEST_W, ROOT_DEPTH_TEST_H, 12345u);
-    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
-    sand_set_decay(&t, SAND_DECAY_PER_MATERIAL);
-
-    const int cx      = ROOT_DEPTH_TEST_W / 2;
-    const int floor_y = ROOT_DEPTH_TEST_H - 1;
-    const int bed_top = floor_y - 10; /* ten rows of saturated dirt -
-                                        * comfortably deeper than the cap
-                                        * plus ROOT_REACH's own search
-                                        * past the root column */
-
-    for (int x = 0; x < ROOT_DEPTH_TEST_W; x++) {
-        sand_set(&t, x, floor_y, STONE);
-        for (int y = bed_top; y < floor_y; y++) {
-            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-        }
-    }
-
-    /* REPLANT, rather than grow one tree once. A single trunk's own
-     * `grows` events are surprisingly few over even a long run - the
-     * canopy above it fills the handful of cells growth can reach, and
-     * once it is full there is nowhere left to put a new cell, so no
-     * more moisture is ever spent and no more root rolls ever happen
-     * (measured: a single crowned trunk left for 8000 steps produced
-     * under 100 spend events in total, most of them in the first few
-     * hundred steps). A root roll is only ~3% (reaction_t.roots), so a
-     * cap this test wants to actually REACH needs many more independent
-     * attempts at the same collar than one tree, left alone, ever
-     * offers.
-     *
-     * So every cycle clears the canopy - never the bed, and never
-     * whatever the collar has become - and plants a fresh seed directly
-     * on top of it. The seed touches the bed or the current top of the
-     * root column immediately (no fall needed), grows for a handful of
-     * steps, and is cleared away again - giving the root roll a fresh,
-     * independent chance at the SAME collar every cycle, the way many
-     * separate trees over many separate seasons would. */
-    for (int cycle = 0; cycle < 300; cycle++) {
-        for (int y = 0; y < bed_top; y++) {
-            for (int x = 0; x < ROOT_DEPTH_TEST_W; x++) {
-                sand_set(&t, x, y, SAND_EMPTY);
-            }
-        }
-        /* Top up whatever is STILL dirt - never a root - so a long run
-         * of cycles cannot run the bed dry underneath the very column
-         * this test is trying to deepen. */
-        for (int x = 0; x < ROOT_DEPTH_TEST_W; x++) {
-            for (int y = bed_top; y < floor_y; y++) {
-                if (CELL_MATERIAL(sand_at(&t, x, y)) == MAT_DIRT) {
-                    sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-                }
-            }
-        }
-        sand_set(&t, cx, bed_top - 1, MATX(MATX_PLANT));
-        for (int i = 0; i < 40; i++) {
-            sand_step(&t, 0, 1000, 0);
-        }
-    }
-
-    /* The root column grows straight down from the collar - contiguous,
-     * since each new root forms wherever the stem walk currently makes
-     * contact with soil, which moves one cell deeper each time. A gap
-     * would mean something other than the mechanism this test targets. */
-    int depth = 0;
-    for (int y = bed_top; y < floor_y; y++) {
-        if (sand_at(&t, cx, y) == MATX(MATX_ROOT)) {
-            depth++;
-        } else {
-            break;
-        }
-    }
-
-    free(grid);
-
-    /* 4, not a named constant - ROOT_DEPTH_MAX is private to
-     * sand_reactions.c, and this file already hardcodes its neighbours
-     * (TREE_LIFT, ROOT_REACH, BUD_COST) the same way for the same
-     * reason. */
-    TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(4, depth,
-        "a root column must never run deeper than ROOT_DEPTH_MAX below "
-        "the collar - without a cap, a trunk that never stops spending "
-        "soil moisture would eventually weld its way to the bottom of "
-        "any bed it stands on");
-    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, depth,
-        "and this scene, run this long, must actually approach the cap "
-        "- a depth of zero or one would mean the cap above was never "
-        "truly exercised, passing by default rather than by proof");
-}
+/* DELETED: test_roots_never_go_deeper_than_the_depth_cap used to live
+ * here, replanting a seed on the same deep bed for 300 cycles and
+ * asserting the resulting root column never ran past ROOT_DEPTH_MAX
+ * (4) cells below the collar. That constant is gone - see sand_
+ * reactions.c's own RETIRED comment where it used to be defined - along
+ * with the mechanism it bounded: PART 1 (the collar seed) now only ever
+ * fires once per tree, and PART 2 (step_one_rooting_cell(), local
+ * neighbour-eating) is bounded by ROOT_SURFACE_MAX instead, which does
+ * not reason about depth from a collar at all. There is no version of
+ * this test's claim left to make honest - a root system grown by PART 2
+ * is not a single contiguous column counted from a fixed origin, so
+ * "how deep is IT" is not a question with one answer the way it used to
+ * be. See test_a_root_column_reaches_below_the_collar just below for
+ * what still holds instead: roots never appear above the collar, and
+ * the system still both deepens and spreads given the chance to. */
 
 /* A tree standing on a pre-placed root column still grows as tall as one
  * standing straight on soil - the test that pins the reason roots are
@@ -13688,11 +13596,12 @@ static void test_roots_never_go_deeper_than_the_depth_cap(void)
  * heights. A single, unreplanted tree plateaus at 7-8 cells long before
  * it gets anywhere near TREE_LIFT = 10 (measured: 6000 steps changed
  * nothing) - hardening and a crowded local neighbourhood stop it cold,
- * the same wall test_roots_never_go_deeper_than_the_depth_cap's own top
- * comment describes for budding. That plateau sits well clear of the
- * cap either way, so comparing final heights this way never actually
- * exercises TREE_LIFT and would pass identically whether or not roots
- * were silently being charged against it.
+ * the same wall test_a_watered_plant_roots_into_the_soil_it_drinks_from's
+ * own top comment describes for a single seed's own spend events. That
+ * plateau sits well clear of the cap either way, so comparing final
+ * heights this way never actually exercises TREE_LIFT and would pass
+ * identically whether or not roots were silently being charged against
+ * it.
  *
  * So this builds the stem PRE-GROWN, right at the boundary, and asks
  * one direct question: does the tip's very next growth roll succeed? */
@@ -13818,25 +13727,60 @@ static void test_a_root_column_does_not_spend_the_trees_lift(void)
  * collar can end up buried under fresh soil later - and without the
  * transparency fix in find_water()'s own soil walk, a root would look
  * exactly like the dead end it exists to prevent, reintroducing the bug
- * from the other side. */
+ * from the other side.
+ *
+ * A DEEP wet reserve below the root, not the original single row - since
+ * PART 2 of the roots feature, a root sitting directly on its only
+ * reachable water is itself a second consumer of that exact cell
+ * (step_one_rooting_cell(), sand_reactions.c): given enough steps it
+ * will eventually eat the very cell this test's ORIGINAL one-row version
+ * depended on and convert it to more root, which the soil walk then
+ * crosses too, arriving at stone with nothing left to find - a real
+ * race between the root's own slow, serial, one-cell-at-a-time eating
+ * and the tree's growth roll, and for the fixed seed this suite always
+ * runs with, the root used to win it (measured: FAILED, deterministically,
+ * against the single-row version). That is not the transparency bug this
+ * test exists to catch - find_water()'s own walk was never touched by
+ * PART 2 - it is the new mechanism competing for the one cell of water
+ * the old, narrower scene happened to offer. Six rows deep is far more
+ * than the root can plausibly eat through (each conversion needs its own
+ * independent roll, one cell at a time, only ever on the single newest
+ * cell of the column) before the tree's own, faster-firing growth roll
+ * succeeds at least once - which is the actual claim under test. */
+#define BURIED_ROOT_TEST_W 8
+#define BURIED_ROOT_TEST_H 16
+#define BURIED_ROOT_WET_ROWS 6
+
 static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
 {
-    fixture();
-    sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    uint8_t *grid = malloc((size_t)BURIED_ROOT_TEST_W * BURIED_ROOT_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "buried-root grid must fit in what the framebuffer leaves");
 
-    const int cx = W / 2;
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* the real water */
-        sand_set(&s, x, H - 4, CELL_SOIL(MAT_DIRT, 1, 0));                /* dry - piled back on later */
+    sand_t t;
+    sand_init(&t, grid, BURIED_ROOT_TEST_W, BURIED_ROOT_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx      = BURIED_ROOT_TEST_W / 2;
+    const int floor_y = BURIED_ROOT_TEST_H - 1;
+    const int wet_top = floor_y - BURIED_ROOT_WET_ROWS; /* the real water */
+    const int root_y  = wet_top - 1;                    /* buried */
+    const int dry_y    = root_y - 1;                    /* piled back on later */
+    const int plant_y  = dry_y - 1;
+
+    for (int x = 0; x < BURIED_ROOT_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = wet_top; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_set(&t, x, dry_y, CELL_SOIL(MAT_DIRT, 1, 0));
     }
-    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* buried */
-    sand_set(&s, cx, H - 5, MATX(MATX_PLANT));
+    sand_set(&t, cx, root_y, MATX(MATX_ROOT));
+    sand_set(&t, cx, plant_y, MATX(MATX_PLANT));
 
     int before = 0;
-    for (int y = 0; y < H; y++) {
-        const cell_t c = sand_at(&s, cx, y);
+    for (int y = 0; y < BURIED_ROOT_TEST_H; y++) {
+        const cell_t c = sand_at(&t, cx, y);
         if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
             before++;
         }
@@ -13844,10 +13788,10 @@ static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
 
     int grew = 0;
     for (int i = 0; i < 2000 && !grew; i++) {
-        sand_step(&s, 0, 1000, 0);
+        sand_step(&t, 0, 1000, 0);
         int now = 0;
-        for (int y = 0; y < H; y++) {
-            const cell_t c = sand_at(&s, cx, y);
+        for (int y = 0; y < BURIED_ROOT_TEST_H; y++) {
+            const cell_t c = sand_at(&t, cx, y);
             if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
                 now++;
             }
@@ -13856,6 +13800,7 @@ static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
             grew = 1;
         }
     }
+    free(grid);
     TEST_ASSERT_TRUE_MESSAGE(grew,
         "a plant standing over dry dirt, a buried root and wet dirt in "
         "that order must still be able to grow - the buried root has to "
@@ -13863,84 +13808,104 @@ static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
         "it would cut the tree off from the water below its own root");
 }
 
-/* Roots go DOWN, not just sideways along the surface.
+/* Roots go DOWN, not just sideways along the surface - AND sideways, not
+ * just down.
  *
- * The other root tests bound the system from above - the cap, the lift,
- * transparency - and every one of them passed while roots were in fact a
- * single row at the collar that never went deeper, because nothing asked
- * them to reach BELOW it. Reported from the device as roots never growing
- * past the attachment point, and measured at 20,000 steps: three roots,
- * all at depth 0.
- *
- * The cause was ordering inside find_water()'s own direction scan. It
- * takes the first SOIL it finds and breaks, keeping stem as a mere
- * fallback - so once the collar rooted, the walk found the loose dirt
- * DIAGONALLY beside that root before it ever considered going through it,
- * and the contact never moved down a row.
- *
- * Seeded with the first root already in place rather than waiting for one
- * to roll, so this tests the deepening and not the luck of the first
- * conversion. */
+ * RETIRED CLAIM, and why: this test used to assert that the very FIRST
+ * conversion after a pre-placed collar root landed directly BELOW it
+ * rather than beside it, back when PART 1's collar-welding walk was the
+ * entire feature and "does the column go down at all" was a real
+ * question - see the old walk's own bug, preserved in git history, where
+ * find_water()'s scan found loose dirt diagonally beside a root before
+ * it ever crossed the root itself. That bug lived in find_water(), which
+ * PART 2 (step_one_rooting_cell(), sand_reactions.c) never touches, and
+ * "the very first conversion" is not even a well-formed question for a
+ * local rule with no fixed direction preference: every one of a root
+ * cell's moist neighbours is an equally valid candidate, so which one
+ * gets eaten first is exactly as informative as which one a coin lands
+ * on. What is still true, and still worth pinning, is the SHAPE over the
+ * whole run: nothing above the collar (gravity did not stop applying),
+ * and the system both deepens and spreads given the chance to, since a
+ * root that only ever did one of the two would not read as a root
+ * system either. */
+#define REACH_TEST_W 16
+#define REACH_TEST_H 12
+
 static void test_a_root_column_reaches_below_the_collar(void)
 {
-    fixture();
-    sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    uint8_t *grid = malloc((size_t)REACH_TEST_W * REACH_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "root-reach grid must fit in what the framebuffer leaves");
 
-    const int cx = W / 2;
-    for (int x = 0; x < W; x++) {
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-        sand_set(&s, x, H - 4, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-    }
-    sand_set(&s, cx, H - 4, MATX(MATX_ROOT)); /* the collar, already rooted */
+    sand_t t;
+    sand_init(&t, grid, REACH_TEST_W, REACH_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
 
-    /* WHERE THE NEXT ROOT LANDS, not merely whether one ever appears
-     * below. That weaker question passes either way and is why the first
-     * version of this test pinned nothing: with the old ordering a row
-     * eventually saturates with root, leaving no dirt beside the column
-     * to find, and the walk stumbles downward regardless - just slowly
-     * and unreliably (measured over six seeds, deepest root 3/2/3/0/2/3
-     * against 3/3/3/3/3/3). The two orderings differ on the very FIRST
-     * conversion after the collar: below the root, or beside it. */
-    int below = 0, beside = 0;
-    for (int cycle = 0; cycle < 200 && !below && !beside; cycle++) {
-        /* Replanted and re-watered, the same way the other root tests
-         * have to: one seed's canopy fills up and stops spending soil
-         * moisture, and a conversion can only ride on a spend. */
-        for (int y = 0; y < H - 4; y++) {
-            for (int x = 0; x < W; x++) {
-                sand_set(&s, x, y, SAND_EMPTY);
-            }
-        }
-        for (int x = 0; x < W; x++) {
-            for (int y = H - 3; y <= H - 2; y++) {
-                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_DIRT) {
-                    sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
-                }
-            }
-        }
-        sand_set(&s, cx, H - 5, MATX(MATX_PLANT));
+    const int cx        = REACH_TEST_W / 2;
+    const int floor_y    = REACH_TEST_H - 1;
+    const int collar_y   = floor_y - 8; /* eight rows of saturated dirt
+                                          * below the collar, and the
+                                          * full width beside it, so the
+                                          * system has real room to grow
+                                          * both ways */
 
-        for (int i = 0; i < 40 && !below && !beside; i++) {
-            sand_step(&s, 0, 1000, 0);
-            below = (sand_at(&s, cx, H - 3) == MATX(MATX_ROOT));
-            for (int x = 0; x < W && !beside; x++) {
-                if (x != cx && sand_at(&s, x, H - 4) == MATX(MATX_ROOT)) {
-                    beside = 1;
-                }
-            }
+    for (int x = 0; x < REACH_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = collar_y; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
         }
     }
-    TEST_ASSERT_TRUE_MESSAGE(below || beside,
-        "setup failure, not the claim under test: no second root formed "
-        "at all, so there is nothing to say about where it went");
-    TEST_ASSERT_TRUE_MESSAGE(below,
-        "the root after the collar has to go BELOW it, not alongside it - "
-        "the walk must cross its own root to the soil beneath rather than "
-        "stepping around it into the dirt on either side, or a root "
-        "system is a flat row at the surface however long the tree lives");
+    sand_set(&t, cx, collar_y - 1, CELL_MAKE(MAT_WOOD, 0)); /* shelters
+                                                              * the seed
+                                                              * root so
+                                                              * this test
+                                                              * is not
+                                                              * confounded
+                                                              * by rot */
+    sand_set(&t, cx, collar_y, MATX(MATX_ROOT)); /* the collar, already
+                                                   * rooted - PART 2 needs
+                                                   * no growing plant at
+                                                   * all to run, only a
+                                                   * root cell with a
+                                                   * moist neighbour */
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&t, 0, 1000, 0);
+    }
+
+    int above_collar = 0, max_depth = 0, max_half_width = 0;
+    for (int y = 0; y < REACH_TEST_H; y++) {
+        for (int x = 0; x < REACH_TEST_W; x++) {
+            if (sand_at(&t, x, y) != MATX(MATX_ROOT)) {
+                continue;
+            }
+            if (y < collar_y) {
+                above_collar = 1;
+            }
+            const int depth = y - collar_y;
+            if (depth > max_depth) {
+                max_depth = depth;
+            }
+            const int hw = (x > cx) ? (x - cx) : (cx - x);
+            if (hw > max_half_width) {
+                max_half_width = hw;
+            }
+        }
+    }
+    free(grid);
+
+    TEST_ASSERT_FALSE_MESSAGE(above_collar,
+        "a root must never appear above the collar row - gravity still "
+        "applies to where a tree's own footing can be, even though the "
+        "eating rule itself has no direction weights");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2, max_depth,
+        "over this run the system must still reach at least two rows "
+        "below the collar - a root system that never deepens is not one, "
+        "however wide it spreads");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2, max_half_width,
+        "and it must spread at least two columns to either side - a "
+        "single straight column is the shape this feature moved away "
+        "from, not the one it is aiming for");
 }
 
 /* Lava reaching a root burns it out; a flame reaching one does nothing.
@@ -14167,10 +14132,10 @@ static void test_a_rooted_collar_survives_the_bed_shifting_away(void)
     /* Scene 1: let a root actually form at the collar, then keep going.
      *
      * REPLANTED every 40 steps - a single seed's own canopy fills up and
-     * stops spending moisture long before a ~3% root roll
+     * stops spending moisture long before the collar-seed roll
      * (reaction_t.roots) is likely to land. See
-     * test_roots_never_go_deeper_than_the_depth_cap's own top comment,
-     * which hits the identical wall and fixes it the same way. */
+     * test_a_watered_plant_roots_into_the_soil_it_drinks_from's own top
+     * comment, which hits the identical wall and fixes it the same way. */
     fixture();
     sand_clear(&s);
     sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
@@ -14361,6 +14326,327 @@ static void test_root_conversion_never_creates_moisture(void)
                  "ever spend moisture, never create it", i, now, initial);
         TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(initial, now, why);
     }
+}
+
+/* PART 2's own version of the claim above, isolated rather than read off
+ * a whole simulated tree: one root, one moist neighbour, nothing else on
+ * the board that could spend or create moisture by any other path. The
+ * system-wide test above already proves the total never rises across
+ * growth, budding AND root-eating together; this one proves specifically
+ * that step_one_rooting_cell()'s own conversion is what accounts for the
+ * fall, by giving it exactly one thing to eat and checking that it is
+ * gone, not merely reduced, once eaten. */
+static void test_a_root_eats_a_moist_neighbour_and_only_spends_its_own_moisture(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, cy = 3;
+    /* Dirt is KIND_POWDER (material.c) - a lone candidate cell needs
+     * direct support or it simply falls away before the root ever gets a
+     * turn, which is not this test's claim at all. A stone floor
+     * directly under the candidate, and stone either side of it so
+     * nothing can slide out from under it either, keeps the pocket to
+     * exactly one eligible cell. */
+    sand_set(&s, cx - 1, cy + 2, STONE);
+    sand_set(&s, cx, cy + 2, STONE);
+    sand_set(&s, cx + 1, cy + 2, STONE);
+    sand_set(&s, cx, cy - 1, CELL_MAKE(MAT_WOOD, 0)); /* shelter */
+    sand_set(&s, cx, cy, MATX(MATX_ROOT));
+    sand_set(&s, cx, cy + 1, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* the
+                                                                          * one
+                                                                          * candidate
+                                                                          */
+
+    int ate = 0;
+    for (int i = 0; i < 3000 && !ate; i++) {
+        sand_step(&s, 0, 1000, 0);
+        ate = (sand_at(&s, cx, cy + 1) == MATX(MATX_ROOT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(ate,
+        "setup failure, not the claim under test: the root's one moist "
+        "neighbour never got eaten at all, so there is nothing to check "
+        "the moisture accounting of");
+
+    int total = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                total += CELL_MOISTURE(c);
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, total,
+        "the one dirt cell on this board held the only moisture there "
+        "was; once step_one_rooting_cell() converts it, that moisture "
+        "must be simply GONE - spent as the price of the conversion, not "
+        "carried anywhere else on the board there is nothing else to "
+        "carry it to");
+}
+
+/* A root never eats what is not moist dirt. Three candidates in reach,
+ * each one testing a different guard in step_one_rooting_cell()'s own
+ * neighbour scan: dry dirt (the MOISTURE check), sand (the MATERIAL
+ * check - reaction_of(c)->dries == 0), and empty space (CELL_IS_EMPTY()).
+ * Run long enough that, at 8 in 256 per step, a guard that had quietly
+ * gone missing would show it - not merely long enough that a genuine 3%
+ * chance might still happen to miss. */
+static void test_a_root_never_eats_dry_dirt_sand_or_empty_space(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, cy = 3;
+    /* A floor under the whole candidate row, same reason as the previous
+     * test - dirt and sand are both KIND_POWDER and fall away from an
+     * unsupported cell before there is anything to observe. TWO cells
+     * wider than the candidates themselves, not flush with them: a
+     * powder resting right at the edge of a floor still has an open
+     * diagonal-down past that edge to slide into, which is exactly what
+     * a first version of this test did with a 3-wide floor - the sand
+     * candidate slid one step diagonally off the end of it on step 0
+     * and was gone before the test could observe anything. */
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        sand_set(&s, x, cy + 1, STONE);
+    }
+    sand_set(&s, cx, cy - 1, CELL_MAKE(MAT_WOOD, 0));         /* shelter, up */
+    sand_set(&s, cx, cy, MATX(MATX_ROOT));
+    /* Three candidates, one per guard in step_one_rooting_cell()'s
+     * neighbour scan - all beside the root rather than below it, since
+     * the row below is now the floor. */
+    sand_set(&s, cx - 1, cy, CELL_SOIL(MAT_DIRT, 1, 0)); /* dry, left */
+    sand_set(&s, cx + 1, cy, SAND_FIRST_SHADE);          /* sand, right */
+    /* (cx - 1, cy - 1) stays SAND_EMPTY from sand_clear() above - empty,
+     * diagonally up-left, one of the root's eight neighbours - named
+     * explicitly here rather than left implicit, so the scene reads as
+     * three deliberate candidates rather than two plus whatever the grid
+     * happened to start as. */
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_SOIL(MAT_DIRT, 1, 0),
+        sand_at(&s, cx - 1, cy),
+        "dry dirt must never be eaten - CELL_MOISTURE(n) != 0 is not "
+        "optional, it is the whole reason the conversion does not need "
+        "to spend anything separately");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE,
+        sand_at(&s, cx + 1, cy),
+        "sand must never be eaten, wet or not - reaction_of(n)->dries == "
+        "0 for sand, and that is the guard that keeps this rule to soil "
+        "specifically");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, cx - 1, cy - 1)),
+        "empty space must never become a root out of nowhere");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
+        "and nothing else on the board should have changed at all - one "
+        "root in, one root out");
+}
+
+/* THE SURFACE RULE ITSELF: a root already touching more than
+ * ROOT_SURFACE_MAX (2) other roots does not roll to grow at all, even
+ * with an eligible candidate sitting right there. Two scenes, the same
+ * shape as every other boundary test in this file (see
+ * test_a_root_column_does_not_spend_the_trees_lift's own comment): a
+ * control just under the cap that must still grow, and a target just
+ * over it that must not, so a failure of either side can be told apart
+ * from the other. */
+static bool
+surface_rule_lets_growth_through(int satellite_roots)
+{
+    sand_t t;
+    uint8_t grid[8 * 8];
+    sand_init(&t, grid, 8, 8, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = 4, cy = 4;
+    /* Dirt is KIND_POWDER (material.c) - a floor under it, or it falls
+     * away before either scene gets a chance to prove anything. Two
+     * cells wider than the candidate itself - see
+     * test_a_root_never_eats_dry_dirt_sand_or_empty_space's own comment
+     * on why a floor flush with its one occupant is still not a floor a
+     * powder cannot slide off the edge of. */
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        sand_set(&t, x, cy + 2, STONE);
+    }
+    sand_set(&t, cx, cy, MATX(MATX_ROOT));
+    sand_set(&t, cx, cy + 1, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* the
+                                                                          * one
+                                                                          * candidate,
+                                                                          * down
+                                                                          */
+    /* Satellites fill row cy - 1 ONLY - up-left, up, up-right, in that
+     * order - and nowhere else. That is not an arbitrary choice of
+     * geometry: a satellite placed level with the central root (as an
+     * earlier version of this scene did, at (cx - 1, cy)) is ITSELF
+     * adjacent to the candidate cell, and a satellite with few enough
+     * root neighbours of its OWN can roll and eat the candidate directly
+     * - entirely bypassing whatever the central root's own surface count
+     * says, and confounding the very boundary this test means to pin.
+     * Row cy - 1 is two rows from the candidate at cy + 1, so nothing
+     * placed there can ever reach it. No explicit wood shelter is needed
+     * either: two or more satellite roots already shelter the central
+     * one through `roots_to`, the same mutual-shelter path
+     * step_one_withering_cell() gives a column of root under a living
+     * tree (see test_a_root_column_under_a_living_tree_does_not_rot). */
+    static const int sat_dx[3] = {-1, 0, 1};
+    for (int i = 0; i < satellite_roots; i++) {
+        sand_set(&t, cx + sat_dx[i], cy - 1, MATX(MATX_ROOT));
+    }
+
+    bool grew = false;
+    for (int i = 0; i < 2000 && !grew; i++) {
+        sand_step(&t, 0, 1000, 0);
+        grew = (sand_at(&t, cx, cy + 1) == MATX(MATX_ROOT));
+    }
+    return grew;
+}
+
+static void test_a_thickly_rooted_cell_stops_growing(void)
+{
+    TEST_ASSERT_TRUE_MESSAGE(surface_rule_lets_growth_through(2),
+        "control: a root with only 2 root neighbours (at or under "
+        "ROOT_SURFACE_MAX) must still be able to grow into an eligible "
+        "candidate - if this fails, the boundary below proves nothing "
+        "about the surface rule specifically");
+    TEST_ASSERT_FALSE_MESSAGE(surface_rule_lets_growth_through(3),
+        "a root with 3 root neighbours (over ROOT_SURFACE_MAX) must not "
+        "roll to grow at all, even with an eligible candidate right "
+        "there - this is the rule that keeps the system a filigree "
+        "instead of a solid block");
+}
+
+/* ROOTS FOLLOW WATER, WITH NO DIRECTION WEIGHTS OF THEIR OWN
+ * (step_one_rooting_cell()'s own top comment, sand_reactions.c): a bed
+ * wet on only one side of a root grows root on that side and never the
+ * dry one, purely because the moisture check is the only thing steering
+ * it - nothing in the scan itself prefers left over right or down over
+ * up. */
+static void test_roots_grow_toward_the_wet_side_only(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, cy = 3;
+    /* Both dirt candidates are KIND_POWDER - a floor under the whole
+     * candidate row, or neither survives long enough to be eaten OR to
+     * stay put and prove it was not. Two cells wider than the candidates
+     * themselves - see test_a_root_never_eats_dry_dirt_sand_or_empty_
+     * space's own comment on why a floor flush with its edge cells is
+     * not actually a floor; a powder resting right at the edge still has
+     * an open diagonal to slide off into. */
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        sand_set(&s, x, cy + 1, STONE);
+    }
+    sand_set(&s, cx, cy - 1, CELL_MAKE(MAT_WOOD, 0));    /* shelter, up */
+    sand_set(&s, cx, cy, MATX(MATX_ROOT));
+    sand_set(&s, cx - 1, cy, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* wet,
+                                                                          * left
+                                                                          */
+    sand_set(&s, cx + 1, cy, CELL_SOIL(MAT_DIRT, 1, 0));                /* dry,
+                                                                          * right
+                                                                          */
+
+    int wet_side_grew = 0;
+    for (int i = 0; i < 3000 && !wet_side_grew; i++) {
+        sand_step(&s, 0, 1000, 0);
+        wet_side_grew = (sand_at(&s, cx - 1, cy) == MATX(MATX_ROOT));
+        TEST_ASSERT_FALSE_MESSAGE(sand_at(&s, cx + 1, cy) == MATX(MATX_ROOT),
+            "the dry side must never become root - there is no water "
+            "there for the conversion to spend");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(wet_side_grew,
+        "setup failure, not the claim under test: the wet side never "
+        "grew either, so there is nothing to say about which side the "
+        "system preferred");
+}
+
+/* THE RUNAWAY SCENE, scaled for the host suite - see the Roots section
+ * of docs/Sand/Sand-Simulation.md for the full six-seed, 20,000-step
+ * version this is a fast stand-in for. A root pre-planted (so the rare
+ * one-time collar seed cannot confound the reading - see
+ * spend_soil_moisture()'s own comment), its collar rewatered to
+ * SOIL_MOISTURE_MAX every single step - about as generous as this
+ * feature ever sees - and the claim is not "it stays small", it is that
+ * the count REACHES A FIXED POINT: two counts taken apart in time, late
+ * enough that growth has had its chance, must be equal. A system still
+ * climbing between them is the shape of the runaway this whole feature
+ * exists to avoid.
+ *
+ * WHAT THIS DOES NOT ISOLATE, watched red and found wanting: bumping
+ * ROOT_SURFACE_MAX itself far past its real value does NOT turn this
+ * test red - a board this small (20x14) runs out of reachable moist dirt
+ * within 3000 steps regardless of the surface rule, so the count still
+ * plateaus, just later and higher. This test is a regression guard on
+ * SATURATION happening at all, not a proof of which of the three bounds
+ * (moisture, surface rule, roll) is doing the work at this scale -
+ * test_a_thickly_rooted_cell_stops_growing pins ROOT_SURFACE_MAX
+ * specifically, and the real evidence that it is the surface rule
+ * carrying the full-size scene (not merely a smaller board's own limits)
+ * is the six-seed, 20,000-step measurement recorded in ROOT_SURFACE_MAX's
+ * own comment (sand_reactions.c), where a bed sixty cells wide gives the
+ * system far more room than 3,000 steps could plausibly exhaust. */
+#define RUNAWAY_TEST_W 20
+#define RUNAWAY_TEST_H 14
+
+static void test_a_continuously_watered_root_system_still_saturates(void)
+{
+    uint8_t *grid = malloc((size_t)RUNAWAY_TEST_W * RUNAWAY_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "runaway grid must fit in what the framebuffer leaves");
+
+    sand_t t;
+    sand_init(&t, grid, RUNAWAY_TEST_W, RUNAWAY_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx      = RUNAWAY_TEST_W / 2;
+    const int floor_y = RUNAWAY_TEST_H - 1;
+    const int bed_top = floor_y - 8;
+
+    for (int x = 0; x < RUNAWAY_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = bed_top; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+    }
+    sand_set(&t, cx, bed_top - 1, CELL_MAKE(MAT_WOOD, 0));
+    /* One row INTO the bed, not ON bed_top - the rewater loop below
+     * overwrites bed_top's own 13 cells every single step, which would
+     * erase a root planted there before step 0 even finished (measured:
+     * this exact mistake, in the scratch harness this scene is modelled
+     * on, produced a flat 0 for the entire run). */
+    sand_set(&t, cx, bed_top + 1, MATX(MATX_ROOT));
+
+    int mid_count = -1, final_count = -1;
+    for (int i = 0; i < 3000; i++) {
+        for (int dx = -6; dx <= 6; dx++) {
+            const int x = cx + dx;
+            if (x < 0 || x >= RUNAWAY_TEST_W) {
+                continue;
+            }
+            sand_set(&t, x, bed_top, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&t, 0, 1000, 0);
+        if (i == 1500) {
+            mid_count = count_cells_of(MAT_EXTENDED);
+        }
+    }
+    final_count = count_cells_of(MAT_EXTENDED);
+    free(grid);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, mid_count,
+        "setup failure, not the claim under test: the system must have "
+        "grown past its single pre-placed root by the halfway point, or "
+        "there is nothing here to say saturated");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(mid_count, final_count,
+        "a system this continuously watered must still reach a fixed "
+        "point rather than keep climbing - ROOT_SURFACE_MAX is what is "
+        "supposed to hold it there (sand_reactions.c's own comment on "
+        "the constant records the same comparison at 20,000 steps)");
 }
 
 
@@ -25599,7 +25885,6 @@ void run_sand_suite(void)
     RUN_TEST(test_a_bare_trunk_in_wet_ground_buds_again);
     RUN_TEST(test_a_watered_plant_roots_into_the_soil_it_drinks_from);
     RUN_TEST(test_a_trunk_standing_on_its_own_root_is_anchored);
-    RUN_TEST(test_roots_never_go_deeper_than_the_depth_cap);
     RUN_TEST(test_a_root_column_does_not_spend_the_trees_lift);
     RUN_TEST(test_a_buried_root_does_not_cut_off_the_water_below_it);
     RUN_TEST(test_a_root_column_reaches_below_the_collar);
@@ -25611,6 +25896,11 @@ void run_sand_suite(void)
     RUN_TEST(test_a_rooted_collar_survives_the_bed_shifting_away);
     RUN_TEST(test_a_root_is_inert);
     RUN_TEST(test_root_conversion_never_creates_moisture);
+    RUN_TEST(test_a_root_eats_a_moist_neighbour_and_only_spends_its_own_moisture);
+    RUN_TEST(test_a_root_never_eats_dry_dirt_sand_or_empty_space);
+    RUN_TEST(test_a_thickly_rooted_cell_stops_growing);
+    RUN_TEST(test_roots_grow_toward_the_wet_side_only);
+    RUN_TEST(test_a_continuously_watered_root_system_still_saturates);
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
     RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
     RUN_TEST(test_cullet_does_not_look_like_sand);

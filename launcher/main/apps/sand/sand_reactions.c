@@ -1465,16 +1465,22 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * an unbounded tree is not slow, it is explosive. */
 #define TREE_LIFT   10
 
-/* How many cells deep, below the collar, a tree's roots may run - see
- * reaction_t.roots and spend_soil_moisture() below. Together with the
- * small `roots` chance itself, this is the whole thing stopping a
- * watered bed from turning into timber below ground the way TREE_LIFT
- * stops it above ground: without a cap, a tree that never stops spending
- * soil moisture would eventually weld its way to the bottom of any bed
- * it stands on. 4 is a starting point, not a measurement - deep enough
- * to survive a shifting surface, short enough that a root column reads
- * as a root rather than as a second trunk running underground. */
-#define ROOT_DEPTH_MAX 4
+/* RETIRED: there used to be a ROOT_DEPTH_MAX here, capping how many
+ * cells deep a root column could run below the collar. It bounded a
+ * mechanism that no longer exists - PART 1 of the roots feature used to
+ * be the ENTIRE feature, growing a root system by repeatedly re-rolling
+ * the collar-welding roll below every time the tree spent soil moisture
+ * anywhere, one cell deeper each time; a fixed depth cap was the only
+ * thing stopping that from reaching the bottom of any bed a tree stood
+ * on. PART 2 (step_one_rooting_cell(), below) replaced that with a local
+ * rule - a root cell eating a moist neighbour of its own - and that
+ * rule carries its own bound, ROOT_SURFACE_MAX, measured against a
+ * continuously-rewatered scene to hold the whole system to a fixed
+ * point with no depth cap at all (see ROOT_SURFACE_MAX's own comment).
+ * A cell this far down a bed genuinely needing to stay unrooted was
+ * never the goal; a root system that stops growing on its own, at
+ * whatever depth the water ran out or the shape saturated, is closer to
+ * what a real one does anyway. */
 
 /* And how wide a trunk may get. Thickening is what turns a sapling into
  * something that reads as a trunk, and left alone it is the one direction
@@ -1503,9 +1509,10 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * reaction_t.roots) the stem walk passed through on the way down.
  *
  * Both exist for PART 1 of the roots feature (spend_soil_moisture()
- * below): the collar is where a new root has to form for a root column to
- * grow contiguously downward from the tree, and root_depth is what
- * ROOT_DEPTH_MAX is measured against. Neither is `lift` - a root cell is
+ * below): the collar is where the FIRST root has to form, and
+ * `root_depth == 0` is how spend_soil_moisture() tells "this collar is
+ * still bare" from "a root system already grows here, PART 2's job now"
+ * - see that function's own comment. Neither is `lift` - a root cell is
  * below the water line and must not cost the tree any of TREE_LIFT, which
  * is why it gets its own counter rather than folding into the existing
  * one. */
@@ -1692,19 +1699,31 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
  * feature. It spends the moisture exactly as each site used to do
  * inline, then - separately, and only once the spend itself has already
  * happened - rolls whether the CONTACT cell (the collar, where the stem
- * actually touches ground) welds into a root.
+ * actually touches ground) welds into the FIRST root of a new system.
  *
- * `soil_at` is never the cell that gets converted. It can be several
+ * ONLY THE FIRST. `root_depth == 0` means find_water()'s stem walk
+ * crossed no root at all on the way down - a bare collar - which is
+ * exactly the case this exists for: a tree resting on top of its bed
+ * rather than embedded in it, one shift of the soil away from being
+ * stranded (see reaction_t.roots's own comment in material.h for the
+ * bug this is the fix for). The moment that first root exists, PART 2 -
+ * step_one_rooting_cell(), below, gated on the cell ITSELF being a root
+ * rather than on anything spending moisture nearby - takes over growing
+ * the system outward and downward on its own, cell eating cell, the way
+ * an actual root network spreads. Gating this path shut once root_depth
+ * is nonzero is what keeps the two from fighting over the same collar:
+ * without it, every grow/bud/sprout event for the rest of the tree's
+ * life keeps re-rolling here too, seeding fresh disconnected root cells
+ * at whatever the CURRENT deepest contact happens to be, on top of a
+ * system PART 2 is already growing outward from the first one.
+ *
+ * `soil_at` is never the cell that gets converted - it can be several
  * rows down the ROOT_REACH walk in find_water(), and a root planted
  * there would be a disconnected woody speck in the middle of the bed,
- * anchoring nothing. Converting the CONTACT cell instead means the next
- * conversion happens one cell deeper - the stem walk now passes straight
- * through the new root, so the collar itself moves down with it - and a
- * root column grows downward from the tree on its own, contiguous with
- * it. `contact_at` is -1 for a caller that never reaches soil at all
- * (step_one_drinking_cell()'s find_water() call, which passes a scratch
- * int instead of caring); this function is simply not called in that
- * case, since drinking never spends soil moisture. */
+ * anchoring nothing. `contact_at` is -1 for a caller that never reaches
+ * soil at all (step_one_drinking_cell()'s find_water() call, which
+ * passes a scratch int instead of caring); this function is simply not
+ * called in that case, since drinking never spends soil moisture. */
 static void
 spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
                      int root_depth) {
@@ -1712,7 +1731,7 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
     s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - amount));
     mark_rows(s, soil_at / w, soil_at / w);
 
-    if (r->roots == 0 || contact_at < 0 || root_depth >= ROOT_DEPTH_MAX) {
+    if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
         return;
     }
     /* Roll AFTER every other gate, the same discipline this whole file
@@ -1722,6 +1741,135 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
         return;
     }
     place_reacted(s, contact_at % w, contact_at / w, (size_t)contact_at, r->roots_to);
+}
+
+/* How many of a root's own eight neighbours may already read as root
+ * before it stops rolling to grow at all - see step_one_rooting_cell()'s
+ * own top comment for where this sits among the feature's three bounds.
+ * Without a surface rule a well-watered bed converts every moist cell it
+ * can reach, one after another with nothing to stop it partway, and the
+ * result reads as a slab of root rather than a system of them - it is
+ * this rule, not the depth/spread caps the walk-shaped first draft of
+ * this feature used, that keeps the shape filamentary; no depth or
+ * spread cap was needed in the end (see this function's own top comment
+ * on the three that were).
+ *
+ * 2, MEASURED, not guessed - see the Roots section of docs/Sand/Sand-
+ * Simulation.md for the full numbers this came from. Compared directly
+ * against a runaway scene (a root pre-planted so the one-time collar
+ * seed's own luck cannot confound the reading, then its collar
+ * rewatered to SOIL_MOISTURE_MAX EVERY step for 20,000 steps - about as
+ * much water as this feature will ever see): at 1 the system starved
+ * itself shut at 4 root cells, reading as a bare stub rather than a
+ * system; at 3 it never stopped growing - 99 roots by step 2000, still
+ * climbing at 220 by step 20000, no sign of levelling off; at 2 it
+ * climbed to the low forties by step 2000 and then sat there BYTE-
+ * IDENTICAL through the remaining 18,000 steps, seed after seed - a
+ * genuine fixed point, not merely a slowdown. */
+#define ROOT_SURFACE_MAX 2
+
+/* One cell of ROOT, eating into the moist soil it touches - PART 2 of the
+ * roots feature (docs/Sand/Sand-Simulation.md), and the whole growth
+ * rule: find a neighbour that is dirt (reaction_of(c)->dries != 0) and
+ * still holds moisture, roll a small chance, and convert it - which
+ * consumes the moisture as the price of the conversion, the same "spend
+ * the scarce thing" discipline growth, budding and sprouting already
+ * rest on (reaction_t.roots's own comment, material.h).
+ *
+ * NO DIRECTION WEIGHTS, deliberately. Moisture itself already has a
+ * shape - it percolates down through a bed (step_one_soaking_cell()) and
+ * diffuses out from anything drinking or pouring nearby - so a root that
+ * simply reaches for whichever neighbour still has water in it spreads
+ * wide near a wet surface and fingers downward through a bed drying from
+ * the top, without this function needing to know which way is down at
+ * all. An earlier draft of this feature walked a stem-shaped run outward
+ * from the tree's collar instead, reusing step_one_growing_cell()'s own
+ * site-roll-plus-fan-walk machinery; it was replaced by this local rule
+ * because a root does not need a stem's machinery to look like a root,
+ * and because this rests on the same scarce-resource bound the rest of
+ * the feature already uses rather than adding a second kind of bound
+ * beside it.
+ *
+ * Bounded three ways, in the order that was actually measured to matter
+ * - see the Roots section of docs/Sand/Sand-Simulation.md for the
+ * numbers behind each:
+ *   1. THE MOISTURE ITSELF. A cell with nothing to spend has nothing to
+ *      grow into, and the total on a board is finite unless something
+ *      keeps pouring more in - the same bound budding rests on.
+ *   2. ROOT_SURFACE_MAX, above - a root already thick with root
+ *      neighbours does not roll at all, which is what keeps the system
+ *      a filigree rather than a block.
+ *   3. `r->roots` itself, on MATX_ROOT's own row (material.c) - a small
+ *      chance, the same discipline every other roll in this file uses. */
+static bool
+step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    /* Cheapest question first, and it rejects most already-thick columns
+     * without the neighbour scan below ever touching the RNG. */
+    int root_neighbors = 0;
+    for (int d = 0; d < 8; d++) {
+        const int* nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == (cell_t)r->roots_to) {
+            root_neighbors++;
+        }
+    }
+    if (root_neighbors > ROOT_SURFACE_MAX) {
+        return false; /* buried inside its own kind; nothing to do here */
+    }
+
+    /* ALL EIGHT, not the four cardinals - compared directly, both ways,
+     * against the same six seeds (docs/Sand/Sand-Simulation.md's Roots
+     * section): four gave a near-straight taproot, one or two cells wide,
+     * that only fanned out where moisture happened to pool against the
+     * stone floor; eight let a root step diagonally as it reaches for
+     * water, which is what actually produces the wandering, forking
+     * shape a root system is supposed to have - the difference is
+     * qualitative, not a rounding error, and it is the reason this rule
+     * bothers with ring_dir() at all instead of the plainer reaction_dirs
+     * four-neighbour scan sprouting and drinking already use.
+     *
+     * Fixed, arbitrary ring order - like reaction_dirs above, and for the
+     * same reason: this is a "does anything qualify" scan, not a
+     * weighted pick, so the first match is as good as any other and
+     * costs nothing extra to find. */
+    int eat_at = -1, ex = 0, ey = 0;
+    for (int d = 0; d < 8; d++) {
+        const int* nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (!CELL_IS_EMPTY(n) && reaction_of(n)->dries != 0 && CELL_MOISTURE(n) != 0) {
+            eat_at = (int)nat;
+            ex = nx;
+            ey = ny;
+            break;
+        }
+    }
+    if (eat_at < 0) {
+        return false; /* nothing moist beside it right now */
+    }
+    /* Both found before the roll - the same discipline every site in
+     * this file uses, drawing a random number only once everything else
+     * has already said this cell has somewhere to spend it. */
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
+        return true; /* a candidate exists; just not this roll */
+    }
+
+    /* The conversion IS the spend. place_reacted() overwrites the whole
+     * cell with a fresh root byte, so the dirt's moisture nibble is
+     * simply gone with the rest of what that cell used to be, rather
+     * than separately debited the way spend_soil_moisture() debits a
+     * moisture nibble IN PLACE on a cell that stays dirt - there is no
+     * moisture field left to hold once the cell is no longer dirt at
+     * all. */
+    place_reacted(s, ex, ey, (size_t)eat_at, r->roots_to);
+    return true;
 }
 
 /* One cell of something that DRINKS: touching a liquid, and rooted in
@@ -1823,17 +1971,19 @@ step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
 
     place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
 
-    /* SPENDS, BUT NEVER ROOTS - contact_at deliberately -1.
+    /* SPENDS, BUT NEVER SEEDS A ROOT - contact_at deliberately -1.
      *
      * This is a direct four-neighbour scan, not a stem walk, so it has no
      * honest depth to report: it knows a soil cell is adjacent and nothing
-     * about how much root already sits between that cell and the tree.
-     * Passing 0, as this did at first, is not a harmless default - it says
-     * "no root column here" to the one gate that bounds the whole feature,
-     * so ROOT_DEPTH_MAX could never fire on this path and a trunk standing
-     * in soil could root through it without limit. Rooting is left to
-     * growth and budding, both of which walk the stem and therefore know
-     * the real depth; sprouting just pays for its leaf. */
+     * about whether a root already exists at this tree's own collar.
+     * Passing 0, as this did at first, is not a harmless default - it
+     * would tell spend_soil_moisture()'s `root_depth == 0` gate "this
+     * collar is still bare" on every single sprout, whether or not that
+     * is true, and a trunk that had already rooted elsewhere could keep
+     * seeding fresh, disconnected root cells from every sprouting leaf
+     * site on the tree. Rooting is left to growth and budding, both of
+     * which walk the stem and therefore know the real depth; sprouting
+     * just pays for its leaf. */
     spend_soil_moisture(s, w, r, soil_at, 1, -1, 0);
     return true;
 }
@@ -4146,6 +4296,19 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
             if (step_one_drinking_cell(s, x, y, w, h, r, c)) {
                 found |= FOUND_MOISTURE;
             }
+        }
+        /* Root growth - PART 2 of the roots feature, step_one_rooting_cell()
+         * above. Gated on the cell ITSELF being a root (`c == r->roots_to`),
+         * not merely on `r->roots` being nonzero: plant and wood also carry
+         * `.roots`, for the one-time collar seed spend_soil_moisture() still
+         * pays out below, and must never take this branch - a plant cell's
+         * own material is never equal to its `roots_to`, so this check alone
+         * keeps the two rows apart without needing a second field. */
+        if (r->roots != 0 && c == (cell_t)r->roots_to && s->may_have_moisture) {
+            if (step_one_rooting_cell(s, x, y, w, h, r)) {
+                found |= FOUND_MOISTURE;
+            }
+            continue;
         }
         /* Growing. Reached only where there is soil with water in it,
          * which is what may_have_moisture already tracks - a plant on dry
