@@ -215,7 +215,33 @@ $f" ;;
     esac
 done
 
+# Compiled in parallel, in batches, because these are two dozen independent
+# translation units and the cost is almost entirely per-process compiler
+# launch overhead rather than -fstack-usage itself - serially this pass
+# roughly doubled the wall time of a suite whose whole point is being fast
+# enough to run constantly. Batched rather than all-at-once so this does not
+# fork two dozen compilers on a small machine; `wait` without arguments is
+# POSIX and waits for the whole batch.
+#
+# Each batch's exit statuses are collected into su_failed rather than
+# checked with `set -e`, because a failing background job does not abort the
+# script and an unnoticed compile failure here would mean a silently
+# incomplete set of .su files - the exact "gate that checks nothing" this
+# pass is trying not to be.
+SU_BATCH=8
 n=0
+in_batch=0
+su_pids=""
+su_failed=0
+
+su_wait_batch() {
+    for pid in $su_pids; do
+        wait "$pid" || su_failed=1
+    done
+    su_pids=""
+    in_batch=0
+}
+
 for f in $SU_SOURCES; do
     n=$((n + 1))
     base=$(basename "$f" .c)
@@ -223,8 +249,19 @@ for f in $SU_SOURCES; do
     "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
         -I "$TEST_DIR/../components/microui/include" \
         -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
-        -fstack-usage -c "$f" -o "$SU_DIR/$(printf '%02d' "$n")_$base.o"
+        -fstack-usage -c "$f" -o "$SU_DIR/$(printf '%02d' "$n")_$base.o" &
+    su_pids="$su_pids $!"
+    in_batch=$((in_batch + 1))
+    [ "$in_batch" -lt "$SU_BATCH" ] || su_wait_batch
 done
+[ "$in_batch" -eq 0 ] || su_wait_batch
+
+if [ "$su_failed" -ne 0 ]; then
+    echo "the -fstack-usage pass failed to compile at least one test source;" >&2
+    echo "its .su file is missing, so the stack gate would be checking an" >&2
+    echo "incomplete set of functions. Refusing to continue." >&2
+    exit 1
+fi
 
 # A gate that quietly checks nothing is worse than no gate: if -fstack-usage
 # is not supported (older compiler, unexpected toolchain), no .su files are
