@@ -196,6 +196,174 @@ void test_fill_rect_writes_exactly_its_own_area(void)
     TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(39, 60));
 }
 
+/* --- dithered fake transparency ------------------------------------------ */
+
+void test_dither_at_alpha_zero_draws_nothing(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+
+    gfx_clear(bg);
+    gfx_fill_rect_dither(10, 10, 40, 40, fg, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_pixels(fg),
+        "alpha 0 should draw nothing at all - not even one dither cell");
+}
+
+/* The one alpha value everything else in this file already relies on being
+ * exact: BOOT_ANIM_TITLE_SHADOW_ALPHA's own backward-compatible default is
+ * 255, and boot_anim.c's own comment on that default promises it is
+ * byte-for-byte identical to the plain gfx_fill_rect() every OTHER caller
+ * in this tree still uses. Checked by full coverage (every pixel in the
+ * area, not merely the right COUNT of them) plus corner spot checks, the
+ * same idiom test_fill_rect_writes_exactly_its_own_area() above already
+ * uses - not a whole-framebuffer snapshot compare, which would need a
+ * second copy of the 322 KiB framebuffer just to hold: real DRAM this
+ * board does not have to spare (see docs/Notes/Board-and-Memory.md). */
+void test_dither_at_alpha_255_matches_a_solid_fill_exactly(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+
+    gfx_clear(bg);
+    gfx_fill_rect_dither(10, 10, 40, 40, fg, 255);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(40 * 40, count_pixels(fg),
+        "alpha 255 should cover every pixel of the rect, same as a solid "
+        "gfx_fill_rect() would");
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(10, 10));
+    TEST_ASSERT_EQUAL_HEX16(fg, pixel_at(49, 49));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(9, 10));
+    TEST_ASSERT_EQUAL_HEX16(bg, pixel_at(50, 49));
+}
+
+void test_dither_coverage_is_monotonic_and_graduated(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+    const int area = 40 * 40;
+
+    int prev = -1;
+    for (int a = 0; a <= 255; a += 17) {
+        gfx_clear(bg);
+        gfx_fill_rect_dither(10, 10, 40, 40, fg, (uint8_t)a);
+        const int n = count_pixels(fg);
+        TEST_ASSERT_TRUE_MESSAGE(n >= prev,
+            "coverage should never decrease as alpha climbs");
+        TEST_ASSERT_TRUE_MESSAGE(n <= area,
+            "a dithered fill can never draw MORE pixels than a solid one "
+            "would across the same area");
+        prev = n;
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(area, prev,
+        "the sweep's own last step (255) should reach full coverage");
+}
+
+/* The property the whole "fake transparency" trick depends on: the dither
+ * is keyed to each pixel's own ABSOLUTE panel position, not a position
+ * local to whichever call drew it - so two abutting dithered rects read as
+ * one continuous stippled texture rather than each restarting the pattern
+ * at its own corner and leaving a visible seam where they meet.
+ *
+ * Checked at the seam itself (x=46..53, spanning the seam at x=50) across
+ * all four dither phase-rows (y=10..13 - the Bayer table's own period),
+ * which is where a local-instead-of-absolute indexing bug would actually
+ * show up. A handful of named pixels, not a snapshot of the drawn area -
+ * see test_dither_at_alpha_255_matches_a_solid_fill_exactly()'s own
+ * comment on why this file avoids a second framebuffer-sized buffer. */
+void test_dither_stays_in_phase_across_separate_calls(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFF00FF);
+
+    gfx_clear(bg);
+    gfx_fill_rect_dither(10, 10, 80, 40, fg, 128);
+
+    gfx_color_t one_call[4][8];
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 8; dx++) {
+            one_call[dy][dx] = pixel_at(46 + dx, 10 + dy);
+        }
+    }
+
+    gfx_clear(bg);
+    gfx_fill_rect_dither(10, 10, 40, 40, fg, 128);
+    gfx_fill_rect_dither(50, 10, 40, 40, fg, 128);
+
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 8; dx++) {
+            TEST_ASSERT_EQUAL_HEX16_MESSAGE(one_call[dy][dx],
+                pixel_at(46 + dx, 10 + dy),
+                "the seam between two abutting dithered rects should read "
+                "identically to one continuous dithered rect at the same "
+                "spot - a mismatch here means the dither restarted its "
+                "own pattern at the second rect's own corner");
+        }
+    }
+}
+
+/* "A" at scale 5 fits a single 8x8 font cell scaled up - a 40x40 box, the
+ * only region either draw call could possibly have touched. Compared one
+ * ROW at a time (re-rendering both the solid and dithered glyph for each
+ * row) rather than snapshotting the whole box into a stack array: this
+ * suite is device-only (see this file's own top comment), so it runs on
+ * the ESP-IDF main task's 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE
+ * - see suite_sand.c's own comments on that same budget), several frames
+ * deep into selftest_run()/suites_run_all() by the time this test's own
+ * locals are live. A 40x40 gfx_color_t buffer is 3.2 KB - most of that
+ * budget in one local; a 40-wide row is 80 bytes. */
+void test_dithered_text_at_alpha_255_matches_solid_text_exactly(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFFFFFF);
+    const gfx_font_t *font = gfx_default_font();
+    const int box = 8 * 5;   /* cell_w/cell_h (8) * scale (5) */
+
+    for (int row = 0; row < box; row++) {
+        gfx_color_t solid_row[8 * 5];
+
+        gfx_clear(bg);
+        gfx_text_font(20, 20, "A", fg, 5, 0, font);
+        for (int col = 0; col < box; col++) {
+            solid_row[col] = pixel_at(20 + col, 20 + row);
+        }
+
+        gfx_clear(bg);
+        gfx_text_font_dither(20, 20, "A", fg, 5, 0, font, 255);
+
+        for (int col = 0; col < box; col++) {
+            TEST_ASSERT_EQUAL_HEX16_MESSAGE(solid_row[col],
+                pixel_at(20 + col, 20 + row),
+                "gfx_text_font_dither() at alpha 255 must match "
+                "gfx_text_font()'s own solid output pixel for pixel");
+        }
+    }
+}
+
+void test_dithered_text_at_low_alpha_draws_fewer_pixels_than_solid(void)
+{
+    fixture();
+    const gfx_color_t bg = gfx_rgb(0x000000);
+    const gfx_color_t fg = gfx_rgb(0xFFFFFF);
+    const gfx_font_t *font = gfx_default_font();
+
+    gfx_clear(bg);
+    gfx_text_font(20, 20, "A", fg, 5, 0, font);
+    const int solid_n = count_pixels(fg);
+
+    gfx_clear(bg);
+    gfx_text_font_dither(20, 20, "A", fg, 5, 0, font, 64);
+    const int dim_n = count_pixels(fg);
+
+    TEST_ASSERT_TRUE_MESSAGE(dim_n > 0 && dim_n < solid_n,
+        "a dim shadow should draw some but fewer pixels than a solid glyph");
+}
+
 /* --- lines -------------------------------------------------------------- */
 
 void test_a_horizontal_line_covers_both_endpoints(void)
@@ -1194,6 +1362,12 @@ void run_gfx_suite(void)
     RUN_TEST(test_partial_clear_erases_only_previous_drawn_region);
     RUN_TEST(test_gfx_invalidate_forces_full_clear_in_partial_mode);
     RUN_TEST(test_fill_rect_writes_exactly_its_own_area);
+    RUN_TEST(test_dither_at_alpha_zero_draws_nothing);
+    RUN_TEST(test_dither_at_alpha_255_matches_a_solid_fill_exactly);
+    RUN_TEST(test_dither_coverage_is_monotonic_and_graduated);
+    RUN_TEST(test_dither_stays_in_phase_across_separate_calls);
+    RUN_TEST(test_dithered_text_at_alpha_255_matches_solid_text_exactly);
+    RUN_TEST(test_dithered_text_at_low_alpha_draws_fewer_pixels_than_solid);
     RUN_TEST(test_fill_rect_is_clipped_to_the_screen);
     RUN_TEST(test_a_horizontal_line_covers_both_endpoints);
     RUN_TEST(test_a_line_is_the_same_line_drawn_backwards);

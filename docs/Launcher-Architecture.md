@@ -65,13 +65,20 @@ and means something different by each:
 
 ## Generated sources
 
-`main/boot/boot_anim_curve.h` is the only generated file in the tree, and the
-conventions it follows are meant to apply to the next one.
+Three generated files live in the tree, each following the same four rules
+below: `main/boot/boot_anim_curve.h` (`tools/gen_zeta_curve.py`),
+`main/boot/boot_anim_timeline.h` (`tools/gen_boot_anim_timeline.py`, from
+`main/boot/boot_anim_timeline.json`), and `main/boot/boot_anim_image.h`
+(`tools/gen_boot_anim_image.py`, from `design/boot/boot.png`).
 
-The curve it holds is the zeta function evaluated along the critical line.
-That is not something to compute on a chip with no FPU, and it never changes,
-so `tools/gen_zeta_curve.py` computes it once in double precision and the
-result ships in flash.
+`boot_anim_curve.h` holds the zeta function evaluated along the critical
+line. That is not something to compute on a chip with no FPU, and it never
+changes, so `tools/gen_zeta_curve.py` computes it once in double precision
+and the result ships in flash. `boot_anim_image.h` holds the same idea
+applied to a photograph the boot animation crossfades to: no PNG decoder on
+this chip, no PSRAM to decode into, so the pixel data - already rotated into
+panel space and packed into the panel's own byte-swapped RGB565 - ships in
+flash the same way.
 
 Four rules, and the last is the one that matters:
 
@@ -96,7 +103,28 @@ version of the constants. So `suite_boot_anim.c` tests the numbers that ship,
 against the mathematics rather than against the generator: the curve must
 reach the axis at each of the five known zero heights, and must stay well
 clear of it everywhere else. No table of plausible numbers passes both halves
-by accident.
+by accident. `boot_anim_image.h` has no underlying math to check pixel
+content against - its independent check is instead two `_Static_assert`s in
+`boot_anim.c` pinning the shipped array's shape to the panel's own
+`GFX_WIDTH`/`GFX_HEIGHT`, plus real visual verification through
+`tools/boot_anim_editor_server.py`'s render view (the same workflow used for
+every other render-affecting change in this tree).
+
+**Two different rules for keeping a generated file current, by design.**
+`boot_anim_editor_server.py`'s dev server updates both `boot_anim_timeline.h`
+and `boot_anim_image.h` automatically, but not the same way. The timeline is
+live state typed into the browser: `render()` writes it to a disposable
+scratch copy on every scrub of the playhead, and only "Build & Flash"
+overwrites the real, committed `boot_anim_timeline.json`/`.h` - a draft the
+user is still editing must never land in the tree as a side effect of moving
+a slider. The photograph has no draft concept - `design/boot/boot.png` is a
+real file on disk, not something the editor holds live state for - so
+`_ensure_image_current()` regenerates the REAL, committed `boot_anim_image.h`
+in place whenever the PNG's mtime is newer, on every request, exactly like
+running `gen_boot_anim_image.py` by hand would. The next asset type decides
+which rule it follows the same way: state the browser is actively editing
+gets a scratch copy and waits for an explicit save; a file on disk that the
+generator only mirrors gets regenerated in place on demand.
 
 ---
 

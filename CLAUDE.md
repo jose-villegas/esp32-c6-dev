@@ -175,13 +175,17 @@ identically to x86, not just that the logic is right on a laptop).
 
 ### Generated files
 
-`launcher/main/boot/boot_anim_curve.h` is the only generated file in the
-tree; the generator lives in `launcher/tools/gen_zeta_curve.py`, the checked-
-in output in the tree it belongs to. The convention for the next generated
-file: banner naming the exact regenerate command, generator validates itself
-before emitting, and the shipped artifact is tested independently of the
-generator (against the underlying math, not against the generator's own
-logic).
+Three generated files live in the tree, each with its own generator in
+`launcher/tools/` and its checked-in output in the tree it belongs to:
+`boot_anim_curve.h` (`gen_zeta_curve.py`), `boot_anim_timeline.h`
+(`gen_boot_anim_timeline.py`, from `boot_anim_timeline.json`), and
+`boot_anim_image.h` (`gen_boot_anim_image.py`, from `design/boot/boot.png`).
+The convention they all follow: banner naming the exact regenerate command,
+generator validates itself before emitting, and the shipped artifact is
+tested independently of the generator (against the underlying math where
+there is one, or - for an asset like the photo, with no math to check pixel
+content against - against structural facts a `_Static_assert` can pin down
+plus real visual verification, not against the generator's own logic).
 
 ## Documentation map
 

@@ -1,0 +1,1447 @@
+<!DOCTYPE html>
+<!--
+  Boot animation editor - a live editor for the startup animation's timing
+  and camera keyframes, rendered with the REAL firmware code.
+
+  RUN IT
+
+      python tools/boot_anim_editor_server.py
+
+  then open http://127.0.0.1:8934/ - this page is served BY that script, it
+  is not meant to be opened directly as a file:// page any more (phase 1 of
+  this tool was; see boot_anim_editor_server.py's own top comment for why a
+  server is what makes actual C-code rendering possible without a WASM
+  toolchain).
+
+  WHAT THE RENDER VIEW SHOWS
+
+  Not a JS reimplementation of boot_anim.h/boot_anim.c's math. Every image
+  in the render view is produced by compiling and running the REAL firmware
+  drawing code (main/gfx/gfx.c + main/boot/boot_anim.c, unmodified - see
+  their own ESP_PLATFORM comments) against whatever timing/keyframes are
+  currently in this page, on the machine running the server. See
+  boot_anim_editor_server.py for exactly how.
+
+  Each keyframe carries TWO real 3D transforms - a camera, and the "space"
+  the grid+curve live in - position/rotation/scale on every axis, in plain
+  units (meters, degrees, a 1.0-is-untouched multiplier - see
+  boot_anim_timeline.json's own comment on why and on the Z-then-X-then-Y
+  rotation order small3dlib composes in). The origin readout under the
+  render view is DERIVED, not authored: a real 3D transform has nowhere to
+  type a screen position into directly any more.
+
+  WHAT "BAKE" DOES
+
+  Downloads a JSON file in boot_anim_timeline.json's shape. This page never
+  writes into the repo itself. Replace launcher/main/boot/
+  boot_anim_timeline.json with the download, then regenerate the firmware
+  header:
+
+      python tools/gen_boot_anim_timeline.py main/boot/boot_anim_timeline.json > main/boot/boot_anim_timeline.h
+
+  "Load" reopens a previously-baked JSON (or any file in this shape) to
+  keep editing it. Bake/Load never touch the SCRATCH copy the server
+  renders from while you edit - that scratch copy is disposable by design.
+  The page also loads the real, committed boot_anim_timeline.json
+  automatically on open (GET /timeline) - Load is for opening something
+  ELSE, not a prerequisite for starting from what is actually committed.
+
+  WHAT "BUILD & FLASH" DOES
+
+  The one button here that is not a preview: it writes the current values
+  straight to the REAL main/boot/boot_anim_timeline.json and regenerates
+  the REAL boot_anim_timeline.h (what Bake + a manual copy + regenerate
+  would produce, done here instead), then runs tools/build_flash_dev.sh -
+  builds the development firmware image and flashes it to the serial port
+  typed in next to the button (default COM3). See
+  boot_anim_editor_server.py's own top comment for the /build_flash
+  endpoint this calls, and build_flash_dev.sh's own header for what the
+  development image is (development-only logging/instrumentation, no test
+  suites - see build_flash.sh's own comment on --dev vs --diag).
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Boot Animation Editor</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #0b0c10;
+    --panel: #14161c;
+    --panel-border: #2a2d37;
+    --text: #e4e6eb;
+    --text-dim: #8b8f9c;
+    --accent: #5b9dff;
+    --accent-dim: #2c3e5c;
+    --danger: #ff6b6b;
+    --row-hover: #1c1f28;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; padding: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 13px/1.4 -apple-system, "Segoe UI", sans-serif;
+  }
+  #app {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "render  kf"
+      "play    kfdetail"
+      "consts  kfdetail"
+      "err     err";
+    gap: 10px;
+    padding: 10px;
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+  #renderPanel   { grid-area: render; }
+  #kfPanel       { grid-area: kf; }
+  #playbar       { grid-area: play; align-self: start; }
+  #kfDetailPanel { grid-area: kfdetail; }
+  #constsPanel   { grid-area: consts; }
+  #renderError   { grid-area: err; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 10px;
+    min-width: 0;
+  }
+  .panel h2 {
+    margin: 0 0 8px;
+    font-size: 11px;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+  #renderPanel { position: relative; }
+  #renderFrame {
+    position: relative;
+    width: 100%;
+    aspect-ratio: 448 / 368;
+    background: #000;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  /* The rendered BMP is the panel's own native 368x448 PORTRAIT
+   * framebuffer - same as the real device. Rotated here purely for
+   * display, the way holding the device sideways does physically; nothing
+   * about the render itself is rotated.
+   *
+   * -90deg (counterclockwise), not 90: phase 1's canvas render used
+   * `ctx.rotate(-Math.PI / 2)` for the same panel->viewer mapping (derived
+   * from boot_anim.c's title_glyph_origin(): panel_x = W - view_y,
+   * panel_y = view_x), confirmed correct there by eye. +90 here was a
+   * 180-degree mismatch - looks like both axes flipped, which is exactly
+   * what a rotation off by 180 does to a rectangle. */
+  /* Box sized to the SOURCE bitmap's own portrait dimensions (368x448 -
+   * the real panel's raw framebuffer), not the landscape footprint it
+   * ends up with after rotating - sizing the box to the rotated
+   * footprint instead would stretch the image to fit it before the
+   * rotation ever applied. */
+  #renderImg {
+    position: absolute;
+    width: 368px; height: 448px;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%) rotate(-90deg);
+    transform-origin: center;
+    image-rendering: pixelated;
+  }
+  #renderStatus {
+    position: absolute;
+    top: 6px; left: 6px;
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    background: rgba(0,0,0,.6);
+    color: var(--text-dim);
+  }
+  #renderStatus.busy { color: var(--accent); }
+  #renderStatus.error { color: var(--danger); background: rgba(60,10,10,.85); }
+  #originReadout {
+    position: absolute;
+    bottom: 6px; left: 6px;
+    font-size: 11px;
+    padding: 3px 7px;
+    border-radius: 3px;
+    background: rgba(0,0,0,.6);
+    color: var(--text-dim);
+    font-variant-numeric: tabular-nums;
+  }
+  /* #flashError shares this: same look, its own separate element (see
+   * showFlashError()'s own comment on why it is not #renderError). */
+  #renderError, #flashError {
+    display: none;
+    white-space: pre-wrap;
+    font: 12px/1.4 ui-monospace, monospace;
+    color: var(--danger);
+    background: #1c1013;
+    border: 1px solid var(--danger);
+    border-radius: 6px;
+    padding: 10px;
+    max-height: 200px;
+    overflow-y: auto;
+  }
+  #flashError { margin-top: 8px; }
+  #playbar {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .playbar-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .playbar-row input[type=range] { flex: 1; }
+  #flashPort { width: 70px; flex: none; }
+  #rangeFrom, #rangeTo, #playSpeed { width: 60px; flex: none; }
+  #flashStatus { font-size: 12px; color: var(--text-dim); }
+  button {
+    background: var(--accent-dim);
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+    padding: 6px 12px;
+    font: inherit;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); color: #fff; }
+  button.danger { background: #3a2020; border-color: var(--danger); }
+  button:disabled { opacity: .4; cursor: default; }
+  input[type=number], input[type=text], select {
+    background: #0d0e12;
+    color: var(--text);
+    border: 1px solid var(--panel-border);
+    border-radius: 3px;
+    padding: 3px 5px;
+    font: inherit;
+    width: 100%;
+  }
+  input:disabled, select:disabled { opacity: .35; }
+  label.field {
+    display: grid;
+    grid-template-columns: 1fr 90px;
+    gap: 6px;
+    align-items: center;
+    margin: 3px 0;
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  #constsPanel { max-height: 320px; overflow-y: auto; }
+  #constsPanel .group-title {
+    color: var(--accent);
+    font-size: 11px;
+    margin: 10px 0 2px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  #constsPanel .group-title:first-child { margin-top: 0; }
+  .field-key { display: block; font-size: 9px; opacity: .55; }
+
+  /* The panel is a flex column so the list (flex: 1 below) claims whatever
+   * height the grid's row-stretch gives this panel - which, next to the
+   * render view's fixed 448:368 aspect ratio, is real, usable room - down
+   * to just what the track and the Add button actually need, rather than
+   * a small fixed-height scrollbox leaving the rest of the panel empty. */
+  #kfPanel {
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* The slim strip: a visual/drag reference for WHERE keyframes sit on the
+   * timeline, not the primary way to select or inspect one - see the list
+   * just below it for that. flex-shrink: 0 - fixed height regardless of
+   * how much room the list ends up with. */
+  #kfTrack {
+    position: relative;
+    flex-shrink: 0;
+    height: 28px;
+    background: #0d0e12;
+    border-radius: 4px;
+    margin: 6px 0 8px;
+    cursor: pointer;
+  }
+  #kfTrack .kf-dot {
+    position: absolute;
+    top: 50%;
+    width: 10px; height: 10px;
+    margin-left: -5px; margin-top: -5px;
+    border-radius: 50%;
+    background: var(--accent-dim);
+    border: 2px solid var(--accent);
+    cursor: grab;
+  }
+  #kfTrack .kf-dot.selected { background: var(--accent); }
+  #kfTrack .playhead {
+    position: absolute;
+    top: 0; bottom: 0;
+    width: 2px;
+    background: var(--danger);
+    pointer-events: none;
+  }
+
+  /* The list: the actual, clickable interface for keyframes. flex: 1 -
+   * fills whatever the panel has left after the track above and the Add
+   * button below; min-height: 0 is what lets a flex child actually shrink
+   * enough for its own overflow-y to take over instead of pushing the
+   * panel taller than the row it is in. */
+  #kfList {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    border: 1px solid var(--panel-border);
+    border-radius: 4px;
+  }
+  .kf-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 9px;
+    border-bottom: 1px solid var(--panel-border);
+    cursor: pointer;
+  }
+  .kf-row:last-child { border-bottom: none; }
+  .kf-row:hover { background: var(--row-hover); }
+  .kf-row.selected { background: var(--accent-dim); }
+  .kf-row .kf-index {
+    color: var(--text-dim);
+    font-size: 11px;
+    width: 1.4em;
+  }
+  .kf-row .kf-ms { font-variant-numeric: tabular-nums; width: 4.5em; }
+  .kf-row .kf-summary {
+    flex: 1;
+    color: var(--text-dim);
+    font-size: 11.5px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .kf-row .kf-del {
+    background: none;
+    border: none;
+    color: var(--text-dim);
+    padding: 2px 6px;
+  }
+  .kf-row .kf-del:hover { color: var(--danger); border-color: transparent; }
+
+  #kfButtons { display: flex; flex-shrink: 0; gap: 6px; margin-top: 8px; }
+  .row3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; }
+  .subhead { font-size: 11px; color: var(--text-dim); margin: 8px 0 2px; }
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="panel" id="renderPanel">
+    <h2>Render view</h2>
+    <div id="renderFrame">
+      <img id="renderImg" alt="">
+      <div id="renderStatus"></div>
+      <div id="originReadout" title="Where the space's own local origin (t=0, zeta=0) lands on screen - derived, not authored"></div>
+    </div>
+  </div>
+
+  <div class="panel" id="kfPanel">
+    <h2>Keyframes <span id="kfCount"></span></h2>
+    <div id="kfTrack"></div>
+    <div id="kfList"></div>
+    <div id="kfButtons">
+      <button id="btnAddKf">+ Add at playhead</button>
+    </div>
+  </div>
+
+  <div class="panel" id="playbar">
+    <div class="playbar-row">
+      <button id="btnPlay">Play</button>
+      <span id="msReadout" style="width:70px;text-align:right;color:var(--text-dim)">0 ms</span>
+      <input type="range" id="scrub" min="0" max="5800" value="0" step="1">
+    </div>
+    <div class="playbar-row" style="font-size:12px;color:var(--text-dim);">
+      <span>loop</span>
+      <input type="number" id="rangeFrom" value="0" min="0" title="Play loops from this ms">
+      <span>&ndash;</span>
+      <input type="number" id="rangeTo" value="5800" min="0" title="Play loops back to “from” once it reaches this ms">
+      <span style="margin-left:8px;">speed</span>
+      <input type="number" id="playSpeed" value="1" min="0.01" step="0.05"
+             title="Playback speed multiplier - below 1 slows Play down, scrubbing is unaffected">
+    </div>
+    <div class="playbar-row">
+      <button id="btnLoad">Load</button>
+      <input type="file" id="fileInput" accept=".json" style="display:none">
+      <button id="btnBake" class="primary">Bake</button>
+    </div>
+    <div class="playbar-row">
+      <input type="text" id="flashPort" value="COM3" title="Serial port the device is on">
+      <button id="btnBuildFlash" class="primary">Build &amp; Flash</button>
+      <span id="flashStatus"></span>
+    </div>
+    <div id="flashError"></div>
+  </div>
+
+  <div class="panel" id="kfDetailPanel">
+    <h2>Keyframe details</h2>
+    <div id="kfDetail"></div>
+  </div>
+
+  <div class="panel" id="constsPanel">
+    <h2>Other consts</h2>
+    <div id="constsList"></div>
+  </div>
+
+  <div id="renderError"></div>
+
+</div>
+
+<script>
+'use strict';
+
+/* ===========================================================================
+ * State
+ * ======================================================================= */
+
+/* pos in meters, rot in degrees (small3dlib's own Z-then-X-then-Y
+ * composition order - see boot_anim_timeline.json's own comment), scale a
+ * plain multiplier (1 = untouched) - the exact shape
+ * gen_boot_anim_timeline.py's own top comment documents.
+ *
+ * A FALLBACK, not the normal source: the Boot section below fetches the
+ * real, committed main/boot/boot_anim_timeline.json over GET /timeline
+ * and replaces this the moment that lands - see that section's own
+ * comment. This constant only matters when that fetch fails (a server
+ * old enough to predate the endpoint, say), so it stays worth keeping
+ * roughly in sync with the real file by hand, but is no longer the thing
+ * that silently governs a Build & Flash pressed before Load. */
+const DEFAULT_STATE = {
+  timing: {
+    total_ms: 5800, axes_ms: 450, grid_start_ms: 150, grid_ring_ms: 12,
+    grid_rings: 28, grid_spokes: 8, grid_spoke_dash: 0,
+    grid_spoke_start_ms: 0, grid_spoke_draw_ms: 0,
+    grid_fade_ms: 300,
+    wave_in_ms: 1000, wave_out_ms: 4300,
+    pen_start_ms: 520, pen_ms: 1980, pen_finish_ms: 4300,
+    title_start_ms: 2700,
+    title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
+    title_turns_phase: 229376, title_amplitude_px: 22,
+    title_wave_amplitude_px: 11, title_wave_period_ms: 1600,
+    title_wave_stagger_ms: 90, title_height_px: 50,
+    title_shadow_dx: 1, title_shadow_dy: 1, title_shadow_alpha: 255,
+    image_start_ms: 5800, image_fade_ms: 800,
+    fade_start_ms: 4300, grid_hue_ms: 2600,
+    grid_hue_spread: 70, grid_whiten_max: 120, grid_ceiling_max: 170,
+    grid_max: 70,
+  },
+  camera_focal: 512,
+  grid_step_m: 0.25,
+  wave_height_m: 0,
+  wave_wavelength_m: 0.75,
+  wave_period_ms: 3000,
+  keyframes: [
+    { ms: 520,
+      camera: { pos: [0, 2, -10], rot: [0, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1, 1, 1] },
+      ease: 'linear' },
+    { ms: 2500,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1, 1, 1] },
+      ease: 'linear' },
+    { ms: 2700,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1, 1, 1] },
+      ease: 'linear' },
+    { ms: 3600,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [1.4, 1.4, 1.4] },
+      ease: 'ease_out' },
+    { ms: 4200,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [0.11, 0.11, 0.11] },
+      ease: 'ease_in' },
+    { ms: 4300,
+      camera: { pos: [0, 2, -10], rot: [58, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [0, 0, 0],  rot: [0, 0, 0], scale: [0.11, 0.11, 0.11] },
+      ease: 'linear' },
+    { ms: 5800,
+      camera: { pos: [2, 2, -10], rot: [80, 0, 0], scale: [1, 1, 1] },
+      space:  { pos: [-1, 0, 0], rot: [0, 0, 0], scale: [0.11, 0.11, 0.11] },
+      ease: 'ease_out' },
+  ],
+};
+
+/* Grouped by WHAT each field actually belongs to, not by whether it
+ * happens to live in `timing` vs top-level - grid_step_m/wave_height_m are
+ * top-level (see gen_boot_anim_timeline.py's own comment on why: no
+ * keyframe to attach them to), but split them into their own groups
+ * instead of putting every non-`timing` field first, and a reader has to
+ * track two unrelated groupings at once to find, say, "everything about
+ * the wave" - it is one group here, `timing` membership be damned.
+ * renderConsts() below reads this top-to-bottom, weaving in the fields
+ * that are not plain `timing` numbers (grid_step_m/reach, wave_height_m/
+ * wavelength/period) at the point in EACH list they actually belong,
+ * rather than exiling them to their own section ahead of everything else
+ * the way the old "Camera lens" / "Grid" / "Wave" mini-blocks used to.
+ *
+ * "Rings" and "Spokes" are two groups, not one "Grid" - both draw onto the
+ * same floor, but nothing about how many spokes there are or when they
+ * draw outward has any bearing on a ring's own fade-in/colour, and lumping
+ * the two together read as one long, undifferentiated list of grid_*
+ * fields with nothing telling them apart at a glance. */
+const FIELD_GROUPS = [
+  { title: 'Overall', keys: ['total_ms', 'fade_start_ms'] },
+  { title: 'Axes', keys: ['axes_ms'] },
+  { title: 'Rings', keys: ['grid_rings', 'grid_start_ms', 'grid_ring_ms',
+      'grid_fade_ms', 'grid_hue_ms', 'grid_hue_spread', 'grid_whiten_max',
+      'grid_ceiling_max', 'grid_max'] },
+  { title: 'Spokes', keys: ['grid_spokes', 'grid_spoke_dash',
+      'grid_spoke_start_ms', 'grid_spoke_draw_ms'] },
+  { title: 'Wave', keys: ['wave_in_ms', 'wave_out_ms'] },
+  { title: 'Curve', keys: ['pen_start_ms', 'pen_ms', 'pen_finish_ms'] },
+  { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
+      'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
+      'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms',
+      'title_height_px', 'title_shadow_dx', 'title_shadow_dy',
+      'title_shadow_alpha'] },
+  { title: 'Image', keys: ['image_start_ms', 'image_fade_ms'] },
+];
+
+/* A short, human description for every plain `timing[key]` field -
+ * addTimingField() below shows this as the field's own label, with the
+ * raw JSON key underneath in a dimmer, smaller line (not just a hover
+ * tooltip - a key like grid_spoke_draw_ms is exactly what a hand-editor of
+ * the JSON file needs to see, not something to hide behind a mouseover).
+ * A key missing here falls back to showing its own raw name as the label,
+ * so a newly-added field never renders as blank. */
+const FIELD_LABELS = {
+  total_ms: 'total animation length',
+  fade_start_ms: 'dissolve to the launcher starts',
+  axes_ms: 'axes grow out of the origin',
+  grid_rings: 'how many rings',
+  grid_start_ms: 'rings start fading in',
+  grid_ring_ms: 'delay before the next ring starts, after the one before it',
+  grid_fade_ms: 'how long one ring takes to fade in',
+  grid_hue_ms: 'time for the hue to complete one full colour cycle',
+  grid_hue_spread: 'hue shift per ring, outward',
+  grid_whiten_max: 'peak brightness of the slow colour-whitening drift',
+  grid_ceiling_max: 'peak opacity once fully brightened',
+  grid_max: 'starting opacity ceiling',
+  grid_spokes: 'how many spokes (0 hides them)',
+  grid_spoke_dash: 'dashed instead of solid (0 solid, 1 dashed)',
+  grid_spoke_start_ms: 'spokes start drawing outward from the origin',
+  grid_spoke_draw_ms: 'time to reach full length (0 = instant)',
+  wave_in_ms: 'muted before this, then lerps up to full strength',
+  wave_out_ms: 'full strength until this, then lerps back to muted',
+  pen_start_ms: 'curve starts drawing',
+  pen_ms: 'how long the curve’s first phase takes',
+  pen_finish_ms: 'when the curve reaches its true end',
+  title_start_ms: 'title starts arriving',
+  title_stagger_ms: 'delay before the next letter starts, after the one before it',
+  title_flight_ms: 'how long one letter’s flight takes',
+  title_entry_px: 'how far off-panel a letter starts',
+  title_turns_phase: 'wobble oscillations packed into the flight',
+  title_amplitude_px: 'peak wobble swing at the start',
+  title_wave_amplitude_px: 'idle wave amplitude once a letter has landed',
+  title_wave_period_ms: 'idle wave cycle time',
+  title_wave_stagger_ms: 'idle wave phase offset, per letter',
+  title_height_px: 'how far down the frame the title lands',
+  title_shadow_dx: 'drop shadow offset, px right (0/0 disables it)',
+  title_shadow_dy: 'drop shadow offset, px down',
+  title_shadow_alpha: 'shadow density 0-255 (dithered fake transparency)',
+  image_start_ms: 'photograph starts crossing in, scene crossing out',
+  image_fade_ms: 'how long that crossfade takes (0 = instant cut)',
+};
+
+let state = JSON.parse(JSON.stringify(DEFAULT_STATE));
+let playhead = 0;
+let playing = false;
+let selectedKf = 0;
+let lastFrameTime = 0;
+
+function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+function sortKeyframes() {
+  const selected = state.keyframes[selectedKf];
+  state.keyframes.sort((a, b) => a.ms - b.ms);
+  selectedKf = state.keyframes.indexOf(selected);
+}
+
+/* ===========================================================================
+ * Rendering - fetches an actual frame from boot_anim_editor_server.py.
+ * Debounced: edits to timing/keyframes (which force a server-side
+ * recompile) wait a moment for more edits to land first; scrubbing/
+ * playback calls this directly every frame instead, since ms alone never
+ * triggers a recompile server-side.
+ * ======================================================================= */
+
+const statusEl = document.getElementById('renderStatus');
+const originEl = document.getElementById('originReadout');
+const errorEl = document.getElementById('renderError');
+const flashErrorEl = document.getElementById('flashError');
+const imgEl = document.getElementById('renderImg');
+const scrub = document.getElementById('scrub');
+const msReadout = document.getElementById('msReadout');
+
+let renderDebounceTimer = null;
+let renderSeq = 0;
+let lastObjectUrl = null;
+let renderPending = false;
+let renderDirty = false;
+
+/* Below this, a render is indistinguishable from instant - a cache-hit
+ * frame during ordinary scrubbing/playback normally comes back in tens of
+ * ms (see requestRender()'s own comment on why there is now at most one
+ * of these in flight at a time). Showing "rendering..." for every one of
+ * those anyway would flicker the label on and off every frame despite
+ * nothing actually being slow; only a render that is ACTUALLY taking a
+ * while - a real recompile, a cold Defender scan - earns the label. */
+const STATUS_DELAY_MS = 150;
+
+async function renderNow() {
+  const seq = ++renderSeq;
+  const busyTimer = setTimeout(() => {
+    statusEl.textContent = 'rendering...';
+    statusEl.className = 'busy';
+  }, STATUS_DELAY_MS);
+
+  let res;
+  try {
+    res = await fetch('/render', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timing: state.timing, camera_focal: state.camera_focal,
+        grid_step_m: state.grid_step_m,
+        wave_height_m: state.wave_height_m,
+        wave_wavelength_m: state.wave_wavelength_m,
+        wave_period_ms: state.wave_period_ms,
+        keyframes: state.keyframes, ms: playhead,
+      }),
+    });
+  } catch (err) {
+    clearTimeout(busyTimer);
+    if (seq !== renderSeq) return;
+    statusEl.textContent = 'server unreachable';
+    statusEl.className = 'error';
+    showError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err);
+    return;
+  }
+  clearTimeout(busyTimer);
+  if (seq !== renderSeq) return;
+
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ error: res.statusText }));
+    statusEl.textContent = res.status >= 500 ? 'compile error' : 'invalid timeline';
+    statusEl.className = 'error';
+    showError(body.error || ('HTTP ' + res.status));
+    return;
+  }
+
+  hideError();
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const prev = lastObjectUrl;
+  imgEl.src = url;
+  lastObjectUrl = url;
+  if (prev) URL.revokeObjectURL(prev);
+  statusEl.textContent = '';
+  statusEl.className = '';
+
+  /* The space's local origin, projected server-side through this exact
+   * frame's transform and handed back as a header - see
+   * boot_anim_render_host.c's own comment on why this is read-only now
+   * rather than an authored field. */
+  const origin = res.headers.get('X-Origin');
+  originEl.textContent = origin ? `origin: ${origin}px` : '';
+}
+
+function showError(msg) {
+  errorEl.textContent = msg;
+  errorEl.style.display = 'block';
+}
+function hideError() {
+  errorEl.style.display = 'none';
+}
+
+/* A SEPARATE element from #renderError/showError() above, not the same
+ * one reused - renderNow() below calls hideError() unconditionally on
+ * every successful render (line ~630), and a render fires on nearly every
+ * keystroke, every scrub, every Play frame; a Build & Flash failure takes
+ * a couple of minutes, plenty of time for an unrelated render to land and
+ * silently wipe it the instant it was shown - measured happening in
+ * practice, not a hypothetical. Positioned right next to the Build &
+ * Flash button itself (see its own spot in the DOM), so unlike
+ * #renderError this is already close to on-screen - 'nearest', not
+ * 'center', is a small nudge for a short viewport rather than a jump, and
+ * safe to do unconditionally here (nothing else on screen is competing
+ * for a render error's own more careful scroll-or-not judgement call). */
+function showFlashError(msg) {
+  flashErrorEl.textContent = msg;
+  flashErrorEl.style.display = 'block';
+  flashErrorEl.scrollIntoView({ behavior: 'auto', block: 'nearest' });
+}
+function hideFlashError() {
+  flashErrorEl.style.display = 'none';
+}
+
+/* The server handles one render at a time (its own top comment: "every
+ * render already serializes through one compiler/one binary anyway"), but
+ * nothing used to stop the CLIENT from firing a new one anyway - Play's
+ * tick() below asks for a new frame every ~33ms of wall-clock time
+ * regardless of whether the last request has come back yet. Once a single
+ * render takes longer than that (a subprocess spawn even without Defender
+ * scanning it, or with - see the server's own startup message), requests
+ * pile up faster than the server can answer them, and renderSeq's own
+ * staleness check (in renderNow()) means almost every one of them arrives
+ * only to be thrown away because a NEWER request had already started - so
+ * the render view sits on its last successful frame for a while, then
+ * jumps straight to whichever much-later ms happened to still be current
+ * when a response finally landed while nothing newer had started yet.
+ * That is the "stays black, then jumps to a single frame" a slow render
+ * pipeline actually looks like from here.
+ *
+ * requestRender() is the fix: never more than one request in flight.
+ * Anything that wants a render while one is already pending sets
+ * `renderDirty` instead of firing a second one, and the in-flight
+ * request's own completion (success OR failure - see the `finally`)
+ * kicks off exactly one more, for whatever the latest wanted state is by
+ * then. Frame-perfect scrubbing/playback are not the goal here - keeping
+ * the pipe from ever backing up is: every response that does arrive stays
+ * current, so every one of them actually reaches the screen. */
+function requestRender() {
+  if (renderPending) {
+    renderDirty = true;
+    return;
+  }
+  renderPending = true;
+  renderNow().finally(() => {
+    renderPending = false;
+    if (renderDirty) {
+      renderDirty = false;
+      requestRender();
+    }
+  });
+}
+
+/* For scrub/play: immediate, no debounce - the server itself skips the
+ * recompile when only `ms` changed. */
+function renderFrame() {
+  scrub.max = state.timing.total_ms;
+  scrub.value = playhead;
+  msReadout.textContent = `${Math.round(playhead)} ms`;
+  renderKfTrack();
+  requestRender();
+}
+
+/* For edits to timing/keyframes: debounced, since these force a server
+ * recompile and typing/dragging fires many events in a row. */
+function renderDebounced() {
+  scrub.max = state.timing.total_ms;
+  renderKfTrack();
+  if (renderDebounceTimer) clearTimeout(renderDebounceTimer);
+  renderDebounceTimer = setTimeout(requestRender, 250);
+}
+
+/* ===========================================================================
+ * Other consts panel
+ * ======================================================================= */
+
+function addGroupTitle(list, title) {
+  const h = document.createElement('div');
+  h.className = 'group-title';
+  h.textContent = title;
+  list.appendChild(h);
+}
+
+/* Every plain `timing[key]` field, wherever it ends up grouped - see
+ * FIELD_GROUPS' own comment on why that grouping no longer matches
+ * "is this a timing field" one-to-one. The label is FIELD_LABELS' own
+ * human description, with the raw JSON key underneath in a dimmer,
+ * smaller line - both, not one instead of the other, so the field is
+ * readable in the UI AND still identifiable against the JSON file. */
+function addTimingField(list, key) {
+  const label = document.createElement('label');
+  label.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = FIELD_LABELS[key] || key;
+  const keyLine = document.createElement('span');
+  keyLine.className = 'field-key';
+  keyLine.textContent = key;
+  span.appendChild(keyLine);
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.id = 'timingField_' + key;
+  input.value = state.timing[key];
+  input.addEventListener('input', () => {
+    state.timing[key] = Number(input.value) || 0;
+    if (key === 'grid_rings') updateGridExtent();
+    renderDebounced();
+  });
+  label.appendChild(span);
+  label.appendChild(input);
+  list.appendChild(label);
+}
+
+/* A field bound to a top-level (not per-keyframe, not plain `timing`)
+ * state key - camera_focal, grid_step_m, the wave's own three - all built
+ * the same shape addTimingField() gives a `timing` field: a human label, the
+ * raw JSON key underneath it in a dimmer line (omitted for `key` of '' -
+ * "reach" below has no JSON field of its own to show), a number input.
+ * `onInput` gets the parsed number and does whatever else that particular
+ * field needs (updateGridExtent(), etc.) beyond just storing it. */
+function addStateField(list, label, key, value, onInput, opts) {
+  opts = opts || {};
+  const l = document.createElement('label');
+  l.className = 'field';
+  const span = document.createElement('span');
+  span.textContent = label;
+  if (key) {
+    const keyLine = document.createElement('span');
+    keyLine.className = 'field-key';
+    keyLine.textContent = key;
+    span.appendChild(keyLine);
+  }
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.step = 'any';
+  if (opts.min !== undefined) input.min = String(opts.min);
+  if (opts.id) input.id = opts.id;
+  input.value = value;
+  input.addEventListener('input', () => onInput(Number(input.value) || 0));
+  l.appendChild(span);
+  l.appendChild(input);
+  list.appendChild(l);
+  return input;
+}
+
+function renderConsts() {
+  const list = document.getElementById('constsList');
+  list.innerHTML = '';
+
+  /* Not per-keyframe, unlike everything else the camera/space transforms
+   * carry - see boot_anim_timeline.json's own comment: a lens property, not
+   * a position or angle. small3dlib's own S3L_F (512) is its "normal" FOV;
+   * 0 is orthographic (see boot_anim.h's "The projection" section) - not a
+   * second code path, just this one field. The one group with nothing else
+   * to gather next to it, so no FIELD_GROUPS entry for it. */
+  addGroupTitle(list, 'Camera lens');
+  addStateField(list, '0 = orthographic', 'camera_focal', state.camera_focal,
+    v => { state.camera_focal = v; renderDebounced(); });
+
+  for (const group of FIELD_GROUPS) {
+    addGroupTitle(list, group.title);
+
+    if (group.title === 'Rings') {
+      /* Not per-keyframe - the spacing between floor rings, in meters
+       * like a transform's own pos (see gen_boot_anim_timeline.py's top
+       * comment). Ahead of grid_rings itself (below, same group) rather
+       * than off in a "Camera lens"-style group of its own - everything
+       * about the rings belongs together. */
+      addStateField(list, 'ring spacing, meters', 'grid_step_m',
+        state.grid_step_m,
+        v => { state.grid_step_m = v; updateGridExtent(); renderDebounced(); });
+
+      /* Reach isn't its own authored field - it's grid_step_m * grid_rings
+       * (see draw_floor()'s own `far` in boot_anim.c) - editing it solves
+       * for grid_rings (right below, same group) at the CURRENT spacing,
+       * rather than being a third independent number: density (spacing)
+       * and reach (how far out the floor goes) are kept as separate knobs
+       * on purpose - growing the reach by adding rings also adds
+       * line-draws, while growing it by widening the spacing does not -
+       * so editing reach moves the one of the two that actually changes
+       * what you asked for. */
+      addStateField(list, 'reach (rings × step), meters', '', 0, v => {
+        const step = state.grid_step_m;
+        if (step > 0) {
+          state.timing.grid_rings = Math.max(1, Math.round(v / step));
+          const ringsInput = document.getElementById('timingField_grid_rings');
+          if (ringsInput) ringsInput.value = state.timing.grid_rings;
+        }
+        renderDebounced();
+      }, { min: 0, id: 'gridExtentInput' });
+    }
+
+    if (group.title === 'Wave') {
+      /* Also not per-keyframe - there is only ever the one wave (see
+       * boot_anim.h's "The wave" section: a genuine radial sine, height(r,
+       * t) = amplitude * sin(2*pi*r/wavelength - 2*pi*t/period), no
+       * separate start/end window of its own - it runs for as long as the
+       * rings it rides on are themselves visible). height in meters like
+       * grid_step_m above (0 turns the ripple off outright, not just
+       * down); wavelength the crest-to-crest distance, also meters;
+       * period how long one full cycle takes to pass a fixed point, the
+       * same unit title_wave_period_ms already is for the title's own
+       * wobble (see the Title group, below). */
+      addStateField(list, 'peak height, meters (0 = off)', 'wave_height_m',
+        state.wave_height_m,
+        v => { state.wave_height_m = v; renderDebounced(); });
+      addStateField(list, 'crest-to-crest distance, meters',
+        'wave_wavelength_m', state.wave_wavelength_m,
+        v => { state.wave_wavelength_m = v; renderDebounced(); });
+      addStateField(list, 'time for one cycle to pass a fixed point, ms',
+        'wave_period_ms', state.wave_period_ms,
+        v => { state.wave_period_ms = v; renderDebounced(); });
+    }
+
+    for (const key of group.keys) {
+      addTimingField(list, key);
+    }
+  }
+
+  updateGridExtent();
+}
+
+function updateGridExtent() {
+  const el = document.getElementById('gridExtentInput');
+  if (!el || document.activeElement === el) return;   // don't fight the user's own typing
+  const extent = (state.grid_step_m || 0) * (state.timing.grid_rings || 0);
+  el.value = extent.toFixed(2);
+}
+
+/* ===========================================================================
+ * Keyframes: the slim drag strip + the clickable list
+ * ======================================================================= */
+
+function kfSummary(kf) {
+  return `cam ${kf.camera.pos.join(',')} / ${kf.camera.rot[0]}°  `
+       + `space scale ${kf.space.scale[0]}  ${kf.ease}`;
+}
+
+/* Selecting a keyframe moves the playhead to it and re-renders, same as
+ * dragging one already did - so the render view always shows the thing
+ * you just clicked on, not wherever the playhead happened to be left. */
+function selectKf(i) {
+  selectedKf = i;
+  playhead = state.keyframes[i].ms;
+  playing = false;
+  document.getElementById('btnPlay').textContent = 'Play';
+  renderKfList();
+  renderKfDetail();
+  renderFrame();
+}
+
+function renderKfTrack() {
+  const track = document.getElementById('kfTrack');
+  track.innerHTML = '';
+  document.getElementById('kfCount').textContent = `(${state.keyframes.length})`;
+  const totalMs = state.timing.total_ms || 1;
+
+  state.keyframes.forEach((kf, i) => {
+    const dot = document.createElement('div');
+    dot.className = 'kf-dot' + (i === selectedKf ? ' selected' : '');
+    dot.style.left = `${(kf.ms / totalMs) * 100}%`;
+    dot.title = `ms ${kf.ms}`;
+    dot.addEventListener('mousedown', (e) => {
+      e.stopPropagation();
+      selectKf(i);
+      const trackRect = track.getBoundingClientRect();
+      const onMove = (ev) => {
+        const frac = clamp((ev.clientX - trackRect.left) / trackRect.width, 0, 1);
+        kf.ms = Math.round(frac * totalMs);
+        sortKeyframes();
+        renderKfTrack();
+        renderKfList();
+        renderKfDetail();
+        playhead = kf.ms;
+        renderFrame();
+      };
+      const onUp = () => {
+        window.removeEventListener('mousemove', onMove);
+        window.removeEventListener('mouseup', onUp);
+      };
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+    });
+    track.appendChild(dot);
+  });
+
+  const ph = document.createElement('div');
+  ph.className = 'playhead';
+  ph.style.left = `${(playhead / totalMs) * 100}%`;
+  track.appendChild(ph);
+}
+
+document.getElementById('kfTrack').addEventListener('click', (e) => {
+  const rect = e.currentTarget.getBoundingClientRect();
+  const frac = clamp((e.clientX - rect.left) / rect.width, 0, 1);
+  playhead = frac * state.timing.total_ms;
+  playing = false;
+  document.getElementById('btnPlay').textContent = 'Play';
+  renderFrame();
+});
+
+function renderKfList() {
+  const list = document.getElementById('kfList');
+  list.innerHTML = '';
+  state.keyframes.forEach((kf, i) => {
+    const row = document.createElement('div');
+    row.className = 'kf-row' + (i === selectedKf ? ' selected' : '');
+
+    const idx = document.createElement('span');
+    idx.className = 'kf-index';
+    idx.textContent = i + 1;
+
+    const ms = document.createElement('span');
+    ms.className = 'kf-ms';
+    ms.textContent = kf.ms + ' ms';
+
+    const summary = document.createElement('span');
+    summary.className = 'kf-summary';
+    summary.textContent = kfSummary(kf);
+
+    const del = document.createElement('button');
+    del.className = 'kf-del';
+    del.textContent = '✕';
+    del.title = 'Delete this keyframe';
+    del.disabled = state.keyframes.length <= 2;
+    del.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (state.keyframes.length <= 2) return;
+      state.keyframes.splice(i, 1);
+      selectedKf = clamp(selectedKf, 0, state.keyframes.length - 1);
+      renderKfTrack();
+      renderKfList();
+      renderKfDetail();
+      renderDebounced();
+    });
+
+    row.addEventListener('click', () => selectKf(i));
+    row.appendChild(idx);
+    row.appendChild(ms);
+    row.appendChild(summary);
+    row.appendChild(del);
+    list.appendChild(row);
+  });
+}
+
+/* One "pos / rot / scale, x/y/z" block - used twice below (camera, space),
+ * identical in shape since both are full small3dlib transforms - see
+ * boot_anim_timeline.json's own comment on why both got the same TRS
+ * rather than the camera being special-cased down to just pos/rot. */
+function addTransformBlock(el, title, xf, onChange) {
+  const head = document.createElement('div');
+  head.className = 'subhead';
+  head.style.color = 'var(--accent)';
+  head.style.fontSize = '12px';
+  head.style.marginTop = '10px';
+  head.textContent = title;
+  el.appendChild(head);
+
+  const addRow3 = (label, arr, step) => {
+    const sub = document.createElement('div');
+    sub.className = 'subhead';
+    sub.textContent = label;
+    el.appendChild(sub);
+    const row = document.createElement('div');
+    row.className = 'row3';
+    ['x', 'y', 'z'].forEach((axis, i) => {
+      const input = document.createElement('input');
+      input.type = 'number';
+      input.step = step;
+      input.value = arr[i];
+      input.addEventListener('input', () => {
+        arr[i] = Number(input.value) || 0;
+        onChange();
+      });
+      row.appendChild(input);
+    });
+    el.appendChild(row);
+  };
+
+  addRow3('pos (meters)', xf.pos, 'any');
+  addRow3('rot (degrees - Z, then X, then Y composition)', xf.rot, 'any');
+  addRow3('scale (1 = untouched)', xf.scale, '0.01');
+}
+
+function renderKfDetail() {
+  const kf = state.keyframes[selectedKf];
+  const el = document.getElementById('kfDetail');
+  el.innerHTML = '';
+  if (!kf) return;
+
+  const onChange = () => { renderKfList(); renderDebounced(); };
+
+  const msRow = document.createElement('label');
+  msRow.className = 'field';
+  const msSpan = document.createElement('span');
+  msSpan.textContent = 'ms';
+  const msInput = document.createElement('input');
+  msInput.type = 'number';
+  msInput.value = kf.ms;
+  msInput.addEventListener('input', () => {
+    kf.ms = Number(msInput.value) || 0;
+    sortKeyframes();
+    playhead = kf.ms;
+    renderKfTrack();
+    renderKfList();
+    renderDebounced();
+    renderFrame();
+  });
+  msRow.appendChild(msSpan);
+  msRow.appendChild(msInput);
+  el.appendChild(msRow);
+
+  addTransformBlock(el, 'Camera', kf.camera, onChange);
+  addTransformBlock(el, 'Space (the grid + curve)', kf.space, onChange);
+
+  const sub4 = document.createElement('div');
+  sub4.className = 'subhead';
+  sub4.style.marginTop = '10px';
+  sub4.textContent = 'ease (of the segment arriving at this keyframe)';
+  el.appendChild(sub4);
+  const easeSelect = document.createElement('select');
+  const isFirst = selectedKf === 0;
+  easeSelect.disabled = isFirst;
+  for (const opt of ['linear', 'ease_out', 'ease_in']) {
+    const o = document.createElement('option');
+    o.value = opt;
+    o.textContent = opt;
+    if (kf.ease === opt) o.selected = true;
+    easeSelect.appendChild(o);
+  }
+  easeSelect.addEventListener('change', () => {
+    kf.ease = easeSelect.value;
+    renderKfList();
+    renderDebounced();
+  });
+  el.appendChild(easeSelect);
+}
+
+document.getElementById('btnAddKf').addEventListener('click', () => {
+  /* Seeded from the current selection rather than interpolated from the
+   * server (which would need a round trip) - close enough to land near
+   * the playhead's neighbourhood, and every field is right there in the
+   * details panel to correct immediately after. */
+  const base = state.keyframes[selectedKf] || state.keyframes[0];
+  const copyXf = (xf) => ({ pos: [...xf.pos], rot: [...xf.rot], scale: [...xf.scale] });
+  state.keyframes.push({
+    ms: Math.round(clamp(playhead, 0, state.timing.total_ms)),
+    camera: copyXf(base.camera),
+    space: copyXf(base.space),
+    ease: 'linear',
+  });
+  sortKeyframes();
+  selectedKf = state.keyframes.findIndex((k) => k.ms === Math.round(playhead));
+  renderKfTrack();
+  renderKfList();
+  renderKfDetail();
+  renderDebounced();
+});
+
+/* ===========================================================================
+ * Play controls
+ * ======================================================================= */
+
+scrub.addEventListener('input', () => {
+  playing = false;
+  document.getElementById('btnPlay').textContent = 'Play';
+  playhead = Number(scrub.value);
+  renderFrame();
+});
+
+const btnPlay = document.getElementById('btnPlay');
+const rangeFromInput = document.getElementById('rangeFrom');
+const rangeToInput = document.getElementById('rangeTo');
+const playSpeedInput = document.getElementById('playSpeed');
+
+/* Editor-only conveniences, not part of the animation itself - never sent
+ * to the server, never in `state`, never in Bake's payload. Loops back to
+ * `from` rather than 0 once Play reaches `to`, so you can park on one
+ * transition (say, the finale's turn) and watch just that segment repeat
+ * instead of the whole 5+ second animation every time. Falls back to the
+ * full timeline on anything nonsensical (to <= from, blank fields) rather
+ * than refusing to play. */
+function getLoopRange() {
+  const total = state.timing.total_ms;
+  let from = clamp(Number(rangeFromInput.value) || 0, 0, total);
+  let to = Number(rangeToInput.value);
+  if (!(to > from)) to = total;
+  to = clamp(to, from + 1, total);
+  return { from, to };
+}
+
+btnPlay.addEventListener('click', () => {
+  playing = !playing;
+  btnPlay.textContent = playing ? 'Pause' : 'Play';
+  if (playing) {
+    const { from, to } = getLoopRange();
+    if (playhead < from || playhead >= to) playhead = from;
+    lastFrameTime = performance.now();
+    requestAnimationFrame(tick);
+  }
+});
+
+/* Each frame is a network round trip to a freshly spawned native process,
+ * not a canvas repaint - see boot_anim_editor_server.py's own top comment.
+ * 30fps assumes a Defender exclusion on the scratch dir it prints on
+ * startup - without one, a fresh .exe gets scanned on every launch and
+ * this will visibly lag behind 30fps rather than match it, since the
+ * server is still capped at one render in flight at a time either way. */
+const PLAYBACK_FPS = 30;
+
+function tick(now) {
+  if (!playing) return;
+  const dt = now - lastFrameTime;
+  if (dt >= 1000 / PLAYBACK_FPS) {
+    lastFrameTime = now;
+    /* Below 1, this is the whole "time step (slow down)" mechanism: the
+     * animation's OWN clock (playhead) advances slower than the wall
+     * clock driving requestAnimationFrame, rather than skipping frames or
+     * throttling the request rate - so slow motion stays smooth, just
+     * slow, at whatever the server can actually render. */
+    const speed = Math.max(0.01, Number(playSpeedInput.value) || 1);
+    playhead += dt * speed;
+    const { from, to } = getLoopRange();
+    if (playhead >= to) {
+      playhead = from;
+    }
+    renderFrame();
+  }
+  requestAnimationFrame(tick);
+}
+
+/* ===========================================================================
+ * Bake / Load
+ * ======================================================================= */
+
+document.getElementById('btnBake').addEventListener('click', () => {
+  const payload = {
+    timing: state.timing, camera_focal: state.camera_focal,
+    grid_step_m: state.grid_step_m,
+    wave_height_m: state.wave_height_m,
+    wave_wavelength_m: state.wave_wavelength_m,
+    wave_period_ms: state.wave_period_ms,
+    keyframes: state.keyframes,
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 4)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'boot_anim_timeline.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+});
+
+/* Shared by both ways a JSON timeline reaches this page: the Load button
+ * below, and the automatic GET /timeline fetch on open (see this file's
+ * own Boot section) - the exact same field-by-field backfill either way,
+ * so a file that predates some field is completed identically whichever
+ * path brought it in. Throws on a file missing the fields every version
+ * has always had; the caller decides what to do with that (Load shows it
+ * to the person who chose the file, boot-time load falls back quietly). */
+function applyLoadedState(loaded) {
+  if (!loaded.timing || !loaded.keyframes || loaded.camera_focal === undefined ||
+      loaded.grid_step_m === undefined) {
+    throw new Error('missing timing/camera_focal/grid_step_m/keyframes');
+  }
+  if (loaded.timing.pen_finish_ms === undefined) {
+    loaded.timing.pen_finish_ms = loaded.timing.fade_start_ms;
+  }
+  /* The wave is newer still - same reasoning, same fallback the
+   * generator itself uses: height 0 turns the ripple off outright, so
+   * an old file keeps behaving exactly like it always did. */
+  if (loaded.wave_height_m === undefined) {
+    loaded.wave_height_m = 0;
+  }
+  /* wave_wavelength_m/wave_period_ms replace an EARLIER version's
+   * wave_decay_m/wave_start_ms/wave_end_ms/wave_ease outright - a
+   * genuine radial sine now, not a travelling front (see
+   * gen_boot_anim_timeline.py's own comment on why a file with a
+   * nonzero wave_height_m from before this existed will not look the
+   * same either way). Same reasonable-starting-point defaults the
+   * generator itself falls back to. */
+  if (loaded.wave_wavelength_m === undefined) {
+    loaded.wave_wavelength_m = 3 * (loaded.grid_step_m || 1);
+  }
+  if (loaded.wave_period_ms === undefined) {
+    loaded.wave_period_ms = 3000;
+  }
+  /* wave_in_ms/wave_out_ms are newer again - starting to lerp in a
+   * second in, and starting to lerp back out a second before the
+   * end, are the same reasonable-starting-point defaults the
+   * generator itself falls back to. */
+  if (loaded.timing.wave_in_ms === undefined) {
+    loaded.timing.wave_in_ms = 1000;
+  }
+  if (loaded.timing.wave_out_ms === undefined) {
+    loaded.timing.wave_out_ms =
+      Math.max(1000, (loaded.timing.total_ms || 5800) - 1000);
+  }
+  /* grid_spokes is newer than grid_rings itself - same default
+   * gen_boot_anim_timeline.py falls back to (the old, unconditional
+   * 8-spoke grid). */
+  if (loaded.timing.grid_spokes === undefined) {
+    loaded.timing.grid_spokes = 8;
+  }
+  /* grid_spoke_dash is newer still - an old file drew every spoke
+   * solid, so 0 (solid) is what keeps it looking the same. */
+  if (loaded.timing.grid_spoke_dash === undefined) {
+    loaded.timing.grid_spoke_dash = 0;
+  }
+  /* grid_spoke_start_ms/grid_spoke_draw_ms are newer again - an old
+   * file drew every spoke at full length instantly, with no outward
+   * reveal. 0/0 reproduces that (see gen_boot_anim_timeline.py's own
+   * comment on why). */
+  if (loaded.timing.grid_spoke_start_ms === undefined) {
+    loaded.timing.grid_spoke_start_ms = 0;
+  }
+  if (loaded.timing.grid_spoke_draw_ms === undefined) {
+    loaded.timing.grid_spoke_draw_ms = 0;
+  }
+  /* title_height_px is newer again - BOOT_ANIM_TITLE_VIEW_Y used to be a
+   * fixed constant (50) in boot_anim.h, so 50 is what keeps an old file
+   * landing the title exactly where it always did. */
+  if (loaded.timing.title_height_px === undefined) {
+    loaded.timing.title_height_px = 50;
+  }
+  /* title_shadow_dx/dy are newer again - the shadow used to be a fixed
+   * (1, 1) two gfx_text_font() calls always drew, so 1/1 is what keeps
+   * an old file looking exactly the same rather than silently losing
+   * its shadow. */
+  if (loaded.timing.title_shadow_dx === undefined) {
+    loaded.timing.title_shadow_dx = 1;
+  }
+  if (loaded.timing.title_shadow_dy === undefined) {
+    loaded.timing.title_shadow_dy = 1;
+  }
+  /* title_shadow_alpha is newer again - the shadow used to be fully
+   * solid (there was no dithering to be less than that), so 255 keeps
+   * an old file looking exactly the same rather than silently turning
+   * translucent. */
+  if (loaded.timing.title_shadow_alpha === undefined) {
+    loaded.timing.title_shadow_alpha = 255;
+  }
+  /* image_start_ms/image_fade_ms are newer again - an old file had no
+   * photograph in it at all, and total_ms is what reproduces that
+   * exactly (see gen_boot_anim_timeline.py's own setdefault comment on
+   * why total_ms, specifically, is the inert value here). */
+  if (loaded.timing.image_start_ms === undefined) {
+    loaded.timing.image_start_ms = loaded.timing.total_ms || 5800;
+  }
+  if (loaded.timing.image_fade_ms === undefined) {
+    loaded.timing.image_fade_ms = 800;
+  }
+  state = loaded;
+  selectedKf = 0;
+  playhead = 0;
+  renderConsts();
+  renderKfTrack();
+  renderKfList();
+  renderKfDetail();
+  renderFrame();
+}
+
+document.getElementById('btnLoad').addEventListener('click', () => {
+  document.getElementById('fileInput').click();
+});
+document.getElementById('fileInput').addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      applyLoadedState(JSON.parse(reader.result));
+    } catch (err) {
+      alert('Could not load that file as a boot_anim_timeline.json: ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = '';
+});
+
+/* ===========================================================================
+ * Build & Flash - the only button here that touches the real, committed
+ * timeline files and real hardware. Everything above (the render view,
+ * scrubbing, Play) only ever talks to the server's SCRATCH copy - see
+ * boot_anim_editor_server.py's own top comment on the render()/build_and_
+ * flash() split.
+ * ======================================================================= */
+
+const flashPortInput = document.getElementById('flashPort');
+const flashStatusEl = document.getElementById('flashStatus');
+const btnBuildFlash = document.getElementById('btnBuildFlash');
+
+btnBuildFlash.addEventListener('click', async () => {
+  const port = flashPortInput.value.trim() || 'COM3';
+  const proceed = confirm(
+    'This overwrites the committed main/boot/boot_anim_timeline.json and ' +
+    '.h with the values currently in this page, then builds and flashes ' +
+    'the development image to ' + port + '.\n\nContinue?');
+  if (!proceed) return;
+
+  btnBuildFlash.disabled = true;
+  flashStatusEl.textContent = 'building & flashing... (can take a minute)';
+  flashStatusEl.style.color = 'var(--text-dim)';
+  hideFlashError();
+
+  try {
+    const res = await fetch('/build_flash', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        timing: state.timing, camera_focal: state.camera_focal,
+        grid_step_m: state.grid_step_m,
+        wave_height_m: state.wave_height_m,
+        wave_wavelength_m: state.wave_wavelength_m,
+        wave_period_ms: state.wave_period_ms,
+        keyframes: state.keyframes,
+        port,
+      }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      flashStatusEl.textContent = 'failed';
+      flashStatusEl.style.color = 'var(--danger)';
+      showFlashError(body.error || ('HTTP ' + res.status));
+      return;
+    }
+    flashStatusEl.textContent = 'flashed to ' + port;
+    flashStatusEl.style.color = 'var(--accent)';
+  } catch (err) {
+    flashStatusEl.textContent = 'failed';
+    flashStatusEl.style.color = 'var(--danger)';
+    showFlashError('Could not reach boot_anim_editor_server.py - is it still running?\n' + err);
+  } finally {
+    btnBuildFlash.disabled = false;
+  }
+});
+
+/* ===========================================================================
+ * Boot
+ * ======================================================================= */
+
+renderConsts();
+renderKfTrack();
+renderKfList();
+renderKfDetail();
+renderFrame();
+
+/* Then immediately try to replace DEFAULT_STATE's hand-duplicated copy
+ * (see its own top comment) with the REAL committed timeline, via GET
+ * /timeline (see boot_anim_editor_server.py's own comment on that
+ * endpoint) - the page above already rendered once against DEFAULT_STATE
+ * so there is always something on screen even if this fetch is slow, and
+ * a second render() call once it lands is cheap next to the alternative
+ * of opening on a copy that silently drifts from what is actually
+ * committed. Failure (server too old, file unreadable, bad JSON) falls
+ * back to staying on DEFAULT_STATE quietly - this page still needs to
+ * work against a server that predates this endpoint, and a failed
+ * best-effort refresh is not something the person opening the page needs
+ * an alert() for. */
+fetch('/timeline')
+  .then((res) => (res.ok ? res.json() : Promise.reject(new Error('HTTP ' + res.status))))
+  .then((loaded) => applyLoadedState(loaded))
+  .catch((err) => {
+    console.warn('boot_anim_editor: could not load the real committed ' +
+      'timeline from GET /timeline, staying on DEFAULT_STATE:', err);
+  });
+</script>
+</body>
+</html>
