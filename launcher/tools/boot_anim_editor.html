@@ -431,7 +431,9 @@ const DEFAULT_STATE = {
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
     title_turns_phase: 229376, title_amplitude_px: 22,
     title_wave_amplitude_px: 11, title_wave_period_ms: 1600,
-    title_wave_stagger_ms: 90, title_height_px: 50, title_x_px: 170,
+    title_wave_stagger_ms: 90,
+    title_wave_out_ms: 5800, title_wave_fade_ms: 600,
+    title_height_px: 50, title_x_px: 170,
     title_shadow_dx: 1, title_shadow_dy: 1, title_shadow_alpha: 255,
     image_start_ms: 5800, image_fade_ms: 800,
     fade_start_ms: 4300, grid_hue_ms: 2600,
@@ -506,6 +508,7 @@ const FIELD_GROUPS = [
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
       'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms',
+      'title_wave_out_ms', 'title_wave_fade_ms',
       'title_height_px', 'title_x_px', 'title_shadow_dx', 'title_shadow_dy',
       'title_shadow_alpha'] },
   { title: 'Image', keys: ['image_start_ms', 'image_fade_ms'] },
@@ -549,6 +552,8 @@ const FIELD_LABELS = {
   title_wave_amplitude_px: 'idle wave amplitude once a letter has landed',
   title_wave_period_ms: 'idle wave cycle time',
   title_wave_stagger_ms: 'idle wave phase offset, per letter',
+  title_wave_out_ms: 'when the idle wave starts calming (total_ms = never)',
+  title_wave_fade_ms: 'how long the calming takes (0 = stop dead)',
   title_height_px: 'how far down the frame the title lands',
   title_x_px: 'how far into the frame the title lands, left edge',
   title_shadow_dx: 'drop shadow offset, px right (0/0 disables it)',
@@ -1334,6 +1339,15 @@ function applyLoadedState(loaded) {
   }
   if (loaded.timing.image_fade_ms === undefined) {
     loaded.timing.image_fade_ms = 800;
+  }
+  /* title_wave_out_ms/title_wave_fade_ms are newer again - an old file had
+   * an idle wave that never calmed, and total_ms is what reproduces that
+   * exactly, on the same reasoning image_start_ms above uses. */
+  if (loaded.timing.title_wave_out_ms === undefined) {
+    loaded.timing.title_wave_out_ms = loaded.timing.total_ms || 5800;
+  }
+  if (loaded.timing.title_wave_fade_ms === undefined) {
+    loaded.timing.title_wave_fade_ms = 600;
   }
   state = loaded;
   selectedKf = 0;

@@ -78,17 +78,23 @@
 
 #define BOOT_ANIM_TITLE_WAVE_PERIOD_MS 900
 #define BOOT_ANIM_TITLE_WAVE_STAGGER_MS 75
+/* when the idle wave starts calming back to stillness - at or past total_ms it never does, which is the default */
+#define BOOT_ANIM_TITLE_WAVE_OUT_MS 3200
+
+/* how long that calming takes, from full swing to none */
+#define BOOT_ANIM_TITLE_WAVE_FADE_MS 1500
+
 /* how far down the viewer's frame the title's own centre lands - see boot_anim.h's own comment on this section for the frame it is in */
-#define BOOT_ANIM_TITLE_VIEW_Y 60
+#define BOOT_ANIM_TITLE_VIEW_Y 50
 
 /* how far into the viewer's frame the title's own left edge starts - see boot_anim.h's own comment on this section for where the default came from */
-#define BOOT_ANIM_TITLE_VIEW_X 99
+#define BOOT_ANIM_TITLE_VIEW_X 135
 
 /* drop shadow offset, pixels right (negative is left) - 0/0 disables it */
-#define BOOT_ANIM_TITLE_SHADOW_DX -7
+#define BOOT_ANIM_TITLE_SHADOW_DX 3
 
 /* drop shadow offset, pixels down (negative is up) */
-#define BOOT_ANIM_TITLE_SHADOW_DY 7
+#define BOOT_ANIM_TITLE_SHADOW_DY 3
 
 /* shadow density, 0..255 - 0 invisible, 255 solid, between is a dithered fake transparency (see gfx_fill_rect_dither() in gfx.c) */
 #define BOOT_ANIM_TITLE_SHADOW_ALPHA 128

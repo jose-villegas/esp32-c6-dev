@@ -12,9 +12,12 @@
  *
  * Same split as ui_style.h documents for a bezel: this header only computes
  * WHERE things go, and touches neither gfx.c nor microui.c, so it stays
- * linkable on a host (see test/suites/suite_ui_transform.c). Only "microui.h"
- * is included, for mu_Rect - the same dependency ui_style.h takes and for the
- * same reason.
+ * linkable on a host (see test/suites/suite_ui_transform.c). "microui.h" is
+ * included for mu_Rect - the same dependency ui_style.h takes and for the
+ * same reason - and "gfx/gfx_font.h" for gfx_font_t/gfx_font_advance()
+ * (ui_text_glyph0_origin() below needs a font's cell width, not just a
+ * rect); gfx_font.h is pure too - no gfx.h, no BSP - so this stays linkable
+ * on a host either way.
  *
  * FIXED POINT, NOT FLOAT
  *
@@ -54,6 +57,7 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+#include "gfx/gfx_font.h"
 #include "microui.h"
 #include "util/fixed.h"
 
@@ -249,6 +253,55 @@ static inline int ui_transform_quarter(ui_transform_t t)
     return 0; /* not a rotation at all (e.g. the zero matrix) - identity is
                  the least wrong answer, and is_axis_preserving() would have
                  already rejected this transform anyway. */
+}
+
+/* Where gfx_text_font()'s (x, y) origin - the FIRST glyph's cell, whichever
+ * way the string is about to be drawn (gfx.c's gfx_text_font() always draws
+ * str[0] there and walks the REST of the string away from it) - must be
+ * placed so a string measuring `box` (built the way ui.c's MU_COMMAND_TEXT
+ * case does: gfx_font_text_width()/gfx_font_height() mapped through
+ * ui_transform_rect(), same as every other command's rect) draws flush
+ * inside it at `quarter` turns.
+ *
+ * Turns 0 and 1 walk FORWARD from the origin (gfx_text_font()'s own step
+ * table, gfx.c: +x at turn 0, +y at turn 1), so box's own (x, y) corner
+ * already IS where glyph 0 belongs - no correction, none applied.
+ *
+ * Turns 2 and 3 walk BACKWARD, so glyph 0 has to start ONE GLYPH CELL in
+ * from the box's FAR edge, not sit right at it (which would draw the whole
+ * string entirely past the box). That one-cell step is `font->cell_w` -
+ * the fixed atlas cell (see gfx_font_t in gfx_font.h), NOT font->cell_h and
+ * NOT a per-glyph ADVANCE - and, perhaps surprisingly, it is font->cell_w
+ * in BOTH turn 2 (correcting the box's own X) and turn 3 (correcting Y):
+ * draw_rotated_font_pixel()'s rotation (gfx.c) always maps a glyph's COLUMN
+ * axis (span cell_w - a glyph's own "reading" dimension before any
+ * rotation) onto whichever screen axis the string is currently walking
+ * along, turn 1 and turn 3 included, so glyph 0's footprint ALONG THE WALK
+ * AXIS is cell_w in every one of the four turns, never cell_h. Advance does
+ * not belong here either: glyph 0 occupies its own fixed cell footprint
+ * regardless of which specific glyph or advance it carries (only the
+ * SUBSEQUENT glyphs' spacing depends on advance, via gfx_text_font()'s own
+ * walk, untouched by this function). Verified independently three ways
+ * before trusting a single `cell_w` for both branches: symbolically (which
+ * screen axis "col" maps to per turn), by mapping glyph 0's own logical
+ * cell straight through ui_transform_rect() - the same function every other
+ * MU_COMMAND already trusts - and checking it lands exactly where
+ * gfx_text_font() actually draws, and pixel-for-pixel against a synthetic
+ * non-square, proportional font; see suite_ui_transform.c's own tests,
+ * which pin this against exactly that kind of font rather than the old
+ * square monospace one that could never have shown a cell_w/cell_h mixup
+ * either way. */
+static inline void ui_text_glyph0_origin(const gfx_font_t *font, mu_Rect box,
+                                         int quarter, int scale,
+                                         int *out_x, int *out_y)
+{
+    *out_x = box.x;
+    *out_y = box.y;
+    if (quarter == 2) {
+        *out_x = box.x + box.w - font->cell_w * scale;
+    } else if (quarter == 3) {
+        *out_y = box.y + box.h - font->cell_w * scale;
+    }
 }
 
 /* Whether `t` maps axis-aligned rectangles to axis-aligned rectangles - the

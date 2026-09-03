@@ -125,6 +125,19 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
                           uint8_t alpha);
 
+/* gfx_fill_rect(), but MIXED with the destination via gfx_color_mix()
+ * (gfx_color.h) at `alpha` (0 leaves the framebuffer untouched, 255 is
+ * pixel-identical to gfx_fill_rect(), everything between is a real per-
+ * channel blend) instead of gfx_fill_rect_dither()'s coverage trick. Unlike
+ * every other fill in this file, this one READS the destination pixel
+ * before writing it - affordable for text-sized areas (the 8bpp coverage-
+ * atlas font this exists for draws at most a `scale`x`scale` square per
+ * pixel), NOT for full-frame work - see gfx.c's own comment above the
+ * definition, and gfx_blit_dither()'s comment just above for why a full
+ * framebuffer composite dithers instead of blending. */
+void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
+                         uint8_t alpha);
+
 /* Composite a source IMAGE over the framebuffer at `alpha`'s own dithered
  * coverage - gfx_fill_rect_dither()'s sibling for pixels that come from a
  * bitmap instead of one flat colour: a covered destination pixel becomes
@@ -247,8 +260,11 @@ const gfx_font_t *gfx_default_font(void);
  * gfx_text_turned() all delegate to, passing gfx_default_font(). Same
  * (x, y)-is-the-first-glyph's-cell and turn convention as gfx_text_turned().
  *
- * Only draws 1bpp glyphs - see the definition in gfx.c for why a bpp != 1
- * font is silently skipped rather than drawn wrong. */
+ * Draws bpp==1 (1-bit mask, e.g. gfx_font_8x8) and bpp==8 (8-bit coverage
+ * atlas, e.g. a font tools/gen_font.py generated) glyphs; anything else is
+ * silently skipped rather than drawn wrong - see draw_glyph_font()'s own
+ * comment in gfx.c for why those are the only two layouts with a defined
+ * meaning. */
 void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
                    int scale, int quarter_turns, const gfx_font_t *font);
 

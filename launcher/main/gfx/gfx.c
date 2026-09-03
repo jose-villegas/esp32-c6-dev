@@ -644,15 +644,16 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
 /*---------------------------------------------------------------------------
  * Dithered fake transparency
  *
- * gfx has no blending anywhere (see draw_glyph_font()'s own comment on why a
- * >1bpp font is skipped rather than drawn: nothing here can mix two colours
- * by coverage) - this is the other way to fake it, and the classic one:
- * ordered (Bayer) dithering picks WHICH pixels to draw, not how to blend the
- * ones it does. No extra framebuffer read, no float math, just a per-pixel
- * threshold test against a small fixed table - practically free next to a
- * real blend, which is exactly why 8-bit consoles used it for shadows and
- * water decades before this chip's own class of hardware could afford
- * anything better.
+ * gfx_fill_rect_blend() (further down this file) is a REAL per-pixel blend,
+ * but it pays for a framebuffer read - affordable at glyph scale, not
+ * across a whole frame (see its own comment for why). Dithering is the
+ * other way to fake transparency, and the classic one, for exactly the
+ * cases a real blend is too expensive for: ordered (Bayer) dithering picks
+ * WHICH pixels to draw, not how to blend the ones it does. No extra
+ * framebuffer read, no float math, just a per-pixel threshold test against
+ * a small fixed table - practically free next to a real blend, which is
+ * exactly why 8-bit consoles used it for shadows and water decades before
+ * this chip's own class of hardware could afford anything better.
  *---------------------------------------------------------------------------*/
 
 /* gfx_fill_rect(), but at `alpha`'s own apparent coverage instead of solid -
@@ -690,6 +691,53 @@ void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
             if (gfx_dither_covers(col, row, alpha)) {
                 dst[col] = color;
             }
+        }
+    }
+
+    mark_band(y0, y1);
+}
+
+/* gfx_fill_rect()'s true-blend sibling: gfx_fill_rect_dither() fakes
+ * transparency by choosing WHICH pixels to draw (see that function's own
+ * comment), this one draws every pixel but MIXES it with whatever is
+ * already there via gfx_color_mix() (gfx_color.h) - a real per-pixel blend,
+ * not a coverage trick. It is the only fill in this file that READS the
+ * framebuffer before writing it, which every other primitive here goes out
+ * of its way to avoid (see gfx_blit_dither()'s own comment on why a
+ * framebuffer read is the thing dithering exists to dodge). That read is
+ * affordable for a handful of glyph-sized rects - the 8bpp coverage-atlas
+ * font this exists for (see draw_rotated_font_pixel_blend() below) draws at
+ * most a `scale`x`scale` square per covered pixel - but would NOT be for a
+ * full-frame blend: boot_anim.c's draw_image() composites an entire 322 KiB
+ * framebuffer every frame specifically BECAUSE gfx_blit_dither() avoids
+ * this read, and swapping that call for a loop of this function would bring
+ * back the exact per-pixel gfx_color_mix() cost that comment already
+ * measured and rejected (near_end's Image phase, ~55ms vs ~25ms - see
+ * draw_image()'s own comment).
+ *
+ * alpha 0 is an exact no-op (returns before touching the framebuffer or
+ * marking anything dirty, same contract as gfx_fill_rect_dither()'s own 0
+ * case) and alpha 255 is exact solid (gfx_color_mix()'s own t=255 case
+ * rounds to exactly `b`, so this never merely APPROACHES gfx_fill_rect()'s
+ * output at full alpha, it MATCHES it, pixel for pixel). */
+void gfx_fill_rect_blend(int x, int y, int w, int h, gfx_color_t color,
+                         uint8_t alpha)
+{
+    if (alpha == 0) {
+        return;
+    }
+
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+
+    if (x0 < clip.x0) x0 = clip.x0;
+    if (y0 < clip.y0) y0 = clip.y0;
+    if (x1 > clip.x1) x1 = clip.x1;
+    if (y1 > clip.y1) y1 = clip.y1;
+
+    for (int row = y0; row < y1; row++) {
+        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
+        for (int col = x0; col < x1; col++) {
+            dst[col] = gfx_color_mix(dst[col], color, alpha);
         }
     }
 
@@ -828,10 +876,12 @@ void gfx_text_scaled(int x, int y, const char *text, gfx_color_t color,
  * it is turned - only the string's advance direction differs between
  * rotations, not this. Drawn as a scale x scale square.
  *
- * Generalised from the old fixed-8x8 version to font->cell_w/cell_h, but
- * still only ever exercised at cell_w == cell_h == 8 - the only font that
- * exists. A future non-square font's rotation is unverified until one shows
- * up to test it against. */
+ * Generalised from the old fixed-8x8 version to font->cell_w/cell_h. This
+ * particular copy (the 1bpp path) is still only ever exercised at
+ * cell_w == cell_h == 8 - gfx_font_8x8 is the only 1bpp font - but the
+ * identical switch below is also draw_rotated_font_pixel_blend()'s (the
+ * 8bpp path just below), which a genuinely non-square font (e.g.
+ * font_lmroman_40.h, cell_w != cell_h) does exercise. */
 static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
                                     int row, int col, int scale, int turn,
                                     gfx_color_t color)
@@ -846,6 +896,31 @@ static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
     gfx_fill_rect(x + px * scale, y + py * scale, scale, scale, color);
 }
 
+/* draw_rotated_font_pixel()'s sibling for an 8bpp COVERAGE atlas: same
+ * rotation math (see that function's own comment - the switch is copied
+ * verbatim, not shared, for the same "small enough to duplicate, too easy
+ * to get subtly wrong across an indirection" reasoning gfx_font_lmroman_
+ * 40 and every generator in tools/ apply to their own tables), but the
+ * atlas byte at (row, col) is a coverage LEVEL - 0 background, 255 full
+ * ink, gen_font.py's own FreeType-antialiased output kept verbatim - not a
+ * 1-bit mask, so this blends through gfx_fill_rect_blend() instead of
+ * drawing solid. */
+static void draw_rotated_font_pixel_blend(const gfx_font_t *font, int x,
+                                          int y, int row, int col, int scale,
+                                          int turn, gfx_color_t color,
+                                          uint8_t coverage)
+{
+    int px, py;
+    switch (turn) {
+    case 1:  px = font->cell_h - 1 - row; py = col;                   break;
+    case 2:  px = font->cell_w - 1 - col; py = font->cell_h - 1 - row; break;
+    case 3:  px = row;                    py = font->cell_w - 1 - col; break;
+    default: px = col;                    py = row;                   break;
+    }
+    gfx_fill_rect_blend(x + px * scale, y + py * scale, scale, scale, color,
+                        coverage);
+}
+
 /* Draws one glyph of `font`, or nothing at all when there is nothing safe to
  * draw:
  *
@@ -854,35 +929,64 @@ static void draw_rotated_font_pixel(const gfx_font_t *font, int x, int y,
  *     font's first/count is exactly [0, 128)), generalised to whatever range
  *     `font` actually covers.
  *
- *   - font->bpp != 1. The coverage atlas this descriptor makes room for
- *     needs blending to draw - each atlas byte would be a coverage level,
- *     not a 1-bit mask - and gfx has no blending anywhere yet (draw_command()
- *     in ui.c skips transparent rects for the same reason, per its own
- *     comment). Wiring that up is a separate task; an unrendered glyph is a
- *     far smaller problem than a garbled one in the meantime. */
+ *   - font->bpp is neither 1 nor 8. Nothing else has a defined atlas layout
+ *     to read (see gfx_font_t's own comment in gfx_font.h), so there is
+ *     nothing safe to draw; an unrendered glyph is a far smaller problem
+ *     than a garbled one.
+ *
+ * The two supported layouts are genuinely different loops, not one loop
+ * with a per-pixel branch: a 1bpp row is a bitmask tested per column, an
+ * 8bpp row is a coverage byte per column read straight from the atlas, and
+ * folding them into one shape would mean paying an extra branch on every
+ * pixel of the (hot, still-monospace-8x8) 1bpp path for a distinction that
+ * is known once per ROW, not once per pixel. Skipping a zero-coverage byte
+ * outright (`coverage == 0`, the common case - most of a proportional
+ * glyph's cell is background, unlike a monospace 1bpp cell where a whole
+ * BYTE is checked for zero first) is this path's equivalent of the 1bpp
+ * loop's own `bits == 0` row skip just below. */
 static void draw_glyph_font(const gfx_font_t *font, int x, int y,
                             unsigned char ch, gfx_color_t color, int scale,
                             int turn)
 {
-    if (font->bpp != 1) {
-        return;
-    }
     if (ch < font->first || (unsigned)(ch - font->first) >= font->count) {
         return;
     }
 
-    const uint8_t *glyph = font->atlas + (size_t)(ch - font->first) * font->cell_h;
+    if (font->bpp == 1) {
+        const uint8_t *glyph =
+            font->atlas + (size_t)(ch - font->first) * font->cell_h;
 
-    for (int row = 0; row < font->cell_h; row++) {
-        const uint8_t bits = glyph[row];
-        if (bits == 0) {
-            continue;
-        }
-        for (int col = 0; col < font->cell_w; col++) {
-            if (bits & (1 << col)) {
-                draw_rotated_font_pixel(font, x, y, row, col, scale, turn, color);
+        for (int row = 0; row < font->cell_h; row++) {
+            const uint8_t bits = glyph[row];
+            if (bits == 0) {
+                continue;
+            }
+            for (int col = 0; col < font->cell_w; col++) {
+                if (bits & (1 << col)) {
+                    draw_rotated_font_pixel(font, x, y, row, col, scale, turn, color);
+                }
             }
         }
+        return;
+    }
+
+    if (font->bpp == 8) {
+        const size_t cell_pixels = (size_t)font->cell_w * font->cell_h;
+        const uint8_t *glyph =
+            font->atlas + (size_t)(ch - font->first) * cell_pixels;
+
+        for (int row = 0; row < font->cell_h; row++) {
+            const uint8_t *glyph_row = glyph + (size_t)row * font->cell_w;
+            for (int col = 0; col < font->cell_w; col++) {
+                const uint8_t coverage = glyph_row[col];
+                if (coverage == 0) {
+                    continue;
+                }
+                draw_rotated_font_pixel_blend(font, x, y, row, col, scale,
+                                              turn, color, coverage);
+            }
+        }
+        return;
     }
 }
 
@@ -953,30 +1057,63 @@ static void draw_rotated_font_pixel_dither(const gfx_font_t *font, int x,
                          color, alpha);
 }
 
+/* bpp==1/bpp==8 split mirrors draw_glyph_font() above (see its own comment
+ * for why this is two loops, not one branchy one) - the only new idea here
+ * is FOLDING the glyph's own coverage with the caller's `alpha` for the
+ * 8bpp path: a pixel should read as covered only once BOTH clear their own
+ * dither test, and since dither coverage is monotonic non-decreasing in
+ * alpha at a fixed cell, covers(a) && covers(b) == covers(min(a, b))
+ * exactly - not approximately, suite_gfx_color.c pins the property - the
+ * same identity boot_anim.c's draw_image() already leans on for its own
+ * two-alpha crossfade (see that function's own comment). So the coverage
+ * byte and `alpha` are reduced to their minimum ONCE per pixel and handed
+ * to the ordinary draw_rotated_font_pixel_dither() below - no new dither
+ * path, just a smaller effective alpha into the one that already exists. */
 static void draw_glyph_font_dither(const gfx_font_t *font, int x, int y,
                                    unsigned char ch, gfx_color_t color,
                                    int scale, int turn, uint8_t alpha)
 {
-    if (font->bpp != 1) {
-        return;
-    }
     if (ch < font->first || (unsigned)(ch - font->first) >= font->count) {
         return;
     }
 
-    const uint8_t *glyph = font->atlas + (size_t)(ch - font->first) * font->cell_h;
+    if (font->bpp == 1) {
+        const uint8_t *glyph =
+            font->atlas + (size_t)(ch - font->first) * font->cell_h;
 
-    for (int row = 0; row < font->cell_h; row++) {
-        const uint8_t bits = glyph[row];
-        if (bits == 0) {
-            continue;
-        }
-        for (int col = 0; col < font->cell_w; col++) {
-            if (bits & (1 << col)) {
-                draw_rotated_font_pixel_dither(font, x, y, row, col, scale,
-                                               turn, color, alpha);
+        for (int row = 0; row < font->cell_h; row++) {
+            const uint8_t bits = glyph[row];
+            if (bits == 0) {
+                continue;
+            }
+            for (int col = 0; col < font->cell_w; col++) {
+                if (bits & (1 << col)) {
+                    draw_rotated_font_pixel_dither(font, x, y, row, col, scale,
+                                                   turn, color, alpha);
+                }
             }
         }
+        return;
+    }
+
+    if (font->bpp == 8) {
+        const size_t cell_pixels = (size_t)font->cell_w * font->cell_h;
+        const uint8_t *glyph =
+            font->atlas + (size_t)(ch - font->first) * cell_pixels;
+
+        for (int row = 0; row < font->cell_h; row++) {
+            const uint8_t *glyph_row = glyph + (size_t)row * font->cell_w;
+            for (int col = 0; col < font->cell_w; col++) {
+                const uint8_t coverage = glyph_row[col];
+                if (coverage == 0) {
+                    continue;
+                }
+                const uint8_t folded = coverage < alpha ? coverage : alpha;
+                draw_rotated_font_pixel_dither(font, x, y, row, col, scale,
+                                               turn, color, folded);
+            }
+        }
+        return;
     }
 }
 
