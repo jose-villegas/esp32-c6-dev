@@ -33,6 +33,7 @@
         "wave_in_ms": 750,
         "wave_out_ms": 5500,
         "title_height_px": 75,
+        "title_x_px": 170,
         "image_start_ms": 3500,
         "image_fade_ms": 1300,
         "title_shadow_dx": -7,

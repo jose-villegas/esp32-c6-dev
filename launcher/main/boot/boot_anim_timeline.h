@@ -81,6 +81,9 @@
 /* how far down the viewer's frame the title's own centre lands - see boot_anim.h's own comment on this section for the frame it is in */
 #define BOOT_ANIM_TITLE_VIEW_Y 75
 
+/* how far into the viewer's frame the title's own left edge starts - see boot_anim.h's own comment on this section for where the default came from */
+#define BOOT_ANIM_TITLE_VIEW_X 170
+
 /* drop shadow offset, pixels right (negative is left) - 0/0 disables it */
 #define BOOT_ANIM_TITLE_SHADOW_DX -7
 
