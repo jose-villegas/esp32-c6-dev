@@ -37,7 +37,9 @@
 #include "../../gfx/gfx.h"
 #include "../../input/imu.h"
 #include "../../boot/post_ui.h"
+#if CONFIG_LAUNCHER_SELFTEST
 #include "../../boot/selftest.h"
+#endif
 #include "../../ui/ui.h"
 
 #define PAGE_COUNT     2
@@ -50,6 +52,7 @@ static int page;
  * physically turning it through its holds to read the numbers off. */
 static int show_orientation;
 
+#if CONFIG_LAUNCHER_SELFTEST
 /* Last selftest_run() result, persisted across frames like show_orientation
  * above rather than reset in diagnostics_enter(): re-running the checks on
  * every visit already happens via post_rerun() for the (cheap) POST report,
@@ -63,6 +66,7 @@ static int selftest_failures = -1;
  * diagnostics_frame(), never run from inside mu_button()'s own if-block -
  * see the comment there for why. */
 static bool selftest_pending;
+#endif /* CONFIG_LAUNCHER_SELFTEST */
 
 /* Sensor axes to screen axes - the SAME board-layout fact main.c's
  * DISPLAY_GRAVITY_X/Y and app_sand.c's GRAVITY_SCREEN_X/Y already carry,
@@ -104,12 +108,12 @@ static void draw_toggles_page(const input_t *input)
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
         int overlay_on = gfx_debug_overlay();
-        mu_checkbox(ctx, "gfx dirty-region overlay", &overlay_on);
+        mu_checkbox(ctx, "gfx panel-grid overlay", &overlay_on);
         gfx_set_debug_overlay(overlay_on);
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
         int leaf_on = gfx_debug_leaf_overlay();
-        mu_checkbox(ctx, "gfx leaf-grid overlay", &leaf_on);
+        mu_checkbox(ctx, "gfx leaf-rect overlay", &leaf_on);
         gfx_set_leaf_overlay(leaf_on);
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, UI_ROW_HEIGHT);
@@ -159,6 +163,7 @@ static void draw_toggles_page(const input_t *input)
             mu_text(ctx, line);
         }
 
+#if CONFIG_LAUNCHER_SELFTEST
         /* An ACTION, not a persistent toggle like the checkboxes above -
          * this runs once when tapped rather than reflecting a state the
          * page tracks continuously. Only FLAGGED here, not run: selftest_run()
@@ -181,6 +186,7 @@ static void draw_toggles_page(const input_t *input)
                      selftest_failures);
         }
         mu_text(ctx, selftest_line);
+#endif /* CONFIG_LAUNCHER_SELFTEST */
 
         mu_layout_row(ctx, 1, (int[]){ -1 }, gfx_text_height() + 8);
         mu_text(ctx, "BOOT for the POST report");
@@ -195,6 +201,7 @@ static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
 {
     (void)dt_ms;
 
+#if CONFIG_LAUNCHER_SELFTEST
     /* Consumed here, before this frame's own ui_begin()/ui_end() bracket
      * opens - never from inside mu_button()'s own if-block in
      * draw_toggles_page(). selftest_run() runs suite_ui.c, a device-only
@@ -226,6 +233,7 @@ static void diagnostics_frame(uint32_t dt_ms, const input_t *input)
         ui_set_transform(ui_transform_quarter_turn(
             display_shell_quarter(), GFX_WIDTH, GFX_HEIGHT));
     }
+#endif /* CONFIG_LAUNCHER_SELFTEST */
 
     if (input->boot.pressed) {
         page = (page + 1) % PAGE_COUNT;
