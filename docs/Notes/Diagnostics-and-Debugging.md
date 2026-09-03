@@ -237,8 +237,9 @@ Two ways to see raw sensor readings without adding any code:
   `CONFIG_LAUNCHER_DEVELOPMENT` and `CONFIG_LAUNCHER_SELFTEST` actually
   gate, and the three build variants (release/dev/diag).
 - [`../Launcher-Architecture.md`](../Launcher-Architecture.md) - the
-  Diagnostics app, and its planned split into a Settings app.
-- [`../Settings-App-Plan.md`](../Settings-App-Plan.md) - that planned
-  split, and the SELFTEST/"diagnostics" naming mismatch it would resolve.
+  Diagnostics app (DEVELOPMENT-gated as a whole, with the self-test runner
+  alone narrowed to SELFTEST), and its still-open split into a Settings app.
+- [`../Settings-App-Plan.md`](../Settings-App-Plan.md) - that open split,
+  and the SELFTEST/"diagnostics" naming mismatch it would resolve.
 - [`Flashing-and-Toolchain.md`](Flashing-and-Toolchain.md) - board recovery,
   and the toolchain details `monitor.sh` depends on.
