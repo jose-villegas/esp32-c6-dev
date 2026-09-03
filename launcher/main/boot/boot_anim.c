@@ -393,8 +393,19 @@ static void draw_grid_spoke(uint16_t turn, int32_t near, int32_t far,
     }
 }
 
-static void draw_floor(uint32_t now_ms, uint8_t ink,
-                       const boot_anim_view_t *view)
+/* draw_floor(), draw_axes(), draw_curve(), draw_zeros(), draw_image() and
+ * draw_title() below are all non-static, deliberately - see
+ * suite_boot_anim_perf.c, which times each on its own across the
+ * animation's own timeline. Nothing here is declared in boot_anim.h (no
+ * caller outside this file and the perf suite has any business calling
+ * these individually); the suite reaches them through its own extern
+ * declarations, mirroring app_cube.c's own cube_update_rotation()/
+ * cube_clear_frame()/cube_rasterize_frame() and the reasoning in that
+ * file's own comment on why: boot_anim_draw_frame() below is just these
+ * calls in sequence, so a perf run exercises the exact code a real frame
+ * runs, not a hand copy of it that could drift. */
+void draw_floor(uint32_t now_ms, uint8_t ink,
+                const boot_anim_view_t *view)
 {
     /* The three values the ring loop below hands straight to
      * boot_anim_wave_height() - see its own comment on why a zero
@@ -514,8 +525,8 @@ static void draw_label(int x, int y, const char *text, uint8_t ink)
                     LABEL_SCALE);
 }
 
-static void draw_axes(uint32_t now_ms, uint8_t ink,
-                      const boot_anim_view_t *view)
+void draw_axes(uint32_t now_ms, uint8_t ink,
+              const boot_anim_view_t *view)
 {
     const uint8_t reach = boot_anim_axis_reach(now_ms);
     if (reach == 0) {
@@ -603,8 +614,8 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
  * happens at is one of the numbers the Riemann hypothesis is about. Drawn
  * white and flat rather than blended, so they stay legible through whatever
  * the curve is doing around them. */
-static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
-                       const boot_anim_view_t *view)
+void draw_zeros(int32_t pen_t_q8, uint8_t ink,
+                const boot_anim_view_t *view)
 {
     for (int i = 0; i < BOOT_ANIM_ZEROS; i++) {
         const int32_t t = boot_anim_zero_t[i];
@@ -740,8 +751,8 @@ static void draw_heads(int32_t colour_pen, uint8_t ink,
  *
  * Returns the height the pen has climbed to, which is what decides how many
  * of the zeros have been marked. */
-static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
-                          const boot_anim_view_t *view)
+int32_t draw_curve(uint32_t now_ms, uint8_t ink,
+                   const boot_anim_view_t *view)
 {
     const int32_t pen = boot_anim_pen(now_ms);
     if (pen <= 0) {
@@ -908,7 +919,7 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
  * Up to two gfx_text_font*() calls per letter now instead of one - real,
  * but bounded to six letters, and paid only for the ~1s the title is
  * actually flying in and settling, not the whole animation. */
-static void draw_title(uint32_t now_ms, uint8_t ink)
+void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
     const gfx_font_t *font = gfx_default_font();
@@ -970,7 +981,7 @@ static void draw_title(uint32_t now_ms, uint8_t ink)
  * redundant today - it is here because the contract says so regardless,
  * and because that redundancy is not guaranteed to still hold if this
  * frame ever grows a partial clear. */
-static void draw_image(uint8_t ink, uint8_t reveal)
+void draw_image(uint8_t ink, uint8_t reveal)
 {
     if (reveal == 0) {
         return;
@@ -1017,6 +1028,18 @@ static void draw_image(uint8_t ink, uint8_t reveal)
  * The loop
  *-------------------------------------------------------------------------*/
 
+/* The whole-panel wipe boot_anim_draw_frame() opens with - see this file's
+ * own top comment ("EVERY FRAME IS A FULL REPAINT") for why there is no
+ * partial-clear path here the way app_cube.c's own cube_clear_frame() has
+ * one. A separate, non-static function for the same reason every other
+ * draw_* here now is: suite_boot_anim_perf.c times it as its own phase,
+ * since it is real work (322 KiB) paid every frame regardless of what else
+ * that frame draws - see gfx_clear()'s own measured cost in gfx.c. */
+void boot_anim_clear_frame(void)
+{
+    gfx_clear(COL_BG);
+}
+
 void boot_anim_draw_frame(uint32_t now_ms)
 {
     const uint8_t ink    = boot_anim_ink(now_ms);
@@ -1032,7 +1055,7 @@ void boot_anim_draw_frame(uint32_t now_ms)
     const boot_anim_view_t view = boot_anim_view(GFX_WIDTH, GFX_HEIGHT,
                                                  now_ms);
 
-    gfx_clear(COL_BG);
+    boot_anim_clear_frame();
 
     /* Gated the same way the title already is below: once the photograph
      * is about to fully cover the panel, this is a whole frame of drawing
@@ -1061,14 +1084,48 @@ void boot_anim_draw_frame(uint32_t now_ms)
     }
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Windowed, not per-frame or once-at-the-end - main.c's own report_fps()
+ * (the shell's post-boot loop) already makes that case, and a log line
+ * costs several ms of UART, enough to throttle the very thing being
+ * measured. Duplicated here rather than shared: boot_anim_run() has its
+ * own loop, entirely separate from the shell's, so there is no one call
+ * site the two could share this from.
+ *
+ * 500ms windows, not main.c's 1.5s - short enough to actually localize a
+ * dip to a ~2s window (the photograph's own crossfade, draw_image()'s
+ * full-framebuffer blend loop - see that function's own comment) rather
+ * than average it away against six-odd seconds of much cheaper curve/grid
+ * drawing. `now_ms` in the log line, not just an fps number, so a dip can
+ * be read straight off against boot_anim_timeline.json's own authored
+ * ms values without having to count log lines to find it. */
+static void report_fps_windowed(int64_t now_us, uint32_t now_ms,
+                                int64_t *window_start, uint32_t *frames)
+{
+    (*frames)++;
+    const int64_t since = now_us - *window_start;
+    if (since >= 500000) {
+        ESP_LOGI(TAG, "t=%ums: %.1f fps", (unsigned)now_ms,
+                 (double)*frames * 1000000.0 / (double)since);
+        *frames = 0;
+        *window_start = now_us;
+    }
+}
+#endif
+
 #ifdef ESP_PLATFORM
 void boot_anim_run(void)
 {
     const int64_t started_us = esp_timer_get_time();
     uint32_t frames = 0;
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    int64_t fps_window_start = started_us;
+    uint32_t fps_window_frames = 0;
+#endif
 
     for (;;) {
-        const int64_t elapsed_us = esp_timer_get_time() - started_us;
+        const int64_t now_us = esp_timer_get_time();
+        const int64_t elapsed_us = now_us - started_us;
         const uint32_t now_ms = (uint32_t)(elapsed_us / 1000);
         if (now_ms >= BOOT_ANIM_MS) {
             break;
@@ -1077,6 +1134,10 @@ void boot_anim_run(void)
         boot_anim_draw_frame(now_ms);
         gfx_present();
         frames++;
+#if CONFIG_LAUNCHER_DEVELOPMENT
+        report_fps_windowed(now_us, now_ms, &fps_window_start,
+                            &fps_window_frames);
+#endif
 
         /* The same yield the shell's loop makes, for the same reason: the
          * idle task feeds the watchdog. */
