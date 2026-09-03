@@ -27,14 +27,14 @@ clears the ceiling today is 864 bytes
 - so 1024 is not starving anything real, it is just below where the next
 genuine outlier would have to be caught.
 
-Seven functions already exceed it (PRE_EXISTING_STACK_DEBT below), the worst
-by far being test_a_submerged_obstacle_casts_a_gravity_aligned_shadow's
-on-stack `unsigned depth[92 * 112]` - 42,848 bytes, nearly 12x the entire
-device stack, the same species of bug as both historical panics and not yet
-known to have been run on real hardware. That number is the reason the
-ceiling is not simply raised to match what already exists: doing so would
-paper over a live device risk instead of gating it. Pre-existing frames are
-tracked explicitly instead, so a NEW oversized frame still fails the build.
+Seven functions already exceed it (PRE_EXISTING_STACK_DEBT below), now
+ranging 1,088-1,792 bytes. The reason they are tracked individually rather
+than absorbed by a higher ceiling is what the worst of them turned out to
+be: an on-stack `unsigned depth[92 * 112]`, 42,848 bytes, nearly twelve
+times the whole device stack, the same species of bug as both historical
+panics. Raising the ceiling to fit what already existed would have hidden
+it; listing each frame instead surfaced it on the gate's first run (bd
+esp32c6-3h9, fixed in 4a17e07).
 
 This gate is only worth anything if a frame that fits on x86 cannot secretly
 be larger on the target, so that was measured rather than assumed. Compiling
@@ -74,14 +74,17 @@ import device_profile  # noqa: E402  (path must be set up first)
 # Keyed by (source file basename, function name) rather than a full path, so
 # this survives being checked out to a different absolute location.
 #
-# The worst entry - test_a_submerged_obstacle_casts_a_gravity_aligned_shadow,
-# 42,848 bytes from an on-stack `unsigned depth[92 * 112]` - is a genuine
-# device risk, not a false positive: it is the same species of bug as both
-# panics this gate exists to catch, just not yet known to have run on real
-# hardware. See this file's header for the full account.
+# A frame that shrinks but stays over the ceiling gets its entry RE-RECORDED
+# at the lower number, which is tightening, not loosening - leaving the old
+# value there would licence it to grow all the way back. That has already
+# happened once: this list's worst entry was
+# test_a_submerged_obstacle_casts_a_gravity_aligned_shadow at 42,848 bytes,
+# an on-stack `unsigned depth[92 * 112]` and a genuine device risk (bd
+# esp32c6-3h9, the first thing this gate caught). It was moved to the heap
+# in 4a17e07 and now measures 1,632.
 PRE_EXISTING_STACK_DEBT = {
     ("suite_sand.c",
-     "test_a_submerged_obstacle_casts_a_gravity_aligned_shadow"): 42848,
+     "test_a_submerged_obstacle_casts_a_gravity_aligned_shadow"): 1632,
     ("suite_sand.c",
      "test_a_sparse_repaint_does_not_band_a_tall_liquid_column"): 1792,
     ("suite_sand.c",
