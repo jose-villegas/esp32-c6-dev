@@ -33,6 +33,7 @@
 
 #if CONFIG_LAUNCHER_SELFTEST
 #include "boot/selftest.h"
+#include "suites.h"
 #endif
 
 #include "bsp/esp-bsp.h"
@@ -478,6 +479,23 @@ void app_main(void)
         if (dt_ms > 250) {
             dt_ms = 250;   /* clamp, so a stall does not jump animation */
         }
+
+#if CONFIG_LAUNCHER_SELFTEST
+        /* A RUNSUITE request from the host over the console - see
+         * util/screenshot.c's own "WHY THE RESULT COMES BACK THROUGH A FLAG"
+         * section for why this cannot just call suites_run_one() directly
+         * from the listener task: that task and this loop both draw and
+         * present to the one framebuffer, with no lock between them. Checked
+         * before this iteration's own step_app()/gfx_present() below, so the
+         * suite's own many frames of drawing/clearing/presenting never
+         * interleave with the shell's. */
+        char runsuite_name[64];
+        if (screenshot_take_runsuite_request(runsuite_name, sizeof runsuite_name)) {
+            if (!suites_run_one(runsuite_name)) {
+                ESP_LOGE(TAG, "no suite named '%s' is registered", runsuite_name);
+            }
+        }
+#endif
 
         touch_read(&input);
         buttons_read(&input.boot, &input.power);
