@@ -553,8 +553,8 @@ static void test_the_seeds_three_axes_project_to_distinct_directions(void)
  * from BOOT_ANIM_WAVE_HEIGHT_Q12/WAVELENGTH_Q12/PERIOD_MS - see
  * boot_anim_wave_height()'s own comment on why it takes all three as
  * parameters: the shipped seed's own height is 0 (off by default -
- * test_the_seeds_wave_is_off_by_default() below is the test that actually
- * checks THAT), which would make every one of these assertions trivially
+ * test_the_seeds_wave_is_coherently_authored() below is what actually
+ * checks that), which at 0 would make every one of these assertions trivially
  * true for the wrong reason. */
 static void test_wave_height_is_zero_when_the_amplitude_is_zero(void)
 {
@@ -658,9 +658,28 @@ static void test_wave_height_is_frozen_when_the_period_is_zero(void)
  * claim boot_anim_wave_height() itself makes (see its own comment), so
  * worth its own test the way test_the_seed_finishes_the_curve_before_
  * the_dissolve_starts() already checks a different seed-specific fact. */
-static void test_the_seeds_wave_is_off_by_default(void)
+/* This used to assert the seed's own wave height was 0 - true when the
+ * ripple was a brand new knob nobody had authored yet, and false the
+ * moment anyone tuned one in, which is exactly what happened. A seed
+ * value an author is expected to change is not a fact worth pinning; what
+ * IS worth pinning is that whatever they tune stays COHERENT, since
+ * boot_anim_wave_height() reads all three numbers together and a nonzero
+ * height against a zero wavelength or period is the combination that
+ * silently draws nothing (see that function's own early-out). Holds
+ * whether the ripple is authored on or off. */
+static void test_the_seeds_wave_is_coherently_authored(void)
 {
-    TEST_ASSERT_EQUAL_INT32(0, BOOT_ANIM_WAVE_HEIGHT_Q12);
+    TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_HEIGHT_Q12 >= 0,
+        "a negative wave height would flip every crest into a trough");
+    if (BOOT_ANIM_WAVE_HEIGHT_Q12 != 0) {
+        TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_WAVELENGTH_Q12 > 0,
+            "the seed authors a wave height but no wavelength - "
+            "boot_anim_wave_height() would return flat and the ripple "
+            "would silently never appear");
+        TEST_ASSERT_TRUE_MESSAGE(BOOT_ANIM_WAVE_PERIOD_MS > 0,
+            "the seed authors a wave height but no period - the ripple "
+            "would be frozen rather than travelling");
+    }
 }
 
 /* boot_anim_wave_envelope() takes no parameters of its own to fabricate -
@@ -746,21 +765,42 @@ static void test_the_title_wave_never_swings_wider_as_it_calms(void)
     }
 }
 
-static void test_wave_envelope_fades_back_to_zero_by_the_end(void)
+/* Measured from BOOT_ANIM_WAVE_OUT_MS, not from BOOT_ANIM_MS: the
+ * envelope's contract is that it reaches zero one ramp after the fade-out
+ * STARTS, and whether that lands before the animation's own end is a
+ * timeline choice, not a property of this function. The seed currently
+ * parks wave_out_ms exactly at total_ms - so the ripple is still at full
+ * strength on the last frame, which is fine because boot_anim_ink() has
+ * been taking the whole picture to black since fade_start_ms long before
+ * then. Asserting against BOOT_ANIM_MS, as this used to, made the test a
+ * hostage to that one authoring decision. */
+static void test_wave_envelope_fades_back_to_zero_after_its_ramp(void)
 {
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(BOOT_ANIM_MS));
+    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_wave_envelope(
+        BOOT_ANIM_WAVE_OUT_MS + BOOT_ANIM_WAVE_ENVELOPE_RAMP_MS));
 }
 
-/* The seed ships with grid_spoke_start_ms/grid_spoke_draw_ms both 0 - see
- * gen_boot_anim_timeline.py's own comment on why that reproduces "every
- * spoke drawn at full length instantly", the behaviour before either field
- * existed - so boot_anim_grid_spoke_reach() should already be at its own
- * max (255, tween_ramp()'s own Q0 "fully arrived") by the very next
- * millisecond, not just eventually. */
-static void test_the_seeds_spokes_reach_full_length_instantly(void)
+/* The reach's own endpoints, read off whatever the seed authors rather
+ * than off the all-zero default it used to ship. That default ("every
+ * spoke at full length instantly", the behaviour from before either field
+ * existed - see gen_boot_anim_timeline.py's own comment) is still covered
+ * here, because a start and draw of 0 make the two assertions below land
+ * on 0ms and 1ms exactly as the old test did; a seed that animates its
+ * spokes instead simply moves where they are sampled, which is the point.
+ *
+ * tween_ramp() is what makes the second one exact at the boundary rather
+ * than merely close - see its own comment on reaching 255 AT
+ * start + duration, not one millisecond after. */
+static void test_the_seeds_spokes_reach_their_full_length(void)
 {
-    TEST_ASSERT_EQUAL_UINT8(0, boot_anim_grid_spoke_reach(0));
-    TEST_ASSERT_EQUAL_UINT8(255, boot_anim_grid_spoke_reach(1));
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(0,
+        boot_anim_grid_spoke_reach(BOOT_ANIM_GRID_SPOKE_START_MS),
+        "a spoke should have no length at all before its own draw begins");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(255,
+        boot_anim_grid_spoke_reach(BOOT_ANIM_GRID_SPOKE_START_MS +
+                                   BOOT_ANIM_GRID_SPOKE_DRAW_MS + 1),
+        "a spoke should be at full length once its own draw window has "
+        "passed");
 }
 
 /*---------------------------------------------------------------------------
@@ -1119,16 +1159,38 @@ static void test_the_floor_fades_in_from_the_origin_outward(void)
 /* The floor has no edge: it fades out with distance instead of stopping.
  * Long after everything has arrived, each ring must still be dimmer than the
  * one inside it, all the way down to nothing. */
+/* NON-increasing per ring, plus a real drop across any span, rather than
+ * strictly dimmer at every single ring as this used to demand.
+ *
+ * Strict per-ring was only ever satisfiable while the alpha ceiling was
+ * large next to the ring count: the falloff is left * ceiling / FADE, so
+ * with the seed's current 128 rings against a ceiling of 64 each ring is
+ * worth half a level and adjacent PAIRS land on the same integer (63, 63,
+ * 62, 62, ...). That is arithmetic, not a regression - and it is invisible
+ * on the panel, because what the eye reads as "a plane going away" is the
+ * overall gradient, not whether ring 62 and ring 63 differ by one 255th.
+ * The two assertions below are what the test's own name actually claims:
+ * it never gets BRIGHTER with distance, and it genuinely falls rather than
+ * plateauing into a tile with an edge. */
 static void test_the_floor_fades_out_with_distance_rather_than_stopping(void)
 {
     const uint32_t settled = BOOT_ANIM_MS;
+    const int span = BOOT_ANIM_GRID_FADE / 8;
 
     for (int ring = 2; ring < BOOT_ANIM_GRID_FADE; ring++) {
         TEST_ASSERT_TRUE_MESSAGE(
-            boot_anim_grid_alpha(settled, ring) <
+            boot_anim_grid_alpha(settled, ring) <=
             boot_anim_grid_alpha(settled, ring - 1),
-            "a floor ring was no dimmer than the one inside it - the grid "
-            "would read as a tile with an edge rather than as a plane");
+            "a floor ring was BRIGHTER than the one inside it - the grid "
+            "would read as lit from the far edge inward");
+    }
+    for (int ring = span; ring < BOOT_ANIM_GRID_FADE; ring += span) {
+        TEST_ASSERT_TRUE_MESSAGE(
+            boot_anim_grid_alpha(settled, ring) <
+            boot_anim_grid_alpha(settled, ring - span),
+            "the floor stopped dimming across a whole eighth of its own "
+            "reach - it would read as a tile with an edge rather than as "
+            "a plane");
     }
     TEST_ASSERT_EQUAL_UINT8_MESSAGE(0,
         boot_anim_grid_alpha(settled, BOOT_ANIM_GRID_FADE),
@@ -1176,7 +1238,19 @@ static void test_the_grid_climb_runs_the_whole_animation(void)
  * own comment for why raising the colour alone was not enough. Checked
  * through the innermost ring's own alpha, since the ceiling itself is not
  * a separate exposed function. */
-static void test_the_floor_opacity_climbs_alongside_its_colour(void)
+/* How far the floor's opacity ceiling travels is authored, not fixed:
+ * boot_anim_grid_alpha() lerps it from BOOT_ANIM_GRID_MAX to
+ * BOOT_ANIM_GRID_CEILING_MAX, so a seed that sets those two EQUAL - which
+ * the current one does, both 64 - has deliberately asked for a floor that
+ * holds one steady brightness while only its hue climbs. This used to
+ * demand a strict climb and so failed the moment that was authored.
+ *
+ * What must hold either way is that the opacity never goes BACKWARDS: a
+ * settled ring dimming again partway through would read as the floor
+ * guttering, and would mean the ceiling lerp or the arrival ramp had been
+ * wired the wrong way round. The strict-climb case is still asserted, but
+ * only where the seed actually asks for one. */
+static void test_the_floor_opacity_never_falls_back(void)
 {
     /* Ring 1's own fade-in (BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS
      * after BOOT_ANIM_GRID_START_MS) is long done by either of these, plus
@@ -1186,9 +1260,17 @@ static void test_the_floor_opacity_climbs_alongside_its_colour(void)
         BOOT_ANIM_GRID_RING_MS + BOOT_ANIM_GRID_FADE_MS + 50;
     const uint8_t early = boot_anim_grid_alpha(early_ms, 1);
     const uint8_t late  = boot_anim_grid_alpha(BOOT_ANIM_MS, 1);
-    TEST_ASSERT_TRUE_MESSAGE(late > early,
-        "the floor's own opacity should climb over the animation, not "
-        "just its colour");
+
+    TEST_ASSERT_TRUE_MESSAGE(late >= early,
+        "the floor's own opacity fell back over the animation - a settled "
+        "ring should never gutter once it has arrived");
+
+    if (BOOT_ANIM_GRID_CEILING_MAX > BOOT_ANIM_GRID_MAX) {
+        TEST_ASSERT_TRUE_MESSAGE(late > early,
+            "the seed authors a ceiling above the floor's starting max, "
+            "so its opacity should visibly climb over the animation and "
+            "not just its colour");
+    }
 }
 
 /* Starts at 0 the moment the floor itself appears, climbs steadily, never
@@ -1427,36 +1509,49 @@ static void test_the_wobble_is_exactly_flat_once_a_letter_has_arrived(void)
  * strictly grow. A constant-frequency wobble whose AMPLITUDE merely shrinks
  * - the mistake this is checking was not made - would pass every other test
  * here and still be wrong: it would vibrate to a stop instead of settling. */
+/* Counts sign changes in each HALF of the flight rather than comparing
+ * gaps between four consecutive crossings, as this used to.
+ *
+ * The property under test is unchanged - the wobble is a chirp, packing
+ * its oscillation into the early, far part of the flight and stretching
+ * out as the letter settles - and so is the reason it holds:
+ * boot_anim_title_wobble() drives its phase off d SQUARED, so the first
+ * half of the approach (d from 1.0 to 0.5) sweeps three quarters of the
+ * total phase and the second half only the remaining quarter. Comparing
+ * the two halves measures exactly that, and needs just ONE crossing to
+ * do it.
+ *
+ * Gap-comparison needed four, which is not something a seed owes anyone:
+ * BOOT_ANIM_TITLE_TURNS_PHASE is authored, and the current seed's 92000
+ * is 1.4 turns over the whole flight - a deliberately gentler wobble than
+ * the 3.5 turns that was in the file when this test was written, and only
+ * two crossings in total. The chirp was still there; the old test simply
+ * could not see it. */
 static void test_the_wobbles_oscillation_slows_as_it_lands(void)
 {
-    int32_t crossings[8];
-    int n = 0;
-    int prev_sign = 0;
+    int early = 0, late = 0, prev_sign = 0;
 
-    for (int32_t d = BOOT_ANIM_ONE; d >= 0 && n < 8; d -= 4) {
+    for (int32_t d = BOOT_ANIM_ONE; d >= 0; d -= 4) {
         const int y = boot_anim_title_wobble(d);
         const int sign = y > 0 ? 1 : (y < 0 ? -1 : 0);
         if (sign != 0 && prev_sign != 0 && sign != prev_sign) {
-            crossings[n++] = d;
+            if (d >= BOOT_ANIM_ONE / 2) {
+                early++;
+            } else {
+                late++;
+            }
         }
         if (sign != 0) {
             prev_sign = sign;
         }
     }
 
-    TEST_ASSERT_TRUE_MESSAGE(n >= 4,
-        "expected several oscillations early in the flight to compare");
-
-    /* crossings[] was recorded walking d DOWNWARD (1 toward 0), so a later
-     * entry is a smaller d - the gap between consecutive entries is the
-     * distance-in-d between crossings, and it must grow as d shrinks. */
-    for (int i = 0; i < n - 2; i++) {
-        const int32_t gap_earlier = crossings[i] - crossings[i + 1];
-        const int32_t gap_later   = crossings[i + 1] - crossings[i + 2];
-        TEST_ASSERT_TRUE_MESSAGE(gap_later > gap_earlier,
-            "the gap between oscillations should grow as the letter "
-            "approaches - a chirp, not a constant vibration fading out");
-    }
+    TEST_ASSERT_TRUE_MESSAGE(early + late >= 1,
+        "the seed authors no wobble oscillation at all - "
+        "BOOT_ANIM_TITLE_TURNS_PHASE would have to be under half a turn");
+    TEST_ASSERT_TRUE_MESSAGE(early > late,
+        "the wobble should oscillate faster early in the flight than as "
+        "it lands - a chirp, not a constant vibration fading out");
 }
 
 /* "on its final position" now means the ARRIVAL wobble (see
@@ -1674,17 +1769,17 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_wave_height_is_periodic_in_time);
     RUN_TEST(test_wave_height_travels_outward_with_time);
     RUN_TEST(test_wave_height_is_frozen_when_the_period_is_zero);
-    RUN_TEST(test_the_seeds_wave_is_off_by_default);
+    RUN_TEST(test_the_seeds_wave_is_coherently_authored);
     RUN_TEST(test_wave_envelope_is_zero_at_the_very_start);
     RUN_TEST(test_wave_envelope_is_still_muted_at_wave_in_ms_itself);
     RUN_TEST(test_wave_envelope_reaches_full_strength_after_the_ramp);
     RUN_TEST(test_wave_envelope_plateaus_between_in_and_out);
     RUN_TEST(test_wave_envelope_is_still_full_at_wave_out_ms_itself);
-    RUN_TEST(test_wave_envelope_fades_back_to_zero_by_the_end);
+    RUN_TEST(test_wave_envelope_fades_back_to_zero_after_its_ramp);
     RUN_TEST(test_the_title_wave_is_at_full_swing_before_it_calms);
     RUN_TEST(test_the_title_wave_reaches_stillness_after_its_fade);
     RUN_TEST(test_the_title_wave_never_swings_wider_as_it_calms);
-    RUN_TEST(test_the_seeds_spokes_reach_full_length_instantly);
+    RUN_TEST(test_the_seeds_spokes_reach_their_full_length);
 
     RUN_TEST(test_a_span_starts_and_ends_halfway_between_its_points);
     RUN_TEST(test_a_repeated_point_pins_the_end_of_the_curve);
@@ -1709,7 +1804,7 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_the_floor_fades_out_with_distance_rather_than_stopping);
     RUN_TEST(test_the_floor_stays_dim_enough_to_be_a_backdrop);
     RUN_TEST(test_the_grid_climb_runs_the_whole_animation);
-    RUN_TEST(test_the_floor_opacity_climbs_alongside_its_colour);
+    RUN_TEST(test_the_floor_opacity_never_falls_back);
     RUN_TEST(test_the_floor_whitens_steadily_from_its_own_start_to_a_cap);
     RUN_TEST(test_the_floor_colour_travels_with_time_and_distance);
     RUN_TEST(test_the_axes_are_there_before_the_curve_starts_climbing);
