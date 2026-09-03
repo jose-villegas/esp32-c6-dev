@@ -14,12 +14,26 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef ESP_PLATFORM
 #include "bsp/esp-bsp.h"
+#endif
 #include "gfx/gfx_color.h"
 #include "gfx/gfx_font.h"
 
+/* ESP_PLATFORM is defined by ESP-IDF's own toolchain file - never by this
+ * project - which is what makes it the natural, zero-plumbing switch
+ * between the device build and a host one: a plain `gcc` invocation (the
+ * same one test/run_tests.sh already uses) simply never defines it. The
+ * host figures are literals rather than pulled from anywhere, the same
+ * reason gfx_dirty.h and test/suites/suite_boot_anim.c already hardcode
+ * them - a BSP header is exactly what a host build cannot include. */
+#ifdef ESP_PLATFORM
 #define GFX_WIDTH   BSP_LCD_H_RES   /* 368 */
 #define GFX_HEIGHT  BSP_LCD_V_RES   /* 448 */
+#else
+#define GFX_WIDTH   368
+#define GFX_HEIGHT  448
+#endif
 
 /* QSPI clock for the panel.
  *
@@ -101,6 +115,15 @@ bool gfx_interlace_enabled(void);
 void gfx_invalidate(void);
 
 void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
+
+/* gfx_fill_rect(), but at `alpha`'s own apparent coverage (0 nothing, 255
+ * solid, 16 graduated steps between) rather than solid - an ordered
+ * (Bayer) dither, the cheapest fake transparency this panel can do since
+ * it has no blending anywhere. See gfx.c's own comment above the
+ * definition for the dither table itself and why 255 is guaranteed to be
+ * exactly as solid as gfx_fill_rect(). */
+void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
+                          uint8_t alpha);
 
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
@@ -197,6 +220,15 @@ const gfx_font_t *gfx_default_font(void);
  * font is silently skipped rather than drawn wrong. */
 void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
                    int scale, int quarter_turns, const gfx_font_t *font);
+
+/* gfx_text_font(), but every glyph pixel is drawn through
+ * gfx_fill_rect_dither() at `alpha` instead of solid - text that fades
+ * rather than cuts. A deliberately separate function, not a parameter
+ * added to gfx_text_font() itself - see gfx.c's own comment above the
+ * definition for why. */
+void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
+                          int scale, int quarter_turns,
+                          const gfx_font_t *font, uint8_t alpha);
 
 /* gfx_text_width()'s general form: the width `text` would draw at in
  * `font`, at `scale`. gfx_text_width() is this called with

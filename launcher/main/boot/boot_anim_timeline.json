@@ -1,0 +1,429 @@
+{
+    "timing": {
+        "total_ms": 6500,
+        "axes_ms": 450,
+        "grid_start_ms": 320,
+        "grid_ring_ms": 16,
+        "grid_rings": 128,
+        "grid_fade_ms": 128,
+        "pen_start_ms": 520,
+        "pen_ms": 1980,
+        "title_start_ms": 2700,
+        "title_stagger_ms": 250,
+        "title_flight_ms": 1100,
+        "title_entry_px": 420,
+        "title_turns_phase": 229376,
+        "title_amplitude_px": 24,
+        "title_wave_amplitude_px": 12,
+        "title_wave_period_ms": 900,
+        "title_wave_stagger_ms": 75,
+        "fade_start_ms": 5800,
+        "grid_hue_ms": 700,
+        "grid_hue_spread": 64,
+        "grid_whiten_max": 32,
+        "grid_ceiling_max": 64,
+        "grid_max": 64,
+        "pen_finish_ms": 5800,
+        "wave_start_ms": 4200,
+        "wave_end_ms": 5800,
+        "grid_spokes": 4,
+        "grid_spoke_dash": 1,
+        "grid_spoke_start_ms": 2300,
+        "grid_spoke_draw_ms": 800,
+        "wave_in_ms": 750,
+        "wave_out_ms": 5500,
+        "title_height_px": 75,
+        "image_start_ms": 4200,
+        "image_fade_ms": 2300,
+        "title_shadow_dx": -7,
+        "title_shadow_dy": 7,
+        "title_shadow_alpha": 128
+    },
+    "camera_focal": 512,
+    "grid_step_m": 0.1,
+    "wave_height_m": 1.25,
+    "wave_wavelength_m": 5,
+    "wave_period_ms": 800,
+    "keyframes": [
+        {
+            "ms": 0,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    11,
+                    0,
+                    0
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 700,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -5,
+                    0,
+                    0
+                ],
+                "rot": [
+                    -135,
+                    -45,
+                    90
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "ease_out"
+        },
+        {
+            "ms": 1580,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -5,
+                    0,
+                    0
+                ],
+                "rot": [
+                    -135,
+                    27,
+                    90
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 2000,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -5,
+                    0,
+                    0
+                ],
+                "rot": [
+                    -135,
+                    27,
+                    90
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 2800,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -5,
+                    0,
+                    0
+                ],
+                "rot": [
+                    -135,
+                    0,
+                    90
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 3100,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -2,
+                    8,
+                    0
+                ],
+                "rot": [
+                    -180,
+                    -45,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 3300,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -2,
+                    8,
+                    0
+                ],
+                "rot": [
+                    -180,
+                    -45,
+                    0
+                ],
+                "scale": [
+                    1.1,
+                    1.1,
+                    1.1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 4200,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -3,
+                    12,
+                    7
+                ],
+                "rot": [
+                    -210,
+                    -45,
+                    30
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 4700,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    -3,
+                    20,
+                    15
+                ],
+                "rot": [
+                    -207,
+                    -45,
+                    30
+                ],
+                "scale": [
+                    3,
+                    3,
+                    3
+                ]
+            },
+            "ease": "linear"
+        },
+        {
+            "ms": 5500,
+            "camera": {
+                "pos": [
+                    0,
+                    0,
+                    -10
+                ],
+                "rot": [
+                    0,
+                    0,
+                    0
+                ],
+                "scale": [
+                    1,
+                    1,
+                    1
+                ]
+            },
+            "space": {
+                "pos": [
+                    0,
+                    19,
+                    5
+                ],
+                "rot": [
+                    -180,
+                    -90,
+                    -5
+                ],
+                "scale": [
+                    1.15,
+                    1.15,
+                    1.15
+                ]
+            },
+            "ease": "linear"
+        }
+    ]
+}
