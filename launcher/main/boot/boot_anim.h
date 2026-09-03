@@ -794,6 +794,34 @@ static inline int32_t boot_anim_wave_height(int32_t r_q12, uint32_t now_ms,
  * tight), not during the normal, large-on-screen portion of the climb. */
 #define BOOT_ANIM_LOD_CHORD_PX 3
 
+/* boot_anim_lod_stride_for_extent()'s two tiers, in screen pixels of the
+ * WHOLE curve's Manhattan bounding-box extent - the "from far away, lose
+ * samples, not just sub-steps" level of detail (see boot_anim_curve_stride()
+ * below). Justified the same way BOOT_ANIM_LOD_CHORD_PX is, bounded by the
+ * curve's own geometry: the spiral's path length is several times its
+ * bounding box (measured well under 8x for the shipped table), so at an
+ * extent of STRIDE4_PX the average decimated chord is at most
+ * 4 * (8 * 96) / BOOT_ANIM_CURVE_POINTS - about a pixel and a half - i.e.
+ * no coarser than the sub-step collapse's own 3px bar already deems
+ * invisible, and usually far finer. */
+#define BOOT_ANIM_LOD_STRIDE2_PX 192
+#define BOOT_ANIM_LOD_STRIDE4_PX 96
+
+/* The third and last level-of-detail axis, alongside the chord collapse and
+ * the sample stride above: how much of the scene the photograph's own
+ * dither (draw_image() in boot_anim.c) is ALREADY overwriting, in
+ * gfx_dither_level() units (0..16 sixteenths of coverage). Past HALF (a
+ * quarter of every stroke's pixels replaced by photo) the curve halves its
+ * sub-steps and the floor caps its ring segments; past COARSE (half of
+ * everything checkerboarded away) each curve span collapses to its single
+ * chord and the floor thins its rings outright. Unlike the other two axes
+ * these are honest approximations, not identities - the justification is
+ * that the stipple destroys the fine detail faster than the shortcut does,
+ * and that the cost of a frame then tapers in step with how much of the
+ * scene is actually left on screen. */
+#define BOOT_ANIM_DISSOLVE_HALF_LEVEL   4
+#define BOOT_ANIM_DISSOLVE_COARSE_LEVEL 8
+
 typedef struct {
     int32_t re, im;   /* Q12 */
     int32_t t;        /* Q8  */
@@ -901,6 +929,49 @@ static inline S3L_Vec4 boot_anim_spline_cs(S3L_Vec4 c0, S3L_Vec4 c1,
     return p;
 }
 
+/* Whether camera-space points `a` and `c` would land within `px` of each
+ * other on screen (Manhattan distance) - the level-of-detail primitive
+ * every "is this worth drawing finely" question below reduces to.
+ *
+ * WITHOUT projecting either point: the full projection of a coordinate is
+ * screen = HALF_RES * (coord * focal / z) / S3L_F, so the screen-space
+ * Manhattan chord is (|dx|+|dy|) * focal * HALF_RES / (z * S3L_F) - and
+ * "chord < px" cross-multiplies into
+ *
+ *     (|dx|+|dy|) * focal * HALF_RES  <  px * z * S3L_F
+ *
+ * two 64-bit multiplies and a compare, no divide, no near-plane clip, no
+ * screen mapping - which matters because this runs once per curve span
+ * and once per grid ring, thousands of times a frame, on a chip whose
+ * divide is its slowest instruction. `z` is taken as the NEARER of the
+ * two (min z = larger apparent size), so a span crossing depth is judged
+ * by its biggest possible on-screen extent - conservative in the "keep
+ * detail" direction. focal == 0 is small3dlib's orthographic mode (no
+ * divide by z in the real projection either), handled as its own branch
+ * of the same cross-multiplication.
+ *
+ * Answers false ("not close") whenever either point is at or behind the
+ * near plane: the whole point of an LOD shortcut is to be invisible when
+ * it fires, so a pair the projection could not answer cleanly for keeps
+ * full detail rather than guessing. */
+static inline bool boot_anim_screen_chord_lt(S3L_Vec4 a, S3L_Vec4 c,
+                                             const boot_anim_view_t *view,
+                                             int32_t px)
+{
+    if (a.z <= BOOT_ANIM_NEAR_Z || c.z <= BOOT_ANIM_NEAR_Z) {
+        return false;
+    }
+    const int32_t dx = im_abs((int)(a.x - c.x));
+    const int32_t dy = im_abs((int)(a.y - c.y));
+    const int64_t m = (int64_t)dx + dy;
+    if (view->focal == 0) {
+        return m * S3L_HALF_RESOLUTION_X < (int64_t)px * S3L_F;
+    }
+    const int32_t zmin = a.z < c.z ? a.z : c.z;
+    return m * view->focal * S3L_HALF_RESOLUTION_X <
+           (int64_t)px * zmin * S3L_F;
+}
+
 /* How many of BOOT_ANIM_SPLINE_STEPS a span between two already-camera-space
  * OUTER points is actually worth walking - basic level of detail: once the
  * whole span's own on-screen chord is a few pixels or less, subdividing it
@@ -909,25 +980,14 @@ static inline S3L_Vec4 boot_anim_spline_cs(S3L_Vec4 c0, S3L_Vec4 c1,
  * own comment cites for why a B-spline was chosen at all) - so a span whose
  * two ENDS already land within BOOT_ANIM_LOD_CHORD_PX of each other cannot
  * have a MIDDLE that strays further away than that. Probed with the span's
- * outer two points rather than anything in between: cheap (one projection
- * each, not the full spline+transform this function exists to let the
- * caller skip), and sufficient given the convex-hull argument above.
- *
- * Falls back to full detail rather than guessing whenever the probe itself
- * cannot answer cleanly - off panel, or straddling the near plane - since
- * the whole point of an LOD shortcut is to be invisible when it fires, not
- * to save a cycle at the cost of a wrong-looking frame in an edge case. */
+ * outer two points rather than anything in between - sufficient given the
+ * convex-hull argument above - via boot_anim_screen_chord_lt(), so the
+ * probe itself costs two multiplies, not a projection. */
 static inline int boot_anim_curve_lod_steps(S3L_Vec4 a, S3L_Vec4 c,
                                             const boot_anim_view_t *view)
 {
-    int ax, ay, bx, by;
-    if (!boot_anim_project_segment_cs(a, c, view, &ax, &ay, &bx, &by)) {
-        return BOOT_ANIM_SPLINE_STEPS;
-    }
-    if (im_abs(bx - ax) + im_abs(by - ay) < BOOT_ANIM_LOD_CHORD_PX) {
-        return 1;
-    }
-    return BOOT_ANIM_SPLINE_STEPS;
+    return boot_anim_screen_chord_lt(a, c, view, BOOT_ANIM_LOD_CHORD_PX)
+        ? 1 : BOOT_ANIM_SPLINE_STEPS;
 }
 
 /* Sample `i` of the generated curve, clamped at both ends.
@@ -947,6 +1007,61 @@ static inline boot_anim_pt_t boot_anim_sample(int i)
     p.im = boot_anim_curve[i].im;
     p.t  = boot_anim_curve[i].t;
     return p;
+}
+
+/* Which sample stride an on-screen curve extent of `manhattan_px` (the
+ * bounding box's width + height) justifies - the pure decision half of
+ * boot_anim_curve_stride() below, split out so it is host-testable on its
+ * own. 1 is "draw every sample", the only value with zero approximation in
+ * it; 2 and 4 drop samples outright, justified by BOOT_ANIM_LOD_STRIDE*_PX's
+ * own comment (the decimated chords stay at or under the pixel scale the
+ * sub-step LOD already treats as invisible). */
+static inline int boot_anim_lod_stride_for_extent(int32_t manhattan_px)
+{
+    if (manhattan_px < BOOT_ANIM_LOD_STRIDE4_PX) {
+        return 4;
+    }
+    if (manhattan_px < BOOT_ANIM_LOD_STRIDE2_PX) {
+        return 2;
+    }
+    return 1;
+}
+
+/* The whole curve's sample stride for the CURRENT frame's view - "from far
+ * away we can afford to lose precision", applied to samples rather than
+ * spline sub-steps: once the space transform's own scale keyframe has
+ * shrunk the curve to a fraction of the panel (the crossfade's pull-back),
+ * adjacent samples land well under a pixel apart and drawing every one of
+ * them is pure per-segment overhead - the segments themselves no longer
+ * move any pixels the coarser walk would not.
+ *
+ * Probed from three representative samples (first, middle, last - the
+ * spiral winds around its own middle, so these three bound its extent
+ * within a small factor), projected for real ONCE per frame - three
+ * projections against the ~2000 per-span probes this decides the fate of.
+ * Any probe point the projection cannot answer for (behind the near plane)
+ * means the curve is near or around the camera - full detail, stride 1,
+ * same "never guess low" fallback boot_anim_screen_chord_lt() takes. */
+static inline int boot_anim_curve_stride(const boot_anim_view_t *view)
+{
+    static const int probe_idx[3] = {
+        0, BOOT_ANIM_CURVE_POINTS / 2, BOOT_ANIM_CURVE_POINTS - 1,
+    };
+    int min_x = 0, max_x = 0, min_y = 0, max_y = 0;
+
+    for (int k = 0; k < 3; k++) {
+        const boot_anim_pt_t p = boot_anim_sample(probe_idx[k]);
+        int sx, sy;
+        if (!boot_anim_project_point(p.re, p.im, p.t, view, &sx, &sy)) {
+            return 1;
+        }
+        if (k == 0 || sx < min_x) min_x = sx;
+        if (k == 0 || sx > max_x) max_x = sx;
+        if (k == 0 || sy < min_y) min_y = sy;
+        if (k == 0 || sy > max_y) max_y = sy;
+    }
+
+    return boot_anim_lod_stride_for_extent((max_x - min_x) + (max_y - min_y));
 }
 
 /*---------------------------------------------------------------------------
