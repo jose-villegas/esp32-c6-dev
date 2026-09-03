@@ -377,15 +377,15 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
  * it, so it returns false the moment any direction fails rather than
  * accumulating across all four.
  *
- * DELIBERATELY NOT cover_mask()/cover_seals() (sand_priv.h) - this used
+ * DELIBERATELY NOT cover_mask()/covered_at() (sand_priv.h) - this used
  * to be built on cover_count() (bd esp32c6-mqt) and briefly shared
  * plumbing with the lava-burst gate below; bd esp32c6-a2j split them back
  * apart on purpose. Burial is a genuinely different question from
  * gravity-relative coverage: a burning SOLID (fire, ember) is starved of
  * air by being surrounded on every side, screen-fixed cardinals and all -
  * "what is below it" smothers a flame exactly as much as what is above
- * it does, so this has no business rotating with gravity or exempting a
- * cardinal-triple crust the way the burst gate does. Keeping one
+ * it does, so this has no business rotating with gravity or ignoring
+ * the sides the way the burst gate does. Keeping one
  * predicate answering two different questions is exactly the mistake
  * cover_count() made the first time; this stays its own, plain,
  * gravity-agnostic all-4 test. */
@@ -3491,9 +3491,9 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * because a lava neighbour is KIND_LIQUID and neighbor_smothers()
      * never counts one - the pool's own sides and floor are always more
      * of the same liquid, never covering, no matter how completely a
-     * crust seals its surface. covered_at()'s gravity-relative semi-disc
-     * (cover_mask()/cover_seals(), sand_priv.h) is what actually answers
-     * "is there a lid over it" for a wide pool. */
+     * crust seals its surface. covered_at()'s gravity-relative lid
+     * (cover_mask(), sand_priv.h) is what actually answers "is there a
+     * lid over it" for a wide pool. */
     if (mat->kind != KIND_LIQUID && smothered(s, x, y, w, h, mat->density)) {
         /* Burying a burning log smothers the BURN, not the log. Same
          * reasoning as quenching one. */
@@ -3537,7 +3537,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * THE ROLL COMES BEFORE covered_at(), not after: at
      * SAND_LAVA_BURST_CHANCE's odds (sand.h, deliberately the rarest a
      * single byte-wide roll can express) the roll is the cheap rejection,
-     * the 5-neighbour cover_mask() walk is not - so the overwhelmingly
+     * the 3-neighbour cover_mask() walk is not - so the overwhelmingly
      * common case, a covered cell that simply loses this step's roll,
      * never pays for the walk.
      *
@@ -3549,14 +3549,17 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * pool wider than one cell could have at most one neighbour that
      * ever counted - the crust directly above it - so a wide pool could
      * never reach the threshold no matter how completely a crust sealed
-     * it. covered_at()'s gravity-relative semi-disc fixes that: the two
+     * it. covered_at()'s gravity-relative lid fixes that: the two
      * diagonal crust cells beside "straight up" count too, so a crust
-     * alone gets an interior pool cell to 3 - see
+     * alone lids an interior pool cell - see
      * test_a_wide_pool_under_a_crust_bursts (suite_sand.c), the case that
-     * could not fire before this change. SAND_LAVA_BURST_COVER, not
-     * smothered()'s own all-5-would-be equivalent - a pocket with one
-     * open side (of the five gravity-relative ones) still qualifies
-     * (SAND_LAVA_BURST_COVER's own comment, sand.h).
+     * could not fire before this change. Those three cells and ONLY
+     * those: the two perpendiculars beside the cell never count, because
+     * a vessel's sides wall lava in rather than cover it, and letting
+     * them count blew the sides out of every hand-drawn basin (see
+     * test_lava_in_a_wall_notch_never_bursts, suite_sand.c, and
+     * cover_mask()'s own comment for the notch that did it). A pocket
+     * with an open side still qualifies, as long as its lid is complete.
      *
      * NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
      * gas_ignite_confined() caller above, which skips straight to a plain
@@ -3581,7 +3584,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     if (is_lava && burst_chance != 0 &&
         (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
         (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0) &&
-        covered_at(s, x, y, w, h, mat->density, SAND_LAVA_BURST_COVER)) {
+        covered_at(s, x, y, w, h, mat->density)) {
         /* rx->quench_to, not a hardcoded MAT_STONE: `is_lava` above IS
          * "a burning liquid with a quench product", so the product is
          * already named right there, and a second burning liquid with
