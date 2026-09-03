@@ -47,6 +47,16 @@ fi
 # and strictness costs nothing in tests.
 CFLAGS="-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -g -O1"
 
+# --- the device's heap, on this machine ------------------------------------
+# Sourced the same way find_cc.sh is, one block above. The cap is a profile
+# field rather than a literal here for the reason device_profile.sh's own
+# header gives: it is a per-chip number, and a second board may join the
+# test family. Selection is $DEVICE_PROFILE, default esp32c6.
+# shellcheck source=../tools/device_profile.sh
+. "$TEST_DIR/../tools/device_profile.sh"
+device_profile_load "" "$TEST_DIR/../tools/device_profiles" || exit 1
+HOST_HEAP_ARENA_BYTES=$(device_profile_require DP_FREE_HEAP_BYTES) || exit 1
+
 # The shell's own portable units and their suites. Hardware suites are absent
 # by design - suite_gfx.c would not compile here, which is the point.
 #
@@ -58,6 +68,7 @@ SOURCES="
 $TEST_DIR/host_main.c
 $TEST_DIR/suites.c
 $TEST_DIR/timing.c
+$TEST_DIR/heap_arena.c
 $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
 $TEST_DIR/suites/suite_button_fsm.c
@@ -152,11 +163,23 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
 # fold the math functions into libc, so a suite using atan2() or fabs()
 # links clean locally and fails only in CI, which is exactly how it was
 # found. Harmless where libm is already part of libc.
+#
+# --wrap routes the suite's own allocations into heap_arena.c's device-sized
+# arena, so a fixture that asks for more than the board has fails HERE
+# rather than after a flash. Only this runner defines HOST_HEAP_ARENA: the
+# firmware and perf_probe compile the same timing.c with every arena line
+# preprocessed out, which is why the hooks had to be behind one macro rather
+# than merely unused. Note that libc-internal allocations do not route
+# through --wrap at all (a pointer from strdup() arrives at __wrap_free
+# never having been seen by __wrap_malloc), which is why the arena forwards
+# pointers it does not own instead of trusting every free().
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
     -I "$TEST_DIR/../components/microui/include" \
     -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
-    $SOURCES "$UNITY_OBJ" -o "$OUT" -lm
+    -DHOST_HEAP_ARENA -DHOST_HEAP_ARENA_BYTES="$HOST_HEAP_ARENA_BYTES" \
+    $SOURCES "$UNITY_OBJ" -o "$OUT" \
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -lm
 
 # --- static stack-frame gate ------------------------------------------------
 # A separate, cheap compile pass over test-code translation units only, with

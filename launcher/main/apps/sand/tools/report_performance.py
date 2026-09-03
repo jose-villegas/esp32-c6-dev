@@ -49,7 +49,15 @@ RESULT_RE = re.compile(r"^\S+:\d+:(?P<name>\w+):(?P<status>PASS|FAIL)(?::\s*(?P<
 # absence means an older capture, from before per-test timing existed - see
 # make_slow_tests_section() below, which degrades to nothing rather than
 # erroring on one.
-TEST_TIME_RE = re.compile(r"^TEST_TIME name=(?P<name>\w+) elapsed_ms=(?P<ms>\d+)$")
+#
+# The trailing group is what keeps that promise for fields added since: the
+# host runner appends peak_bytes= when it runs under the device-sized heap
+# arena (test/heap_arena.c), and an end-anchored pattern would have silently
+# matched nothing on every line rather than failing - degrading a capture to
+# "no timing data" with no error to notice. New fields go on the END of that
+# line, and are ignored here until something needs them.
+TEST_TIME_RE = re.compile(
+    r"^TEST_TIME name=(?P<name>\w+) elapsed_ms=(?P<ms>\d+)(?:\s.*)?$")
 
 # selftest.c's own sentinel, printed once at the very end of the run - the
 # one total this file cannot get by summing TEST_TIME lines, because a
