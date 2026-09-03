@@ -33,6 +33,7 @@
 
 #include "boot/boot_anim_image.h"
 #include "display/display.h"
+#include "gfx/fonts/font_lmroman_40.h"
 #include "gfx/gfx.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
@@ -1149,7 +1150,12 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
 void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
-    const gfx_font_t *font = gfx_default_font();
+    /* &gfx_font_lmroman_40, not gfx_default_font() - the title has its
+     * own font now (tools/gen_font.py, main/gfx/fonts/font_lmroman_
+     * 40.h), a real proportional coverage atlas rather than the shell's
+     * 8x8 bitmap - see BOOT_ANIM_TITLE_SCALE's own comment in boot_anim.h
+     * for why that also means SCALE dropped to 1. */
+    const gfx_font_t *font = &gfx_font_lmroman_40;
     const int glyph_w = gfx_font_width(font, "A", -1, BOOT_ANIM_TITLE_SCALE);
     const int glyph_h = gfx_font_height(font, BOOT_ANIM_TITLE_SCALE);
     char one[2] = { 0, 0 };
@@ -1159,7 +1165,7 @@ void draw_title(uint32_t now_ms, uint8_t ink)
         BOOT_ANIM_TITLE_SHADOW_ALPHA != 0;
 
     for (int i = 0; i < BOOT_ANIM_TITLE_LEN; i++) {
-        const boot_anim_title_pos_t p = boot_anim_title_letter(i, now_ms);
+        const boot_anim_title_pos_t p = boot_anim_title_letter(font, i, now_ms);
         int px, py;
         title_glyph_origin(p.x, p.y, glyph_w, glyph_h, &px, &py);
 

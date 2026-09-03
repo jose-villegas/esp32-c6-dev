@@ -247,6 +247,26 @@ def validate(cfg):
              "enormous one and the crossfade would silently never finish" %
              (timing["image_start_ms"], timing["image_fade_ms"]))
 
+    if timing["title_wave_out_ms"] < 0 or timing["title_wave_fade_ms"] < 0:
+        fail("title_wave_out_ms/title_wave_fade_ms must not be negative "
+             "(%r/%r given) - boot_anim_title_wave_reach() hands both to "
+             "tween_ramp() as a uint32_t, the same wrap-to-enormous trap "
+             "image_start_ms above describes" %
+             (timing["title_wave_out_ms"], timing["title_wave_fade_ms"]))
+
+    # Only worth saying when the calming is actually authored to happen at
+    # all - the default parks title_wave_out_ms at total_ms, where the wave
+    # simply never calms and there is nothing to warn about. Mirrors the
+    # image_start_ms < total_ms guard on its own crossfade warning below.
+    if (timing["title_wave_out_ms"] < timing["total_ms"] and
+            timing["title_wave_out_ms"] + timing["title_wave_fade_ms"] >
+            timing["total_ms"]):
+        warn("the title's idle wave is still calming at total_ms (%d + %d > "
+             "%d) - it will be cut off mid-settle rather than reaching "
+             "stillness on screen"
+             % (timing["title_wave_out_ms"], timing["title_wave_fade_ms"],
+                timing["total_ms"]))
+
     last_ms = -1
     for kf in kfs:
         if kf["ms"] <= last_ms:
@@ -377,6 +397,11 @@ TIMING_ORDER = [
      "the small idle wave once a letter has landed"),
     ("title_wave_period_ms", "BOOT_ANIM_TITLE_WAVE_PERIOD_MS", None),
     ("title_wave_stagger_ms", "BOOT_ANIM_TITLE_WAVE_STAGGER_MS", None),
+    ("title_wave_out_ms", "BOOT_ANIM_TITLE_WAVE_OUT_MS",
+     "when the idle wave starts calming back to stillness - at or past "
+     "total_ms it never does, which is the default"),
+    ("title_wave_fade_ms", "BOOT_ANIM_TITLE_WAVE_FADE_MS",
+     "how long that calming takes, from full swing to none"),
     ("title_height_px", "BOOT_ANIM_TITLE_VIEW_Y",
      "how far down the viewer's frame the title's own centre lands - "
      "see boot_anim.h's own comment on this section for the frame it is in"),
@@ -516,6 +541,16 @@ def main():
     timing.setdefault("title_shadow_alpha", 255)
     timing.setdefault("image_start_ms", timing.get("total_ms", 5800))
     timing.setdefault("image_fade_ms", 800)
+    # title_wave_out_ms/title_wave_fade_ms are newer again - the idle wave
+    # used to run at full swing for as long as the title was on screen,
+    # with no way to settle it. Defaulting the START of the calming to
+    # total_ms means boot_anim_title_wave_reach() is 255 for every frame
+    # boot_anim_run() actually draws (it stops at total_ms), so a file
+    # baked before these existed keeps its wave running exactly as it
+    # did - the same "default it past the end so it never fires" trick
+    # image_start_ms above already uses.
+    timing.setdefault("title_wave_out_ms", timing.get("total_ms", 5800))
+    timing.setdefault("title_wave_fade_ms", 600)
 
     validate(cfg)
 
