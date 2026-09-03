@@ -110,8 +110,26 @@ static inline void splash_displace(sand_t *s, int x, int y, uint8_t mat_id)
             (unsigned)fx >= (unsigned)s->w || (unsigned)fy >= (unsigned)s->h) {
             continue;
         }
-        if (CELL_IS_EMPTY(s->cells[(size_t)ny * (size_t)s->w + (size_t)nx])) {
+        const cell_t neighbour = s->cells[(size_t)ny * (size_t)s->w + (size_t)nx];
+        if (CELL_IS_EMPTY(neighbour)) {
             continue;   /* nothing there to push outward */
+        }
+        /* MASKED TO mat_id, same as the sand_displace_material() call two
+         * lines up and for the same reason (that call's own comment above:
+         * "pouring water over water sitting on dirt flung the dirt around
+         * too") - an un-masked ring kick still fires sand_impulse() at
+         * whatever foreign material sits in the ring, dirt included. Traced
+         * separately from the actual dirt-stirring bug and measured on the
+         * same 40-row-dirt/pool-depth scene this file's splash comments
+         * already use: this loop hit a dirt neighbour 60 times out of
+         * ~7,500 firings at pool depth 0 (2 and 0 at depths 2 and 8) -
+         * almost nothing next to can_impulse_enter()'s ~1,200 (sand.c),
+         * which is the actual fix. Masked anyway, for the same reason the
+         * sibling call already is: consistency with what "this is meant to
+         * be water splashing itself, nothing else" (above) already
+         * promises, not because this loop was where the churn came from. */
+        if (CELL_MATERIAL(neighbour) != mat_id) {
+            continue;
         }
         if (!CELL_IS_EMPTY(s->cells[(size_t)fy * (size_t)s->w + (size_t)fx])) {
             continue;   /* no room one further out to push it into */
