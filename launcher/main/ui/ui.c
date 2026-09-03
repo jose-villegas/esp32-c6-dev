@@ -507,30 +507,23 @@ static void draw_command(const mu_Command *cmd)
             t, (mu_Rect){ cmd->text.pos.x, cmd->text.pos.y, tw, th });
 
         /* gfx_text_font()'s (x, y) is the FIRST GLYPH's cell, not a corner
-         * of the box - at quarter 0 and 1 the string walks forward (+x or
-         * +y) away from the box's own top-left corner, so that corner IS
-         * the origin; at quarter 2 and 3 it walks backward from the FAR end
-         * of the box, one glyph cell in from that far edge. This is
-         * app_sand/palette.c's palette_label_origin() port of exactly this
-         * same problem (see its own comment and suite_palette.c's tests for
-         * the four corner/direction pairs and the proof it centres
-         * correctly at every turn) - ported rather than called directly
-         * because ui/ sits below apps/, so ui.c pulling in apps/sand/ would
-         * be a backwards layering dependency. palette_label_origin() itself
-         * is untouched and stays the reference implementation, even though
-         * nothing calls it for the palette any more now that the palette
-         * rotates as one whole microui-drawn unit. The step is the font's
-         * own cell width at this scale - the same value gfx_text_font()'s
-         * step table advances by per glyph (today's font is monospace, the
-         * same assumption palette_label_origin() already makes with
-         * PALETTE_CHAR_W). */
-        const int step_w = font->cell_w * GFX_GLYPH_SCALE;
-        int mx = box.x, my = box.y;
-        if (quarter == 2) {
-            mx = box.x + box.w - step_w;
-        } else if (quarter == 3) {
-            my = box.y + box.h - step_w;
-        }
+         * of the box - see ui_text_glyph0_origin()'s own comment
+         * (ui_transform.h) for the full derivation, including why it needs
+         * font->cell_w (never cell_h, never a per-glyph advance) at both
+         * quarter 2 and quarter 3. Extracted there, rather than kept
+         * inline, specifically so it is testable against a synthetic
+         * proportional font on a host - this is app_sand/palette.c's
+         * palette_label_origin() port of the same underlying problem (see
+         * its own comment and suite_palette.c's tests for the four corner/
+         * direction pairs), ported rather than called directly because ui/
+         * sits below apps/, so ui.c pulling in apps/sand/ would be a
+         * backwards layering dependency. palette_label_origin() itself is
+         * untouched and stays the reference implementation for ITS still-
+         * monospace font, even though nothing calls it for the palette any
+         * more now that the palette rotates as one whole microui-drawn
+         * unit. */
+        int mx, my;
+        ui_text_glyph0_origin(font, box, quarter, GFX_GLYPH_SCALE, &mx, &my);
 
         ui_text_pass_t passes[UI_TEXT_MAX_PASSES];
         const int n = ui_text_passes(text_style, passes, UI_TEXT_MAX_PASSES);

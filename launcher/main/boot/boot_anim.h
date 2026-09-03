@@ -99,6 +99,7 @@ static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
 
 #include "boot/boot_anim_curve.h"
 #include "boot/boot_anim_timeline.h"
+#include "gfx/gfx_font.h"
 #include "util/intmath.h"
 #include "util/tween.h"
 
@@ -1352,7 +1353,14 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 #define BOOT_ANIM_TITLE     "Autana"
 #define BOOT_ANIM_TITLE_LEN 6
 
-#define BOOT_ANIM_TITLE_SCALE 5    /* glyph scale - see gfx_text_font()   */
+/* 1, not scaled up: the title used to draw gfx_font_8x8 (an 8px cell) at
+ * 5x to reach a legible ~40px glyph height; it now draws
+ * gfx_font_lmroman_40 (tools/gen_font.py, main/gfx/fonts/font_lmroman_
+ * 40.h), which was rasterized AT 40px in the first place - see
+ * boot_anim.c's draw_title() for where that font is actually named. Scaling
+ * an already-40px coverage atlas up again would blur it for no reason a
+ * bitmap font's own blockiness ever had to pay for. */
+#define BOOT_ANIM_TITLE_SCALE 1
 #define BOOT_ANIM_TITLE_GAP   3    /* extra px of tracking between glyphs */
 
 /* The viewer's frame this whole section lays out in - see this section's
@@ -1495,34 +1503,78 @@ typedef struct {
  * boot_anim_timeline.h: BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX/PERIOD_MS/
  * STAGGER_MS. */
 
+/* How much of the idle wave is still running at `now_ms` - 255 at full
+ * swing, 0 once it has fully settled, linear between over BOOT_ANIM_TITLE_
+ * WAVE_FADE_MS starting at BOOT_ANIM_TITLE_WAVE_OUT_MS. Both authored
+ * (title_wave_out_ms/title_wave_fade_ms in the JSON).
+ *
+ * Scales the wave's AMPLITUDE rather than gating it off, so the word
+ * settles toward stillness instead of snapping straight the instant the
+ * knob fires - a letter caught mid-bob rides its own arc down to zero.
+ * The same "255 minus a ramp" shape boot_anim_wave_envelope() above
+ * already uses for the FLOOR's ripple, which is a different wave entirely
+ * (see that function) but wants the identical dying-away arithmetic.
+ *
+ * Deliberately not eased, unlike boot_anim_finale_reach()'s own arrival:
+ * this is a decay an author tunes by ear against a specific moment on the
+ * timeline, and a linear ramp is the one they can predict from the two
+ * numbers they typed. tween_ramp() jumps straight to 255 on a zero
+ * duration rather than dividing by zero (see its own comment), so
+ * title_wave_fade_ms = 0 is a legitimate "stop dead here", not a crash. */
+static inline uint8_t boot_anim_title_wave_reach(uint32_t now_ms)
+{
+    return (uint8_t)(255u - tween_ramp(now_ms, BOOT_ANIM_TITLE_WAVE_OUT_MS,
+                                       BOOT_ANIM_TITLE_WAVE_FADE_MS));
+}
+
 static inline int boot_anim_title_wave(int i, uint32_t now_ms)
 {
     const uint32_t t = (now_ms + (uint32_t)i * BOOT_ANIM_TITLE_WAVE_STAGGER_MS)
                        % BOOT_ANIM_TITLE_WAVE_PERIOD_MS;
     const uint16_t phase =
         (uint16_t)((t * 65536u) / BOOT_ANIM_TITLE_WAVE_PERIOD_MS);
-    return (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX * boot_anim_sin(phase)) >> 15;
+    const int32_t amp = (BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX *
+                         boot_anim_title_wave_reach(now_ms)) / 255;
+    return (int)((amp * boot_anim_sin(phase)) >> 15);
 }
 
 /* Where letter `i` of BOOT_ANIM_TITLE sits, in the viewer's frame (see this
- * section's own top comment), at `now_ms`. Letters are laid out left to
- * right in their FINAL row first - see final_x below - and each one's
- * flight is just a horizontal lerp toward its own final_x, with the wobble
- * added to a fixed baseline.
+ * section's own top comment), at `now_ms`, drawn in `font`. Letters are
+ * laid out left to right in their FINAL row first - see final_x below -
+ * and each one's flight is just a horizontal lerp toward its own final_x,
+ * with the wobble added to a fixed baseline.
  *
  * The row starts at BOOT_ANIM_TITLE_VIEW_X/Y, a fixed target rather than one
  * read from a live view: the row a letter is flying TOWARD has to stay put
- * for the whole flight, not move while the letter is chasing it. */
-static inline boot_anim_title_pos_t boot_anim_title_letter(int i,
-                                                            uint32_t now_ms)
+ * for the whole flight, not move while the letter is chasing it.
+ *
+ * final_x is BOOT_ANIM_TITLE_VIEW_X plus the ADVANCE-SUM of every letter
+ * before this one, plus a flat BOOT_ANIM_TITLE_GAP of tracking per letter -
+ * gfx_font_text_width(font, BOOT_ANIM_TITLE, i, ...) is exactly that sum
+ * (see its own contract in gfx_font.h: `len` stops the count at the i'th
+ * character, not the whole word). This used to be `i * (8 * SCALE + GAP)`,
+ * a fixed per-letter cell - correct only because gfx_font_8x8 is monospace
+ * (every glyph advances by the same 8*scale) and silently wrong for a
+ * proportional font, where "M" and "i" do not occupy the same width: at a
+ * fixed cell, a run of narrow letters (an "i" between two wide ones, say)
+ * would sit in a cell built for the font's WIDEST glyph and read as if
+ * space had been inserted, and a long enough word would drift off whatever
+ * final_x a fixed per-cell reckoning predicted. See suite_boot_anim.c's
+ * test_final_x_matches_the_advance_sum() for the regression this closes,
+ * and gfx_font_text_width()'s own docs for why summing per-glyph advances
+ * (not `len * cell_w`) is what "proportional" means at all. */
+static inline boot_anim_title_pos_t boot_anim_title_letter(
+    const gfx_font_t *font, int i, uint32_t now_ms)
 {
     const uint32_t start = BOOT_ANIM_TITLE_START_MS +
                            (uint32_t)i * BOOT_ANIM_TITLE_STAGGER_MS;
     const uint8_t u8 = tween_ease_out(
         tween_ramp(now_ms, start, BOOT_ANIM_TITLE_FLIGHT_MS));
 
-    const int cell = 8 * BOOT_ANIM_TITLE_SCALE + BOOT_ANIM_TITLE_GAP;
-    const int final_x = BOOT_ANIM_TITLE_VIEW_X + i * cell;
+    const int prefix_w = gfx_font_text_width(font, BOOT_ANIM_TITLE, i,
+                                             BOOT_ANIM_TITLE_SCALE);
+    const int final_x = BOOT_ANIM_TITLE_VIEW_X + prefix_w +
+                        i * BOOT_ANIM_TITLE_GAP;
     const int start_x = final_x - BOOT_ANIM_TITLE_ENTRY_PX;
 
     boot_anim_title_pos_t p;
