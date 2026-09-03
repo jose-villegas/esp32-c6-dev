@@ -131,6 +131,15 @@ One grid is ~41 KB on its own. If a round suddenly reports nothing, suspect
 a static test fixture added since the last good capture before suspecting
 the device - that has now been the cause twice.
 
+The host suite now allocates from an arena this size (`test/heap_arena.c`,
+fed from the device profile) and gates test-code stack frames against the
+3,584-byte stack, so both failures are supposed to be caught on a laptop
+before a capture is ever spent on them - see the Testing Guide's "The host
+runner enforces two of the device's limits". Supposed to: the arena starts
+from a clean process, so it does not model fragmentation inherited from the
+rest of a real boot, and `bd esp32c6-e82`'s device allocation failures do
+not reproduce on it. Still check the free-heap line in the capture.
+
 **A healthy suite is SLOW, and that is the correct sign.** While the
 fixtures were failing to allocate, the whole device run finished in ~168
 seconds, because failing a malloc is instant. With the heap freed and every
@@ -286,11 +295,14 @@ skipped.
 
 Open items, as of this file's writing:
 
-- **Host limits don't mirror the device's** — a fixture that overflows the
-  device's 3,584-byte stack or ~64 KB free heap passes on the host and
-  costs a full capture cycle to discover. `bd esp32c6-e9t` proposes making
-  the host runner enforce both. Until then: check the current free-heap
-  number before adding any new device fixture.
+- **A test fixture puts 41 KB on the device's 3.5 KB stack** — the new host
+  stack gate found `test_a_submerged_obstacle_casts_a_gravity_aligned_shadow`
+  declaring `unsigned depth[92 * 112]` as a local: a 42,496-byte frame
+  measured with the device's own compiler, against a 3,584-byte stack, and
+  not `DEVICE_BUILD`-guarded. Same species as the two panics that have
+  already blocked capture. `bd esp32c6-3h9`, P0 — fix before the next
+  capture round, and delete its entry from `check_stack_usage.py`'s debt
+  list when you do.
 - **The dispatcher rung of the pair-matrix is unshipped** — the loop+switch
   shape is in the never-retry list; a different shape, plus the ordering
   sweep that waits on it, lives on the `sand-pair-matrix` branch
