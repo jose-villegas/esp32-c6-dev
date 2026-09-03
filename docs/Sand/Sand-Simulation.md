@@ -615,7 +615,40 @@ had moist dirt beside it. A root can only eat moist soil, a bed watered
 from the top dries from the top, and the moist front the fingers chase is
 gone before they reach the floor. The weights decide which moist cell a
 tip takes next; how deep the water goes decides how deep the roots can.
-An earlier draft of this feature reused
+
+**So the roots carry the water down.** A root cell is a CONDUIT
+(`step_one_conducting_cell()`, `ROOT_CONDUCT_CHANCE` 64): each step it
+may move one level of moisture from the wettest soil beside or above it
+into the driest soil beneath it. Moves only, never makes - the same
+conservation percolation keeps - and one way only, gravity-ward, so it
+cannot ping-pong against diffusion. The sink is the next cell a tip wants
+to eat, and a fresh tip is itself a conduit, so the moisture front and
+the root front move down together: depth is earned a level of water at a
+time. Sides count as sources, not only "above" - a column has more root
+above each cell, not soil, so only its top cell would ever conduct
+otherwise; drawing from the wet soil flanking each cell is what lets a
+whole column drain the surface layer downward.
+
+Measured on the dry bed watered at the collar only (the device case), ten
+seeds, mean deepest root of 19 rows, for three percolation rates:
+
+```
+SOIL_PERCOLATE_CHANCE    conduit off    conduit on
+        15 (current)         4.6           15.0
+        30                   7.0           18.0
+        60 (the old value)   5.3           15.1
+
+   and on a SATURATED bed, percolation 15:   9.6           15.4
+```
+
+Two readings. Conduction is worth roughly three times what the
+percolation rate is - even the old, fast percolation only reached 5-7
+rows without it - so the earlier slowdown of `SOIL_PERCOLATE_CHANCE` was
+not what made roots shallow, and undoing it would not have made them
+deep. And the runaway scene still pins: collar re-saturated every step,
+93 roots at step 2000 and 93 at 20,000, because `ROOT_SURFACE_MAX` bounds
+the SHAPE regardless of how much water is carried into it. An earlier
+draft of this feature reused
 `step_one_growing_cell()`'s own stem-walk machinery - a site roll (tip,
 lean, branch, widen) walking a run outward from the collar - the same way
 a limb grows; it was replaced by the local eating rule because a root does

@@ -14638,6 +14638,106 @@ static void test_the_first_root_under_a_trunk_heads_down(void)
         "surface");
 }
 
+/* A root is a CONDUIT: it carries a level of water from the wettest soil
+ * beside or above it into the driest soil beneath it
+ * (step_one_conducting_cell()). Depth was measured to be bounded by water,
+ * not by heading - a root can only eat moist soil, and a bed watered from
+ * the top dries from the top - so the roots bring the water down with
+ * them. Moves only, never makes; gravity-ward only.
+ *
+ * THE SOURCE SITS DIRECTLY ABOVE THE ROOT, and every cell the source's own
+ * percolation could reach is blocked - wood one side, stone the other, the
+ * root itself beneath. The first version put the source BESIDE the root,
+ * and passed with conduction stubbed to nothing: soil percolates into any
+ * of its three gravity-ward cells, and the sink was that source's own
+ * diagonal. Ordinary physics was feeding the sink and the test was
+ * crediting the conduit. With the source overhead and hemmed in, nothing
+ * but a root carrying water THROUGH itself can wet the cell below it.
+ * Ordinary drying (`dries`) can still lower the source on its own, which
+ * is why the second assertion is "at most what the source lost", never
+ * equality. */
+static void test_a_root_carries_a_level_of_water_down_through_itself(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, ry = H - 3;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, cx, ry, MATX(MATX_ROOT));
+    sand_set(&s, cx - 1, ry, CELL_MAKE(MAT_WOOD, 0));          /* shelter; blocks the source's slide */
+    sand_set(&s, cx, ry - 1, CELL_SOIL(MAT_DIRT, 1, 5));       /* the source, ABOVE the root */
+    sand_set(&s, cx, ry + 1, CELL_SOIL(MAT_DIRT, 1, 0));       /* the sink, beneath, dry */
+
+    int got = 0;
+    for (int i = 0; i < 400 && !got; i++) {
+        sand_step(&s, 0, 1000, 0);
+        got = CELL_MOISTURE(sand_at(&s, cx, ry + 1));
+    }
+    const int source_now = CELL_MOISTURE(sand_at(&s, cx, ry - 1));
+    TEST_ASSERT_TRUE_MESSAGE(got > 0,
+        "a root with wet soil above it and dry soil beneath it must carry "
+        "water down through itself into the dry cell - that is the whole "
+        "reason roots conduct");
+    TEST_ASSERT_TRUE_MESSAGE(got <= 5 - source_now,
+        "conduction MOVES water, it never makes it: the sink may gain at "
+        "most what the source lost (drying may take more from the source, "
+        "never less)");
+}
+
+/* An INVARIANT guard, and honest about what that means: this test asserts
+ * things that never happen, so stubbing the conduit's chance to zero
+ * cannot turn it red - it passes with the mechanism off exactly as with
+ * it on. It was watched red the only way such a test can be, by briefly
+ * inverting the source/sink roles in step_one_conducting_cell() during
+ * development, and it stays here to catch that inversion coming back. */
+static void test_conduction_never_pushes_water_up_or_into_anything_but_soil(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, ry = H - 3;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, cx, ry, MATX(MATX_ROOT));
+    sand_set(&s, cx, ry + 1, CELL_SOIL(MAT_DIRT, 1, 6));      /* wet, BENEATH - only ever a sink */
+    sand_set(&s, cx, ry - 1, CELL_SOIL(MAT_DIRT, 1, 0));      /* dry, above */
+    sand_set(&s, cx - 1, ry, CELL_SOIL(MAT_DIRT, 1, 0));      /* dry, beside */
+    sand_set(&s, cx + 1, ry, CELL_MAKE(MAT_WOOD, 0));          /* not soil, and the shelter */
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(sand_at(&s, cx, ry - 1)),
+            "water beneath a root must never be carried UP");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(sand_at(&s, cx - 1, ry)),
+            "water beneath a root must never be carried SIDEWAYS");
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_MAKE(MAT_WOOD, 0), sand_at(&s, cx + 1, ry),
+            "conduction touches soil only - wood is not a sink and not a "
+            "source");
+    }
+}
+
+/* No "brings water deeper than bare soil" test here, deliberately. It was
+ * written and it failed for reasons that have nothing to do with the
+ * claim: on this 8x8 grid percolation alone floods a six-row bed inside
+ * any run long enough to matter, so there is no depth left for a conduit
+ * to add - and a column that DOES carry water down then eats the cell it
+ * wetted, so measuring moisture in dirt counts the delivery as a loss.
+ * The depth claim is established where it can be seen, on the 60x70
+ * harness with a 19-row dry bed watered at the collar: mean deepest root
+ * 4.6 rows with conduction off, 15.0 with it on, over ten seeds (see
+ * ROOT_CONDUCT_CHANCE's own comment in sand_reactions.c, and the Roots
+ * section of docs/Sand/Sand-Simulation.md). What the suite pins is the
+ * mechanism itself - the two tests above. */
+
 static void test_a_thickly_rooted_cell_stops_growing(void)
 {
     TEST_ASSERT_TRUE_MESSAGE(surface_rule_lets_growth_through(2),
@@ -26033,6 +26133,8 @@ void run_sand_suite(void)
     RUN_TEST(test_a_root_never_eats_dry_dirt_sand_or_empty_space);
     RUN_TEST(test_a_root_tip_grows_on_away_from_its_parent_and_down);
     RUN_TEST(test_the_first_root_under_a_trunk_heads_down);
+    RUN_TEST(test_a_root_carries_a_level_of_water_down_through_itself);
+    RUN_TEST(test_conduction_never_pushes_water_up_or_into_anything_but_soil);
     RUN_TEST(test_a_thickly_rooted_cell_stops_growing);
     RUN_TEST(test_roots_grow_toward_the_wet_side_only);
     RUN_TEST(test_a_continuously_watered_root_system_still_saturates);

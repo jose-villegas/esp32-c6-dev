@@ -1795,6 +1795,112 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
 #define ROOT_WEIGHT_AWAY 2
 #define ROOT_WEIGHT_DOWN 2
 
+/* How readily a root CONDUCTS water downward - step_one_conducting_cell()
+ * below. Chance in 256 per root cell per step of moving one level of
+ * moisture from the wettest soil beside or above it into the driest soil
+ * beneath it. See the function for why this exists at all. Roots are few
+ * enough that the per-cell cost of a generous figure is nothing.
+ *
+ * MEASURED on the dry bed watered at the collar only (the device case),
+ * ten seeds, 20,000 steps, mean deepest root of 19 rows, against the
+ * percolation rate - because the obvious alternative was to undo the
+ * SOIL_PERCOLATE_CHANCE slowdown instead:
+ *
+ *     SOIL_PERCOLATE_CHANCE    conduit 0    conduit 64
+ *             15 (current)        4.6          15.0
+ *             30                  7.0          18.0
+ *             60 (old value)      5.3          15.1
+ *
+ * Conduction is worth about three times what percolation is: even the
+ * old, fast percolation reached 5-7 rows without it. And the runaway
+ * scene - collar re-saturated every step - still pins, 93 roots at step
+ * 2000 and 93 at 20,000: ROOT_SURFACE_MAX bounds the SHAPE whatever
+ * amount of water is carried into it, so carrying more does not undo
+ * the bound. 64 is the first value tried and it was decisive; it wants
+ * eyes on the panel for feel, not more measurement for depth. */
+#define ROOT_CONDUCT_CHANCE 64
+
+/* One cell of ROOT, carrying water DOWN through itself - a conduit.
+ *
+ * Why a root system needs this at all: depth is bounded by water, not by
+ * heading. A root can only eat moist soil, a bed watered from the top
+ * dries from the top, and measured over thirty seeds the moist front the
+ * fingers chase was gone before they reached the floor - every saturated
+ * bed 98-99% dry after 20,000 steps, not one live tip beside a moist cell,
+ * and on a dry bed watered at the collar alone a mean deepest root of 5.7
+ * rows of 19. Steeper direction weights narrowed the system and did not
+ * deepen it (ROOT_WEIGHT_DOWN's own comment). So the water has to be
+ * brought to where the roots want to go, and that is what real roots do:
+ * they carry it.
+ *
+ * The rule: take one level from the WETTEST soil among the five
+ * neighbours beside or above this root, put it into the DRIEST soil among
+ * the three beneath it. Moves only, never makes - the same conservation
+ * step_one_soaking_cell()'s percolation keeps - and only ever one way,
+ * gravity-ward, so it cannot ping-pong against diffusion. The sink is the
+ * next cell a tip wants to eat, and a fresh tip is itself a conduit, so
+ * the moisture front and the root front move down together: depth is
+ * EARNED, a level of water at a time, rather than handed out by a weight.
+ *
+ * Sides count as sources, not only "above". A column of root has more
+ * root above each cell, not soil - only its top cell would ever conduct
+ * if the source had to be overhead. Drawing from the wet soil flanking
+ * each cell is what lets a whole column drain the surface layer downward.
+ *
+ * Every gate before the roll, the file's rule: with no source or no sink
+ * this touches neither the grid nor the RNG. */
+static bool
+step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    const int down = ring_of(s->last_load_dx, s->last_load_dy);
+    (void)r;
+
+    int src_at = -1, src_x = 0, src_y = 0, src_m = 0;
+    int dst_at = -1, dst_x = 0, dst_y = 0, dst_m = SOIL_MOISTURE_MAX;
+
+    for (int k = 0; k < 8; k++) {
+        const int* nd = ring_dir(down + k);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t c = s->cells[nat];
+        if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
+            continue; /* not soil: root, wood, stone, air */
+        }
+        const int m = CELL_MOISTURE(c);
+        if (k == 0 || k == 1 || k == 7) {
+            /* Gravity-ward: a sink, if it has room. */
+            if (m < dst_m) {
+                dst_m = m;
+                dst_at = (int)nat;
+                dst_x = nx;
+                dst_y = ny;
+            }
+        } else if (m > src_m) {
+            /* Beside or above: a source, if it holds anything. */
+            src_m = m;
+            src_at = (int)nat;
+            src_x = nx;
+            src_y = ny;
+        }
+    }
+    if (src_at < 0 || dst_at < 0) {
+        return false; /* nothing to carry, or nowhere to carry it */
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= ROOT_CONDUCT_CHANCE) {
+        return true;
+    }
+    const cell_t src = s->cells[src_at], dst = s->cells[dst_at];
+    s->cells[src_at] = CELL_WITH_MOISTURE(src, (uint8_t)(src_m - 1));
+    s->cells[dst_at] = CELL_WITH_MOISTURE(dst, (uint8_t)(dst_m + 1));
+    mark_rows(s, src_y, src_y);
+    mark_rows(s, dst_y, dst_y);
+    wake_block_and_neighbors(s, src_x, src_y);
+    wake_block_and_neighbors(s, dst_x, dst_y);
+    return true;
+}
+
 /* One cell of ROOT, eating into the moist soil it touches - PART 2 of the
  * roots feature (docs/Sand/Sand-Simulation.md), and the whole growth
  * rule: find a neighbour that is dirt (reaction_of(c)->dries != 0) and
@@ -4398,6 +4504,11 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * own material is never equal to its `roots_to`, so this check alone
          * keeps the two rows apart without needing a second field. */
         if (r->roots != 0 && c == (cell_t)r->roots_to && s->may_have_moisture) {
+            /* Conduct first, then eat: the level a root carries down this
+             * step is the level the tip beneath it can grow into next. */
+            if (step_one_conducting_cell(s, x, y, w, h, r)) {
+                found |= FOUND_MOISTURE;
+            }
             if (step_one_rooting_cell(s, x, y, w, h, r)) {
                 found |= FOUND_MOISTURE;
             }
