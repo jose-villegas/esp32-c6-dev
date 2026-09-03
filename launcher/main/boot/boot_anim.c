@@ -1046,15 +1046,17 @@ void draw_image(uint8_t ink, uint8_t reveal)
             }
         }
     } else {
-        /* Dissolving, and possibly still arriving at once - a second
-         * dither test in place of ink's own lift off black, rather than
-         * gfx_color_mix(COL_BG, photo_row[x], ink). Both tests read the
-         * same gfx_dither4x4 table at the same (x, y), so a pixel only
-         * ever shows the photo when it clears BOTH coverage levels -
-         * equivalent to comparing the lower of the two against one cell,
-         * not two independent dice rolls that could disagree with each
-         * other. Replaces the last gfx_color_mix() call left in this
-         * function - near_end's own Image cost dropped from ~55ms to
+        /* Dissolving, and possibly still arriving at once - a dither test
+         * in place of ink's own lift off black, rather than gfx_color_mix
+         * (COL_BG, photo_row[x], ink). Both `reveal` and `ink` would read
+         * the same gfx_dither4x4 table at the same (x, y), so a pixel only
+         * ever shows the photo when it clears BOTH coverage levels; since
+         * gfx_dither_covers()'s own `level` is monotonic non-decreasing in
+         * alpha, testing against the lower of the two is exactly that same
+         * result (covers(a) && covers(b) == covers(min(a, b)) for the same
+         * cell), not merely an approximation of it - one test instead of
+         * two, same outcome. Replaces the last gfx_color_mix() call left in
+         * this function - near_end's own Image cost dropped from ~55ms to
          * ~25ms on real hardware.
          *
          * A dithered fade-to-black is a visibly different look from a
@@ -1066,13 +1068,13 @@ void draw_image(uint8_t ink, uint8_t reveal)
          * middle of the fade window. A deliberate choice, on-panel, not
          * an oversight - see git history around when this landed for the
          * visual comparison that decided it. */
+        const uint8_t covered_by = reveal < ink ? reveal : ink;
         for (int y = 0; y < GFX_HEIGHT; y++) {
             gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
             const gfx_color_t *photo_row =
                 (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
             for (int x = 0; x < GFX_WIDTH; x++) {
-                if (gfx_dither_covers(x, y, reveal) &&
-                    gfx_dither_covers(x, y, ink)) {
+                if (gfx_dither_covers(x, y, covered_by)) {
                     row[x] = photo_row[x];
                 }
             }
