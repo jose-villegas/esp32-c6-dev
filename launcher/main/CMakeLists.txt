@@ -68,10 +68,20 @@ set(app_suites ${discovered_apps})
 list(FILTER app_suites INCLUDE REGEX "/suite_[^/]*\\.c$")
 list(FILTER discovered_apps EXCLUDE REGEX "/suite_[^/]*\\.c$")
 
-# Diagnostics is a bench tool, not a feature: it re-runs POST, which cycles the
-# audio rail and drops the display off SPI2 mid-session. Excluded by folder
-# rather than by name so the rule is structural.
-if(NOT CONFIG_LAUNCHER_SELFTEST)
+# Diagnostics carries the gfx debug-overlay checkboxes a developer wants
+# while working on sand, plus the POST report and (SELFTEST builds only -
+# see app_diagnostics.c) the self-test runner button. None of that belongs
+# in a release image: entering the app re-runs POST, which cycles the audio
+# rail and drops the display off SPI2 mid-session - reasonable while
+# debugging, not something to leave reachable in a shipped product. Gated
+# on DEVELOPMENT rather than SELFTEST so it ships in a --dev build too, with
+# no test suites along for the ride - that is the whole reason a --dev
+# build exists: SELFTEST's linked-in suites cost enough static RAM that
+# sand's grid allocation can fail. LAUNCHER_SELFTEST `select`s
+# LAUNCHER_DEVELOPMENT (Kconfig.projbuild), so this one condition still
+# covers both --dev and --diag. Excluded by folder rather than by name so
+# the rule is structural.
+if(NOT CONFIG_LAUNCHER_DEVELOPMENT)
     list(FILTER discovered_apps EXCLUDE REGEX "/apps/diagnostics/")
 endif()
 

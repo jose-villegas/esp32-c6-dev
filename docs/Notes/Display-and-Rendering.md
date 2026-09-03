@@ -296,12 +296,37 @@ Noita uses. `sand_track_dirty_rows()` records every row a grain left or entered
 - see [`../Sand/Simulation-Lessons.md`](../Sand/Simulation-Lessons.md).
 
 **A development-only visualizer** makes this concrete on real hardware
-instead of only in synthetic tests: `gfx_set_debug_overlay(true)` (a checkbox
-on the Diagnostics app's second page, BOOT to reach it) outlines whichever
-cells are actually being sent each frame - yellow for a gathered run, cyan for
-a full-row fallback, each cell bordered at its own tight bounds rather than
-one box drawn around a whole merged run, so a border can never land on the
-fixed line shared with a neighbouring cell. Declared only under
+instead of only in synthetic tests, as two fully independent layers, each
+with its own checkbox on the Diagnostics app's second page (BOOT to reach
+it), correct in all four on/off combinations. Diagnostics is gated on
+`CONFIG_LAUNCHER_DEVELOPMENT`, not the narrower `CONFIG_LAUNCHER_SELFTEST`
+(see `docs/Launcher-Architecture.md`), so a plain `--dev` build reaches
+these checkboxes too, with no test suites competing for RAM - the point of
+that split is exactly this: using them while working on `sand` without the
+suites' static footprint threatening its grid allocation:
+
+- **Panel-grid layer** (`gfx_set_debug_overlay(true)`) outlines whichever
+  cells are actually being sent each frame - yellow for a gathered run, cyan
+  for a full-row fallback, each cell bordered at its own tight bounds rather
+  than one box drawn around a whole merged run, so a border can never land
+  on the fixed line shared with a neighbouring cell.
+- **Leaf layer** (`gfx_set_leaf_overlay(true)`) outlines the leaves that
+  were actually updated this frame, one green rectangle per dirty leaf, via
+  `gfx_dirty.h`'s `dirty_leaf_rects()`. Since leaf bits are only ever set by
+  a caller that hands `dirty_mark()` a real box (`mark_band()` never marks
+  them - see "A second, finer level underneath the grid" below), a region
+  only ever touched by `mark_band()` legitimately shows no green at all;
+  that is a consequence of the design, not a gap in the overlay.
+
+A full-width send straight out of the framebuffer (`send_full_row()`) has no
+disposable scratch copy to draw into, so turning either layer on there means
+saving the exact pixels about to be overwritten, drawing, sending
+(blocking), then restoring - everything either layer touches is saved
+before either one draws anything, so a pixel the two layers share (a leaf
+edge landing on a cell edge, for instance) still restores to its true
+original regardless of draw or restore order. A gathered send
+(`gather_and_send()`) instead draws into the disposable `gather_buf`, so its
+borders are simply never persisted. Declared only under
 `CONFIG_LAUNCHER_DEVELOPMENT`, in both the header and the implementation - not
 just compiled out of a release build, but undefined there: a caller outside a
 development-only file that forgets to guard a call to it fails to compile
@@ -477,13 +502,6 @@ kept here so the reasoning survives to whoever picks one up.
   future pass could OR fewer leaf-rows together (or none) to split
   vertically too, without any data-structure change - only a new send-side
   function. Not started: no concrete motivating case has needed it yet.
-- **A debug-overlay toggle showing the leaf grid itself.** Raised, not
-  built. The existing overlay (see above) shows which cells were actually
-  sent each frame; a second, separate toggle showing the static 16x28 leaf
-  boundaries - or which individual leaves are dirty - would make the finer
-  subdivision visible on real hardware the same way the cell-level
-  yellow/cyan overlay already does, rather than only in the synthetic
-  `suite_gfx.c` test and the host-side `suite_gfx_dirty.c` suite.
 - ~~`LEAF_REFINE_MAX_RUNS` and `ROW_MAX_RUNS` (row_runs.h) are both 2,
   unmeasured.~~ **Measured** - see "The cap sweeps" below. Both stay at 2.
 - **Fixing 80 MHz at the driver level, instead of just not using it.**
