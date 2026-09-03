@@ -131,6 +131,15 @@ One grid is ~41 KB on its own. If a round suddenly reports nothing, suspect
 a static test fixture added since the last good capture before suspecting
 the device - that has now been the cause twice.
 
+The host suite now allocates from an arena this size (`test/heap_arena.c`,
+fed from the device profile) and gates test-code stack frames against the
+3,584-byte stack, so both failures are supposed to be caught on a laptop
+before a capture is ever spent on them - see the Testing Guide's "The host
+runner enforces two of the device's limits". Supposed to: the arena starts
+from a clean process, so it does not model fragmentation inherited from the
+rest of a real boot, and `bd esp32c6-e82`'s device allocation failures do
+not reproduce on it. Still check the free-heap line in the capture.
+
 **A healthy suite is SLOW, and that is the correct sign.** While the
 fixtures were failing to allocate, the whole device run finished in ~168
 seconds, because failing a malloc is instant. With the heap freed and every
@@ -147,6 +156,18 @@ with `-DDEVICE_BUILD` on a laptop, against a link-only gfx stub and a real
 `esp_timer_get_time()`, and calls the actual frame-budget test bodies
 through the `SAND_HOST_PROBE` wrapper functions beside them - not a
 hand-copied scene, so it can't drift from what the device build measures.
+It also compiles with the device's own codegen-shaping flags, taken from
+the device profile, so a switch cannot become a jump table here that the
+board could never have had. On this tree that changes nothing - no
+portable sand source emits an indirect jump either way - but it removes
+the failure mode rather than leaving it to be rediscovered.
+
+Read the magnitudes it gives you with the record in mind: host numbers
+call *direction* reliably for changes of code shape, and land at 0.7x-2x
+for changes of work quantity. The factor neither this harness nor any x86
+host can see is flash placement against the 32 KB instruction cache. The
+route to that number, once a QEMU with TCG plugins exists, is sketched and
+half-built in `launcher/tools/oracle/`.
 
 ```sh
 bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
@@ -286,11 +307,6 @@ skipped.
 
 Open items, as of this file's writing:
 
-- **Host limits don't mirror the device's** — a fixture that overflows the
-  device's 3,584-byte stack or ~64 KB free heap passes on the host and
-  costs a full capture cycle to discover. `bd esp32c6-e9t` proposes making
-  the host runner enforce both. Until then: check the current free-heap
-  number before adding any new device fixture.
 - **The dispatcher rung of the pair-matrix is unshipped** — the loop+switch
   shape is in the never-retry list; a different shape, plus the ordering
   sweep that waits on it, lives on the `sand-pair-matrix` branch

@@ -47,6 +47,16 @@ fi
 # and strictness costs nothing in tests.
 CFLAGS="-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -g -O1"
 
+# --- the device's heap, on this machine ------------------------------------
+# Sourced the same way find_cc.sh is, one block above. The cap is a profile
+# field rather than a literal here for the reason device_profile.sh's own
+# header gives: it is a per-chip number, and a second board may join the
+# test family. Selection is $DEVICE_PROFILE, default esp32c6.
+# shellcheck source=../tools/device_profile.sh
+. "$TEST_DIR/../tools/device_profile.sh"
+device_profile_load "" "$TEST_DIR/../tools/device_profiles" || exit 1
+HOST_HEAP_ARENA_BYTES=$(device_profile_require DP_FREE_HEAP_BYTES) || exit 1
+
 # The shell's own portable units and their suites. Hardware suites are absent
 # by design - suite_gfx.c would not compile here, which is the point.
 #
@@ -58,6 +68,7 @@ SOURCES="
 $TEST_DIR/host_main.c
 $TEST_DIR/suites.c
 $TEST_DIR/timing.c
+$TEST_DIR/heap_arena.c
 $TEST_DIR/suites/suite_touch_fsm.c
 $TEST_DIR/suites/suite_gesture.c
 $TEST_DIR/suites/suite_button_fsm.c
@@ -152,11 +163,126 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
 # fold the math functions into libc, so a suite using atan2() or fabs()
 # links clean locally and fails only in CI, which is exactly how it was
 # found. Harmless where libm is already part of libc.
+#
+# --wrap routes the suite's own allocations into heap_arena.c's device-sized
+# arena, so a fixture that asks for more than the board has fails HERE
+# rather than after a flash. Only this runner defines HOST_HEAP_ARENA: the
+# firmware and perf_probe compile the same timing.c with every arena line
+# preprocessed out, which is why the hooks had to be behind one macro rather
+# than merely unused. Note that libc-internal allocations do not route
+# through --wrap at all (a pointer from strdup() arrives at __wrap_free
+# never having been seen by __wrap_malloc), which is why the arena forwards
+# pointers it does not own instead of trusting every free().
 # shellcheck disable=SC2086
 "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
     -I "$TEST_DIR/../components/microui/include" \
     -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
-    $SOURCES "$UNITY_OBJ" -o "$OUT" -lm
+    -DHOST_HEAP_ARENA -DHOST_HEAP_ARENA_BYTES="$HOST_HEAP_ARENA_BYTES" \
+    $SOURCES "$UNITY_OBJ" -o "$OUT" \
+    -Wl,--wrap=malloc -Wl,--wrap=calloc -Wl,--wrap=realloc -Wl,--wrap=free -lm
+
+# --- static stack-frame gate ------------------------------------------------
+# A separate, cheap compile pass over test-code translation units only, with
+# -fstack-usage added - GCC/Clang then write one <name>.su file per object
+# naming every function's own frame size, without executing anything. Kept
+# out of the compile+link command above on purpose: -fstack-usage writes its
+# .su file beside whatever -o path was given, and that command emits one
+# binary from many files at once, so its .su files would scatter into the
+# CWD rather than land somewhere this script can find them.
+#
+# Test code only (test/'s own drivers, test/suites/*.c, and each app's
+# suite_*.c) - not the product logic those suites exercise. A huge frame in
+# sand.c itself would be a real risk too, but it is not the risk that
+# already panic-looped the board twice (see check_stack_usage.py's header),
+# and widening this to product code is a separate decision. Derived from
+# $SOURCES already assembled above, rather than a fresh glob, so this can
+# only ever compile files already proven to build on a host: suite_gfx.c and
+# suite_ui.c are device-only (real bsp/gfx headers, no host stub) and are
+# already correctly absent from $SOURCES - globbing test/suites/*.c blindly
+# would try to compile them here too and fail for a reason that has nothing
+# to do with stack usage.
+SU_DIR="$BUILD_DIR/su"
+rm -rf "$SU_DIR"
+mkdir -p "$SU_DIR"
+
+SU_SOURCES=""
+for f in $SOURCES; do
+    case "$f" in
+        "$TEST_DIR"/*) SU_SOURCES="$SU_SOURCES
+$f" ;;
+        */suite_*.c) SU_SOURCES="$SU_SOURCES
+$f" ;;
+    esac
+done
+
+# Compiled in parallel, in batches, because these are two dozen independent
+# translation units and the cost is almost entirely per-process compiler
+# launch overhead rather than -fstack-usage itself - serially this pass
+# roughly doubled the wall time of a suite whose whole point is being fast
+# enough to run constantly. Batched rather than all-at-once so this does not
+# fork two dozen compilers on a small machine; `wait` without arguments is
+# POSIX and waits for the whole batch.
+#
+# Each batch's exit statuses are collected into su_failed rather than
+# checked with `set -e`, because a failing background job does not abort the
+# script and an unnoticed compile failure here would mean a silently
+# incomplete set of .su files - the exact "gate that checks nothing" this
+# pass is trying not to be.
+SU_BATCH=8
+n=0
+in_batch=0
+su_pids=""
+su_failed=0
+
+su_wait_batch() {
+    for pid in $su_pids; do
+        wait "$pid" || su_failed=1
+    done
+    su_pids=""
+    in_batch=0
+}
+
+for f in $SU_SOURCES; do
+    n=$((n + 1))
+    base=$(basename "$f" .c)
+    # shellcheck disable=SC2086
+    "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
+        -I "$TEST_DIR/../components/microui/include" \
+        -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
+        -fstack-usage -c "$f" -o "$SU_DIR/$(printf '%02d' "$n")_$base.o" &
+    su_pids="$su_pids $!"
+    in_batch=$((in_batch + 1))
+    [ "$in_batch" -lt "$SU_BATCH" ] || su_wait_batch
+done
+[ "$in_batch" -eq 0 ] || su_wait_batch
+
+if [ "$su_failed" -ne 0 ]; then
+    echo "the -fstack-usage pass failed to compile at least one test source;" >&2
+    echo "its .su file is missing, so the stack gate would be checking an" >&2
+    echo "incomplete set of functions. Refusing to continue." >&2
+    exit 1
+fi
+
+# A gate that quietly checks nothing is worse than no gate: if -fstack-usage
+# is not supported (older compiler, unexpected toolchain), no .su files are
+# written at all, so fail loudly here rather than let check_stack_usage.py
+# report a clean pass over zero functions.
+if [ -z "$(find "$SU_DIR" -maxdepth 1 -name '*.su' -print -quit)" ]; then
+    echo "no .su stack-usage files were produced by $CC_BIN - it may not" >&2
+    echo "support -fstack-usage. This gate exists to catch test fixtures" >&2
+    echo "that would panic-loop the device (see docs/Sand/" >&2
+    echo "Performance-Tuning-Attempts.md); refusing to silently pass." >&2
+    exit 1
+fi
+
+# Same interpreter search as elsewhere (run_device_tests.sh): whatever
+# python happens to be on PATH, python3 preferred.
+PYTHON=$(command -v python3 || command -v python || true)
+if [ -z "${PYTHON:-}" ]; then
+    echo "no Python found to run check_stack_usage.py" >&2
+    exit 1
+fi
+"$PYTHON" "$TEST_DIR/check_stack_usage.py" "$SU_DIR"
 
 # MinGW appends .exe; elsewhere the plain name is produced.
 [ -x "$OUT" ] || OUT="$OUT.exe"
