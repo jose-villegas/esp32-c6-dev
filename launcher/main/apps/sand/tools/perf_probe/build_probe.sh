@@ -33,6 +33,32 @@
 # For an interleaved best-of-N run across several scenes, see run_probe.py
 # in this same directory rather than looping this script by hand.
 #
+# CODEGEN FIDELITY: the flags that change what code GCC emits for portable
+# C - most importantly -fno-jump-tables -fno-tree-switch-conversion, which
+# mean a switch can NEVER become a jump table on device - come from the one
+# device profile (launcher/tools/device_profiles/esp32c6.sh, selected by
+# $DEVICE_PROFILE), not a literal list here. A host build that omits them
+# can compile a switch to a jump table where the device compiles a compare
+# chain, and a dispatcher-shaped change gets mispredicted in the wrong
+# direction - attempt 19's regression was partly this. DO NOT "simplify"
+# these back into a literal -O2 here; the whole point of reading them from
+# the profile is that they can never drift from the device's own compile
+# command again. -Wall/-Wextra/-Werror/-Wno-unused-parameter stay this
+# script's own concern - they are strictness, not codegen, and the device
+# build's own warning set differs (see esp32c6.sh's DP_CODEGEN_SOURCE).
+#
+# WHAT THIS DID AND DID NOT BUY, measured 2026-09-03, so nobody re-runs the
+# experiment expecting a win: on the tree as it stands the two switch flags
+# change nothing at all. Compiling every portable sand source (including
+# suite_sand.c) at -O2 with and without them emits ZERO indirect jumps
+# either way - there is currently no switch dense enough for GCC to convert,
+# and sand_reactions.c has no switch left in it. An interleaved best-of-N
+# A/B over the reaction scenes found no consistent magnitude change either,
+# which is exactly what that disassembly predicts. This is insurance that
+# costs nothing today: it starts mattering the moment a dense switch lands -
+# the pair-matrix dispatcher (bd esp32c6-iu5) being the obvious candidate,
+# and the one whose device regression started this.
+#
 # POSIX sh, same portability reasoning as launcher/test/run_tests.sh.
 
 set -eu
@@ -52,7 +78,22 @@ if ! CC_BIN=$(find_cc); then
     exit 1
 fi
 
-CFLAGS="-std=c11 -Wall -Wextra -Werror -Wno-unused-parameter -O2 -g"
+# DEVICE_PROFILE picks the chip (default esp32c6) - see device_profile.sh's
+# own header for why the profiles directory is passed explicitly rather
+# than discovered.
+. "$MAIN_DIR/../tools/device_profile.sh"
+device_profile_load "" "$MAIN_DIR/../tools/device_profiles"
+
+# DP_CODEGEN_FLAGS is the device's codegen-shaping set (includes -O2).
+# DP_ARCH_FLAGS is the ISA-targeting set (-march=...) for the cross build
+# ONLY - it is deliberately never read here. Mixing "which instructions"
+# into a host x86/ARM compile would either be rejected outright or silently
+# ignored, and conflating it with "how a switch compiles" is exactly the
+# mistake this profile split exists to prevent.
+CODEGEN_FLAGS=$(device_profile_require DP_CODEGEN_FLAGS) || exit 1
+STD_FLAG=$(device_profile_require DP_STD_FLAG) || exit 1
+
+CFLAGS="$STD_FLAG -Wall -Wextra -Werror -Wno-unused-parameter $CODEGEN_FLAGS -g"
 DEFS="-DDEVICE_BUILD -DSAND_HOST_PROBE -DCONFIG_LAUNCHER_DEVELOPMENT=1 $EXTRA_DEFS"
 
 INCS="-I $MAIN_DIR -I $TEST_DIR -I $TEST_DIR/framework -I $TEST_DIR/stubs"
