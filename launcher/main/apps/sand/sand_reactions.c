@@ -1776,18 +1776,21 @@ spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t 
  * the scarce thing" discipline growth, budding and sprouting already
  * rest on (reaction_t.roots's own comment, material.h).
  *
- * NO DIRECTION WEIGHTS, deliberately. Moisture itself already has a
- * shape - it percolates down through a bed (step_one_soaking_cell()) and
- * diffuses out from anything drinking or pouring nearby - so a root that
- * simply reaches for whichever neighbour still has water in it spreads
- * wide near a wet surface and fingers downward through a bed drying from
- * the top, without this function needing to know which way is down at
- * all. An earlier draft of this feature walked a stem-shaped run outward
- * from the tree's collar instead, reusing step_one_growing_cell()'s own
- * site-roll-plus-fan-walk machinery; it was replaced by this local rule
- * because a root does not need a stem's machinery to look like a root,
- * and because this rests on the same scarce-resource bound the rest of
- * the feature already uses rather than adding a second kind of bound
+ * Moisture itself already has most of the shape - it percolates down
+ * through a bed (step_one_soaking_cell()) and diffuses out from anything
+ * drinking or pouring nearby - so a root reaching for whichever neighbour
+ * still has water in it spreads wide near a wet surface and fingers
+ * downward through a bed drying from the top. The first cut had no
+ * direction weights at all on exactly that reasoning, and it was mostly
+ * right: it was replaced by a SMALL skew, not a walk (see the pick below
+ * for what the skew is and the measurement behind it), because near a wet
+ * surface the sideways spread won so completely that depth only happened
+ * at the angles the geometry favoured. An earlier draft before that walked
+ * a stem-shaped run outward from the tree's collar instead, reusing
+ * step_one_growing_cell()'s own site-roll-plus-fan-walk machinery; it was
+ * dropped because a root does not need a stem's machinery to look like a
+ * root, and because this rests on the same scarce-resource bound the rest
+ * of the feature already uses rather than adding a second kind of bound
  * beside it.
  *
  * Bounded three ways, in the order that was actually measured to matter
@@ -1831,11 +1834,51 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
      * bothers with ring_dir() at all instead of the plainer reaction_dirs
      * four-neighbour scan sprouting and drinking already use.
      *
-     * Fixed, arbitrary ring order - like reaction_dirs above, and for the
-     * same reason: this is a "does anything qualify" scan, not a
-     * weighted pick, so the first match is as good as any other and
-     * costs nothing extra to find. */
-    int eat_at = -1, ex = 0, ey = 0;
+     * A WEIGHTED PICK, not the first match. The first cut took whichever
+     * moist neighbour the fixed ring order reached first, which is a
+     * uniform pick in disguise - and uniform is isotropic, so the shape
+     * of the moisture decided everything. Near a wet surface moisture
+     * spreads sideways, so the system spread sideways, and reported from
+     * the device as roots preferring the sides so strongly that deeper
+     * roots only happened at the few angles the geometry favoured.
+     *
+     * Two biases, both read off the grid with no state:
+     *   AWAY FROM ITS PARENT - the sum of the directions from this cell's
+     *     own root neighbours to it, `away`. A tip has one parent, so the
+     *     vector is strong and the tip keeps going the way it was going,
+     *     the same thing holds_line does for a stem without ever
+     *     remembering anything. A junction has several, they partly
+     *     cancel, and it is free to go any way - which is right for a
+     *     junction. A lone seed has none and is left to gravity.
+     *   GRAVITY-WARD - what actually buys depth: a root reaching for the
+     *     water percolating down beneath it rather than the water
+     *     diffusing beside it.
+     * Weights are base 1, +2 for continuing away, +1 for going down. A
+     * tip growing straight on and down weighs 4 against 1 for turning
+     * back sideways; the away term is the larger on purpose, since it is
+     * the parent-relative skew that was asked for and gravity alone had
+     * been measured to make a taproot (the four-neighbour finding above).
+     *
+     * Two draws, both after every gate: the `roots` roll, then the pick -
+     * the second is only ever drawn once the first has said a conversion
+     * happens, so a root with nothing moist beside it still touches the
+     * RNG exactly as often as before, which is not at all. */
+    int away_x = 0, away_y = 0;
+    for (int d = 0; d < 8; d++) {
+        const int* nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == (cell_t)r->roots_to) {
+            away_x -= nd[0];
+            away_y -= nd[1];
+        }
+    }
+    const int gx = s->last_load_dx, gy = s->last_load_dy;
+
+    int cand_at[8], cand_x[8], cand_y[8], cand_w[8];
+    int n_cand = 0, total_w = 0;
     for (int d = 0; d < 8; d++) {
         const int* nd = ring_dir(d);
         const int nx = x + nd[0], ny = y + nd[1];
@@ -1844,22 +1887,39 @@ step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         }
         const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
         const cell_t n = s->cells[nat];
-        if (!CELL_IS_EMPTY(n) && reaction_of(n)->dries != 0 && CELL_MOISTURE(n) != 0) {
-            eat_at = (int)nat;
-            ex = nx;
-            ey = ny;
-            break;
+        if (CELL_IS_EMPTY(n) || reaction_of(n)->dries == 0 || CELL_MOISTURE(n) == 0) {
+            continue;
         }
+        int wgt = 1;
+        if (nd[0] * away_x + nd[1] * away_y > 0) {
+            wgt += 2; /* carries on away from its parent */
+        }
+        if (nd[0] * gx + nd[1] * gy > 0) {
+            wgt += 1; /* reaches down */
+        }
+        cand_at[n_cand] = (int)nat;
+        cand_x[n_cand] = nx;
+        cand_y[n_cand] = ny;
+        cand_w[n_cand] = wgt;
+        total_w += wgt;
+        n_cand++;
     }
-    if (eat_at < 0) {
+    if (n_cand == 0) {
         return false; /* nothing moist beside it right now */
     }
-    /* Both found before the roll - the same discipline every site in
-     * this file uses, drawing a random number only once everything else
-     * has already said this cell has somewhere to spend it. */
+    /* Everything found before the roll - the same discipline every site
+     * in this file uses, drawing a random number only once everything
+     * else has already said this cell has somewhere to spend it. */
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
         return true; /* a candidate exists; just not this roll */
     }
+    int pick = rng_below(&s->rng, total_w);
+    int k = 0;
+    while (pick >= cand_w[k]) {
+        pick -= cand_w[k];
+        k++;
+    }
+    const int eat_at = cand_at[k], ex = cand_x[k], ey = cand_y[k];
 
     /* The conversion IS the spend. place_reacted() overwrites the whole
      * cell with a fresh root byte, so the dirt's moisture nibble is
