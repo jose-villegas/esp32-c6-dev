@@ -171,21 +171,29 @@ static const uint8_t gfx_dither4x4[4][4] = {
  * covers nothing at all - an author-visible value meant to read as
  * "barely there" would instead be indistinguishable from alpha 0. +8
  * rounds to the nearest of the 16 levels instead of always flooring. */
-static inline bool gfx_dither_covers(int x, int y, uint8_t alpha)
+
+/* The alpha -> Bayer-level scaling gfx_dither_covers() below compares
+ * against the table, exposed on its own so a caller with a whole ROW (or
+ * frame) of pixels at one alpha can compute the level once and test cells
+ * directly, instead of re-deriving it per pixel - see boot_anim.c's
+ * draw_image() for the loop this exists for. 17, not 16: alpha 255 maps
+ * to a level strictly above every table cell (the table's own max is 15),
+ * which is what keeps "fully solid" exactly solid without the separate
+ * >= 255 branch the per-pixel wrapper below still keeps for clarity. */
+static inline int gfx_dither_level(uint8_t alpha)
 {
     if (alpha == 0) {
-        return false;
+        return 0;
     }
     if (alpha >= 255) {
-        /* Its own unconditional path, not the dither test, so the fully-
-         * solid case is never one Bayer cell short of solid the way a
-         * plain `level > cell` test would leave it (the highest table
-         * value, 15, can never compare less than a scaled 255 by one ULP
-         * of the shift below). */
-        return true;
+        return 16;
     }
-    const int level = (alpha + 8) >> 4;
-    return level > gfx_dither4x4[y & 3][x & 3];
+    return (alpha + 8) >> 4;
+}
+
+static inline bool gfx_dither_covers(int x, int y, uint8_t alpha)
+{
+    return gfx_dither_level(alpha) > gfx_dither4x4[y & 3][x & 3];
 }
 
 /* Add `b` to `a`, saturating each channel at its own maximum.

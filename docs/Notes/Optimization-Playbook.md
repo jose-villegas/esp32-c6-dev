@@ -273,6 +273,78 @@ axis.
 
 ---
 
+## A 64-bit divide on a 32-bit core is a library call
+
+RV32IM has a hardware divider for 32-bit operands only; an `int64_t`
+division compiles to a `__divdi3` software call — hundreds of cycles,
+completely invisible at the source line. The boot animation's curve loop ran
+a widening divide helper (`fx_div_round`) twice per spline span, roughly
+four thousand soft-divisions per frame, for operands that provably fit 32
+bits (`i * 4096` tops out near 8 million). One 32-bit divide per span,
+carried incrementally across the loop, produced the same rounding and the
+same values — part of the bundle that took the curve phase from 26.5 ms to
+17.9 ms at the worst checkpoint (`boot_anim.c`, 2026-09-04). The lesson
+travels as a grep: look for `int64_t` division or modulo — including inside
+innocuous-looking fixed-point helpers — in any hot loop on a 32-bit target,
+then prove the operand range and stay narrow.
+
+---
+
+## A decision that is constant per row does not belong in the pixel loop
+
+The dithered photo crossfade asked "does the Bayer pattern cover this
+pixel?" 164,864 times a frame — but alpha is one value for the whole call
+and the pattern repeats every 4 pixels, so within a row the entire decision
+is four booleans. Hoisting them made fully-covered rows a `memcpy` and
+untouched rows free: the fade-out's Image phase fell 16.5 → 7.5 ms, the
+early crossfade's 13.5 → 3.9 ms. The generalized primitive is
+`gfx_blit_dither()` (gfx.h).
+
+The companion trap the rewrite exposed: once the compute is hoisted, the
+floor is *data traffic*. The photo is `static const`, so it lives in flash
+behind the XIP cache — and any mid-alpha pattern touches every cache line
+of every displayed row, so mid-fade cost (~14 ms) is a full-image flash
+read no CPU-side cleverness can lower. Ask where the asset physically
+lives, not just what the loop computes — the "know what kind of memory"
+lesson above, applied to `const` data.
+
+---
+
+## An affine transform commutes with an affine combination — hoist it
+
+A quadratic B-spline's weights sum to a constant, and a model/camera
+transform is affine — so transforming three control points and
+interpolating the results is *algebraically identical* to interpolating
+first and transforming every sub-point, at a quarter of the matrix work
+(pinned by a host test comparing both orderings, `suite_boot_anim.c`). Same
+family, same loop: a polyline's interior vertex is the end of one segment
+and the start of the next — cache its projection instead of projecting it
+twice, and keep the pairwise near-plane clip only for segments that
+actually straddle the plane. And the level-of-detail *predicate* needn't
+project at all: "would these two points land within k pixels of each
+other" cross-multiplies into two 64-bit multiplies and a compare
+(`boot_anim_screen_chord_lt()`), no divide, no clip. All three are exact
+rewrites — the picture cannot change, only the bill.
+
+---
+
+## Coverage already lost is a detail budget
+
+When another layer is known to overwrite a fraction of your pixels — here
+the crossfade's dither stippling the scene away — that fraction is a
+budget you can spend: at a quarter coverage the curve halves its spline
+sub-steps, at half coverage spans collapse to single chords and ring
+density thins, so frame cost tapers in step with how much of the drawing
+is actually left visible. Unlike everything above this IS an
+approximation: bound it with an argument written next to the constant (the
+convex-hull and sagitta bounds in `boot_anim.h`), and verify visually at
+the exact frames each tier first engages, not just at the extremes. The
+full bundle held every checkpoint of the boot animation at or above 20 fps
+where the three crossfade dips had sat at 12–14 (2026-09-04, measured via
+`suite_boot_anim_perf.c`).
+
+---
+
 ## Related
 
 - [`../Sand/Performance-Tuning-Attempts.md`](../Sand/Performance-Tuning-Attempts.md)

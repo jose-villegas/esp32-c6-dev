@@ -125,6 +125,37 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color);
 void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
                           uint8_t alpha);
 
+/* Composite a source IMAGE over the framebuffer at `alpha`'s own dithered
+ * coverage - gfx_fill_rect_dither()'s sibling for pixels that come from a
+ * bitmap instead of one flat colour: a covered destination pixel becomes
+ * the corresponding source pixel outright, an uncovered one is left
+ * exactly as it was, and nothing is ever blended - the same "coverage,
+ * not arithmetic" transparency everything dithered here does.
+ *
+ * `src` is the source pixel for the rect's own top-left corner (x, y),
+ * already in panel format (gfx_color_t), with `src_stride` pixels per
+ * source row - so a full-screen image is gfx_blit_dither(0, 0, GFX_WIDTH,
+ * GFX_HEIGHT, image, GFX_WIDTH, alpha), and a window into a larger image
+ * just offsets `src` and passes the image's own width as the stride.
+ *
+ * This is the cheapest full-frame crossfade this panel can do, and it is
+ * cheap by construction, not by luck: alpha is one value for the whole
+ * call, and the Bayer pattern repeats every 4 pixels, so the per-pixel
+ * decision collapses to four booleans per row - a fully-covered row is a
+ * plain memcpy, an untouched row costs nothing at all, and the awkward
+ * middle walks unrolled groups of four. Same table, same rounding, same
+ * result as testing gfx_dither_covers() at every pixel (the device suite
+ * pins this); the pattern is phase-locked to absolute panel coordinates
+ * like every other dithered draw here, so overlapping dithered shapes
+ * stay in register with each other.
+ *
+ * First user: the boot animation's photograph crossfade (boot_anim.c's
+ * draw_image()). Meant for any app compositing an image over live
+ * content - a transition, a viewer, a watermark. Clips to the current
+ * clip rect like everything else in this file. */
+void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
+                     int src_stride, uint8_t alpha);
+
 /* Both clip to the framebuffer, so callers need not bounds-check. */
 void gfx_pixel(int x, int y, gfx_color_t color);
 
