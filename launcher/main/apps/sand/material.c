@@ -1616,30 +1616,32 @@ static const gfx_color_t palette[256] = {
                                     * on the panel, same as every other
                                     * starting-point constant in this table
                                     * (see docs/Sand/Metal-Smelting-Plan.md). */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFB49B), /* root - PALE BONE, and pale is the whole
-                                    * point: a root that has never seen light
-                                    * is the palest thing in the ground, not
-                                    * the darkest. It began as a dark
-                                    * red-brown on the theory that a root
-                                    * should read as tree, and that put it at
-                                    * luminance ~49 - squarely inside wet
-                                    * dirt's own range (DIRT_WET 0x3A2A18 is
-                                    * ~45), so it vanished into exactly the
-                                    * soil it is usually buried in.
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFA58A), /* root - a PALE, WARM TAN, a shade or two
+                                    * lighter than the trunk it belongs to.
+                                    * Three colours to get here, and each
+                                    * step was decided on the panel, not on
+                                    * paper:
                                     *
-                                    * Contrast is against DIRT, which is what
-                                    * a root is always seen against: dirt runs
-                                    * ~127 (DIRT_DRY) down to ~45 (DIRT_WET),
-                                    * and this sits at ~180, clear of the
-                                    * whole ramp at either wetness.
+                                    *   dark red-brown (0x5C2018) - "reads as
+                                    *   tree", but luminance ~49 sits inside
+                                    *   wet dirt's own range (DIRT_WET is
+                                    *   ~45), so it vanished into exactly the
+                                    *   soil it is buried in.
+                                    *   pale bone (0xBFB49B) - fixed that,
+                                    *   ~180 against dirt's ~127 dry / ~45
+                                    *   wet, but read as too BRIGHT: a
+                                    *   neutral off-white glowing under the
+                                    *   trunk rather than belonging to it.
+                                    *   this - the user's own pick, pulled
+                                    *   toward wood's hue and down to ~170.
+                                    *   Still clear of dirt's whole ramp at
+                                    *   either wetness, and now the same
+                                    *   family as the trunk above it.
                                     *
-                                    * DESATURATED on purpose, which is the
-                                    * other half. Pale alone would collide
-                                    * with sand's own pale end (SAND_PALE
-                                    * 0xF2CE90), a saturated gold - R-B there
-                                    * is 98 against this one's 36 - so the
-                                    * neutrality is what keeps a root out of a
-                                    * dune as well as out of the soil. */
+                                    * Warmer than bone but not sand: R-B here
+                                    * is 53 against SAND_PALE 0xF2CE90's 98,
+                                    * so a root in a dune still separates
+                                    * from the dune. */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT + 1] = GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
@@ -1885,8 +1887,8 @@ static const gfx_color_t wood_grain[8] = {
  * note it is the DARK end of a pale pair, not a dark colour); ROOT_LIGHT
  * lifts it the same way METAL_LIGHT lifts METAL_DARK, and both want eyes
  * on the panel like every other starting colour here. */
-#define ROOT_DARK         0xBFB49B
-#define ROOT_LIGHT        0xE5DDCB
+#define ROOT_DARK         0xBFA58A
+#define ROOT_LIGHT        0xDCC5A8
 
 #define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
 
