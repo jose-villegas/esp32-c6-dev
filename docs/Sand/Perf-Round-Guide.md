@@ -156,6 +156,18 @@ with `-DDEVICE_BUILD` on a laptop, against a link-only gfx stub and a real
 `esp_timer_get_time()`, and calls the actual frame-budget test bodies
 through the `SAND_HOST_PROBE` wrapper functions beside them - not a
 hand-copied scene, so it can't drift from what the device build measures.
+It also compiles with the device's own codegen-shaping flags, taken from
+the device profile, so a switch cannot become a jump table here that the
+board could never have had. On this tree that changes nothing - no
+portable sand source emits an indirect jump either way - but it removes
+the failure mode rather than leaving it to be rediscovered.
+
+Read the magnitudes it gives you with the record in mind: host numbers
+call *direction* reliably for changes of code shape, and land at 0.7x-2x
+for changes of work quantity. The factor neither this harness nor any x86
+host can see is flash placement against the 32 KB instruction cache. The
+route to that number, once a QEMU with TCG plugins exists, is sketched and
+half-built in `launcher/tools/oracle/`.
 
 ```sh
 bash launcher/main/apps/sand/tools/perf_probe/build_probe.sh out/probe
@@ -295,14 +307,6 @@ skipped.
 
 Open items, as of this file's writing:
 
-- **A test fixture puts 41 KB on the device's 3.5 KB stack** — the new host
-  stack gate found `test_a_submerged_obstacle_casts_a_gravity_aligned_shadow`
-  declaring `unsigned depth[92 * 112]` as a local: a 42,496-byte frame
-  measured with the device's own compiler, against a 3,584-byte stack, and
-  not `DEVICE_BUILD`-guarded. Same species as the two panics that have
-  already blocked capture. `bd esp32c6-3h9`, P0 — fix before the next
-  capture round, and delete its entry from `check_stack_usage.py`'s debt
-  list when you do.
 - **The dispatcher rung of the pair-matrix is unshipped** — the loop+switch
   shape is in the never-retry list; a different shape, plus the ordering
   sweep that waits on it, lives on the `sand-pair-matrix` branch
