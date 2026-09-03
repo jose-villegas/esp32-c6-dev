@@ -805,6 +805,97 @@ static void test_a_span_climbs_steadily_when_its_points_do(void)
     }
 }
 
+/* boot_anim_spline_cs()'s whole reason to exist: transforming three control
+ * points to camera space and THEN interpolating them must land on the same
+ * point (modulo fixed-point rounding order, not a real difference) as
+ * interpolating in world space and THEN transforming - draw_curve() relies
+ * on this to skip a full matrix transform on every drawn sub-point. Checked
+ * against a real, non-identity view (rotated, translated, perspective) -
+ * an identity transform would not catch a bug that only shows up once
+ * translation and rotation are actually mixed in. */
+static void test_spline_cs_matches_transforming_the_world_space_spline(void)
+{
+    const boot_anim_view_t view = boot_anim_view(PANEL_W, PANEL_H, CURVE_DONE_MS);
+    const boot_anim_pt_t a = pt(-3000, 1500, 200);
+    const boot_anim_pt_t b = pt(2500, -1800, 900);
+    const boot_anim_pt_t c = pt(600, 3200, 1600);
+
+    const S3L_Vec4 ta = boot_anim_to_camera_space(a.re, a.im, a.t, &view);
+    const S3L_Vec4 tb = boot_anim_to_camera_space(b.re, b.im, b.t, &view);
+    const S3L_Vec4 tc = boot_anim_to_camera_space(c.re, c.im, c.t, &view);
+
+    for (int32_t t = 0; t <= BOOT_ANIM_ONE; t += 197) {
+        const boot_anim_pt_t world = boot_anim_spline(a, b, c, t);
+        const S3L_Vec4 want =
+            boot_anim_to_camera_space(world.re, world.im, world.t, &view);
+        const S3L_Vec4 got = boot_anim_spline_cs(ta, tb, tc, t);
+
+        TEST_ASSERT_INT32_WITHIN_MESSAGE(2, want.x, got.x,
+            "transform-then-interpolate must match interpolate-then-"
+            "transform, up to fixed-point rounding order");
+        TEST_ASSERT_INT32_WITHIN_MESSAGE(2, want.y, got.y,
+            "transform-then-interpolate must match interpolate-then-"
+            "transform, up to fixed-point rounding order");
+        TEST_ASSERT_INT32_WITHIN_MESSAGE(2, want.z, got.z,
+            "transform-then-interpolate must match interpolate-then-"
+            "transform, up to fixed-point rounding order");
+    }
+}
+
+/*---------------------------------------------------------------------------
+ * Basic level of detail
+ *-------------------------------------------------------------------------*/
+
+/* Two points far enough apart on screen that boot_anim_curve_lod_steps()
+ * must not shortcut - an identity, orthographic view (focal 0) so the
+ * points' own x/y ARE their screen offset from centre, no projection math
+ * to work back through by hand. */
+static void test_curve_lod_steps_keeps_full_detail_for_a_wide_chord(void)
+{
+    const boot_anim_view_t view = identity_view(0);
+    const S3L_Vec4 a = { -100, 0, 5 * S3L_F, S3L_F };
+    const S3L_Vec4 c = {  100, 0, 5 * S3L_F, S3L_F };
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_SPLINE_STEPS,
+        boot_anim_curve_lod_steps(a, c, &view),
+        "a span whose two ends land well apart on screen must keep full "
+        "detail, not be shortcut");
+}
+
+/* The actual point of the LOD shortcut: two points that already land on
+ * (near enough) the same pixel cannot have a spline through them worth
+ * subdividing - see boot_anim_curve_lod_steps()'s own comment on the
+ * convex-hull argument for why the two OUTER points are enough to decide
+ * this without looking at anything in between. */
+static void test_curve_lod_steps_collapses_a_tiny_chord_to_one_step(void)
+{
+    const boot_anim_view_t view = identity_view(0);
+    const S3L_Vec4 a = { 40, 40, 5 * S3L_F, S3L_F };
+    const S3L_Vec4 c = { 41, 40, 5 * S3L_F, S3L_F };
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1,
+        boot_anim_curve_lod_steps(a, c, &view),
+        "two points landing within a pixel of each other should collapse "
+        "to a single straight step");
+}
+
+/* The safety fallback: a span the probe cannot even project (both ends at
+ * or behind the near plane here) must NOT be reported as "tiny, skip it" -
+ * boot_anim_curve_lod_steps() has no idea how big it actually is on
+ * screen in that case, so it has to default to full detail rather than
+ * guess low. */
+static void test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project(void)
+{
+    const boot_anim_view_t view = identity_view(S3L_F);
+    const S3L_Vec4 a = { 40, 40, 0, S3L_F };
+    const S3L_Vec4 c = { 41, 40, BOOT_ANIM_NEAR_Z - 1, S3L_F };
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(BOOT_ANIM_SPLINE_STEPS,
+        boot_anim_curve_lod_steps(a, c, &view),
+        "a span the probe cannot project at all must default to full "
+        "detail, not be assumed tiny");
+}
+
 /*---------------------------------------------------------------------------
  * Pacing
  *
@@ -1462,6 +1553,10 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_a_repeated_point_pins_the_end_of_the_curve);
     RUN_TEST(test_a_span_never_leaves_its_control_points_behind);
     RUN_TEST(test_a_span_climbs_steadily_when_its_points_do);
+    RUN_TEST(test_spline_cs_matches_transforming_the_world_space_spline);
+    RUN_TEST(test_curve_lod_steps_keeps_full_detail_for_a_wide_chord);
+    RUN_TEST(test_curve_lod_steps_collapses_a_tiny_chord_to_one_step);
+    RUN_TEST(test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project);
 
     RUN_TEST(test_the_pen_runs_from_nothing_to_phase_ones_end);
     RUN_TEST(test_the_pen_keeps_climbing_through_phase_two);

@@ -99,6 +99,7 @@ static inline void boot_anim_unused_pixel(S3L_PixelInfo *pixel) { (void)pixel; }
 
 #include "boot/boot_anim_curve.h"
 #include "boot/boot_anim_timeline.h"
+#include "util/intmath.h"
 #include "util/tween.h"
 
 #define BOOT_ANIM_Q    12
@@ -782,6 +783,17 @@ static inline int32_t boot_anim_wave_height(int32_t r_q12, uint32_t now_ms,
  * curve's tightest, which is well under what anyone can see. */
 #define BOOT_ANIM_SPLINE_STEPS 4
 
+/* boot_anim_curve_lod_steps()'s own threshold, in screen pixels (Manhattan,
+ * not Euclidean - see that function's own comment on why the whole span's
+ * outer chord is what gets measured). A full-detail span is ordinarily
+ * about six pixels end to end (four sub-steps at "a joint every pixel and a
+ * half", per BOOT_ANIM_SPLINE_STEPS's own comment above) - three is
+ * comfortably below that, so this only actually engages once a span has
+ * shrunk on screen to roughly half its usual size or smaller (the far end
+ * of the timeline's own camera pull-back, or a span that was already unusually
+ * tight), not during the normal, large-on-screen portion of the climb. */
+#define BOOT_ANIM_LOD_CHORD_PX 3
+
 typedef struct {
     int32_t re, im;   /* Q12 */
     int32_t t;        /* Q8  */
@@ -837,6 +849,85 @@ static inline boot_anim_pt_t boot_anim_spline(boot_anim_pt_t c0,
     p.im = (w0 * c0.im + w1 * c1.im + w2 * c2.im) >> (BOOT_ANIM_Q + 1);
     p.t  = (w0 * c0.t  + w1 * c1.t  + w2 * c2.t ) >> (BOOT_ANIM_Q + 1);
     return p;
+}
+
+/* The same quadratic B-spline as boot_anim_spline() above, evaluated on
+ * three points already in CAMERA space instead of three raw curve samples -
+ * draw_curve() uses this to avoid transforming every drawn sub-point
+ * individually (see its own top comment for the full reasoning). Exact, not
+ * approximate: boot_anim_to_camera_space() is an affine map (linear +
+ * translation - see S3L_vec3Xmat4's own body in small3dlib.h, which always
+ * writes v->w = S3L_F regardless of the input w, i.e. drops any projective
+ * term), and this spline's weights sum to a constant (2*BOOT_ANIM_ONE - see
+ * boot_anim_spline()'s own comment) - an affine map commutes with an affine
+ * combination of that kind exactly, in real-number math:
+ *
+ *     transform(spline(c0, c1, c2, t)) == spline(transform(c0),
+ *                                                 transform(c1),
+ *                                                 transform(c2), t)
+ *
+ * The fixed-point RESULT is not bit-exact to calling boot_anim_spline() then
+ * boot_anim_to_camera_space() on it - this rounds each transformed
+ * coordinate once instead of rounding the raw spline result once and then
+ * the transform's own internal divide again - but the difference is well
+ * under a pixel; the algebraic identity above is what actually matters and
+ * holds regardless of rounding.
+ *
+ * The weighted sum is done in int64_t, unlike boot_anim_spline()'s own
+ * 32-bit one: that function's own comment can prove its operands stay small
+ * because they are raw curve-table values with a known generated range: a
+ * CAMERA-space coordinate carries no such promise - it is whatever the
+ * current keyframed camera/space transform happens to produce - so this
+ * takes the same "size the accumulator instead of trusting the operands"
+ * approach util/fixed.h's own helpers use elsewhere, at a cost of a few
+ * extra cycles per point that is trivial next to the S3L_vec3Xmat4 call
+ * this function exists to avoid paying per sub-point. */
+static inline S3L_Vec4 boot_anim_spline_cs(S3L_Vec4 c0, S3L_Vec4 c1,
+                                           S3L_Vec4 c2, int32_t t_q12)
+{
+    const int32_t u  = BOOT_ANIM_ONE - t_q12;
+    const int32_t w0 = (u * u) >> BOOT_ANIM_Q;
+    const int32_t w2 = (t_q12 * t_q12) >> BOOT_ANIM_Q;
+    const int32_t w1 = 2 * BOOT_ANIM_ONE - w0 - w2;
+
+    S3L_Vec4 p;
+    p.x = (S3L_Unit)(((int64_t)w0 * c0.x + (int64_t)w1 * c1.x +
+                       (int64_t)w2 * c2.x) >> (BOOT_ANIM_Q + 1));
+    p.y = (S3L_Unit)(((int64_t)w0 * c0.y + (int64_t)w1 * c1.y +
+                       (int64_t)w2 * c2.y) >> (BOOT_ANIM_Q + 1));
+    p.z = (S3L_Unit)(((int64_t)w0 * c0.z + (int64_t)w1 * c1.z +
+                       (int64_t)w2 * c2.z) >> (BOOT_ANIM_Q + 1));
+    p.w = S3L_F;
+    return p;
+}
+
+/* How many of BOOT_ANIM_SPLINE_STEPS a span between two already-camera-space
+ * OUTER points is actually worth walking - basic level of detail: once the
+ * whole span's own on-screen chord is a few pixels or less, subdividing it
+ * further cannot move a drawn pixel, because a B-spline never leaves the
+ * convex hull of its control points (the same property boot_anim_spline()'s
+ * own comment cites for why a B-spline was chosen at all) - so a span whose
+ * two ENDS already land within BOOT_ANIM_LOD_CHORD_PX of each other cannot
+ * have a MIDDLE that strays further away than that. Probed with the span's
+ * outer two points rather than anything in between: cheap (one projection
+ * each, not the full spline+transform this function exists to let the
+ * caller skip), and sufficient given the convex-hull argument above.
+ *
+ * Falls back to full detail rather than guessing whenever the probe itself
+ * cannot answer cleanly - off panel, or straddling the near plane - since
+ * the whole point of an LOD shortcut is to be invisible when it fires, not
+ * to save a cycle at the cost of a wrong-looking frame in an edge case. */
+static inline int boot_anim_curve_lod_steps(S3L_Vec4 a, S3L_Vec4 c,
+                                            const boot_anim_view_t *view)
+{
+    int ax, ay, bx, by;
+    if (!boot_anim_project_segment_cs(a, c, view, &ax, &ay, &bx, &by)) {
+        return BOOT_ANIM_SPLINE_STEPS;
+    }
+    if (im_abs(bx - ax) + im_abs(by - ay) < BOOT_ANIM_LOD_CHORD_PX) {
+        return 1;
+    }
+    return BOOT_ANIM_SPLINE_STEPS;
 }
 
 /* Sample `i` of the generated curve, clamped at both ends.
