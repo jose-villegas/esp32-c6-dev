@@ -696,6 +696,89 @@ void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
     mark_band(y0, y1);
 }
 
+/* See gfx.h for the contract. The shape of the loop is the whole point:
+ * alpha is constant for the call and gfx_dither_covers(col, row, alpha)
+ * depends on col only through col & 3 and on row only through row & 3, so
+ * within one row the entire per-pixel decision is FOUR booleans, computed
+ * once - not a table read and compare 368 times. gfx_dither_level() is the
+ * same scaling gfx_dither_covers() itself uses (suite_gfx_color.c pins
+ * them agreeing at every alpha), so this produces bit-identical output to
+ * the per-pixel loop it replaces; the device suite additionally checks the
+ * primitive against a literal per-pixel gfx_dither_covers() reference,
+ * unaligned start included.
+ *
+ * The two degenerate rows come out free, which matters more than the
+ * unroll: a row with no covered column is skipped whole, and a row with
+ * all four covered - which at alpha 255 is EVERY row, making that case a
+ * plain row-by-row copy with no special-casing - is a memcpy. So a fade's
+ * cost tapers toward its own cheap ends instead of staying flat. */
+void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
+                     int src_stride, uint8_t alpha)
+{
+    if (alpha == 0) {
+        return;
+    }
+
+    int x0 = x, y0 = y, x1 = x + w, y1 = y + h;
+
+    if (x0 < clip.x0) x0 = clip.x0;
+    if (y0 < clip.y0) y0 = clip.y0;
+    if (x1 > clip.x1) x1 = clip.x1;
+    if (y1 > clip.y1) y1 = clip.y1;
+    if (x0 >= x1 || y0 >= y1) {
+        return;
+    }
+
+    const int level = gfx_dither_level(alpha);
+
+    for (int row = y0; row < y1; row++) {
+        const uint8_t *cells = gfx_dither4x4[row & 3];
+        const bool p[4] = { level > cells[0], level > cells[1],
+                            level > cells[2], level > cells[3] };
+
+        if (!p[0] && !p[1] && !p[2] && !p[3]) {
+            continue;
+        }
+
+        gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
+        const gfx_color_t *s =
+            src + (size_t)(row - y) * (size_t)src_stride + (x0 - x);
+
+        if (p[0] && p[1] && p[2] && p[3]) {
+            memcpy(dst + x0, s, (size_t)(x1 - x0) * sizeof *dst);
+            continue;
+        }
+
+        /* Walk up to a 4-aligned column, then unrolled groups, then the
+         * tail - the Bayer pattern is indexed by ABSOLUTE column (phase-
+         * locked to the panel, like every dithered draw here), so the
+         * group body's p[0]..p[3] are only right once col & 3 == 0. A
+         * full-frame blit (x0 == 0, width a multiple of 4) never enters
+         * either fringe loop. */
+        int col = x0;
+        gfx_color_t *dp = dst + col;
+        const gfx_color_t *sp = s;
+        for (; col < x1 && (col & 3) != 0; col++, dp++, sp++) {
+            if (p[col & 3]) {
+                *dp = *sp;
+            }
+        }
+        for (; col + 4 <= x1; col += 4, dp += 4, sp += 4) {
+            if (p[0]) dp[0] = sp[0];
+            if (p[1]) dp[1] = sp[1];
+            if (p[2]) dp[2] = sp[2];
+            if (p[3]) dp[3] = sp[3];
+        }
+        for (; col < x1; col++, dp++, sp++) {
+            if (p[col & 3]) {
+                *dp = *sp;
+            }
+        }
+    }
+
+    mark_band(y0, y1);
+}
+
 /*---------------------------------------------------------------------------
  * Text
  *

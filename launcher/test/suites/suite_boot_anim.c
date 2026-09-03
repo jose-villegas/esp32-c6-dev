@@ -879,6 +879,49 @@ static void test_curve_lod_steps_collapses_a_tiny_chord_to_one_step(void)
         "to a single straight step");
 }
 
+/* boot_anim_screen_chord_lt()'s whole point over projecting the points for
+ * real: the perspective cross-multiplication has to agree with what the
+ * projection would say - the SAME camera-space pair reads as a wide chord
+ * near the camera and a tiny one far from it, because apparent size falls
+ * off with z. dx=100 S3L units with focal=S3L_F: at z of one unit it spans
+ * ~36 screen px (well over the 3px bar); pushed a hundred units out it
+ * spans well under one. */
+static void test_screen_chord_shrinks_with_distance(void)
+{
+    const boot_anim_view_t view = identity_view(S3L_F);
+    const S3L_Vec4 near_a = { 0, 0, S3L_F, S3L_F };
+    const S3L_Vec4 near_c = { 100, 0, S3L_F, S3L_F };
+    const S3L_Vec4 far_a = { 0, 0, 100 * S3L_F, S3L_F };
+    const S3L_Vec4 far_c = { 100, 0, 100 * S3L_F, S3L_F };
+
+    TEST_ASSERT_FALSE_MESSAGE(
+        boot_anim_screen_chord_lt(near_a, near_c, &view, 3),
+        "a pair spanning tens of pixels near the camera must not read as "
+        "a tiny chord");
+    TEST_ASSERT_TRUE_MESSAGE(
+        boot_anim_screen_chord_lt(far_a, far_c, &view, 3),
+        "the same pair a hundred units out spans under a pixel and must "
+        "read as tiny - apparent size falls off with z");
+}
+
+/* The pure decision half of the whole-curve sample decimation - see
+ * boot_anim_curve_stride()'s own comment. Full detail while the curve is
+ * anywhere near panel-sized; samples only start dropping once the whole
+ * thing has shrunk to a fraction of it. */
+static void test_lod_stride_tiers_by_extent(void)
+{
+    TEST_ASSERT_EQUAL_INT(1, boot_anim_lod_stride_for_extent(500));
+    TEST_ASSERT_EQUAL_INT(1, boot_anim_lod_stride_for_extent(
+        BOOT_ANIM_LOD_STRIDE2_PX));
+    TEST_ASSERT_EQUAL_INT(2, boot_anim_lod_stride_for_extent(
+        BOOT_ANIM_LOD_STRIDE2_PX - 1));
+    TEST_ASSERT_EQUAL_INT(2, boot_anim_lod_stride_for_extent(
+        BOOT_ANIM_LOD_STRIDE4_PX));
+    TEST_ASSERT_EQUAL_INT(4, boot_anim_lod_stride_for_extent(
+        BOOT_ANIM_LOD_STRIDE4_PX - 1));
+    TEST_ASSERT_EQUAL_INT(4, boot_anim_lod_stride_for_extent(0));
+}
+
 /* The safety fallback: a span the probe cannot even project (both ends at
  * or behind the near plane here) must NOT be reported as "tiny, skip it" -
  * boot_anim_curve_lod_steps() has no idea how big it actually is on
@@ -1557,6 +1600,8 @@ void run_boot_anim_suite(void)
     RUN_TEST(test_curve_lod_steps_keeps_full_detail_for_a_wide_chord);
     RUN_TEST(test_curve_lod_steps_collapses_a_tiny_chord_to_one_step);
     RUN_TEST(test_curve_lod_steps_keeps_full_detail_when_the_probe_cannot_project);
+    RUN_TEST(test_screen_chord_shrinks_with_distance);
+    RUN_TEST(test_lod_stride_tiers_by_extent);
 
     RUN_TEST(test_the_pen_runs_from_nothing_to_phase_ones_end);
     RUN_TEST(test_the_pen_keeps_climbing_through_phase_two);

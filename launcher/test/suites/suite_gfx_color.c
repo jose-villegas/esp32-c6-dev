@@ -229,6 +229,27 @@ static void test_expanding_a_colour_twice_is_idempotent(void)
  * rather than merely asserted in a comment.
  *---------------------------------------------------------------------------*/
 
+/* gfx_dither_level() is the alpha->level scaling gfx_dither_covers() itself
+ * compares against the table - exposed so a caller with a whole row at one
+ * alpha (boot_anim.c's dither_photo_over()) can compute it once. This pins
+ * the two agreeing at EVERY alpha and cell, so the row-pattern loop and the
+ * per-pixel test can never drift apart without a test going red. */
+static void test_dither_level_agrees_with_covers_at_every_alpha_and_cell(void)
+{
+    for (int a = 0; a <= 255; a++) {
+        const int level = gfx_dither_level((uint8_t)a);
+        for (int y = 0; y < 4; y++) {
+            for (int x = 0; x < 4; x++) {
+                TEST_ASSERT_EQUAL_MESSAGE(
+                    level > gfx_dither4x4[y][x],
+                    gfx_dither_covers(x, y, (uint8_t)a),
+                    "gfx_dither_covers() must equal gfx_dither_level() "
+                    "compared against the same cell, at every alpha");
+            }
+        }
+    }
+}
+
 static void test_alpha_zero_never_covers(void)
 {
     for (int y = 0; y < 4; y++) {
@@ -317,6 +338,7 @@ void run_gfx_color_suite(void)
     RUN_TEST(test_adding_never_makes_a_channel_darker);
     RUN_TEST(test_round_trip_is_exact_for_a_spread_of_colours);
     RUN_TEST(test_expanding_a_colour_twice_is_idempotent);
+    RUN_TEST(test_dither_level_agrees_with_covers_at_every_alpha_and_cell);
     RUN_TEST(test_alpha_zero_never_covers);
     RUN_TEST(test_alpha_255_always_covers);
     RUN_TEST(test_coverage_is_monotonic_in_alpha_at_every_cell);
