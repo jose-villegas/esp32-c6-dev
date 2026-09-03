@@ -22,6 +22,8 @@
  *===========================================================================*/
 #pragma once
 
+#include <stdbool.h>
+
 /* Headroom, not a tight fit: the device selftest build alone (test/suites'
  * own dozen plus one suite per app) already sits close to whatever this is
  * set to, and a suite past the limit is dropped SILENTLY - suite_register()
@@ -41,6 +43,19 @@ void suite_register(const char *name, suite_fn fn);
 
 /* Runs every registered suite, in name order so the output is stable. */
 void suites_run_all(void);
+
+/* Runs exactly one registered suite by its exact name - the string SUITE_
+ * REGISTER() stringified its own function name into, e.g.
+ * "run_boot_anim_perf_suite" or "run_cube_perf_suite". For a targeted run:
+ * a perf suite's own report can be minutes behind whatever else registered
+ * ahead of it alphabetically (cube_perf alone runs ~40s, sand's own suite
+ * much longer), and most of the time only one suite's own output is
+ * actually wanted - see screenshot.c's own RUNSUITE console command, the
+ * one place this is called from today.
+ *
+ * Returns false (nothing run) if no suite matches `name` exactly, so the
+ * caller can report that back rather than silently doing nothing. */
+bool suites_run_one(const char *name);
 
 /* How many suites did NOT fit and were dropped - see suite_register().
  *
