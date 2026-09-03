@@ -598,11 +598,24 @@ state: a candidate that continues AWAY from the cell's own root neighbours
 weighs +2, one that reaches gravity-ward +1, over a base of 1. A tip has
 one parent and keeps going the way it was going - what `holds_line` does
 for a stem, without remembering anything; a junction's neighbours partly
-cancel and it is free to turn; a lone seed is left to gravity. Measured
-over six seeds, mean deepest root 4.2 rows without the skew and 8.8 with,
-systems about twice the size (a directed tip keeps finding fresh moist
-cells instead of re-hitting the crowd), and the runaway scene still pins
-at a fixed point. An earlier draft of this feature reused
+cancel and it is free to turn; the trunk a root grew from counts as a
+parent too (`clings_to`), so the very first root under a tree heads down
+and out from under the wood rather than tossing a coin along the wet
+surface. Measured over THIRTY seeds (six was per-seed scatter of +/-10
+rows): mean deepest root 3.5 rows with the weights zeroed, 7.2-7.4 with
+them; systems about twice the size (22 roots against 42), because a
+directed tip keeps finding fresh moist cells instead of re-hitting the
+crowd; and the runaway scene still pins at a fixed point.
+
+**Depth is bounded by water, not by the weights.** Raising the gravity
+term and adding the trunk term narrowed systems (mean half-width 8.5 ->
+7.9) and did not deepen them (7.2 -> 7.4), and the harness says why:
+after 20,000 steps every saturated bed was 98-99% dry and not one live tip
+had moist dirt beside it. A root can only eat moist soil, a bed watered
+from the top dries from the top, and the moist front the fingers chase is
+gone before they reach the floor. The weights decide which moist cell a
+tip takes next; how deep the water goes decides how deep the roots can.
+An earlier draft of this feature reused
 `step_one_growing_cell()`'s own stem-walk machinery - a site roll (tip,
 lean, branch, widen) walking a run outward from the collar - the same way
 a limb grows; it was replaced by the local eating rule because a root does
