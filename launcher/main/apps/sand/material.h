@@ -933,24 +933,36 @@ typedef struct {
      * actually happens. */
     uint8_t clings_to;
 
-    /* ROOTING: chance in 256 that SPENDING this material's own soil
-     * moisture (growing, budding, sprouting - see each of their own
-     * comments) also welds the CONTACT cell - the collar, where the stem
-     * actually touches ground - into `roots_to`.
+    /* ROOTING: one field, two readings, by which material's row it sits
+     * on - the same table-reuse `hardens_to` and `clings_to` already
+     * practise elsewhere in this struct.
      *
+     * ON A GROWER (plant, wood): chance in 256 that SPENDING this
+     * material's own soil moisture (growing, budding, sprouting - see
+     * each of their own comments) also welds the CONTACT cell - the
+     * collar, where the stem actually touches ground - into `roots_to`.
      * It exists because dirt is a powder and shifts: when the soil
      * directly under a tree's collar slides away, find_water()'s walk
      * down the stem finds neither stem nor ground below it and the tree
      * simply stops growing, stranded above water it can no longer reach.
      * A root embeds the tree in the bed instead of resting it on top of
-     * that bed, so a shifting surface cannot disconnect the two.
+     * that bed, so a shifting surface cannot disconnect the two. This is
+     * a ONE-TIME SEED, gated (spend_soil_moisture(), sand_reactions.c) to
+     * `root_depth == 0` - it plants the first root under a bare collar
+     * and then gets out of the way; everything the root system becomes
+     * after that first cell grows the other way, below.
      *
-     * Small on purpose. The conversion destroys whatever moisture the
-     * contact cell still held - a root does not carry water, it anchors -
-     * so a generous chance eats the very water bed the tree is living
-     * off. See ROOT_DEPTH_MAX (sand_reactions.c) for the other half of
-     * what keeps this from turning a watered bed into timber below the
-     * surface as well as above it. */
+     * ON ROOT ITSELF: chance in 256 that a root cell, touching a moist
+     * dirt neighbour, converts that neighbour into more root - see
+     * step_one_rooting_cell() (sand_reactions.c) and MATX_ROOT's own row
+     * (material.c) for the shape this produces. The conversion IS the
+     * water cost: a dirt cell's moisture lives in its own variant, and
+     * turning it into root discards that variant along with everything
+     * else the old cell was, so there is nothing left to separately
+     * spend. A root that already has several root neighbours does not
+     * roll at all - see ROOT_SURFACE_MAX (sand_reactions.c) - which is
+     * most of what keeps the system a filigree of roots instead of a
+     * block of them growing to fill the bed. */
     uint8_t roots;
     uint8_t roots_to;
 

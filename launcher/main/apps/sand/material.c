@@ -1147,22 +1147,24 @@ const reaction_t reactions[MATERIAL_MAX] = {
 
             /* Budding and sprouting both spend a level of the soil moisture
          * they root in, and both roll this off that same spend - see
-         * reaction_t.roots's own comment in material.h and PART 1 of the
-         * roots feature. 8 in 256, about 3%: small, because the
-         * conversion destroys whatever moisture the contact cell still
-         * held, and a trunk that spends soil moisture constantly should
-         * not be turning its own footing to timber every few steps.
+         * reaction_t.roots's own comment in material.h. PART 1 of the
+         * roots feature: this is the ONE-TIME SEED that plants the FIRST
+         * root under a bare collar (spend_soil_moisture(), gated to
+         * root_depth == 0). Once that first cell exists, PART 2 -
+         * step_one_rooting_cell(), sand_reactions.c, MATX_ROOT's own
+         * `roots` figure below - takes over growing the system outward
+         * and downward on its own; this field never fires again for that
+         * tree.
          *
-         * 40, RAISED FROM 8, and the reason is that the rarity of the
-         * SPEND is what actually bounds this, not the roll. Measured on a
-         * watered bed over 20,000 steps: a tree spends soil moisture only
-         * 74 times in its whole life - it grows, matures out of TREE_LIFT
-         * range, and stops - so at 8 in 256 the expected yield was about
-         * two root cells per tree, which is what "roots never grow past
-         * the attachment point" looked like on the device. At 40 the same
-         * scene grows 17 of them, 6/5/4/2 by depth: a system that spreads
-         * and tapers downward. Past 40 it saturates against the depth cap
-         * rather than getting bigger - 90 gives 21 roots, 160 gives 17. */
+         * Still 40, UNCHANGED from before PART 2 existed, though what it
+         * used to measure - a watered bed's total root count and depth
+         * distribution after 20,000 steps, this field rolling again and
+         * again against a depth cap - no longer applies now that
+         * root_depth != 0 locks this path shut for good after the first
+         * success. What matters now is only "does the first root form
+         * promptly", and 40 already answered that reliably before, so
+         * there was no reason to retune a figure the redesign did not
+         * actually stress. */
             .roots = 40,
             .roots_to = MATX(MATX_ROOT),
 
@@ -2723,16 +2725,17 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
 
             /* Growth spends soil moisture every time it extends, and rolls
          * this off that same spend - see reaction_t.roots's own comment
-         * in material.h and PART 1 of the roots feature. Same figure as
-         * wood's own row below, for the same reason: it is the small
-         * chance and the depth cap together that keep a watered bed from
-         * turning into timber below ground as well as above it.
+         * in material.h. PART 1 of the roots feature: the ONE-TIME SEED
+         * that plants a bare collar's first root (root_depth == 0 gate,
+         * spend_soil_moisture()); see wood's own row for what runs after
+         * that first cell exists.
          *
-         * 40, raised from 8 - see wood's own row for the measurement. The
-         * two must move together: a tree roots through whichever of the
-         * two is spending, and a plant that rooted at a different rate
-         * from the trunk it becomes would put a visible seam in the
-         * system at the moment a run hardens. */
+         * Same figure as wood's own row, and the two must still move
+         * together even though this path now only ever fires once per
+         * tree: a tree roots through whichever of the two is spending
+         * when the collar is still bare, and a plant that seeded at a
+         * different rate from the trunk it becomes would put a visible
+         * seam in the system at the moment a run hardens. */
             .roots = 40,
             .roots_to = MATX(MATX_ROOT),
 
@@ -2978,16 +2981,36 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
             .withers = 1,
             .sheltered_by = MAT_WOOD,
 
-            /* Recognition, exactly as on the leaf row: no `roots`, so a
-         * root never makes another, but naming `roots_to` is what lets
-         * the shelter check and find_water() see a neighbouring root as
-         * part of the same body. */
+            /* THE GROWTH RULE ITSELF - PART 2 of the roots feature. A root
+         * cell rolls to root into the moist soil it touches: see
+         * step_one_rooting_cell() (sand_reactions.c) for the mechanism
+         * and reaction_t.roots's own comment (material.h) for why one
+         * field carries two different readings depending which row it
+         * sits on. `roots_to` naming itself is what lets a root eat into
+         * MORE of itself - the same field a leaf uses purely for
+         * recognition (leaf carries `roots_to` with no `roots` of its
+         * own, since it has no soil moisture to spend) does double duty
+         * here as the actual conversion target.
+         *
+         * 8 in 256, about 3% - small on purpose, and small for a
+         * different reason than the collar seed's own 40 above: THAT
+         * roll fires rarely (once per tree, ever, once root_depth is
+         * nonzero - see spend_soil_moisture()'s own comment), so it can
+         * afford to be generous. THIS roll fires on every root cell,
+         * every step, for as long as any of them still has a moist
+         * neighbour - a whole system rolling every step is the thing
+         * ROOT_SURFACE_MAX and the moisture cost itself have to bound,
+         * and a low base rate is the third leg of that, not decoration.
+         * See ROOT_SURFACE_MAX's own comment (sand_reactions.c) for the
+         * measurement this figure came out of. */
+            .roots = 8,
             .roots_to = MATX(MATX_ROOT),
 
             /* No `grows`, no `falls`, no `drinks`, no `sprouts`, no
-         * `buds`. A root does not extend, does not fall with the tree
-         * above it, takes no water of its own, and is never a budding or
-         * sprouting site. It holds still and holds on. */
+         * `buds`. A root does not extend along a stem, does not fall
+         * with the tree above it, takes no water of its own, and is
+         * never a budding or sprouting site - the whole of how it
+         * spreads is `roots` above, cell eating cell. */
         },
 };
 
