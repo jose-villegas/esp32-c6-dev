@@ -249,31 +249,58 @@ static void polar_point(int32_t radius, uint16_t turn, int32_t *re, int32_t *im)
  * short. Every vertex is at the SAME distance from the origin by
  * construction (it is a circle), so unlike a spoke (see draw_grid_spoke()
  * below) the wave's own height is identical for the whole ring - `t` is
- * computed once by the caller, not per vertex here. */
+ * computed once by the caller, not per vertex here.
+ *
+ * `steps` is how many segments THIS ring gets - the caller picks it from
+ * the ring's own projected size (see draw_floor()'s tier comment), rather
+ * than every ring paying BOOT_ANIM_GRID_CIRCLE_STEPS regardless of whether
+ * it spans the panel or eight pixels of horizon.
+ *
+ * Each vertex is perspective-projected ONCE, its screen position cached
+ * across to the next segment, with the pairwise boot_anim_project_segment_
+ * cs() call kept only for a segment actually straddling the near plane -
+ * the same both-in-front fast path draw_curve() takes, for the same
+ * reason: an interior vertex is the end of one segment and the start of
+ * the next, and projecting it twice doubled the divides in what is, at
+ * over a hundred rings a frame, the floor's whole cost. */
 static void draw_grid_circle(int32_t radius, int32_t t, gfx_color_t c,
-                             const boot_anim_view_t *view)
+                             int steps, const boot_anim_view_t *view)
 {
     S3L_Vec4 prev_cs;
+    bool prev_front = false;
+    int prev_sx = 0, prev_sy = 0;
     bool have_prev = false;
 
-    for (int step = 0; step <= BOOT_ANIM_GRID_CIRCLE_STEPS; step++) {
-        /* step == STEPS closes the loop back onto step 0's own point,
+    for (int step = 0; step <= steps; step++) {
+        /* step == steps closes the loop back onto step 0's own point,
          * rather than leaving a gap on the last edge of the ring. */
-        const int i = (step == BOOT_ANIM_GRID_CIRCLE_STEPS) ? 0 : step;
-        const uint16_t turn =
-            (uint16_t)((i * 65536) / BOOT_ANIM_GRID_CIRCLE_STEPS);
+        const int i = (step == steps) ? 0 : step;
+        const uint16_t turn = (uint16_t)(((uint32_t)i * 65536u) /
+                                         (uint32_t)steps);
         int32_t re, im;
         polar_point(radius, turn, &re, &im);
         const S3L_Vec4 cs = boot_anim_to_camera_space(re, im, t, view);
+        const bool front = cs.z > BOOT_ANIM_NEAR_Z;
+        int sx = 0, sy = 0;
+        if (front) {
+            boot_anim_camera_to_screen(cs, view->focal, &sx, &sy);
+        }
 
         if (have_prev) {
-            int ax, ay, bx, by;
-            if (boot_anim_project_segment_cs(prev_cs, cs, view,
-                                             &ax, &ay, &bx, &by)) {
-                gfx_line_ex(ax, ay, bx, by, c, 0u);
+            if (prev_front && front) {
+                gfx_line_ex(prev_sx, prev_sy, sx, sy, c, 0u);
+            } else if (prev_front != front) {
+                int ax, ay, bx, by;
+                if (boot_anim_project_segment_cs(prev_cs, cs, view,
+                                                 &ax, &ay, &bx, &by)) {
+                    gfx_line_ex(ax, ay, bx, by, c, 0u);
+                }
             }
         }
         prev_cs = cs;
+        prev_front = front;
+        prev_sx = sx;
+        prev_sy = sy;
         have_prev = true;
     }
 }
@@ -421,6 +448,25 @@ void draw_floor(uint32_t now_ms, uint8_t ink,
     const int32_t wavelength_q12 = BOOT_ANIM_WAVE_WAVELENGTH_Q12;
     const uint32_t period_ms = BOOT_ANIM_WAVE_PERIOD_MS;
 
+    /* Whether the last ring PROBED below turned out to span sixteen pixels
+     * or less - carried one ring forward so its immediate neighbour can be
+     * skipped without even probing: at that size, adjacent rings sit well
+     * under a pixel apart (over a hundred rings compressed into a couple
+     * dozen pixels of horizon) and land on the same pixels the drawn ring
+     * already covered, in the same slowly-cycling palette - halving the
+     * ring count in the band redraws the band, not a visibly different
+     * band. Skipped AFTER the alpha check, so the break-when-faded logic
+     * below still walks every ring it always did. */
+    bool last_ring_tiny = false;
+
+    /* Same dissolve-aware detail cap draw_curve() applies - see BOOT_ANIM_
+     * DISSOLVE_*_LEVEL's own comment in boot_anim.h: once the photograph's
+     * dither is stippling half of every ring away, drawing the surviving
+     * half at full segment counts and full ring density buys nothing the
+     * checkerboard has not already destroyed. */
+    const int dissolve_level =
+        gfx_dither_level(boot_anim_image_reveal(now_ms));
+
     for (int ring = 1; ring <= BOOT_ANIM_GRID_RINGS; ring++) {
         const uint8_t alpha = scale8(boot_anim_grid_alpha(now_ms, ring), ink);
         if (alpha == 0) {
@@ -439,6 +485,55 @@ void draw_floor(uint32_t now_ms, uint8_t ink,
             break;
         }
 
+        if ((ring & 1) &&
+            (last_ring_tiny ||
+             dissolve_level >= BOOT_ANIM_DISSOLVE_COARSE_LEVEL)) {
+            continue;
+        }
+
+        /* BOOT_ANIM_GRID_STEP_Q12, not units() (a whole unit) - see
+         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are closer
+         * together than that by default, and generated (an "other const",
+         * like the ring count itself) rather than fixed. */
+        const int32_t d = (int32_t)ring * BOOT_ANIM_GRID_STEP_Q12;
+        const int32_t t = boot_anim_wave_height(d, now_ms, amp_q12,
+                                                wavelength_q12, period_ms);
+
+        /* This ring's segment count, from its own projected diameter -
+         * probed as the screen distance between two opposite rim points
+         * (boot_anim_screen_chord_lt(), two multiplies per tier, no
+         * projection). The tiers keep the chord sagitta - how far the
+         * middle of a straight segment sags off the true circle - at or
+         * under the ~5px the full BOOT_ANIM_GRID_CIRCLE_STEPS count
+         * already allows on a panel-spanning ring (r * (1 - cos(pi/n))
+         * at each tier's own worst diameter), so a reduced ring is drawn
+         * no more coarsely than the "tuned by eye" baseline ever was:
+         * under 32px across -> 4 segments, under 72 -> 6, under 128 -> 8,
+         * else the full count. */
+        int32_t rim_re, rim_im;
+        polar_point(d, 0, &rim_re, &rim_im);
+        const S3L_Vec4 rim_a =
+            boot_anim_to_camera_space(rim_re, rim_im, t, view);
+        polar_point(d, 32768, &rim_re, &rim_im);
+        const S3L_Vec4 rim_b =
+            boot_anim_to_camera_space(rim_re, rim_im, t, view);
+
+        int steps = BOOT_ANIM_GRID_CIRCLE_STEPS;
+        if (boot_anim_screen_chord_lt(rim_a, rim_b, view, 32)) {
+            steps = 4;
+        } else if (boot_anim_screen_chord_lt(rim_a, rim_b, view, 72)) {
+            steps = 6;
+        } else if (boot_anim_screen_chord_lt(rim_a, rim_b, view, 128)) {
+            steps = 8;
+        }
+        if (dissolve_level >= BOOT_ANIM_DISSOLVE_COARSE_LEVEL && steps > 6) {
+            steps = 6;
+        } else if (dissolve_level >= BOOT_ANIM_DISSOLVE_HALF_LEVEL &&
+                   steps > 8) {
+            steps = 8;
+        }
+        last_ring_tiny = boot_anim_screen_chord_lt(rim_a, rim_b, view, 16);
+
         /* The floor is the one thing on screen the whole time that is not
          * doing anything, so it is where a slow colour drift costs nothing
          * and competes with nothing. Whitened, not just lit(): see
@@ -448,15 +543,8 @@ void draw_floor(uint32_t now_ms, uint8_t ink,
         const gfx_color_t c = lit_whitened(
             boot_anim_hue_rgb(boot_anim_grid_hue(now_ms, ring)),
             boot_anim_grid_whiten(now_ms), alpha);
-        /* BOOT_ANIM_GRID_STEP_Q12, not units() (a whole unit) - see
-         * BOOT_ANIM_GRID_RINGS's own comment on why the rings are closer
-         * together than that by default, and generated (an "other const",
-         * like the ring count itself) rather than fixed. */
-        const int32_t d = (int32_t)ring * BOOT_ANIM_GRID_STEP_Q12;
-        const int32_t t = boot_anim_wave_height(d, now_ms, amp_q12,
-                                                wavelength_q12, period_ms);
 
-        draw_grid_circle(d, t, c, view);
+        draw_grid_circle(d, t, c, steps, view);
     }
 
     /* Structure, not the thing being coloured - a fixed, unhued tone
@@ -643,22 +731,23 @@ void draw_zeros(int32_t pen_t_q8, uint8_t ink,
  * middle of the picture - come out brighter and mixed instead of showing
  * whichever piece happened to be drawn last. */
 /* `joined` says this segment continues one already drawn, so its starting
- * pixel has been put down already - see GFX_LINE_OPEN in gfx.h. */
+ * pixel has been put down already - see GFX_LINE_OPEN in gfx.h.
+ *
+ * `c`/`width` arrive PRECOMPUTED, once per span, not derived from a
+ * boot_anim_stroke_t here per sub-step the way they used to be - see
+ * draw_curve()'s own per-span colour comment for why that granularity is
+ * enough. */
 static void draw_stroke(int x0, int y0, int x1, int y1,
-                        boot_anim_stroke_t s, uint8_t ink, bool joined)
+                        gfx_color_t c, int width, bool joined)
 {
-    gfx_color_t c = gfx_rgb(boot_anim_hue_rgb(s.hue));
-    c = gfx_color_mix(c, COL_WHITE, s.bloom);
-    c = gfx_color_mix(COL_BG, c, scale8(s.glow, ink));
-
     /* Width by repeating the stroke across whichever axis the segment is
      * shorter on - the cheapest wide line that does not leave gaps on a
      * diagonal. Offsets are spread either side of the centre so the curve
      * thickens where it is rather than drifting sideways as it fattens. */
-    const int half = s.width / 2;
+    const int half = width / 2;
     const bool shallow = im_abs(x1 - x0) > im_abs(y1 - y0);
 
-    for (int i = 0; i < s.width; i++) {
+    for (int i = 0; i < width; i++) {
         const int off = i - half;
         const int ax = shallow ? x0 : x0 + off;
         const int ay = shallow ? y0 + off : y0;
@@ -790,7 +879,49 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
      * This is the whole saving: what used to be one S3L_vec3Xmat4 call per
      * DRAWN sub-point (up to BOOT_ANIM_SPLINE_STEPS of them per span) is now
      * one per curve SAMPLE. */
-    boot_anim_pt_t s0 = boot_anim_sample(-1);
+    /* "From far away we can afford to lose precision", one level above the
+     * per-span sub-step collapse: once the whole curve projects to a small
+     * fraction of the panel, walk every Nth SAMPLE instead of every one -
+     * see boot_anim_curve_stride()'s own comment for the probe and the
+     * justification. The stride re-splines the decimated samples (control
+     * points i-stride, i, i+stride), which is the same curve sampled
+     * coarser, not a different shape. Two consequences the code below has
+     * to own: the pen's partial-span `part` only applies at stride 1 (at
+     * any coarser stride the spans are full - the tip landing within a
+     * decimated span of the pen is already sub-pixel at the extent that
+     * turned the stride on), and `a1` advances by stride's worth of colour
+     * per span. */
+    const int stride = boot_anim_curve_stride(view);
+
+    /* Once the photograph's dither is stippling the scene away (see
+     * draw_image()), fine curve detail stops being VISIBLE well before it
+     * stops being paid for: at a quarter coverage every fourth pixel of a
+     * stroke is already photo, at half coverage every other one is. So the
+     * dissolve's own level caps how many sub-steps a span may spend -
+     * BOOT_ANIM_DISSOLVE_HALF_LEVEL halves them, BOOT_ANIM_DISSOLVE_
+     * COARSE_LEVEL collapses each span to its single chord (whose largest
+     * deviation from the true spline is the quadratic's own sagitta,
+     * |c0 - 2*c1 + c2| / 8 - a couple of pixels at the curve's very
+     * tightest, behind a >= 50% checkerboard). Scene fully visible ->
+     * level 0 -> no cap; the cost tapers exactly as the visibility does. */
+    const int dissolve_level =
+        gfx_dither_level(boot_anim_image_reveal(now_ms));
+    const int max_steps =
+        dissolve_level >= BOOT_ANIM_DISSOLVE_COARSE_LEVEL ? 1 :
+        dissolve_level >= BOOT_ANIM_DISSOLVE_HALF_LEVEL   ? 2 :
+        BOOT_ANIM_SPLINE_STEPS;
+
+    /* The three control points of the CURRENT span, transformed to camera
+     * space ONCE each rather than once per sub-step - see boot_anim_
+     * spline_cs()'s own comment in boot_anim.h for why interpolating
+     * already-transformed points is exact, not an approximation. Adjacent
+     * spans share two of their three samples (span i is (i-stride, i,
+     * i+stride), the next is (i, i+stride, i+2*stride)), so after the first
+     * span only ONE fresh transform is needed per span - ta/tb simply
+     * become last span's tb/tc. This is the whole saving: what used to be
+     * one S3L_vec3Xmat4 call per DRAWN sub-point (up to BOOT_ANIM_SPLINE_
+     * STEPS of them per span) is now one per walked curve sample. */
+    boot_anim_pt_t s0 = boot_anim_sample(-stride);
     boot_anim_pt_t s1 = boot_anim_sample(0);
     S3L_Vec4 ta = boot_anim_to_camera_space(s0.re, s0.im, s0.t, view);
     S3L_Vec4 tb = boot_anim_to_camera_space(s1.re, s1.im, s1.t, view);
@@ -801,51 +932,116 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
      * double the per-point matrix work over a curve of several hundred
      * segments. */
     S3L_Vec4 prev_cs = tb;
+    /* The projected screen position of prev_cs, cached alongside it so an
+     * interior point is perspective-divided and mapped ONCE, not twice
+     * (once as this segment's end, again as the next segment's start) -
+     * valid only while prev_front says the point is actually in front of
+     * the near plane; a straddling segment falls back to boot_anim_
+     * project_segment_cs()'s own clip below, which is the only case that
+     * ever needed the pairwise call. */
+    bool prev_front = prev_cs.z > BOOT_ANIM_NEAR_Z;
+    int prev_sx = 0, prev_sy = 0;
+    if (prev_front) {
+        boot_anim_camera_to_screen(prev_cs, view->focal, &prev_sx, &prev_sy);
+    }
     /* Whether the immediately PRECEDING segment was actually drawn, not
      * merely whether anything has ever been drawn - see GFX_LINE_OPEN's own
-     * comment on `joined`: a segment skipped by the near-plane clip below
-     * (boot_anim_project_segment_cs() returning false) leaves a gap, so the
-     * next segment that IS drawn must not claim its start pixel already
-     * landed there. */
+     * comment on `joined`: a segment skipped by the near-plane logic below
+     * leaves a gap, so the next segment that IS drawn must not claim its
+     * start pixel already landed there. */
     bool joined = false;
 
-    for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
-        const boot_anim_pt_t s2 = boot_anim_sample(i + 1);
+    /* a(i) = round(i * ONE / phase1_span), the Q12 colour position of
+     * sample i - carried forward across the loop (a0 = last span's a1)
+     * with ONE 32-bit divide per span, instead of fx_div_round()'s two
+     * int64 divides: this chip has no 64-bit divider, so each of those
+     * was a software-division call, per span, per frame - measured as a
+     * real slice of this function's whole frame cost - for operands that
+     * provably fit 32 bits (i * BOOT_ANIM_ONE tops out around 8 million).
+     * Same rounding, same values, exactly. */
+    int32_t a0 = 0;
+
+    for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i += stride) {
+        const boot_anim_pt_t s2 = boot_anim_sample(i + stride);
         const S3L_Vec4 tc = boot_anim_to_camera_space(s2.re, s2.im, s2.t, view);
 
         /* How far into the whole curve this span sits, and how far the next
          * one does, so the colour can be interpolated across it rather than
          * stepping once per sample. */
-        const int32_t a0 = fx_div_round(i, phase1_span, BOOT_ANIM_Q);
-        const int32_t a1 = fx_div_round(i + 1, phase1_span, BOOT_ANIM_Q);
+        const int32_t a1 = ((i + stride) * BOOT_ANIM_ONE + phase1_span / 2) /
+                           phase1_span;
 
         /* A partial span for the one the pen is inside: without it the head
          * would jump from sample to sample, and a sample is six pixels. */
-        const int32_t limit = (i == last) ? part : BOOT_ANIM_ONE;
+        const int32_t limit =
+            (stride == 1 && i == last) ? part : BOOT_ANIM_ONE;
 
         /* Basic level of detail: a span that already draws within a couple
          * of pixels end to end is not worth walking in BOOT_ANIM_SPLINE_
-         * STEPS pieces - see boot_anim_curve_lod_steps()'s own comment. */
-        const int steps = boot_anim_curve_lod_steps(ta, tc, view);
+         * STEPS pieces - see boot_anim_curve_lod_steps()'s own comment -
+         * and the dissolve cap above bounds it from the other side. */
+        int steps = boot_anim_curve_lod_steps(ta, tc, view);
+        if (steps > max_steps) {
+            steps = max_steps;
+        }
+
+        /* Colour and width once per SPAN, at its own midpoint, not once
+         * per sub-step: a span is at most a few pixels of curve, and the
+         * trail's hue/glow gradients run over hundreds of samples - the
+         * difference between colouring a 6px piece in one tone or in four
+         * nearly identical ones is invisible, and boot_anim_stroke()'s
+         * five-trail scan plus three colour mixes per DRAWN SEGMENT was a
+         * measured slice of this function's whole frame cost. */
+        const boot_anim_stroke_t s =
+            boot_anim_stroke(a0 + ((a1 - a0) >> 1), colour);
+        gfx_color_t span_c = gfx_rgb(boot_anim_hue_rgb(s.hue));
+        span_c = gfx_color_mix(span_c, COL_WHITE, s.bloom);
+        span_c = gfx_color_mix(COL_BG, span_c, scale8(s.glow, ink));
 
         for (int step = 1; step <= steps; step++) {
             const int32_t t = (limit * step) / steps;
 
             const S3L_Vec4 next_cs = boot_anim_spline_cs(ta, tb, tc, t);
-            const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
+            const bool next_front = next_cs.z > BOOT_ANIM_NEAR_Z;
 
-            int ax, ay, bx, by;
-            if (boot_anim_project_segment_cs(prev_cs, next_cs, view,
-                                             &ax, &ay, &bx, &by)) {
-                draw_stroke(ax, ay, bx, by,
-                            boot_anim_stroke(along, colour), ink, joined);
+            if (prev_front && next_front) {
+                /* Both endpoints in front: the near-plane clip cannot
+                 * engage, so project the ONE new point and reuse the
+                 * cached other - identical coordinates to what the
+                 * pairwise call would produce, at half its projections. */
+                int nsx, nsy;
+                boot_anim_camera_to_screen(next_cs, view->focal, &nsx, &nsy);
+                draw_stroke(prev_sx, prev_sy, nsx, nsy,
+                            span_c, s.width, joined);
                 joined = true;
+                prev_sx = nsx;
+                prev_sy = nsy;
+            } else if (prev_front != next_front) {
+                /* Straddles the near plane - the one case the pairwise
+                 * clip exists for. */
+                int ax, ay, bx, by;
+                if (boot_anim_project_segment_cs(prev_cs, next_cs, view,
+                                                 &ax, &ay, &bx, &by)) {
+                    draw_stroke(ax, ay, bx, by, span_c, s.width, joined);
+                    joined = true;
+                    if (next_front) {
+                        /* (bx, by) is next's own true projection (it was
+                         * prev that got clipped), so the cache stays
+                         * valid across the crossing. */
+                        prev_sx = bx;
+                        prev_sy = by;
+                    }
+                } else {
+                    joined = false;
+                }
             } else {
-                joined = false;
+                joined = false;   /* both behind - nothing to draw */
             }
             prev_cs = next_cs;
+            prev_front = next_front;
         }
 
+        a0 = a1;
         ta = tb;
         tb = tc;
     }
@@ -1017,6 +1213,63 @@ void draw_title(uint32_t now_ms, uint8_t ink)
  * redundant today - it is here because the contract says so regardless,
  * and because that redundancy is not guaranteed to still hold if this
  * frame ever grows a partial clear. */
+/* Dither the photograph over whatever the scene left in the framebuffer, at
+ * coverage `alpha` - the shared body of draw_image()'s two dithered branches
+ * below.
+ *
+ * BY ROW-PATTERN, not per pixel: gfx_dither_covers(x, y, alpha) depends on x
+ * only through x & 3 and on y only through y & 3, and alpha is one value for
+ * the whole frame - so within one row the decision is fully described by
+ * FOUR booleans (one per Bayer column), computed once per row instead of a
+ * table read and compare per pixel. Identical output to calling
+ * gfx_dither_covers() at every pixel - same table, same gfx_dither_level()
+ * rounding (suite_gfx_color.c pins the two agreeing) - at a fraction of the
+ * per-pixel work; per suite_boot_anim_perf.c this loop was one of the two
+ * largest phases of a crossfade frame, and unlike the drawing around it,
+ * every one of its 164,864 iterations was identical bookkeeping.
+ *
+ * The two degenerate rows come out free: a row none of whose four columns
+ * are covered is skipped whole, and a row with all four covered is a plain
+ * memcpy - which at the top and bottom of the alpha range is MOST rows
+ * (Bayer rows saturate at different levels), so the cost tapers toward the
+ * cheap ends of the fade instead of staying flat across it. */
+static void dither_photo_over(gfx_color_t *fb, uint8_t alpha)
+{
+    const int level = gfx_dither_level(alpha);
+
+    for (int y = 0; y < GFX_HEIGHT; y++) {
+        const uint8_t *cells = gfx_dither4x4[y & 3];
+        const bool p0 = level > cells[0];
+        const bool p1 = level > cells[1];
+        const bool p2 = level > cells[2];
+        const bool p3 = level > cells[3];
+
+        if (!p0 && !p1 && !p2 && !p3) {
+            continue;
+        }
+
+        gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
+        const gfx_color_t *photo_row =
+            (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
+
+        if (p0 && p1 && p2 && p3) {
+            memcpy(row, photo_row, (size_t)GFX_WIDTH * sizeof *row);
+            continue;
+        }
+
+        /* The group loop is exact, no remainder handling - pinned below
+         * rather than assumed. */
+        _Static_assert(GFX_WIDTH % 4 == 0,
+            "the Bayer-column unroll walks the row four pixels at a time");
+        for (int x = 0; x < GFX_WIDTH; x += 4) {
+            if (p0) row[x]     = photo_row[x];
+            if (p1) row[x + 1] = photo_row[x + 1];
+            if (p2) row[x + 2] = photo_row[x + 2];
+            if (p3) row[x + 3] = photo_row[x + 3];
+        }
+    }
+}
+
 void draw_image(uint8_t ink, uint8_t reveal)
 {
     if (reveal == 0) {
@@ -1061,20 +1314,10 @@ void draw_image(uint8_t ink, uint8_t reveal)
          * whole point - the photo and the scene never actually blend,
          * only their coverage does, which is what "dither" has always
          * meant since long before this chip's own class of hardware
-         * could afford a real blend. Nested row/col, not a flat 0..n
-         * index into gfx_dither_covers(x, y, ...): recovering (x, y)
-         * from a flat index needs a divide per pixel, exactly the
-         * instruction this whole rewrite exists to stop paying for. */
-        for (int y = 0; y < GFX_HEIGHT; y++) {
-            gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
-            const gfx_color_t *photo_row =
-                (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
-            for (int x = 0; x < GFX_WIDTH; x++) {
-                if (gfx_dither_covers(x, y, reveal)) {
-                    row[x] = photo_row[x];
-                }
-            }
-        }
+         * could afford a real blend. The walk itself lives in
+         * dither_photo_over() above - see its comment for why it goes by
+         * row pattern rather than testing gfx_dither_covers() per pixel. */
+        dither_photo_over(fb, reveal);
     } else {
         /* Dissolving, and possibly still arriving at once - a dither test
          * in place of ink's own lift off black, rather than gfx_color_mix
@@ -1098,17 +1341,7 @@ void draw_image(uint8_t ink, uint8_t reveal)
          * middle of the fade window. A deliberate choice, on-panel, not
          * an oversight - see git history around when this landed for the
          * visual comparison that decided it. */
-        const uint8_t covered_by = reveal < ink ? reveal : ink;
-        for (int y = 0; y < GFX_HEIGHT; y++) {
-            gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
-            const gfx_color_t *photo_row =
-                (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
-            for (int x = 0; x < GFX_WIDTH; x++) {
-                if (gfx_dither_covers(x, y, covered_by)) {
-                    row[x] = photo_row[x];
-                }
-            }
-        }
+        dither_photo_over(fb, reveal < ink ? reveal : ink);
     }
 
     gfx_mark_all_dirty();
