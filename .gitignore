@@ -138,3 +138,7 @@ $RECYCLE.BIN/
 # Structured prompts for handing work to another session or a local model.
 # Working notes, revised per round - not part of the shipped project.
 .prompts/
+
+### Claude Code
+# Skills are local dev tooling, not shipped project content.
+.claude/skills/
