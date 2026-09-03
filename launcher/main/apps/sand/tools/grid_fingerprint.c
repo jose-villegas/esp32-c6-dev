@@ -234,8 +234,8 @@ static void scene_sealed_lava(sand_t *s)
 
     /* Three separate pockets, each a lava cell boxed on all 4 cardinal
      * AND all 4 diagonal neighbours by stone - unambiguously covered on
-     * every one of covered_at()'s 5 gravity-relative cells regardless of
-     * which way is down, so the scene proves the conversion actually
+     * all three of covered_at()'s gravity-relative lid cells regardless
+     * of which way is down, so the scene proves the conversion actually
      * fires rather than merely COULD fire. */
     for (int k = 0; k < 3; k++) {
         const int cx = 12 + k * 20;
