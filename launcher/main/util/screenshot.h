@@ -33,6 +33,7 @@
 #pragma once
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #include "app.h"
@@ -194,6 +195,22 @@ void screenshot_start(void);
  * only once per request, however many frames it takes main.c to get back
  * around to checking. */
 bool screenshot_take_request(void);
+
+#if CONFIG_LAUNCHER_SELFTEST
+/* Same "read and consume once per frame" contract as screenshot_take_request()
+ * above, for a RUNSUITE line instead of SCREENSHOT - see screenshot.c's own
+ * "WHY THE RESULT COMES BACK THROUGH A FLAG" section for why a suite run
+ * needs this even more than a single screenshot does: suites_run_one() draws,
+ * clears, and presents repeatedly for however long the suite runs, and must
+ * never interleave with the shell's own frame loop doing the same on a
+ * different task.
+ *
+ * Copies the pending suite name into `name_out` (a caller-owned buffer of
+ * `name_out_size` bytes, always NUL-terminated) and returns true if a RUNSUITE
+ * line arrived since the last call; returns false (leaving `name_out`
+ * untouched) otherwise. */
+bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size);
+#endif
 
 /* Streams the current framebuffer to stdout as base64 BMP data, followed by
  * one SCREENSHOT_STATE: line of plain-text JSON - device state at the same
