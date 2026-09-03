@@ -218,6 +218,91 @@ static void test_expanding_a_colour_twice_is_idempotent(void)
     }
 }
 
+/*-----------------------------------------------------------------------------
+ * gfx_dither_covers - the per-pixel ordered-dither coverage test shared by
+ * gfx_fill_rect_dither() (device suite: test_dither_* in suite_gfx.c, which
+ * exercises this function only indirectly, through a real framebuffer fill)
+ * and boot_anim.c's draw_image(), which calls it directly on two separate
+ * alphas per pixel (`reveal`, `ink`) and ANDs the results together. These
+ * tests are what boot_anim.c's own comment on that AND - "equivalent to
+ * testing the lower of the two against one cell" - is checked against,
+ * rather than merely asserted in a comment.
+ *---------------------------------------------------------------------------*/
+
+static void test_alpha_zero_never_covers(void)
+{
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            TEST_ASSERT_FALSE_MESSAGE(gfx_dither_covers(x, y, 0),
+                "alpha 0 must cover nothing at any cell, or a caller "
+                "skipping a zero-alpha draw entirely would disagree with "
+                "one that called through anyway");
+        }
+    }
+}
+
+static void test_alpha_255_always_covers(void)
+{
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            TEST_ASSERT_TRUE_MESSAGE(gfx_dither_covers(x, y, 255),
+                "alpha 255 must cover every cell - its own unconditional "
+                "path, not the >  test, so it is never one Bayer level "
+                "short of solid");
+        }
+    }
+}
+
+static void test_coverage_is_monotonic_in_alpha_at_every_cell(void)
+{
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            bool was_covered = false;
+            for (int a = 0; a <= 255; a++) {
+                const bool covered = gfx_dither_covers(x, y, (uint8_t)a);
+                if (was_covered) {
+                    TEST_ASSERT_TRUE_MESSAGE(covered,
+                        "coverage at a fixed cell must never go from "
+                        "covered back to uncovered as alpha rises, or a "
+                        "caller ramping alpha upward could see a pixel "
+                        "flicker off partway through");
+                }
+                was_covered = covered;
+            }
+        }
+    }
+}
+
+/* The exact property boot_anim.c's draw_image() leans on to fold two
+ * gfx_dither_covers() calls into one: since coverage is monotonic in alpha
+ * at a fixed cell (proved above), testing against the lower of two alphas
+ * must agree with testing against each and ANDing the results, for every
+ * cell and every pair. Swept in steps of 17 (255 is not divisible by 17,
+ * so the sweep still lands on both 0 and 255) rather than exhaustively -
+ * a monotonic step function that agrees at every 17th value and at both
+ * endpoints cannot disagree in between without a jump the coarser sweep
+ * would itself have caught at a neighbouring point. */
+static void test_covers_both_equals_covers_the_lower_alpha(void)
+{
+    for (int y = 0; y < 4; y++) {
+        for (int x = 0; x < 4; x++) {
+            for (int a = 0; a <= 255; a += 17) {
+                for (int b = 0; b <= 255; b += 17) {
+                    const uint8_t lower = (uint8_t)(a < b ? a : b);
+                    const bool both = gfx_dither_covers(x, y, (uint8_t)a) &&
+                                       gfx_dither_covers(x, y, (uint8_t)b);
+                    const bool via_min = gfx_dither_covers(x, y, lower);
+                    TEST_ASSERT_EQUAL_MESSAGE(via_min, both,
+                        "covers(a) && covers(b) must equal covers(min(a, "
+                        "b)) at every cell - this is what lets draw_image() "
+                        "test the lower alpha once instead of testing both "
+                        "and ANDing");
+                }
+            }
+        }
+    }
+}
+
 void run_gfx_color_suite(void)
 {
     RUN_TEST(test_t_zero_returns_a_exactly);
@@ -232,6 +317,10 @@ void run_gfx_color_suite(void)
     RUN_TEST(test_adding_never_makes_a_channel_darker);
     RUN_TEST(test_round_trip_is_exact_for_a_spread_of_colours);
     RUN_TEST(test_expanding_a_colour_twice_is_idempotent);
+    RUN_TEST(test_alpha_zero_never_covers);
+    RUN_TEST(test_alpha_255_always_covers);
+    RUN_TEST(test_coverage_is_monotonic_in_alpha_at_every_cell);
+    RUN_TEST(test_covers_both_equals_covers_the_lower_alpha);
 }
 
 SUITE_REGISTER(run_gfx_color_suite);

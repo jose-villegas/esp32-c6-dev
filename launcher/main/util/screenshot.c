@@ -21,7 +21,17 @@
  * since two is what this project actually has today (see CLAUDE.md on
  * designing for hypothetical future requirements).
  *
-
+ * Like SCREENSHOT below, RUNSUITE only ever sets a flag here - see "WHY
+ * THE RESULT COMES BACK THROUGH A FLAG" further down, which now covers
+ * both commands. Calling suites_run_one() directly from this task once
+ * genuinely shipped, and genuinely raced the shell's own frame loop for
+ * gfx_present() and the framebuffer's own dirty-tracking state (two
+ * tasks, no lock, one panel) - caught by test_partial_clear_erases_
+ * only_previous_drawn_region in suite_gfx.c intermittently failing when
+ * run through RUNSUITE specifically, never when run as part of the
+ * normal boot-time suites_run_all() sequence, which is what pointed at
+ * the actual cause.
+ *
  * WHY USB-SERIAL-JTAG, NOT UART
  *
  * This board's one USB-C port is the ESP32-C6's own native USB-Serial/JTAG
@@ -59,6 +69,20 @@
  * and before gfx_present() sends it - the same reasoning main.c already
  * applies to display_update() (see its own comment on why that runs ahead
  * of step_app() rather than whenever the IMU happens to be read).
+ *
+ * RUNSUITE needs this even more than SCREENSHOT does. A suite is not a
+ * one-shot read of whatever is already on screen - it draws, clears and
+ * presents on its own, repeatedly, for however long it runs. Calling
+ * suites_run_one() from this task would have it doing exactly that
+ * WHILE the shell's own loop is still running step_app()/gfx_present()
+ * every frame on the main task, unsynchronised - two tasks racing to
+ * write the one framebuffer and drive the one panel handle. Going
+ * through screenshot_take_runsuite_request()/main.c's loop instead
+ * means the suite runs on the main task itself, with the shell's own
+ * drawing for that iteration deferred until it returns - the same
+ * "exactly one frame loop, one framebuffer" invariant this project
+ * states everywhere else, just not previously enforced for a command
+ * that runs one of its own suites.
  *===========================================================================*/
 #include "util/screenshot.h"
 
@@ -75,10 +99,6 @@
 
 #include "gfx/gfx.h"
 #include "util/device_state.h"
-
-#if CONFIG_LAUNCHER_SELFTEST
-#include "suites.h"
-#endif
 
 static const char *TAG = "screenshot";
 
@@ -105,6 +125,17 @@ static volatile bool s_request_pending;
  * for names not yet written - bump this rather than trim a name to fit it,
  * the same "headroom, not a tight fit" reasoning SUITE_MAX already states. */
 #define SCREENSHOT_LINE_MAX 48
+
+#if CONFIG_LAUNCHER_SELFTEST
+/* Set by screenshot_task() below on a RUNSUITE line, consumed by main.c's
+ * loop via screenshot_take_runsuite_request() - see this file's own "WHY
+ * THE RESULT COMES BACK THROUGH A FLAG" section for why this cannot just
+ * call suites_run_one() directly from this task. Not stack-local for the
+ * same reason screenshot_dump()'s own scratch buffer below is not: this
+ * outlives the line that set it, read back by a different task entirely. */
+static volatile bool s_runsuite_pending;
+static char s_runsuite_name[SCREENSHOT_LINE_MAX];
+#endif
 
 static void screenshot_task(void *arg)
 {
@@ -139,10 +170,9 @@ static void screenshot_task(void *arg)
                                    strlen(RUNSUITE_TRIGGER)) == 0) {
                     const char *name = line + strlen(RUNSUITE_TRIGGER);
                     ESP_LOGI(TAG, "RUNSUITE %s", name);
-                    if (!suites_run_one(name)) {
-                        ESP_LOGE(TAG, "no suite named '%s' is registered",
-                                 name);
-                    }
+                    strncpy(s_runsuite_name, name, sizeof(s_runsuite_name) - 1);
+                    s_runsuite_name[sizeof(s_runsuite_name) - 1] = '\0';
+                    s_runsuite_pending = true;
 #endif
                 } else {
                     ESP_LOGI(TAG, "ignoring line: '%s'", line);
@@ -210,6 +240,19 @@ bool screenshot_take_request(void)
     s_request_pending = false;
     return true;
 }
+
+#if CONFIG_LAUNCHER_SELFTEST
+bool screenshot_take_runsuite_request(char *name_out, size_t name_out_size)
+{
+    if (!s_runsuite_pending) {
+        return false;
+    }
+    s_runsuite_pending = false;
+    strncpy(name_out, s_runsuite_name, name_out_size - 1);
+    name_out[name_out_size - 1] = '\0';
+    return true;
+}
+#endif
 
 /* Not stack-local: screenshot_dump() runs on main.c's shell task, which has
  * a 3584-byte stack (CONFIG_ESP_MAIN_TASK_STACK_SIZE) shared with everything
