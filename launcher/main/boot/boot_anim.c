@@ -780,14 +780,27 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     const int32_t colour = boot_anim_colour_progress(now_ms);
     const int32_t phase1_span = (int32_t)(BOOT_ANIM_CURVE_PHASE1_POINTS - 1);
 
-    boot_anim_pt_t head = boot_anim_sample(0);
-    /* Kept in CAMERA space across the loop, not re-derived from `head`'s
-     * re/im/t each time a segment is drawn - see boot_anim_project_segment()
+    /* The three control points of the CURRENT span, transformed to camera
+     * space ONCE each rather than once per sub-step - see boot_anim_
+     * spline_cs()'s own comment in boot_anim.h for why interpolating
+     * already-transformed points is exact, not an approximation. Adjacent
+     * spans share two of their three samples (span i is (i-1, i, i+1), span
+     * i+1 is (i, i+1, i+2)), so after the first span only ONE fresh
+     * transform is needed per span - ta/tb simply become last span's tb/tc.
+     * This is the whole saving: what used to be one S3L_vec3Xmat4 call per
+     * DRAWN sub-point (up to BOOT_ANIM_SPLINE_STEPS of them per span) is now
+     * one per curve SAMPLE. */
+    boot_anim_pt_t s0 = boot_anim_sample(-1);
+    boot_anim_pt_t s1 = boot_anim_sample(0);
+    S3L_Vec4 ta = boot_anim_to_camera_space(s0.re, s0.im, s0.t, view);
+    S3L_Vec4 tb = boot_anim_to_camera_space(s1.re, s1.im, s1.t, view);
+    /* Kept in CAMERA space across the loop, not re-derived from a world-space
+     * point each time a segment is drawn - see boot_anim_project_segment_cs()
      * in boot_anim.h for why: every interior point is both the end of one
      * segment and the start of the next, and transforming it twice would
      * double the per-point matrix work over a curve of several hundred
      * segments. */
-    S3L_Vec4 prev_cs = boot_anim_to_camera_space(head.re, head.im, head.t, view);
+    S3L_Vec4 prev_cs = tb;
     /* Whether the immediately PRECEDING segment was actually drawn, not
      * merely whether anything has ever been drawn - see GFX_LINE_OPEN's own
      * comment on `joined`: a segment skipped by the near-plane clip below
@@ -797,11 +810,8 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
     bool joined = false;
 
     for (int i = 0; i <= last && i < BOOT_ANIM_CURVE_POINTS; i++) {
-        /* The span centred on sample i, cutting the corner there. Clamped
-         * indices at both ends pin the curve to its first and last sample. */
-        const boot_anim_pt_t c0 = boot_anim_sample(i - 1);
-        const boot_anim_pt_t c1 = boot_anim_sample(i);
-        const boot_anim_pt_t c2 = boot_anim_sample(i + 1);
+        const boot_anim_pt_t s2 = boot_anim_sample(i + 1);
+        const S3L_Vec4 tc = boot_anim_to_camera_space(s2.re, s2.im, s2.t, view);
 
         /* How far into the whole curve this span sits, and how far the next
          * one does, so the colour can be interpolated across it rather than
@@ -813,12 +823,15 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
          * would jump from sample to sample, and a sample is six pixels. */
         const int32_t limit = (i == last) ? part : BOOT_ANIM_ONE;
 
-        for (int step = 1; step <= BOOT_ANIM_SPLINE_STEPS; step++) {
-            const int32_t t = (limit * step) / BOOT_ANIM_SPLINE_STEPS;
+        /* Basic level of detail: a span that already draws within a couple
+         * of pixels end to end is not worth walking in BOOT_ANIM_SPLINE_
+         * STEPS pieces - see boot_anim_curve_lod_steps()'s own comment. */
+        const int steps = boot_anim_curve_lod_steps(ta, tc, view);
 
-            head = boot_anim_spline(c0, c1, c2, t);
-            const S3L_Vec4 next_cs =
-                boot_anim_to_camera_space(head.re, head.im, head.t, view);
+        for (int step = 1; step <= steps; step++) {
+            const int32_t t = (limit * step) / steps;
+
+            const S3L_Vec4 next_cs = boot_anim_spline_cs(ta, tb, tc, t);
             const int32_t along = a0 + (((a1 - a0) * t) >> BOOT_ANIM_Q);
 
             int ax, ay, bx, by;
@@ -832,10 +845,27 @@ int32_t draw_curve(uint32_t now_ms, uint8_t ink,
             }
             prev_cs = next_cs;
         }
+
+        ta = tb;
+        tb = tc;
     }
 
     draw_heads(colour, ink, view);
-    return head.t;
+
+    /* The world-space point the pen has actually reached, for the return
+     * value below - computed directly rather than carried out of the loop
+     * above the way `head` used to be, since the loop no longer produces a
+     * world-space point at all (boot_anim_spline_cs() interpolates already-
+     * transformed CAMERA-space points, which have no `.t` left to read: the
+     * curve's own "how far up" coordinate is folded into the transform, not
+     * carried alongside it). One extra spline() call, at exactly the pen's
+     * own (last, part) position - matches what the old loop's FINAL
+     * iteration (i == last, t == limit == part) computed bit for bit,
+     * regardless of how many LOD steps ran along the way to get here. */
+    const boot_anim_pt_t final_c0 = boot_anim_sample(last - 1);
+    const boot_anim_pt_t final_c1 = boot_anim_sample(last);
+    const boot_anim_pt_t final_c2 = boot_anim_sample(last + 1);
+    return boot_anim_spline(final_c0, final_c1, final_c2, part).t;
 }
 
 /*---------------------------------------------------------------------------
