@@ -61,3 +61,14 @@ void suites_run_all(void)
         suites[i].fn();
     }
 }
+
+bool suites_run_one(const char *name)
+{
+    for (int i = 0; i < registered; i++) {
+        if (strcmp(suites[i].name, name) == 0) {
+            suites[i].fn();
+            return true;
+        }
+    }
+    return false;
+}
