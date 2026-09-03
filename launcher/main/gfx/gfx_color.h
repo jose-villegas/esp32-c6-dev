@@ -14,6 +14,7 @@
  *===========================================================================*/
 #pragma once
 
+#include <stdbool.h>
 #include <stdint.h>
 
 /* A packed, panel-ready pixel. Produced by GFX_RGB or gfx_rgb(), stored in the
@@ -133,6 +134,58 @@ static inline gfx_color_t gfx_color_mix(gfx_color_t a, gfx_color_t b, uint8_t t)
 
     /* Swap back to the panel's byte order. */
     return (gfx_color_t)((nm >> 8) | (nm << 8));
+}
+
+/* The standard order-4 Bayer matrix, values 0..15 rather than pre-scaled to
+ * 0..255 - gfx_dither_covers() below scales the ONE side that actually
+ * needs to be a byte (alpha, an input this file does not control), not
+ * the table it is compared against.
+ *
+ * Indexed by each pixel's own ABSOLUTE panel row/col (y & 3, x & 3), not a
+ * position local to whatever shape is being dithered. That is what keeps
+ * two dithered shapes that overlap or sit edge to edge in phase with each
+ * other - a local index would have every dithered shape restart the
+ * pattern at its own corner, which reads as a seam where two of them meet
+ * rather than one continuous texture. */
+static const uint8_t gfx_dither4x4[4][4] = {
+    {  0,  8,  2, 10 },
+    { 12,  4, 14,  6 },
+    {  3, 11,  1,  9 },
+    { 15,  7, 13,  5 },
+};
+
+/* Whether an ordered (Bayer) dither at `alpha` (0 nothing, 255 everything,
+ * 16 graduated levels between - see gfx_fill_rect_dither()'s own comment
+ * in gfx.c for the full reasoning behind this trade) covers absolute
+ * panel pixel (x, y). This is gfx_fill_rect_dither()'s own per-pixel
+ * decision, pulled out here so a caller with its own pixel loop - not a
+ * plain filled rect - can reuse the identical table and rounding rule
+ * rather than keeping a second copy that could drift out of phase with
+ * it. `static inline`, not a regular function: this is meant to inline
+ * into a hot per-pixel loop the same way gfx_color_mix() above does, and
+ * a real call per pixel across a whole framebuffer would cost more than
+ * the branch it replaces.
+ *
+ * Rounded, not truncated: a plain `alpha >> 4` maps every alpha in 1..15
+ * to level 0, which then never compares greater than any table cell and
+ * covers nothing at all - an author-visible value meant to read as
+ * "barely there" would instead be indistinguishable from alpha 0. +8
+ * rounds to the nearest of the 16 levels instead of always flooring. */
+static inline bool gfx_dither_covers(int x, int y, uint8_t alpha)
+{
+    if (alpha == 0) {
+        return false;
+    }
+    if (alpha >= 255) {
+        /* Its own unconditional path, not the dither test, so the fully-
+         * solid case is never one Bayer cell short of solid the way a
+         * plain `level > cell` test would leave it (the highest table
+         * value, 15, can never compare less than a scaled 255 by one ULP
+         * of the shift below). */
+        return true;
+    }
+    const int level = (alpha + 8) >> 4;
+    return level > gfx_dither4x4[y & 3][x & 3];
 }
 
 /* Add `b` to `a`, saturating each channel at its own maximum.

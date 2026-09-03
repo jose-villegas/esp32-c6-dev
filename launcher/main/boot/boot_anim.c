@@ -393,8 +393,19 @@ static void draw_grid_spoke(uint16_t turn, int32_t near, int32_t far,
     }
 }
 
-static void draw_floor(uint32_t now_ms, uint8_t ink,
-                       const boot_anim_view_t *view)
+/* draw_floor(), draw_axes(), draw_curve(), draw_zeros(), draw_image() and
+ * draw_title() below are all non-static, deliberately - see
+ * suite_boot_anim_perf.c, which times each on its own across the
+ * animation's own timeline. Nothing here is declared in boot_anim.h (no
+ * caller outside this file and the perf suite has any business calling
+ * these individually); the suite reaches them through its own extern
+ * declarations, mirroring app_cube.c's own cube_update_rotation()/
+ * cube_clear_frame()/cube_rasterize_frame() and the reasoning in that
+ * file's own comment on why: boot_anim_draw_frame() below is just these
+ * calls in sequence, so a perf run exercises the exact code a real frame
+ * runs, not a hand copy of it that could drift. */
+void draw_floor(uint32_t now_ms, uint8_t ink,
+                const boot_anim_view_t *view)
 {
     /* The three values the ring loop below hands straight to
      * boot_anim_wave_height() - see its own comment on why a zero
@@ -514,8 +525,8 @@ static void draw_label(int x, int y, const char *text, uint8_t ink)
                     LABEL_SCALE);
 }
 
-static void draw_axes(uint32_t now_ms, uint8_t ink,
-                      const boot_anim_view_t *view)
+void draw_axes(uint32_t now_ms, uint8_t ink,
+              const boot_anim_view_t *view)
 {
     const uint8_t reach = boot_anim_axis_reach(now_ms);
     if (reach == 0) {
@@ -603,8 +614,8 @@ static void draw_axes(uint32_t now_ms, uint8_t ink,
  * happens at is one of the numbers the Riemann hypothesis is about. Drawn
  * white and flat rather than blended, so they stay legible through whatever
  * the curve is doing around them. */
-static void draw_zeros(int32_t pen_t_q8, uint8_t ink,
-                       const boot_anim_view_t *view)
+void draw_zeros(int32_t pen_t_q8, uint8_t ink,
+                const boot_anim_view_t *view)
 {
     for (int i = 0; i < BOOT_ANIM_ZEROS; i++) {
         const int32_t t = boot_anim_zero_t[i];
@@ -740,8 +751,8 @@ static void draw_heads(int32_t colour_pen, uint8_t ink,
  *
  * Returns the height the pen has climbed to, which is what decides how many
  * of the zeros have been marked. */
-static int32_t draw_curve(uint32_t now_ms, uint8_t ink,
-                          const boot_anim_view_t *view)
+int32_t draw_curve(uint32_t now_ms, uint8_t ink,
+                   const boot_anim_view_t *view)
 {
     const int32_t pen = boot_anim_pen(now_ms);
     if (pen <= 0) {
@@ -908,7 +919,7 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
  * Up to two gfx_text_font*() calls per letter now instead of one - real,
  * but bounded to six letters, and paid only for the ~1s the title is
  * actually flying in and settling, not the whole animation. */
-static void draw_title(uint32_t now_ms, uint8_t ink)
+void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
     const gfx_font_t *font = gfx_default_font();
@@ -950,16 +961,22 @@ static void draw_title(uint32_t now_ms, uint8_t ink)
  * the framebuffer. That is fine over black and wrong over a photograph -
  * a half-faded grid line drawn that way would paint a dark, OPAQUE
  * scratch across the mountain, not a fading-transparent one - so the
- * crossfade happens here instead, the one place a draw call actually
- * reads gfx_framebuffer() before writing it. boot_anim_draw_frame() below
- * draws the scene (floor/axes/curve/zeros) at full, undimmed ink, gated
- * off once boot_anim_scene_reach() says it is about to be fully covered
- * anyway; this then blends the photograph OVER whatever that left behind,
- * at boot_anim_image_reveal() - the exact cross-dissolve (1-r)*scene +
- * r*photo. The title is drawn AFTER this call, untouched by any of it -
- * see boot_anim_scene_reach()'s own comment in boot_anim.h for why that
- * is a deliberate departure from this file's "one multiply takes the
- * whole picture down together" design elsewhere.
+ * crossfade happens here instead, the one place that can leave a scene
+ * pixel exactly as drawn rather than overwrite it outright. NOT by
+ * reading and blending it, though - gfx_dither_covers() below never
+ * inspects a pixel's own value, only its (x, y) - but by choosing not to
+ * write over it at all for whichever pixels the current reveal fraction
+ * does not yet cover. boot_anim_draw_frame() below draws the scene
+ * (floor/axes/curve/zeros) at full, undimmed ink, gated off once boot_
+ * anim_scene_reach() says it is about to be fully covered anyway; this
+ * then dithers the photograph OVER whatever that left behind, at boot_
+ * anim_image_reveal()'s own coverage fraction - a stippled coverage
+ * split between the two pictures, not a true per-pixel blend (see draw_
+ * image()'s own comment below for why, and what that trades away). The
+ * title is drawn AFTER this call, untouched by any of it - see boot_
+ * anim_scene_reach()'s own comment in boot_anim.h for why that is a
+ * deliberate departure from this file's "one multiply takes the whole
+ * picture down together" design elsewhere.
  *
  * Writes through gfx_framebuffer() directly rather than 164,864
  * gfx_pixel() calls - the same bulk path app_cube.c and app_sand.c's own
@@ -970,7 +987,7 @@ static void draw_title(uint32_t now_ms, uint8_t ink)
  * redundant today - it is here because the contract says so regardless,
  * and because that redundancy is not guaranteed to still hold if this
  * frame ever grows a partial clear. */
-static void draw_image(uint8_t ink, uint8_t reveal)
+void draw_image(uint8_t ink, uint8_t reveal)
 {
     if (reveal == 0) {
         return;
@@ -981,32 +998,84 @@ static void draw_image(uint8_t ink, uint8_t reveal)
 
     if (reveal == 255 && ink == 255) {
         /* Fully arrived and not yet dissolving - which is most of the
-         * photograph's time on screen. gfx_color_mix() is exact at both
-         * of its own endpoints, so this is the identical result the
-         * general loop below would produce, for a plain row-major copy
-         * of one framebuffer's worth of already-panel-format pixels -
-         * true only because the two _Static_asserts near this file's own
-         * includes make it true, not merely likely. */
+         * photograph's time on screen. gfx_dither_covers() is exact at
+         * alpha 255 (its own unconditional path, not the dither test -
+         * see that function's own comment in gfx_color.h), so this is
+         * the identical result the dithered loop below would produce,
+         * for a plain row-major copy of one framebuffer's worth of
+         * already-panel-format pixels - true only because the two
+         * _Static_asserts near this file's own includes make it true,
+         * not merely likely. */
         memcpy(fb, boot_anim_image, n * sizeof *fb);
     } else if (ink == 255) {
         /* The crossfade itself, the common case: ink is 255 for the
          * whole of it unless a timeline is deliberately authored to
-         * overlap the two dissolves, so hoisting that test out of the
-         * loop halves the per-pixel work here. */
-        for (size_t i = 0; i < n; i++) {
-            fb[i] = gfx_color_mix(fb[i], (gfx_color_t)boot_anim_image[i],
-                                  reveal);
+         * overlap the two dissolves.
+         *
+         * DITHERED, not blended - the same "no framebuffer-read blend
+         * hardware, so fake transparency with an ordered dither" trade
+         * this file already makes for the title's own shadow (see
+         * draw_title()'s own comment, and gfx_fill_rect_dither()'s in
+         * gfx.c). A per-pixel gfx_color_mix() over all 164,864 pixels
+         * was measurably the single most expensive part of a crossfade
+         * frame - see suite_boot_anim_perf.c's own measured numbers,
+         * where this loop alone outweighed gfx_present()'s own full-
+         * panel QSPI transfer. gfx_dither_covers() is the exact per-
+         * pixel decision gfx_fill_rect_dither() makes internally, reused
+         * here so both call sites stay in phase off one table (gfx_
+         * color.h) rather than each keeping its own copy. A covered
+         * pixel becomes the photo outright - no multiply, no div255,
+         * just the pixel that was already sitting in boot_anim_image[].
+         * An uncovered one is left exactly as the scene already drew it;
+         * skipping the write there is not an approximation, it is the
+         * whole point - the photo and the scene never actually blend,
+         * only their coverage does, which is what "dither" has always
+         * meant since long before this chip's own class of hardware
+         * could afford a real blend. Nested row/col, not a flat 0..n
+         * index into gfx_dither_covers(x, y, ...): recovering (x, y)
+         * from a flat index needs a divide per pixel, exactly the
+         * instruction this whole rewrite exists to stop paying for. */
+        for (int y = 0; y < GFX_HEIGHT; y++) {
+            gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
+            const gfx_color_t *photo_row =
+                (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
+            for (int x = 0; x < GFX_WIDTH; x++) {
+                if (gfx_dither_covers(x, y, reveal)) {
+                    row[x] = photo_row[x];
+                }
+            }
         }
     } else {
-        /* Dissolving, and possibly still arriving at once. Both
-         * multiplies, in the order they mean: the photograph is lifted
-         * off black by ink first (the same "how lit is anything" ink
-         * already governs everywhere else), and THAT lit result is what
-         * gets blended over what the scene left in the framebuffer. */
-        for (size_t i = 0; i < n; i++) {
-            const gfx_color_t lit_px =
-                gfx_color_mix(COL_BG, (gfx_color_t)boot_anim_image[i], ink);
-            fb[i] = gfx_color_mix(fb[i], lit_px, reveal);
+        /* Dissolving, and possibly still arriving at once - a second
+         * dither test in place of ink's own lift off black, rather than
+         * gfx_color_mix(COL_BG, photo_row[x], ink). Both tests read the
+         * same gfx_dither4x4 table at the same (x, y), so a pixel only
+         * ever shows the photo when it clears BOTH coverage levels -
+         * equivalent to comparing the lower of the two against one cell,
+         * not two independent dice rolls that could disagree with each
+         * other. Replaces the last gfx_color_mix() call left in this
+         * function - near_end's own Image cost dropped from ~55ms to
+         * ~25ms on real hardware.
+         *
+         * A dithered fade-to-black is a visibly different look from a
+         * smooth one - checkering the photo against pure black is
+         * higher-contrast than the crossfade's own photo-vs-scene dither
+         * (see gfx_dither_covers()'s own comment on the ink==255 branch
+         * above for that one), and reads as a genuinely stippled/starlit
+         * fade rather than a soft dissolve, especially through the
+         * middle of the fade window. A deliberate choice, on-panel, not
+         * an oversight - see git history around when this landed for the
+         * visual comparison that decided it. */
+        for (int y = 0; y < GFX_HEIGHT; y++) {
+            gfx_color_t *row = fb + (size_t)y * GFX_WIDTH;
+            const gfx_color_t *photo_row =
+                (const gfx_color_t *)boot_anim_image + (size_t)y * GFX_WIDTH;
+            for (int x = 0; x < GFX_WIDTH; x++) {
+                if (gfx_dither_covers(x, y, reveal) &&
+                    gfx_dither_covers(x, y, ink)) {
+                    row[x] = photo_row[x];
+                }
+            }
         }
     }
 
@@ -1016,6 +1085,18 @@ static void draw_image(uint8_t ink, uint8_t reveal)
 /*---------------------------------------------------------------------------
  * The loop
  *-------------------------------------------------------------------------*/
+
+/* The whole-panel wipe boot_anim_draw_frame() opens with - see this file's
+ * own top comment ("EVERY FRAME IS A FULL REPAINT") for why there is no
+ * partial-clear path here the way app_cube.c's own cube_clear_frame() has
+ * one. A separate, non-static function for the same reason every other
+ * draw_* here now is: suite_boot_anim_perf.c times it as its own phase,
+ * since it is real work (322 KiB) paid every frame regardless of what else
+ * that frame draws - see gfx_clear()'s own measured cost in gfx.c. */
+void boot_anim_clear_frame(void)
+{
+    gfx_clear(COL_BG);
+}
 
 void boot_anim_draw_frame(uint32_t now_ms)
 {
@@ -1032,7 +1113,7 @@ void boot_anim_draw_frame(uint32_t now_ms)
     const boot_anim_view_t view = boot_anim_view(GFX_WIDTH, GFX_HEIGHT,
                                                  now_ms);
 
-    gfx_clear(COL_BG);
+    boot_anim_clear_frame();
 
     /* Gated the same way the title already is below: once the photograph
      * is about to fully cover the panel, this is a whole frame of drawing
@@ -1061,14 +1142,48 @@ void boot_anim_draw_frame(uint32_t now_ms)
     }
 }
 
+#if CONFIG_LAUNCHER_DEVELOPMENT
+/* Windowed, not per-frame or once-at-the-end - main.c's own report_fps()
+ * (the shell's post-boot loop) already makes that case, and a log line
+ * costs several ms of UART, enough to throttle the very thing being
+ * measured. Duplicated here rather than shared: boot_anim_run() has its
+ * own loop, entirely separate from the shell's, so there is no one call
+ * site the two could share this from.
+ *
+ * 500ms windows, not main.c's 1.5s - short enough to actually localize a
+ * dip to a ~2s window (the photograph's own crossfade, draw_image()'s
+ * full-framebuffer blend loop - see that function's own comment) rather
+ * than average it away against six-odd seconds of much cheaper curve/grid
+ * drawing. `now_ms` in the log line, not just an fps number, so a dip can
+ * be read straight off against boot_anim_timeline.json's own authored
+ * ms values without having to count log lines to find it. */
+static void report_fps_windowed(int64_t now_us, uint32_t now_ms,
+                                int64_t *window_start, uint32_t *frames)
+{
+    (*frames)++;
+    const int64_t since = now_us - *window_start;
+    if (since >= 500000) {
+        ESP_LOGI(TAG, "t=%ums: %.1f fps", (unsigned)now_ms,
+                 (double)*frames * 1000000.0 / (double)since);
+        *frames = 0;
+        *window_start = now_us;
+    }
+}
+#endif
+
 #ifdef ESP_PLATFORM
 void boot_anim_run(void)
 {
     const int64_t started_us = esp_timer_get_time();
     uint32_t frames = 0;
+#if CONFIG_LAUNCHER_DEVELOPMENT
+    int64_t fps_window_start = started_us;
+    uint32_t fps_window_frames = 0;
+#endif
 
     for (;;) {
-        const int64_t elapsed_us = esp_timer_get_time() - started_us;
+        const int64_t now_us = esp_timer_get_time();
+        const int64_t elapsed_us = now_us - started_us;
         const uint32_t now_ms = (uint32_t)(elapsed_us / 1000);
         if (now_ms >= BOOT_ANIM_MS) {
             break;
@@ -1077,6 +1192,10 @@ void boot_anim_run(void)
         boot_anim_draw_frame(now_ms);
         gfx_present();
         frames++;
+#if CONFIG_LAUNCHER_DEVELOPMENT
+        report_fps_windowed(now_us, now_ms, &fps_window_start,
+                            &fps_window_frames);
+#endif
 
         /* The same yield the shell's loop makes, for the same reason: the
          * idle task feeds the watchdog. */

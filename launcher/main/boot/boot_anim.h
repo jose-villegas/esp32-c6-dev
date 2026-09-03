@@ -1158,16 +1158,20 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 #define BOOT_ANIM_TITLE_VIEW_W 448
 #define BOOT_ANIM_TITLE_VIEW_H 368
 
-/* Where the word rests, in the viewer's frame. X is fixed - see below for
- * where it comes from. Y (BOOT_ANIM_TITLE_VIEW_Y, "how far down the word
- * lands") is authored (title_height_px in the JSON, generated into
- * boot_anim_timeline.h) rather than fixed here, so it is a knob rather
- * than a value someone has to come edit this comment to change.
+/* Where the word rests, in the viewer's frame. Both X (BOOT_ANIM_TITLE_
+ * VIEW_X, "how far into the frame the word's own left edge starts") and Y
+ * (BOOT_ANIM_TITLE_VIEW_Y, "how far down the word lands") are authored
+ * (title_x_px/title_height_px in the JSON, generated into boot_anim_
+ * timeline.h) rather than fixed here, so each is a knob rather than a
+ * value someone has to come edit this comment to change - X was the
+ * later of the two to make that move, kept fixed here for a while after Y
+ * already had (see git history around when title_height_px was added).
  *
- * X comes from the golden rectangle spiral inscribed in the frame, not a
- * number picked by eye - and Y's own DEFAULT (50, in boot_anim_timeline.
- * json) is that same construction's Y, kept as the starting point even
- * though it is no longer literally read from here.
+ * Both come from the golden rectangle spiral inscribed in the frame
+ * originally, not a number picked by eye - their own DEFAULTS (170 and
+ * 50, in boot_anim_timeline.json) are that same construction's point,
+ * kept as the starting point even though it is no longer literally read
+ * from here.
  *
  * Inscribe a golden rectangle R0 in the 448x368 frame, width-matched
  * (448 x 448/phi = 448 x 276.9) and centred vertically. Cut it into a
@@ -1191,8 +1195,8 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
  * centre put it - both the word and the motif read as too far off to one
  * side there; see BOOT_ANIM_FINALE_ORIGIN_VIEW_X's own comment for the
  * same correction on the motif's side, a considerably bigger one.
- * BOOT_ANIM_TITLE_VIEW_X/Y (X here, Y's own default in the JSON) is that
- * point, minus half the word's own box (BOOT_ANIM_TITLE_LEN cells of
+ * BOOT_ANIM_TITLE_VIEW_X/Y's own defaults in the JSON are that point,
+ * minus half the word's own box (BOOT_ANIM_TITLE_LEN cells of
  * 8*SCALE+GAP, less one trailing GAP, by 8*SCALE) - gfx_text_font()'s
  * (x, y) is a corner, not a centre - and nudged down by half that box's
  * own height again so the word's CENTRE, not its top edge, sits on the
@@ -1200,14 +1204,13 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
  *
  * SCALE went up (3 -> 5, on request - the word wanted to read bigger)
  * without moving the golden point itself: (322.5, 70) is that point,
- * unchanged, and X/Y were still centred on it before Y became a knob.
- * What DID move is how far back from R1's own centre X sits, because the
- * box is bigger now - at the pure golden-centred X the word's own right
- * edge landed a couple of pixels past BOOT_ANIM_TITLE_VIEW_W, failing
- * test_the_title_stays_on_the_panel_once_visible(). Nudged a little
- * further left than that strictly requires, for margin - and another
- * 15px left again on top of that, on request. */
-#define BOOT_ANIM_TITLE_VIEW_X 170
+ * unchanged, and X/Y were still centred on it before either became a
+ * knob. What DID move is how far back from R1's own centre X sits,
+ * because the box is bigger now - at the pure golden-centred X the
+ * word's own right edge landed a couple of pixels past BOOT_ANIM_TITLE_
+ * VIEW_W, failing test_the_title_stays_on_the_panel_once_visible().
+ * Nudged a little further left than that strictly requires, for margin -
+ * and another 15px left again on top of that, on request. */
 
 /* BOOT_ANIM_TITLE_STAGGER_MS/FLIGHT_MS/ENTRY_PX (each letter's stagger,
  * flight duration, and how far off-panel it starts - which must clear

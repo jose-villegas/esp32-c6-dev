@@ -1,6 +1,6 @@
 {
     "timing": {
-        "total_ms": 6500,
+        "total_ms": 5500,
         "axes_ms": 450,
         "grid_start_ms": 320,
         "grid_ring_ms": 16,
@@ -8,22 +8,22 @@
         "grid_fade_ms": 128,
         "pen_start_ms": 520,
         "pen_ms": 1980,
-        "title_start_ms": 2700,
-        "title_stagger_ms": 250,
-        "title_flight_ms": 1100,
+        "title_start_ms": 2450,
+        "title_stagger_ms": 170,
+        "title_flight_ms": 500,
         "title_entry_px": 420,
-        "title_turns_phase": 229376,
+        "title_turns_phase": 92000,
         "title_amplitude_px": 24,
         "title_wave_amplitude_px": 12,
         "title_wave_period_ms": 900,
         "title_wave_stagger_ms": 75,
-        "fade_start_ms": 5800,
+        "fade_start_ms": 4800,
         "grid_hue_ms": 700,
         "grid_hue_spread": 64,
         "grid_whiten_max": 32,
         "grid_ceiling_max": 64,
         "grid_max": 64,
-        "pen_finish_ms": 5800,
+        "pen_finish_ms": 4900,
         "wave_start_ms": 4200,
         "wave_end_ms": 5800,
         "grid_spokes": 4,
@@ -32,9 +32,10 @@
         "grid_spoke_draw_ms": 800,
         "wave_in_ms": 750,
         "wave_out_ms": 5500,
-        "title_height_px": 75,
-        "image_start_ms": 4200,
-        "image_fade_ms": 2300,
+        "title_height_px": 60,
+        "title_x_px": 99,
+        "image_start_ms": 3500,
+        "image_fade_ms": 800,
         "title_shadow_dx": -7,
         "title_shadow_dy": 7,
         "title_shadow_alpha": 128
@@ -66,14 +67,14 @@
             },
             "space": {
                 "pos": [
-                    11,
+                    10,
                     0,
                     0
                 ],
                 "rot": [
-                    0,
-                    0,
-                    0
+                    -135,
+                    -45,
+                    90
                 ],
                 "scale": [
                     1,
@@ -274,7 +275,7 @@
             "ease": "linear"
         },
         {
-            "ms": 3300,
+            "ms": 4300,
             "camera": {
                 "pos": [
                     0,
@@ -300,127 +301,13 @@
                 ],
                 "rot": [
                     -180,
-                    -45,
+                    -270,
                     0
                 ],
                 "scale": [
-                    1.1,
-                    1.1,
-                    1.1
-                ]
-            },
-            "ease": "linear"
-        },
-        {
-            "ms": 4200,
-            "camera": {
-                "pos": [
-                    0,
-                    0,
-                    -10
-                ],
-                "rot": [
-                    0,
-                    0,
-                    0
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "space": {
-                "pos": [
-                    -3,
-                    12,
-                    7
-                ],
-                "rot": [
-                    -210,
-                    -45,
-                    30
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "ease": "linear"
-        },
-        {
-            "ms": 4700,
-            "camera": {
-                "pos": [
-                    0,
-                    0,
-                    -10
-                ],
-                "rot": [
-                    0,
-                    0,
-                    0
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "space": {
-                "pos": [
-                    -3,
-                    20,
-                    15
-                ],
-                "rot": [
-                    -207,
-                    -45,
-                    30
-                ],
-                "scale": [
-                    3,
-                    3,
-                    3
-                ]
-            },
-            "ease": "linear"
-        },
-        {
-            "ms": 5500,
-            "camera": {
-                "pos": [
-                    0,
-                    0,
-                    -10
-                ],
-                "rot": [
-                    0,
-                    0,
-                    0
-                ],
-                "scale": [
-                    1,
-                    1,
-                    1
-                ]
-            },
-            "space": {
-                "pos": [
-                    0,
-                    19,
-                    5
-                ],
-                "rot": [
-                    -180,
-                    -90,
-                    -5
-                ],
-                "scale": [
-                    1.15,
-                    1.15,
-                    1.15
+                    0.6,
+                    0.6,
+                    0.6
                 ]
             },
             "ease": "linear"
