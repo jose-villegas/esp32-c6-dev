@@ -440,10 +440,9 @@ always-on drain nobody asked for.
 
 ### A sufficiently covered lava cell can burst
 
-Independent of water: a lava cell whose gravity-relative coverage
-(`covered_at()`, `sand_priv.h` - see "The shared 'am I covered' primitive"
-below) reaches at least `SAND_LAVA_BURST_COVER` (3) gets a tiny,
-deliberately rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in
+Independent of water: a lava cell with a complete gravity-relative lid
+over it (`covered_at()`, `sand_priv.h` - see "The shared 'am I covered'
+primitive" below) gets a tiny, deliberately rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in
 256, the rarest a single byte-wide roll can express) to convert to
 `MAT_STONE` and immediately `sand_explode()` at that spot, fire included.
 This is the replacement for the earlier vent mechanism
@@ -453,9 +452,9 @@ sealed pool's own crust so a sustained pour can keep reaching lava rather
 than the pour's own cool-off chain armouring the surface shut - see the
 cool-off section above.
 
-3, not `smothered()`'s own all-4 (a different, gravity-agnostic question -
-see below): a pocket with one open side still qualifies, which is what
-lets an ordinary hand-drawn vessel (which the `smothered()`-exemption
+A lid, not `smothered()`'s own all-4 (a different, gravity-agnostic
+question - see below): a pocket with an open side still qualifies, which is
+what lets an ordinary hand-drawn vessel (which the `smothered()`-exemption
 story above already found has dozens of one-cell dimples) actually reopen
 over time rather than needing a fully sealed cell to ever do anything.
 
@@ -473,39 +472,46 @@ directly above it - so a wide pool sealed by a crust could never reach
 the threshold no matter how complete the seal was. Only an isolated lava
 cell sitting in its own solid pocket could ever burst.
 
-`cover_mask()`/`cover_seals()`/`covered_at()` (`sand_priv.h`, beside
+`cover_mask()`/`covered_at()` (`sand_priv.h`, beside
 `ring_dir()`/`ring_of()`) fix both problems and are meant as a general
-"is this cell covered enough" primitive, not a burst-private helper - the
+"is there a lid over this cell" primitive, not a burst-private helper - the
 confined-gas ignition check is a candidate to migrate onto it later (the
 vent machinery's own `covered_from_above()`, the other candidate this
 paragraph used to name, no longer exists - removed once the burst above
-replaced it). The eligible cells are a **semi-disc of the 8-ring, centred
-on anti-gravity**: the cell directly opposite gravity, the two diagonals
-either side of it, and the two perpendiculars beyond those - five cells,
-equivalently the ring minus the gravity direction itself and its two
-ring-neighbours. Gravity is read from `s->last_load_dx/dy` (the SETTLED
-direction - the nearest of the eight ring directions, stable while the
-board is held still) rather than `s->last_step_dx/dy` (the per-step
-DITHERED direction) or the raw tilt vector: dithering would alternate the
-eligible semi-disc between two adjacent orientations every step a tilt
-fell between two eighths, and a continuous test off the raw vector would
-give five eligible cells only at exact axis or exact diagonal alignment -
-the smoothed IMU vector is essentially never exactly aligned, so either
-alternative would flicker between a 5-cell and a 4-cell rule constantly.
+replaced it). The lid is the **three cells centred on anti-gravity**: the
+cell directly opposite gravity and the two diagonals either side of it,
+and a cell is covered when **all three** are covering (non-liquid,
+strictly denser, in bounds - the board edge is never a container). What is
+below a cell supports it and what is beside it walls it in; neither covers
+it. Gravity is read from `s->last_load_dx/dy` (the SETTLED direction - the
+nearest of the eight ring directions, stable while the board is held
+still) rather than `s->last_step_dx/dy` (the per-step DITHERED direction)
+or the raw tilt vector: dithering would swing the lid between two adjacent
+orientations every step a tilt fell between two eighths, so a cell sealed
+in one would read open in the other and the rule would turn into
+orientation noise.
 
-A cell is covered when at least `need` of those five are covering, AND
-the covered cells form **one contiguous run around the semi-disc** - with
-exactly one narrow exception: the three CARDINALS of the semi-disc (the
-two perpendiculars plus anti-gravity itself), which seal even though the
-diagonals between them are open, because two blocked cardinals seal the
-corner between them and an open diagonal between them is not a route
-out. That exception applies only when gravity itself is axis-aligned - a
-diagonal gravity's semi-disc holds only two cardinals, so the same three
-arc positions there are all diagonals and must not be let through. A
-broader version of the exception ("any single-diagonal gap flanked by two
-covered cardinals") was considered and rejected: it would also admit two
-patterns the settled acceptance data excludes - see
-`test_rejected_semi_disc_patterns_stay_rejected`, `suite_sand.c`.
+This is the second gravity-relative version (2026-09-03). The first
+(2026-09-02) was a five-cell **semi-disc** - the same three plus the two
+perpendiculars - needing three covered in a contiguous run, with a
+cardinal-triple exception. The perpendiculars were the defect. A
+finger-drawn stone wall bulges one cell past itself every brush step, so
+its inner face has a notch every brush step, and lava settling into each
+notch saw wall to its side, wall on the diagonal above that side and wall
+directly above: three, contiguous, "sealed" - while the pool's surface sat
+wide open one cell over. Every hand-drawn basin blew its own sides out as
+the lava settled. Reproduced on the host: a clean one-cell wall never
+produced a single eligible cell in 5000 steps (which is why no test saw
+it - every basin in the suite is drawn clean); a brush-drawn one did
+within 16 steps and breached by step 62 at natural odds. Dropping the
+perpendiculars removed every eligible cell in that scene at brush radii 2
+to 4 and left the wide-pool-under-a-crust case, the one the rule exists
+for, exactly as it was. It is also cheaper: three probes, no count, no
+contiguity walk, no exception. The one shape it still fires on at a wall
+that the player might not expect is a two-cell-wide overhang, where the
+innermost cell does have a complete lid. See
+`test_lava_in_a_wall_notch_never_bursts` and
+`test_cover_primitive_matches_the_exhaustive_shape_table`, `suite_sand.c`.
 
 **`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
 DIVISOR` with fire before it queues a single flight entry** (see
@@ -539,6 +545,269 @@ maximum chance the same scene lost about half its lava in the first 20
 steps and then plateaued as the remaining pockets thinned out and
 scattered. Not a suppression mechanism - the tapering is an emergent
 consequence of the blast itself clearing cover, not a cap anyone added.
+
+## Roots: a tree welds itself to the soil it drinks from, then spreads through it
+
+The plant/wood/leaf family (`MATX_PLANT`, `MAT_WOOD`, `MATX_LEAF`) is not
+otherwise covered in this document - its growth, hardening and budding
+rules live in the extensive comments on `extended_reactions[MATX_PLANT]`
+and `reactions[MAT_WOOD]` in `material.c`, which is the source of truth for
+how a tree grows tall, thickens, and buds new limbs. This section covers
+one narrower piece: how a tree stays connected to the ground it drinks
+from once the ground itself starts moving, and how the root SYSTEM that
+grows from that connection gets its shape.
+
+**The problem.** Dirt is a powder and shifts. A tree finds water by
+walking down its own stem to the ground and on down into the soil
+(`find_water()`, `sand_reactions.c`) - and when the soil directly under
+the tree's collar (where the trunk actually touches ground) slides away,
+that walk finds neither more stem nor ground below it and simply returns
+failure. The tree is stranded, sometimes with plenty of water two rows
+down, because the one cell it needed to reach it is gone.
+
+**PART 1: the seed.** As a plant or a trunk spends the soil moisture it
+grows, buds or sprouts on, there is a small chance (`reaction_t.roots` on
+the PLANT/WOOD rows, 40 in 256) that the CONTACT cell - the collar itself,
+not wherever the moisture actually came from - welds into a `ROOT` cell
+instead of staying an ordinary grain of dirt. A root is `KIND_STATIC`: it
+does not fall, slide, or get displaced the way loose dirt does, so once a
+collar has rooted, nothing about the bed shifting can carry it away from
+under the tree.
+
+This roll fires ONLY ONCE per tree - gated in `spend_soil_moisture()` to
+`root_depth == 0`, meaning `find_water()`'s stem walk crossed no root at
+all on the way down. The moment the first root exists, PART 1 gets out of
+the way for good and PART 2 takes over growing the system; without that
+gate, every later grow/bud/sprout event would keep re-rolling here too,
+seeding fresh disconnected root cells at whatever the current deepest
+contact happens to be, fighting PART 2 over the same collar.
+
+**PART 2: the system.** A root cell is not otherwise inert - it eats.
+Every step, a root cell scans its own eight neighbours (`step_one_rooting_cell()`)
+for one that is dirt and still holds moisture, rolls a small chance
+(`reaction_t.roots` on `MATX_ROOT`'s OWN row - the same field, a second
+reading of it, the way `hardens_to` and `clings_to` already do double duty
+elsewhere in `reaction_t`), and converts it into more root. The conversion
+IS the water cost: `place_reacted()` overwrites the whole cell with a
+fresh root byte, so the dirt's moisture nibble is simply gone along with
+everything else the cell used to be, rather than separately debited.
+
+Almost no direction weights. Moisture itself already has a shape - it
+percolates down through a bed and diffuses out from anything drinking or
+pouring nearby - so a root that simply reaches for whichever neighbour
+still has water in it spreads wide near a wet surface and fingers downward
+through a bed drying from the top. The first cut had no weights at all on
+exactly that reasoning, and on the device the sideways spread near a wet
+surface won so completely that depth only happened at the angles the
+geometry favoured. So there is one SMALL skew, read off the grid with no
+state: a candidate that continues AWAY from the cell's own root neighbours
+weighs +2, one that reaches gravity-ward +1, over a base of 1. A tip has
+one parent and keeps going the way it was going - what `holds_line` does
+for a stem, without remembering anything; a junction's neighbours partly
+cancel and it is free to turn; the trunk a root grew from counts as a
+parent too (`clings_to`), so the very first root under a tree heads down
+and out from under the wood rather than tossing a coin along the wet
+surface. Measured over THIRTY seeds (six was per-seed scatter of +/-10
+rows): mean deepest root 3.5 rows with the weights zeroed, 7.2-7.4 with
+them; systems about twice the size (22 roots against 42), because a
+directed tip keeps finding fresh moist cells instead of re-hitting the
+crowd; and the runaway scene still pins at a fixed point.
+
+**Depth is bounded by water, not by the weights.** Raising the gravity
+term and adding the trunk term narrowed systems (mean half-width 8.5 ->
+7.9) and did not deepen them (7.2 -> 7.4), and the harness says why:
+after 20,000 steps every saturated bed was 98-99% dry and not one live tip
+had moist dirt beside it. A root can only eat moist soil, a bed watered
+from the top dries from the top, and the moist front the fingers chase is
+gone before they reach the floor. The weights decide which moist cell a
+tip takes next; how deep the water goes decides how deep the roots can.
+
+**So the roots carry the water down.** A root cell is a CONDUIT
+(`step_one_conducting_cell()`, `ROOT_CONDUCT_CHANCE` 64): each step it
+may move one level of moisture from the wettest soil beside or above it
+into the driest soil beneath it. Moves only, never makes - the same
+conservation percolation keeps - and one way only, gravity-ward, so it
+cannot ping-pong against diffusion. The sink is the next cell a tip wants
+to eat, and a fresh tip is itself a conduit, so the moisture front and
+the root front move down together: depth is earned a level of water at a
+time. Sides count as sources, not only "above" - a column has more root
+above each cell, not soil, so only its top cell would ever conduct
+otherwise; drawing from the wet soil flanking each cell is what lets a
+whole column drain the surface layer downward.
+
+Measured on the dry bed watered at the collar only (the device case), ten
+seeds, mean deepest root of 19 rows, for three percolation rates:
+
+```
+SOIL_PERCOLATE_CHANCE    conduit off    conduit on
+        15 (current)         4.6           15.0
+        30                   7.0           18.0
+        60 (the old value)   5.3           15.1
+
+   and on a SATURATED bed, percolation 15:   9.6           15.4
+```
+
+Two readings. Conduction is worth roughly three times what the
+percolation rate is - even the old, fast percolation only reached 5-7
+rows without it - so the earlier slowdown of `SOIL_PERCOLATE_CHANCE` was
+not what made roots shallow, and undoing it would not have made them
+deep. And the runaway scene still pins: collar re-saturated every step,
+93 roots at step 2000 and 93 at 20,000, because `ROOT_SURFACE_MAX` bounds
+the SHAPE regardless of how much water is carried into it. An earlier
+draft of this feature reused
+`step_one_growing_cell()`'s own stem-walk machinery - a site roll (tip,
+lean, branch, widen) walking a run outward from the collar - the same way
+a limb grows; it was replaced by the local eating rule because a root does
+not need a stem's machinery to look like a root, and because eating rests
+on the same scarce-resource philosophy (spend the moisture, and that is
+the whole bound) the rest of this feature already uses, rather than adding
+depth and spread caps as a second, separate kind of bound beside it.
+
+**What actually bounds it.** Three things, in the order that matters:
+
+1. **The moisture itself.** A cell with nothing to spend has nothing to
+   grow into, and the total on a board is finite unless something keeps
+   pouring more in.
+2. **`ROOT_SURFACE_MAX`, 2.** A root already touching more than 2 other
+   roots does not roll to grow at all. This is what actually gives the
+   system its shape - without it, a well-watered bed converts every moist
+   cell it can reach into a solid slab of root rather than a filigree of
+   it. Measured against a runaway scene - a root pre-planted so the rare
+   PART 1 lottery cannot confound the reading, its collar rewatered to
+   SOIL_MOISTURE_MAX every single step for 20,000 steps, root count
+   sampled every 2000: at `ROOT_SURFACE_MAX = 1` the system starved
+   itself shut at 4 cells (a bare stub); at 3 it never stopped growing -
+   99 roots by step 2000, still climbing at 220 by step 20000, no sign of
+   levelling off; at 2 it climbed to the low forties by step 2000 and then
+   sat there BYTE-IDENTICAL through the remaining 18,000 steps, seed after
+   seed - a genuine fixed point.
+3. **`reaction_t.roots` itself, 8 in 256 on the root row** - a small
+   chance, the same discipline every roll in `sand_reactions.c` follows.
+
+No depth or spread cap was needed in the end - the walk-shaped first
+draft's `ROOT_DEPTH_MAX` is retired entirely (see its own RETIRED comment
+in `sand_reactions.c`, where the constant used to live). A local rule with
+no notion of "the collar" has nothing to measure a depth cap FROM in the
+first place, and `ROOT_SURFACE_MAX` alone already produces a genuine fixed
+point at the scale this feature actually runs at.
+
+**Eight neighbours, not four.** `step_one_rooting_cell()`'s scan walks all
+eight ring directions rather than the four cardinals `reaction_dirs[]`
+uses elsewhere in this file. Compared directly, both ways, over the same
+six seeds: four gave a near-straight taproot, one or two cells wide, that
+only fanned out where moisture happened to pool against the stone floor;
+eight let a root step diagonally as it reaches for water, which is what
+actually produces the wandering, forking shape a root system is supposed
+to have. The difference was qualitative, not a rounding error.
+
+**Shade follows structure, not age.** A root darkens from the fresh tan
+toward a wood-like brown (`ROOT_OLD`, `material.c`) as more root grows
+around it: the painter hands `material_colours()` the count of root
+neighbours in the `depth` slot only a liquid's interior otherwise reads
+(`material_root_neighbours()`, `material.h`), and that count picks one of
+`ROOT_SHADES` steps. A tip touching one other root wears the fresh colour;
+a cell that has put out children steps darker; the collar, touched on most
+sides, wears the darkest. Not a lifetime, on purpose and not only because
+a root has nowhere to store one: an age would darken the tips too, and the
+tips are the part meant to stay fresh. Lose a child to rot or lava and the
+parent lightens again. The eating rule above is what makes this visible at
+all - a straight column is almost entirely two-neighbour cells, while a
+branching system is full of the junctions the darker steps are keyed to.
+
+**Measured, before and after** (60 wide, 70 tall; stone floor; 20 rows of
+saturated dirt; one seed on the surface; the 13 cells around the collar
+rewatered every 20 steps; 20,000 steps; `sand_step(&s, 0, 1000, 0)`):
+
+```
+                     BEFORE (PART 1 only)         AFTER (PART 1 + PART 2)
+seed    roots depth  half-width  wood      roots depth  half-width  wood
+11        7     3        7       141         0     0        0       83
+909       4     2        3       82         35    19        9       88
+4242      3     2        1       78         48    19       12       69
+77        1     1        1       71         76    19       13       58
+5150      7     2        9       148        55    19       12      298
+31337     2     2        2       116        29     8        7       104
+```
+
+Before, a root system was a short column near the collar, one to seven
+cells, capped by `ROOT_DEPTH_MAX` and starved by how rarely a single
+un-replanted tree spends soil moisture at all. After, the same scene
+grows a genuine branching system reaching most of the bed's own depth,
+spreading well past the collar. Seed 11 growing zero roots either side is
+not a regression - PART 1's lottery (~16% per eligible spend, and a single
+tree spends only a few dozen times in its life) simply missed for that
+seed within 20,000 steps; the suite's own tests replant every 40 steps
+specifically to give that roll many independent tries, the way this raw
+harness does not.
+
+One seed's soil, picture (`seed 4242`, `R` root, `W` wood, `.` dirt,
+collar near the top centre):
+
+```
+.............................RR.RR..........................
+.............................RR.RR..........................
+.............................R..............................
+.............................R..............................
+.............................RR.............................
+.............................R..............................
+.............................R..............................
+.............................RR.............................
+.............................RR.............................
+..............................R.............................
+..............................R.............................
+..............................RR............................
+..............................R.............................
+..............................R.............................
+..............................RR............................
+..............................R.............................
+..............................R.............................
+..............................RR..R..R.R.RR..................
+..............................RRRRRRRRRRRRR..................
+```
+
+Wide near the collar, a wandering single-cell thread through the middle of
+the bed, and a wider fan again at the bottom where moisture pools against
+the stone floor - the shape moisture's own distribution gives it, for
+free, with only the small away-from-parent and gravity-ward skew above
+laid over it.
+
+**Why a new material, not more wood.** The obvious shortcut - give wood a
+"rooted" variant, the way glass spends its variant on temperature - does
+not work, because wood's variant is already spoken for: it is burn
+progress (`reaction_t.burn_decay`), and `CELL_VARIANT(n) != 0` is what
+"on fire" means throughout the reactions pass. A root wearing a wood
+variant would read as a nearly-burnt-out log. Being its own material also
+buys two things a wood-based encoding could not: a root does not count
+against `TREE_LIFT` (`find_water()` tracks a separate `root_depth` purely
+so it can NOT add to `lift` - a cell below the water line lifts nothing,
+and charging it anyway would let a handful of root cells eat a real share
+of every tree's height budget for free), and the stem walk can tell a
+root apart from ordinary ground well enough to treat one buried under
+freshly-shifted dirt as transparent rather than as a second dead end,
+reintroducing the very bug this feature exists to fix from the other
+side.
+
+Flammability is zero on a root's own row, deliberately - not an omission.
+A root is buried, and a fire that could reach down and burn out a tree's
+own anchor from under it would undo the whole point of the feature: the
+tree would be exactly as vulnerable to a shifting bed as it was before
+roots existed, just one fire away.
+
+**A root competing with its own tree.** PART 2 gave the feature one new
+and genuinely surprising failure mode: a root sitting directly on its
+tree's ONLY reachable water can, given enough steps, eat that exact cell
+itself and convert it to more root - and if nothing lies beyond it but
+stone, the tree's own water access is gone, spent on growing the root
+system instead of ever reaching the trunk above. This is not a bug in
+`find_water()`'s transparency (untouched by PART 2, and still correct);
+it is root and tree genuinely competing for the same scarce moisture,
+first roll wins. `test_a_buried_root_does_not_cut_off_the_water_below_it`
+(`suite_sand.c`) used to rest on a single row of water directly under the
+root, and PART 2 made that scene racy against this exact competition
+(measured: FAILED, deterministically, for this suite's fixed seed) - the
+fix was a deeper wet reserve below the root, not a change to the
+mechanism, since a real root system does not get to consume literally
+every cell of water below it before the tree it belongs to can use any.
 
 ## Momentum and the wall-rebound splash
 

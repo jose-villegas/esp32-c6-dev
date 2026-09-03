@@ -30,8 +30,8 @@
 
 #include "sand.h"
 /* Reaches past sand.h's own public surface on purpose - bd esp32c6-a2j's
- * exhaustive-shape-table and rejected-pattern tests below exercise
- * cover_mask()/cover_seals() (ring_dir() too) directly, and a rule that
+ * exhaustive-shape-table test below exercises
+ * cover_mask()/covered_at() (ring_dir() too) directly, and a rule that
  * rotates with gravity and is only ever exercised indirectly, through the
  * stochastic burst roll, at whatever gravity direction one scene happens
  * to use, is not really tested. sand_priv.h is pure portable logic
@@ -2787,6 +2787,249 @@ static void test_a_cascading_impulse_moves_more_than_one_cell(void)
         "impulse_count climbing above 1 proves the cascade queued a "
         "second, independent entry rather than the lone grain simply "
         "moving alone");
+}
+
+/* --- pouring water must not stir the dirt bed underneath it --------------- */
+
+#define STIR_W 14
+#define STIR_H 30
+static uint8_t stir_cells[STIR_W * STIR_H];
+static sand_t  stir_sim;
+
+/* THE PINPOINTING TEST THE MAINTAINER ASKED FOR. Reported: pouring water
+ * over dirt makes the submerged dirt "move a lot". Measured (see can_
+ * impulse_enter()'s own comment, sand.c, for the full numbers) rather than
+ * argued: the obvious suspect, splash_displace()'s directed ring kick
+ * (sand_liquid.c), barely ever touched a dirt cell - 60 times out of
+ * roughly 7,500 firings on this same shape of scene. The actual cause was
+ * can_impulse_enter() itself, which used to let a flying water grain swap
+ * into ANY non-static occupant on the way to landing, dirt included -
+ * every splash grain the pour kicked up tunnelled straight through
+ * whatever dirt sat in its path. Built as close to the measured scene as
+ * this file's own helpers allow: a settled dirt bed, a settled pool of
+ * water resting on it, and a continuous stream poured on top of that pool
+ * for hundreds of steps, so plenty of drops land hard on an already-full
+ * surface and splash.
+ *
+ * TRACKS POSITION, NOT BYTES - "assert on dirt cells moving, not on
+ * impulse internals" is the brief this test was written against. A dirt
+ * cell's own MOISTURE nibble legitimately changes near standing water
+ * (wicking - unrelated to this bug, and not something this test should
+ * ever fail on), so what is pinned here is whether MAT_DIRT itself ever
+ * leaves one of its starting cells - the thing the report actually
+ * complained about - not whether any byte of it changed in place. */
+static void test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell(void)
+{
+    enum {
+        FLOOR      = STIR_H - 1,
+        DIRT_TOP   = FLOOR - 12,     /* a 12-row dirt bed */
+        POOL_TOP   = DIRT_TOP - 5,   /* 5 settled rows of water on it */
+        STREAM_X   = STIR_W / 2,
+        POUR_STEPS = 600,
+    };
+
+    /* HEAP, not the stack - see drop_impulse_buf's own comment above
+     * (test_water_falling_onto_water_also_queues_a_small_displacement)
+     * for the stack-protection panic a buffer this size caused on-device
+     * the one other time this file put one on the stack instead. */
+    impulse_t *buf = malloc(4096 * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "the pour impulse queue must fit in what the framebuffer leaves");
+    sand_init(&stir_sim, stir_cells, STIR_W, STIR_H, 0xC0FFEEu);
+    sand_enable_impulses(&stir_sim, buf, 4096);
+
+    for (int y = 0; y < STIR_H; y++) {
+        sand_set(&stir_sim, 0, y, STONE);
+        sand_set(&stir_sim, STIR_W - 1, y, STONE);
+    }
+    for (int x = 0; x < STIR_W; x++) {
+        sand_set(&stir_sim, x, FLOOR, STONE);
+    }
+    for (int y = DIRT_TOP; y < FLOOR; y++) {
+        for (int x = 1; x < STIR_W - 1; x++) {
+            sand_set(&stir_sim, x, y, CELL_MAKE(MAT_DIRT, 0));
+        }
+    }
+    for (int y = POOL_TOP; y < DIRT_TOP; y++) {
+        for (int x = 1; x < STIR_W - 1; x++) {
+            sand_set(&stir_sim, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    bool was_dirt[STIR_W * STIR_H];
+    for (int i = 0; i < STIR_W * STIR_H; i++) {
+        was_dirt[i] = CELL_MATERIAL(stir_sim.cells[i]) == MAT_DIRT;
+    }
+
+    for (int i = 0; i < POUR_STEPS; i++) {
+        sand_spawn(&stir_sim, STREAM_X, 1, 2, MAT_WATER);   /* 5-wide stream */
+        sand_step(&stir_sim, 0, 1000, 0);
+    }
+
+    free(buf);
+
+    int left_its_cell = 0, arrived_elsewhere = 0;
+    for (int i = 0; i < STIR_W * STIR_H; i++) {
+        const bool is_dirt_now = CELL_MATERIAL(stir_sim.cells[i]) == MAT_DIRT;
+        if (was_dirt[i] && !is_dirt_now) {
+            left_its_cell++;
+        }
+        if (!was_dirt[i] && is_dirt_now) {
+            arrived_elsewhere++;
+        }
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, left_its_cell,
+        "pouring water onto the pool over a settled dirt bed must never "
+        "move a submerged dirt cell out of its own position - this same "
+        "scene moved hundreds before can_impulse_enter() learned to refuse "
+        "a liquid mover's swap into a non-liquid target");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, arrived_elsewhere,
+        "and MAT_DIRT must not show up outside the bed's own footprint "
+        "either - the two counts are the same swap seen from its two ends");
+}
+
+/* THE DIRECT VERSION OF THE SAME CLAIM, isolated from the pinpointing
+ * scene's own moving parts (splash chance, radius decay, a continuous
+ * pour) down to one water grain and one dirt grain: queue a single
+ * impulse aimed straight at a dirt cell and watch it fail to arrive.
+ *
+ * SIDEWAYS, not straight down - traced two confounds out of this test
+ * before landing here, neither one this file's fault. A single dirt cell
+ * with open, empty ground either side let ordinary gravity's own diagonal
+ * slide walk the water around it before the impulse ever ran; filling the
+ * whole row with dirt fixed that but let sand_step_liquids()'s cross-flow
+ * spread the one water cell sideways across the open row above it instead
+ * (see splash_displace()'s own comment, sand_liquid.c, for the identical
+ * "open ground either side" shape of that older, related bug). Neither
+ * confound is why a THIRD attempt, straight down with a full dirt row AND
+ * a floor pinning the water in place, still passed on UNFIXED code: dirt
+ * is DENSER than water (62 against 30), so the instant the impulse's own
+ * bugged swap puts water below dirt, ORDINARY gravity - can_enter(),
+ * sand_priv.h, ALLOWS a denser powder to sink through a lighter liquid -
+ * immediately sinks the dirt back down through the water on the very next
+ * step, before this test's own loop ever gets to look. The two mechanisms
+ * fight to the same visible resting place, byte-for-byte, and a test that
+ * only checks the FINAL position cannot tell "the impulse rule already
+ * refused this" from "ordinary gravity kept undoing what the impulse rule
+ * allowed" - confirmed by a full per-step board dump, not assumed.
+ * SIDEWAYS has no such shadow: ordinary powder movement only ever
+ * considers straight-down and the two gravity-relative diagonals as
+ * candidates (step_one_grain(), sand.c) - a purely horizontal neighbour is
+ * never one of them, density or no density - so a floor under both cells
+ * (blocking the vertical candidates outright) leaves the impulse this test
+ * queues as the ONLY mechanism that could ever move either cell at all. */
+static void test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path(void)
+{
+    fixture();
+    impulse_t buf[8];
+    sand_enable_impulses(&s, buf, 8);
+
+    enum { ROW = 4, WX = 3, DX = 4, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, WX, ROW, WATER);
+    sand_set(&s, DX, ROW, CELL_MAKE(MAT_DIRT, 0));
+
+    sand_impulse(&s, WX, ROW, DIR_RIGHT, 255);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MAT_DIRT,
+        CELL_MATERIAL(sand_at(&s, DX, ROW)),
+        "a flying water grain queued straight at a dirt cell beside it "
+        "must not swap into that cell - can_impulse_enter() (sand.c) now "
+        "refuses a KIND_LIQUID mover's swap into anything but another "
+        "KIND_LIQUID target, pinned here directly rather than through a "
+        "whole pour scene");
+}
+
+/* THE OTHER HALF OF THE SAME RULE: the new gate is about foreign, NON-
+ * liquid occupants specifically, not a blanket ban on a flying liquid
+ * displacing anything at all - a flying grain of water must still be able
+ * to shoulder its way into another liquid, exactly as it always could, or
+ * splashing into oil, acid or lava (see splash_displace()'s own comment,
+ * sand_liquid.c) would have quietly stopped working alongside the fix.
+ * PINNED HORIZONTALLY, with a floor beneath both cells, for the same
+ * gravity-confound reason the test above goes straight down - here the
+ * push direction ITSELF is sideways, so a floor is what keeps ordinary
+ * gravity from pulling either cell out of the row before the impulse gets
+ * to try its own move. */
+static void test_a_flying_water_grain_still_displaces_another_liquid(void)
+{
+    fixture();
+    impulse_t buf[8];
+    sand_enable_impulses(&s, buf, 8);
+
+    enum { ROW = 4, WX = 3, OX = 4, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, WX, ROW, WATER);
+    sand_set(&s, OX, ROW, OIL);
+
+    sand_impulse(&s, WX, ROW, DIR_RIGHT, 255);
+
+    bool water_reached_target = false;
+    for (int i = 0; i < H && !water_reached_target; i++) {
+        sand_step(&s, 0, 1000, 0);
+        water_reached_target =
+            CELL_MATERIAL(sand_at(&s, OX, ROW)) == MAT_WATER;
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(water_reached_target,
+        "a flying water grain must still be able to swap into another "
+        "liquid's cell - the can_impulse_enter() fix (sand.c) is a rule "
+        "about foreign, NON-liquid occupants, not a blanket ban on "
+        "displacing whatever the mover finds in its path");
+}
+
+#define LIQ_CASCADE_W 1
+#define LIQ_CASCADE_H 16
+static uint8_t liq_cascade_cells[LIQ_CASCADE_W * LIQ_CASCADE_H];
+static sand_t  liq_cascade_sim;
+
+/* SAME SCENE SHAPE AND SAME impulse_count > 1 SIGNAL AS
+ * test_a_cascading_impulse_moves_more_than_one_cell ABOVE - see that
+ * test's own comment for why a vertical column pushed UP (against
+ * gravity, in a grid exactly as wide as the column) is what isolates a
+ * genuine multi-hop CASCADE relay from ordinary gravity or cross-flow.
+ * Run again here specifically against the new can_impulse_enter()
+ * liquid-vs-non-liquid gate: water relaying into water is the SAME kind
+ * on both sides of every hop in this chain, so the gate - which only
+ * narrows a KIND_LIQUID mover's swap into a target that is NOT liquid -
+ * must never fire once in this whole run. */
+static void test_a_water_into_water_cascade_is_untouched_by_the_liquid_fix(void)
+{
+    enum { COL = 0, TOP = 8, COL_LEN = 8, DIR_UP = 4 };
+    impulse_t buf[64];
+    sand_init(&liq_cascade_sim, liq_cascade_cells, LIQ_CASCADE_W,
+             LIQ_CASCADE_H, 1u);
+    sand_enable_impulses(&liq_cascade_sim, buf, 64);
+
+    for (int y = TOP; y < TOP + COL_LEN; y++) {
+        sand_set(&liq_cascade_sim, COL, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+
+    sand_impulse(&liq_cascade_sim, COL, TOP, DIR_UP, 255);
+
+    bool cascade_confirmed = false;
+    for (int i = 0; i < 10 && !cascade_confirmed; i++) {
+        sand_step(&liq_cascade_sim, 0, 1000, 0);
+        if (liq_cascade_sim.impulse_count > 1) {
+            cascade_confirmed = true;
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(cascade_confirmed,
+        "a same-material (water-into-water) cascade must still relay more "
+        "than one entry after can_impulse_enter()'s new liquid-vs-non-"
+        "liquid gate - the gate only narrows what happens when the target "
+        "is NOT liquid, so an all-water chain must come through completely "
+        "untouched");
 }
 
 /* --- gas ------------------------------------------------------------------ */
@@ -10179,8 +10422,8 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
         }
     }
     sand_set(&s, W / 2, H / 2, CELL_MAKE(MAT_LAVA, MASS_MAX));
-    /* This scene is exactly SAND_LAVA_BURST_COVER-or-more covered (bd
-     * esp32c6-mqt) - pinned off so this test still isolates smothered()'s
+    /* This scene puts a complete lid over the lava (bd esp32c6-mqt) -
+     * pinned off so this test still isolates smothered()'s
      * own exemption, the thing it actually names, rather than flickering
      * on the unrelated burst roll every step this cell stays covered. */
     sand_set_lava_burst(&s, 0);
@@ -10199,8 +10442,8 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
 }
 
 /* bd esp32c6-mqt: burial no longer means "lasts forever" either. A lava
- * cell covered on SAND_LAVA_BURST_COVER or more of its 5 gravity-relative
- * semi-disc cells (covered_at(), sand_priv.h - bd esp32c6-a2j) gets a
+ * cell with a complete gravity-relative lid over it (covered_at(),
+ * sand_priv.h - bd esp32c6-a2j) gets a
  * tiny per-step chance to convert to MAT_STONE and burst - the chosen
  * replacement for the vent machinery (bd esp32c6-0f2 removes that
  * separately, later) and the mechanism that reopens a sealed pool's crust
@@ -10210,8 +10453,7 @@ static void test_lava_buried_in_stone_is_not_deleted(void)
  * Exactly the same fully-walled scene test_lava_buried_in_stone_is_not_
  * deleted uses, this time with the burst chance pinned to its maximum
  * instead of pinned off - every one of the 8 surrounding cells is stone,
- * so all 5 gravity-relative ones are covered regardless of which way is
- * down.
+ * so all three lid cells are covered regardless of which way is down.
  *
  * PINS THE ONE BEHAVIOUR THE BRIEF FOR THIS CHANGE CALLS OUT BY NAME:
  * sand_explode() fills a core of radius `radius / SAND_EXPLODE_CORE_
@@ -10281,33 +10523,18 @@ static void test_buried_lava_bursts_into_stone_and_fire(void)
         "covering it, or nothing actually exploded outward");
 }
 
-/* THE THRESHOLD, REWRITTEN FOR THE GRAVITY-RELATIVE RULE (bd esp32c6-a2j).
- * Exactly SAND_LAVA_BURST_COVER - 1 (2) of the five gravity-relative
- * semi-disc cells covered must never burst, however long it runs and
- * however high the chance is pinned - the test that fails silently (goes
- * green when it should not) if covered_at()'s count or shape check were
- * ever loosened by one.
+/* A LID WITH GAPS IS NOT A LID - the test that goes green when it should
+ * not if covered_at() were ever loosened from "all three" to "any two"
+ * or "the middle one alone".
  *
- * The old version of this test built a full-width tunnel walled top and
- * bottom - under the CARDINAL rule that scene structurally pinned the
- * count at 2 (up, down), but under THIS rule "down" is excluded (it is
- * the gravity direction itself, not something that covers) and the
- * DIAGONALS are included, so that same scene now has up-left/up/up-right
- * all covered - exactly the wide-pool-under-a-crust case bd esp32c6-a2j
- * exists to make burst, not the never-bursts case any more.
- *
- * A CEILING WITH ALTERNATING HOLES gives the new structural guarantee
- * instead: stone at even columns, open at odd ones. A lava cell under an
- * open column sees its "up" neighbour empty but BOTH ceiling diagonals
- * (the even columns either side) covered - count 2, and not the
- * cardinal-triple exception either (that needs all three of up-left/up/
- * up-right, not two diagonals with the middle one open) - so it can
- * never seal. A lava cell under a solid column sees only "up" covered -
- * count 1, even further from the threshold. Every column in the scene is
- * one of the two, so the whole row structurally never reaches 3,
- * regardless of how the liquid itself moves - the same reasoning the
- * original tunnel used, adapted to the rule that replaced it. */
-static void test_lava_with_only_two_covered_sides_never_bursts(void)
+ * A CEILING WITH ALTERNATING HOLES gives the structural guarantee: stone
+ * at even columns, open at odd ones. A lava cell under an open column
+ * sees BOTH lid diagonals (the even columns either side) covered but the
+ * cell directly above it empty; a cell under a solid column sees only
+ * the cell above it, both diagonals open. Every column in the scene is
+ * one of the two, so no cell in the row ever has all three, regardless
+ * of how the liquid itself moves. */
+static void test_lava_under_a_lid_with_gaps_never_bursts(void)
 {
     fixture();
     sand_clear(&s);
@@ -10330,75 +10557,115 @@ static void test_lava_with_only_two_covered_sides_never_bursts(void)
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(before, liquid_mass_of(MAT_LAVA),
-        "a lava cell covered on only 2 of its 5 gravity-relative semi-disc "
-        "cells must never burst, no matter how high the chance is pinned "
-        "or how long it runs - SAND_LAVA_BURST_COVER is 3, not 2, and 2 "
-        "covered diagonals either side of an open 'up' is not the "
-        "cardinal-triple exception either");
+        "a lava cell under a lid with a gap in it - both diagonals covered "
+        "and the cell above open, or the cell above covered and both "
+        "diagonals open - must never burst, no matter how high the chance "
+        "is pinned or how long it runs: all three lid cells, not any two");
 }
 
-/* THE REJECTED PATTERNS STAY REJECTED - bd esp32c6-a2j. A broader version
- * of the cardinal-triple exception ("any single-diagonal gap flanked by
- * two covered cardinals") was considered while settling this rule with
- * the user and REJECTED: it would also let {up-left, up, right} and
- * {up, up-right, left} seal, in portrait, and the user's own exhaustive
- * diagrams excluded both. This is the test that catches the exception
- * being "helpfully" generalised back to that wrong, broader version
- * later - see cover_seals()'s own comment (sand_priv.h) for the full
- * reasoning.
+/* THE SIDES OF A BASIN ARE NOT A LID - the 2026-09-03 revision of bd
+ * esp32c6-a2j's rule. A finger-drawn stone wall is never flat: each
+ * brush disc bulges past the one below it, so the inner face has a
+ * one-cell notch every brush step, and lava settling into that notch
+ * sees wall on its side, wall on the diagonal above that side, and wall
+ * directly above - three covering cells in a contiguous run. Under the
+ * 5-cell semi-disc rule that sealed, so every notch on both walls of an
+ * ordinary hand-drawn basin rolled the burst every step and the walls
+ * blew out from the inside as the lava settled (reproduced on the host:
+ * a clean one-cell wall never produced a single eligible cell, a
+ * brush-drawn one did within 16 steps and breached by step 62 at natural
+ * odds). The pool's surface is wide open a cell to the side, so nothing
+ * is under pressure there; the sides were counting as cover.
  *
- * Calls cover_mask()/cover_seals() directly rather than through a
- * stepped scene: both patterns fail on SHAPE, not on count (each has
- * exactly 3 of the 5 cells covered, meeting SAND_LAVA_BURST_COVER), so
- * the only way to pin "count is enough but shape must still say no" down
- * exactly is to ask the primitive the question directly rather than
- * inferring it from whether a stochastic burst happened to fire within
- * some step budget. */
-static void test_rejected_semi_disc_patterns_stay_rejected(void)
+ * The rule is now "lid only": the three anti-gravity cells, all of them,
+ * and the two perpendiculars never count. Both notch shapes - {up-left,
+ * up, left} on the left wall and {up, up-right, right} on the right -
+ * must therefore never burst, however long it runs and however high the
+ * chance is pinned. The walls' intact-stone count is the assertion, not
+ * the notch cells' own material, because a burst that fires is what
+ * takes the wall out. */
+static void test_lava_in_a_wall_notch_never_bursts(void)
 {
     fixture();
     sand_clear(&s);
-    s.last_load_dx = 0;
-    s.last_step_dy = 1;   /* portrait: gravity straight down */
+    for (int y = 0; y < H; y++) {
+        sand_set(&s, 0, y, STONE);   /* left wall, two thick */
+        sand_set(&s, 1, y, STONE);
+        sand_set(&s, 6, y, STONE);   /* right wall, two thick */
+        sand_set(&s, 7, y, STONE);
+    }
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, 7, STONE);   /* floor */
+    }
+    sand_set(&s, 2, 2, STONE);       /* the brush bulge over each notch */
+    sand_set(&s, 5, 2, STONE);
+    for (int y = 3; y <= 6; y++) {
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_LAVA, MASS_MAX));
+        }
+    }
+    /*   ##....##
+     *   ##....##
+     *   ###..###   <- bulges at (2,2) and (5,2)
+     *   ##LLLL##   <- notch cells (2,3) and (5,3), open above at x 3..4
+     *   ##LLLL##
+     *   ##LLLL##
+     *   ##LLLL##
+     *   ########                                                        */
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 2)) &&
+                             CELL_IS_EMPTY(sand_at(&s, 4, 2)),
+        "fixture check: the pool's surface is open to the air between the "
+        "two bulges - this is a basin, not a sealed pocket");
 
-    /* Arc order for gravity down (cover_mask()'s own comment): bit 0 =
-     * right, bit 1 = up-right, bit 2 = up, bit 3 = up-left, bit 4 = left. */
-    const unsigned up_left_up_right = (1u << 3) | (1u << 2) | (1u << 0);
-    const unsigned up_up_right_left = (1u << 2) | (1u << 1) | (1u << 4);
+    int stone_before = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            stone_before += CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STONE;
+        }
+    }
 
-    TEST_ASSERT_FALSE_MESSAGE(
-        cover_seals(&s, up_left_up_right, SAND_LAVA_BURST_COVER),
-        "{up-left, up, right} covered, up-right and left open - an open "
-        "diagonal (up-right) flanked by two covered cardinals (up, "
-        "right), but NOT the exact cardinal-triple - must stay rejected");
-    TEST_ASSERT_FALSE_MESSAGE(
-        cover_seals(&s, up_up_right_left, SAND_LAVA_BURST_COVER),
-        "{up, up-right, left} covered, up-left and right open - the "
-        "mirror image of the pattern above, must also stay rejected");
+    impulse_t *buf = malloc((size_t)(W * H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "wall-notch impulse queue must fit in what the framebuffer leaves");
+    sand_enable_impulses(&s, buf, W * H);
+    sand_set_lava_burst(&s, 255);
+
+    for (int i = 0; i < 500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    int stone_after = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            stone_after += CELL_MATERIAL(sand_at(&s, x, y)) == MAT_STONE;
+        }
+    }
+    free(buf);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(stone_before, stone_after,
+        "lava settled into a notch on a basin's inner wall - wall to its "
+        "side, wall on the diagonal above that side, wall directly above, "
+        "open air a cell over - must never burst, however high the chance "
+        "is pinned: the two perpendiculars are not part of the lid, and a "
+        "burst here is what blows the side out of every hand-drawn basin");
 }
 
-/* THE EXHAUSTIVE SHAPE TABLE - bd esp32c6-a2j. A rule that rotates with
- * gravity and is only ever exercised at one rotation is not really
- * tested, so this drives cover_mask()/cover_seals() (sand_priv.h)
- * directly, at each of the 8 ring directions, over every one of the 256
- * ways to paint the full 8-neighbour ring covered or open - not just the
- * 32 combinations of the 5 cells that end up eligible. Every combo first
- * checks that cover_mask() equals a mask built independently from that
- * combo's own bits at the 5 eligible ring positions (ring_of()/
- * ring_dir(), not cover_mask()'s own logic checked against itself) -
- * proving it genuinely ignores the 3 cells gravity excludes, not merely
- * that it is never asked about them - and only the 32 combos where those
- * 3 excluded bits are all 0 feed the count/shape tally below, so each of
- * the 32 distinct 5-bit patterns is tallied exactly once despite
- * appearing 8 times across the full 256.
- *
- * The counts checked are the user's own settled acceptance data (bd
- * esp32c6-a2j's notes): the four axis-aligned gravity directions each
- * admit exactly 4 valid shapes at exactly-3-covered (7 valid in total);
- * the four diagonal directions admit only 3 at exactly-3 (6 total),
- * because a diagonal gravity's semi-disc holds only two cardinals, so
- * the cardinal-triple exception can never arise there - inherent to the
- * rule, not a defect (see cover_seals()'s own comment). */
+/* THE EXHAUSTIVE SHAPE TABLE. A rule that rotates with gravity and is
+ * only ever exercised at one rotation is not really tested, so this
+ * drives cover_mask()/covered_at() (sand_priv.h) directly, at each of the
+ * 8 ring directions, over every one of the 256 ways to paint the full
+ * 8-neighbour ring covered or open. Every combo first checks that
+ * cover_mask() equals a mask built independently from that combo's own
+ * bits at the 3 lid positions (ring_of()/ring_dir(), already covered by
+ * their own tests elsewhere - not cover_mask()'s own logic checked
+ * against itself), proving it genuinely ignores the 5 cells gravity
+ * excludes - the two PERPENDICULARS included, the cells whose counting
+ * blew the sides out of hand-drawn basins (see
+ * test_lava_in_a_wall_notch_never_bursts above) - and not merely that it
+ * is never asked about them. Then covered_at() must be true for exactly
+ * the combos with all three lid cells painted and no other: 32 of the
+ * 256, the same at every gravity direction, axis-aligned or diagonal.
+ * The semi-disc rule this replaced had 7 valid shapes at axis-aligned
+ * gravity and 6 at diagonal; the lid rule has one, everywhere. */
 static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
 {
     fixture();
@@ -10411,11 +10678,12 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
         const int *grav = ring_dir(g);
         s.last_load_dx = grav[0];
         s.last_load_dy = grav[1];
-        const bool axis_aligned = (g & 1) == 0;
         const int anti = g + 4;   /* ring_of(grav) is just g */
+        const unsigned lid_ring_bits = (1u << ((anti + 7) & 7)) |
+                                       (1u << (anti & 7)) |
+                                       (1u << ((anti + 1) & 7));
 
-        int valid_at_3 = 0;
-        int valid_total = 0;
+        int sealed = 0;
         for (unsigned combo = 0; combo < 256u; combo++) {
             for (int i = 0; i < 8; i++) {
                 const int *d = ring_dir(i);
@@ -10424,59 +10692,30 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
             }
 
             const unsigned mask = cover_mask(&s, cx, cy, W, H, density);
-
-            /* PROVES THE 3 EXCLUDED RING POSITIONS ARE GENUINELY IGNORED,
-             * not merely never exercised: `expected` is built straight
-             * from `combo`'s own bits at the 5 eligible ring positions
-             * (ring_of()/ring_dir(), already covered by their own tests
-             * elsewhere - not cover_mask()'s own logic being checked
-             * against itself), independent of whatever the other 3 bits
-             * of this combo happen to be. */
             unsigned expected = 0;
-            for (int i = 0; i < 5; i++) {
-                const int ring_pos = (anti - 2 + i) & 7;
-                if (combo & (1u << ring_pos)) {
+            for (int i = 0; i < 3; i++) {
+                if (combo & (1u << ((anti - 1 + i) & 7))) {
                     expected |= 1u << i;
                 }
             }
             TEST_ASSERT_EQUAL_INT_MESSAGE((int)expected, (int)mask,
-                "cover_mask() must depend only on the 5 eligible ring "
-                "positions, read in ring order, and nothing else");
+                "cover_mask() must depend only on the 3 lid ring positions, "
+                "read in ring order, and nothing else - not the "
+                "perpendiculars, not anything gravity-ward");
 
-            /* Tallied once per distinct 5-bit PATTERN, not once per raw
-             * combo - each pattern reappears 8 times across the 256
-             * combos (once per setting of the 3 excluded bits, which the
-             * assertion just above already proved cannot change the
-             * mask), so only counting it when those 3 bits are 0 avoids
-             * inflating the counts eightfold. */
-            const unsigned excluded_bits =
-                (1u << ((anti + 3) & 7)) | (1u << ((anti + 4) & 7)) |
-                (1u << ((anti + 5) & 7));
-            if ((combo & excluded_bits) != 0) {
-                continue;
-            }
-
-            unsigned count = 0;
-            for (unsigned b = 0; b < 5u; b++) {
-                count += (mask >> b) & 1u;
-            }
-            if (cover_seals(&s, mask, SAND_LAVA_BURST_COVER)) {
-                valid_total++;
-                if (count == (unsigned)SAND_LAVA_BURST_COVER) {
-                    valid_at_3++;
-                }
-            }
+            const bool lid_complete = (combo & lid_ring_bits) == lid_ring_bits;
+            TEST_ASSERT_EQUAL_MESSAGE(lid_complete,
+                covered_at(&s, cx, cy, W, H, density),
+                "covered_at() must be true exactly when all three lid cells "
+                "are covered, whatever the other five hold");
+            sealed += lid_complete;
         }
 
-        const int expected_at_3 = axis_aligned ? 4 : 3;
-        const int expected_total = axis_aligned ? 7 : 6;
-        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_at_3, valid_at_3,
-            "wrong count of exactly-3-covered valid shapes at this "
-            "gravity direction - ring_dir()'s index tells axis-aligned "
-            "(even) from diagonal (odd)");
-        TEST_ASSERT_EQUAL_INT_MESSAGE(expected_total, valid_total,
-            "wrong total count of valid (sealed) shapes at this gravity "
-            "direction");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(32, sealed,
+            "exactly 32 of the 256 ring paintings carry a complete lid (the "
+            "other five cells free to be anything), at every gravity "
+            "direction alike - there is no axis-aligned/diagonal asymmetry "
+            "left in this rule");
     }
 }
 
@@ -10487,11 +10726,10 @@ static void test_cover_primitive_matches_the_exhaustive_shape_table(void)
  * comment and bd esp32c6-a2j's own notes for why): the tested cell's
  * left, right AND below neighbours are all more lava - KIND_LIQUID,
  * which neighbor_smothers() never counts - so under the OLD screen-fixed
- * cardinal rule only "up" ever counted, for a count of 1, nowhere near
- * SAND_LAVA_BURST_COVER's 3. Under THIS rule the crust's two diagonal
- * cells count too: up-left, up and up-right are all crust, for a count
- * of 3, contiguous, sealed - regardless of what the pool does below or
- * beside the tested cell. */
+ * cardinal rule only "up" ever counted, one of the three it needed.
+ * Under THIS rule up-left, up and up-right are the whole question, and
+ * all three are crust - a complete lid, regardless of what the pool does
+ * below or beside the tested cell. */
 static void test_a_wide_pool_under_a_crust_bursts(void)
 {
     fixture();
@@ -10560,11 +10798,11 @@ static void test_a_wide_pool_under_a_crust_bursts(void)
  * screen-y instead of screen-x, sealed by a crust to its LEFT instead of
  * above it, driven by genuine sideways gravity (gx=1000, gy=0) so
  * gravity-relative "up" is screen-LEFT. Under the correct rule the
- * interior test cell's three "above" neighbours (left, up-left,
- * down-left, gravity-relative) are all crust - count 3, contiguous,
- * sealed. Under a regression hardcoded to screen-up, the same cell would
- * see only up-left and left as covered (screen-up and up-right are more
- * lava) - count 2, never bursts. */
+ * interior test cell's three lid cells (left, up-left, down-left,
+ * gravity-relative) are all crust - a complete lid. Under a regression
+ * hardcoded to screen-up, the same cell's lid would be up-left, up and
+ * up-right, of which only up-left is stone (the other two are more
+ * lava) - never bursts. */
 static void test_a_wide_pool_under_a_sideways_crust_bursts(void)
 {
     fixture();
@@ -10831,7 +11069,35 @@ static void test_a_powder_lands_on_a_powder_but_sinks_in_a_liquid(void)
             }
         }
         for (int x = 2; x < W - 2; x++) {
-            sand_set(&s, x, 1, CELL_MAKE(dropped, 4));
+            /* BONE DRY (variant 0), not the 4 this used to carry. Variant
+             * IS moisture for a soil material (CELL_MOISTURE(),
+             * material.h) - so a dropped DIRT grain here used to start
+             * able to soak and percolate into the bed underneath it,
+             * which has nothing to do with the displacement rule this
+             * test exists to check and everything to do with
+             * reaction_t.soaks and SOIL_PERCOLATE_CHANCE
+             * (sand_reactions.c). A wet grain COULD, over the run, turn a
+             * few deep bed cells into MAT_DIRT of their own by soaking
+             * alone - not by falling through anything - and this test's
+             * own measurement (lowest cell of `dropped`'s material)
+             * cannot tell that apart from the grain having actually
+             * sunk. Reported after PART 2 of the roots-and-percolation
+             * change slowed the downward soaking rate: the change
+             * shifted the shared RNG stream from that point on (this
+             * file's own repeated warning - see try_ignite() and
+             * step_one_soaking_cell()'s own top comments), and the new
+             * roll sequence happened to soak far enough to reach the
+             * bed's own floor within this test's 300 steps where the old
+             * one had not. The dropped grain itself was never displaced
+             * either way - confirmed by inspecting the grid directly -
+             * this test was only ever passing by an accident of which
+             * rolls the RNG happened to produce, not because it was
+             * pinning the rule it names. Starting bone dry removes the
+             * soaking side channel entirely, on both SAND and DIRT
+             * (SAND's variant is a shade and was never affected either
+             * way), so this test is only ever sensitive to displacement
+             * again, whatever the soaking rates are tuned to next. */
+            sand_set(&s, x, 1, CELL_MAKE(dropped, 0));
         }
 
         for (int i = 0; i < 300; i++) {
@@ -13200,12 +13466,1441 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
         "limit it, since it happens at the foot of the trunk");
 }
 
+/* --- roots ----------------------------------------------------------------
+ *
+ * Dirt is a powder and shifts. When the soil directly under a tree's
+ * collar slides away, find_water()'s own stem walk finds neither stem nor
+ * ground below it and the tree simply stops growing - stranded above
+ * water it can no longer reach. As a plant or a trunk spends the soil
+ * moisture it grows on, there is a small chance the soil cell it drank
+ * through welds into a ROOT instead of staying a grain of dirt -
+ * KIND_STATIC, holds still, and cannot be carried away the way loose
+ * dirt can. See reaction_t.roots and the top of docs/Sand/Sand-
+ * Simulation.md's tree-feeding section. */
 
-/* Plant, leaf, ice and metal all take their texture from the position hash,
- * and everything else extended does not. Metal alone is HATCHED rather than
- * SPECKLED - it is the only one of the four with a travelling shine on top
- * of its grain (see metal_dither/metal_shine's own comment in material.c) -
- * so it gets its own pattern check instead of sharing the other three's.
+/* A watered plant growing on a dirt bed eventually puts a root into the
+ * soil under it. The simplest possible claim this feature makes, and the
+ * one every other root test in this file assumes already holds.
+ *
+ * REPLANTED every 40 steps rather than left to grow once. A single seed's
+ * own canopy fills the handful of cells its growth can reach and then
+ * stops spending moisture at all - measured, a single seed left alone for
+ * 30000 steps produced barely a dozen spend events in total, nowhere
+ * near enough independent tries at a ~3% root roll (reaction_t.roots).
+ * Clearing the canopy and planting a fresh seed on the same spot gives
+ * that roll a fresh, independent attempt at the SAME collar every cycle -
+ * see test_a_rooted_collar_survives_the_bed_shifting_away's own scene 1,
+ * which hits the identical wall and fixes it the same way. */
+static void test_a_watered_plant_roots_into_the_soil_it_drinks_from(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+
+    int rooted = 0;
+    for (int cycle = 0; cycle < 200 && !rooted; cycle++) {
+        for (int y = 0; y < H - 2; y++) {
+            for (int x = 0; x < W; x++) {
+                sand_set(&s, x, y, SAND_EMPTY);
+            }
+        }
+        for (int x = 0; x < W; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, H - 2)) == MAT_DIRT) {
+                sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
+        }
+        sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+        for (int i = 0; i < 40 && !rooted; i++) {
+            sand_step(&s, 0, 1000, 0);
+            for (int y = 0; y < H && !rooted; y++) {
+                for (int x = 0; x < W; x++) {
+                    if (sand_at(&s, x, y) == MATX(MATX_ROOT)) {
+                        rooted = 1;
+                    }
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(rooted,
+        "a plant growing on watered soil must eventually weld a root "
+        "into the ground it drinks from - without this, a tree only "
+        "ever rests on the soil it grew from rather than being embedded "
+        "in it");
+}
+
+/* A root is not is_kin() of the wood it anchors - and that is exactly
+ * right, not an oversight. anchored() only asks whether something
+ * GRAVITY-WARD of a kin body is non-kin (sand_reactions.c, is_kin()'s
+ * own comment - "three earlier versions... each looked sufficient and
+ * each was wrong on the board"), so a root counts as support the same
+ * way bare ground would, without needing to be treated as more tree.
+ * Verified directly rather than reasoned about, for the same reason
+ * anchored()'s own comment gives.
+ *
+ * The root here rests on NOTHING - empty space all the way down. If
+ * anchoring depended on the root itself being supported by something
+ * else, or on the root reading as more tree rather than as ground,
+ * this would fall; a root is inert regardless of what is under it
+ * (extended_reactions[MATX_ROOT] sets no `.falls`), so the only thing
+ * keeping the whole structure in place is is_kin() correctly saying a
+ * root is NOT more of the plant's own body. */
+static void test_a_trunk_standing_on_its_own_root_is_anchored(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    sand_set(&s, cx, H - 3, MATX(MATX_ROOT));
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, cx, H - 5, CELL_MAKE(MAT_WOOD, 0));
+    /* Diagonally off the top of it, touching nothing else - the same
+     * shape test_a_limb_hangs_on_to_a_wooden_trunk uses above, so a
+     * limb that only ever looked anchored by luck of a squarer test
+     * geometry cannot pass this one by accident either. */
+    sand_set(&s, cx + 1, H - 6, MATX(MATX_PLANT));
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 3),
+        "the root itself must not have moved - it holds still regardless "
+        "of what is or is not beneath it");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_PLANT),
+        sand_at(&s, cx + 1, H - 6),
+        "a limb growing off a trunk that stands on nothing but a root "
+        "must stay exactly where it grew - if the root were mistaken "
+        "for more of the tree's own body instead of something the tree "
+        "rests ON, this whole structure would read as unsupported and "
+        "come down");
+}
+
+/* DELETED: test_roots_never_go_deeper_than_the_depth_cap used to live
+ * here, replanting a seed on the same deep bed for 300 cycles and
+ * asserting the resulting root column never ran past ROOT_DEPTH_MAX
+ * (4) cells below the collar. That constant is gone - see sand_
+ * reactions.c's own RETIRED comment where it used to be defined - along
+ * with the mechanism it bounded: PART 1 (the collar seed) now only ever
+ * fires once per tree, and PART 2 (step_one_rooting_cell(), local
+ * neighbour-eating) is bounded by ROOT_SURFACE_MAX instead, which does
+ * not reason about depth from a collar at all. There is no version of
+ * this test's claim left to make honest - a root system grown by PART 2
+ * is not a single contiguous column counted from a fixed origin, so
+ * "how deep is IT" is not a question with one answer the way it used to
+ * be. See test_a_root_column_reaches_below_the_collar just below for
+ * what still holds instead: roots never appear above the collar, and
+ * the system still both deepens and spreads given the chance to. */
+
+/* A tree standing on a pre-placed root column still grows as tall as one
+ * standing straight on soil - the test that pins the reason roots are
+ * their own material rather than more wood. find_water()'s stem walk
+ * must pass through a root without charging it against `lift`, or a
+ * handful of root cells would eat a real share of TREE_LIFT for every
+ * tree that ever roots at all.
+ *
+ * NOT measured by growing a tree from a seed and comparing final
+ * heights. A single, unreplanted tree plateaus at 7-8 cells long before
+ * it gets anywhere near TREE_LIFT = 10 (measured: 6000 steps changed
+ * nothing) - hardening and a crowded local neighbourhood stop it cold,
+ * the same wall test_a_watered_plant_roots_into_the_soil_it_drinks_from's
+ * own top comment describes for a single seed's own spend events. That
+ * plateau sits well clear of the cap either way, so comparing final
+ * heights this way never actually exercises TREE_LIFT and would pass
+ * identically whether or not roots were silently being charged against
+ * it.
+ *
+ * So this builds the stem PRE-GROWN, right at the boundary, and asks
+ * one direct question: does the tip's very next growth roll succeed? */
+#define LIFT_TEST_W 8
+#define LIFT_TEST_H 24
+
+/* `stem` cells stacked directly on `roots` cells of pre-placed root (0
+ * for none), which sit on a saturated dirt bed. Only the TOPMOST cell of
+ * the stem is MATX_PLANT; every cell below it is already MAT_WOOD.
+ *
+ * That split matters more than it looks. Every cell of a stem that is
+ * still soft plant is independently eligible to roll `grows` - and a
+ * cell low down, close to the collar, has a small `lift` of its own and
+ * can branch or thicken there regardless of what the actual TIP is
+ * capped at. An all-plant stem exercised exactly that: an eleven-cell
+ * control meant to prove TREE_LIFT actually blocks something instead
+ * grew anyway, from a low cell nowhere near the cap, and proved nothing.
+ * Wood does not grow at all (reactions[MAT_WOOD] has no `.grows`), so
+ * hardening everything except the tip leaves exactly one cell in the
+ * whole scene that can ever add a plant or wood cell - the tip itself,
+ * at the lift this test means to test. (Wood can still bud or sprout,
+ * but neither is lift-gated and neither one's product - MATX_LEAF, or a
+ * root - is counted below, so neither can read as "the tip grew".)
+ *
+ * Returns whether the tip grows at least one cell further within a
+ * short run - measured across the WHOLE grid, not one column, since a
+ * successful growth roll can lean or branch sideways from the tip
+ * rather than only ever extending straight up. */
+static bool lift_boundary_grows(int stem, int roots)
+{
+    uint8_t *grid = malloc((size_t)LIFT_TEST_W * LIFT_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "lift-boundary grid must fit in what the framebuffer leaves");
+
+    sand_t t;
+    sand_init(&t, grid, LIFT_TEST_W, LIFT_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx      = LIFT_TEST_W / 2;
+    const int floor_y = LIFT_TEST_H - 1;
+    const int bed_top = floor_y - 3;
+
+    for (int x = 0; x < LIFT_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = bed_top; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+    }
+    for (int y = bed_top - roots; y < bed_top; y++) {
+        sand_set(&t, cx, y, MATX(MATX_ROOT));
+    }
+    const int stem_top = bed_top - roots - stem;
+    for (int y = stem_top + 1; y < bed_top - roots; y++) {
+        sand_set(&t, cx, y, CELL_MAKE(MAT_WOOD, 0));
+    }
+    sand_set(&t, cx, stem_top, MATX(MATX_PLANT)); /* the one grower */
+
+    int total_before = 0;
+    for (int y = 0; y < floor_y; y++) {
+        for (int x = 0; x < LIFT_TEST_W; x++) {
+            const cell_t c = sand_at(&t, x, y);
+            if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
+                total_before++;
+            }
+        }
+    }
+
+    bool grew = false;
+    for (int i = 0; i < 400 && !grew; i++) {
+        sand_step(&t, 0, 1000, 0);
+        int total_now = 0;
+        for (int y = 0; y < floor_y; y++) {
+            for (int x = 0; x < LIFT_TEST_W; x++) {
+                const cell_t c = sand_at(&t, x, y);
+                if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
+                    total_now++;
+                }
+            }
+        }
+        if (total_now > total_before) {
+            grew = true;
+        }
+    }
+    free(grid);
+    return grew;
+}
+
+static void test_a_root_column_does_not_spend_the_trees_lift(void)
+{
+    /* TWO CONTROLS FIRST, or the boundary below proves nothing. TREE_LIFT
+     * is 10 (sand_reactions.c): a ten-cell stem's tip sits at lift 9, the
+     * last position still under the cap, so it must still be able to put
+     * out an eleventh cell; an eleven-cell stem's tip sits at lift 10 and
+     * must NOT be able to put out a twelfth. Without both of these
+     * holding, a change to either side of that boundary could not be
+     * blamed on roots specifically. */
+    TEST_ASSERT_TRUE_MESSAGE(lift_boundary_grows(10, 0),
+        "control: a plain ten-cell stem must still be able to grow one "
+        "more cell - if this fails, the boundary below proves nothing "
+        "about roots specifically");
+    TEST_ASSERT_FALSE_MESSAGE(lift_boundary_grows(11, 0),
+        "control: an eleven-cell stem must NOT grow further - TREE_LIFT "
+        "is 10, and this is the cap actually engaging; if this passes, "
+        "growth was never bounded here and the comparison below proves "
+        "nothing either");
+
+    /* THE CLAIM: the same ten-cell stem, standing on 3 cells of
+     * pre-placed root instead of directly on soil, must grow exactly as
+     * readily. If root cells were silently counted against TREE_LIFT
+     * (as `*lift` briefly was, from reusing find_water()'s own walk
+     * counter for both kinds of cell it crosses), this stem would
+     * already read as 3 over the cap and never grow again - the same
+     * failure the eleven-cell control above pins, reached from the
+     * other direction. */
+    TEST_ASSERT_TRUE_MESSAGE(lift_boundary_grows(10, 3),
+        "a ten-cell stem standing on 3 cells of root must still be able "
+        "to grow one more cell, the same as standing straight on soil - "
+        "a root must cost the tree no TREE_LIFT at all");
+}
+
+/* A root with dirt piled back on top of it does not cut the tree off
+ * from the water below it. Dirt shifts, so a root that formed at a
+ * collar can end up buried under fresh soil later - and without the
+ * transparency fix in find_water()'s own soil walk, a root would look
+ * exactly like the dead end it exists to prevent, reintroducing the bug
+ * from the other side.
+ *
+ * A DEEP wet reserve below the root, not the original single row - since
+ * PART 2 of the roots feature, a root sitting directly on its only
+ * reachable water is itself a second consumer of that exact cell
+ * (step_one_rooting_cell(), sand_reactions.c): given enough steps it
+ * will eventually eat the very cell this test's ORIGINAL one-row version
+ * depended on and convert it to more root, which the soil walk then
+ * crosses too, arriving at stone with nothing left to find - a real
+ * race between the root's own slow, serial, one-cell-at-a-time eating
+ * and the tree's growth roll, and for the fixed seed this suite always
+ * runs with, the root used to win it (measured: FAILED, deterministically,
+ * against the single-row version). That is not the transparency bug this
+ * test exists to catch - find_water()'s own walk was never touched by
+ * PART 2 - it is the new mechanism competing for the one cell of water
+ * the old, narrower scene happened to offer. Six rows deep is far more
+ * than the root can plausibly eat through (each conversion needs its own
+ * independent roll, one cell at a time, only ever on the single newest
+ * cell of the column) before the tree's own, faster-firing growth roll
+ * succeeds at least once - which is the actual claim under test. */
+#define BURIED_ROOT_TEST_W 8
+#define BURIED_ROOT_TEST_H 16
+#define BURIED_ROOT_WET_ROWS 6
+
+static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
+{
+    uint8_t *grid = malloc((size_t)BURIED_ROOT_TEST_W * BURIED_ROOT_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "buried-root grid must fit in what the framebuffer leaves");
+
+    sand_t t;
+    sand_init(&t, grid, BURIED_ROOT_TEST_W, BURIED_ROOT_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx      = BURIED_ROOT_TEST_W / 2;
+    const int floor_y = BURIED_ROOT_TEST_H - 1;
+    const int wet_top = floor_y - BURIED_ROOT_WET_ROWS; /* the real water */
+    const int root_y  = wet_top - 1;                    /* buried */
+    const int dry_y    = root_y - 1;                    /* piled back on later */
+    const int plant_y  = dry_y - 1;
+
+    for (int x = 0; x < BURIED_ROOT_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = wet_top; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_set(&t, x, dry_y, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+    sand_set(&t, cx, root_y, MATX(MATX_ROOT));
+    sand_set(&t, cx, plant_y, MATX(MATX_PLANT));
+
+    int before = 0;
+    for (int y = 0; y < BURIED_ROOT_TEST_H; y++) {
+        const cell_t c = sand_at(&t, cx, y);
+        if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
+            before++;
+        }
+    }
+
+    int grew = 0;
+    for (int i = 0; i < 2000 && !grew; i++) {
+        sand_step(&t, 0, 1000, 0);
+        int now = 0;
+        for (int y = 0; y < BURIED_ROOT_TEST_H; y++) {
+            const cell_t c = sand_at(&t, cx, y);
+            if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD) {
+                now++;
+            }
+        }
+        if (now > before) {
+            grew = 1;
+        }
+    }
+    free(grid);
+    TEST_ASSERT_TRUE_MESSAGE(grew,
+        "a plant standing over dry dirt, a buried root and wet dirt in "
+        "that order must still be able to grow - the buried root has to "
+        "be transparent to the soil walk, or dirt piled back on top of "
+        "it would cut the tree off from the water below its own root");
+}
+
+/* Roots go DOWN, not just sideways along the surface - AND sideways, not
+ * just down.
+ *
+ * RETIRED CLAIM, and why: this test used to assert that the very FIRST
+ * conversion after a pre-placed collar root landed directly BELOW it
+ * rather than beside it, back when PART 1's collar-welding walk was the
+ * entire feature and "does the column go down at all" was a real
+ * question - see the old walk's own bug, preserved in git history, where
+ * find_water()'s scan found loose dirt diagonally beside a root before
+ * it ever crossed the root itself. That bug lived in find_water(), which
+ * PART 2 (step_one_rooting_cell(), sand_reactions.c) never touches, and
+ * "the very first conversion" is not even a well-formed question for a
+ * local rule with no fixed direction preference: every one of a root
+ * cell's moist neighbours is an equally valid candidate, so which one
+ * gets eaten first is exactly as informative as which one a coin lands
+ * on. What is still true, and still worth pinning, is the SHAPE over the
+ * whole run: nothing above the collar (gravity did not stop applying),
+ * and the system both deepens and spreads given the chance to, since a
+ * root that only ever did one of the two would not read as a root
+ * system either. */
+#define REACH_TEST_W 16
+#define REACH_TEST_H 12
+
+static void test_a_root_column_reaches_below_the_collar(void)
+{
+    uint8_t *grid = malloc((size_t)REACH_TEST_W * REACH_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "root-reach grid must fit in what the framebuffer leaves");
+
+    sand_t t;
+    sand_init(&t, grid, REACH_TEST_W, REACH_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx        = REACH_TEST_W / 2;
+    const int floor_y    = REACH_TEST_H - 1;
+    const int collar_y   = floor_y - 8; /* eight rows of saturated dirt
+                                          * below the collar, and the
+                                          * full width beside it, so the
+                                          * system has real room to grow
+                                          * both ways */
+
+    for (int x = 0; x < REACH_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = collar_y; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+    }
+    sand_set(&t, cx, collar_y - 1, CELL_MAKE(MAT_WOOD, 0)); /* shelters
+                                                              * the seed
+                                                              * root so
+                                                              * this test
+                                                              * is not
+                                                              * confounded
+                                                              * by rot */
+    sand_set(&t, cx, collar_y, MATX(MATX_ROOT)); /* the collar, already
+                                                   * rooted - PART 2 needs
+                                                   * no growing plant at
+                                                   * all to run, only a
+                                                   * root cell with a
+                                                   * moist neighbour */
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&t, 0, 1000, 0);
+    }
+
+    int above_collar = 0, max_depth = 0, max_half_width = 0;
+    for (int y = 0; y < REACH_TEST_H; y++) {
+        for (int x = 0; x < REACH_TEST_W; x++) {
+            if (sand_at(&t, x, y) != MATX(MATX_ROOT)) {
+                continue;
+            }
+            if (y < collar_y) {
+                above_collar = 1;
+            }
+            const int depth = y - collar_y;
+            if (depth > max_depth) {
+                max_depth = depth;
+            }
+            const int hw = (x > cx) ? (x - cx) : (cx - x);
+            if (hw > max_half_width) {
+                max_half_width = hw;
+            }
+        }
+    }
+    free(grid);
+
+    TEST_ASSERT_FALSE_MESSAGE(above_collar,
+        "a root must never appear above the collar row - gravity still "
+        "applies to where a tree's own footing can be, even though the "
+        "eating rule itself has no direction weights");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2, max_depth,
+        "over this run the system must still reach at least two rows "
+        "below the collar - a root system that never deepens is not one, "
+        "however wide it spreads");
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(2, max_half_width,
+        "and it must spread at least two columns to either side - a "
+        "single straight column is the shape this feature moved away "
+        "from, not the one it is aiming for");
+}
+
+/* Lava reaching a root burns it out; a flame reaching one does nothing.
+ *
+ * The asymmetry is the point and is deliberate on both sides: fire must
+ * not be able to eat a tree's anchor from under it (see MATX_ROOT's own
+ * row), but molten rock under a tree should light it from the roots up.
+ * A root has no variant to bank a heat ramp in, so the two are told apart
+ * at the SOURCE - reaction_t.melts fires only from a burning liquid.
+ *
+ * Walled in with stone so the lava cannot run off sideways and the only
+ * cell it touches is the root beneath it. */
+static void test_lava_burns_a_root_out_of_the_ground(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, cx, H - 2, MATX(MATX_ROOT));
+    /* Sheltered by a trunk beside it, for the same reason the fire test
+     * just below is: an orphaned root ROTS (reaction_t.withers), and the
+     * first version of this passed with the melt path deleted outright -
+     * the root was simply rotting inside the 400 steps. Diagonal to the
+     * lava, so the wood is out of its four-neighbour reach. */
+    sand_set(&s, cx - 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, cx + 1, H - 2, STONE);
+    sand_set(&s, cx - 1, H - 3, STONE);
+    sand_set(&s, cx + 1, H - 3, STONE);
+    sand_set(&s, cx, H - 3, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    int gone = 0;
+    for (int i = 0; i < 400 && !gone; i++) {
+        sand_step(&s, 0, 1000, 0);
+        gone = (sand_at(&s, cx, H - 2) != MATX(MATX_ROOT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(gone,
+        "lava sitting on a root must burn it out - a root ignores flame, "
+        "but molten rock is the one heat that reaches it (and with a trunk "
+        "beside it the root cannot have merely rotted, so the melt is the "
+        "only door left)");
+}
+
+static void test_fire_leaves_a_root_alone(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, cx, H - 2, MATX(MATX_ROOT));
+    /* Sheltered by a trunk beside it, or the first version of this test
+     * failed for the wrong reason: an orphaned root on bare stone ROTS
+     * (reaction_t.withers), and 400 steps at 1 in 256 is plenty for that.
+     * Diagonal to the flame, not cardinal, so the wood itself is never
+     * the thing that catches. */
+    sand_set(&s, cx - 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
+
+    for (int i = 0; i < 400; i++) {
+        /* Held against it - fire is a gas and drifts off in a step or two,
+         * so a single cell of it would test one lick, not sustained heat. */
+        sand_set(&s, cx, H - 3, CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1));
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 2),
+            "a root must ignore fire - flammability 0 and heat_chance 0 are "
+            "both deliberate, and `melts` must not have opened a side door "
+            "for a gas");
+    }
+}
+
+/* An orphaned root rots; a root under a living tree does not.
+ *
+ * Roots were permanent litter: no falls, no flammability, only acid ever
+ * removed one, and at 7-20 cells per tree a burnt forest would slowly fill
+ * its bed with bone-coloured cells nothing could clear - the same trap
+ * plant and leaf each fell into once. Withering is the answer for those,
+ * so it is the answer here, with the same two exemptions: touching its
+ * tree, or able to reach water. */
+static void test_an_orphaned_root_in_dry_ground_rots_away(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
+    }
+    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* the tree is long gone */
+
+    int gone = 0;
+    for (int i = 0; i < 6000 && !gone; i++) {
+        sand_step(&s, 0, 1000, 0);
+        gone = (sand_at(&s, cx, H - 3) != MATX(MATX_ROOT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(gone,
+        "a root with no tree above it and no water below it has to rot "
+        "away, or every burnt tree leaves its root system in the ground "
+        "for ever");
+}
+
+/* Both cells of a two-deep column must survive: the top one touches wood,
+ * the bottom one touches only root. Without `roots_to` counting as shelter
+ * a column rotted from the bottom up beneath a perfectly healthy tree the
+ * moment its soil dried. */
+static void test_a_root_column_under_a_living_tree_does_not_rot(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
+        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+    sand_set(&s, cx, H - 2, MATX(MATX_ROOT)); /* bottom: touches root only */
+    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* top: touches wood */
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WOOD, 0));
+
+    for (int i = 0; i < 6000; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 3),
+        "the root touching the trunk is sheltered by it and must stay");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 2),
+        "the root touching only ANOTHER ROOT must stay too - a column under "
+        "a living tree must not rot out from the bottom in a drought");
+}
+
+/* Watering a CANOPY still reaches the soil once the tree has rooted.
+ *
+ * A leaf drinks by walking down its own trunk to the ground and putting a
+ * level of moisture into the soil it finds there - which is what makes
+ * watering the top of a tree water the tree. The walk crosses a root only
+ * if the walker's own row names one, so foliage needs `roots_to` on the
+ * LEAF row (material.c) even though a leaf can never make a root: it has
+ * no `roots`, no soil moisture to spend and nothing to spend it on.
+ *
+ * Without that field a root is a BARRIER to the water a canopy is trying
+ * to deliver, which is backwards - a root should conduct water into the
+ * soil, not dam it out.
+ *
+ * THE ISOLATION IS THE WHOLE TEST, and the first two attempts at it both
+ * measured the wrong thing. Wood carries `drinks` 12 of its own AND its
+ * row does name `roots_to`, so any trunk cell touching the water delivers
+ * moisture whether or not the leaf can - which quietly kept the scene
+ * "passing" with the field removed. Here the water is BOXED: stone below
+ * it and stone beside it, so it cannot fall or spread, and the only cell
+ * cardinally touching it is the leaf. step_one_drinking_cell() looks at
+ * the four cardinal neighbours only, so the wood diagonally below the
+ * water is not a drinker of it. The root row spans the full width for the
+ * same reason - a one-cell root leaves a diagonal escape into loose dirt
+ * beside it, and the walk gropes round through that instead, which reads
+ * as working. */
+static void test_a_canopy_waters_the_soil_through_its_own_roots(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
+        sand_set(&s, x, H - 3, MATX(MATX_ROOT));           /* no way round */
+    }
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, cx, H - 5, MATX(MATX_LEAF));
+
+    /* The box: the water can only ever touch the leaf. */
+    sand_set(&s, cx - 2, H - 5, STONE);
+    sand_set(&s, cx - 1, H - 4, STONE);
+
+    int wettest = 0;
+    for (int i = 0; i < 2000 && wettest == 0; i++) {
+        /* Held against the leaf, the way a watering can is - drinking
+         * spends the water it takes, so a single cell of it would answer
+         * "did one drink happen" rather than "can a canopy water a
+         * rooted tree". */
+        sand_set(&s, cx - 1, H - 5, CELL_MAKE(MAT_WATER, MASS_MAX));
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, H - 2);
+            if (CELL_MATERIAL(c) == MAT_DIRT && CELL_MOISTURE(c) > wettest) {
+                wettest = CELL_MOISTURE(c);
+            }
+        }
+    }
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, wettest,
+        "a leaf held against water must be able to put that water into the "
+        "soil under its own tree even when the only route down runs "
+        "through root - the soil here is dry, is touching no water of its "
+        "own, and the leaf is the only cell the water touches, so the one "
+        "way it can get wet is the walk crossing the roots");
+}
+
+/* THE REGRESSION TEST FOR THE ACTUAL COMPLAINT: a tree's collar, erased -
+ * the bed shifting under it - stops the tree cold if nothing has rooted
+ * there yet, and does not once something has.
+ *
+ * Two scenes rather than one flag, because there is no per-instance way
+ * to force `roots` to 0 - the reaction tables are `const` and shared, not
+ * something a sand_t carries a knob for the way soak/decay/scatter do.
+ * The second scene gets the identical effect a forced-off `roots` would:
+ * the collar is erased at step ZERO, before even one growth event has
+ * had a chance to roll for a root, so it is guaranteed still plain dirt
+ * at the moment it is cleared - indistinguishable from `roots` having
+ * never existed at all. (Checked directly during development: with
+ * reaction_t.roots forced to 0 in material.c, the first scene fails
+ * exactly the way the second one is built to here - no root ever forms,
+ * so the collar stays vulnerable and the tree never grows past its
+ * seed.) */
+static void test_a_rooted_collar_survives_the_bed_shifting_away(void)
+{
+    const int cx = W / 2;
+
+    /* Scene 1: let a root actually form at the collar, then keep going.
+     *
+     * REPLANTED every 40 steps - a single seed's own canopy fills up and
+     * stops spending moisture long before the collar-seed roll
+     * (reaction_t.roots) is likely to land. See
+     * test_a_watered_plant_roots_into_the_soil_it_drinks_from's own top
+     * comment, which hits the identical wall and fixes it the same way. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+
+    int rooted = 0;
+    for (int cycle = 0; cycle < 200 && !rooted; cycle++) {
+        for (int y = 0; y < H - 2; y++) {
+            for (int x = 0; x < W; x++) {
+                sand_set(&s, x, y, SAND_EMPTY);
+            }
+        }
+        if (CELL_MATERIAL(sand_at(&s, cx, H - 2)) == MAT_DIRT) {
+            sand_set(&s, cx, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_set(&s, cx, H - 3, MATX(MATX_PLANT));
+
+        for (int i = 0; i < 40 && !rooted; i++) {
+            sand_step(&s, 0, 1000, 0);
+            rooted = (sand_at(&s, cx, H - 2) == MATX(MATX_ROOT));
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(rooted,
+        "setup failure, not the claim under test: the collar must have "
+        "rooted before the rest of this test means anything");
+
+    int before = 0;
+    for (int y = 0; y < H; y++) {
+        const cell_t c = sand_at(&s, cx, y);
+        if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD ||
+            c == MATX(MATX_ROOT)) {
+            before++;
+        }
+    }
+    int grew_with_root = 0;
+    for (int i = 0; i < 1500 && !grew_with_root; i++) {
+        sand_step(&s, 0, 1000, 0);
+        int now = 0;
+        for (int y = 0; y < H; y++) {
+            const cell_t c = sand_at(&s, cx, y);
+            if (c == MATX(MATX_PLANT) || CELL_MATERIAL(c) == MAT_WOOD ||
+                c == MATX(MATX_ROOT)) {
+                now++;
+            }
+        }
+        if (now > before) {
+            grew_with_root = 1;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(grew_with_root,
+        "a tree whose collar has already rooted must keep growing - the "
+        "root holds still, so nothing about the bed shifting can carry "
+        "it away out from under the tree");
+
+    /* Scene 2: the collar erased before a root could ever have formed -
+     * the deterministic stand-in for `roots` never having existed. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, cx, H - 3, MATX(MATX_PLANT));
+    /* All THREE gravity-ward cells, not just the one straight down -
+     * find_water()'s own stem walk tries straight down and then either
+     * diagonal (it has to, for a branch's own trunk sitting at an
+     * angle beneath it), so a shifting bed that only cleared the one
+     * cell directly below would still leave the tree two doors it never
+     * needed to lose. */
+    sand_set(&s, cx - 1, H - 2, SAND_EMPTY);
+    sand_set(&s, cx, H - 2, SAND_EMPTY); /* the bed shifting, right now */
+    sand_set(&s, cx + 1, H - 2, SAND_EMPTY);
+
+    /* By COUNT across the whole grid, not by watching one column for a
+     * cell outside its starting row. The seed itself is no longer
+     * anchored once all three cells under it are gone, so it FALLS one
+     * row onto the stone floor exactly as any ungrounded plant does
+     * (reaction_t.falls) - which is not growth, and a position-based
+     * check that treated "moved to a different row" as "grew" caught
+     * that fall instead of the thing this test means to catch. Growth
+     * MAKES cells; falling only relocates the one there already, so the
+     * total count is what actually distinguishes them. */
+    int grew_without_root = 0;
+    for (int i = 0; i < 1500 && !grew_without_root; i++) {
+        sand_step(&s, 0, 1000, 0);
+        if (count_cells_of(MAT_EXTENDED) + count_cells_of(MAT_WOOD) > 1) {
+            grew_without_root = 1;
+        }
+    }
+    TEST_ASSERT_FALSE_MESSAGE(grew_without_root,
+        "a tree whose collar is erased before any root exists must stay "
+        "stuck - this is the bug the whole feature exists to fix, "
+        "reproduced here to prove the fix is actually load-bearing");
+}
+
+/* A root is inert: it does not fall, does not grow, is not a bud or
+ * sprout site, and never appears on a board with no plant on it. */
+static void test_a_root_is_inert(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    /* Mid-air over nothing, and over stone that is not directly beneath
+     * it either - if a root fell, moved, or spawned anything at all,
+     * this would catch it. */
+    sand_set(&s, W / 2, 2, MATX(MATX_ROOT));
+    for (int i = 0; i < 300; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MATX(MATX_ROOT), sand_at(&s, W / 2, 2),
+        "a root must not move - it holds still and holds on, the whole "
+        "of its own reaction row");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
+        "and it must not have grown, budded, sprouted, or produced "
+        "anything else - an inert cell sitting alone for 300 steps "
+        "should still be alone");
+
+    /* And on a board with water, wet soil, and no plant anywhere - the
+     * only way a root can ever be created - none ever appears. */
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        sand_set(&s, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+    for (int i = 0; i < 500; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, count_cells_of(MAT_EXTENDED),
+        "a board with wet soil and standing water but no plant or wood "
+        "anywhere must never produce a root - roots are grown, not "
+        "spontaneous");
+}
+
+/* The conversion never creates moisture: total soil moisture after is
+ * never more than before. A root does not carry water - see reaction_t.
+ * roots's own comment on why the small chance matters - it destroys
+ * whatever the contact cell still held rather than moving it anywhere,
+ * so the running total across the whole board can only ever hold steady
+ * or fall, never rise, once the initial bed is placed and nothing is
+ * pouring more water in. */
+static void test_root_conversion_never_creates_moisture(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, W / 2, H - 3, MATX(MATX_PLANT));
+
+    int total = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                total += CELL_MOISTURE(c);
+            }
+        }
+    }
+    const int initial = total;
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&s, 0, 1000, 0);
+
+        int now = 0;
+        for (int y = 0; y < H; y++) {
+            for (int x = 0; x < W; x++) {
+                const cell_t c = sand_at(&s, x, y);
+                if (CELL_MATERIAL(c) == MAT_DIRT) {
+                    now += CELL_MOISTURE(c);
+                }
+            }
+        }
+        char why[224];
+        snprintf(why, sizeof why,
+                 "step %d: total soil moisture rose to %d from a starting "
+                 "total of %d - nothing on this board pours water in, so "
+                 "growth, budding and root conversion together must only "
+                 "ever spend moisture, never create it", i, now, initial);
+        TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(initial, now, why);
+    }
+}
+
+/* PART 2's own version of the claim above, isolated rather than read off
+ * a whole simulated tree: one root, one moist neighbour, nothing else on
+ * the board that could spend or create moisture by any other path. The
+ * system-wide test above already proves the total never rises across
+ * growth, budding AND root-eating together; this one proves specifically
+ * that step_one_rooting_cell()'s own conversion is what accounts for the
+ * fall, by giving it exactly one thing to eat and checking that it is
+ * gone, not merely reduced, once eaten. */
+static void test_a_root_eats_a_moist_neighbour_and_only_spends_its_own_moisture(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, cy = 3;
+    /* Dirt is KIND_POWDER (material.c) - a lone candidate cell needs
+     * direct support or it simply falls away before the root ever gets a
+     * turn, which is not this test's claim at all. A stone floor
+     * directly under the candidate, and stone either side of it so
+     * nothing can slide out from under it either, keeps the pocket to
+     * exactly one eligible cell. */
+    sand_set(&s, cx - 1, cy + 2, STONE);
+    sand_set(&s, cx, cy + 2, STONE);
+    sand_set(&s, cx + 1, cy + 2, STONE);
+    sand_set(&s, cx, cy - 1, CELL_MAKE(MAT_WOOD, 0)); /* shelter */
+    sand_set(&s, cx, cy, MATX(MATX_ROOT));
+    sand_set(&s, cx, cy + 1, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* the
+                                                                          * one
+                                                                          * candidate
+                                                                          */
+
+    int ate = 0;
+    for (int i = 0; i < 3000 && !ate; i++) {
+        sand_step(&s, 0, 1000, 0);
+        ate = (sand_at(&s, cx, cy + 1) == MATX(MATX_ROOT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(ate,
+        "setup failure, not the claim under test: the root's one moist "
+        "neighbour never got eaten at all, so there is nothing to check "
+        "the moisture accounting of");
+
+    int total = 0;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                total += CELL_MOISTURE(c);
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, total,
+        "the one dirt cell on this board held the only moisture there "
+        "was; once step_one_rooting_cell() converts it, that moisture "
+        "must be simply GONE - spent as the price of the conversion, not "
+        "carried anywhere else on the board there is nothing else to "
+        "carry it to");
+}
+
+/* A root never eats what is not moist dirt. Three candidates in reach,
+ * each one testing a different guard in step_one_rooting_cell()'s own
+ * neighbour scan: dry dirt (the MOISTURE check), sand (the MATERIAL
+ * check - reaction_of(c)->dries == 0), and empty space (CELL_IS_EMPTY()).
+ * Run long enough that, at 8 in 256 per step, a guard that had quietly
+ * gone missing would show it - not merely long enough that a genuine 3%
+ * chance might still happen to miss. */
+static void test_a_root_never_eats_dry_dirt_sand_or_empty_space(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, cy = 3;
+    /* A floor under the whole candidate row, same reason as the previous
+     * test - dirt and sand are both KIND_POWDER and fall away from an
+     * unsupported cell before there is anything to observe. TWO cells
+     * wider than the candidates themselves, not flush with them: a
+     * powder resting right at the edge of a floor still has an open
+     * diagonal-down past that edge to slide into, which is exactly what
+     * a first version of this test did with a 3-wide floor - the sand
+     * candidate slid one step diagonally off the end of it on step 0
+     * and was gone before the test could observe anything. */
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        sand_set(&s, x, cy + 1, STONE);
+    }
+    sand_set(&s, cx, cy - 1, CELL_MAKE(MAT_WOOD, 0));         /* shelter, up */
+    sand_set(&s, cx, cy, MATX(MATX_ROOT));
+    /* Three candidates, one per guard in step_one_rooting_cell()'s
+     * neighbour scan - all beside the root rather than below it, since
+     * the row below is now the floor. */
+    sand_set(&s, cx - 1, cy, CELL_SOIL(MAT_DIRT, 1, 0)); /* dry, left */
+    sand_set(&s, cx + 1, cy, SAND_FIRST_SHADE);          /* sand, right */
+    /* (cx - 1, cy - 1) stays SAND_EMPTY from sand_clear() above - empty,
+     * diagonally up-left, one of the root's eight neighbours - named
+     * explicitly here rather than left implicit, so the scene reads as
+     * three deliberate candidates rather than two plus whatever the grid
+     * happened to start as. */
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_SOIL(MAT_DIRT, 1, 0),
+        sand_at(&s, cx - 1, cy),
+        "dry dirt must never be eaten - CELL_MOISTURE(n) != 0 is not "
+        "optional, it is the whole reason the conversion does not need "
+        "to spend anything separately");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(SAND_FIRST_SHADE,
+        sand_at(&s, cx + 1, cy),
+        "sand must never be eaten, wet or not - reaction_of(n)->dries == "
+        "0 for sand, and that is the guard that keeps this rule to soil "
+        "specifically");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, cx - 1, cy - 1)),
+        "empty space must never become a root out of nowhere");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, count_cells_of(MAT_EXTENDED),
+        "and nothing else on the board should have changed at all - one "
+        "root in, one root out");
+}
+
+/* THE SURFACE RULE ITSELF: a root already touching more than
+ * ROOT_SURFACE_MAX (2) other roots does not roll to grow at all, even
+ * with an eligible candidate sitting right there. Two scenes, the same
+ * shape as every other boundary test in this file (see
+ * test_a_root_column_does_not_spend_the_trees_lift's own comment): a
+ * control just under the cap that must still grow, and a target just
+ * over it that must not, so a failure of either side can be told apart
+ * from the other. */
+static bool
+surface_rule_lets_growth_through(int satellite_roots)
+{
+    sand_t t;
+    uint8_t grid[8 * 8];
+    sand_init(&t, grid, 8, 8, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = 4, cy = 4;
+    /* Dirt is KIND_POWDER (material.c) - a floor under it, or it falls
+     * away before either scene gets a chance to prove anything. Two
+     * cells wider than the candidate itself - see
+     * test_a_root_never_eats_dry_dirt_sand_or_empty_space's own comment
+     * on why a floor flush with its one occupant is still not a floor a
+     * powder cannot slide off the edge of. */
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        sand_set(&t, x, cy + 2, STONE);
+    }
+    sand_set(&t, cx, cy, MATX(MATX_ROOT));
+    sand_set(&t, cx, cy + 1, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* the
+                                                                          * one
+                                                                          * candidate,
+                                                                          * down
+                                                                          */
+    /* Satellites fill row cy - 1 ONLY - up-left, up, up-right, in that
+     * order - and nowhere else. That is not an arbitrary choice of
+     * geometry: a satellite placed level with the central root (as an
+     * earlier version of this scene did, at (cx - 1, cy)) is ITSELF
+     * adjacent to the candidate cell, and a satellite with few enough
+     * root neighbours of its OWN can roll and eat the candidate directly
+     * - entirely bypassing whatever the central root's own surface count
+     * says, and confounding the very boundary this test means to pin.
+     * Row cy - 1 is two rows from the candidate at cy + 1, so nothing
+     * placed there can ever reach it. No explicit wood shelter is needed
+     * either: two or more satellite roots already shelter the central
+     * one through `roots_to`, the same mutual-shelter path
+     * step_one_withering_cell() gives a column of root under a living
+     * tree (see test_a_root_column_under_a_living_tree_does_not_rot). */
+    static const int sat_dx[3] = {-1, 0, 1};
+    for (int i = 0; i < satellite_roots; i++) {
+        sand_set(&t, cx + sat_dx[i], cy - 1, MATX(MATX_ROOT));
+    }
+
+    bool grew = false;
+    for (int i = 0; i < 2000 && !grew; i++) {
+        sand_step(&t, 0, 1000, 0);
+        grew = (sand_at(&t, cx, cy + 1) == MATX(MATX_ROOT));
+    }
+    return grew;
+}
+
+/* A tip keeps going the way it was going - away from its parent - and
+ * down. Reported from the device: the uniform pick let moisture's own
+ * sideways spread near the surface decide everything, so deeper roots
+ * only happened at the angles the geometry favoured. Now a candidate that
+ * continues away from the cell's root neighbours weighs +2 and one that
+ * reaches gravity-ward +1, over a base of 1 (step_one_rooting_cell()).
+ *
+ * STATISTICAL, over many seeds, because a weighted roll is a tendency and
+ * not a rule. The scene is a tip with its parent directly ABOVE it in a
+ * moist bed, so "away from parent" and "down" point the same way: the
+ * three cells below the tip weigh 4 each, the two beside it 1 each -
+ * 12 against 2. Only the first conversion adjacent to the tip is
+ * classified, per seed.
+ *
+ * THE PARENT IS SILENCED, and that is the whole difficulty of this scene.
+ * A live parent competes for the tip's two side cells (they touch both),
+ * and its own away-vector points UP, so it reaches them with no penalty
+ * at all: measured with the parent free to grow, the weights only moved
+ * "below" from 49% to 59%, which is a real skew drowned in a confound.
+ * Three roots above the parent give it four root neighbours, past
+ * ROOT_SURFACE_MAX, so it never rolls; the three extras can only reach
+ * rows above the tip, never the cells classified here. What is left is
+ * the tip's own pick and nothing else.
+ *
+ * Watched red with both weights stubbed to zero - the tip's uniform pick
+ * over five candidates, three of them below, lands "below" 3 in 5. The
+ * bar is 75%: well above 60%, well below the 86% the weights predict. */
+static void test_a_root_tip_grows_on_away_from_its_parent_and_down(void)
+{
+    const int cx = W / 2, ty = H - 4;
+    int below = 0, beside = 0;
+
+    for (uint32_t seed = 1; seed <= 120u; seed++) {
+        sand_init(&s, cells, W, H, seed);
+        sand_clear(&s);
+        sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+            for (int y = H - 7; y <= H - 2; y++) {
+                sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
+        }
+        sand_set(&s, cx - 1, ty - 2, MATX(MATX_ROOT)); /* three above the parent: */
+        sand_set(&s, cx, ty - 2, MATX(MATX_ROOT));     /* with the tip that is four */
+        sand_set(&s, cx + 1, ty - 2, MATX(MATX_ROOT)); /* neighbours, so it never rolls */
+        sand_set(&s, cx, ty - 1, MATX(MATX_ROOT));     /* the parent, above */
+        sand_set(&s, cx, ty, MATX(MATX_ROOT));         /* the tip */
+
+        int verdict = 0;
+        for (int i = 0; i < 600 && verdict == 0; i++) {
+            sand_step(&s, 0, 1000, 0);
+            for (int dx = -1; dx <= 1 && verdict == 0; dx++) {
+                if (sand_at(&s, cx + dx, ty + 1) == MATX(MATX_ROOT)) {
+                    verdict = 1; /* below the tip */
+                }
+            }
+            if (verdict == 0 && (sand_at(&s, cx - 1, ty) == MATX(MATX_ROOT) ||
+                                 sand_at(&s, cx + 1, ty) == MATX(MATX_ROOT))) {
+                verdict = 2; /* beside it */
+            }
+        }
+        if (verdict == 1) below++;
+        if (verdict == 2) beside++;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(below + beside >= 100,
+        "setup failure, not the claim under test: the tip must actually "
+        "grow in most seeds for the ratio to mean anything");
+    TEST_ASSERT_TRUE_MESSAGE(below * 100 >= 75 * (below + beside),
+        "a tip with its parent above it must mostly grow ON and DOWN, not "
+        "sideways - the weighted pick has to actually skew the roll, or the "
+        "system stays as sideways as the moisture that feeds it");
+}
+
+/* The FIRST root under a trunk heads down, not along the surface.
+ *
+ * A lone collar root has no root neighbours, so with parents alone its
+ * away-vector was zero and it was left to the gravity term - and it is
+ * the one root whose heading matters most, since the whole system grows
+ * from it. Now the trunk it grew from counts as a parent too (`clings_to`
+ * in step_one_rooting_cell()'s away scan), so "away from what I grew
+ * from" points straight down from under the wood.
+ *
+ * Same statistical shape as the tip test above, same classification of
+ * the first conversion adjacent to the root. The trunk is not a candidate
+ * (wood is not dirt), so the root's seven candidates split three below at
+ * 1 + AWAY + DOWN, two beside at 1, two up-diagonals at 1: "below" is
+ * predicted at 15 in 17. Watched red with the trunk term and DOWN both
+ * stubbed to nothing - a uniform pick over the same seven lands "below"
+ * 3 in 5 against the same 75% bar. */
+static void test_the_first_root_under_a_trunk_heads_down(void)
+{
+    const int cx = W / 2, ry = H - 4;
+    int below = 0, beside = 0;
+
+    for (uint32_t seed = 1; seed <= 120u; seed++) {
+        sand_init(&s, cells, W, H, seed);
+        sand_clear(&s);
+        sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, H - 1, STONE);
+            for (int y = H - 7; y <= H - 2; y++) {
+                sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+            }
+        }
+        sand_set(&s, cx, ry - 1, CELL_MAKE(MAT_WOOD, 0)); /* the trunk */
+        sand_set(&s, cx, ry, MATX(MATX_ROOT));            /* its first root */
+
+        int verdict = 0;
+        for (int i = 0; i < 600 && verdict == 0; i++) {
+            sand_step(&s, 0, 1000, 0);
+            for (int dx = -1; dx <= 1 && verdict == 0; dx++) {
+                if (sand_at(&s, cx + dx, ry + 1) == MATX(MATX_ROOT)) {
+                    verdict = 1;
+                }
+            }
+            if (verdict == 0 && (sand_at(&s, cx - 1, ry) == MATX(MATX_ROOT) ||
+                                 sand_at(&s, cx + 1, ry) == MATX(MATX_ROOT))) {
+                verdict = 2;
+            }
+        }
+        if (verdict == 1) below++;
+        if (verdict == 2) beside++;
+    }
+    TEST_ASSERT_TRUE_MESSAGE(below + beside >= 100,
+        "setup failure, not the claim under test: the collar root must "
+        "actually grow in most seeds for the ratio to mean anything");
+    TEST_ASSERT_TRUE_MESSAGE(below * 100 >= 75 * (below + beside),
+        "the first root under a trunk must mostly head DOWN - the trunk it "
+        "grew from has to count as the parent it grows away from, or the "
+        "seed of every root system starts with a coin-toss along the wet "
+        "surface");
+}
+
+/* A root is a CONDUIT: it carries a level of water from the wettest soil
+ * beside or above it into the driest soil beneath it
+ * (step_one_conducting_cell()). Depth was measured to be bounded by water,
+ * not by heading - a root can only eat moist soil, and a bed watered from
+ * the top dries from the top - so the roots bring the water down with
+ * them. Moves only, never makes; gravity-ward only.
+ *
+ * THE SOURCE SITS DIRECTLY ABOVE THE ROOT, and every cell the source's own
+ * percolation could reach is blocked - wood one side, stone the other, the
+ * root itself beneath. The first version put the source BESIDE the root,
+ * and passed with conduction stubbed to nothing: soil percolates into any
+ * of its three gravity-ward cells, and the sink was that source's own
+ * diagonal. Ordinary physics was feeding the sink and the test was
+ * crediting the conduit. With the source overhead and hemmed in, nothing
+ * but a root carrying water THROUGH itself can wet the cell below it.
+ * Ordinary drying (`dries`) can still lower the source on its own, which
+ * is why the second assertion is "at most what the source lost", never
+ * equality. */
+static void test_a_root_carries_a_level_of_water_down_through_itself(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, ry = H - 3;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, cx, ry, MATX(MATX_ROOT));
+    sand_set(&s, cx - 1, ry, CELL_MAKE(MAT_WOOD, 0));          /* shelter; blocks the source's slide */
+    sand_set(&s, cx, ry - 1, CELL_SOIL(MAT_DIRT, 1, 5));       /* the source, ABOVE the root */
+    sand_set(&s, cx, ry + 1, CELL_SOIL(MAT_DIRT, 1, 0));       /* the sink, beneath, dry */
+
+    int got = 0;
+    for (int i = 0; i < 400 && !got; i++) {
+        sand_step(&s, 0, 1000, 0);
+        got = CELL_MOISTURE(sand_at(&s, cx, ry + 1));
+    }
+    const int source_now = CELL_MOISTURE(sand_at(&s, cx, ry - 1));
+    TEST_ASSERT_TRUE_MESSAGE(got > 0,
+        "a root with wet soil above it and dry soil beneath it must carry "
+        "water down through itself into the dry cell - that is the whole "
+        "reason roots conduct");
+    TEST_ASSERT_TRUE_MESSAGE(got <= 5 - source_now,
+        "conduction MOVES water, it never makes it: the sink may gain at "
+        "most what the source lost (drying may take more from the source, "
+        "never less)");
+}
+
+/* An INVARIANT guard, and honest about what that means: this test asserts
+ * things that never happen, so stubbing the conduit's chance to zero
+ * cannot turn it red - it passes with the mechanism off exactly as with
+ * it on. It was watched red the only way such a test can be, by briefly
+ * inverting the source/sink roles in step_one_conducting_cell() during
+ * development, and it stays here to catch that inversion coming back. */
+static void test_conduction_never_pushes_water_up_or_into_anything_but_soil(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, ry = H - 3;
+    for (int y = 0; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, STONE);
+        }
+    }
+    sand_set(&s, cx, ry, MATX(MATX_ROOT));
+    sand_set(&s, cx, ry + 1, CELL_SOIL(MAT_DIRT, 1, 6));      /* wet, BENEATH - only ever a sink */
+    sand_set(&s, cx, ry - 1, CELL_SOIL(MAT_DIRT, 1, 0));      /* dry, above */
+    sand_set(&s, cx - 1, ry, CELL_SOIL(MAT_DIRT, 1, 0));      /* dry, beside */
+    sand_set(&s, cx + 1, ry, CELL_MAKE(MAT_WOOD, 0));          /* not soil, and the shelter */
+
+    for (int i = 0; i < 400; i++) {
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(sand_at(&s, cx, ry - 1)),
+            "water beneath a root must never be carried UP");
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(sand_at(&s, cx - 1, ry)),
+            "water beneath a root must never be carried SIDEWAYS");
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(CELL_MAKE(MAT_WOOD, 0), sand_at(&s, cx + 1, ry),
+            "conduction touches soil only - wood is not a sink and not a "
+            "source");
+    }
+}
+
+/* No "brings water deeper than bare soil" test here, deliberately. It was
+ * written and it failed for reasons that have nothing to do with the
+ * claim: on this 8x8 grid percolation alone floods a six-row bed inside
+ * any run long enough to matter, so there is no depth left for a conduit
+ * to add - and a column that DOES carry water down then eats the cell it
+ * wetted, so measuring moisture in dirt counts the delivery as a loss.
+ * The depth claim is established where it can be seen, on the 60x70
+ * harness with a 19-row dry bed watered at the collar: mean deepest root
+ * 4.6 rows with conduction off, 15.0 with it on, over ten seeds (see
+ * ROOT_CONDUCT_CHANCE's own comment in sand_reactions.c, and the Roots
+ * section of docs/Sand/Sand-Simulation.md). What the suite pins is the
+ * mechanism itself - the two tests above. */
+
+static void test_a_thickly_rooted_cell_stops_growing(void)
+{
+    TEST_ASSERT_TRUE_MESSAGE(surface_rule_lets_growth_through(2),
+        "control: a root with only 2 root neighbours (at or under "
+        "ROOT_SURFACE_MAX) must still be able to grow into an eligible "
+        "candidate - if this fails, the boundary below proves nothing "
+        "about the surface rule specifically");
+    TEST_ASSERT_FALSE_MESSAGE(surface_rule_lets_growth_through(3),
+        "a root with 3 root neighbours (over ROOT_SURFACE_MAX) must not "
+        "roll to grow at all, even with an eligible candidate right "
+        "there - this is the rule that keeps the system a filigree "
+        "instead of a solid block");
+}
+
+/* ROOTS FOLLOW WATER, WITH NO DIRECTION WEIGHTS OF THEIR OWN
+ * (step_one_rooting_cell()'s own top comment, sand_reactions.c): a bed
+ * wet on only one side of a root grows root on that side and never the
+ * dry one, purely because the moisture check is the only thing steering
+ * it - nothing in the scan itself prefers left over right or down over
+ * up. */
+static void test_roots_grow_toward_the_wet_side_only(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2, cy = 3;
+    /* Both dirt candidates are KIND_POWDER - a floor under the whole
+     * candidate row, or neither survives long enough to be eaten OR to
+     * stay put and prove it was not. Two cells wider than the candidates
+     * themselves - see test_a_root_never_eats_dry_dirt_sand_or_empty_
+     * space's own comment on why a floor flush with its edge cells is
+     * not actually a floor; a powder resting right at the edge still has
+     * an open diagonal to slide off into. */
+    for (int x = cx - 2; x <= cx + 2; x++) {
+        sand_set(&s, x, cy + 1, STONE);
+    }
+    sand_set(&s, cx, cy - 1, CELL_MAKE(MAT_WOOD, 0));    /* shelter, up */
+    sand_set(&s, cx, cy, MATX(MATX_ROOT));
+    sand_set(&s, cx - 1, cy, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX)); /* wet,
+                                                                          * left
+                                                                          */
+    sand_set(&s, cx + 1, cy, CELL_SOIL(MAT_DIRT, 1, 0));                /* dry,
+                                                                          * right
+                                                                          */
+
+    int wet_side_grew = 0;
+    for (int i = 0; i < 3000 && !wet_side_grew; i++) {
+        sand_step(&s, 0, 1000, 0);
+        wet_side_grew = (sand_at(&s, cx - 1, cy) == MATX(MATX_ROOT));
+        TEST_ASSERT_FALSE_MESSAGE(sand_at(&s, cx + 1, cy) == MATX(MATX_ROOT),
+            "the dry side must never become root - there is no water "
+            "there for the conversion to spend");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(wet_side_grew,
+        "setup failure, not the claim under test: the wet side never "
+        "grew either, so there is nothing to say about which side the "
+        "system preferred");
+}
+
+/* THE RUNAWAY SCENE, scaled for the host suite - see the Roots section
+ * of docs/Sand/Sand-Simulation.md for the full six-seed, 20,000-step
+ * version this is a fast stand-in for. A root pre-planted (so the rare
+ * one-time collar seed cannot confound the reading - see
+ * spend_soil_moisture()'s own comment), its collar rewatered to
+ * SOIL_MOISTURE_MAX every single step - about as generous as this
+ * feature ever sees - and the claim is not "it stays small", it is that
+ * the count REACHES A FIXED POINT: two counts taken apart in time, late
+ * enough that growth has had its chance, must be equal. A system still
+ * climbing between them is the shape of the runaway this whole feature
+ * exists to avoid.
+ *
+ * WHAT THIS DOES NOT ISOLATE, watched red and found wanting: bumping
+ * ROOT_SURFACE_MAX itself far past its real value does NOT turn this
+ * test red - a board this small (20x14) runs out of reachable moist dirt
+ * within 3000 steps regardless of the surface rule, so the count still
+ * plateaus, just later and higher. This test is a regression guard on
+ * SATURATION happening at all, not a proof of which of the three bounds
+ * (moisture, surface rule, roll) is doing the work at this scale -
+ * test_a_thickly_rooted_cell_stops_growing pins ROOT_SURFACE_MAX
+ * specifically, and the real evidence that it is the surface rule
+ * carrying the full-size scene (not merely a smaller board's own limits)
+ * is the six-seed, 20,000-step measurement recorded in ROOT_SURFACE_MAX's
+ * own comment (sand_reactions.c), where a bed sixty cells wide gives the
+ * system far more room than 3,000 steps could plausibly exhaust. */
+#define RUNAWAY_TEST_W 20
+#define RUNAWAY_TEST_H 14
+
+static void test_a_continuously_watered_root_system_still_saturates(void)
+{
+    uint8_t *grid = malloc((size_t)RUNAWAY_TEST_W * RUNAWAY_TEST_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(grid,
+        "runaway grid must fit in what the framebuffer leaves");
+
+    sand_t t;
+    sand_init(&t, grid, RUNAWAY_TEST_W, RUNAWAY_TEST_H, 12345u);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    const int cx      = RUNAWAY_TEST_W / 2;
+    const int floor_y = RUNAWAY_TEST_H - 1;
+    const int bed_top = floor_y - 8;
+
+    for (int x = 0; x < RUNAWAY_TEST_W; x++) {
+        sand_set(&t, x, floor_y, STONE);
+        for (int y = bed_top; y < floor_y; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+    }
+    sand_set(&t, cx, bed_top - 1, CELL_MAKE(MAT_WOOD, 0));
+    /* One row INTO the bed, not ON bed_top - the rewater loop below
+     * overwrites bed_top's own 13 cells every single step, which would
+     * erase a root planted there before step 0 even finished (measured:
+     * this exact mistake, in the scratch harness this scene is modelled
+     * on, produced a flat 0 for the entire run). */
+    sand_set(&t, cx, bed_top + 1, MATX(MATX_ROOT));
+
+    int mid_count = -1, final_count = -1;
+    for (int i = 0; i < 3000; i++) {
+        for (int dx = -6; dx <= 6; dx++) {
+            const int x = cx + dx;
+            if (x < 0 || x >= RUNAWAY_TEST_W) {
+                continue;
+            }
+            sand_set(&t, x, bed_top, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        }
+        sand_step(&t, 0, 1000, 0);
+        if (i == 1500) {
+            mid_count = count_cells_of(MAT_EXTENDED);
+        }
+    }
+    final_count = count_cells_of(MAT_EXTENDED);
+    free(grid);
+
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(1, mid_count,
+        "setup failure, not the claim under test: the system must have "
+        "grown past its single pre-placed root by the halfway point, or "
+        "there is nothing here to say saturated");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(mid_count, final_count,
+        "a system this continuously watered must still reach a fixed "
+        "point rather than keep climbing - ROOT_SURFACE_MAX is what is "
+        "supposed to hold it there (sand_reactions.c's own comment on "
+        "the constant records the same comparison at 20,000 steps)");
+}
+
+
+/* Plant, leaf, ice, root and metal all take their texture from the
+ * position hash, and everything else extended does not. Metal alone is
+ * HATCHED rather than SPECKLED - it is the only one of the five with a
+ * travelling shine on top of its grain (see metal_dither/metal_shine's own
+ * comment in material.c) - so it gets its own pattern check instead of
+ * sharing the other four's.
  *
  * An extended material's variant IS which one it is, so neither can carry
  * a shade and the position hash is the only variation available - the same
@@ -13217,13 +14912,75 @@ static void test_a_bare_trunk_in_wet_ground_buds_again(void)
  * a mistake there does not fail to build - it paints some other extended
  * material in leaf green, which is the sort of thing nobody notices until
  * a fourteenth material arrives and comes out looking like a hedge. */
+/* A root darkens by STRUCTURE, not by time: the painter hands
+ * material_colours() the count of root neighbours in `depth` for a root
+ * cell (material_root_neighbours(), material.h), and the shade steps from
+ * the fresh tan toward a wood-like brown as that count climbs. A tip (one
+ * neighbour) must wear exactly the fresh colour a lone seed does, and every
+ * step older must be darker in every channel - checked per channel after
+ * undoing the panel's byte swap, rather than as a luminance, so a hue drift
+ * could not pass as "darker". Nothing else may read `depth` this way: a
+ * leaf at depth 0 and at depth 4 is the same leaf. */
+static unsigned r5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 11) & 31u; }
+static unsigned g6(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 5) & 63u; }
+static unsigned b5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return n & 31u; }
+
+static void test_a_root_darkens_as_more_root_grows_around_it(void)
+{
+    gfx_color_t col[3];
+    gfx_color_t by_count[6];
+    for (unsigned n = 0; n < 6u; n++) {
+        material_colours(MATX(MATX_ROOT), 3u, 0u, n, col);
+        by_count[n] = col[0];
+    }
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(by_count[0], by_count[1],
+        "a tip (one root neighbour) wears the same fresh colour as a lone seed");
+    for (unsigned n = 1; n < 5u; n++) {
+        TEST_ASSERT_TRUE_MESSAGE(r5(by_count[n + 1]) <= r5(by_count[n]) &&
+                                 g6(by_count[n + 1]) <= g6(by_count[n]) &&
+                                 b5(by_count[n + 1]) <= b5(by_count[n]),
+            "each extra root neighbour may only darken a root, never lighten it");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(r5(by_count[4]) < r5(by_count[1]) &&
+                             g6(by_count[4]) < g6(by_count[1]) &&
+                             b5(by_count[4]) < b5(by_count[1]),
+        "a root touched on four sides must be visibly darker than a tip, in "
+        "every channel - the gradient has to actually exist");
+
+    gfx_color_t leaf_shallow[3], leaf_deep[3];
+    material_colours(MATX(MATX_LEAF), 3u, 0u, 0u, leaf_shallow);
+    material_colours(MATX(MATX_LEAF), 3u, 0u, 4u, leaf_deep);
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(leaf_shallow[0], leaf_deep[0],
+        "only a root reads `depth` as a neighbour count - a leaf must ignore it");
+}
+
+/* The count itself, on three synthetic rows with the top one missing the
+ * way paint_row_n() hands a NULL `above` on the grid's first row. */
+static void test_root_neighbours_are_counted_across_three_rows(void)
+{
+    const cell_t R = MATX(MATX_ROOT), D = CELL_SOIL(MAT_DIRT, 0, 3), Wd = CELL_MAKE(MAT_WOOD, 0);
+    const uint8_t above[5] = { R,  R,  R,  D,  D  };
+    const uint8_t row[5]   = { D,  R,  R,  Wd, R  };
+    const uint8_t below[5] = { D,  D,  R,  R,  D  };
+    /* (2): above-left R, above R, left R, below R, below-right R = 5;
+     * above-right D, right Wd, below-left D do not count. */
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(5u, material_root_neighbours(above, row, below, 2, 5),
+        "counts root on all eight sides and nothing else - dirt and wood "
+        "are not root");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(3u, material_root_neighbours(NULL, row, below, 2, 5),
+        "a NULL above row (the grid's top edge) contributes nothing - the "
+        "two roots above (2) drop out, left/below/below-right remain");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(1u, material_root_neighbours(above, row, below, 4, 5),
+        "the right-hand grid edge is not read past");
+}
+
 static void test_the_right_extended_materials_are_grained(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
 
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const cell_t c = MATX(k);
-        const bool speckled = (k == MATX_PLANT || k == MATX_LEAF || k == MATX_ICE);
+        const bool speckled = (k == MATX_PLANT || k == MATX_LEAF || k == MATX_ICE || k == MATX_ROOT);
         const bool hatched = (k == MATX_METAL);
 
         int distinct = 0;
@@ -20293,9 +22050,9 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
      * orthogonal mechanic, for the same reason the now-removed vent
      * mechanism was (bd esp32c6-0f2): this scene's lava burner sits
      * fully enclosed - side walls, a stone slab above, the grid floor
-     * below (build_boiler_scene(), above) - which comfortably clears
-     * SAND_LAVA_BURST_COVER's threshold on every burner cell regardless
-     * of which way is down. Left at its real figure, a burst partway
+     * below (build_boiler_scene(), above) - which puts a complete lid
+     * over every burner cell regardless of which way is down. Left at
+     * its real figure, a burst partway
      * through the measured window disrupts the slab that is supposed to
      * hold steady for the whole test, the same disruption vent_chance
      * used to risk here before it was removed. What this test exists to
@@ -20641,11 +22398,26 @@ static void wet_earth_scan(const sand_t *s, int *water_mass, int *dirt_count,
  * uses for the same reason: a single before/after comparison cannot catch
  * a scene that is active at first and stalls partway through. Measured
  * (three seeds, water mass lost per quarter): 274-373 units, comfortably
- * clear of the 150 floor below; dirt gained per quarter: 83-115 against a
- * floor of 50; moisture gained per quarter: 190-271 against a floor of
- * 100. All three floors sit at roughly half the worst-case measured
- * value, the same margin the rest of this file's coverage assertions
- * use. */
+ * clear of the 150 floor below; moisture gained per quarter: 190-271
+ * against a floor of 100. Both floors sit at roughly half the worst-case
+ * measured value, the same margin the rest of this file's coverage
+ * assertions use.
+ *
+ * DIRT GAINED PER QUARTER moved when PART 2 of the roots-and-percolation
+ * change split percolation out of `spread` into its own, deliberately
+ * slower SOIL_PERCOLATE_CHANCE (sand_reactions.c) - sand converting to
+ * dirt BELOW a wet cell is exactly the branch that constant now governs,
+ * and lateral diffusion (still at the old, unchanged rate) only ever
+ * carried part of this scene's total. Re-measured on this scene's own
+ * fixed seed (53u - not the three the water-mass and moisture figures
+ * above were originally taken across): 48, 51, 31, 54 per quarter. Still
+ * nonzero every quarter - conversion has not stalled, it is simply
+ * slower, which is the entire point of PART 2 - so the honest fix is a
+ * lower floor, not a faster constant that would undo the change this test
+ * exists to guard downstream of. 20, at the same roughly-half-of-worst-
+ * case margin the other two floors use against the new worst quarter
+ * (31), rather than left at the old 50 to keep this scene "passing"
+ * through a regression that was never a regression. */
 static void test_the_wet_earth_scene_keeps_percolating_across_the_window(void)
 {
     uint8_t *big    = malloc(REAL_W * REAL_H);
@@ -20758,7 +22530,10 @@ static void test_the_wet_earth_scene_keeps_percolating_across_the_window(void)
                  "%d dirt cells there) - the sand-to-soil claim this scene "
                  "makes only holds if it keeps happening for the whole "
                  "window, not just at the start", q, dirt_gained);
-        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, dirt_gained, why);
+        /* 20, not the original 50 - see this test's own top comment for
+         * why PART 2's percolation slowdown moved this specific floor and
+         * not the other two. */
+        TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(20, dirt_gained, why);
 
         snprintf(why, sizeof why,
                  "quarter %d must still be raising dirt's own moisture "
@@ -21864,7 +23639,7 @@ static void test_the_layered_dune_scene_throws_more_than_one_band(void)
  * covered lava converting to stone and bursting (bd esp32c6-mqt) - has no
  * mechanism left anywhere near as expensive as the vent scan this scene
  * used to hold open: one roll per covered lava cell per step, at odds of
- * roughly 1 in 256, with a 5-neighbour cover_mask() walk only after the
+ * roughly 1 in 256, with a 3-neighbour cover_mask() walk only after the
  * roll passes. A "burst spam" scene built the same way (many cells
  * forced-covered, chance pinned to maximum) would measure a real cost,
  * but not a REPRESENTATIVE one - production never pins the chance, and
@@ -24226,6 +26001,10 @@ void run_sand_suite(void)
     RUN_TEST(test_water_falling_onto_water_also_queues_a_small_displacement);
     RUN_TEST(test_a_water_splash_actually_opens_a_gap);
     RUN_TEST(test_a_cascading_impulse_moves_more_than_one_cell);
+    RUN_TEST(test_pouring_water_over_a_dirt_bed_never_moves_a_dirt_cell);
+    RUN_TEST(test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path);
+    RUN_TEST(test_a_flying_water_grain_still_displaces_another_liquid);
+    RUN_TEST(test_a_water_into_water_cascade_is_untouched_by_the_liquid_fix);
 
     RUN_TEST(test_gas_rises_straight_up_under_ordinary_gravity);
     RUN_TEST(test_gas_falls_when_the_board_is_inverted);
@@ -24318,6 +26097,8 @@ void run_sand_suite(void)
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
     RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
+    RUN_TEST(test_a_root_darkens_as_more_root_grows_around_it);
+    RUN_TEST(test_root_neighbours_are_counted_across_three_rows);
     RUN_TEST(test_the_right_extended_materials_are_grained);
     RUN_TEST(test_metal_hatched_body_lines_and_shine_differ);
     RUN_TEST(test_metal_shine_does_not_vary_between_cells);
@@ -24347,6 +26128,28 @@ void run_sand_suite(void)
     RUN_TEST(test_a_seed_under_stone_stays_put);
     RUN_TEST(test_a_stem_that_wanders_still_hardens);
     RUN_TEST(test_a_bare_trunk_in_wet_ground_buds_again);
+    RUN_TEST(test_a_watered_plant_roots_into_the_soil_it_drinks_from);
+    RUN_TEST(test_a_trunk_standing_on_its_own_root_is_anchored);
+    RUN_TEST(test_a_root_column_does_not_spend_the_trees_lift);
+    RUN_TEST(test_a_buried_root_does_not_cut_off_the_water_below_it);
+    RUN_TEST(test_a_root_column_reaches_below_the_collar);
+    RUN_TEST(test_a_canopy_waters_the_soil_through_its_own_roots);
+    RUN_TEST(test_lava_burns_a_root_out_of_the_ground);
+    RUN_TEST(test_fire_leaves_a_root_alone);
+    RUN_TEST(test_an_orphaned_root_in_dry_ground_rots_away);
+    RUN_TEST(test_a_root_column_under_a_living_tree_does_not_rot);
+    RUN_TEST(test_a_rooted_collar_survives_the_bed_shifting_away);
+    RUN_TEST(test_a_root_is_inert);
+    RUN_TEST(test_root_conversion_never_creates_moisture);
+    RUN_TEST(test_a_root_eats_a_moist_neighbour_and_only_spends_its_own_moisture);
+    RUN_TEST(test_a_root_never_eats_dry_dirt_sand_or_empty_space);
+    RUN_TEST(test_a_root_tip_grows_on_away_from_its_parent_and_down);
+    RUN_TEST(test_the_first_root_under_a_trunk_heads_down);
+    RUN_TEST(test_a_root_carries_a_level_of_water_down_through_itself);
+    RUN_TEST(test_conduction_never_pushes_water_up_or_into_anything_but_soil);
+    RUN_TEST(test_a_thickly_rooted_cell_stops_growing);
+    RUN_TEST(test_roots_grow_toward_the_wet_side_only);
+    RUN_TEST(test_a_continuously_watered_root_system_still_saturates);
     RUN_TEST(test_a_shattered_pane_comes_back_as_cullet);
     RUN_TEST(test_painted_sand_stays_out_of_the_cullet_band);
     RUN_TEST(test_cullet_does_not_look_like_sand);
@@ -24409,8 +26212,8 @@ void run_sand_suite(void)
     RUN_TEST(test_foam_blobs_are_bigger_than_one_cell);
     RUN_TEST(test_lava_buried_in_stone_is_not_deleted);
     RUN_TEST(test_buried_lava_bursts_into_stone_and_fire);
-    RUN_TEST(test_lava_with_only_two_covered_sides_never_bursts);
-    RUN_TEST(test_rejected_semi_disc_patterns_stay_rejected);
+    RUN_TEST(test_lava_under_a_lid_with_gaps_never_bursts);
+    RUN_TEST(test_lava_in_a_wall_notch_never_bursts);
     RUN_TEST(test_cover_primitive_matches_the_exhaustive_shape_table);
     RUN_TEST(test_a_wide_pool_under_a_crust_bursts);
     RUN_TEST(test_a_wide_pool_under_a_sideways_crust_bursts);

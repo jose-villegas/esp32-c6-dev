@@ -377,15 +377,15 @@ neighbor_quenches(const sand_t* s, int nx, int ny, int w, int h) {
  * it, so it returns false the moment any direction fails rather than
  * accumulating across all four.
  *
- * DELIBERATELY NOT cover_mask()/cover_seals() (sand_priv.h) - this used
+ * DELIBERATELY NOT cover_mask()/covered_at() (sand_priv.h) - this used
  * to be built on cover_count() (bd esp32c6-mqt) and briefly shared
  * plumbing with the lava-burst gate below; bd esp32c6-a2j split them back
  * apart on purpose. Burial is a genuinely different question from
  * gravity-relative coverage: a burning SOLID (fire, ember) is starved of
  * air by being surrounded on every side, screen-fixed cardinals and all -
  * "what is below it" smothers a flame exactly as much as what is above
- * it does, so this has no business rotating with gravity or exempting a
- * cardinal-triple crust the way the burst gate does. Keeping one
+ * it does, so this has no business rotating with gravity or ignoring
+ * the sides the way the burst gate does. Keeping one
  * predicate answering two different questions is exactly the mistake
  * cover_count() made the first time; this stays its own, plain,
  * gravity-agnostic all-4 test. */
@@ -860,6 +860,30 @@ cool_off_chain(sand_t* s, int x, int y, int w, int h, uint8_t product, int chanc
     }
 }
 
+/* How fast wet soil runs DOWNHILL - see the PERCOLATION branch below.
+ *
+ * Its own constant rather than reusing `spread` (= reaction_t.soaks),
+ * which used to be doing THREE jobs off one number: how fast this
+ * material drinks an adjacent liquid, how fast it diffuses sideways into
+ * a drier neighbour, and how fast it runs downhill. Reported as wet dirt
+ * "running down" through dirt too fast, and there was no separate knob to
+ * answer with - turning down `soaks` itself would have slowed drinking
+ * and lateral spread by the same amount, which nobody asked for; those
+ * two still read `spread` directly below and are unaffected by this.
+ *
+ * A `#define` rather than a new reaction_t field: dirt is the only
+ * material with `dries != 0`, so it is the only one that can ever reach
+ * this branch at all, and a byte on every material's row for something
+ * only one of them can use is exactly the shape
+ * reactions[MAT_DIRT].flaw_to's own comment (material.c) already rejected
+ * once - "a new field serving exactly one material" - for the identical
+ * reason.
+ *
+ * 15 is a quarter of dirt's implicit old rate: before this constant
+ * existed, the downward branch used `spread` too, so dirt's effective
+ * percolation figure was reactions[MAT_DIRT].soaks = 60. */
+#define SOIL_PERCOLATE_CHANCE 15
+
 /* One cell that soaks up liquid, or holds what it soaked.
  *
  * Two halves that belong together because they are the same quantity going
@@ -1088,7 +1112,7 @@ step_one_soaking_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, const
                 open[n_open++] = i;
             }
         }
-        if (n_open != 0 && (int)(rng_next(&s->rng) & 0xFF) < spread) {
+        if (n_open != 0 && (int)(rng_next(&s->rng) & 0xFF) < SOIL_PERCOLATE_CHANCE) {
             const int pick = open[rng_below(&s->rng, n_open)];
             const int* fd = ring_dir(down + (pick == 0 ? 0 : pick == 1 ? 1 : 7));
             const int nx = x + fd[0], ny = y + fd[1];
@@ -1441,6 +1465,23 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  * an unbounded tree is not slow, it is explosive. */
 #define TREE_LIFT   10
 
+/* RETIRED: there used to be a ROOT_DEPTH_MAX here, capping how many
+ * cells deep a root column could run below the collar. It bounded a
+ * mechanism that no longer exists - PART 1 of the roots feature used to
+ * be the ENTIRE feature, growing a root system by repeatedly re-rolling
+ * the collar-welding roll below every time the tree spent soil moisture
+ * anywhere, one cell deeper each time; a fixed depth cap was the only
+ * thing stopping that from reaching the bottom of any bed a tree stood
+ * on. PART 2 (step_one_rooting_cell(), below) replaced that with a local
+ * rule - a root cell eating a moist neighbour of its own - and that
+ * rule carries its own bound, ROOT_SURFACE_MAX, measured against a
+ * continuously-rewatered scene to hold the whole system to a fixed
+ * point with no depth cap at all (see ROOT_SURFACE_MAX's own comment).
+ * A cell this far down a bed genuinely needing to stay unrooted was
+ * never the goal; a root system that stops growing on its own, at
+ * whatever depth the water ran out or the shape saturated, is closer to
+ * what a real one does anyway. */
+
 /* And how wide a trunk may get. Thickening is what turns a sapling into
  * something that reads as a trunk, and left alone it is the one direction
  * with nothing to stop it: the cells that thicken are the ones nearest the
@@ -1462,18 +1503,116 @@ step_one_falling_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
  *
  * Both are bounded, and the whole thing runs in the cold pass for cells
  * that grow - which is a handful on any board that has any. */
+/* `contact_at` is the grid index of the FIRST soil cell the stem walk
+ * reaches - the collar, where the tree actually stands - or -1 if the
+ * walk never gets there. `root_depth` is how many cells of root (see
+ * reaction_t.roots) the stem walk passed through on the way down.
+ *
+ * Both exist for PART 1 of the roots feature (spend_soil_moisture()
+ * below): the collar is where the FIRST root has to form, and
+ * `root_depth == 0` is how spend_soil_moisture() tells "this collar is
+ * still bare" from "a root system already grows here, PART 2's job now"
+ * - see that function's own comment. Neither is `lift` - a root cell is
+ * below the water line and must not cost the tree any of TREE_LIFT, which
+ * is why it gets its own counter rather than folding into the existing
+ * one. */
 static int
-find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self, int* lift, bool wants_room) {
+find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t self, int* lift, int* contact_at,
+           int* root_depth, bool wants_room) {
     const int dx = s->last_load_dx, dy = s->last_load_dy;
     const int down = ring_of(dx, dy);
 
+    *contact_at = -1;
+
     int cx = x, cy = y;
+    int lift_count = 0;
+    int roots_passed = 0;
     for (int step = 0; step < GROW_REACH; step++) {
-        *lift = step;
+        /* `step` is the walk's own budget counter and bounds BOTH kinds
+         * of cell it can cross; `lift_count` is a separate tally that
+         * only ever counts STEM transitions. Reusing `step` for `*lift`
+         * directly - as this used to - looks right and is not: `step`
+         * advances once per loop iteration regardless of whether that
+         * iteration crossed a stem cell or a root one, so a root would
+         * still cost lift by riding along on the shared counter even
+         * though it is never counted in `roots_passed` either. */
+        *lift = lift_count;
+        *root_depth = roots_passed;
         int nx = -1, ny = -1;
         bool on_soil = false;
+        bool via_root = false;
+        /* Whether the pre-check below actually COMMITTED to a root. Not
+         * the same question as `nx >= 0`: the scan sets nx early as a
+         * FALLBACK and then keeps looking for real soil, so testing nx to
+         * decide whether to run the scan at all stops it on its own
+         * fallback and it never reaches the ground beside a root. That
+         * mistake cost the feature's own regression test - see the
+         * lookahead note below for the scene that catches it. */
+        bool took_root = false;
 
-        for (int i = 0; i < 3; i++) {
+        /* OUR OWN ROOT, STRAIGHT DOWN, BEFORE THE SCAN BELOW RUNS AT ALL.
+         *
+         * The ordering IS the mechanism, and getting it wrong is what made
+         * roots a single row rather than a system. The scan takes the
+         * first SOIL it finds and breaks, keeping stem only as a fallback
+         * - so the moment a collar cell rooted, the walk found the loose
+         * dirt sitting DIAGONALLY beside that root before it ever
+         * considered going THROUGH it. The contact therefore stayed on the
+         * surface row for ever, each conversion landing beside the last
+         * instead of beneath it. Measured on a watered bed at 20,000
+         * steps: three roots, every one of them at depth 0, spreading
+         * sideways. Reported from the device as roots never growing past
+         * the attachment point.
+         *
+         * The scan DOES stumble down eventually without this - once a
+         * whole surface row has rooted there is no dirt left beside it to
+         * find, so the fallback crosses a root and the contact drops a
+         * row. What it does not do is get there RELIABLY. Measured over
+         * six seeds at 20,000 steps, deepest root reached: 3/3/3/3/3/3
+         * with this check against 3/2/3/0/2/3 without, the zero being a
+         * tree that put out two roots and never left the surface. The
+         * trees come out bigger too (wood 86-159 against 18-102), which
+         * is the same cause seen from the other end: a walk that goes
+         * through its roots reaches the wetter soil underneath them.
+         *
+         * A tree stands ON its roots, and the ground that feeds it is
+         * what lies BELOW them, so the root has to be crossed before the
+         * soil beside it is considered. Straight down only: a root grows
+         * into the contact cell, which is always the cell gravity-ward,
+         * so that is the one direction a root column can occupy. A root
+         * found diagonally is still crossable through the fallback in the
+         * scan, for a stem that has wandered off the column. */
+        /* ONLY IF THERE IS GROUND UNDER IT, which is the other half and was
+         * missing at first. Preferring the root unconditionally commits the
+         * walk to it, and a root with nothing below it is a DEAD END: the
+         * walk arrives, finds no soil and no stem, and gives up - even
+         * though the soil it wanted was sitting diagonally beside the root
+         * all along. A bed one row deep on stone is exactly that shape, and
+         * it is the shape the whole feature's own regression test uses, so
+         * this turned "the tree survives its bed shifting" straight back
+         * into a failure. One cell of lookahead is the entire fix: cross a
+         * root when soil or more root lies under it, and otherwise leave
+         * the scan below to find the ground beside it. */
+        if (r->roots_to != 0) {
+            const int* fd = ring_dir(down);
+            const int tx = cx + fd[0], ty = cy + fd[1];
+            if ((unsigned)tx < (unsigned)w && (unsigned)ty < (unsigned)h
+                && s->cells[(size_t)ty * (size_t)w + (size_t)tx] == (cell_t)r->roots_to) {
+                const int ax = tx + dx, ay = ty + dy;
+                if ((unsigned)ax < (unsigned)w && (unsigned)ay < (unsigned)h) {
+                    const cell_t under = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
+                    if (!CELL_IS_EMPTY(under)
+                        && (reaction_of(under)->dries != 0 || under == (cell_t)r->roots_to)) {
+                        nx = tx;
+                        ny = ty;
+                        via_root = true;
+                        took_root = true;
+                    }
+                }
+            }
+        }
+
+        for (int i = 0; !took_root && i < 3; i++) {
             const int* fd = ring_dir(down + (i == 0 ? 0 : i == 1 ? 1 : 7));
             const int tx = cx + fd[0], ty = cy + fd[1];
             if ((unsigned)tx >= (unsigned)w || (unsigned)ty >= (unsigned)h) {
@@ -1492,26 +1631,52 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
             if (nx < 0 && (c == self || (r->clings_to != 0 && CELL_MATERIAL(c) == r->clings_to))) {
                 nx = tx;
                 ny = ty; /* more stem, keep it as a fallback */
+            } else if (nx < 0 && r->roots_to != 0 && c == (cell_t)r->roots_to) {
+                /* A ROOT counts as stem too. Without this, the very bug
+                 * roots exist to fix - a stem finding neither stem nor
+                 * ground below it once the ground it stood on has moved -
+                 * would come straight back the moment a root actually
+                 * grew there. */
+                nx = tx;
+                ny = ty;
+                via_root = true;
             }
         }
         if (nx < 0) {
             return -1; /* neither stem nor ground below */
         }
         if (!on_soil) {
+            if (via_root) {
+                roots_passed++; /* below the water line - see this
+                                  * function's own top comment */
+            } else {
+                lift_count++;
+            }
             cx = nx;
             cy = ny; /* carry on down the stem */
             continue;
         }
 
-        /* Into the soil. */
+        /* Into the soil. This is the collar. */
         cx = nx;
         cy = ny;
+        *contact_at = (int)((size_t)cy * (size_t)w + (size_t)cx);
         for (int depth = 0; depth < ROOT_REACH; depth++) {
             if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
                 return -1;
             }
             const size_t at = (size_t)cy * (size_t)w + (size_t)cx;
             const cell_t c = s->cells[at];
+            /* A root is TRANSPARENT to the soil walk. Dirt shifts, so a
+             * root can end up with soil piled back on top of it - and
+             * without this, a root would cut the tree off from the water
+             * below its own root, which is the exact bug this feature
+             * exists to fix, reintroduced from the other side. */
+            if (r->roots_to != 0 && c == (cell_t)r->roots_to) {
+                cx += dx;
+                cy += dy;
+                continue;
+            }
             if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
                 return -1;
             }
@@ -1527,6 +1692,383 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
         return -1;
     }
     return -1;
+}
+
+/* Every grower that spends a cell of soil moisture pays through here -
+ * growing, budding and sprouting alike - see PART 1 of the roots
+ * feature. It spends the moisture exactly as each site used to do
+ * inline, then - separately, and only once the spend itself has already
+ * happened - rolls whether the CONTACT cell (the collar, where the stem
+ * actually touches ground) welds into the FIRST root of a new system.
+ *
+ * ONLY THE FIRST. `root_depth == 0` means find_water()'s stem walk
+ * crossed no root at all on the way down - a bare collar - which is
+ * exactly the case this exists for: a tree resting on top of its bed
+ * rather than embedded in it, one shift of the soil away from being
+ * stranded (see reaction_t.roots's own comment in material.h for the
+ * bug this is the fix for). The moment that first root exists, PART 2 -
+ * step_one_rooting_cell(), below, gated on the cell ITSELF being a root
+ * rather than on anything spending moisture nearby - takes over growing
+ * the system outward and downward on its own, cell eating cell, the way
+ * an actual root network spreads. Gating this path shut once root_depth
+ * is nonzero is what keeps the two from fighting over the same collar:
+ * without it, every grow/bud/sprout event for the rest of the tree's
+ * life keeps re-rolling here too, seeding fresh disconnected root cells
+ * at whatever the CURRENT deepest contact happens to be, on top of a
+ * system PART 2 is already growing outward from the first one.
+ *
+ * `soil_at` is never the cell that gets converted - it can be several
+ * rows down the ROOT_REACH walk in find_water(), and a root planted
+ * there would be a disconnected woody speck in the middle of the bed,
+ * anchoring nothing. `contact_at` is -1 for a caller that never reaches
+ * soil at all (step_one_drinking_cell()'s find_water() call, which
+ * passes a scratch int instead of caring); this function is simply not
+ * called in that case, since drinking never spends soil moisture. */
+static void
+spend_soil_moisture(sand_t* s, int w, const reaction_t* r, int soil_at, uint8_t amount, int contact_at,
+                     int root_depth) {
+    const cell_t soil = s->cells[soil_at];
+    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - amount));
+    mark_rows(s, soil_at / w, soil_at / w);
+
+    if (r->roots == 0 || contact_at < 0 || root_depth != 0) {
+        return;
+    }
+    /* Roll AFTER every other gate, the same discipline this whole file
+     * uses everywhere else - drawing a random number for a root that
+     * cannot happen shifts every decision downstream of it. */
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
+        return;
+    }
+    place_reacted(s, contact_at % w, contact_at / w, (size_t)contact_at, r->roots_to);
+}
+
+/* How many of a root's own eight neighbours may already read as root
+ * before it stops rolling to grow at all - see step_one_rooting_cell()'s
+ * own top comment for where this sits among the feature's three bounds.
+ * Without a surface rule a well-watered bed converts every moist cell it
+ * can reach, one after another with nothing to stop it partway, and the
+ * result reads as a slab of root rather than a system of them - it is
+ * this rule, not the depth/spread caps the walk-shaped first draft of
+ * this feature used, that keeps the shape filamentary; no depth or
+ * spread cap was needed in the end (see this function's own top comment
+ * on the three that were).
+ *
+ * 2, MEASURED, not guessed - see the Roots section of docs/Sand/Sand-
+ * Simulation.md for the full numbers this came from. Compared directly
+ * against a runaway scene (a root pre-planted so the one-time collar
+ * seed's own luck cannot confound the reading, then its collar
+ * rewatered to SOIL_MOISTURE_MAX EVERY step for 20,000 steps - about as
+ * much water as this feature will ever see): at 1 the system starved
+ * itself shut at 4 root cells, reading as a bare stub rather than a
+ * system; at 3 it never stopped growing - 99 roots by step 2000, still
+ * climbing at 220 by step 20000, no sign of levelling off; at 2 it
+ * climbed to the low forties by step 2000 and then sat there BYTE-
+ * IDENTICAL through the remaining 18,000 steps, seed after seed - a
+ * genuine fixed point, not merely a slowdown. */
+#define ROOT_SURFACE_MAX 2
+
+/* The two skews step_one_rooting_cell()'s pick lays over the moisture -
+ * see the pick itself for what each means. Both sit on a base of 1 per
+ * candidate, so a candidate that continues away from its parent AND
+ * reaches down weighs 1 + AWAY + DOWN against 1 for one that does
+ * neither.
+ *
+ * DOWN was 1 at first, with AWAY the larger on the reasoning that the
+ * parent-relative skew was the thing asked for; the device still read as
+ * roots not going deep enough, so DOWN came up to match AWAY and the
+ * trunk now counts as a parent (see the pick), which is what points the
+ * very first root downward.
+ *
+ * MEASURED HONESTLY, AND THE WEIGHTS ARE NOT THE DEPTH LEVER. Over thirty
+ * seeds on a saturated 19-row bed (root_shape harness, 20,000 steps),
+ * DOWN 1 -> 2 plus the trunk term moved mean deepest root 7.2 -> 7.4 rows
+ * and mean half-width 8.5 -> 7.9: a real narrowing, no real deepening.
+ * What stops a finger is WATER, not heading - every one of those beds was
+ * 98-99% dry by the end and not a single live tip had moist dirt beside
+ * it. A root can only eat moist soil, and a bed watered from the top
+ * dries from the top, so the moist front the fingers chase is gone
+ * before they reach the floor. Deeper roots need deeper water; the
+ * weights only decide which moist cell a tip takes next. Six seeds had
+ * suggested a doubling from the earlier step (4.2 -> 8.8) - that was
+ * per-seed RNG scatter of +/-10 rows, which thirty seeds average away. */
+#define ROOT_WEIGHT_AWAY 2
+#define ROOT_WEIGHT_DOWN 2
+
+/* How readily a root CONDUCTS water downward - step_one_conducting_cell()
+ * below. Chance in 256 per root cell per step of moving one level of
+ * moisture from the wettest soil beside or above it into the driest soil
+ * beneath it. See the function for why this exists at all. Roots are few
+ * enough that the per-cell cost of a generous figure is nothing.
+ *
+ * MEASURED on the dry bed watered at the collar only (the device case),
+ * ten seeds, 20,000 steps, mean deepest root of 19 rows, against the
+ * percolation rate - because the obvious alternative was to undo the
+ * SOIL_PERCOLATE_CHANCE slowdown instead:
+ *
+ *     SOIL_PERCOLATE_CHANCE    conduit 0    conduit 64
+ *             15 (current)        4.6          15.0
+ *             30                  7.0          18.0
+ *             60 (old value)      5.3          15.1
+ *
+ * Conduction is worth about three times what percolation is: even the
+ * old, fast percolation reached 5-7 rows without it. And the runaway
+ * scene - collar re-saturated every step - still pins, 93 roots at step
+ * 2000 and 93 at 20,000: ROOT_SURFACE_MAX bounds the SHAPE whatever
+ * amount of water is carried into it, so carrying more does not undo
+ * the bound. 64 is the first value tried and it was decisive; it wants
+ * eyes on the panel for feel, not more measurement for depth. */
+#define ROOT_CONDUCT_CHANCE 64
+
+/* One cell of ROOT, carrying water DOWN through itself - a conduit.
+ *
+ * Why a root system needs this at all: depth is bounded by water, not by
+ * heading. A root can only eat moist soil, a bed watered from the top
+ * dries from the top, and measured over thirty seeds the moist front the
+ * fingers chase was gone before they reached the floor - every saturated
+ * bed 98-99% dry after 20,000 steps, not one live tip beside a moist cell,
+ * and on a dry bed watered at the collar alone a mean deepest root of 5.7
+ * rows of 19. Steeper direction weights narrowed the system and did not
+ * deepen it (ROOT_WEIGHT_DOWN's own comment). So the water has to be
+ * brought to where the roots want to go, and that is what real roots do:
+ * they carry it.
+ *
+ * The rule: take one level from the WETTEST soil among the five
+ * neighbours beside or above this root, put it into the DRIEST soil among
+ * the three beneath it. Moves only, never makes - the same conservation
+ * step_one_soaking_cell()'s percolation keeps - and only ever one way,
+ * gravity-ward, so it cannot ping-pong against diffusion. The sink is the
+ * next cell a tip wants to eat, and a fresh tip is itself a conduit, so
+ * the moisture front and the root front move down together: depth is
+ * EARNED, a level of water at a time, rather than handed out by a weight.
+ *
+ * Sides count as sources, not only "above". A column of root has more
+ * root above each cell, not soil - only its top cell would ever conduct
+ * if the source had to be overhead. Drawing from the wet soil flanking
+ * each cell is what lets a whole column drain the surface layer downward.
+ *
+ * Every gate before the roll, the file's rule: with no source or no sink
+ * this touches neither the grid nor the RNG. */
+static bool
+step_one_conducting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    const int down = ring_of(s->last_load_dx, s->last_load_dy);
+    (void)r;
+
+    int src_at = -1, src_x = 0, src_y = 0, src_m = 0;
+    int dst_at = -1, dst_x = 0, dst_y = 0, dst_m = SOIL_MOISTURE_MAX;
+
+    for (int k = 0; k < 8; k++) {
+        const int* nd = ring_dir(down + k);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t c = s->cells[nat];
+        if (CELL_IS_EMPTY(c) || reaction_of(c)->dries == 0) {
+            continue; /* not soil: root, wood, stone, air */
+        }
+        const int m = CELL_MOISTURE(c);
+        if (k == 0 || k == 1 || k == 7) {
+            /* Gravity-ward: a sink, if it has room. */
+            if (m < dst_m) {
+                dst_m = m;
+                dst_at = (int)nat;
+                dst_x = nx;
+                dst_y = ny;
+            }
+        } else if (m > src_m) {
+            /* Beside or above: a source, if it holds anything. */
+            src_m = m;
+            src_at = (int)nat;
+            src_x = nx;
+            src_y = ny;
+        }
+    }
+    if (src_at < 0 || dst_at < 0) {
+        return false; /* nothing to carry, or nowhere to carry it */
+    }
+    if ((int)(rng_next(&s->rng) & 0xFF) >= ROOT_CONDUCT_CHANCE) {
+        return true;
+    }
+    const cell_t src = s->cells[src_at], dst = s->cells[dst_at];
+    s->cells[src_at] = CELL_WITH_MOISTURE(src, (uint8_t)(src_m - 1));
+    s->cells[dst_at] = CELL_WITH_MOISTURE(dst, (uint8_t)(dst_m + 1));
+    mark_rows(s, src_y, src_y);
+    mark_rows(s, dst_y, dst_y);
+    wake_block_and_neighbors(s, src_x, src_y);
+    wake_block_and_neighbors(s, dst_x, dst_y);
+    return true;
+}
+
+/* One cell of ROOT, eating into the moist soil it touches - PART 2 of the
+ * roots feature (docs/Sand/Sand-Simulation.md), and the whole growth
+ * rule: find a neighbour that is dirt (reaction_of(c)->dries != 0) and
+ * still holds moisture, roll a small chance, and convert it - which
+ * consumes the moisture as the price of the conversion, the same "spend
+ * the scarce thing" discipline growth, budding and sprouting already
+ * rest on (reaction_t.roots's own comment, material.h).
+ *
+ * Moisture itself already has most of the shape - it percolates down
+ * through a bed (step_one_soaking_cell()) and diffuses out from anything
+ * drinking or pouring nearby - so a root reaching for whichever neighbour
+ * still has water in it spreads wide near a wet surface and fingers
+ * downward through a bed drying from the top. The first cut had no
+ * direction weights at all on exactly that reasoning, and it was mostly
+ * right: it was replaced by a SMALL skew, not a walk (see the pick below
+ * for what the skew is and the measurement behind it), because near a wet
+ * surface the sideways spread won so completely that depth only happened
+ * at the angles the geometry favoured. An earlier draft before that walked
+ * a stem-shaped run outward from the tree's collar instead, reusing
+ * step_one_growing_cell()'s own site-roll-plus-fan-walk machinery; it was
+ * dropped because a root does not need a stem's machinery to look like a
+ * root, and because this rests on the same scarce-resource bound the rest
+ * of the feature already uses rather than adding a second kind of bound
+ * beside it.
+ *
+ * Bounded three ways, in the order that was actually measured to matter
+ * - see the Roots section of docs/Sand/Sand-Simulation.md for the
+ * numbers behind each:
+ *   1. THE MOISTURE ITSELF. A cell with nothing to spend has nothing to
+ *      grow into, and the total on a board is finite unless something
+ *      keeps pouring more in - the same bound budding rests on.
+ *   2. ROOT_SURFACE_MAX, above - a root already thick with root
+ *      neighbours does not roll at all, which is what keeps the system
+ *      a filigree rather than a block.
+ *   3. `r->roots` itself, on MATX_ROOT's own row (material.c) - a small
+ *      chance, the same discipline every other roll in this file uses. */
+static bool
+step_one_rooting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r) {
+    /* Cheapest question first, and it rejects most already-thick columns
+     * without the neighbour scan below ever touching the RNG. */
+    int root_neighbors = 0;
+    for (int d = 0; d < 8; d++) {
+        const int* nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        if (s->cells[(size_t)ny * (size_t)w + (size_t)nx] == (cell_t)r->roots_to) {
+            root_neighbors++;
+        }
+    }
+    if (root_neighbors > ROOT_SURFACE_MAX) {
+        return false; /* buried inside its own kind; nothing to do here */
+    }
+
+    /* ALL EIGHT, not the four cardinals - compared directly, both ways,
+     * against the same six seeds (docs/Sand/Sand-Simulation.md's Roots
+     * section): four gave a near-straight taproot, one or two cells wide,
+     * that only fanned out where moisture happened to pool against the
+     * stone floor; eight let a root step diagonally as it reaches for
+     * water, which is what actually produces the wandering, forking
+     * shape a root system is supposed to have - the difference is
+     * qualitative, not a rounding error, and it is the reason this rule
+     * bothers with ring_dir() at all instead of the plainer reaction_dirs
+     * four-neighbour scan sprouting and drinking already use.
+     *
+     * A WEIGHTED PICK, not the first match. The first cut took whichever
+     * moist neighbour the fixed ring order reached first, which is a
+     * uniform pick in disguise - and uniform is isotropic, so the shape
+     * of the moisture decided everything. Near a wet surface moisture
+     * spreads sideways, so the system spread sideways, and reported from
+     * the device as roots preferring the sides so strongly that deeper
+     * roots only happened at the few angles the geometry favoured.
+     *
+     * Two biases, both read off the grid with no state:
+     *   AWAY FROM ITS PARENT - the sum of the directions from this cell's
+     *     own root neighbours to it, `away`. A tip has one parent, so the
+     *     vector is strong and the tip keeps going the way it was going,
+     *     the same thing holds_line does for a stem without ever
+     *     remembering anything. A junction has several, they partly
+     *     cancel, and it is free to go any way - which is right for a
+     *     junction. A lone seed has none and is left to gravity.
+     *   GRAVITY-WARD - what actually buys depth: a root reaching for the
+     *     water percolating down beneath it rather than the water
+     *     diffusing beside it.
+     * THE TRUNK COUNTS AS A PARENT TOO. The first root a tree puts down
+     * has no root neighbours at all, so its away-vector was zero and it
+     * was left to the gravity term alone - and it is the one root whose
+     * heading matters most, since everything else grows from it. The
+     * wood standing directly on top of it is what it grew from, so it
+     * enters the away-vector exactly as a parent root does (`clings_to`,
+     * the material the row says a root is part of), and the collar's
+     * first move is down and out from under the trunk rather than a
+     * coin-toss along the wet surface. Reported as roots still not going
+     * deep enough with the parent skew alone.
+     *
+     * Two draws, both after every gate: the `roots` roll, then the pick -
+     * the second is only ever drawn once the first has said a conversion
+     * happens, so a root with nothing moist beside it still touches the
+     * RNG exactly as often as before, which is not at all. */
+    int away_x = 0, away_y = 0;
+    for (int d = 0; d < 8; d++) {
+        const int* nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const cell_t c = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
+        if (c == (cell_t)r->roots_to || (!CELL_IS_EMPTY(c) && CELL_MATERIAL(c) == r->clings_to)) {
+            away_x -= nd[0];
+            away_y -= nd[1];
+        }
+    }
+    const int gx = s->last_load_dx, gy = s->last_load_dy;
+
+    int cand_at[8], cand_x[8], cand_y[8], cand_w[8];
+    int n_cand = 0, total_w = 0;
+    for (int d = 0; d < 8; d++) {
+        const int* nd = ring_dir(d);
+        const int nx = x + nd[0], ny = y + nd[1];
+        if ((unsigned)nx >= (unsigned)w || (unsigned)ny >= (unsigned)h) {
+            continue;
+        }
+        const size_t nat = (size_t)ny * (size_t)w + (size_t)nx;
+        const cell_t n = s->cells[nat];
+        if (CELL_IS_EMPTY(n) || reaction_of(n)->dries == 0 || CELL_MOISTURE(n) == 0) {
+            continue;
+        }
+        int wgt = 1;
+        if (nd[0] * away_x + nd[1] * away_y > 0) {
+            wgt += ROOT_WEIGHT_AWAY; /* carries on away from its parent */
+        }
+        if (nd[0] * gx + nd[1] * gy > 0) {
+            wgt += ROOT_WEIGHT_DOWN; /* reaches down */
+        }
+        cand_at[n_cand] = (int)nat;
+        cand_x[n_cand] = nx;
+        cand_y[n_cand] = ny;
+        cand_w[n_cand] = wgt;
+        total_w += wgt;
+        n_cand++;
+    }
+    if (n_cand == 0) {
+        return false; /* nothing moist beside it right now */
+    }
+    /* Everything found before the roll - the same discipline every site
+     * in this file uses, drawing a random number only once everything
+     * else has already said this cell has somewhere to spend it. */
+    if ((int)(rng_next(&s->rng) & 0xFF) >= r->roots) {
+        return true; /* a candidate exists; just not this roll */
+    }
+    int pick = rng_below(&s->rng, total_w);
+    int k = 0;
+    while (pick >= cand_w[k]) {
+        pick -= cand_w[k];
+        k++;
+    }
+    const int eat_at = cand_at[k], ex = cand_x[k], ey = cand_y[k];
+
+    /* The conversion IS the spend. place_reacted() overwrites the whole
+     * cell with a fresh root byte, so the dirt's moisture nibble is
+     * simply gone with the rest of what that cell used to be, rather
+     * than separately debited the way spend_soil_moisture() debits a
+     * moisture nibble IN PLACE on a cell that stays dirt - there is no
+     * moisture field left to hold once the cell is no longer dirt at
+     * all. */
+    place_reacted(s, ex, ey, (size_t)eat_at, r->roots_to);
+    return true;
 }
 
 /* One cell of something that DRINKS: touching a liquid, and rooted in
@@ -1561,8 +2103,11 @@ step_one_drinking_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* 
         return false; /* nothing to drink */
     }
 
-    int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, true);
+    int lift = 0, contact_at = -1, root_depth = 0; /* drinking never spends
+                                                     * soil moisture, so
+                                                     * nothing here roots -
+                                                     * scratch values */
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, true);
     if (soil_at < 0) {
         return true; /* thirsty, but nowhere to put it */
     }
@@ -1625,9 +2170,20 @@ step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
 
     place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
 
-    const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - 1));
-    mark_rows(s, soil_at / w, soil_at / w);
+    /* SPENDS, BUT NEVER SEEDS A ROOT - contact_at deliberately -1.
+     *
+     * This is a direct four-neighbour scan, not a stem walk, so it has no
+     * honest depth to report: it knows a soil cell is adjacent and nothing
+     * about whether a root already exists at this tree's own collar.
+     * Passing 0, as this did at first, is not a harmless default - it
+     * would tell spend_soil_moisture()'s `root_depth == 0` gate "this
+     * collar is still bare" on every single sprout, whether or not that
+     * is true, and a trunk that had already rooted elsewhere could keep
+     * seeding fresh, disconnected root cells from every sprouting leaf
+     * site on the tree. Rooting is left to growth and budding, both of
+     * which walk the stem and therefore know the real depth; sprouting
+     * just pays for its leaf. */
+    spend_soil_moisture(s, w, r, soil_at, 1, -1, 0);
     return true;
 }
 
@@ -1693,8 +2249,8 @@ step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         return true; /* crowned, but boxed in */
     }
 
-    int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
+    int lift = 0, contact_at = -1, root_depth = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false);
     if (soil_at < 0) {
         return true; /* nothing to drink */
     }
@@ -1715,8 +2271,7 @@ step_one_budding_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
 
     place_reacted(s, bx, by, (size_t)at, r->buds_to);
 
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - BUD_COST));
-    mark_rows(s, soil_at / w, soil_at / w);
+    spend_soil_moisture(s, w, r, soil_at, BUD_COST, contact_at, root_depth);
     return true;
 }
 
@@ -1837,6 +2392,15 @@ step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
             if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->sheltered_by) {
                 return false; /* under its tree; it stays */
             }
+            /* More ROOT counts as shelter too, byte-exact through
+             * `roots_to` the way find_water() recognises one. A column
+             * of root under a living tree touches wood only at its top
+             * cell; without this the rest of the column rotted out from
+             * beneath a perfectly healthy tree the moment its soil dried,
+             * bottom cell first. */
+            if (r->roots_to != 0 && n == (cell_t)r->roots_to) {
+                return false;
+            }
         }
     }
 
@@ -1859,8 +2423,11 @@ step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
         }
     }
 
-    int lift = 0;
-    if (find_water(s, x, y, w, h, r, self, &lift, false) >= 0) {
+    int lift = 0, contact_at = -1, root_depth = 0; /* just a reachability
+                                                     * check - nothing here
+                                                     * spends, so nothing
+                                                     * roots */
+    if (find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false) >= 0) {
         return false; /* it can still drink */
     }
     if ((int)(rng_next(&s->rng) & 0xFF) >= r->withers) {
@@ -1968,8 +2535,8 @@ step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
         return true; /* inside the crowd, not at its edge */
     }
 
-    int lift = 0;
-    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, false);
+    int lift = 0, contact_at = -1, root_depth = 0;
+    const int soil_at = find_water(s, x, y, w, h, r, self, &lift, &contact_at, &root_depth, false);
     if (soil_at < 0) {
         return true; /* nothing to drink */
     }
@@ -2140,9 +2707,7 @@ step_one_growing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t* r
     mark_rows(s, gy, gy);
     wake_block_and_neighbors(s, gx, gy);
 
-    const cell_t soil = s->cells[soil_at];
-    s->cells[soil_at] = CELL_WITH_MOISTURE(soil, (uint8_t)(CELL_MOISTURE(soil) - 1));
-    mark_rows(s, soil_at / w, soil_at / w);
+    spend_soil_moisture(s, w, r, soil_at, 1, contact_at, root_depth);
 
     /* HARDENING. Counted from the bottom of the column - the cell whose
      * gravity-ward neighbour is not more of the same - so a run is
@@ -3491,9 +4056,9 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * because a lava neighbour is KIND_LIQUID and neighbor_smothers()
      * never counts one - the pool's own sides and floor are always more
      * of the same liquid, never covering, no matter how completely a
-     * crust seals its surface. covered_at()'s gravity-relative semi-disc
-     * (cover_mask()/cover_seals(), sand_priv.h) is what actually answers
-     * "is there a lid over it" for a wide pool. */
+     * crust seals its surface. covered_at()'s gravity-relative lid
+     * (cover_mask(), sand_priv.h) is what actually answers "is there a
+     * lid over it" for a wide pool. */
     if (mat->kind != KIND_LIQUID && smothered(s, x, y, w, h, mat->density)) {
         /* Burying a burning log smothers the BURN, not the log. Same
          * reasoning as quenching one. */
@@ -3537,7 +4102,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * THE ROLL COMES BEFORE covered_at(), not after: at
      * SAND_LAVA_BURST_CHANCE's odds (sand.h, deliberately the rarest a
      * single byte-wide roll can express) the roll is the cheap rejection,
-     * the 5-neighbour cover_mask() walk is not - so the overwhelmingly
+     * the 3-neighbour cover_mask() walk is not - so the overwhelmingly
      * common case, a covered cell that simply loses this step's roll,
      * never pays for the walk.
      *
@@ -3549,14 +4114,17 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
      * pool wider than one cell could have at most one neighbour that
      * ever counted - the crust directly above it - so a wide pool could
      * never reach the threshold no matter how completely a crust sealed
-     * it. covered_at()'s gravity-relative semi-disc fixes that: the two
+     * it. covered_at()'s gravity-relative lid fixes that: the two
      * diagonal crust cells beside "straight up" count too, so a crust
-     * alone gets an interior pool cell to 3 - see
+     * alone lids an interior pool cell - see
      * test_a_wide_pool_under_a_crust_bursts (suite_sand.c), the case that
-     * could not fire before this change. SAND_LAVA_BURST_COVER, not
-     * smothered()'s own all-5-would-be equivalent - a pocket with one
-     * open side (of the five gravity-relative ones) still qualifies
-     * (SAND_LAVA_BURST_COVER's own comment, sand.h).
+     * could not fire before this change. Those three cells and ONLY
+     * those: the two perpendiculars beside the cell never count, because
+     * a vessel's sides wall lava in rather than cover it, and letting
+     * them count blew the sides out of every hand-drawn basin (see
+     * test_lava_in_a_wall_notch_never_bursts, suite_sand.c, and
+     * cover_mask()'s own comment for the notch that did it). A pocket
+     * with an open side still qualifies, as long as its lid is complete.
      *
      * NOT GATED ON s->impulse_buf, UNLIKE try_ignite_given()'s own
      * gas_ignite_confined() caller above, which skips straight to a plain
@@ -3581,7 +4149,7 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
     if (is_lava && burst_chance != 0 &&
         (int)(rng_next(&s->rng) & 0xFF) < burst_chance &&
         (!burst_natural || (rng_next(&s->rng) % SAND_LAVA_BURST_GATE) == 0) &&
-        covered_at(s, x, y, w, h, mat->density, SAND_LAVA_BURST_COVER)) {
+        covered_at(s, x, y, w, h, mat->density)) {
         /* rx->quench_to, not a hardcoded MAT_STONE: `is_lava` above IS
          * "a burning liquid with a quench product", so the product is
          * already named right there, and a second burning liquid with
@@ -3688,7 +4256,29 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
              * lava, sand -> glass -> lava), or a thermal-shock crack via
              * crack_run() - counts as the WORK this trigger charges for. */
             const uint8_t before_mat = CELL_MATERIAL(n);
-            if (try_heat_transform_given(s, nx, ny, w, h, nat, n)) {
+            bool changed = try_heat_transform_given(s, nx, ny, w, h, nat, n);
+            /* MELTING - the door only a burning LIQUID can open. See
+             * reaction_t.melts for why this exists beside heat_chance at
+             * all: a material with no variant cannot tell fire from lava
+             * by banking heat the way glass does, so the distinction is
+             * made here, at the one place the SOURCE is known. Contact
+             * only, deliberately - conduct_heat()'s far end never reaches
+             * this, so lava behind a wall melts nothing a fire behind it
+             * would not.
+             *
+             * Every gate before the roll: the source's kind, then the
+             * neighbour's own two fields, then - and only then - the RNG.
+             * A flame next to a root pays three predicted-false compares
+             * and never touches the stream, which is the discipline the
+             * rest of this walk already keeps. */
+            if (!changed && mat->kind == KIND_LIQUID) {
+                const reaction_t* nr = reaction_of(n);
+                if (nr->melts != 0 && nr->heats_to != 0 && (int)(rng_next(&s->rng) & 0xFF) < nr->melts) {
+                    place_reacted(s, nx, ny, nat, nr->heats_to);
+                    changed = true;
+                }
+            }
+            if (changed) {
                 acted = true;
                 if (lava_cooloff != 0 && CELL_MATERIAL(s->cells[nat]) != before_mat &&
                     (int)(rng_next(&s->rng) & 0xFF) < lava_cooloff) {
@@ -3909,6 +4499,24 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
                 found |= FOUND_MOISTURE;
             }
         }
+        /* Root growth - PART 2 of the roots feature, step_one_rooting_cell()
+         * above. Gated on the cell ITSELF being a root (`c == r->roots_to`),
+         * not merely on `r->roots` being nonzero: plant and wood also carry
+         * `.roots`, for the one-time collar seed spend_soil_moisture() still
+         * pays out below, and must never take this branch - a plant cell's
+         * own material is never equal to its `roots_to`, so this check alone
+         * keeps the two rows apart without needing a second field. */
+        if (r->roots != 0 && c == (cell_t)r->roots_to && s->may_have_moisture) {
+            /* Conduct first, then eat: the level a root carries down this
+             * step is the level the tip beneath it can grow into next. */
+            if (step_one_conducting_cell(s, x, y, w, h, r)) {
+                found |= FOUND_MOISTURE;
+            }
+            if (step_one_rooting_cell(s, x, y, w, h, r)) {
+                found |= FOUND_MOISTURE;
+            }
+            continue;
+        }
         /* Growing. Reached only where there is soil with water in it,
          * which is what may_have_moisture already tracks - a plant on dry
          * ground costs one field test and nothing else. */
@@ -3994,7 +4602,12 @@ sand_step_reactions(sand_t* s) {
     uint8_t theirs_bits[MATERIAL_MAX] = {0};
     for (int m = 1; m < MAT_COUNT; m++) {
         const reaction_t* r = &reactions[m];
-        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+        /* `melts` opens the bit too: a material lava alone can change has
+         * to reach the burning walk at all, and this bit is that walk's
+         * front door. Fire paying one cheap, RNG-free probe per such
+         * neighbour (try_heat_transform_given() rejects it at its
+         * heat_chance gate before rolling) is the price. */
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[m] |= PAIR_HEAT_RESPONSIVE;
         }
         if (materials[m].kind == KIND_LIQUID) {
@@ -4014,7 +4627,7 @@ sand_step_reactions(sand_t* s) {
     }
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const reaction_t* r = &extended_reactions[k];
-        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[MAT_EXTENDED] |= PAIR_HEAT_RESPONSIVE;
         }
         if (r->flammability != 0) {
