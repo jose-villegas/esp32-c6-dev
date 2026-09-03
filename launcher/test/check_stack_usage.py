@@ -36,6 +36,17 @@ ceiling is not simply raised to match what already exists: doing so would
 paper over a live device risk instead of gating it. Pre-existing frames are
 tracked explicitly instead, so a NEW oversized frame still fails the build.
 
+This gate is only worth anything if a frame that fits on x86 cannot secretly
+be larger on the target, so that was measured rather than assumed. Compiling
+the same suites with the ESP RISC-V toolchain and the device profile's own
+flags (check_stack_usage_device.sh, which runs this same checker over the
+target's .su files) gave, across the 411 functions of suite_sand.c present
+in both builds: not one larger on RISC-V than on x86, median 0.40x, worst
+case 0.99x, and no function over the ceiling on device that was not also
+over it here. The host over-estimates - the safe direction for a gate to be
+wrong in. Re-run that script after a toolchain or -O-level change, which is
+the sort of thing that could invert it.
+
 The profile is the source of truth for the ceiling and the device stack size
 - neither number is hardcoded here. See launcher/tools/device_profile.py.
 
