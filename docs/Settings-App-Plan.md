@@ -109,6 +109,20 @@ occasion to relitigate what belongs where.
 - **CI workflow file rename** (`build-diagnostics.yml`) changes the
   workflow's badge URL - the README badges section needs updating in the
   same change, not as an afterthought.
+- **A memory-layout view belongs in Settings, and the display-mode toggles
+  hang off it** (`bd esp32c6-rpt`). Resolution and colour mode are being
+  planned as system settings, and each moves a different line of the RAM
+  ledger: a half-resolution framebuffer returns ~240 KB (the panel has no
+  scaler, so it buys memory, not bus time), RGB444 returns 25% of both.
+  A toggle is only legible if the screen shows the ledger it moves: the
+  framebuffer at its current size, the running app's grid, static
+  `.data`/`.bss`, free heap and its largest contiguous block, and - beside
+  each toggle - the projected delta. The sources all exist
+  (`heap_caps_get_info()`, the linker's `_bss_start`/`_bss_end`, the
+  framebuffer and grid sizes gfx and sand already know). It doubles as
+  the diagnostic this project has needed twice: the round where three
+  device captures measured nothing because fixtures had eaten the heap
+  would have been one glance at this screen.
 - Should Settings be reachable from the launcher unconditionally (like any
   other app) or only exist in `--dev`/`--diag` builds the way Diagnostics
   does today? Development-only content argues for the latter, matching how
