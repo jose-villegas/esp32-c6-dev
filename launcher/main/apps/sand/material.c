@@ -1145,6 +1145,29 @@ const reaction_t reactions[MATERIAL_MAX] = {
             .buds = 32,
             .buds_to = MATX(MATX_PLANT),
 
+            /* Budding and sprouting both spend a level of the soil moisture
+         * they root in, and both roll this off that same spend - see
+         * reaction_t.roots's own comment in material.h. PART 1 of the
+         * roots feature: this is the ONE-TIME SEED that plants the FIRST
+         * root under a bare collar (spend_soil_moisture(), gated to
+         * root_depth == 0). Once that first cell exists, PART 2 -
+         * step_one_rooting_cell(), sand_reactions.c, MATX_ROOT's own
+         * `roots` figure below - takes over growing the system outward
+         * and downward on its own; this field never fires again for that
+         * tree.
+         *
+         * Still 40, UNCHANGED from before PART 2 existed, though what it
+         * used to measure - a watered bed's total root count and depth
+         * distribution after 20,000 steps, this field rolling again and
+         * again against a depth cap - no longer applies now that
+         * root_depth != 0 locks this path shut for good after the first
+         * success. What matters now is only "does the first root form
+         * promptly", and 40 already answered that reliably before, so
+         * there was no reason to retune a figure the redesign did not
+         * actually stress. */
+            .roots = 40,
+            .roots_to = MATX(MATX_ROOT),
+
             /* A trunk standing in water waters its own roots, at a third of
          * green growth's rate - bark is not a leaf. */
             .drinks = 12,
@@ -1595,8 +1618,33 @@ static const gfx_color_t palette[256] = {
                                     * on the panel, same as every other
                                     * starting-point constant in this table
                                     * (see docs/Sand/Metal-Smelting-Plan.md). */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_METAL + 1] = GFX_RGB(0xFF00FF),
-    GFX_RGB(0xFF00FF),
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFA58A), /* root - a PALE, WARM TAN, a shade or two
+                                    * lighter than the trunk it belongs to.
+                                    * Three colours to get here, and each
+                                    * step was decided on the panel, not on
+                                    * paper:
+                                    *
+                                    *   dark red-brown (0x5C2018) - "reads as
+                                    *   tree", but luminance ~49 sits inside
+                                    *   wet dirt's own range (DIRT_WET is
+                                    *   ~45), so it vanished into exactly the
+                                    *   soil it is buried in.
+                                    *   pale bone (0xBFB49B) - fixed that,
+                                    *   ~180 against dirt's ~127 dry / ~45
+                                    *   wet, but read as too BRIGHT: a
+                                    *   neutral off-white glowing under the
+                                    *   trunk rather than belonging to it.
+                                    *   this - the user's own pick, pulled
+                                    *   toward wood's hue and down to ~170.
+                                    *   Still clear of dirt's whole ramp at
+                                    *   either wetness, and now the same
+                                    *   family as the trunk above it.
+                                    *
+                                    * Warmer than bone but not sand: R-B here
+                                    * is 53 against SAND_PALE 0xF2CE90's 98,
+                                    * so a root in a dune still separates
+                                    * from the dune. */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT + 1] = GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
@@ -1833,6 +1881,59 @@ static const gfx_color_t wood_grain[8] = {
 #define METAL_DARK        0x7C8794
 #define METAL_LIGHT       0xB9C4D2
 
+/* Root: buried structure, not foliage, so it gets the narrow speckle
+ * treatment ice and metal do rather than leaf's wide one - a root does
+ * not move once grown, and the variation is meant to read as texture in
+ * pale fibre rather than as real difference in the material.
+ * ROOT_DARK is the palette's own entry (see MATX_ROOT's block above, and
+ * note it is the DARK end of a pale pair, not a dark colour); ROOT_LIGHT
+ * lifts it the same way METAL_LIGHT lifts METAL_DARK, and both want eyes
+ * on the panel like every other starting colour here. */
+#define ROOT_DARK         0xBFA58A
+#define ROOT_LIGHT        0xDCC5A8
+
+/* A root DARKENS AS IT GROWS - not with time, with STRUCTURE. The shade
+ * is picked by how many of a cell's eight neighbours are root, the number
+ * the painter hands material_colours() in `depth` for this one material
+ * (see material.h): a tip touching one other root wears the fresh tan
+ * above, a cell that has put out children sits a step or two toward
+ * ROOT_OLD, and the collar, touched on most sides, wears the darkest step.
+ * The maintainer's own framing: "as one root grows from another, it
+ * darkens its parent".
+ *
+ * Structure rather than a lifetime on purpose, and not only because a root
+ * has nowhere to store one: an age would darken the TIPS too, and the
+ * whole point of the gradient is that the tips stay fresh for as long as
+ * they are tips. Losing a child to rot or lava lightens the parent again,
+ * which a stored age could never do.
+ *
+ * ROOT_OLD is pulled toward the trunk's own WOOD_UNLIT (0x5A3D24) and
+ * deliberately stops short of it: the oldest root should read as the same
+ * family as the wood it grew from, not as more trunk. The step from fresh
+ * to old is even in RGB across ROOT_SHADES; the bucket edges (root_shade()
+ * below) are a guess wanting eyes on the panel.
+ *
+ * BOTH ends of the grain pair travel, each to its own old colour. The first
+ * cut lerped the light end toward ROOT_OLD as well, so the oldest row's two
+ * ends met and its eight grain entries collapsed to one flat colour -
+ * caught by test_the_right_extended_materials_are_grained, which asks that
+ * a grained material actually use its grain. ROOT_OLD_LIGHT carries the
+ * same lift over ROOT_OLD that ROOT_LIGHT has over ROOT_DARK. */
+#define ROOT_OLD          0x7A5535
+#define ROOT_OLD_LIGHT    0x976D48
+#define ROOT_SHADES       4
+
+#define ROOT_STEP(k)       LERP(ROOT_DARK, ROOT_OLD, (k) * 15 / (ROOT_SHADES - 1))
+#define ROOT_STEP_LIGHT(k) LERP(ROOT_LIGHT, ROOT_OLD_LIGHT, (k) * 15 / (ROOT_SHADES - 1))
+
+/* Which of the ROOT_SHADES steps a root with `n` root neighbours wears.
+ * 0 or 1 is a tip (or a lone seed), 2 has one child, 3 is a junction, and
+ * anything more is the collar or the middle of a thicket. */
+static inline unsigned root_shade(unsigned n)
+{
+    return n <= 1u ? 0u : n == 2u ? 1u : n == 3u ? 2u : (ROOT_SHADES - 1u);
+}
+
 #define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
 
 #define GRAIN8_ROW(lo, hi)                                                                                             \
@@ -1843,6 +1944,14 @@ static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
+/* One grain row per shade step, fresh first - see ROOT_OLD above. */
+static const gfx_color_t root_grain[ROOT_SHADES][8] = {
+    GRAIN8_ROW(ROOT_STEP(0), ROOT_STEP_LIGHT(0)),
+    GRAIN8_ROW(ROOT_STEP(1), ROOT_STEP_LIGHT(1)),
+    GRAIN8_ROW(ROOT_STEP(2), ROOT_STEP_LIGHT(2)),
+    GRAIN8_ROW(ROOT_STEP(3), ROOT_STEP_LIGHT(3)),
+};
+_Static_assert(ROOT_SHADES == 4, "root_grain[] above spells out one row per shade - add a row here too");
 
 /* Metal's woven line and travelling shine - the same HATCHED mechanism
  * glass uses in paint_row_n(), which is generic to anything hatched and
@@ -2494,10 +2603,11 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
                 out[2] = metal_shine;
                 return MATERIAL_HATCHED;
             }
-            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE) {
-                out[0] = (v == MATX_PLANT) ? plant_grain[hash & 7u]
+            if (v == MATX_PLANT || v == MATX_LEAF || v == MATX_ICE || v == MATX_ROOT) {
+                out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
-                                            : ice_grain[hash & 7u];
+                         : (v == MATX_ICE)  ? ice_grain[hash & 7u]
+                                            : root_grain[root_shade(depth)][hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
                 return MATERIAL_SPECKLED;
@@ -2550,6 +2660,7 @@ static const char* const extended_names[MATERIAL_EXTENDED_COUNT] = {
     [MATX_PLANT] = "Plant",
     [MATX_LEAF] = "Leaf",
     [MATX_METAL] = "Metal",
+    [MATX_ROOT] = "Root",
 };
 
 const char*
@@ -2611,6 +2722,22 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
             .grows = 12,
             .hardens_to = MAT_WOOD,
             .clings_to = MAT_WOOD,
+
+            /* Growth spends soil moisture every time it extends, and rolls
+         * this off that same spend - see reaction_t.roots's own comment
+         * in material.h. PART 1 of the roots feature: the ONE-TIME SEED
+         * that plants a bare collar's first root (root_depth == 0 gate,
+         * spend_soil_moisture()); see wood's own row for what runs after
+         * that first cell exists.
+         *
+         * Same figure as wood's own row, and the two must still move
+         * together even though this path now only ever fires once per
+         * tree: a tree roots through whichever of the two is spending
+         * when the collar is still bare, and a plant that seeded at a
+         * different rate from the trunk it becomes would put a visible
+         * seam in the system at the moment a run hardens. */
+            .roots = 40,
+            .roots_to = MATX(MATX_ROOT),
 
             /* What hardening leaves behind: a trunk two cells wider than a
          * stick at the foot, and foliage round the top of it.
@@ -2710,6 +2837,30 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
             .flammability = 90,
 
             .dissolvable = 240, /* the softest thing on the board */
+
+            /* RECOGNITION WITHOUT CREATION. `roots` is deliberately absent,
+         * so a leaf can never make a root - it has no soil moisture to
+         * spend and nothing to spend it on. Naming `roots_to` anyway is
+         * what lets find_water()'s walk CROSS one, and a leaf is the cell
+         * that most needs to: drinking walks down the trunk to the
+         * ground, and on a rooted tree the ground is reached through the
+         * roots. A root should conduct a canopy's water into the soil,
+         * not dam it out.
+         *
+         * Measured by flipping THIS FIELD ALONE on one fixed scene - a
+         * trunk on a fully rooted collar, a leaf held against water for
+         * 400 steps: 17 levels of soil moisture delivered without it, 33
+         * with. Roughly double, not a repair of something broken.
+         *
+         * The comparison NOT to make is root-collar against wood-collar,
+         * which was tried first and is confounded: wood carries
+         * `drinks` 12 of its own, so a wood collar is a row of extra
+         * drinkers rather than the same scene with a different cell in
+         * it, and the gap it shows is mostly that, not the walk. What is
+         * being fixed here is narrow and worth stating narrowly - a leaf
+         * whose only route to the ground runs through root could not
+         * find it, and now can. */
+            .roots_to = MATX(MATX_ROOT),
         },
 
     /* METAL. Dirt smelted by sustained heat - see
@@ -2767,6 +2918,99 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * named above is 0, and that is a decision, not an oversight -
          * see reactions[]'s own top comment on what an absent field means
          * field by field. */
+        },
+
+    /* ROOT. What a plant welds itself to the soil with as it spends that
+     * soil's moisture - see reaction_t.roots and PART 1 of the roots
+     * feature (docs/Sand/Sand-Simulation.md).
+     *
+     * A root holds still and holds on; that is the whole row. */
+    [MATX_ROOT] =
+        {
+            /* Part of the tree, for every "is this cell more of the same
+         * body" question - anchoring, the stem walk, how far it is to
+         * water. A trunk standing on its own root reports anchored
+         * immediately, the same way it does standing on soil, because
+         * anchored() only asks whether SOMETHING gravity-ward is non-kin,
+         * and a root answers that exactly as bare ground does. */
+            .clings_to = MAT_WOOD,
+
+            /* Softer than wood's 160: acid has to be able to dig a root
+         * out of the ground, or a tree becomes permanent the moment it
+         * roots at all. Close to wood's own figure rather than leaves'
+         * far softer one - a root is buried structure, not foliage. */
+            .dissolvable = 180,
+
+            /* FIRE, NO. DELIBERATELY ZERO, not an omission - see reactions[]'s
+         * own top comment on what an absent field means field by field.
+         * A root is buried, and a fire that could reach down and eat a
+         * tree's own anchor out from under it would undo the entire
+         * point of this feature: the tree would still be exactly as
+         * vulnerable to a shifting bed as it was before roots existed,
+         * just one fire away. */
+            .flammability = 0,
+
+            /* LAVA, YES. Molten rock reaching a root system burns it out,
+         * and what it leaves is FIRE - so lava under a tree lights it
+         * from the roots up, which is both the right picture and the
+         * one thing that can then climb a trunk (wood's own flammability
+         * 6). `melts`, not `heat_chance`, is what keeps this from being
+         * a contradiction of the zero just above: see reaction_t.melts
+         * for why a material with no variant has to tell fire and lava
+         * apart at the source. `heat_chance` stays 0, so a flame, an
+         * ember, or heat through a wall all still do nothing here.
+         *
+         * 24 in 256 is a starting point. Lava is sustained contact rather
+         * than a passing lick, so this does not need to be high to read
+         * as decisive - about ten steps of contact per root cell. */
+            .heats_to = MAT_FIRE,
+            .melts = 24,
+
+            /* ROTS when orphaned. Without this a root was permanent
+         * litter - no `falls`, no `flammability`, nothing but acid ever
+         * removed one - and at 7-20 cells per tree a burnt forest would
+         * slowly fill its bed with bone-coloured cells nothing could
+         * clear. The same trap plant and leaf each fell into once.
+         *
+         * "Orphaned" is answered by the same machinery a leaf uses: it
+         * stays while anything of its tree is touching it (`sheltered_by`
+         * wood, and - through `roots_to` below - more root, so a column
+         * does not rot from the bottom while the tree above it lives),
+         * and it stays while it can still reach water. A root left behind
+         * in ground that has since dried out is the one that goes. */
+            .withers = 1,
+            .sheltered_by = MAT_WOOD,
+
+            /* THE GROWTH RULE ITSELF - PART 2 of the roots feature. A root
+         * cell rolls to root into the moist soil it touches: see
+         * step_one_rooting_cell() (sand_reactions.c) for the mechanism
+         * and reaction_t.roots's own comment (material.h) for why one
+         * field carries two different readings depending which row it
+         * sits on. `roots_to` naming itself is what lets a root eat into
+         * MORE of itself - the same field a leaf uses purely for
+         * recognition (leaf carries `roots_to` with no `roots` of its
+         * own, since it has no soil moisture to spend) does double duty
+         * here as the actual conversion target.
+         *
+         * 8 in 256, about 3% - small on purpose, and small for a
+         * different reason than the collar seed's own 40 above: THAT
+         * roll fires rarely (once per tree, ever, once root_depth is
+         * nonzero - see spend_soil_moisture()'s own comment), so it can
+         * afford to be generous. THIS roll fires on every root cell,
+         * every step, for as long as any of them still has a moist
+         * neighbour - a whole system rolling every step is the thing
+         * ROOT_SURFACE_MAX and the moisture cost itself have to bound,
+         * and a low base rate is the third leg of that, not decoration.
+         * See ROOT_SURFACE_MAX's own comment (sand_reactions.c) for the
+         * measurement this figure came out of. */
+            .roots = 8,
+            .roots_to = MATX(MATX_ROOT),
+
+            /* No `grows`, no `falls`, no `drinks`, no `sprouts`, no
+         * `buds`. A root does not extend along a stem, does not fall
+         * with the tree above it, takes no water of its own, and is
+         * never a budding or sprouting site - the whole of how it
+         * spreads is `roots` above, cell eating cell. */
         },
 };
 
