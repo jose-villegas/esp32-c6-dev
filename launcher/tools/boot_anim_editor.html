@@ -431,7 +431,7 @@ const DEFAULT_STATE = {
     title_stagger_ms: 140, title_flight_ms: 900, title_entry_px: 320,
     title_turns_phase: 229376, title_amplitude_px: 22,
     title_wave_amplitude_px: 11, title_wave_period_ms: 1600,
-    title_wave_stagger_ms: 90, title_height_px: 50,
+    title_wave_stagger_ms: 90, title_height_px: 50, title_x_px: 170,
     title_shadow_dx: 1, title_shadow_dy: 1, title_shadow_alpha: 255,
     image_start_ms: 5800, image_fade_ms: 800,
     fade_start_ms: 4300, grid_hue_ms: 2600,
@@ -506,7 +506,7 @@ const FIELD_GROUPS = [
   { title: 'Title', keys: ['title_start_ms', 'title_stagger_ms', 'title_flight_ms',
       'title_entry_px', 'title_turns_phase', 'title_amplitude_px',
       'title_wave_amplitude_px', 'title_wave_period_ms', 'title_wave_stagger_ms',
-      'title_height_px', 'title_shadow_dx', 'title_shadow_dy',
+      'title_height_px', 'title_x_px', 'title_shadow_dx', 'title_shadow_dy',
       'title_shadow_alpha'] },
   { title: 'Image', keys: ['image_start_ms', 'image_fade_ms'] },
 ];
@@ -550,6 +550,7 @@ const FIELD_LABELS = {
   title_wave_period_ms: 'idle wave cycle time',
   title_wave_stagger_ms: 'idle wave phase offset, per letter',
   title_height_px: 'how far down the frame the title lands',
+  title_x_px: 'how far into the frame the title lands, left edge',
   title_shadow_dx: 'drop shadow offset, px right (0/0 disables it)',
   title_shadow_dy: 'drop shadow offset, px down',
   title_shadow_alpha: 'shadow density 0-255 (dithered fake transparency)',
@@ -1300,6 +1301,12 @@ function applyLoadedState(loaded) {
    * landing the title exactly where it always did. */
   if (loaded.timing.title_height_px === undefined) {
     loaded.timing.title_height_px = 50;
+  }
+  /* title_x_px is newer still - BOOT_ANIM_TITLE_VIEW_X used to be a
+   * fixed constant (170) in boot_anim.h, same reason as title_height_px
+   * above. */
+  if (loaded.timing.title_x_px === undefined) {
+    loaded.timing.title_x_px = 170;
   }
   /* title_shadow_dx/dy are newer again - the shadow used to be a fixed
    * (1, 1) two gfx_text_font() calls always drew, so 1/1 is what keeps
