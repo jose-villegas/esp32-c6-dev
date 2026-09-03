@@ -53,7 +53,7 @@
 #define BOOT_ANIM_PEN_MS 1980
 
 /* when the curve reaches the table's true end - independent of fade_start_ms, so it can keep drawing well past phase 1 */
-#define BOOT_ANIM_PEN_FINISH_MS 4900
+#define BOOT_ANIM_PEN_FINISH_MS 4800
 
 /* the title arrives after the curve, not during it */
 #define BOOT_ANIM_TITLE_START_MS 2450
