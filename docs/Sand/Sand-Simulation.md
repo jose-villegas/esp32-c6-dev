@@ -637,6 +637,20 @@ eight let a root step diagonally as it reaches for water, which is what
 actually produces the wandering, forking shape a root system is supposed
 to have. The difference was qualitative, not a rounding error.
 
+**Shade follows structure, not age.** A root darkens from the fresh tan
+toward a wood-like brown (`ROOT_OLD`, `material.c`) as more root grows
+around it: the painter hands `material_colours()` the count of root
+neighbours in the `depth` slot only a liquid's interior otherwise reads
+(`material_root_neighbours()`, `material.h`), and that count picks one of
+`ROOT_SHADES` steps. A tip touching one other root wears the fresh colour;
+a cell that has put out children steps darker; the collar, touched on most
+sides, wears the darkest. Not a lifetime, on purpose and not only because
+a root has nowhere to store one: an age would darken the tips too, and the
+tips are the part meant to stay fresh. Lose a child to rot or lava and the
+parent lightens again. The eating rule above is what makes this visible at
+all - a straight column is almost entirely two-neighbour cells, while a
+branching system is full of the junctions the darker steps are keyed to.
+
 **Measured, before and after** (60 wide, 70 tall; stone floor; 20 rows of
 saturated dirt; one seed on the surface; the 13 cells around the collar
 rewatered every 20 steps; 20,000 steps; `sand_step(&s, 0, 1000, 0)`):
