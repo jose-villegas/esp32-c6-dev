@@ -75,6 +75,48 @@ the portable ones. That is deliberate: passing on a laptop only proves the logic
 right on x86, whereas running on-target proves the same source behaves
 identically built by the RISC-V toolchain and executed on this chip.
 
+### The host runner enforces two of the device's limits
+
+The host has megabytes of stack and gigabytes of heap; the board has 3,584
+bytes of main task stack and about 64 KB of heap once the framebuffer is
+carved out. Two classes of bug lived in that gap, and each one cost a
+build-flash-capture cycle to find — twice over, for both:
+
+- **A fixture whose stack frame cannot fit.** `run_tests.sh` compiles the
+  test sources a second time with `-fstack-usage` and
+  `check_stack_usage.py` fails the run on any function whose frame exceeds
+  the profile's ceiling. This is a *static prediction*, not a reproduction:
+  the host cannot overflow, so the gate reads the frame sizes the compiler
+  already computed for its own prologues. Seven frames already exceed the
+  ceiling and are listed as debt in the checker, so a new one still fails
+  while the existing ones stay visible rather than silently blessed.
+- **A fixture that allocates more than the board has.** The suite's
+  `malloc`/`calloc`/`realloc`/`free` are redirected (`-Wl,--wrap=`) into
+  `heap_arena.c`, a first-fit arena exactly the size of the device's free
+  heap. First-fit with real coalescing, because the rule that bites is
+  contiguity, not totals: one grid is 41,216 contiguous bytes, and it fails
+  on a heap with 50 KB free whose largest block is 38 KB. Blocks still
+  outstanding when a test ends print a `LEAK` line naming that test —
+  that is the assert-before-free pattern, which on device leaks a grid and
+  starves every later test in the same boot.
+
+Both numbers come from `launcher/tools/device_profiles/<chip>.sh`, selected
+by `$DEVICE_PROFILE` (default `esp32c6`), each carrying its own provenance.
+Nothing hardcodes a chip's constants, so a second board is a new profile
+rather than an edit everywhere; a profile field that has never been
+measured is the literal `unmeasured`, and both loaders refuse to hand one
+to a gate.
+
+**These are approximations, and worth knowing where they end.** The stack
+gate checks test code only, one function at a time — it does not sum a call
+chain, so it bounds the worst single frame rather than the deepest path.
+The arena models one process's allocations from a clean start, so it cannot
+show fragmentation inherited from the rest of a real boot: the known
+device-side allocation failures (`esp32c6-e82`) do **not** reproduce here,
+which locates their cause outside the fixtures themselves. Neither gate
+replaces a device capture. They make a whole class of bug cost a second on
+a laptop instead of a capture cycle, which is the entire claim.
+
 ### Release builds contain no test code
 
 `CONFIG_LAUNCHER_SELFTEST` defaults **off**, and the CMake conditional leaves
