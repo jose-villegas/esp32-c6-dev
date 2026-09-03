@@ -53,7 +53,7 @@
 #define BOOT_ANIM_PEN_MS 1980
 
 /* when the curve reaches the table's true end - independent of fade_start_ms, so it can keep drawing well past phase 1 */
-#define BOOT_ANIM_PEN_FINISH_MS 5800
+#define BOOT_ANIM_PEN_FINISH_MS 4900
 
 /* the title arrives after the curve, not during it */
 #define BOOT_ANIM_TITLE_START_MS 2700
@@ -91,10 +91,10 @@
 #define BOOT_ANIM_TITLE_SHADOW_ALPHA 128
 
 /* the photograph starts crossing in as the function crosses out */
-#define BOOT_ANIM_IMAGE_START_MS 4200
+#define BOOT_ANIM_IMAGE_START_MS 3500
 
 /* how long that one shared crossfade takes - 0 cuts straight to the photo */
-#define BOOT_ANIM_IMAGE_FADE_MS 2300
+#define BOOT_ANIM_IMAGE_FADE_MS 1300
 
 /* dissolve into the launcher */
 #define BOOT_ANIM_FADE_START_MS 5800
@@ -161,12 +161,12 @@ typedef struct {
     uint8_t  ease;
 } boot_anim_keyframe_t;
 
-#define BOOT_ANIM_KEYFRAME_COUNT 10
+#define BOOT_ANIM_KEYFRAME_COUNT 7
 
 static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] = {
     {     0,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {   5632,      0,      0 }, {      0,      0,      0 }, {    512,    512,    512 },
+      {   5120,      0,      0 }, {   -192,    -64,    128 }, {    512,    512,    512 },
       BOOT_ANIM_EASE_LINEAR },
     {   700,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
@@ -188,20 +188,8 @@ static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] 
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
       {  -1024,   4096,      0 }, {   -256,    -64,      0 }, {    512,    512,    512 },
       BOOT_ANIM_EASE_LINEAR },
-    {  3300,
+    {  5000,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1024,   4096,      0 }, {   -256,    -64,      0 }, {    563,    563,    563 },
-      BOOT_ANIM_EASE_LINEAR },
-    {  4200,
-      {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1536,   6144,   3584 }, {   -299,    -64,     43 }, {    512,    512,    512 },
-      BOOT_ANIM_EASE_LINEAR },
-    {  4700,
-      {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1536,  10240,   7680 }, {   -294,    -64,     43 }, {   1536,   1536,   1536 },
-      BOOT_ANIM_EASE_LINEAR },
-    {  5500,
-      {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {      0,   9728,   2560 }, {   -256,   -128,     -7 }, {    589,    589,    589 },
+      {  -1024,   4096,      0 }, {   -256,   -384,      0 }, {    307,    307,    307 },
       BOOT_ANIM_EASE_LINEAR },
 };
