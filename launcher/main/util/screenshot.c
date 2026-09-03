@@ -5,6 +5,23 @@
  * between marker lines a host script (tools/screenshot.py) reads back out
  * of the same stream idf_monitor/ESP_LOG already use.
  *
+ * ALSO OWNS RUNSUITE, A SECOND, UNRELATED COMMAND
+ *
+ * CONFIG_LAUNCHER_SELFTEST only: "RUNSUITE <name>" runs exactly one
+ * registered suite (suites_run_one() in test/suites.c) instead of
+ * suites_run_all()'s everything-at-boot run - the targeted way to see one
+ * suite's own report (a perf suite's especially) without waiting through
+ * whatever else registered ahead of it alphabetically first. It lives
+ * here, in a file otherwise about screenshots, rather than in its own
+ * listener, because the console can only have one blocking reader:
+ * usb_serial_jtag_vfs_use_driver() below hands this task exclusive,
+ * interrupt-driven ownership of stdin, and a second task calling fgetc()
+ * on the same stream would race it for every incoming byte. One line
+ * listener, two commands - not a generic, registrable dispatch table,
+ * since two is what this project actually has today (see CLAUDE.md on
+ * designing for hypothetical future requirements).
+ *
+
  * WHY USB-SERIAL-JTAG, NOT UART
  *
  * This board's one USB-C port is the ESP32-C6's own native USB-Serial/JTAG
@@ -59,9 +76,17 @@
 #include "gfx/gfx.h"
 #include "util/device_state.h"
 
+#if CONFIG_LAUNCHER_SELFTEST
+#include "suites.h"
+#endif
+
 static const char *TAG = "screenshot";
 
 #define SCREENSHOT_TRIGGER "SCREENSHOT"
+
+#if CONFIG_LAUNCHER_SELFTEST
+#define RUNSUITE_TRIGGER "RUNSUITE "
+#endif
 
 static volatile bool s_request_pending;
 
@@ -72,11 +97,14 @@ static volatile bool s_request_pending;
  * arrive there is nothing time-critical about noticing it a frame or two
  * later.
  *
- * A line over SCREENSHOT_LINE_MAX is never going to match the trigger -
+ * A line over SCREENSHOT_LINE_MAX is never going to match either trigger -
  * dropped by resetting `len`, not by growing the buffer, so a host
  * accidentally in the wrong mode (pasting binary, say) cannot run this off
- * the end of a fixed buffer. */
-#define SCREENSHOT_LINE_MAX 32
+ * the end of a fixed buffer. Sized for RUNSUITE_TRIGGER plus the longest
+ * suite name today (run_boot_anim_perf_suite, 25 chars) with real headroom
+ * for names not yet written - bump this rather than trim a name to fit it,
+ * the same "headroom, not a tight fit" reasoning SUITE_MAX already states. */
+#define SCREENSHOT_LINE_MAX 48
 
 static void screenshot_task(void *arg)
 {
@@ -106,6 +134,16 @@ static void screenshot_task(void *arg)
                 if (strcmp(line, SCREENSHOT_TRIGGER) == 0) {
                     ESP_LOGI(TAG, "trigger received");
                     s_request_pending = true;
+#if CONFIG_LAUNCHER_SELFTEST
+                } else if (strncmp(line, RUNSUITE_TRIGGER,
+                                   strlen(RUNSUITE_TRIGGER)) == 0) {
+                    const char *name = line + strlen(RUNSUITE_TRIGGER);
+                    ESP_LOGI(TAG, "RUNSUITE %s", name);
+                    if (!suites_run_one(name)) {
+                        ESP_LOGE(TAG, "no suite named '%s' is registered",
+                                 name);
+                    }
+#endif
                 } else {
                     ESP_LOGI(TAG, "ignoring line: '%s'", line);
                 }
@@ -156,7 +194,12 @@ void screenshot_start(void)
         return;
     }
 
+#if CONFIG_LAUNCHER_SELFTEST
+    ESP_LOGI(TAG, "listening for '%s' and '%s<name>' on the console",
+             SCREENSHOT_TRIGGER, RUNSUITE_TRIGGER);
+#else
     ESP_LOGI(TAG, "listening for '%s' on the console", SCREENSHOT_TRIGGER);
+#endif
 }
 
 bool screenshot_take_request(void)
