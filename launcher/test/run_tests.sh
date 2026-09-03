@@ -158,6 +158,72 @@ UNITY_OBJ="$BUILD_DIR/unity.o"
     -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
     $SOURCES "$UNITY_OBJ" -o "$OUT" -lm
 
+# --- static stack-frame gate ------------------------------------------------
+# A separate, cheap compile pass over test-code translation units only, with
+# -fstack-usage added - GCC/Clang then write one <name>.su file per object
+# naming every function's own frame size, without executing anything. Kept
+# out of the compile+link command above on purpose: -fstack-usage writes its
+# .su file beside whatever -o path was given, and that command emits one
+# binary from many files at once, so its .su files would scatter into the
+# CWD rather than land somewhere this script can find them.
+#
+# Test code only (test/'s own drivers, test/suites/*.c, and each app's
+# suite_*.c) - not the product logic those suites exercise. A huge frame in
+# sand.c itself would be a real risk too, but it is not the risk that
+# already panic-looped the board twice (see check_stack_usage.py's header),
+# and widening this to product code is a separate decision. Derived from
+# $SOURCES already assembled above, rather than a fresh glob, so this can
+# only ever compile files already proven to build on a host: suite_gfx.c and
+# suite_ui.c are device-only (real bsp/gfx headers, no host stub) and are
+# already correctly absent from $SOURCES - globbing test/suites/*.c blindly
+# would try to compile them here too and fail for a reason that has nothing
+# to do with stack usage.
+SU_DIR="$BUILD_DIR/su"
+rm -rf "$SU_DIR"
+mkdir -p "$SU_DIR"
+
+SU_SOURCES=""
+for f in $SOURCES; do
+    case "$f" in
+        "$TEST_DIR"/*) SU_SOURCES="$SU_SOURCES
+$f" ;;
+        */suite_*.c) SU_SOURCES="$SU_SOURCES
+$f" ;;
+    esac
+done
+
+n=0
+for f in $SU_SOURCES; do
+    n=$((n + 1))
+    base=$(basename "$f" .c)
+    # shellcheck disable=SC2086
+    "$CC_BIN" $CFLAGS -I "$MAIN_DIR" -I "$TEST_DIR" -I "$TEST_DIR/framework" \
+        -I "$TEST_DIR/../components/microui/include" \
+        -I "$TEST_DIR/../components/small3dlib/include" -include "$TEST_DIR/timing.h" \
+        -fstack-usage -c "$f" -o "$SU_DIR/$(printf '%02d' "$n")_$base.o"
+done
+
+# A gate that quietly checks nothing is worse than no gate: if -fstack-usage
+# is not supported (older compiler, unexpected toolchain), no .su files are
+# written at all, so fail loudly here rather than let check_stack_usage.py
+# report a clean pass over zero functions.
+if [ -z "$(find "$SU_DIR" -maxdepth 1 -name '*.su' -print -quit)" ]; then
+    echo "no .su stack-usage files were produced by $CC_BIN - it may not" >&2
+    echo "support -fstack-usage. This gate exists to catch test fixtures" >&2
+    echo "that would panic-loop the device (see docs/Sand/" >&2
+    echo "Performance-Tuning-Attempts.md); refusing to silently pass." >&2
+    exit 1
+fi
+
+# Same interpreter search as elsewhere (run_device_tests.sh): whatever
+# python happens to be on PATH, python3 preferred.
+PYTHON=$(command -v python3 || command -v python || true)
+if [ -z "${PYTHON:-}" ]; then
+    echo "no Python found to run check_stack_usage.py" >&2
+    exit 1
+fi
+"$PYTHON" "$TEST_DIR/check_stack_usage.py" "$SU_DIR"
+
 # MinGW appends .exe; elsewhere the plain name is produced.
 [ -x "$OUT" ] || OUT="$OUT.exe"
 
