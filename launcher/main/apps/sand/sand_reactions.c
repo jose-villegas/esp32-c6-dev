@@ -1534,8 +1534,78 @@ find_water(sand_t* s, int x, int y, int w, int h, const reaction_t* r, cell_t se
         int nx = -1, ny = -1;
         bool on_soil = false;
         bool via_root = false;
+        /* Whether the pre-check below actually COMMITTED to a root. Not
+         * the same question as `nx >= 0`: the scan sets nx early as a
+         * FALLBACK and then keeps looking for real soil, so testing nx to
+         * decide whether to run the scan at all stops it on its own
+         * fallback and it never reaches the ground beside a root. That
+         * mistake cost the feature's own regression test - see the
+         * lookahead note below for the scene that catches it. */
+        bool took_root = false;
 
-        for (int i = 0; i < 3; i++) {
+        /* OUR OWN ROOT, STRAIGHT DOWN, BEFORE THE SCAN BELOW RUNS AT ALL.
+         *
+         * The ordering IS the mechanism, and getting it wrong is what made
+         * roots a single row rather than a system. The scan takes the
+         * first SOIL it finds and breaks, keeping stem only as a fallback
+         * - so the moment a collar cell rooted, the walk found the loose
+         * dirt sitting DIAGONALLY beside that root before it ever
+         * considered going THROUGH it. The contact therefore stayed on the
+         * surface row for ever, each conversion landing beside the last
+         * instead of beneath it. Measured on a watered bed at 20,000
+         * steps: three roots, every one of them at depth 0, spreading
+         * sideways. Reported from the device as roots never growing past
+         * the attachment point.
+         *
+         * The scan DOES stumble down eventually without this - once a
+         * whole surface row has rooted there is no dirt left beside it to
+         * find, so the fallback crosses a root and the contact drops a
+         * row. What it does not do is get there RELIABLY. Measured over
+         * six seeds at 20,000 steps, deepest root reached: 3/3/3/3/3/3
+         * with this check against 3/2/3/0/2/3 without, the zero being a
+         * tree that put out two roots and never left the surface. The
+         * trees come out bigger too (wood 86-159 against 18-102), which
+         * is the same cause seen from the other end: a walk that goes
+         * through its roots reaches the wetter soil underneath them.
+         *
+         * A tree stands ON its roots, and the ground that feeds it is
+         * what lies BELOW them, so the root has to be crossed before the
+         * soil beside it is considered. Straight down only: a root grows
+         * into the contact cell, which is always the cell gravity-ward,
+         * so that is the one direction a root column can occupy. A root
+         * found diagonally is still crossable through the fallback in the
+         * scan, for a stem that has wandered off the column. */
+        /* ONLY IF THERE IS GROUND UNDER IT, which is the other half and was
+         * missing at first. Preferring the root unconditionally commits the
+         * walk to it, and a root with nothing below it is a DEAD END: the
+         * walk arrives, finds no soil and no stem, and gives up - even
+         * though the soil it wanted was sitting diagonally beside the root
+         * all along. A bed one row deep on stone is exactly that shape, and
+         * it is the shape the whole feature's own regression test uses, so
+         * this turned "the tree survives its bed shifting" straight back
+         * into a failure. One cell of lookahead is the entire fix: cross a
+         * root when soil or more root lies under it, and otherwise leave
+         * the scan below to find the ground beside it. */
+        if (r->roots_to != 0) {
+            const int* fd = ring_dir(down);
+            const int tx = cx + fd[0], ty = cy + fd[1];
+            if ((unsigned)tx < (unsigned)w && (unsigned)ty < (unsigned)h
+                && s->cells[(size_t)ty * (size_t)w + (size_t)tx] == (cell_t)r->roots_to) {
+                const int ax = tx + dx, ay = ty + dy;
+                if ((unsigned)ax < (unsigned)w && (unsigned)ay < (unsigned)h) {
+                    const cell_t under = s->cells[(size_t)ay * (size_t)w + (size_t)ax];
+                    if (!CELL_IS_EMPTY(under)
+                        && (reaction_of(under)->dries != 0 || under == (cell_t)r->roots_to)) {
+                        nx = tx;
+                        ny = ty;
+                        via_root = true;
+                        took_root = true;
+                    }
+                }
+            }
+        }
+
+        for (int i = 0; !took_root && i < 3; i++) {
             const int* fd = ring_dir(down + (i == 0 ? 0 : i == 1 ? 1 : 7));
             const int tx = cx + fd[0], ty = cy + fd[1];
             if ((unsigned)tx >= (unsigned)w || (unsigned)ty >= (unsigned)h) {
@@ -1753,11 +1823,18 @@ step_one_sprouting_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
 
     place_reacted(s, ex, ey, (size_t)empty_at, r->sprouts_to);
 
-    /* `soil_at` here IS the contact cell - this is a direct neighbour
-     * scan, not a stem walk, so there is no deeper collar to name and no
-     * existing root column to measure: root_depth is simply 0, the same
-     * as a wood cell touching soil for the first time anywhere else. */
-    spend_soil_moisture(s, w, r, soil_at, 1, soil_at, 0);
+    /* SPENDS, BUT NEVER ROOTS - contact_at deliberately -1.
+     *
+     * This is a direct four-neighbour scan, not a stem walk, so it has no
+     * honest depth to report: it knows a soil cell is adjacent and nothing
+     * about how much root already sits between that cell and the tree.
+     * Passing 0, as this did at first, is not a harmless default - it says
+     * "no root column here" to the one gate that bounds the whole feature,
+     * so ROOT_DEPTH_MAX could never fire on this path and a trunk standing
+     * in soil could root through it without limit. Rooting is left to
+     * growth and budding, both of which walk the stem and therefore know
+     * the real depth; sprouting just pays for its leaf. */
+    spend_soil_moisture(s, w, r, soil_at, 1, -1, 0);
     return true;
 }
 
@@ -1965,6 +2042,15 @@ step_one_withering_cell(sand_t* s, int x, int y, int w, int h, const reaction_t*
             const cell_t n = s->cells[(size_t)ny * (size_t)w + (size_t)nx];
             if (!CELL_IS_EMPTY(n) && CELL_MATERIAL(n) == r->sheltered_by) {
                 return false; /* under its tree; it stays */
+            }
+            /* More ROOT counts as shelter too, byte-exact through
+             * `roots_to` the way find_water() recognises one. A column
+             * of root under a living tree touches wood only at its top
+             * cell; without this the rest of the column rotted out from
+             * beneath a perfectly healthy tree the moment its soil dried,
+             * bottom cell first. */
+            if (r->roots_to != 0 && n == (cell_t)r->roots_to) {
+                return false;
             }
         }
     }
@@ -3818,7 +3904,29 @@ step_one_burning_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h) {
              * lava, sand -> glass -> lava), or a thermal-shock crack via
              * crack_run() - counts as the WORK this trigger charges for. */
             const uint8_t before_mat = CELL_MATERIAL(n);
-            if (try_heat_transform_given(s, nx, ny, w, h, nat, n)) {
+            bool changed = try_heat_transform_given(s, nx, ny, w, h, nat, n);
+            /* MELTING - the door only a burning LIQUID can open. See
+             * reaction_t.melts for why this exists beside heat_chance at
+             * all: a material with no variant cannot tell fire from lava
+             * by banking heat the way glass does, so the distinction is
+             * made here, at the one place the SOURCE is known. Contact
+             * only, deliberately - conduct_heat()'s far end never reaches
+             * this, so lava behind a wall melts nothing a fire behind it
+             * would not.
+             *
+             * Every gate before the roll: the source's kind, then the
+             * neighbour's own two fields, then - and only then - the RNG.
+             * A flame next to a root pays three predicted-false compares
+             * and never touches the stream, which is the discipline the
+             * rest of this walk already keeps. */
+            if (!changed && mat->kind == KIND_LIQUID) {
+                const reaction_t* nr = reaction_of(n);
+                if (nr->melts != 0 && nr->heats_to != 0 && (int)(rng_next(&s->rng) & 0xFF) < nr->melts) {
+                    place_reacted(s, nx, ny, nat, nr->heats_to);
+                    changed = true;
+                }
+            }
+            if (changed) {
                 acted = true;
                 if (lava_cooloff != 0 && CELL_MATERIAL(s->cells[nat]) != before_mat &&
                     (int)(rng_next(&s->rng) & 0xFF) < lava_cooloff) {
@@ -4124,7 +4232,12 @@ sand_step_reactions(sand_t* s) {
     uint8_t theirs_bits[MATERIAL_MAX] = {0};
     for (int m = 1; m < MAT_COUNT; m++) {
         const reaction_t* r = &reactions[m];
-        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+        /* `melts` opens the bit too: a material lava alone can change has
+         * to reach the burning walk at all, and this bit is that walk's
+         * front door. Fire paying one cheap, RNG-free probe per such
+         * neighbour (try_heat_transform_given() rejects it at its
+         * heat_chance gate before rolling) is the price. */
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[m] |= PAIR_HEAT_RESPONSIVE;
         }
         if (materials[m].kind == KIND_LIQUID) {
@@ -4144,7 +4257,7 @@ sand_step_reactions(sand_t* s) {
     }
     for (int k = 0; k < MATERIAL_EXTENDED_COUNT; k++) {
         const reaction_t* r = &extended_reactions[k];
-        if (r->heat_ramp != 0 || (r->heats_to != 0 && r->heat_chance != 0)) {
+        if (r->heat_ramp != 0 || (r->heats_to != 0 && (r->heat_chance != 0 || r->melts != 0))) {
             theirs_bits[MAT_EXTENDED] |= PAIR_HEAT_RESPONSIVE;
         }
         if (r->flammability != 0) {

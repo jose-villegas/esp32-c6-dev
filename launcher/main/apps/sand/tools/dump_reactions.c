@@ -263,6 +263,11 @@ static const field_doc_t field_docs[] = {
      * treatment (emit_spoils()) rather than guessed prose. */
     F(heats_to,     GRP_TRANSFORM, FK_TARGET, NULL),
     FRATE(heat_chance, GRP_TRANSFORM, "melts"),
+    /* `melts` shares heats_to with heat_chance but answers to LAVA
+     * alone - direct contact with a burning liquid, never a flame and
+     * never heat through a conductor. See reaction_t.melts for why a
+     * material with no variant has to draw that line at the source. */
+    FRATE(melts,       GRP_TRANSFORM, "melts under lava"),
     F(flaw_to,       GRP_TRANSFORM, FK_TARGET, NULL),
     FCHANCE(flaw_chance, GRP_TRANSFORM, "comes out flawed"),
     F(spoils_to,     GRP_TRANSFORM, FK_TARGET, NULL),
@@ -766,10 +771,27 @@ static void emit_transform(const reaction_t *r)
          * branch. */
         printf("- Under long heat from %s, melts to %s.\n", heat_sources,
                prose_name(to_name(r->heats_to)));
+    } else if (r->heat_chance == 0) {
+        /* `melts` alone: heats_to reachable ONLY through direct contact
+         * with lava - not a flame, not an ember, not heat through a wall.
+         * The only row on this path today is Root, and the whole reason
+         * it exists is that a root must shrug off fire yet give way to
+         * molten rock; see reaction_t.melts. Named as "lava" rather than
+         * through heat_sources on purpose - heat_sources is every burning
+         * material, and naming them all here would state the exact
+         * opposite of what this field means. */
+        if (r->melts == 0) return;
+        printf("- Touching lava - and lava only, never a flame - becomes "
+               "%s %s.\n",
+               prose_name(to_name(r->heats_to)), adverb("melts", r->melts));
     } else {
         printf("- Beside %s, melts to %s %s.\n", heat_sources,
                prose_name(to_name(r->heats_to)),
                adverb("heat_chance", r->heat_chance));
+        if (r->melts != 0) {
+            printf("  Touching lava directly, %s instead.\n",
+                   adverb("melts", r->melts));
+        }
         if (r->flaw_to != 0) {
             /* Same trigger as the clause just printed - the SAME roll,
              * not a second one - so this reads as a qualifier on it
@@ -1166,6 +1188,20 @@ static void emit_pairwise_table(void)
     for (size_t i = 0; i < all_rows_count; i++) {
         if (all_rows[i].r->heats_to == 0) continue;
         char rate[64];
+        /* `melts` is its own row against LAVA alone, never folded into
+         * the burners row: it is direct contact with a burning liquid,
+         * not "fire or lava, or through a conductor", and a row that has
+         * ONLY melts (Root) would otherwise be printed as reachable by
+         * every burner at a rate of "never" - true and useless. See
+         * reaction_t.melts. */
+        if (all_rows[i].r->melts != 0) {
+            print_join_row(all_rows[i].name, "Lava", to_name(all_rows[i].r->heats_to),
+                           adverb("melts", all_rows[i].r->melts),
+                           "direct contact only - not fire, not through a conductor");
+        }
+        if (all_rows[i].r->heat_ramp == 0 && all_rows[i].r->heat_chance == 0) {
+            continue; /* melts-only: the burners row would be a lie */
+        }
         if (all_rows[i].r->heat_ramp != 0) {
             snprintf(rate, sizeof(rate), "under long heat (banked)");
         } else {
