@@ -9342,16 +9342,28 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
         sand_step(&shadow_test_grid, 1000, 1000, 0);
     }
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STONE,
-        CELL_MATERIAL(sand_at(&shadow_test_grid, OX, OY)),
-        "setup: the obstacle must still be stone after settling");
-    TEST_ASSERT_TRUE_MESSAGE(
-        shadow_test_is_liquid(OX - 8, OY) && shadow_test_is_liquid(OX + 8, OY) &&
-        shadow_test_is_liquid(OX, OY - 8) && shadow_test_is_liquid(OX, OY + 8),
-        "setup: water must remain on all four sides of the obstacle, or "
-        "this test is not exercising a genuinely submerged obstacle");
+    if (CELL_MATERIAL(sand_at(&shadow_test_grid, OX, OY)) != MAT_STONE) {
+        free(shadow_test_cells);
+        TEST_FAIL_MESSAGE("setup: the obstacle must still be stone after settling");
+    }
+    if (!(shadow_test_is_liquid(OX - 8, OY) && shadow_test_is_liquid(OX + 8, OY) &&
+          shadow_test_is_liquid(OX, OY - 8) && shadow_test_is_liquid(OX, OY + 8))) {
+        free(shadow_test_cells);
+        TEST_FAIL_MESSAGE(
+            "setup: water must remain on all four sides of the obstacle, or "
+            "this test is not exercising a genuinely submerged obstacle");
+    }
 
-    unsigned depth[SHADOW_TEST_W * SHADOW_TEST_H];
+    /* Heap, not stack: PW * PH unsigneds is 41,216 bytes, eleven times the
+     * device's 3,584-byte main task stack. As a local this was a Stack
+     * protection fault waiting for the next device run - the third fixture
+     * to make exactly that mistake, and the first caught by the host stack
+     * gate instead of by a panic loop. */
+    unsigned *depth = malloc(sizeof *depth * (size_t)SHADOW_TEST_W * SHADOW_TEST_H);
+    if (depth == NULL) {
+        free(shadow_test_cells);
+        TEST_FAIL_MESSAGE("setup: could not allocate the depth field");
+    }
     double worst_off_by = 0.0;
     size_t worst_i = 0;
 
@@ -9369,7 +9381,11 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
                  "is that the shadow no longer vanishes at any tilt, "
                  "including the old design's own 45-degree blind spot",
                  gx, gy);
-        TEST_ASSERT_TRUE_MESSAGE(has_shadow, why_shadow);
+        if (!has_shadow) {
+            free(depth);
+            free(shadow_test_cells);
+            TEST_FAIL_MESSAGE(why_shadow);
+        }
 
         if (off_by > worst_off_by) {
             worst_off_by = off_by;
@@ -9377,6 +9393,7 @@ static void test_a_submerged_obstacle_casts_a_gravity_aligned_shadow(void)
         }
     }
 
+    free(depth);
     free(shadow_test_cells);
 
     char why[400];
