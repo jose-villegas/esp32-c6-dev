@@ -222,6 +222,24 @@ def validate(cfg):
              "(title_wave_amplitude_px=%r) are accounted for" %
              (timing["title_height_px"], _title_view_h,
               timing["title_amplitude_px"], timing["title_wave_amplitude_px"]))
+    # Exact, not coarse like title_height_px's own bound above: unlike Y,
+    # X has no wobble or idle wave added to it once a letter lands (see
+    # boot_anim_title_letter() in boot_anim.h - only p.y gets one) so
+    # there is no margin to stand in for here, just the word's own fixed
+    # width. 448/8/5/3/6 mirror BOOT_ANIM_TITLE_VIEW_W/the glyph cell/gap/
+    # BOOT_ANIM_TITLE_LEN in boot_anim.h, the same "named here" convention
+    # as _title_view_h above. No trailing gap after the LAST glyph, which
+    # is why this is LEN cells minus one gap, not LEN cells outright - see
+    # boot_anim.h's own comment on this section for the same subtraction.
+    _title_view_w = 448
+    _title_cell_w = 8 * 5 + 3
+    _title_word_w = 6 * _title_cell_w - 3
+    if (timing["title_x_px"] < 0 or
+            timing["title_x_px"] + _title_word_w > _title_view_w):
+        fail("title_x_px=%r would carry the title off the left or right "
+             "of the %d-pixel-wide viewer's frame (the word itself is "
+             "%d px wide at BOOT_ANIM_TITLE_SCALE)" %
+             (timing["title_x_px"], _title_view_w, _title_word_w))
     if timing["image_start_ms"] < 0 or timing["image_fade_ms"] < 0:
         fail("image_start_ms/image_fade_ms must not be negative (%r/%r "
              "given) - boot_anim_image_reveal() hands both to tween_ramp() "
@@ -362,6 +380,10 @@ TIMING_ORDER = [
     ("title_height_px", "BOOT_ANIM_TITLE_VIEW_Y",
      "how far down the viewer's frame the title's own centre lands - "
      "see boot_anim.h's own comment on this section for the frame it is in"),
+    ("title_x_px", "BOOT_ANIM_TITLE_VIEW_X",
+     "how far into the viewer's frame the title's own left edge starts - "
+     "see boot_anim.h's own comment on this section for where the default "
+     "came from"),
     ("title_shadow_dx", "BOOT_ANIM_TITLE_SHADOW_DX",
      "drop shadow offset, pixels right (negative is left) - 0/0 disables it"),
     ("title_shadow_dy", "BOOT_ANIM_TITLE_SHADOW_DY",
@@ -474,6 +496,13 @@ def main():
     # fixed at - is what keeps a file baked before this existed landing
     # the title exactly where it always did.
     timing.setdefault("title_height_px", 50)
+    # title_x_px is newer still - BOOT_ANIM_TITLE_VIEW_X was the last of
+    # the pair still fixed in boot_anim.h, same golden-rectangle
+    # derivation as Y's own default above, hand-nudged from there for
+    # margin (see that section's own comment for the full chain) - 170,
+    # what it was fixed at, for the same "a file baked before this
+    # existed keeps landing the title exactly where it always did" reason.
+    timing.setdefault("title_x_px", 170)
     # title_shadow_dx/dy are newer again - the shadow used to be a fixed
     # (1, 1) two gfx_text_font() calls always drew, so 1/1 is what keeps
     # a file baked before this existed looking exactly the same rather

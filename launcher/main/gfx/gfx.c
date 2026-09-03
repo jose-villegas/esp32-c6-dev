@@ -655,41 +655,21 @@ void gfx_fill_rect(int x, int y, int w, int h, gfx_color_t color)
  * anything better.
  *---------------------------------------------------------------------------*/
 
-/* The standard order-4 Bayer matrix, values 0..15 rather than pre-scaled to
- * 0..255 - gfx_fill_rect_dither() scales the ONE side that actually needs
- * to be a byte (alpha, an input this file does not control), not the table
- * it is compared against.
- *
- * Indexed by each pixel's own ABSOLUTE panel row/col (row & 3, col & 3),
- * not a position local to whatever shape is being dithered. That is what
- * keeps two dithered shapes that overlap or sit edge to edge in phase with
- * each other - a local (per-rect) index would have every dithered rect
- * restart the pattern at its own corner, which reads as a seam where two
- * of them meet rather than one continuous texture. */
-static const uint8_t dither4x4[4][4] = {
-    {  0,  8,  2, 10 },
-    { 12,  4, 14,  6 },
-    {  3, 11,  1,  9 },
-    { 15,  7, 13,  5 },
-};
-
 /* gfx_fill_rect(), but at `alpha`'s own apparent coverage instead of solid -
  * 0 draws nothing, 255 draws every pixel, everything between is one of 16
- * graduated levels (dither4x4's own size), not a smooth per-pixel blend.
- * Coarse on purpose: a genuine alpha blend needs a framebuffer READ this
- * panel's other primitives do not pay for, and 16 levels is already finer
- * than this chip's own class of hardware could dither convincingly on
- * anything smaller than a few dozen pixels across.
+ * graduated levels (gfx_dither4x4's own size, gfx_color.h), not a smooth
+ * per-pixel blend. Coarse on purpose: a genuine alpha blend needs a
+ * framebuffer READ this panel's other primitives do not pay for, and 16
+ * levels is already finer than this chip's own class of hardware could
+ * dither convincingly on anything smaller than a few dozen pixels across.
  *
- * 255 takes its own unconditional path rather than the dither test, so the
- * fully-solid case - what gfx_fill_rect() itself, and every caller that
- * never asks for less than full alpha, still gets - is never one Bayer
- * cell short of solid the way a plain `alpha > threshold` test would
- * leave it (the highest table value, 15, can never compare less than a
- * scaled 255 by one ULP of the shift below). 0 returns before touching the
- * framebuffer or marking anything dirty, the same "truly nothing happened"
- * contract boot_anim.c's draw_image() already uses for its own 0-alpha
- * case. */
+ * The per-pixel decision itself - gfx_dither_covers() - lives in
+ * gfx_color.h, not here: boot_anim.c's own crossfade has its own pixel
+ * loop (a whole framebuffer, not a filled rect) and needs the identical
+ * table and rounding rule, not a second copy that could drift out of
+ * phase with this one. 0 returns before touching the framebuffer or
+ * marking anything dirty, the same "truly nothing happened" contract
+ * boot_anim.c's draw_image() already uses for its own 0-alpha case. */
 void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
                           uint8_t alpha)
 {
@@ -704,19 +684,10 @@ void gfx_fill_rect_dither(int x, int y, int w, int h, gfx_color_t color,
     if (x1 > clip.x1) x1 = clip.x1;
     if (y1 > clip.y1) y1 = clip.y1;
 
-    /* Rounded, not truncated - a plain `alpha >> 4` maps every alpha in
-     * 1..15 to level 0, which then never compares greater than any
-     * dither4x4 cell (0..15) and draws nothing at all: an author-visible
-     * value that is supposed to mean "barely there" instead means
-     * "invisible", indistinguishable from alpha 0. +8 rounds to the
-     * nearest of the 16 levels instead of always flooring. */
-    const int level = (alpha + 8) >> 4;   /* 0..16 */
-
     for (int row = y0; row < y1; row++) {
         gfx_color_t *dst = fb + (size_t)row * GFX_WIDTH;
-        const uint8_t *drow = dither4x4[row & 3];
         for (int col = x0; col < x1; col++) {
-            if (alpha >= 255 || level > drow[col & 3]) {
+            if (gfx_dither_covers(col, row, alpha)) {
                 dst[col] = color;
             }
         }

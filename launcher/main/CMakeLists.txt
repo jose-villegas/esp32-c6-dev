@@ -116,6 +116,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_button_fsm.c"
         "../test/suites/suite_rng.c"
         "../test/suites/suite_boot_anim.c"
+        "../test/suites/suite_boot_anim_perf.c"
         "../test/suites/suite_fixed.c"
         "../test/suites/suite_tween.c"
         "../test/suites/suite_gfx.c"
