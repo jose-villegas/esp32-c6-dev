@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Device profile: ESP32-S3 - DELIBERATELY PARTIAL.
 #
 # No such board has been measured here. This file exists to prove the

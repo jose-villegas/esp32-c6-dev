@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Device profile: Waveshare ESP32-C6-Touch-AMOLED-1.8 (the board this repo
 # was written for). Read the format's own rules in ../device_profile.sh
 # before editing: plain KEY=value, no logic, no command substitution - both
