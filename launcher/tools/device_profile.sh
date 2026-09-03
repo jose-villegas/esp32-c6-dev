@@ -1,3 +1,5 @@
+#!/bin/sh
+#
 # Load one device profile from device_profiles/, for POSIX sh callers.
 #
 #   . "$LAUNCHER/tools/device_profile.sh"
