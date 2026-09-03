@@ -300,7 +300,7 @@ Same mechanic as Stone's note just above, and the same generated sentence shape:
 
 - Being quenched into stone (see the generated entry above) chains a small chance into one further neighbouring lava cell, which chains again in turn - up to `SAND_LAVA_COOLOFF_MAX_CHAIN` links per event - which is what lets a sustained pour freeze a pool progressively deeper rather than only sealing its surface.
 - Doing the WORK of actually melting a neighbour into something new (not merely banking one more level of heat) costs lava that same small chance of freezing itself, one cell at a time, and chains the same way.
-- Covered by at least 3 of the 5 gravity-relative neighbours forming a semi-disc opposite gravity (non-liquid, denser than itself, and forming one contiguous run around that arc - or, axis-aligned only, the three cardinals of it alone even with both flanking diagonals open), rolls a tiny chance per step (1 in 256 - the rarest a single roll can express) to become stone and immediately explode at that spot, fire included - the replacement for lava's old venting behaviour, which no longer exists.
+- Lidded on all three gravity-relative cells opposite gravity (the cell directly against gravity and the two diagonals either side of it - non-liquid and denser than itself; the two cells beside it never count, a vessel's sides wall lava in rather than cover it), rolls a tiny chance per step (1 in 256 - the rarest a single roll can express) to become stone and immediately explode at that spot, fire included - the replacement for lava's old venting behaviour, which no longer exists.
 
 ### Pairwise reactions
 

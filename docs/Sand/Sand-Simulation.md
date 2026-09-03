@@ -440,10 +440,9 @@ always-on drain nobody asked for.
 
 ### A sufficiently covered lava cell can burst
 
-Independent of water: a lava cell whose gravity-relative coverage
-(`covered_at()`, `sand_priv.h` - see "The shared 'am I covered' primitive"
-below) reaches at least `SAND_LAVA_BURST_COVER` (3) gets a tiny,
-deliberately rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in
+Independent of water: a lava cell with a complete gravity-relative lid
+over it (`covered_at()`, `sand_priv.h` - see "The shared 'am I covered'
+primitive" below) gets a tiny, deliberately rare per-step chance (`SAND_LAVA_BURST_CHANCE`, sand.h - 1 in
 256, the rarest a single byte-wide roll can express) to convert to
 `MAT_STONE` and immediately `sand_explode()` at that spot, fire included.
 This is the replacement for the earlier vent mechanism
@@ -453,9 +452,9 @@ sealed pool's own crust so a sustained pour can keep reaching lava rather
 than the pour's own cool-off chain armouring the surface shut - see the
 cool-off section above.
 
-3, not `smothered()`'s own all-4 (a different, gravity-agnostic question -
-see below): a pocket with one open side still qualifies, which is what
-lets an ordinary hand-drawn vessel (which the `smothered()`-exemption
+A lid, not `smothered()`'s own all-4 (a different, gravity-agnostic
+question - see below): a pocket with an open side still qualifies, which is
+what lets an ordinary hand-drawn vessel (which the `smothered()`-exemption
 story above already found has dozens of one-cell dimples) actually reopen
 over time rather than needing a fully sealed cell to ever do anything.
 
@@ -473,39 +472,46 @@ directly above it - so a wide pool sealed by a crust could never reach
 the threshold no matter how complete the seal was. Only an isolated lava
 cell sitting in its own solid pocket could ever burst.
 
-`cover_mask()`/`cover_seals()`/`covered_at()` (`sand_priv.h`, beside
+`cover_mask()`/`covered_at()` (`sand_priv.h`, beside
 `ring_dir()`/`ring_of()`) fix both problems and are meant as a general
-"is this cell covered enough" primitive, not a burst-private helper - the
+"is there a lid over this cell" primitive, not a burst-private helper - the
 confined-gas ignition check is a candidate to migrate onto it later (the
 vent machinery's own `covered_from_above()`, the other candidate this
 paragraph used to name, no longer exists - removed once the burst above
-replaced it). The eligible cells are a **semi-disc of the 8-ring, centred
-on anti-gravity**: the cell directly opposite gravity, the two diagonals
-either side of it, and the two perpendiculars beyond those - five cells,
-equivalently the ring minus the gravity direction itself and its two
-ring-neighbours. Gravity is read from `s->last_load_dx/dy` (the SETTLED
-direction - the nearest of the eight ring directions, stable while the
-board is held still) rather than `s->last_step_dx/dy` (the per-step
-DITHERED direction) or the raw tilt vector: dithering would alternate the
-eligible semi-disc between two adjacent orientations every step a tilt
-fell between two eighths, and a continuous test off the raw vector would
-give five eligible cells only at exact axis or exact diagonal alignment -
-the smoothed IMU vector is essentially never exactly aligned, so either
-alternative would flicker between a 5-cell and a 4-cell rule constantly.
+replaced it). The lid is the **three cells centred on anti-gravity**: the
+cell directly opposite gravity and the two diagonals either side of it,
+and a cell is covered when **all three** are covering (non-liquid,
+strictly denser, in bounds - the board edge is never a container). What is
+below a cell supports it and what is beside it walls it in; neither covers
+it. Gravity is read from `s->last_load_dx/dy` (the SETTLED direction - the
+nearest of the eight ring directions, stable while the board is held
+still) rather than `s->last_step_dx/dy` (the per-step DITHERED direction)
+or the raw tilt vector: dithering would swing the lid between two adjacent
+orientations every step a tilt fell between two eighths, so a cell sealed
+in one would read open in the other and the rule would turn into
+orientation noise.
 
-A cell is covered when at least `need` of those five are covering, AND
-the covered cells form **one contiguous run around the semi-disc** - with
-exactly one narrow exception: the three CARDINALS of the semi-disc (the
-two perpendiculars plus anti-gravity itself), which seal even though the
-diagonals between them are open, because two blocked cardinals seal the
-corner between them and an open diagonal between them is not a route
-out. That exception applies only when gravity itself is axis-aligned - a
-diagonal gravity's semi-disc holds only two cardinals, so the same three
-arc positions there are all diagonals and must not be let through. A
-broader version of the exception ("any single-diagonal gap flanked by two
-covered cardinals") was considered and rejected: it would also admit two
-patterns the settled acceptance data excludes - see
-`test_rejected_semi_disc_patterns_stay_rejected`, `suite_sand.c`.
+This is the second gravity-relative version (2026-09-03). The first
+(2026-09-02) was a five-cell **semi-disc** - the same three plus the two
+perpendiculars - needing three covered in a contiguous run, with a
+cardinal-triple exception. The perpendiculars were the defect. A
+finger-drawn stone wall bulges one cell past itself every brush step, so
+its inner face has a notch every brush step, and lava settling into each
+notch saw wall to its side, wall on the diagonal above that side and wall
+directly above: three, contiguous, "sealed" - while the pool's surface sat
+wide open one cell over. Every hand-drawn basin blew its own sides out as
+the lava settled. Reproduced on the host: a clean one-cell wall never
+produced a single eligible cell in 5000 steps (which is why no test saw
+it - every basin in the suite is drawn clean); a brush-drawn one did
+within 16 steps and breached by step 62 at natural odds. Dropping the
+perpendiculars removed every eligible cell in that scene at brush radii 2
+to 4 and left the wide-pool-under-a-crust case, the one the rule exists
+for, exactly as it was. It is also cheaper: three probes, no count, no
+contiguity walk, no exception. The one shape it still fires on at a wall
+that the player might not expect is a two-cell-wide overhang, where the
+innermost cell does have a complete lid. See
+`test_lava_in_a_wall_notch_never_bursts` and
+`test_cover_primitive_matches_the_exhaustive_shape_table`, `suite_sand.c`.
 
 **`sand_explode()` fills a core of radius `radius / SAND_EXPLODE_CORE_
 DIVISOR` with fire before it queues a single flight entry** (see
