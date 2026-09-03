@@ -13863,6 +13863,220 @@ static void test_a_buried_root_does_not_cut_off_the_water_below_it(void)
         "it would cut the tree off from the water below its own root");
 }
 
+/* Roots go DOWN, not just sideways along the surface.
+ *
+ * The other root tests bound the system from above - the cap, the lift,
+ * transparency - and every one of them passed while roots were in fact a
+ * single row at the collar that never went deeper, because nothing asked
+ * them to reach BELOW it. Reported from the device as roots never growing
+ * past the attachment point, and measured at 20,000 steps: three roots,
+ * all at depth 0.
+ *
+ * The cause was ordering inside find_water()'s own direction scan. It
+ * takes the first SOIL it finds and breaks, keeping stem as a mere
+ * fallback - so once the collar rooted, the walk found the loose dirt
+ * DIAGONALLY beside that root before it ever considered going through it,
+ * and the contact never moved down a row.
+ *
+ * Seeded with the first root already in place rather than waiting for one
+ * to roll, so this tests the deepening and not the luck of the first
+ * conversion. */
+static void test_a_root_column_reaches_below_the_collar(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+        sand_set(&s, x, H - 4, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+    }
+    sand_set(&s, cx, H - 4, MATX(MATX_ROOT)); /* the collar, already rooted */
+
+    /* WHERE THE NEXT ROOT LANDS, not merely whether one ever appears
+     * below. That weaker question passes either way and is why the first
+     * version of this test pinned nothing: with the old ordering a row
+     * eventually saturates with root, leaving no dirt beside the column
+     * to find, and the walk stumbles downward regardless - just slowly
+     * and unreliably (measured over six seeds, deepest root 3/2/3/0/2/3
+     * against 3/3/3/3/3/3). The two orderings differ on the very FIRST
+     * conversion after the collar: below the root, or beside it. */
+    int below = 0, beside = 0;
+    for (int cycle = 0; cycle < 200 && !below && !beside; cycle++) {
+        /* Replanted and re-watered, the same way the other root tests
+         * have to: one seed's canopy fills up and stops spending soil
+         * moisture, and a conversion can only ride on a spend. */
+        for (int y = 0; y < H - 4; y++) {
+            for (int x = 0; x < W; x++) {
+                sand_set(&s, x, y, SAND_EMPTY);
+            }
+        }
+        for (int x = 0; x < W; x++) {
+            for (int y = H - 3; y <= H - 2; y++) {
+                if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_DIRT) {
+                    sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 1, SOIL_MOISTURE_MAX));
+                }
+            }
+        }
+        sand_set(&s, cx, H - 5, MATX(MATX_PLANT));
+
+        for (int i = 0; i < 40 && !below && !beside; i++) {
+            sand_step(&s, 0, 1000, 0);
+            below = (sand_at(&s, cx, H - 3) == MATX(MATX_ROOT));
+            for (int x = 0; x < W && !beside; x++) {
+                if (x != cx && sand_at(&s, x, H - 4) == MATX(MATX_ROOT)) {
+                    beside = 1;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(below || beside,
+        "setup failure, not the claim under test: no second root formed "
+        "at all, so there is nothing to say about where it went");
+    TEST_ASSERT_TRUE_MESSAGE(below,
+        "the root after the collar has to go BELOW it, not alongside it - "
+        "the walk must cross its own root to the soil beneath rather than "
+        "stepping around it into the dirt on either side, or a root "
+        "system is a flat row at the surface however long the tree lives");
+}
+
+/* Lava reaching a root burns it out; a flame reaching one does nothing.
+ *
+ * The asymmetry is the point and is deliberate on both sides: fire must
+ * not be able to eat a tree's anchor from under it (see MATX_ROOT's own
+ * row), but molten rock under a tree should light it from the roots up.
+ * A root has no variant to bank a heat ramp in, so the two are told apart
+ * at the SOURCE - reaction_t.melts fires only from a burning liquid.
+ *
+ * Walled in with stone so the lava cannot run off sideways and the only
+ * cell it touches is the root beneath it. */
+static void test_lava_burns_a_root_out_of_the_ground(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, cx, H - 2, MATX(MATX_ROOT));
+    /* Sheltered by a trunk beside it, for the same reason the fire test
+     * just below is: an orphaned root ROTS (reaction_t.withers), and the
+     * first version of this passed with the melt path deleted outright -
+     * the root was simply rotting inside the 400 steps. Diagonal to the
+     * lava, so the wood is out of its four-neighbour reach. */
+    sand_set(&s, cx - 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
+    sand_set(&s, cx + 1, H - 2, STONE);
+    sand_set(&s, cx - 1, H - 3, STONE);
+    sand_set(&s, cx + 1, H - 3, STONE);
+    sand_set(&s, cx, H - 3, CELL_MAKE(MAT_LAVA, MASS_MAX));
+
+    int gone = 0;
+    for (int i = 0; i < 400 && !gone; i++) {
+        sand_step(&s, 0, 1000, 0);
+        gone = (sand_at(&s, cx, H - 2) != MATX(MATX_ROOT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(gone,
+        "lava sitting on a root must burn it out - a root ignores flame, "
+        "but molten rock is the one heat that reaches it (and with a trunk "
+        "beside it the root cannot have merely rotted, so the melt is the "
+        "only door left)");
+}
+
+static void test_fire_leaves_a_root_alone(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    sand_set(&s, cx, H - 2, MATX(MATX_ROOT));
+    /* Sheltered by a trunk beside it, or the first version of this test
+     * failed for the wrong reason: an orphaned root on bare stone ROTS
+     * (reaction_t.withers), and 400 steps at 1 in 256 is plenty for that.
+     * Diagonal to the flame, not cardinal, so the wood itself is never
+     * the thing that catches. */
+    sand_set(&s, cx - 1, H - 2, CELL_MAKE(MAT_WOOD, 0));
+
+    for (int i = 0; i < 400; i++) {
+        /* Held against it - fire is a gas and drifts off in a step or two,
+         * so a single cell of it would test one lick, not sustained heat. */
+        sand_set(&s, cx, H - 3, CELL_MAKE(MAT_FIRE, MATERIAL_VARIANTS - 1));
+        sand_step(&s, 0, 1000, 0);
+        TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 2),
+            "a root must ignore fire - flammability 0 and heat_chance 0 are "
+            "both deliberate, and `melts` must not have opened a side door "
+            "for a gas");
+    }
+}
+
+/* An orphaned root rots; a root under a living tree does not.
+ *
+ * Roots were permanent litter: no falls, no flammability, only acid ever
+ * removed one, and at 7-20 cells per tree a burnt forest would slowly fill
+ * its bed with bone-coloured cells nothing could clear - the same trap
+ * plant and leaf each fell into once. Withering is the answer for those,
+ * so it is the answer here, with the same two exemptions: touching its
+ * tree, or able to reach water. */
+static void test_an_orphaned_root_in_dry_ground_rots_away(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
+    }
+    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* the tree is long gone */
+
+    int gone = 0;
+    for (int i = 0; i < 6000 && !gone; i++) {
+        sand_step(&s, 0, 1000, 0);
+        gone = (sand_at(&s, cx, H - 3) != MATX(MATX_ROOT));
+    }
+    TEST_ASSERT_TRUE_MESSAGE(gone,
+        "a root with no tree above it and no water below it has to rot "
+        "away, or every burnt tree leaves its root system in the ground "
+        "for ever");
+}
+
+/* Both cells of a two-deep column must survive: the top one touches wood,
+ * the bottom one touches only root. Without `roots_to` counting as shelter
+ * a column rotted from the bottom up beneath a perfectly healthy tree the
+ * moment its soil dried. */
+static void test_a_root_column_under_a_living_tree_does_not_rot(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
+
+    const int cx = W / 2;
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 1, 0)); /* bone dry */
+        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 1, 0));
+    }
+    sand_set(&s, cx, H - 2, MATX(MATX_ROOT)); /* bottom: touches root only */
+    sand_set(&s, cx, H - 3, MATX(MATX_ROOT)); /* top: touches wood */
+    sand_set(&s, cx, H - 4, CELL_MAKE(MAT_WOOD, 0));
+
+    for (int i = 0; i < 6000; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 3),
+        "the root touching the trunk is sheltered by it and must stay");
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(MATX(MATX_ROOT), sand_at(&s, cx, H - 2),
+        "the root touching only ANOTHER ROOT must stay too - a column under "
+        "a living tree must not rot out from the bottom in a drought");
+}
+
 /* Watering a CANOPY still reaches the soil once the tree has rooted.
  *
  * A leaf drinks by walking down its own trunk to the ground and putting a
@@ -25324,7 +25538,12 @@ void run_sand_suite(void)
     RUN_TEST(test_roots_never_go_deeper_than_the_depth_cap);
     RUN_TEST(test_a_root_column_does_not_spend_the_trees_lift);
     RUN_TEST(test_a_buried_root_does_not_cut_off_the_water_below_it);
+    RUN_TEST(test_a_root_column_reaches_below_the_collar);
     RUN_TEST(test_a_canopy_waters_the_soil_through_its_own_roots);
+    RUN_TEST(test_lava_burns_a_root_out_of_the_ground);
+    RUN_TEST(test_fire_leaves_a_root_alone);
+    RUN_TEST(test_an_orphaned_root_in_dry_ground_rots_away);
+    RUN_TEST(test_a_root_column_under_a_living_tree_does_not_rot);
     RUN_TEST(test_a_rooted_collar_survives_the_bed_shifting_away);
     RUN_TEST(test_a_root_is_inert);
     RUN_TEST(test_root_conversion_never_creates_moisture);

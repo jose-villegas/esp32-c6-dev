@@ -640,6 +640,27 @@ typedef struct {
     uint8_t heats_to;
     uint8_t heat_chance;
 
+    /* MELTS: chance in 256 per step of becoming `heats_to` while in direct
+     * contact with a burning LIQUID - lava - and only that. `heat_chance`
+     * above answers to any heat at all: fire, an ember, lava, or heat that
+     * has crossed a conductor. This is the narrower door, for a material
+     * that has to shrug off a flame and still give way to molten rock.
+     *
+     * Glass already draws that exact line, but it does it with a ramp:
+     * fire can raise a pane to shatterable and never to molten, because
+     * `cools` drains faster than a flame can bank (see glass's own row).
+     * That needs a variant to bank INTO, and an extended material has
+     * none - its low nibble is which material it is. So the distinction
+     * has to be made at the source instead of in the target's memory:
+     * lava is the one heat source that is a liquid, and contact with it
+     * is what this rolls on.
+     *
+     * Contact only - not through a conductor. Heat conducted through a
+     * wall has lost its source by the time it arrives, and "lava on the
+     * far side of stone melts what fire on the far side would not" is a
+     * distinction nobody could see the reason for on the panel. */
+    uint8_t melts;
+
     /* THE IMPURE YIELD. Rolled off the SAME successful heat_chance roll
      * above, not a trigger of its own: chance in 256 that a bone-dry cell
      * converts into `flaw_to` instead of `heats_to`. 0, the default, means

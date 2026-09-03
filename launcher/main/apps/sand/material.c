@@ -1151,8 +1151,19 @@ const reaction_t reactions[MATERIAL_MAX] = {
          * roots feature. 8 in 256, about 3%: small, because the
          * conversion destroys whatever moisture the contact cell still
          * held, and a trunk that spends soil moisture constantly should
-         * not be turning its own footing to timber every few steps. */
-            .roots = 8,
+         * not be turning its own footing to timber every few steps.
+         *
+         * 40, RAISED FROM 8, and the reason is that the rarity of the
+         * SPEND is what actually bounds this, not the roll. Measured on a
+         * watered bed over 20,000 steps: a tree spends soil moisture only
+         * 74 times in its whole life - it grows, matures out of TREE_LIFT
+         * range, and stops - so at 8 in 256 the expected yield was about
+         * two root cells per tree, which is what "roots never grow past
+         * the attachment point" looked like on the device. At 40 the same
+         * scene grows 17 of them, 6/5/4/2 by depth: a system that spreads
+         * and tapers downward. Past 40 it saturates against the depth cap
+         * rather than getting bigger - 90 gives 21 roots, 160 gives 17. */
+            .roots = 40,
             .roots_to = MATX(MATX_ROOT),
 
             /* A trunk standing in water waters its own roots, at a third of
@@ -1605,17 +1616,30 @@ static const gfx_color_t palette[256] = {
                                     * on the panel, same as every other
                                     * starting-point constant in this table
                                     * (see docs/Sand/Metal-Smelting-Plan.md). */
-    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0x5C2018), /* root - a dark RED-brown, deliberately off
-                                    * the yellow-brown axis both dirt's ramp
-                                    * (DIRT_DRY/DIRT_WET above) and wood's
-                                    * own WOOD_UNLIT 0x5A3D24 sit on, so a
-                                    * root reads as tree rather than as soil
-                                    * at two screen pixels per cell. Darker
-                                    * than wood's trunk on purpose - it is
-                                    * buried structure, not the part meant
-                                    * to catch the eye. A GUESS, not a
-                                    * measurement - wants eyes on the panel,
-                                    * same as METAL's own entry above. */
+    [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT] = GFX_RGB(0xBFB49B), /* root - PALE BONE, and pale is the whole
+                                    * point: a root that has never seen light
+                                    * is the palest thing in the ground, not
+                                    * the darkest. It began as a dark
+                                    * red-brown on the theory that a root
+                                    * should read as tree, and that put it at
+                                    * luminance ~49 - squarely inside wet
+                                    * dirt's own range (DIRT_WET 0x3A2A18 is
+                                    * ~45), so it vanished into exactly the
+                                    * soil it is usually buried in.
+                                    *
+                                    * Contrast is against DIRT, which is what
+                                    * a root is always seen against: dirt runs
+                                    * ~127 (DIRT_DRY) down to ~45 (DIRT_WET),
+                                    * and this sits at ~180, clear of the
+                                    * whole ramp at either wetness.
+                                    *
+                                    * DESATURATED on purpose, which is the
+                                    * other half. Pale alone would collide
+                                    * with sand's own pale end (SAND_PALE
+                                    * 0xF2CE90), a saturated gold - R-B there
+                                    * is 98 against this one's 36 - so the
+                                    * neutrality is what keeps a root out of a
+                                    * dune as well as out of the soil. */
     [MAT_EXTENDED * MATERIAL_VARIANTS + MATX_ROOT + 1] = GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
     GFX_RGB(0xFF00FF),
@@ -1856,12 +1880,13 @@ static const gfx_color_t wood_grain[8] = {
 /* Root: buried structure, not foliage, so it gets the narrow speckle
  * treatment ice and metal do rather than leaf's wide one - a root does
  * not move once grown, and the variation is meant to read as texture in
- * the earth-toned wood rather than as real difference in the material.
- * ROOT_DARK is the palette's own entry (see MATX_ROOT's block above);
- * ROOT_LIGHT is a guess at the same lift METAL_LIGHT gives METAL_DARK,
- * wanting eyes on the panel like every other starting colour here. */
-#define ROOT_DARK         0x5C2018
-#define ROOT_LIGHT        0x8B3B2A
+ * pale fibre rather than as real difference in the material.
+ * ROOT_DARK is the palette's own entry (see MATX_ROOT's block above, and
+ * note it is the DARK end of a pale pair, not a dark colour); ROOT_LIGHT
+ * lifts it the same way METAL_LIGHT lifts METAL_DARK, and both want eyes
+ * on the panel like every other starting colour here. */
+#define ROOT_DARK         0xBFB49B
+#define ROOT_LIGHT        0xE5DDCB
 
 #define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
 
@@ -2650,8 +2675,14 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * in material.h and PART 1 of the roots feature. Same figure as
          * wood's own row below, for the same reason: it is the small
          * chance and the depth cap together that keep a watered bed from
-         * turning into timber below ground as well as above it. */
-            .roots = 8,
+         * turning into timber below ground as well as above it.
+         *
+         * 40, raised from 8 - see wood's own row for the measurement. The
+         * two must move together: a tree roots through whichever of the
+         * two is spending, and a plant that rooted at a different rate
+         * from the trunk it becomes would put a visible seam in the
+         * system at the moment a run hardens. */
+            .roots = 40,
             .roots_to = MATX(MATX_ROOT),
 
             /* What hardening leaves behind: a trunk two cells wider than a
@@ -2856,20 +2887,56 @@ const reaction_t extended_reactions[MATERIAL_EXTENDED_COUNT] = {
          * far softer one - a root is buried structure, not foliage. */
             .dissolvable = 180,
 
-            /* DELIBERATELY ZERO, not an omission - see reactions[]'s own
-         * top comment on what an absent field means field by field. A
-         * root is buried, and a fire that could reach down and eat a
+            /* FIRE, NO. DELIBERATELY ZERO, not an omission - see reactions[]'s
+         * own top comment on what an absent field means field by field.
+         * A root is buried, and a fire that could reach down and eat a
          * tree's own anchor out from under it would undo the entire
          * point of this feature: the tree would still be exactly as
          * vulnerable to a shifting bed as it was before roots existed,
          * just one fire away. */
             .flammability = 0,
 
-            /* No `grows`, no `falls`, no `withers`, no `drinks`, no
-         * `sprouts`, no `buds`. A root does not extend, does not fall
-         * with the tree above it fine, is never cleared as litter, takes
-         * no water of its own, and is never a budding or sprouting site.
-         * It holds still and holds on. */
+            /* LAVA, YES. Molten rock reaching a root system burns it out,
+         * and what it leaves is FIRE - so lava under a tree lights it
+         * from the roots up, which is both the right picture and the
+         * one thing that can then climb a trunk (wood's own flammability
+         * 6). `melts`, not `heat_chance`, is what keeps this from being
+         * a contradiction of the zero just above: see reaction_t.melts
+         * for why a material with no variant has to tell fire and lava
+         * apart at the source. `heat_chance` stays 0, so a flame, an
+         * ember, or heat through a wall all still do nothing here.
+         *
+         * 24 in 256 is a starting point. Lava is sustained contact rather
+         * than a passing lick, so this does not need to be high to read
+         * as decisive - about ten steps of contact per root cell. */
+            .heats_to = MAT_FIRE,
+            .melts = 24,
+
+            /* ROTS when orphaned. Without this a root was permanent
+         * litter - no `falls`, no `flammability`, nothing but acid ever
+         * removed one - and at 7-20 cells per tree a burnt forest would
+         * slowly fill its bed with bone-coloured cells nothing could
+         * clear. The same trap plant and leaf each fell into once.
+         *
+         * "Orphaned" is answered by the same machinery a leaf uses: it
+         * stays while anything of its tree is touching it (`sheltered_by`
+         * wood, and - through `roots_to` below - more root, so a column
+         * does not rot from the bottom while the tree above it lives),
+         * and it stays while it can still reach water. A root left behind
+         * in ground that has since dried out is the one that goes. */
+            .withers = 1,
+            .sheltered_by = MAT_WOOD,
+
+            /* Recognition, exactly as on the leaf row: no `roots`, so a
+         * root never makes another, but naming `roots_to` is what lets
+         * the shelter check and find_water() see a neighbouring root as
+         * part of the same body. */
+            .roots_to = MATX(MATX_ROOT),
+
+            /* No `grows`, no `falls`, no `drinks`, no `sprouts`, no
+         * `buds`. A root does not extend, does not fall with the tree
+         * above it, takes no water of its own, and is never a budding or
+         * sprouting site. It holds still and holds on. */
         },
 };
 
