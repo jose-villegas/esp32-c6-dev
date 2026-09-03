@@ -59,6 +59,7 @@ def parse_capture(capture_path: str):
 
     runs = {}          # label -> {"now_ms": int, "samples": int, "phases": {phase: {...}}}
     order = []          # labels in the order they first appeared
+    duplicates = []     # labels whose header line appeared more than once
     current_label = None
 
     for line in lines:
@@ -67,6 +68,18 @@ def parse_capture(capture_path: str):
             current_label = hm.group("label")
             if current_label not in runs:
                 order.append(current_label)
+            else:
+                # A second header for a label already seen - two runs of the
+                # same suite concatenated into one capture (e.g. re-run after
+                # a fix, or a full-selftest capture that looped). Silently
+                # overwriting here would let a LATER, possibly-worse run
+                # (still contended, still warming up) quietly replace an
+                # earlier one with no trace in the report - the exact "which
+                # numbers am I actually looking at" trap this list exists to
+                # avoid. Last occurrence still wins (the most recent run in
+                # the capture is the most likely one anybody meant to keep),
+                # but every overwrite is now surfaced instead of silent.
+                duplicates.append(current_label)
             runs[current_label] = {
                 "now_ms": int(hm.group("now_ms")),
                 "samples": int(hm.group("samples")),
@@ -91,7 +104,24 @@ def parse_capture(capture_path: str):
                 "avg": int(am.group("avg")),
             }
 
-    return runs, order
+    return runs, order, duplicates
+
+
+def incomplete_labels(runs, order):
+    """Labels whose run is missing one or more of PHASE_ORDER's lines - a
+    capture that was cut off (timeout, device reset, a too-short --timeout on
+    tools/sweeps/capture_runsuite.py) mid-checkpoint would otherwise produce a
+    report that LOOKS complete: every table still renders, just with a "?" in
+    a cell here and there that is easy to read as "this phase cost nothing"
+    rather than "this line never arrived". Surfaced as an explicit warning
+    instead, both to stdout and in the report itself."""
+    missing = []
+    for label in order:
+        have = set(runs[label]["phases"].keys())
+        gap = [p for p in PHASE_ORDER if p not in have]
+        if gap:
+            missing.append((label, gap))
+    return missing
 
 
 def fps(us: int) -> str:
@@ -104,7 +134,7 @@ def main() -> int:
     parser.add_argument("out_path", help="Markdown file to write")
     args = parser.parse_args()
 
-    runs, order = parse_capture(args.capture_path)
+    runs, order, duplicates = parse_capture(args.capture_path)
 
     lines = []
     lines.append("# Boot Animation Performance Report")
@@ -113,6 +143,7 @@ def main() -> int:
     lines.append(f"Source: `{args.capture_path}`")
     lines.append("")
 
+    gaps = []
     if not runs:
         lines.append("> No `boot_anim_perf` run headers found in this capture - "
                       "the suite may not have run (RUNSUITE run_boot_anim_perf_suite "
@@ -120,6 +151,24 @@ def main() -> int:
                       "have crashed before it reached one.")
         lines.append("")
     else:
+        gaps = incomplete_labels(runs, order)
+        if gaps or duplicates:
+            lines.append("## Warnings")
+            lines.append("")
+            for label, missing_phases in gaps:
+                msg = (f"`{label}` is missing {', '.join(missing_phases)} - "
+                       f"the capture was likely cut off before this checkpoint "
+                       f"finished logging; treat its numbers below as incomplete, "
+                       f"not zero.")
+                lines.append(f"- {msg}")
+                print(f"WARNING: {msg}", file=sys.stderr)
+            for label in duplicates:
+                msg = (f"`{label}` had more than one BOOT_ANIM PERF header in "
+                       f"this capture - only the LAST occurrence is reported "
+                       f"below, earlier ones were discarded.")
+                lines.append(f"- {msg}")
+                print(f"WARNING: {msg}", file=sys.stderr)
+            lines.append("")
         lines.append("## Checkpoints")
         lines.append("")
         lines.append("| Checkpoint | now_ms | samples |")
@@ -174,7 +223,9 @@ def main() -> int:
     with open(args.out_path, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    print(f"{len(runs)} checkpoint(s) -> {args.out_path}")
+    warning_count = len(gaps) + len(duplicates)
+    suffix = f" ({warning_count} warning(s) - see stderr)" if warning_count else ""
+    print(f"{len(runs)} checkpoint(s) -> {args.out_path}{suffix}")
     return 0
 
 
