@@ -1890,6 +1890,48 @@ static const gfx_color_t wood_grain[8] = {
 #define ROOT_DARK         0xBFA58A
 #define ROOT_LIGHT        0xDCC5A8
 
+/* A root DARKENS AS IT GROWS - not with time, with STRUCTURE. The shade
+ * is picked by how many of a cell's eight neighbours are root, the number
+ * the painter hands material_colours() in `depth` for this one material
+ * (see material.h): a tip touching one other root wears the fresh tan
+ * above, a cell that has put out children sits a step or two toward
+ * ROOT_OLD, and the collar, touched on most sides, wears the darkest step.
+ * The maintainer's own framing: "as one root grows from another, it
+ * darkens its parent".
+ *
+ * Structure rather than a lifetime on purpose, and not only because a root
+ * has nowhere to store one: an age would darken the TIPS too, and the
+ * whole point of the gradient is that the tips stay fresh for as long as
+ * they are tips. Losing a child to rot or lava lightens the parent again,
+ * which a stored age could never do.
+ *
+ * ROOT_OLD is pulled toward the trunk's own WOOD_UNLIT (0x5A3D24) and
+ * deliberately stops short of it: the oldest root should read as the same
+ * family as the wood it grew from, not as more trunk. The step from fresh
+ * to old is even in RGB across ROOT_SHADES; the bucket edges (root_shade()
+ * below) are a guess wanting eyes on the panel.
+ *
+ * BOTH ends of the grain pair travel, each to its own old colour. The first
+ * cut lerped the light end toward ROOT_OLD as well, so the oldest row's two
+ * ends met and its eight grain entries collapsed to one flat colour -
+ * caught by test_the_right_extended_materials_are_grained, which asks that
+ * a grained material actually use its grain. ROOT_OLD_LIGHT carries the
+ * same lift over ROOT_OLD that ROOT_LIGHT has over ROOT_DARK. */
+#define ROOT_OLD          0x7A5535
+#define ROOT_OLD_LIGHT    0x976D48
+#define ROOT_SHADES       4
+
+#define ROOT_STEP(k)       LERP(ROOT_DARK, ROOT_OLD, (k) * 15 / (ROOT_SHADES - 1))
+#define ROOT_STEP_LIGHT(k) LERP(ROOT_LIGHT, ROOT_OLD_LIGHT, (k) * 15 / (ROOT_SHADES - 1))
+
+/* Which of the ROOT_SHADES steps a root with `n` root neighbours wears.
+ * 0 or 1 is a tip (or a lone seed), 2 has one child, 3 is a junction, and
+ * anything more is the collar or the middle of a thicket. */
+static inline unsigned root_shade(unsigned n)
+{
+    return n <= 1u ? 0u : n == 2u ? 1u : n == 3u ? 2u : (ROOT_SHADES - 1u);
+}
+
 #define GRAIN8(lo, hi, k) GFX_RGB(LERP((lo), (hi), (k) * 15 / 7))
 
 #define GRAIN8_ROW(lo, hi)                                                                                             \
@@ -1900,7 +1942,14 @@ static const gfx_color_t plant_grain[8] = GRAIN8_ROW(PLANT_DARK, PLANT_LIGHT);
 static const gfx_color_t ice_grain[8] = GRAIN8_ROW(ICE_DARK, ICE_LIGHT);
 static const gfx_color_t leaf_grain[8] = GRAIN8_ROW(LEAF_DARK, LEAF_LIGHT);
 static const gfx_color_t metal_grain[8] = GRAIN8_ROW(METAL_DARK, METAL_LIGHT);
-static const gfx_color_t root_grain[8] = GRAIN8_ROW(ROOT_DARK, ROOT_LIGHT);
+/* One grain row per shade step, fresh first - see ROOT_OLD above. */
+static const gfx_color_t root_grain[ROOT_SHADES][8] = {
+    GRAIN8_ROW(ROOT_STEP(0), ROOT_STEP_LIGHT(0)),
+    GRAIN8_ROW(ROOT_STEP(1), ROOT_STEP_LIGHT(1)),
+    GRAIN8_ROW(ROOT_STEP(2), ROOT_STEP_LIGHT(2)),
+    GRAIN8_ROW(ROOT_STEP(3), ROOT_STEP_LIGHT(3)),
+};
+_Static_assert(ROOT_SHADES == 4, "root_grain[] above spells out one row per shade - add a row here too");
 
 /* Metal's woven line and travelling shine - the same HATCHED mechanism
  * glass uses in paint_row_n(), which is generic to anything hatched and
@@ -2556,7 +2605,7 @@ material_colours(cell_t c, unsigned hash, unsigned mask, unsigned depth, gfx_col
                 out[0] = (v == MATX_PLANT)  ? plant_grain[hash & 7u]
                          : (v == MATX_LEAF) ? leaf_grain[hash & 7u]
                          : (v == MATX_ICE)  ? ice_grain[hash & 7u]
-                                            : root_grain[hash & 7u];
+                                            : root_grain[root_shade(depth)][hash & 7u];
                 out[1] = out[0];
                 out[2] = out[0];
                 return MATERIAL_SPECKLED;

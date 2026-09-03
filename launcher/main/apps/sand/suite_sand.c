@@ -14381,6 +14381,68 @@ static void test_root_conversion_never_creates_moisture(void)
  * a mistake there does not fail to build - it paints some other extended
  * material in leaf green, which is the sort of thing nobody notices until
  * a fourteenth material arrives and comes out looking like a hedge. */
+/* A root darkens by STRUCTURE, not by time: the painter hands
+ * material_colours() the count of root neighbours in `depth` for a root
+ * cell (material_root_neighbours(), material.h), and the shade steps from
+ * the fresh tan toward a wood-like brown as that count climbs. A tip (one
+ * neighbour) must wear exactly the fresh colour a lone seed does, and every
+ * step older must be darker in every channel - checked per channel after
+ * undoing the panel's byte swap, rather than as a luminance, so a hue drift
+ * could not pass as "darker". Nothing else may read `depth` this way: a
+ * leaf at depth 0 and at depth 4 is the same leaf. */
+static unsigned r5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 11) & 31u; }
+static unsigned g6(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return (n >> 5) & 63u; }
+static unsigned b5(gfx_color_t c) { const unsigned n = (unsigned)((c >> 8) | (c << 8)) & 0xFFFFu; return n & 31u; }
+
+static void test_a_root_darkens_as_more_root_grows_around_it(void)
+{
+    gfx_color_t col[3];
+    gfx_color_t by_count[6];
+    for (unsigned n = 0; n < 6u; n++) {
+        material_colours(MATX(MATX_ROOT), 3u, 0u, n, col);
+        by_count[n] = col[0];
+    }
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(by_count[0], by_count[1],
+        "a tip (one root neighbour) wears the same fresh colour as a lone seed");
+    for (unsigned n = 1; n < 5u; n++) {
+        TEST_ASSERT_TRUE_MESSAGE(r5(by_count[n + 1]) <= r5(by_count[n]) &&
+                                 g6(by_count[n + 1]) <= g6(by_count[n]) &&
+                                 b5(by_count[n + 1]) <= b5(by_count[n]),
+            "each extra root neighbour may only darken a root, never lighten it");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(r5(by_count[4]) < r5(by_count[1]) &&
+                             g6(by_count[4]) < g6(by_count[1]) &&
+                             b5(by_count[4]) < b5(by_count[1]),
+        "a root touched on four sides must be visibly darker than a tip, in "
+        "every channel - the gradient has to actually exist");
+
+    gfx_color_t leaf_shallow[3], leaf_deep[3];
+    material_colours(MATX(MATX_LEAF), 3u, 0u, 0u, leaf_shallow);
+    material_colours(MATX(MATX_LEAF), 3u, 0u, 4u, leaf_deep);
+    TEST_ASSERT_EQUAL_HEX16_MESSAGE(leaf_shallow[0], leaf_deep[0],
+        "only a root reads `depth` as a neighbour count - a leaf must ignore it");
+}
+
+/* The count itself, on three synthetic rows with the top one missing the
+ * way paint_row_n() hands a NULL `above` on the grid's first row. */
+static void test_root_neighbours_are_counted_across_three_rows(void)
+{
+    const cell_t R = MATX(MATX_ROOT), D = CELL_SOIL(MAT_DIRT, 0, 3), Wd = CELL_MAKE(MAT_WOOD, 0);
+    const uint8_t above[5] = { R,  R,  R,  D,  D  };
+    const uint8_t row[5]   = { D,  R,  R,  Wd, R  };
+    const uint8_t below[5] = { D,  D,  R,  R,  D  };
+    /* (2): above-left R, above R, left R, below R, below-right R = 5;
+     * above-right D, right Wd, below-left D do not count. */
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(5u, material_root_neighbours(above, row, below, 2, 5),
+        "counts root on all eight sides and nothing else - dirt and wood "
+        "are not root");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(3u, material_root_neighbours(NULL, row, below, 2, 5),
+        "a NULL above row (the grid's top edge) contributes nothing - the "
+        "two roots above (2) drop out, left/below/below-right remain");
+    TEST_ASSERT_EQUAL_UINT_MESSAGE(1u, material_root_neighbours(above, row, below, 4, 5),
+        "the right-hand grid edge is not read past");
+}
+
 static void test_the_right_extended_materials_are_grained(void)
 {
     gfx_color_t col[3] = { 0, 0, 0 };
@@ -25504,6 +25566,8 @@ void run_sand_suite(void)
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
     RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
+    RUN_TEST(test_a_root_darkens_as_more_root_grows_around_it);
+    RUN_TEST(test_root_neighbours_are_counted_across_three_rows);
     RUN_TEST(test_the_right_extended_materials_are_grained);
     RUN_TEST(test_metal_hatched_body_lines_and_shine_differ);
     RUN_TEST(test_metal_shine_does_not_vary_between_cells);
