@@ -314,6 +314,15 @@ static const field_doc_t field_docs[] = {
     F(buds_to,      GRP_REGROW, FK_TARGET, NULL),
     FRATE(drinks,   GRP_REGROW, "drinks through its roots"),
 
+    /* `roots` is not rolled independently every step the way `sprouts`
+     * and `buds` above are - it only rolls once GROWING, BUDDING or
+     * SPROUTING has already spent a level of soil moisture this same
+     * step (spend_soil_moisture(), sand_reactions.c), so it is a
+     * one-shot chance conditioned on that spend, the same shape as
+     * `residue` or `flaw_chance` - FCHANCE, not FRATE. */
+    FCHANCE(roots,  GRP_REGROW, "roots into the soil it drinks from"),
+    F(roots_to,     GRP_REGROW, FK_TARGET, NULL),
+
     /* GRP_SHATTER */
     F(shatters_to,  GRP_SHATTER, FK_TARGET, NULL),
 };
@@ -994,6 +1003,12 @@ static void emit_regrow(const reaction_t *r)
                "more, drinks %s - the water comes out as a level of "
                "moisture in the soil at its root, not in itself.\n",
                wetting_liquids, adverb("drinks", r->drinks));
+    }
+    if (r->roots != 0 && r->roots_to != 0) {
+        printf("- Spending its own soil moisture to grow, bud or sprout, "
+               "%s roots into the soil it drinks from, welding that cell "
+               "into %s.\n",
+               adverb("roots", r->roots), prose_name(to_name(r->roots_to)));
     }
 }
 

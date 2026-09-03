@@ -912,6 +912,27 @@ typedef struct {
      * actually happens. */
     uint8_t clings_to;
 
+    /* ROOTING: chance in 256 that SPENDING this material's own soil
+     * moisture (growing, budding, sprouting - see each of their own
+     * comments) also welds the CONTACT cell - the collar, where the stem
+     * actually touches ground - into `roots_to`.
+     *
+     * It exists because dirt is a powder and shifts: when the soil
+     * directly under a tree's collar slides away, find_water()'s walk
+     * down the stem finds neither stem nor ground below it and the tree
+     * simply stops growing, stranded above water it can no longer reach.
+     * A root embeds the tree in the bed instead of resting it on top of
+     * that bed, so a shifting surface cannot disconnect the two.
+     *
+     * Small on purpose. The conversion destroys whatever moisture the
+     * contact cell still held - a root does not carry water, it anchors -
+     * so a generous chance eats the very water bed the tree is living
+     * off. See ROOT_DEPTH_MAX (sand_reactions.c) for the other half of
+     * what keeps this from turning a watered bed into timber below the
+     * surface as well as above it. */
+    uint8_t roots;
+    uint8_t roots_to;
+
     /* What SHELTERS this from withering: touch a cell of it and a dry
      * spell cannot take you.
      *
@@ -1078,8 +1099,17 @@ typedef enum {
     /* METAL: dirt smelted by sustained heat - see
      * docs/Sand/Metal-Smelting-Plan.md. Briefly slot 5 while the leaf
      * ageing chain held slots 3 and 4; back to 3 now that chain is gone.
-     * Twelve extended slots remain after it. */
+     * Eleven extended slots remain after it. */
     MATX_METAL,
+
+    /* ROOT: what a plant welds itself to the soil with as it drinks - see
+     * reaction_t.roots. Not more wood: wood's variant is burn progress
+     * (reactions[MAT_WOOD].burn_decay), so a root wearing a wood cell
+     * would read as a nearly-burnt-out log rather than as buried anchor.
+     * An extended material needs no variant of its own - the low nibble
+     * IS the identity - so ROOT costs a slot rather than a byte, the same
+     * trade METAL made above. Ten extended slots remain after it. */
+    MATX_ROOT,
 } material_extended_t;
 
 /* What to call one cell, decoding the extended range. materials[].name is

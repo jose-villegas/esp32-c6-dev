@@ -540,6 +540,64 @@ steps and then plateaued as the remaining pockets thinned out and
 scattered. Not a suppression mechanism - the tapering is an emergent
 consequence of the blast itself clearing cover, not a cap anyone added.
 
+## Roots: a tree welds itself to the soil it drinks from
+
+The plant/wood/leaf family (`MATX_PLANT`, `MAT_WOOD`, `MATX_LEAF`) is not
+otherwise covered in this document - its growth, hardening and budding
+rules live in the extensive comments on `extended_reactions[MATX_PLANT]`
+and `reactions[MAT_WOOD]` in `material.c`, which is the source of truth for
+how a tree grows tall, thickens, and buds new limbs. This section covers
+one narrower piece: how a tree stays connected to the ground it drinks
+from once the ground itself starts moving.
+
+**The problem.** Dirt is a powder and shifts. A tree finds water by
+walking down its own stem to the ground and on down into the soil
+(`find_water()`, `sand_reactions.c`) - and when the soil directly under
+the tree's collar (where the trunk actually touches ground) slides away,
+that walk finds neither more stem nor ground below it and simply returns
+failure. The tree is stranded, sometimes with plenty of water two rows
+down, because the one cell it needed to reach it is gone.
+
+**The fix.** As a plant or a trunk spends the soil moisture it grows,
+buds or sprouts on, there is a small chance (`reaction_t.roots`, ~3%) that
+the CONTACT cell - the collar itself, not wherever the moisture actually
+came from - welds into a `ROOT` cell instead of staying an ordinary grain
+of dirt. A root is `KIND_STATIC`: it does not fall, slide, or get
+displaced the way loose dirt does, so once a collar has rooted, nothing
+about the bed shifting can carry it away from under the tree. Converting
+the contact cell rather than the (possibly much deeper) cell the moisture
+was actually taken from matters for a second reason: the very next
+conversion then happens one cell deeper, since `find_water()`'s stem walk
+now passes straight through the new root and the collar effectively moves
+down with it - so a root column grows downward from the collar on its
+own, contiguous with the tree, exactly the shape a real root system has.
+It is capped at `ROOT_DEPTH_MAX` (4) cells below the collar, the
+below-ground twin of `TREE_LIFT` above it: without a cap, a tree that
+never stops spending soil moisture would eventually weld its way to the
+bottom of any bed it stands on.
+
+**Why a new material, not more wood.** The obvious shortcut - give wood a
+"rooted" variant, the way glass spends its variant on temperature - does
+not work, because wood's variant is already spoken for: it is burn
+progress (`reaction_t.burn_decay`), and `CELL_VARIANT(n) != 0` is what
+"on fire" means throughout the reactions pass. A root wearing a wood
+variant would read as a nearly-burnt-out log. Being its own material also
+buys two things a wood-based encoding could not: a root does not count
+against `TREE_LIFT` (`find_water()` tracks a separate `root_depth` purely
+so it can NOT add to `lift` - a cell below the water line lifts nothing,
+and charging it anyway would let a handful of root cells eat a real share
+of every tree's height budget for free), and the stem walk can tell a
+root apart from ordinary ground well enough to treat one buried under
+freshly-shifted dirt as transparent rather than as a second dead end,
+reintroducing the very bug this feature exists to fix from the other
+side.
+
+Flammability is zero on a root's own row, deliberately - not an omission.
+A root is buried, and a fire that could reach down and burn out a tree's
+own anchor from under it would undo the whole point of the feature: the
+tree would be exactly as vulnerable to a shifting bed as it was before
+roots existed, just one fire away.
+
 ## Momentum and the wall-rebound splash
 
 Everything above reacts to where gravity *points*. Nothing reacted to how
