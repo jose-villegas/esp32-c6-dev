@@ -983,24 +983,30 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_ACID_BUBBLE_CHANCE 40
 #define SAND_ACID_BUBBLE_SPEED  220
 
-/* DILUTION - water touching acid rolls a chance to become one or the
- * other, biased toward water, reusing the same trigger acid's ordinary
- * eating already has: the dissolves/dissolvable pair in
- * step_one_dissolver_cell() (sand_reactions.c). No new field for "does
- * this happen at all" - MAT_WATER's own `dissolvable` (material.c)
- * answers that exactly the way sand's or wood's already does, and this
- * constant only decides the OUTCOME once that roll has already landed:
- * whether the acid cell that bit becomes water (dilution, the more
- * common case) or the water cell it bit becomes acid instead (acid
- * spreading). Chance-in-256 that WATER wins, BEFORE
- * SAND_ACID_DILUTE_MASS_BIAS below adjusts it for this particular acid
- * cell. Started at 192 (3 in 4), toned down to 160 (about 5 in 8) once
- * reported as too strongly one-sided, then tightened further to a 55/45
- * split (141) - close enough to even that acid spreading reads as a
- * real, regular outcome rather than the rare exception it was at the
- * wider splits. Starting bias, not a measured one - tune on device like
- * every other constant here. */
-#define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
+/* DILUTION - water touching acid rolls a chance to decide who wins,
+ * reusing the same trigger acid's ordinary eating already has: the
+ * dissolves/dissolvable pair in step_one_dissolver_cell()
+ * (sand_reactions.c). No new field for "does this happen at all" -
+ * MAT_WATER's own `dissolvable` (material.c) answers that exactly the
+ * way sand's or wood's already does, and this constant only decides the
+ * OUTCOME once that roll has already landed. Chance-in-256 that WATER
+ * wins, BEFORE SAND_ACID_DILUTE_MASS_BIAS below adjusts it for this
+ * particular acid cell.
+ *
+ * BOTH cells change on either outcome now, symmetrically - see the
+ * ladder's own comment in step_one_dissolver_cell() for the mechanism
+ * (the winner boils into its own vapour, the loser converts into the
+ * winner's material) - so this constant is now a close-to-even coin
+ * flip, not a strong lean: 192 (3 in 4) toned down to 160, then to a
+ * 55/45 split at 141 while the winning side's cell was still left
+ * untouched (a free cell of whichever material won, every single time,
+ * which is what actually needed fixing - see SAND_ACID_DILUTE_MASS_BIAS
+ * below and the ladder's own comment for the full story). With that
+ * fixed, the split itself only needs a small lean, not a strong one: 134
+ * (roughly 52.3%, about a 2.5-point favour toward water) rather than
+ * 141's 5-point one. Starting bias, not a measured one - tune on device
+ * like every other constant here. */
+#define SAND_ACID_DILUTE_TO_WATER_CHANCE 134
 
 /* MASS MATTERS - a single roll at the fixed split above can't tell a lone
  * drop of acid resting on a lake from a whole poured-on slab of it; every
@@ -1041,19 +1047,19 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * step_one_dissolver_cell(), sand_reactions.c - deliberately one roll,
  * not the two independent ones an earlier version of this used, to keep
  * the interaction from growing another moving part) gives every acid/
- * water bite a small, unconditional chance to boil the acid cell off
- * into MAT_GAS instead of resolving into either water or more acid.
- * Requested directly: a puddle sitting under a steady drip of acid was
- * growing without bound, one full water cell born per winning bite with
- * nothing ever leaving the system - this is the mass sink that was
- * missing, distinct from r->evaporates (material.c), which is acid's own
- * ambient boil-off and fires whether or not water is anywhere nearby.
- * Chance-in-256 out of the full roll (not nested inside the water-wins
- * branch the way it first shipped), checked first in the ladder, ahead
- * of SAND_ACID_DILUTE_MASS_BIAS's adjustment - so evaporating is exactly
- * as likely for a lone drop as for a poured-on slab. No separate fizzle
- * puff on top of it the way the ordinary water-wins case gets one; boiling
- * off in place already is the gas escaping. Starting bias, not a
+ * water bite a small, unconditional chance to boil the ACID cell off
+ * into MAT_GAS before the win/lose split even runs, regardless of who
+ * would otherwise have won. Distinct from r->evaporates (material.c),
+ * which is acid's own ambient boil-off and fires whether or not water is
+ * anywhere nearby - this one only fires at the moment of an actual
+ * acid/water bite. Distinct too from the mass sink the win/lose split
+ * itself now carries on both its own outcomes (see that split's own
+ * comment) - this bucket existed before that fix landed and is kept
+ * as its own separate, smaller chance rather than folded in, since it is
+ * the one outcome that skips the water cell entirely. Chance-in-256 out
+ * of the full roll, checked first in the ladder, ahead of
+ * SAND_ACID_DILUTE_MASS_BIAS's adjustment - so evaporating is exactly as
+ * likely for a lone drop as for a poured-on slab. Starting bias, not a
  * measured one - tune on device like every other constant here. */
 #define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 

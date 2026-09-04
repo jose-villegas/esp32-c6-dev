@@ -15970,17 +15970,17 @@ static void test_acid_and_water_dilute_each_other(void)
 /* The bias itself, not just that dilution happens at all - measured in a
  * single step so the two outcome counts are independent per-column
  * samples rather than counts that could keep compounding into each
- * other across multiple steps. Expected counts at this fixture's width
- * and the current constants (r->dissolves=60/256, water's
- * dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=141/256, a
- * tight 55/45 split): roughly 440 columns where the acid cell becomes
- * water, roughly 360 where the water cell becomes acid instead - a
- * narrow bias, which is exactly why this fixture is 4000 columns wide
- * rather than the 400 it started at (see the fixture's own comment) -
- * a loose assertion (water-wins strictly greater than acid-wins, both
- * counts positive) needs that much sample size to clear the gap
- * reliably at this bias, without hard-coding the exact expected counts
- * a future retune of any of those three constants would break. */
+ * other across multiple steps. Current constants (r->dissolves=60/256,
+ * water's dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=134/256,
+ * roughly 52/48) put the two outcome counts closer together than the
+ * 55/45 split this constant started this round at - see its own comment
+ * (sand.h) for why the lean got smaller once the win/lose split stopped
+ * being the only thing standing between a body of water and unbounded
+ * growth. A loose assertion (water-wins strictly greater than acid-wins,
+ * both counts positive) needs the fixture's full 4000-column width to
+ * clear a gap this narrow reliably, without hard-coding the exact
+ * expected counts a future retune of any of those three constants would
+ * break. */
 static void test_water_wins_the_dilution_more_often_than_acid_does(void)
 {
     uint8_t *dilute_cells = malloc((size_t)DILUTE_W * DILUTE_H);
@@ -16020,68 +16020,119 @@ static void test_water_wins_the_dilution_more_often_than_acid_does(void)
         "becoming acid, not the other way round or a coin flip");
 }
 
-/* A third dedicated fixture, checking the "fizzle" water's win of the
- * roll spawns - a puff of gas into a nearby empty cell, see
- * step_one_dissolver_cell()'s own comment (an impulse pop was tried
- * alongside this too, then dropped as a wasted call: dilution mostly
- * happens fully submerged, where a thrown grain has nowhere open to go,
- * unlike acid_bubble()'s own exposed-rim case). Alternating acid/empty
- * columns in the acid row, on purpose: the two dilution fixtures above
- * are deliberately fully packed (the right shape for measuring the
- * material-swap outcome itself), which leaves emit_into_empty_neighbor()
- * nothing to ever succeed into - this one gives every acid cell an empty
- * neighbour to puff into instead. */
-#define FIZZLE_W 400
-#define FIZZLE_H 2
-static sand_t  fizzle_sim;
+/* A dedicated fixture for the two pairing tests below - alternating
+ * acid/water columns separated by a column of STONE, not an empty gap.
+ * Two different designs were tried first and both broke for their own
+ * reason:
+ *
+ * - The packed dilute_sim fixture above lets an acid cell's LEFT or
+ *   RIGHT neighbour be another acid cell. Once that neighbour has
+ *   already won its own water-wins bite earlier in the same left-to-
+ *   right row scan, it has already turned into water by the time THIS
+ *   cell's own dissolve search reaches it - a failed give-roll on the
+ *   water directly above falls through to left/right next, and can land
+ *   on that freshly-converted neighbour instead. A water-wins column's
+ *   steam ended up written to the column beside it, not above it -
+ *   correct behaviour, just not what a test assuming "the water cell is
+ *   always directly above" can tell apart from a bug.
+ * - An EMPTY gap between pairs (the old "fizzle" fixture's own idiom)
+ *   does not have that problem, but introduces a different one: an
+ *   empty cell is something a liquid can spread INTO, and the main
+ *   sweep runs before reactions do - by the time this pass even starts,
+ *   water or acid may already have drifted sideways into the gap,
+ *   scrambling the one-pair-per-column layout before a single bite ever
+ *   lands.
+ *
+ * STONE closes both holes at once: not dissolvable (an acid cell's only
+ * candidate is ever its own water cell straight up), and not something
+ * anything can flow into (nothing moves before reactions runs, same as
+ * the fully packed fixture's own stability). */
+#define SEPARATED_W 4000
+#define SEPARATED_H 2
+static sand_t  separated_dilute_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
  * own comment above for why. */
-static void acid_water_fizzle_fixture(uint8_t *cells)
+static void acid_water_separated_fixture(uint8_t *cells)
 {
-    sand_init(&fizzle_sim, cells, FIZZLE_W, FIZZLE_H, 13u);
-    sand_set_evaporates(&fizzle_sim, 0);
-    /* Water only over the SAME even columns as the acid below it -
-     * leaving row 0 empty at the odd columns too, not just row 1, is
-     * what keeps this stable. The first attempt left row 0 fully water
-     * with only row 1 gapped, and every odd-column water cell fell
-     * straight down into the empty acid-row cell below it before
-     * reactions ever ran, scrambling the water-above-acid pairing this
-     * fixture depends on - gravity runs in the main sweep, before
-     * step_reactions() gets a turn. An empty column with nothing above
-     * it has nothing left to fall. */
-    for (int x = 0; x < FIZZLE_W; x += 2) {
-        sand_set(&fizzle_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
-        sand_set(&fizzle_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    sand_init(&separated_dilute_sim, cells, SEPARATED_W, SEPARATED_H, 7u);
+    sand_set_evaporates(&separated_dilute_sim, 0);
+    for (int x = 0; x < SEPARATED_W; x++) {
+        if (x % 2 == 0) {
+            sand_set(&separated_dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&separated_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+        } else {
+            sand_set(&separated_dilute_sim, x, 0, STONE);
+            sand_set(&separated_dilute_sim, x, 1, STONE);
+        }
     }
 }
 
-static void test_water_winning_dilution_spawns_a_gas_puff(void)
+/* Both outcomes of the win/lose split now change BOTH cells, not just
+ * one - see step_one_dissolver_cell()'s own comment (sand_reactions.c).
+ * The winning side is not left untouched any more, it boils into its own
+ * vapour (MAT_STEAM for water, MAT_GAS for acid) at the same moment the
+ * losing side converts into the winner's material - a deterministic
+ * PAIR, not two independent coin flips, so wherever one half of a pair
+ * is seen the other must be too, every single time. */
+static void test_water_winning_the_dilution_boils_the_water_cell_to_steam(void)
 {
-    uint8_t *fizzle_cells = malloc((size_t)FIZZLE_W * FIZZLE_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(fizzle_cells,
-        "acid/water fizzle grid must fit in what the framebuffer leaves");
-    acid_water_fizzle_fixture(fizzle_cells);
+    uint8_t *cells = malloc((size_t)SEPARATED_W * SEPARATED_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water separated grid must fit in what the framebuffer leaves");
+    acid_water_separated_fixture(cells);
+    sand_step(&separated_dilute_sim, 0, 1000, 0);
 
-    bool gas_seen = false;
-    for (int i = 0; i < 10 && !gas_seen; i++) {
-        sand_step(&fizzle_sim, 0, 1000, 0);
-        for (int x = 0; x < FIZZLE_W && !gas_seen; x++) {
-            for (int y = 0; y < FIZZLE_H && !gas_seen; y++) {
-                gas_seen = (CELL_MATERIAL(sand_at(&fizzle_sim, x, y)) == MAT_GAS);
-            }
+    int water_wins = 0, water_wins_with_steam = 0;
+    for (int x = 0; x < SEPARATED_W; x += 2) {
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 1)) != MAT_WATER) {
+            continue; /* not a water-wins column - see the sibling test */
+        }
+        water_wins++;
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 0)) == MAT_STEAM) {
+            water_wins_with_steam++;
         }
     }
 
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. */
-    free(fizzle_cells);
+    free(cells);
 
-    TEST_ASSERT_TRUE_MESSAGE(gas_seen,
-        "water winning a dilution must leave a puff of gas behind - the "
-        "only source of MAT_GAS in this fixture (evaporates disabled, no "
-        "sand/wood/oil for a normal dissolve to fizz off of)");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_wins,
+        "expected at least some acid-becomes-water dilutions in 2000 "
+        "independent pairs to check steam against");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(water_wins, water_wins_with_steam,
+        "every column where the acid cell became water must ALSO show "
+        "the water cell that won boiled into steam - the two are one "
+        "outcome of the same roll, not independent");
+}
+
+static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
+{
+    uint8_t *cells = malloc((size_t)SEPARATED_W * SEPARATED_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water separated grid must fit in what the framebuffer leaves");
+    acid_water_separated_fixture(cells);
+    sand_step(&separated_dilute_sim, 0, 1000, 0);
+
+    int acid_wins = 0, acid_wins_with_gas = 0;
+    for (int x = 0; x < SEPARATED_W; x += 2) {
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 0)) != MAT_ACID) {
+            continue; /* not an acid-wins column - see the sibling test */
+        }
+        acid_wins++;
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 1)) == MAT_GAS) {
+            acid_wins_with_gas++;
+        }
+    }
+
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_wins,
+        "expected at least some water-becomes-acid dilutions in 2000 "
+        "independent pairs to check gas against");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(acid_wins, acid_wins_with_gas,
+        "every column where the water cell became acid must ALSO show "
+        "the acid cell that won boiled into gas - the two are one "
+        "outcome of the same roll, not independent");
 }
 
 /* A dedicated fixture for oil's own dilution - oil directly above acid,
@@ -21359,18 +21410,18 @@ static void test_the_four_liquid_scene_keeps_reacting_after_settling(void)
         "lava quenched by water should still be leaving a good showing of "
         "stone at the end of the window - if it isn't, the scene has gone "
         "quiet and the device test beside it is measuring almost nothing");
-    /* 50 down to 8 - SAND_ACID_DILUTE_MASS_BIAS (sand.h) means the acid
-     * band in this scene now genuinely contests the water band it sits
-     * against instead of always losing to it, so less water survives the
-     * crossing to reach lava and boil. Intentional: the whole point of
-     * that constant is a big local mass of one liquid actually winning
-     * against another, and this scene's inverted acid-over-water band is
-     * exactly that shape. Still checked against a floor, not dropped
-     * entirely - steam production really did fall (measured 11 at the
-     * constants current when this was retuned), so a floor of 0 would
-     * stop catching a genuine regression; 8 leaves headroom below that
-     * without asking for the old, pre-mass-bias showing back. */
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(8, steam,
+    /* Dropped to 8 for one round while SAND_ACID_DILUTE_MASS_BIAS (sand.h)
+     * let the acid band in this scene genuinely contest the water band it
+     * sits against without water paying any cost of its own for losing -
+     * every bite either grew a new water cell for free or grew a new acid
+     * cell for free, so whichever side got the local upper hand snowballed.
+     * Restored to 50 once the water/acid dilution ladder made BOTH
+     * outcomes cost the winning side a cell (see that ladder's own comment,
+     * sand_reactions.c) - water is no longer a runaway resource once
+     * either side genuinely has to pay to win, and steam production is
+     * back over 500 at the constants current when this was re-measured,
+     * comfortably clearing the original floor again. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, steam,
         "water boiled and fire quenched should still be leaving some "
         "showing of steam at the end of the window - if it isn't, the "
         "scene has gone quiet and the device test beside it is measuring "
@@ -26413,7 +26464,8 @@ void run_sand_suite(void)
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_acid_and_water_dilute_each_other);
     RUN_TEST(test_water_wins_the_dilution_more_often_than_acid_does);
-    RUN_TEST(test_water_winning_dilution_spawns_a_gas_puff);
+    RUN_TEST(test_water_winning_the_dilution_boils_the_water_cell_to_steam);
+    RUN_TEST(test_acid_winning_the_dilution_boils_the_acid_cell_to_gas);
     RUN_TEST(test_oil_mostly_boils_off_into_gas_not_acid);
     RUN_TEST(test_the_acid_that_ate_oil_can_die_in_a_single_bite);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
