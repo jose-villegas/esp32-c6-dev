@@ -501,7 +501,12 @@ class Renderer:
         finally:
             os.remove(scratch_json)
 
-        with open(TIMELINE_JSON, "w", encoding="utf-8") as f:
+        # newline="\n" like every other write in this file (and like
+        # gen_zeta_curve.py's own reconfigure): without it Python's text
+        # mode translates on Windows and Build & Flash rewrites all ~320
+        # lines as CRLF, so `git diff` after a bake shows the whole file
+        # changed and buries the handful of values actually retuned.
+        with open(TIMELINE_JSON, "w", encoding="utf-8", newline="\n") as f:
             json.dump(payload, f, indent=4)
             f.write("\n")
         with open(TIMELINE_HEADER, "w", encoding="utf-8", newline="\n") as f:
