@@ -4418,6 +4418,83 @@ step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     return true;
 }
 
+/* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
+ * feature itself; this is its mechanism, the same "fake collapse" idiom
+ * step_one_condensing_cell() just above already uses, scaled up and
+ * generalised to two materials instead of one. Unlike that 2x2 check,
+ * this is not keyed off a single reaction_t field - MAT_GAS and
+ * MAT_STEAM are named directly by their caller in step_one_reacting_row()
+ * below, the same way acid_bubble() above names MAT_ACID directly rather
+ * than adding a flag that would only ever be true for one material,
+ * since either species can legitimately be the block's own top-left
+ * corner.
+ *
+ * A COLLAPSE, same as condensation, not a like-for-like replacement -
+ * caught directly: the first version of this converted the WHOLE 4x4
+ * (16 cells) into 16 fresh acid cells, no reduction at all, unlike
+ * condensation's own 4-cells-into-1 shrink just above. Acid is one of
+ * this simulation's biggest producers of gas and steam (dilution,
+ * eating oil, eating sand/wood/stone, its own ambient boil-off all leave
+ * one or the other), so handing every cell a matching pocket held
+ * straight back into MORE acid, at full count, turned "acid rain" into a
+ * feedback loop that could keep a lake topped up indefinitely - the
+ * exact opposite of the finite "acid has a budget" rule the rest of
+ * this file spends real effort enforcing. Fixed at the same ratio
+ * condensation itself already uses (4 cells in, 1 surviving): the
+ * block's own top-left 2x2 - not the whole 4x4 - becomes acid, and
+ * every other cell in the block clears to empty. Sixteen cells of vapor
+ * raining down four cells of acid, not sixteen.
+ *
+ * (x, y) is only ever checked as the block's own top-left corner - same
+ * scan-order argument as step_one_condensing_cell() just above: a
+ * genuine matching 4x4 is always reached from its own actual top-left
+ * cell first, scanning left to right, top to bottom, and once it fires -
+ * clearing every cell in the block - any other gas or steam cell that
+ * WAS part of it is no longer gas or steam by the time its own turn
+ * comes. A cheap, honest miss otherwise, not a case worth special-
+ * casing away. */
+static inline bool
+step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
+    if (x + 3 >= w || y + 3 >= h) {
+        return false;
+    }
+
+    int steam_count = 0, gas_count = 0;
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
+            const uint8_t mat = CELL_MATERIAL(s->cells[at]);
+            if (mat == MAT_STEAM) {
+                steam_count++;
+            } else if (mat == MAT_GAS) {
+                gas_count++;
+            } else {
+                return false;
+            }
+        }
+    }
+    if (steam_count < 2 || gas_count < 2) {
+        return false;
+    }
+
+    const int acid_rain = (s->acid_rain >= 0) ? s->acid_rain : SAND_ACID_RAIN_CHANCE;
+    if ((int)(rng_next(&s->rng) & 0xFF) >= acid_rain) {
+        return false;
+    }
+
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
+            if (dx < 2 && dy < 2) {
+                place_reacted(s, x + dx, y + dy, at, MAT_ACID);
+            } else {
+                place_cell(s, x + dx, y + dy, at, CELL_EMPTY);
+            }
+        }
+    }
+    return true;
+}
+
 /* One row's share of the scan - only burning cells are dispatched; keyed
  * on reaction_t.burns (material.h), NOT on kind == KIND_STATIC. Stone
  * and ember both share that kind, and every unused material slot shares
@@ -4474,6 +4551,27 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
                 acid_bubble(s, x, y);
             }
             step_one_dissolver_cell(s, row, x, y, w, h, r);
+            continue;
+        }
+        /* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h).
+         * MAT_GAS and MAT_STEAM are named directly here rather than
+         * gated behind a reaction_t field of their own - the same
+         * reasoning acid_bubble() above already gives for naming
+         * MAT_ACID directly in the dissolves branch: this is inherently
+         * about these two specific materials, not a trait a future
+         * material could opt into. Checked ahead of the ordinary
+         * condensing branch below, since a steam cell that IS part of a
+         * matching acid-rain block should convert to acid rather than
+         * also rolling to condense into water this same step - the two
+         * are mutually exclusive outcomes for the same cell, and acid
+         * rain is the narrower, more specific match. No flag of its own
+         * to arm or clear: this can never fire without steam existing
+         * somewhere in its own 4x4, and steam's mere presence anywhere
+         * is already what arms may_have_condenser via the branch just
+         * below, so a board with steam on it already keeps this pass
+         * running for as long as either mechanic needs it to. */
+        if ((CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM)
+            && step_one_acid_rain_cell(s, x, y, w, h)) {
             continue;
         }
         /* Condensing, on its own presence-not-activity footing exactly
