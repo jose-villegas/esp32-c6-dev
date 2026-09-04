@@ -2038,19 +2038,31 @@ static void step_impulses(sand_t *s, int dx, int dy)
     const int h = s->h;
     int kept = 0;
 
-    /* CASCADE candidates, collected here and appended only AFTER the main
-     * loop below finishes - see SAND_CASCADE_SPEED_DIVISOR's own comment
-     * in sand.h for why. Queuing into s->impulse_buf mid-loop would grow
-     * s->impulse_count while this same loop's own bound (`i <
-     * s->impulse_count`) is still reading it, so a freshly-queued relay
-     * could be revisited in this SAME pass - an unbounded same-step chain
-     * through however much connected liquid happens to be there, not the
-     * one-ring-per-step ripple this is meant to be. Collecting here and
-     * queuing once the loop's own compaction (`kept`) has already
-     * finished keeps every relay exactly one step behind the hop that
-     * caused it. */
-    impulse_t cascade[SAND_CASCADE_MAX_PER_STEP];
-    int cascade_count = 0;
+    /* DEFERRED follow-up entries, collected here and appended only AFTER
+     * the main loop below finishes - see SAND_CASCADE_SPEED_DIVISOR's own
+     * comment in sand.h for why. Queuing into s->impulse_buf mid-loop would
+     * grow s->impulse_count while this same loop's own bound (`i <
+     * s->impulse_count`) is still reading it, so a freshly-queued entry
+     * could be revisited in this SAME pass - an unbounded same-step chain,
+     * not the one-hop-per-step ripple every caller below is meant to be.
+     * Collecting here and queuing once the loop's own compaction (`kept`)
+     * has already finished keeps every one of them exactly one step behind
+     * the hop that caused it.
+     *
+     * NAMED FOR WHAT IT IS, NOT FOR ITS FIRST CALLER - this used to be
+     * `cascade`, back when a water/acid relay (below) was the only thing
+     * that ever landed in it; the same overloading trap impulse_t's own
+     * comment describes for the old `blast_t` name. It now also carries
+     * TRANSFER entries (a struck cell picking up impulse of its own from
+     * whatever just displaced it, KIND_STATIC/KIND_POWDER movers only,
+     * below) - a second, unrelated reason to defer a follow-up queue by
+     * exactly the same one step, sharing this one array and its cap
+     * (SAND_CASCADE_MAX_PER_STEP - left named for the mechanism that
+     * motivated the cap's own size, not renamed just because a second
+     * caller now shares it) rather than growing a twin of this whole
+     * mechanism for a second kind of follow-up. */
+    impulse_t deferred[SAND_CASCADE_MAX_PER_STEP];
+    int deferred_count = 0;
 
     for (int i = 0; i < s->impulse_count; i++) {
         impulse_t entry = s->impulse_buf[i];
@@ -2674,7 +2686,54 @@ static void step_impulses(sand_t *s, int dx, int dy)
         }
         mark_move(s, x, y, nx, ny);
 
-        /* CASCADE - see its own comment above this loop for why this only
+        /* TRANSFER - a struck cell picks up impulse of its own, rather than
+         * the volume it sat in silently closing behind the mover with
+         * nothing else in it ever learning it was hit. See SAND_IMPULSE_
+         * TRANSFER_DIVISOR's and SAND_IMPULSE_TRANSFER_MIN_SPEED's own
+         * comments in sand.h for the two numbers below; this is the site
+         * both belong to.
+         *
+         * SAME SCOPE AS DRAG, JUST ABOVE - KIND_STATIC or KIND_POWDER
+         * movers only, and `displaced` must be non-empty (nothing to
+         * transfer to otherwise). The DISPLACED cell's own kind is
+         * unrestricted beyond that: can_impulse_enter() already refuses a
+         * KIND_STATIC target before the swap above ever runs, so whatever
+         * is sitting in `displaced` here is never a wall - a struck powder
+         * or liquid alike is fair game, and flinging water out of a pool is
+         * exactly the wanted effect (sand_impulse() already handles a
+         * liquid source, same as the cascade relay below).
+         *
+         * INDEX IS `at`, THE MOVER'S OLD CELL - that is where `displaced`
+         * now physically sits, two lines up (`s->cells[at] = displaced`),
+         * so that is where the transferred entry has to start tracking
+         * from.
+         *
+         * DIRECTION IS THE MOVER'S OWN `dir`, not a reflection - the struck
+         * cell did not bounce, it got hit, and momentum keeps going the way
+         * the blow came from.
+         *
+         * `entry.speed` HERE IS ALREADY POST-DRAG - the charge above already
+         * ran and mutated it in place, so both the floor check and the
+         * divisor below are already measuring what the mover has LEFT after
+         * paying for this same displacement, not its speed on entry to this
+         * step. Gated twice: the floor keeps a nearly-spent mover from
+         * queuing a transfer too faint to ever move, and the shared
+         * per-step cap (SAND_CASCADE_MAX_PER_STEP, this array's own top
+         * comment) is what actually protects impulse_buf from a long plow
+         * queuing one transfer per cell touched. */
+        if (!CELL_IS_EMPTY(displaced) &&
+            (materials[mat_id].kind == KIND_STATIC ||
+             materials[mat_id].kind == KIND_POWDER) &&
+            entry.speed >= SAND_IMPULSE_TRANSFER_MIN_SPEED &&
+            deferred_count < SAND_CASCADE_MAX_PER_STEP) {
+            impulse_t *t = &deferred[deferred_count++];
+            t->index = (uint16_t)at;
+            t->cell  = displaced;
+            t->dir   = entry.dir;
+            t->speed = (uint8_t)(entry.speed / SAND_IMPULSE_TRANSFER_DIVISOR);
+        }
+
+        /* CASCADE - see this array's own top comment for why this only
          * COLLECTS a candidate rather than queuing one directly. WATER
          * and ACID only, matching splash_displace()'s own scope
          * (sand_liquid.c) - this exists to serve that feature, not as a
@@ -2697,7 +2756,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * single flying droplet. */
         if ((mat_id == MAT_WATER || mat_id == MAT_ACID) &&
             entry.speed >= SAND_CASCADE_MIN_SPEED * SAND_CASCADE_SPEED_DIVISOR &&
-            cascade_count < SAND_CASCADE_MAX_PER_STEP) {
+            deferred_count < SAND_CASCADE_MAX_PER_STEP) {
             const int rx = x - d[0];
             const int ry = y - d[1];
             if ((unsigned)rx < (unsigned)w && (unsigned)ry < (unsigned)h) {
@@ -2705,7 +2764,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
                     s->cells[(size_t)ry * (size_t)w + (size_t)rx];
                 if (!CELL_IS_EMPTY(relay_target) &&
                     CELL_MATERIAL(relay_target) == mat_id) {
-                    impulse_t *c = &cascade[cascade_count++];
+                    impulse_t *c = &deferred[deferred_count++];
                     c->index = (uint16_t)((size_t)ry * (size_t)w + (size_t)rx);
                     c->cell  = relay_target;
                     c->dir   = entry.dir;
@@ -2725,14 +2784,15 @@ static void step_impulses(sand_t *s, int dx, int dy)
     s->impulse_count = kept;
 
     /* Appended only now that `kept` (and so s->impulse_count, set just
-     * above) is final - see this function's own top comment for why
-     * mid-loop queuing was not safe here. Each entry is queued exactly
+     * above) is final - see this array's own top comment for why mid-loop
+     * queuing was not safe here. Each entry - a cascade relay or a
+     * transfer alike, this loop does not distinguish - is queued exactly
      * the way sand_impulse() itself would, just batched: this is not a
      * new primitive, only a deferred, bounded set of ordinary impulses. */
-    for (int i = 0; i < cascade_count; i++) {
-        sand_impulse(s, (int)((unsigned)cascade[i].index % (unsigned)w),
-                    (int)((unsigned)cascade[i].index / (unsigned)w),
-                    cascade[i].dir, cascade[i].speed);
+    for (int i = 0; i < deferred_count; i++) {
+        sand_impulse(s, (int)((unsigned)deferred[i].index % (unsigned)w),
+                    (int)((unsigned)deferred[i].index / (unsigned)w),
+                    deferred[i].dir, deferred[i].speed);
     }
 }
 

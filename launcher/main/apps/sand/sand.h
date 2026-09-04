@@ -765,12 +765,73 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * here is immortal even without this floor, but at SAND_IMPULSE_SPEED_RAMP
  * 2 the plain linear ramp alone takes 255 / 2 ~= 128 steps to exhaust - a
  * long time for something to keep visibly rattling in a corner before
- * restitution alone brings it under a floor. 64 is a STARTING FIGURE, not a
- * measurement - same status as SAND_IMPULSE_DRAG_SHIFT above - a quarter of
- * the uint8_t range, picked so a chunk still carrying real launch energy
- * keeps bouncing while one that has mostly spent itself just settles,
- * closing off the bounce-in-place regime the history above describes. */
-#define SAND_IMPULSE_BOUNCE_MIN_SPEED  64
+ * restitution alone brings it under a floor.
+ *
+ * 32, LOWERED FROM 64, AND THE MEASUREMENT SAYS IT BARELY MATTERS. Run
+ * against the two-wall scene (test_the_two_wall_explosion_scene_...,
+ * suite_sand.c, 100 seeds, 284 tracked entries) the two floors give:
+ *
+ *     floor 64   >=1 bounce 205   >=2 45   >=3 0
+ *     floor 32   >=1 bounce 208   >=2 48   >=3 3
+ *
+ * about one percent, plus the first entries ever to reach a third bounce.
+ * Kept because it is free and strictly more lively, NOT because it is the
+ * lever it was expected to be - the arithmetic said an entry crossing back
+ * at speed 43 would newly clear a floor of 32, and that is true and almost
+ * never happens, because THE BINDING CONSTRAINT IS FALL TIME, not energy.
+ * A tracked cell drops one row a step unconditionally ("AIRBORNE SOLIDS
+ * FALL TOO", step_impulses()), so in an arena 40 tall it is on the ground
+ * inside 40 steps while crossing a 42-cell gap costs it 42 - most entries
+ * land before finishing even one crossing, whatever speed they still have.
+ * What actually buys bounces is GEOMETRY: a gap narrower than the fall
+ * height. Not lowered further regardless: speed IS the per-step move
+ * chance, so an entry much under this crawls a step in eight rather than
+ * ricocheting - the rattling this floor exists to prevent, just slower. */
+#define SAND_IMPULSE_BOUNCE_MIN_SPEED  32
+
+/* TRANSFER - what a struck cell inherits from the mover that just displaced
+ * it, at the move site in step_impulses() (sand.c), right after the swap.
+ * Today a flying cell simply swaps with whatever it displaces and the
+ * medium closes behind it with no further effect; this is what lets a
+ * struck cell pick up impulse of its own instead, including flying clean
+ * out of the volume it was sitting in. Direction is the MOVER'S OWN `dir` -
+ * momentum goes the way the blow came from, not the reflection the mover
+ * itself would take off a wall (that is what happens to something that
+ * BOUNCED, and a struck cell did not bounce, it got hit) - see the transfer
+ * site's own comment for the rest of the scope (KIND_STATIC/KIND_POWDER
+ * movers only, matching drag's own scope just above; any non-static
+ * displaced cell, powder or liquid alike).
+ *
+ * SAND_IMPULSE_TRANSFER_DIVISOR halves the mover's own post-drag `speed`
+ * for the transferred entry - the same halving idiom SAND_CASCADE_SPEED_
+ * DIVISOR already uses for a relay one hop removed from the hop that caused
+ * it, reused here rather than inventing a second "how much does a follow-up
+ * lose" shape. 2 is a STARTING FIGURE, not a measurement - same status as
+ * SAND_IMPULSE_DRAG_SHIFT and SAND_IMPULSE_BOUNCE_MIN_SPEED above, picked
+ * from the existing idiom rather than a device sweep. */
+#define SAND_IMPULSE_TRANSFER_DIVISOR  2
+
+/* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
+ * transfer at all, the same shape SAND_IMPULSE_BOUNCE_MIN_SPEED already
+ * floors restitution at (a nearly-spent mover queuing a transfer too faint
+ * to ever visibly move is not worth the entry). 64 matches that floor's own
+ * starting figure for the same reason - not a coincidence to be tuned
+ * independently without cause.
+ *
+ * THE REAL BUDGET REASON THIS EXISTS AT ALL: impulse_buf is a FIXED-SIZE
+ * buffer (APP_IMPULSE_MAX, app_sand.c - 2048 entries, 12 KiB) shared with
+ * whatever explosion or splash is already using it, and sand_impulse()
+ * silently refuses once it is full - graceful, but silent. A chunk plowing
+ * through a wide bank, uncapped, would queue one transfer per cell it
+ * displaces; the shared per-step cap on the deferred array that carries
+ * these (SAND_CASCADE_MAX_PER_STEP, this file - see step_impulses()'s own
+ * comment on that array for why it now carries two kinds of follow-up, not
+ * just cascade relays) is what actually protects the buffer, but this floor
+ * is the first, cheaper gate: a plow through a LOW-density medium (most
+ * cells pass the floor easily) still queues plenty, so both gates matter -
+ * this one trims the faintest transfers before they even compete for the
+ * per-step cap. */
+#define SAND_IMPULSE_TRANSFER_MIN_SPEED  64
 
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
  * not a property of sand_impulse() itself, which takes speed as a plain

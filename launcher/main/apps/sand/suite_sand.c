@@ -21632,7 +21632,16 @@ static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water
  * here the arithmetic IS the claim. A floor under the row (matching
  * test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path above)
  * keeps ordinary gravity from pulling the dirt cell (or the mover) out of
- * the row before the impulse gets its one step. */
+ * the row before the impulse gets its one step.
+ *
+ * impulse_count IS 2, NOT 1, NOW - rung 3's TRANSFER (step_impulses()'s own
+ * comment at the transfer site) queues a second entry for the struck dirt
+ * cell itself once this scene's own numbers clear SAND_IMPULSE_TRANSFER_
+ * MIN_SPEED: the mover's post-drag speed here is 255 - SAND_IMPULSE_SPEED_
+ * RAMP - (dirt's density >> SAND_IMPULSE_DRAG_SHIFT), comfortably above 64.
+ * Entry 0 is still the mover - the deferred transfer is appended only AFTER
+ * this loop's own compaction finishes (step_impulses()'s own top comment),
+ * so it lands at entry 1, after everything this test actually pins. */
 static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displaces(void)
 {
     fixture();
@@ -21648,10 +21657,13 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, s.impulse_count,
         "the single push roll here succeeds on the order of 99.6% of the "
-        "time at speed 255 - losing tracking on this one step means the "
-        "scene itself is broken, not that this run was merely unlucky");
+        "time at speed 255, so the mover (entry 0) losing tracking would "
+        "mean the scene itself is broken - and rung 3's transfer adds "
+        "exactly one more entry (the struck dirt cell, entry 1) whenever "
+        "the mover's post-drag speed clears SAND_IMPULSE_TRANSFER_MIN_"
+        "SPEED, which this scene's own numbers do");
     const uint8_t expected = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
                              (materials[MAT_DIRT].density >> SAND_IMPULSE_DRAG_SHIFT));
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
@@ -21664,7 +21676,8 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
 /* THE SCOPE PIN, same one-step shape: a KIND_POWDER mover displacing the
  * same dirt cell must lose only the plain ramp, no drag term at all - see
  * SAND_IMPULSE_DRAG_SHIFT's own comment in sand.h for why powders are out
- * of scope for this rung. */
+ * of scope for this rung. impulse_count is 2 for the same transfer reason
+ * as the test just above - see its own comment. */
 static void test_a_thrown_powder_grain_pays_drag_displacing_dirt(void)
 {
     fixture();
@@ -21680,10 +21693,13 @@ static void test_a_thrown_powder_grain_pays_drag_displacing_dirt(void)
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+    TEST_ASSERT_EQUAL_INT_MESSAGE(2, s.impulse_count,
         "the single push roll here succeeds on the order of 99.6% of the "
-        "time at speed 255 - losing tracking on this one step means the "
-        "scene itself is broken, not that this run was merely unlucky");
+        "time at speed 255, so the mover (entry 0) losing tracking would "
+        "mean the scene itself is broken - and rung 3's transfer adds "
+        "exactly one more entry (the struck dirt cell, entry 1) whenever "
+        "the mover's post-drag speed clears SAND_IMPULSE_TRANSFER_MIN_"
+        "SPEED, which this scene's own numbers do");
     const uint8_t expected = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
                              (materials[MAT_DIRT].density >> SAND_IMPULSE_DRAG_SHIFT));
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
@@ -22049,7 +22065,7 @@ static void test_a_low_speed_entry_below_the_bounce_floor_still_just_waits(void)
     fixture();
     sand_enable_impulses(&s, impulse_buf, W * H);
 
-    enum { ROW = 3, SX = 4, DIR_DOWN = 0, BIG_RAMP = 200 };
+    enum { ROW = 3, SX = 4, DIR_DOWN = 0, BIG_RAMP = 230 };
     for (int x = 0; x < W; x++) {
         sand_set(&s, x, ROW + 1, STONE);
     }
@@ -22664,6 +22680,857 @@ static void test_without_a_buffer_explode_does_nothing(void)
      * touching a NULL impulse_buf. */
     TEST_ASSERT_EQUAL_INT_MESSAGE(1, sand_count(&s),
         "and ordinary gravity alone must still account for the one grain");
+}
+
+/* --- Rung 3, Part A: the ricochet scene (measurement, not a new feature) --
+ *
+ * Two full-height MAT_STONE walls facing each other across a 42-cell gap, a
+ * blast at the left wall, and a per-step count of how many times each
+ * dislodged chunk's OWN `dir` changes before it finally settles - a
+ * ricochet reads as more than one change, a single stop as zero or one.
+ * This does not exercise anything new: rungs 1 and 2 (drag, reflection) are
+ * already shipped. It exists to tell rung 3's tuning apart from a guess -
+ * see the numbers below, and step_impulses()'s own "FLOORED AT SAND_
+ * IMPULSE_BOUNCE_MIN_SPEED" comment for the mechanism being measured.
+ *
+ * RADIUS IS THE APP'S OWN FIGURE, CONVERTED TO CELLS - DETONATE_RADIUS_PX
+ * is 50 (app_sand.c) and the default quality is NORMAL, 4 px/cell
+ * (QUALITY_DEFAULT, qualities[], app_sand.c), so the app's own detonate
+ * call computes (DETONATE_RADIUS_PX + cell / 2) / cell = (50 + 2) / 4 =
+ * 13 - the exact arithmetic app_sand.c's DETONATE handler uses.
+ *
+ * THE BLAST CENTRE IS OFF-GRID, BEHIND THE WALL, NOT A TYPO. A queued
+ * grain's direction is "away from the blast centre, through the grain's own
+ * cell" (queue_outward_impulse(), sand.c) - so a wall standing to the RIGHT
+ * of the centre gets thrown further right, into the gap, while a wall to
+ * the LEFT of the centre gets thrown further left, away from the gap and
+ * off the grid. Centring the blast IN the gap, next to the wall, throws the
+ * wall the wrong way - straight into itself. Centring it AT x = -11 puts
+ * the left wall (x = 0) 11 cells to its right, which is what "an explosion
+ * AT the wall" has to mean for the wall's own rubble to end up flying
+ * toward the far one: a charge set against/behind the wall's face, blowing
+ * it into the room. This placement has a second, welcome effect: the
+ * unconditional fire-filled core (radius / SAND_EXPLODE_CORE_DIVISOR = 13 /
+ * 5 = 2 around the centre) sits entirely off-grid too (x in [-13, -9]), so
+ * nothing here ever creates a MAT_FIRE entry - every tracked entry is
+ * genuine dislodged wall stone, not core debris.
+ *
+ * IDENTITY IS TRACKED BY POSITION, NOT BY CELL BYTE, and that is a real
+ * finding of its own, not a style choice: MAT_STONE's variant is a
+ * TEMPERATURE nibble now (heat_ramp = 32, cools = 5, material.c, "Stone
+ * carries a temperature exactly as glass does"), and it drifts toward
+ * ambient every step even with no heat source anywhere on the board - an
+ * early version of this test gave every wall row a distinct variant to use
+ * as a per-entry id and measured MORE distinct bytes appearing over a run
+ * than were ever actually dislodged at explode time, purely from that
+ * drift. Position survives this cleanly: an entry moves at most two cells
+ * in one step (one push-roll move plus, for a KIND_STATIC mover, one more
+ * unconditional gravity-drift move - both in step_impulses(), sand.c), and
+ * this scene's few concurrent entries start several rows apart and diverge
+ * in direction immediately, so nearest-position matching (RICOCHET_MATCH_
+ * RADIUS, comfortably above that two-cell bound) never has to break a tie.
+ * Checked, not merely assumed: the measurement below counts entries that
+ * ever failed to find any match at all (would mean a genuinely new impulse
+ * got queued mid-run, which nothing in this liquid/gas/fire-free scene
+ * should ever do) - zero, every seed.
+ *
+ * MEASURED, SEEDS 1..100, this exact scene: 284 tracked stone entries
+ * total. Of those, 150 (52.8%) changed direction at least once, 46 (16.2%)
+ * at least twice, 1 (0.4%) three times, none four or more times - a
+ * ricochet, not a single stop, but a short one. Restricted to the 106
+ * entries that ever crossed the gap's own midline (evidence the flight was
+ * real, not a graze near the near wall): 56 (52.8%) bounced at least once,
+ * 6 (5.7%) at least twice, 1 (0.9%) three times. Restricted further to the
+ * 51 that came within four cells of the FAR wall specifically: 49 (96.1%)
+ * bounced at least once there, 1 (2.0%) twice, 1 (2.0%) three times, none
+ * more. That is the maintainer's own prediction, not quite in the shape
+ * expected, and working through why matters because it changes which knob
+ * actually governs this scene. Restitution's OWN arithmetic
+ * (SAND_IMPULSE_BOUNCE_MIN_SPEED's own comment, sand.h) says a purely
+ * HEAD-ON entry can halve twice before the floor stops a third (255 ramped
+ * once to 253, then 253 -> 126 -> 63, already under 64) - two bounces
+ * available from restitution alone, with room to spare. But restitution
+ * barely gets a turn here, because the 42-cell GAP ITSELF already spends
+ * most of the budget before a bounce ever happens: SAND_IMPULSE_SPEED_RAMP
+ * costs 2 every step and a flight covers roughly a cell a step, so one
+ * crossing costs roughly 42 * 2 = 84 speed - not restitution's own ~128-
+ * step full-tail figure, a small fraction of it, paid just getting there.
+ * Worked through for a typical GLANCING hit (-25%, not -50%): 253 -> cross
+ * the gap (-84) -> 169 -> bounce off the far wall (-25%) -> 127 -> cross
+ * back (-84) -> 43, already under the 64 floor - ONE bounce, exactly what
+ * 96.1% at >= 1 and 2.0% at >= 2 measures. THE RAMP SPENT CROSSING THE GAP
+ * IS THE LIMITER, with the floor finishing it off once that crossing has
+ * already spent most of the budget - restitution's own halving/quartering
+ * rarely gets a second turn before the ramp alone has used up the room.
+ * That also predicts bounce count scales with GAP WIDTH, not with
+ * restitution: the same arithmetic (glancing hits, same starting speed) at
+ * a 20-cell gap - 253 -> cross(-40) -> 213 -> bounce(-25%) -> 160 ->
+ * cross(-40) -> 120 -> bounce(-25%) -> 90 -> cross(-40) -> 50 (stop) - gives
+ * two bounces, and at 10 cells - 253 -> cross(-20) -> 233 -> bounce -> 175
+ * -> cross(-20) -> 155 -> bounce -> 117 -> cross(-20) -> 97 -> bounce -> 73
+ * -> cross(-20) -> 53 (stop) - gives three. Not measured at those widths,
+ * arithmetic only, same status as the two paragraphs below - but it is the
+ * gap-width lever this scene's own numbers actually point at, not the
+ * restitution one.
+ *
+ * A GENTLER RESTITUTION, computed the same way (arithmetic only - nothing
+ * here changes SAND_IMPULSE_BOUNCE_MIN_SPEED or the head-on/glancing split,
+ * see this file's own top instruction not to): charging a head-on bounce
+ * the same quarter a glancing one already pays would raise the worst case
+ * from two bounces to the same five the glancing sequence above already
+ * gets, since the two formulas would then be identical. A LOWER FLOOR,
+ * same starting speed, head-on repeated: floor 32 gives 253 -> 126 -> 63 ->
+ * 31 (stop) - three bounces, one more than today's 64; floor 16 gives one
+ * more again, 253 -> 126 -> 63 -> 31 -> 15 (stop) - four. Left for the
+ * maintainer to pick from, per this file's own top instruction. */
+#define RICOCHET_W 44
+#define RICOCHET_H 40
+#define RICOCHET_RADIUS 13
+#define RICOCHET_CX (-11)
+#define RICOCHET_CY (RICOCHET_H / 2)
+#define RICOCHET_SEEDS 100
+#define RICOCHET_MAX_STEPS 300
+#define RICOCHET_MATCH_RADIUS 3
+#define RICOCHET_MAX_TRACK 32
+
+typedef struct {
+    bool alive;
+    int  x, y, dir;
+    int  bounces;
+} ricochet_lineage_t;
+
+/* One seed of the ricochet scene, folded into `hist` (hist[k] += 1 for
+ * every entry that changed direction at least k times before it stopped
+ * being trackable, k = 0..RICOCHET_MAX_BOUNCES) and *total_entries -
+ * exactly the measurement this test's own top comment reports. Position-
+ * matched across steps, not byte-matched - see that comment for why. */
+#define RICOCHET_MAX_BOUNCES 20
+static void ricochet_measure_seed(uint8_t *cells, impulse_t *buf,
+                                  uint32_t seed, long hist[RICOCHET_MAX_BOUNCES + 1],
+                                  long *total_entries, int *any_unmatched_new)
+{
+    sand_t g;
+    memset(cells, 0, (size_t)RICOCHET_W * RICOCHET_H);
+    sand_init(&g, cells, RICOCHET_W, RICOCHET_H, seed);
+    sand_enable_impulses(&g, buf, RICOCHET_W * RICOCHET_H);
+
+    for (int x = 0; x < RICOCHET_W; x++) {
+        sand_set(&g, x, RICOCHET_H - 1, STONE);
+    }
+    for (int y = 0; y < RICOCHET_H; y++) {
+        sand_set(&g, 0,               y, STONE);
+        sand_set(&g, RICOCHET_W - 1,  y, STONE);
+    }
+
+    sand_explode(&g, RICOCHET_CX, RICOCHET_CY, RICOCHET_RADIUS);
+
+    /* static, not a stack array - see check_stack_usage.py's own gate
+     * (docs/Sand/Performance-Tuning-Attempts.md): this helper runs on the
+     * device's 3584-byte main task stack too (the on-device selftest
+     * links every suite), and RICOCHET_MAX_TRACK copies of every array
+     * below pushed a stack-local version of this function well past the
+     * 1024-byte ceiling. One call is in flight at a time (a plain
+     * sequential loop over seeds in the test below, no re-entrancy), so
+     * moving these to static costs nothing but the .bss they already
+     * would have cost on the stack. */
+    static ricochet_lineage_t lin[RICOCHET_MAX_TRACK];
+    int n_lin = 0;
+    for (int i = 0; i < g.impulse_count && n_lin < RICOCHET_MAX_TRACK; i++) {
+        if (CELL_MATERIAL(g.impulse_buf[i].cell) != MAT_STONE) {
+            continue;
+        }
+        const int idx = g.impulse_buf[i].index;
+        lin[n_lin].alive   = true;
+        lin[n_lin].x       = idx % RICOCHET_W;
+        lin[n_lin].y       = idx / RICOCHET_W;
+        lin[n_lin].dir     = g.impulse_buf[i].dir;
+        lin[n_lin].bounces = 0;
+        n_lin++;
+    }
+
+    int steps = 0;
+    while (g.impulse_count > 0 && steps < RICOCHET_MAX_STEPS) {
+        sand_step(&g, 0, 1000, 0);
+        steps++;
+
+        static int cand_x[RICOCHET_MAX_TRACK], cand_y[RICOCHET_MAX_TRACK],
+                   cand_dir[RICOCHET_MAX_TRACK];
+        int n_cand = 0;
+        for (int i = 0; i < g.impulse_count && n_cand < RICOCHET_MAX_TRACK; i++) {
+            if (CELL_MATERIAL(g.impulse_buf[i].cell) != MAT_STONE) {
+                continue;
+            }
+            const int idx = g.impulse_buf[i].index;
+            cand_x[n_cand]   = idx % RICOCHET_W;
+            cand_y[n_cand]   = idx / RICOCHET_W;
+            cand_dir[n_cand] = g.impulse_buf[i].dir;
+            n_cand++;
+        }
+        static bool cand_used[RICOCHET_MAX_TRACK];
+        memset(cand_used, 0, sizeof cand_used);
+
+        for (int li = 0; li < n_lin; li++) {
+            if (!lin[li].alive) {
+                continue;
+            }
+            int best = -1, best_d = RICOCHET_MATCH_RADIUS * 4 + 1;
+            for (int ci = 0; ci < n_cand; ci++) {
+                if (cand_used[ci]) {
+                    continue;
+                }
+                const int dx = im_abs(cand_x[ci] - lin[li].x);
+                const int dy = im_abs(cand_y[ci] - lin[li].y);
+                if (dx > RICOCHET_MATCH_RADIUS || dy > RICOCHET_MATCH_RADIUS) {
+                    continue;
+                }
+                const int d = dx + dy;
+                if (d < best_d) {
+                    best_d = d;
+                    best   = ci;
+                }
+            }
+            if (best < 0) {
+                lin[li].alive = false;   /* settled, or lost to re-acquisition */
+                continue;
+            }
+            cand_used[best] = true;
+            if (cand_dir[best] != lin[li].dir) {
+                lin[li].bounces++;
+            }
+            lin[li].x   = cand_x[best];
+            lin[li].y   = cand_y[best];
+            lin[li].dir = cand_dir[best];
+        }
+        for (int ci = 0; ci < n_cand; ci++) {
+            if (!cand_used[ci]) {
+                *any_unmatched_new = 1;
+            }
+        }
+    }
+
+    for (int li = 0; li < n_lin; li++) {
+        (*total_entries)++;
+        const int bc = lin[li].bounces > RICOCHET_MAX_BOUNCES
+                           ? RICOCHET_MAX_BOUNCES
+                           : lin[li].bounces;
+        for (int k = 0; k <= bc; k++) {
+            hist[k]++;
+        }
+    }
+}
+
+static void test_the_two_wall_explosion_scene_bounces_more_than_once_before_settling(void)
+{
+    uint8_t *ricochet_cells = malloc((size_t)RICOCHET_W * RICOCHET_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(ricochet_cells,
+        "ricochet grid must fit in what the framebuffer leaves");
+    impulse_t *ricochet_buf =
+        malloc((size_t)(RICOCHET_W * RICOCHET_H) * sizeof *ricochet_buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(ricochet_buf,
+        "ricochet impulse queue must fit in what the framebuffer leaves");
+
+    long hist[RICOCHET_MAX_BOUNCES + 1];
+    memset(hist, 0, sizeof hist);
+    long total_entries = 0;
+    int any_unmatched_new = 0;
+
+    for (uint32_t seed = 1; seed <= (uint32_t)RICOCHET_SEEDS; seed++) {
+        ricochet_measure_seed(ricochet_cells, ricochet_buf, seed, hist,
+                              &total_entries, &any_unmatched_new);
+    }
+
+    free(ricochet_buf);
+    free(ricochet_cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, total_entries,
+        "the scene must actually have dislodged wall material across 100 "
+        "seeds, or the measurement above is vacuous");
+    TEST_ASSERT_FALSE_MESSAGE(any_unmatched_new,
+        "a tracked entry appeared with no plausible predecessor within "
+        "RICOCHET_MATCH_RADIUS - either the position-matching tracker "
+        "above needs a wider radius, or something in this liquid/gas/fire-"
+        "free scene queued a fresh impulse mid-run when nothing should");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, hist[1],
+        "at least one tracked entry must have changed direction at least "
+        "once somewhere across the 100 seeds - a ricochet, not a single "
+        "stop; this is the floor of what this scene must show, not the "
+        "measurement itself (see this test's own top comment for the full "
+        "distribution)");
+}
+
+/* --- Rung 3, Part B: momentum transfer into a volume ----------------------
+ *
+ * Today a flying cell swaps with whatever it displaces and the volume
+ * closes behind it - nothing else in it ever learns it was hit. This is
+ * what lets a struck cell pick up impulse of its own instead (see the
+ * TRANSFER site's own comment at the move site in step_impulses(), sand.c,
+ * right after the swap and right where the drag charge already sits) -
+ * including flying clean out of the volume it was sitting in.
+ *
+ * EJECTA IS MEASURED, NOT ASSUMED, and DIRT and WATER measure completely
+ * differently - a real finding, not a shape mismatch between the two
+ * scenes below. DIRT (KIND_POWDER) is inert once packed: an undisturbed
+ * bank does not spread on its own, so "cells found outside the bank's own
+ * original footprint" is a clean signal - transfer on, or transfer off via
+ * a temporary mutation confirmed live (see below), the difference is
+ * exactly zero vs a real number. WATER (KIND_LIQUID) is not inert: even a
+ * perfectly flat, resting layer spreads sideways on its own, at a rate
+ * (measured: exactly 1.0 mass-equivalent cell per seed per step, dead
+ * linear, confirmed by running the SAME scene with no mover in it at all)
+ * that is comparable to whatever transfer adds on top. "Zero with transfer
+ * removed" is consequently the wrong bar for water and was checked, not
+ * assumed: at 200 seeds, this exact scene measures 260 cells outside its
+ * own original footprint with transfer's own gate hard-mutated to `false`,
+ * not zero - that is water's own ordinary equalisation, present with or
+ * without this rung's own change, and no geometry tried (a taller block, a
+ * walled and fully-settled basin, a basin with a genuine overflow gap, an
+ * upward throw) separated it from transfer's own contribution any better;
+ * every one of those either reproduced the same baseline or, walled tightly
+ * enough to suppress it, blocked transfer too (a transferred entry can
+ * never breach a KIND_STATIC wall regardless - can_impulse_enter()'s own
+ * rule, unconditional for a KIND_STATIC target). What the SAME hard-mutated
+ * run does show is a real, reproducible MARGIN over that baseline - 422
+ * with transfer against 260 without, both at the same 200 seeds - so the
+ * water test below asserts against that margin (a threshold clearly above
+ * 260, clearly below 422) rather than against zero. */
+
+#define EJECTA_W 40
+#define EJECTA_H 20
+#define EJECTA_SEEDS 200
+
+/* Count cells of `mat` on the board that sit OUTSIDE [x0,x1) x [y0,y1) -
+ * shared by both ejecta measurements below, the DIRT and the WATER scene
+ * alike, so "outside the volume's own original footprint" means the exact
+ * same thing in both. */
+static int ejecta_count_outside(sand_t *g, int gw, int gh, uint8_t mat,
+                                int x0, int x1, int y0, int y1)
+{
+    int n = 0;
+    for (int y = 0; y < gh; y++) {
+        for (int x = 0; x < gw; x++) {
+            if (CELL_MATERIAL(sand_at(g, x, y)) != mat) {
+                continue;
+            }
+            if (x >= x0 && x < x1 && y >= y0 && y < y1) {
+                continue;
+            }
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Total cells of `mat` anywhere on the board - the conservation tests'
+ * own "before" count, taken with no "inside" region at all rather than
+ * reusing ejecta_count_outside() with a degenerate empty rectangle. */
+static int ejecta_count_material(sand_t *g, int gw, int gh, uint8_t mat)
+{
+    int n = 0;
+    for (int y = 0; y < gh; y++) {
+        for (int x = 0; x < gw; x++) {
+            if (CELL_MATERIAL(sand_at(g, x, y)) == mat) {
+                n++;
+            }
+        }
+    }
+    return n;
+}
+
+/* DIRT, packed against the floor, no gap underneath it - a floating bank
+ * would slump under its own ordinary gravity before the mover ever arrived
+ * (measured on an earlier version of this scene: a bank left floating a
+ * few rows above the real floor had already relocated itself, whole,
+ * before firing), which would read as ejecta this feature never caused.
+ * VARIANT 0, NOT 8 - see plow_build()'s own comment a few hundred lines up
+ * for why 8 is WET soil under main's re-encoding and quietly changes state
+ * mid-measurement; this scene does not need dirt's moisture at all, so it
+ * never risks it.
+ *
+ * THE MOVER STARTS INSIDE THE BANK'S OWN FOOTPRINT, not adjacent to it -
+ * an earlier version placed it one cell to the left (outside), and the
+ * very first ordinary swap (mover in, one bank cell out to the mover's old
+ * - now outside - cell) counted as "ejecta" on EVERY seed whether transfer
+ * fired or not, since that swap is rung 1's own mechanic, not this rung's.
+ * Starting inside means the first several swaps relocate bank material to
+ * cells still inside the original footprint, so anything found outside
+ * afterward is actually attributable to a cell having FLOWN there under
+ * its own power. */
+#define EJECTA_DIRT_W 2
+#define EJECTA_DIRT_H 4
+static long ejecta_dirt_total(uint8_t *cells, impulse_t *buf)
+{
+    long total = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t)EJECTA_SEEDS; seed++) {
+        const int dx0 = 10, dx1 = dx0 + EJECTA_DIRT_W;
+        const int dy1 = EJECTA_H - 1, dy0 = dy1 - EJECTA_DIRT_H;
+        sand_t g;
+        memset(cells, 0, (size_t)EJECTA_W * EJECTA_H);
+        sand_init(&g, cells, EJECTA_W, EJECTA_H, seed);
+        sand_enable_impulses(&g, buf, EJECTA_W * EJECTA_H);
+        for (int x = 0; x < EJECTA_W; x++) {
+            sand_set(&g, x, EJECTA_H - 1, STONE);
+        }
+        for (int y = dy0; y < dy1; y++) {
+            for (int x = dx0; x < dx1; x++) {
+                sand_set(&g, x, y, CELL_MAKE(MAT_DIRT, 0));
+            }
+        }
+        sand_set(&g, dx0, dy1 - 1, STONE);
+        enum { DIR_RIGHT = 2 };
+        sand_impulse_dislodge(&g, dx0, dy1 - 1, DIR_RIGHT, 255,
+                              SAND_IMPULSE_SPEED_RAMP);
+        for (int i = 0; i < 150; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+        total += ejecta_count_outside(&g, EJECTA_W, EJECTA_H, MAT_DIRT,
+                                      dx0, dx1, dy0, dy1);
+    }
+    return total;
+}
+
+/* MEASURED, 200 seeds: 31 dirt cells end up outside the bank's own 2x4
+ * footprint. RED CHECK, live: with the transfer site's own gate in
+ * step_impulses() (sand.c) hard-mutated to `false` and reverted after,
+ * this exact scene measures exactly 0 - every seed, no exceptions. Dirt
+ * packed and resting does not spread on its own; every one of the 31 is a
+ * cell transfer flung. */
+static void test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits(void)
+{
+    uint8_t *cells = malloc((size_t)EJECTA_W * EJECTA_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "ejecta grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(EJECTA_W * EJECTA_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "ejecta impulse queue must fit in what the framebuffer leaves");
+
+    const long total = ejecta_dirt_total(cells, buf);
+
+    free(buf);
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, total,
+        "summed across 200 seeds, at least one dirt cell must end up "
+        "outside the bank's own original footprint - a packed, resting "
+        "dirt bank never spreads on its own (measured zero with transfer's "
+        "own gate hard-mutated off), so any cell found outside it was "
+        "flung there by the transfer this rung adds");
+}
+
+/* WATER, a single row deep, resting directly on the floor - see this
+ * section's own top comment for why a taller block was tried and
+ * rejected: multiple rows of standing liquid trigger splash_displace()
+ * (sand_liquid.c) internally as they settle into a flatter shape, which
+ * has nothing to do with this rung and swamps it. A single row cannot
+ * "fall onto occupied liquid" within itself, so that path never fires
+ * here - confirmed by watching s.impulse_count stay at exactly 1 (the
+ * mover alone) for the first several steps with transfer's own gate
+ * hard-mutated off, the same live-mutation check this file uses
+ * elsewhere.
+ *
+ * ONLY 4 STEPS - short on purpose, the same reason PLOW_STEPS is short
+ * (that constant's own comment, a few hundred lines up): water's own
+ * ordinary sideways equalisation is dead linear in step count (measured:
+ * exactly matches a control scene with no mover in it at all, seed for
+ * seed), so it keeps closing the gap on every step this runs - the margin
+ * over that baseline that transfer actually adds is at its widest early
+ * and shrinks the longer this scene keeps stepping. */
+#define EJECTA_WATER_W 3
+static long ejecta_water_total(uint8_t *cells, impulse_t *buf)
+{
+    long total = 0;
+    for (uint32_t seed = 1; seed <= (uint32_t)EJECTA_SEEDS; seed++) {
+        const int dx0 = 20, dx1 = dx0 + EJECTA_WATER_W;
+        const int dy1 = EJECTA_H - 1, dy0 = dy1 - 1;
+        sand_t g;
+        memset(cells, 0, (size_t)EJECTA_W * EJECTA_H);
+        sand_init(&g, cells, EJECTA_W, EJECTA_H, seed);
+        sand_enable_impulses(&g, buf, EJECTA_W * EJECTA_H);
+        for (int x = 0; x < EJECTA_W; x++) {
+            sand_set(&g, x, EJECTA_H - 1, STONE);
+        }
+        for (int x = dx0; x < dx1; x++) {
+            sand_set(&g, x, dy0, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+        sand_set(&g, dx0, dy0, STONE);
+        enum { DIR_RIGHT = 2 };
+        sand_impulse_dislodge(&g, dx0, dy0, DIR_RIGHT, 255,
+                              SAND_IMPULSE_SPEED_RAMP);
+        for (int i = 0; i < 4; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+        total += ejecta_count_outside(&g, EJECTA_W, EJECTA_H, MAT_WATER,
+                                      dx0, dx1, dy0, dy1);
+    }
+    return total;
+}
+
+/* MEASURED, 200 seeds: 422 water cells outside the layer's own original
+ * footprint, against 260 for the SAME scene with transfer's own gate
+ * hard-mutated to `false` (this section's own top comment has the reasoning
+ * for why 260, not 0, is the right baseline here). EJECTA_WATER_THRESHOLD
+ * sits comfortably above that measured baseline and comfortably below the
+ * measured total - a regression that silently disabled transfer for
+ * liquids would drop this scene back to the 260 baseline and trip it. */
+#define EJECTA_WATER_THRESHOLD 350
+static void test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits(void)
+{
+    uint8_t *cells = malloc((size_t)EJECTA_W * EJECTA_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "ejecta grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(EJECTA_W * EJECTA_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "ejecta impulse queue must fit in what the framebuffer leaves");
+
+    const long total = ejecta_water_total(cells, buf);
+
+    free(buf);
+    free(cells);
+
+    char why[512];
+    snprintf(why, sizeof why,
+        "summed across 200 seeds, water flung outside the pool's own "
+        "original footprint must clear %d - measured 422 with transfer, "
+        "260 for the same scene with transfer's own gate hard-mutated off "
+        "(water's own baseline sideways spread, unrelated to this rung); "
+        "this threshold sits between the two, so a regression that quietly "
+        "disabled transfer for liquids falls back to the baseline and "
+        "trips it", EJECTA_WATER_THRESHOLD);
+    TEST_ASSERT_GREATER_THAN_MESSAGE(EJECTA_WATER_THRESHOLD, total, why);
+}
+
+/* THE DETERMINISTIC HALF OF THE SAME CLAIM, and the reason the threshold
+ * above is allowed to be a threshold. That test measures the BEHAVIOUR -
+ * water leaving the pool - across 200 chaotic seeds, and its floor sits
+ * between two measured numbers rather than at zero, because water spreads
+ * on its own whatever this rung does. This one measures the MECHANISM in a
+ * single step with one struck cell: the transfer entry has to exist, at the
+ * cell the mover just vacated, carrying the mover's own direction and half
+ * its post-drag speed. Between them, a regression has nowhere to hide - if
+ * water physics on main ever drifts the threshold's own numbers, this still
+ * says whether transfer itself is alive.
+ *
+ * Found by scanning rather than by index: the liquid passes run before the
+ * flight pass and splash_displace() (sand_liquid.c) queues entries of its
+ * own, so nothing guarantees which slot the transfer lands in. */
+static void test_a_struck_water_cell_is_handed_the_movers_own_impulse(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, TX = 2, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, STONE);
+    sand_set(&s, TX, ROW, CELL_MAKE(MAT_WATER, MASS_MAX));
+    sand_impulse_dislodge(&s, SX, ROW, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    /* What the mover has left after one step: the plain ramp, plus drag for
+     * the one water cell it displaced. The transfer is half of that. */
+    const uint8_t mover_speed =
+        (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
+                  (materials[MAT_WATER].density >> SAND_IMPULSE_DRAG_SHIFT));
+    const uint16_t vacated = (uint16_t)(ROW * W + SX);
+
+    int found = -1;
+    for (int i = 0; i < s.impulse_count; i++) {
+        if (s.impulse_buf[i].index == vacated) {
+            found = i;
+            break;
+        }
+    }
+
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(0, found,
+        "the water cell the chunk shouldered aside must itself be tracked "
+        "as a flying entry afterwards, at the cell the chunk vacated - "
+        "that is the whole of what momentum transfer means here");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_WATER,
+        CELL_MATERIAL(s.impulse_buf[found].cell),
+        "and the entry queued there must be the WATER that was struck, not "
+        "the chunk that struck it");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(DIR_RIGHT, s.impulse_buf[found].dir,
+        "momentum goes the way the mover was going - not the reflection, "
+        "which is what happens to something that bounced, and this cell "
+        "did not bounce, it got hit");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(mover_speed / SAND_IMPULSE_TRANSFER_DIVISOR,
+        s.impulse_buf[found].speed,
+        "carrying exactly its share of the mover's own post-drag speed");
+}
+
+/* --- a KIND_POWDER mover's own distance, now that transfer is in scope
+ * too - PLOW_W/H/SEEDS/STEPS, plow_build() and plow_mover_x() are rung 1's
+ * own (a few hundred lines up); this reuses that exact shape and grid, not
+ * a new one, following plow_total_distance()'s own idiom. That existing
+ * helper hardcodes MAT_STONE as the mover, so a fresh pair - one to find a
+ * DIFFERENT material's mover, one to total ITS distance - is what a
+ * KIND_POWDER mover needs instead of a third copy of the whole scene. */
+static int plow_mover_x_material(sand_t *g, uint8_t mat)
+{
+    for (int y = 0; y < PLOW_H - 1; y++) {
+        for (int x = 0; x < PLOW_W; x++) {
+            if (CELL_MATERIAL(sand_at(g, x, y)) == mat) {
+                return x;
+            }
+        }
+    }
+    return -1;
+}
+
+static long plow_total_distance_powder(uint8_t *cells, impulse_t *buf,
+                                       cell_t medium)
+{
+    long total = 0;
+    for (uint32_t k = 1; k <= (uint32_t)PLOW_SEEDS; k++) {
+        sand_t g;
+        plow_build(&g, cells, buf, 4, k, MAT_SAND, medium);
+        for (int i = 0; i < PLOW_STEPS; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+        total += plow_mover_x_material(&g, MAT_SAND) - 1;
+    }
+    return total;
+}
+
+static void test_a_thrown_powder_grain_travels_less_far_through_dirt_than_through_air(void)
+{
+    uint8_t *cells = malloc((size_t)PLOW_W * PLOW_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "plow grid must fit in what the framebuffer leaves");
+    impulse_t buf[4];
+
+    const long air_total  = plow_total_distance_powder(cells, buf, 0);
+    const long dirt_total = plow_total_distance_powder(cells, buf,
+                                                       CELL_MAKE(MAT_DIRT, 0));
+
+    free(cells);
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(air_total, dirt_total,
+        "a thrown KIND_POWDER grain must still travel less far, summed "
+        "across the same seeds, through a bank of dirt than through open "
+        "air - rung 1 already covers this for the single-step drag "
+        "formula (test_a_thrown_powder_grain_pays_drag_displacing_dirt), "
+        "but nothing until now measured it behaviourally, over real "
+        "distance, the way test_a_thrown_chunk_travels_less_far_through_"
+        "dirt_than_through_air already does for a KIND_STATIC mover - and "
+        "KIND_POWDER movers are now also in scope for transfer, not just "
+        "drag");
+}
+
+/* --- the budget guard: impulse_buf is shared, and it is finite ----------
+ *
+ * SAND_CASCADE_MAX_PER_STEP caps how many deferred entries (cascade
+ * relays AND transfers alike, since rung 3 - see step_impulses()'s own
+ * comment on that array) can be QUEUED in any one step, but impulse_buf
+ * itself (APP_IMPULSE_MAX in app_sand.c on the device) is a separate,
+ * FIXED-SIZE budget shared with whatever explosion or splash is already
+ * using it - sand_impulse() refuses silently once it is full. A long plow
+ * through a wide, low-density bank (most cells clear SAND_IMPULSE_
+ * TRANSFER_MIN_SPEED easily) is exactly the shape that could queue one
+ * transfer per cell touched if the per-step cap were not there; this test
+ * is what proves the cap actually holds the line rather than merely
+ * assuming it does. */
+/* SAME SHAPE AS plow_build() (a few hundred lines up) - dirt fills ONLY
+ * row 0, everything below is OPEN except a single floor far at the
+ * bottom, and the mover is thrown from (1, 0). NOT a full-width floor
+ * directly under the mover's own row - an earlier version of this test
+ * used exactly that, and the mover (KIND_STATIC) settled on literally the
+ * SECOND step: fully supported with nowhere to fall, step_impulses()'s
+ * own "SUPPORTED, NOT MERELY ROLLED" rule (sand.c) drops a KIND_STATIC
+ * entry from tracking the instant one push-roll fails, and a floor
+ * spanning the whole width guarantees that happens almost immediately at
+ * this speed. plow_build()'s own open-below shape is what keeps the
+ * mover - and the dirt feeding it from behind, which also falls once it
+ * is unsupported, see that function's own comment - genuinely engaged for
+ * many steps instead of freezing after one. Measured with this shape,
+ * this exact scene (200-cell bank): activity (impulse_count > 0) for 27
+ * steps, never above 3 entries concurrently even with the transfer cap
+ * completely unbounded - BUDGET_IMPULSE_MAX is deliberately far below
+ * what an ordinary run ever needs, so the assertion below is a real gate,
+ * not a number this scene could never approach anyway. */
+#define BUDGET_W 200
+#define BUDGET_H 30
+#define BUDGET_IMPULSE_MAX 8
+#define BUDGET_STEPS 40
+
+static void test_a_long_plow_through_a_wide_bank_never_exhausts_the_impulse_buffer(void)
+{
+    uint8_t *cells = malloc((size_t)BUDGET_W * BUDGET_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "budget-guard grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)BUDGET_IMPULSE_MAX * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "budget-guard impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    sand_t g;
+    memset(cells, 0, (size_t)BUDGET_W * BUDGET_H);
+    sand_init(&g, cells, BUDGET_W, BUDGET_H, 9u);
+    sand_enable_impulses(&g, buf, BUDGET_IMPULSE_MAX);
+
+    for (int x = 0; x < BUDGET_W; x++) {
+        sand_set(&g, x, BUDGET_H - 1, STONE);
+    }
+    for (int x = 2; x < BUDGET_W; x++) {
+        sand_set(&g, x, 0, CELL_MAKE(MAT_DIRT, 0));
+    }
+    sand_set(&g, 1, 0, STONE);
+    enum { DIR_RIGHT = 2 };
+    sand_impulse_dislodge(&g, 1, 0, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    int max_seen = 0;
+    for (int i = 0; i < BUDGET_STEPS; i++) {
+        sand_step(&g, 0, 1000, 0);
+        if (g.impulse_count > max_seen) {
+            max_seen = g.impulse_count;
+        }
+        char why[192];
+        snprintf(why, sizeof why,
+            "step %d: impulse_count (%d) exceeded the buffer's own "
+            "capacity (%d) - sand_impulse() should refuse silently before "
+            "this can ever happen, so reaching it means the per-step cap "
+            "did not hold", i, g.impulse_count, BUDGET_IMPULSE_MAX);
+        TEST_ASSERT_LESS_OR_EQUAL_INT_MESSAGE(BUDGET_IMPULSE_MAX,
+            g.impulse_count, why);
+    }
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, max_seen,
+        "the plow must actually have queued something across its own "
+        "run, or the buffer-capacity assertion above never exercised "
+        "anything");
+
+    /* Still stepping normally afterwards - a fresh sand_impulse() must
+     * still succeed once the plow's own entries have had room to clear,
+     * proving this was never a permanently wedged buffer. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, g.impulse_count,
+        "the plow's own entries must have fully cleared by the end of "
+        "this run - otherwise the fresh sand_impulse() below is not "
+        "actually testing an empty buffer draining, it is testing a "
+        "still-busy one");
+    sand_set(&g, BUDGET_W - 2, BUDGET_H - 2, CELL_MAKE(MAT_SAND, 8));
+    sand_impulse(&g, BUDGET_W - 2, BUDGET_H - 2, DIR_RIGHT, 200);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, g.impulse_count,
+        "a fresh sand_impulse() queued after the plow's own run must "
+        "still succeed - the shared buffer must drain as entries settle, "
+        "not fill up and stay full");
+
+    free(buf);
+    free(cells);
+}
+
+/* --- conservation: transfer relocates cells, it never creates or destroys
+ * them --------------------------------------------------------------------
+ *
+ * Same shape as test_a_thrown_static_chunk_conserves_lava_mass_on_sink
+ * (a few thousand lines up): every transferred entry is queued through
+ * plain sand_impulse() (step_impulses()'s own append loop, sand.c), which
+ * only ever moves a cell that is ALREADY on the board - nothing here
+ * manufactures a fresh one. DIRT is checked by CELL COUNT, exactly - a
+ * KIND_POWDER cell's own count never legitimately changes from ordinary
+ * movement the way a liquid's can (mass_of()'s own comment). WATER is
+ * checked by MASS, not cell count, for the same reason that test checks
+ * lava by mass: a liquid's cell count is free to change as it spreads or
+ * merges without a drop being lost. */
+static void test_a_thrown_powder_grain_conserves_the_dirt_it_ejects(void)
+{
+    uint8_t *cells = malloc((size_t)EJECTA_W * EJECTA_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "conservation grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(EJECTA_W * EJECTA_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "conservation impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    const int dx0 = 10, dx1 = dx0 + EJECTA_DIRT_W;
+    const int dy1 = EJECTA_H - 1, dy0 = dy1 - EJECTA_DIRT_H;
+    sand_t g;
+    memset(cells, 0, (size_t)EJECTA_W * EJECTA_H);
+    sand_init(&g, cells, EJECTA_W, EJECTA_H, 5u);
+    sand_enable_impulses(&g, buf, EJECTA_W * EJECTA_H);
+    for (int x = 0; x < EJECTA_W; x++) {
+        sand_set(&g, x, EJECTA_H - 1, STONE);
+    }
+    for (int y = dy0; y < dy1; y++) {
+        for (int x = dx0; x < dx1; x++) {
+            sand_set(&g, x, y, CELL_MAKE(MAT_DIRT, 0));
+        }
+    }
+    const int dirt_count_before =
+        ejecta_count_material(&g, EJECTA_W, EJECTA_H, MAT_DIRT);
+
+    sand_set(&g, dx0, dy1 - 1, STONE);
+    enum { DIR_RIGHT = 2 };
+    sand_impulse_dislodge(&g, dx0, dy1 - 1, DIR_RIGHT, 255,
+                          SAND_IMPULSE_SPEED_RAMP);
+    for (int i = 0; i < 150; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    const int dirt_count_after =
+        ejecta_count_material(&g, EJECTA_W, EJECTA_H, MAT_DIRT);
+
+    free(buf);
+    free(cells);
+
+    /* -1 for the one cell the mover itself occupied when the bank was
+     * built (it was DIRT there for a moment before being overwritten with
+     * STONE), matching plow_build()'s own precedent of accounting for the
+     * mover's own starting cell explicitly rather than folding it into an
+     * inequality. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(dirt_count_before - 1, dirt_count_after,
+        "total dirt cell count must be exactly conserved across the plow "
+        "and every transfer it queues - transfer only ever relocates a "
+        "cell already on the board, through plain sand_impulse(), so "
+        "nothing here should create or destroy one");
+}
+
+static void test_a_thrown_powder_grain_conserves_the_water_mass_it_ejects(void)
+{
+    uint8_t *cells = malloc((size_t)EJECTA_W * EJECTA_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "conservation grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(EJECTA_W * EJECTA_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "conservation impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    const int dx0 = 20, dx1 = dx0 + EJECTA_WATER_W;
+    const int dy1 = EJECTA_H - 1, dy0 = dy1 - 1;
+    sand_t g;
+    memset(cells, 0, (size_t)EJECTA_W * EJECTA_H);
+    sand_init(&g, cells, EJECTA_W, EJECTA_H, 5u);
+    sand_enable_impulses(&g, buf, EJECTA_W * EJECTA_H);
+    for (int x = 0; x < EJECTA_W; x++) {
+        sand_set(&g, x, EJECTA_H - 1, STONE);
+    }
+    for (int x = dx0; x < dx1; x++) {
+        sand_set(&g, x, dy0, CELL_MAKE(MAT_WATER, MASS_MAX));
+    }
+    const long water_mass_before = mass_of(&g, EJECTA_W, EJECTA_H, MAT_WATER);
+
+    sand_set(&g, dx0, dy0, STONE);
+    enum { DIR_RIGHT = 2 };
+    sand_impulse_dislodge(&g, dx0, dy0, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+    for (int i = 0; i < 4; i++) {
+        sand_step(&g, 0, 1000, 0);
+    }
+
+    const long water_mass_after = mass_of(&g, EJECTA_W, EJECTA_H, MAT_WATER);
+
+    free(buf);
+    free(cells);
+
+    /* MASS_MAX, not an inequality - one full cell's worth was overwritten
+     * by the mover before ever entering the pool, the same accounting
+     * test_a_thrown_powder_grain_conserves_the_dirt_it_ejects uses. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE((int)(water_mass_before - MASS_MAX),
+        (int)water_mass_after,
+        "total water MASS must be exactly conserved across the plow and "
+        "every transfer it queues, checked by mass rather than cell count "
+        "- a liquid's own cell count is free to change as it spreads or "
+        "merges without a drop being lost (mass_of()'s own comment), but "
+        "the total amount must not move");
 }
 
 /* --- free fall and shaking ---------------------------------------------- */
@@ -28076,6 +28943,14 @@ void run_sand_suite(void)
     RUN_TEST(test_a_blast_queues_impulses_on_every_side_of_the_centre);
     RUN_TEST(test_detonating_empty_space_still_flashes_the_core);
     RUN_TEST(test_without_a_buffer_explode_does_nothing);
+    RUN_TEST(test_the_two_wall_explosion_scene_bounces_more_than_once_before_settling);
+    RUN_TEST(test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits);
+    RUN_TEST(test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits);
+    RUN_TEST(test_a_struck_water_cell_is_handed_the_movers_own_impulse);
+    RUN_TEST(test_a_thrown_powder_grain_travels_less_far_through_dirt_than_through_air);
+    RUN_TEST(test_a_long_plow_through_a_wide_bank_never_exhausts_the_impulse_buffer);
+    RUN_TEST(test_a_thrown_powder_grain_conserves_the_dirt_it_ejects);
+    RUN_TEST(test_a_thrown_powder_grain_conserves_the_water_mass_it_ejects);
 
     RUN_TEST(test_nothing_moves_in_free_fall);
     RUN_TEST(test_shaking_spreads_a_pile_sideways);
