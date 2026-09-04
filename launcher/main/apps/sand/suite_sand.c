@@ -16088,12 +16088,16 @@ static void test_water_winning_dilution_spawns_a_gas_puff(void)
  * oil on top because that is ALREADY the stable density ordering (oil's
  * density is 22, acid's is 38 - oil floats on acid on its own, see
  * MAT_OIL's own comment in material.c), so nothing moves due to
- * gravity/density before reactions runs. Oil's dissolvable (40) is much
- * lower than water's (220) - "slowly dilutes", not readily - so this
- * needs more columns than the water fixture to land a comfortable
- * sample in one step: expected conversions at 400 columns and the
- * current constants (r->dissolves=60/256, oil's dissolvable=40/256) is
- * about 15. */
+ * gravity/density before reactions runs. Oil's dissolvable (16 - retuned
+ * more than once, see its own comment in material.c for the earlier 40
+ * and 1) is much lower than water's (220) - "slowly dilutes", not
+ * readily - so a single step is not a safe bet the way the water fixture
+ * is; the tests below step this fixture repeatedly instead (300 steps,
+ * same budget as before) and read the FINAL state, not one snapshot -
+ * each column's oil cell reacts with the acid below it at most once
+ * ever (once it stops being MAT_OIL there is nothing left to dissolve in
+ * a two-material fixture), so there is no risk of a later step
+ * overwriting an earlier column's own result. */
 #define OIL_DILUTE_W 400
 #define OIL_DILUTE_H 2
 static sand_t  oil_dilute_sim;
@@ -16110,70 +16114,120 @@ static void acid_oil_dilute_fixture(uint8_t *cells)
     }
 }
 
-/* Unlike water's free swap, oil converting into acid is explicitly
- * supposed to cost the eating acid a unit of its own mass too - "it
- * should also dissolve while doing so, so we end with a bit less of
- * acid" was the ask. Checked directly: for every column where the oil
- * cell became acid this step, the acid cell right below it must have
- * lost exactly the one unit pay_quench_cost() always takes, the same
- * bite cost eating sand or wood pays. */
-static void test_oil_dilutes_into_acid_but_the_acid_pays_for_it(void)
+/* SAND_ACID_OIL_TO_GAS_CHANCE (sand.h): a bitten oil cell mostly boils
+ * into gas now, acid is the minority outcome that survives from the old
+ * "always becomes acid" rule. Step the fixture out to where essentially
+ * every column has fired at most once (see the fixture's own comment)
+ * and read the final state in one pass - no per-step tracking needed,
+ * a column's oil cell can only ever change once.
+ *
+ * Reads BOTH cells of a column together, not a fixed row index - a
+ * column whose original acid cell died outright (SAND_ACID_OIL_DEATH_
+ * CHANCE, below) leaves an empty cell for whatever the oil turned into
+ * to fall into by ordinary gravity before this reads the final state,
+ * so "the oil cell specifically ends up at row 0" is not something a
+ * settled board can promise. What IS still decidable without caring
+ * which row anything landed in: a column still holding MAT_OIL anywhere
+ * never got bitten this run (skip it, no sample); otherwise MAT_GAS
+ * appearing anywhere in the column means oil boiled off, and its
+ * absence (only MAT_ACID and/or one empty cell left) means oil spread
+ * into more acid instead - those two outcomes are the only ones this
+ * two-material fixture can produce once the oil is gone, and evaporates
+ * is disabled so nothing else can introduce gas from elsewhere. */
+static void test_oil_mostly_boils_off_into_gas_not_acid(void)
 {
     uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
     TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
         "acid/oil dilution grid must fit in what the framebuffer leaves");
     acid_oil_dilute_fixture(oil_dilute_cells);
 
-    /* dissolvable=1 (material.c) is the rarest a single byte-wide roll
-     * can express, so a single step is no longer a safe bet at 400
-     * columns the way it was before that field got tuned down - see its
-     * own comment for the earlier 40. Instead, step until the FIRST
-     * conversion appears anywhere on the (still perfectly uniform, so no
-     * ordinary liquid mass-flow to confuse the reading) board, and check
-     * only that one - one clean sample is enough to prove the invariant,
-     * and every column stays independent right up until the moment it
-     * flips. 300 steps at 400 columns is comfortably past the point
-     * where a first conversion is virtually certain to have landed. */
-    int mass_before[OIL_DILUTE_W];
-    for (int x = 0; x < OIL_DILUTE_W; x++) {
-        mass_before[x] = CELL_VARIANT(sand_at(&oil_dilute_sim, x, 1));
+    for (int i = 0; i < 300; i++) {
+        sand_step(&oil_dilute_sim, 0, 1000, 0);
     }
 
-    int converted_x = -1;
-    for (int i = 0; i < 300 && converted_x < 0; i++) {
-        sand_step(&oil_dilute_sim, 0, 1000, 0);
-        for (int x = 0; x < OIL_DILUTE_W; x++) {
-            if (CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0)) == MAT_ACID) {
-                converted_x = x;
-                break;
-            }
+    int gas = 0, acid_spread = 0;
+    for (int x = 0; x < OIL_DILUTE_W; x++) {
+        const uint8_t m0 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0));
+        const uint8_t m1 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 1));
+        if (m0 == MAT_OIL || m1 == MAT_OIL) {
+            continue; /* never bitten in this window - no sample here */
+        }
+        if (m0 == MAT_GAS || m1 == MAT_GAS) {
+            gas++;
+        } else {
+            acid_spread++;
         }
     }
 
-    /* Not freed here, ahead of this assertion, the way the rest of this
-     * file's converted fixtures are - oil_dilute_sim still points into
-     * oil_dilute_cells and the mass_after read just below still needs
-     * it live. If this assertion itself fails, the buffer leaks, same
-     * as any other test failure in this run; the freed-before-assert
-     * rule this file otherwise follows is about avoiding a leak on the
-     * COMMON path, not eliminating every failure-path leak. */
-    TEST_ASSERT_TRUE_MESSAGE(converted_x >= 0,
-        "expected at least one oil-to-acid conversion within 300 steps "
-        "across 400 independent columns");
-
-    const int mass_after = CELL_VARIANT(sand_at(&oil_dilute_sim, converted_x, 1));
-
-    /* Freed BEFORE the final assertion: Unity longjmps out of a failure,
-     * so a free() after one never runs - see drop_impulse_buf's own
-     * comment above. All reads of oil_dilute_cells are done by this
-     * point. */
     free(oil_dilute_cells);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(mass_before[converted_x] - 1, mass_after,
-        "the acid that converted an oil neighbour into acid must still "
-        "pay pay_quench_cost()'s usual one unit of mass for the bite, "
-        "the same as eating sand or wood would - the conversion is not "
-        "supposed to be free the way water's own swap is");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, gas,
+        "expected at least one oil-to-gas conversion within 300 steps "
+        "across 400 independent columns");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_spread,
+        "SAND_ACID_OIL_TO_GAS_CHANCE biases the outcome, it does not "
+        "eliminate the other side entirely - acid spreading into oil "
+        "should still happen sometimes");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_spread, gas,
+        "SAND_ACID_OIL_TO_GAS_CHANCE is supposed to favour gas heavily - "
+        "oil boiling off should be clearly more common than oil turning "
+        "into more acid");
+}
+
+/* SAND_ACID_OIL_DEATH_CHANCE (sand.h): the acid that ate an oil cell
+ * separately rolls a much higher chance to die outright - its whole
+ * remaining mass gone in this one bite - instead of pay_quench_cost()'s
+ * ordinary one-unit chip. Both are reachable, neither is a certainty.
+ *
+ * Same both-cells-of-the-column reasoning as the test above, and for the
+ * same reason: a died-outright column can settle with its surviving
+ * cell in either row. An empty cell anywhere in a bitten column can only
+ * be the original acid, since the oil-derived cell is always either gas
+ * or acid, never empty - so its presence unambiguously marks a one-shot
+ * death (there is no other way to reach CELL_EMPTY in this fixture,
+ * gradual attrition would need MASS_MAX consecutive bites on the exact
+ * same cell, and each column's oil neighbour only ever offers one).
+ * Symmetrically, an acid cell at exactly MASS_MAX - 1 anywhere in the
+ * column marks the ordinary one-unit chip having landed instead -
+ * MASS_MAX itself would be a FRESH acid cell born from the oil-becomes-
+ * acid branch, not the one that did the eating. */
+static void test_the_acid_that_ate_oil_can_die_in_a_single_bite(void)
+{
+    uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
+        "acid/oil dilution grid must fit in what the framebuffer leaves");
+    acid_oil_dilute_fixture(oil_dilute_cells);
+
+    for (int i = 0; i < 300; i++) {
+        sand_step(&oil_dilute_sim, 0, 1000, 0);
+    }
+
+    int died_outright = 0, chipped_by_one = 0;
+    for (int x = 0; x < OIL_DILUTE_W; x++) {
+        const cell_t c0 = sand_at(&oil_dilute_sim, x, 0);
+        const cell_t c1 = sand_at(&oil_dilute_sim, x, 1);
+        if (CELL_MATERIAL(c0) == MAT_OIL || CELL_MATERIAL(c1) == MAT_OIL) {
+            continue; /* never bitten in this window - no sample here */
+        }
+        if (CELL_IS_EMPTY(c0) || CELL_IS_EMPTY(c1)) {
+            died_outright++;
+        }
+        if ((CELL_MATERIAL(c0) == MAT_ACID && CELL_VARIANT(c0) == MASS_MAX - 1)
+            || (CELL_MATERIAL(c1) == MAT_ACID && CELL_VARIANT(c1) == MASS_MAX - 1)) {
+            chipped_by_one++;
+        }
+    }
+
+    free(oil_dilute_cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, died_outright,
+        "SAND_ACID_OIL_DEATH_CHANCE (sand.h) is supposed to let the acid "
+        "that ate an oil cell die outright, from full mass to nothing in "
+        "the same bite - none did across 400 independent columns");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, chipped_by_one,
+        "SAND_ACID_OIL_DEATH_CHANCE is a chance, not a certainty - "
+        "pay_quench_cost()'s ordinary one-unit chip must still be "
+        "reachable too, not replaced outright");
 }
 
 /* evaporates forced to 255 so this is a one-step, deterministic
@@ -26360,7 +26414,8 @@ void run_sand_suite(void)
     RUN_TEST(test_acid_and_water_dilute_each_other);
     RUN_TEST(test_water_wins_the_dilution_more_often_than_acid_does);
     RUN_TEST(test_water_winning_dilution_spawns_a_gas_puff);
-    RUN_TEST(test_oil_dilutes_into_acid_but_the_acid_pays_for_it);
+    RUN_TEST(test_oil_mostly_boils_off_into_gas_not_acid);
+    RUN_TEST(test_the_acid_that_ate_oil_can_die_in_a_single_bite);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
     RUN_TEST(test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water);
     RUN_TEST(test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid);
