@@ -3787,12 +3787,23 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
         /* DILUTION, not an eat - a water neighbour never vanishes the way
          * sand or wood does below. The dissolves/dissolvable roll above
          * already decided "this bite lands on water"; this decides which
-         * of the two cells the bite actually changes, biased toward water
-         * per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h). Either way the
-         * CELL_VARIANT (mass) of whichever cell flips carries over
-         * unchanged - a swap, not a creation - which is also why
-         * pay_quench_cost() below does not apply to this branch: nothing
-         * is being spent, so this returns before reaching it. */
+         * side wins, per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h), and
+         * BOTH cells change, symmetrically either way: whichever material
+         * wins boils off into its own vapour (its own SOURCE cell, spent
+         * doing the winning - MAT_STEAM for water, MAT_GAS for acid,
+         * each material's own ordinary boils_to), and whichever material
+         * loses is converted into the winner's TARGET cell instead of
+         * simply vanishing. CELL_VARIANT (mass) carries over from
+         * whichever cell it started on, into whatever that cell becomes -
+         * a conversion, not a creation, on both ends now, which is also
+         * why pay_quench_cost() below does not apply to this branch:
+         * nothing is being spent as a bite cost, the transformation
+         * itself is the cost. Earlier versions of this left the winning
+         * side's cell untouched (a free water cell minted from nothing
+         * when water won, a free acid cell when acid won) - reported
+         * directly as the reason a body of water, or a body of acid,
+         * could only ever grow from this interaction and never actually
+         * shrink no matter how the win/lose split was tuned. */
         if (CELL_MATERIAL(n) == MAT_WATER) {
             /* SAND_ACID_DILUTE_MASS_BIAS (sand.h): count how many of the
              * ACID cell's own cardinal neighbours are themselves acid, and
@@ -3837,34 +3848,32 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
              * own comment (sand.h) for why this replaced two independent
              * rolls. */
             const int roll = (int)(rng_next(&s->rng) & 0xFF);
+            const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
             if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
-                const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+                /* Acid's own ambient-style boil-off, unrelated to who
+                 * wins the water/acid split below - see this constant's
+                 * own comment (sand.h). Only the acid cell is touched. */
                 place_reacted(s, x, y, self_at, MAT_GAS);
             } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE + water_wins_chance) {
+                /* WATER WINS - water is the source, spent boiling off
+                 * into its own MAT_STEAM; acid is the target, converted
+                 * into water. Mass carries over from whichever cell it
+                 * started on. */
                 row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
 
-                /* A small "fizzle" at the moment water actually wins -
-                 * explicitly asked for, and only for this outcome (not
-                 * the acid-spreads branch below, nor the evaporate one
-                 * above): a puff of gas into whatever empty cell is
-                 * nearby, the same residue idiom emit_into_empty_neighbor()
-                 * already gives ember's flame and wet dirt's steam (just
-                 * a no-op if nothing empty is adjacent, same as those).
-                 *
-                 * An impulse pop was tried alongside this too (reusing
-                 * acid_bubble()'s own direction math), then dropped -
-                 * unlike a bubble breaking an exposed surface, dilution
-                 * mostly happens fully submerged, where a thrown grain
-                 * has nowhere open to actually go. Not gated on exposure
-                 * the way acid_bubble() itself is - it would have almost
-                 * always had nothing to do, which is exactly the "wasted
-                 * call" this session already flagged once for acid_bubble()
-                 * itself (see ACID_BUBBLE_INVESTIGATION.md) and is not
-                 * worth repeating here. */
-                emit_into_empty_neighbor(s, x, y, w, h, MAT_GAS);
+                s->cells[at] = CELL_MAKE(MAT_STEAM, CELL_VARIANT(n));
+                mark_rows(s, ny, ny);
+                wake_block_and_neighbors(s, nx, ny);
             } else {
+                /* ACID WINS - acid is the source, spent boiling off into
+                 * its own MAT_GAS; water is the target, converted into
+                 * acid. */
+                row[x] = CELL_MAKE(MAT_GAS, CELL_VARIANT(row[x]));
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+
                 s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
                 mark_rows(s, ny, ny);
                 wake_block_and_neighbors(s, nx, ny);
