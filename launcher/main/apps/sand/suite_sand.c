@@ -21806,7 +21806,7 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
         "the mover's post-drag speed clears SAND_IMPULSE_TRANSFER_MIN_"
         "SPEED, which this scene's own numbers do");
     const uint8_t expected = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
-                             (materials[MAT_DIRT].density >> SAND_IMPULSE_DRAG_SHIFT));
+                             impulse_drag_of(CELL_MAKE(MAT_DIRT, 0)));
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
         "speed lost displacing a single dirt cell must equal exactly the "
         "plain ramp plus (density >> SAND_IMPULSE_DRAG_SHIFT) - this is "
@@ -21842,7 +21842,7 @@ static void test_a_thrown_powder_grain_pays_drag_displacing_dirt(void)
         "the mover's post-drag speed clears SAND_IMPULSE_TRANSFER_MIN_"
         "SPEED, which this scene's own numbers do");
     const uint8_t expected = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
-                             (materials[MAT_DIRT].density >> SAND_IMPULSE_DRAG_SHIFT));
+                             impulse_drag_of(CELL_MAKE(MAT_DIRT, 0)));
     TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
         "a KIND_POWDER mover pays the same density-scaled drag a "
         "KIND_STATIC one does - a thrown grain is most of what a blast "
@@ -23401,7 +23401,7 @@ static void test_a_struck_water_cell_is_handed_impulse_in_a_backward_cone_from_t
      * the one water cell it displaced. The transfer is half of that. */
     const uint8_t mover_speed =
         (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
-                  (materials[MAT_WATER].density >> SAND_IMPULSE_DRAG_SHIFT));
+                  impulse_drag_of(CELL_MAKE(MAT_WATER, MASS_MAX)));
     const uint16_t vacated = (uint16_t)(ROW * W + SX);
 
     int found = -1;
