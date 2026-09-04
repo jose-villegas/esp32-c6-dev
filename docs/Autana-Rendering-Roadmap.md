@@ -683,6 +683,86 @@ tiles.** This is where the two stop being alternatives:
   the windows' step, which is small. In a room-based game the whole
   screen can be one window and Track B falls out as the special case.
 
+**Track C design sketch (2026-09-04).** The two things the mix needs —
+cells that are spatially aware of layers, and cells that survive
+scrolling — are one design seen from two sides, and the choice that
+decides it is *which coordinate frame the cells live in*. The answer is
+both, for different jobs:
+
+- **World-anchored windows, for VFX.** A window has a world origin and a
+  layer id; its cells are in window-local coordinates. Scrolling never
+  moves a cell, only where the window is composited (a clipped blit at a
+  pixel offset), which is why scrolling is not hard for this half.
+  Windows are created by emitters and events, grow to a cap when grains
+  reach their edge, sleep through the existing block sleeping, and close
+  when empty or when settled cells bake back into a tile. Cells in
+  different windows do not interact — fine for effects, and the reason
+  terrain needs the other frame.
+- **A screen-anchored grid with a scroll vector, for the active area.**
+  One grid the size of the screen plus a margin. Camera motion is
+  accumulated and split: the whole-cell part is applied *between* steps
+  as a translation of the grid (one `memmove` per row, ~41 KB, well under
+  a millisecond) and the strip that came into view is filled from the
+  world — the gameplay tile layer's collision mask as static solid cells,
+  plus any stored cells for that strip from a compressed off-screen
+  store. The fractional part (cells are 2 px, the camera moves in
+  pixels) is only a draw offset. Physics never sees the scroll. This is
+  Noita's chunk streaming at one-screen scale; Track B is the case where
+  the scroll is always zero.
+- **Where the scroll vector becomes physics.** The sand app already has a
+  momentum channel driven by the gyroscope. Feeding it the negative
+  camera velocity, scaled per window, makes cells inertial: smoke trails
+  when the camera lurches, dust settles when it stops, rain on a
+  background layer drifts by that layer's parallax factor. That is the
+  meaningful version of "cells aware of the scroll vector", it reuses
+  code that exists, and it is a per-window parameter, never per cell.
+- **Layer awareness.** A window's layer id gives it two things: its
+  compositing order and scroll factor from the layer it is drawn on, and
+  its *boundary* from the gameplay layer only. Background windows are
+  pure effects with no entity coupling; gameplay-layer windows hurt, wet
+  and bury entities and feed triggers. Depth is free through the palette
+  lookup: a background window draws one light level dimmer at no
+  per-pixel cost.
+- **Compositing.** Scrolling: every frame is full, so the draw is
+  `draw(instance, band, clip, offset)` per band for each overlapping
+  window — the band pipeline of 3.3. Rooms: the row-run dirty path as
+  today. Same instance type, two draw paths (esp32c6-ems.11).
+- **Budget, estimates.** A 48×48 window is ~2,300 cells: from the sand
+  app's ~5.5 ms worst case for 41,216 cells, ~0.3 ms per step fully
+  active and near zero asleep, so a dozen live windows are a few
+  milliseconds. The scrolling tile draw itself is a full-frame blit,
+  ~2 ms at two cycles per pixel.
+- **Build order that proves it early**, each a host test before it is a
+  device number: (1) the instance core; (2) one world-anchored fire
+  window over a scrolling tile background in the host render harness,
+  which shows layers and compositing without the device; (3) the
+  shifting grid with tile-mask fill, the first scroll test; (4) the
+  momentum coupling, one parameter once the rest exists.
+- **Locality is the performance model** (maintainer, 2026-09-04). The
+  simulation never needs to run full-screen; full-screen is the special
+  case of one big window. A level designer places a *torch*, and that is
+  an emitter record in the level's rectangle list: "instance of 16×32
+  cells, this material set, at world (x, y), on layer n". Loading the
+  level creates the instance, the game tracks its quad on screen, and
+  the draw composites it at the quad's offset and scale. Effects are
+  authored in the editor the same way terrain is.
+- **Parallax as level of detail.** A background window runs cheaper in
+  three independent, per-window ways: bigger cells (a 16×32 instance
+  drawn at 4×4 px covers what a 32×64 one does at a quarter of the step
+  cost), a lower step rate (every second or fourth frame, invisible at
+  parallax speeds), and a dimmer palette light level for depth. The
+  foreground layer gets full resolution and full rate. All three are
+  free once the instance carries its own size and the draw takes a
+  scale.
+- **Keep the quad axis-aligned with an integer scale** (1×, 2×, 4× cells
+  to pixels). A rotated or arbitrarily scaled quad turns the cheap blit
+  into a per-pixel affine sample — the Mode-7 cost class — which is not
+  worth paying for smoke.
+- **Left open on purpose:** what happens when two windows meet — merge
+  into one, or stay independent. Effects can stay independent; terrain
+  cannot, and that boundary is exactly where the active-area grid takes
+  over from windows. Decide on the first case that needs it.
+
 **The architectural requirement: the sand core as an instance.** Today the
 simulation is one grid at one size owned by the app. Every option above
 needs it to be a value: `(cells, width, height, material table, rng,
