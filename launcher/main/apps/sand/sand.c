@@ -1922,6 +1922,36 @@ static inline bool can_impulse_enter(cell_t target, cell_t mover)
     return material_of(mover)->kind != KIND_LIQUID || t->kind == KIND_LIQUID;
 }
 
+/* THE ONE PREDICATE SHARED BY BOTH THE GRAVITY-DRIFT MOVE AND THE SETTLED
+ * CHECK in step_impulses() (sand.c, the "AIRBORNE SOLIDS FALL TOO" block and
+ * the has_opening loop right after it) - narrows can_impulse_enter() above
+ * by exactly one more rule, `speed`-gated, and is the ONLY place that rule
+ * is written down. That is deliberate, not tidiness: step_impulses()'s own
+ * comment on the has_opening loop records a bug that shipped when those two
+ * sites asked "can I move here" two different ways (the drift accepted a
+ * diagonal opening the old settled check, checking only CELL_IS_EMPTY() on
+ * one cell, did not) - impulse_gravity_candidates() (below) already fixed
+ * that for the CANDIDATE list, and this function is the same fix applied to
+ * the second half of the question, whether a candidate is actually
+ * enterable. A future change to the spent rule belongs here, once, not
+ * copied into two call sites that can drift apart again.
+ *
+ * SAND_IMPULSE_SINK_MIN_SPEED's own comment (sand.h) has the reasoning for
+ * why this exists at all - in short, a KIND_STATIC entry's gravity-drift
+ * pays no drag, ever, so stronger drag alone stops the sideways push but
+ * not the endless downward swap. Below the floor, `mover` is SPENT and may
+ * only continue into a genuinely CELL_IS_EMPTY() cell; at or above it,
+ * nothing changes from can_impulse_enter() alone - an energetic entry still
+ * swaps through any non-static occupant exactly as before. */
+static inline bool can_impulse_enter_gravity_ward(cell_t target, cell_t mover,
+                                                  uint8_t speed)
+{
+    if (speed < SAND_IMPULSE_SINK_MIN_SPEED) {
+        return CELL_IS_EMPTY(target);
+    }
+    return can_impulse_enter(target, mover);
+}
+
 /* Fills `cand` with the three cells gravity-ward of (x, y) this step -
  * straight down first, then the two diagonal slides either side of it -
  * the same order and ring math an ordinary falling grain uses
@@ -2250,21 +2280,21 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 if ((unsigned)cx >= (unsigned)w || (unsigned)cy >= (unsigned)h) {
                     continue;
                 }
-                /* can_impulse_enter(), THE SAME PREDICATE THE ROLLED MOVE
-                 * BELOW USES - no more separate "but not liquid" exclusion
-                 * here. That exclusion used to read as protecting lava
-                 * from being overwritten ("a burning LIQUID is never
-                 * smothered", step_one_burning_cell()'s own invariant),
-                 * but this move is a SWAP (four lines down: gdisplaced is
-                 * read out of the target cell, then written back into the
-                 * entry's OLD cell), not an overwrite - the same move_to()
-                 * swap trick can_impulse_enter()'s own comment already
-                 * relies on for every other kind. A lava cell a thrown
-                 * chunk swaps into does not stop existing, it changes
-                 * which cell it occupies - conservation holds exactly, and
-                 * so does the "never smothered" invariant, since lava is
-                 * never replaced with something else, only relocated by
-                 * one cell. See
+                /* can_impulse_enter_gravity_ward(), THE SAME PREDICATE THE
+                 * SETTLED CHECK BELOW USES (see that function's own comment)
+                 * - no more separate "but not liquid" exclusion here. That
+                 * exclusion used to read as protecting lava from being
+                 * overwritten ("a burning LIQUID is never smothered",
+                 * step_one_burning_cell()'s own invariant), but this move is
+                 * a SWAP (four lines down: gdisplaced is read out of the
+                 * target cell, then written back into the entry's OLD
+                 * cell), not an overwrite - the same move_to() swap trick
+                 * can_impulse_enter()'s own comment already relies on for
+                 * every other kind. A lava cell a thrown chunk swaps into
+                 * does not stop existing, it changes which cell it occupies
+                 * - conservation holds exactly, and so does the "never
+                 * smothered" invariant, since lava is never replaced with
+                 * something else, only relocated by one cell. See
                  * test_a_thrown_static_chunk_conserves_lava_mass_on_sink
                  * (suite_sand.c), which asserts total lava mass unchanged
                  * and no lava cell deleted across a chunk sinking through
@@ -2272,17 +2302,24 @@ static void step_impulses(sand_t *s, int dx, int dy)
                  * choice, not an oversight: a thrown, ENERGETIC chunk sinks
                  * into a liquid (including lava) the same way a dense
                  * powder already does under ordinary movement (lava's
-                 * density is 45 against sand's 60 and dirt's 62). An
+                 * density is 45 against sand's 60 and dirt's 62) - and
+                 * "ENERGETIC" is no longer just descriptive, it is exactly
+                 * what can_impulse_enter_gravity_ward() asks: below
+                 * SAND_IMPULSE_SINK_MIN_SPEED a SPENT chunk gets none of
+                 * this, only a genuinely empty cell will do (that constant's
+                 * own comment in sand.h has the device feedback and the
+                 * known liquid trade-off this narrowing accepts). An
                  * ordinary, non-impulse KIND_STATIC cell earns none of
-                 * this: it never reaches this loop at all unless it is
-                 * being tracked as a flying entry, and the main sweep
+                 * this either way: it never reaches this loop at all unless
+                 * it is being tracked as a flying entry, and the main sweep
                  * skips KIND_STATIC outright, so a static cell with no
                  * impulse behind it still just sits exactly where it was
                  * placed - it is IMPULSE that earns the sinking, not being
                  * a solid (see
                  * test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder). */
                 const cell_t gtarget = sand_at(s, cx, cy);
-                if (!can_impulse_enter(gtarget, entry.cell)) {
+                if (!can_impulse_enter_gravity_ward(gtarget, entry.cell,
+                                                    entry.speed)) {
                     continue;
                 }
                 const size_t gat  = entry.index;
@@ -2462,11 +2499,21 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * and declared the chunk settled anyway - dropping it from
          * tracking one loop before it ever got to take the move the drift
          * had already found for it. impulse_gravity_candidates() plus
-         * can_impulse_enter() is now the ONE predicate both places ask,
-         * so the two cannot disagree again - see test_a_thrown_static_
-         * chunk_over_a_powder_keeps_falling_instead_of_settling_on_it
-         * (suite_sand.c), which is exactly the diagonal-opening case that
-         * regressed.
+         * can_impulse_enter_gravity_ward() is now the ONE predicate both
+         * places ask (see that function's own comment), so the two cannot
+         * disagree again - see test_an_energetic_static_chunk_over_a_
+         * powder_bank_still_sinks_to_the_bottom (suite_sand.c), which is
+         * exactly the diagonal-opening case that regressed.
+         *
+         * SPENT IS SETTLED TOO, NOW - can_impulse_enter_gravity_ward()
+         * folds SAND_IMPULSE_SINK_MIN_SPEED into the very same predicate,
+         * so an entry with nothing left only counts a genuinely
+         * CELL_IS_EMPTY() candidate as an opening, same as the drift above
+         * - see test_a_spent_static_chunk_rests_on_a_powder_bank_instead_
+         * of_sinking_forever (suite_sand.c) for the case this reopens on
+         * purpose: a spent chunk over a packed bank now correctly finds no
+         * opening on its very first check and settles right there, rather
+         * than the drift and this check disagreeing about it a second way.
          *
          * A SUPPORT THAT IS ITSELF IN FLIGHT MEANS WAIT, NOT SETTLE. Even
          * with the disagreement above fixed, "no opening" can still be
@@ -2499,8 +2546,9 @@ static void step_impulses(sand_t *s, int dx, int dy)
 
                 bool has_opening = false;
                 for (int c = 0; c < 3; c++) {
-                    if (can_impulse_enter(sand_at(s, rcand[c][0], rcand[c][1]),
-                                          entry.cell)) {
+                    if (can_impulse_enter_gravity_ward(
+                            sand_at(s, rcand[c][0], rcand[c][1]), entry.cell,
+                            entry.speed)) {
                         has_opening = true;
                         break;
                     }
@@ -2513,19 +2561,29 @@ static void step_impulses(sand_t *s, int dx, int dy)
                 /* No opening on any of the three candidates - the
                  * straight-down one (rcand[0]) is what "supported"
                  * ordinarily means. `entry` is KIND_STATIC in this branch
-                 * (the `if` two dozen lines up), and can_impulse_enter()
-                 * only ever rejects a KIND_STATIC mover for a KIND_STATIC
-                 * target - the liquid-vs-liquid carve-out it also carries
-                 * never applies to a static mover - so has_opening == false
-                 * already guarantees rcand[0] is occupied by a KIND_STATIC
-                 * cell (empty, or any other kind, would have opened it) -
-                 * checked explicitly anyway rather than trusted blind, so a
-                 * future change to can_impulse_enter()'s own rule cannot
-                 * quietly turn this into an O(entries) scan for a blocker
-                 * that was never actually KIND_STATIC. Off-grid is excluded
-                 * first: sand_at()'s synthetic edge-is-STONE cell reads as
-                 * KIND_STATIC too, but it has no real index for
-                 * impulse_index_still_tracked() to look up. */
+                 * (the `if` two dozen lines up). For an ENERGETIC entry
+                 * (at or above SAND_IMPULSE_SINK_MIN_SPEED), can_impulse_
+                 * enter() only ever rejects a KIND_STATIC mover for a
+                 * KIND_STATIC target - the liquid-vs-liquid carve-out it
+                 * also carries never applies to a static mover - so
+                 * has_opening == false there guarantees rcand[0] is a
+                 * KIND_STATIC cell. A SPENT entry has a second, ordinary
+                 * way to see no opening now: can_impulse_enter_gravity_
+                 * ward()'s own narrower rule can just as easily reject a
+                 * genuinely occupied but non-static rcand[0] (a packed
+                 * powder or liquid cell, not empty). Either way the check
+                 * below is what actually matters - checked explicitly
+                 * rather than trusted blind, so neither a future change to
+                 * can_impulse_enter()'s own rule nor this rung's spent
+                 * narrowing can quietly turn this into an O(entries) scan
+                 * for a blocker that was never actually KIND_STATIC: if
+                 * rcand[0] is anything else (spent, blocked by ordinary
+                 * packed material), the `if` below is simply false and the
+                 * entry falls straight through to settling, exactly as it
+                 * should. Off-grid is excluded first: sand_at()'s synthetic
+                 * edge-is-STONE cell reads as KIND_STATIC too, but it has
+                 * no real index for impulse_index_still_tracked() to look
+                 * up. */
                 const int bx = rcand[0][0];
                 const int by = rcand[0][1];
                 if ((unsigned)bx < (unsigned)w && (unsigned)by < (unsigned)h) {
@@ -2708,9 +2766,21 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * so that is where the transferred entry has to start tracking
          * from.
          *
-         * DIRECTION IS THE MOVER'S OWN `dir`, not a reflection - the struck
-         * cell did not bounce, it got hit, and momentum keeps going the way
-         * the blow came from.
+         * DIRECTION IS A BACKWARD CONE - one of `dir+3`, `dir+4` (straight
+         * back) or `dir+5`, not the mover's own `dir` and not a reflection
+         * either. Queuing the struck cell along the mover's own heading was
+         * the first version of this, and it was wrong: on device it drove
+         * nothing visibly out of the surface at all, because pushing struck
+         * material further ALONG the direction it was just hit from only
+         * ever shoves it deeper into whatever bank or pool it was already
+         * part of - the opposite of the wanted crater. A real impact sprays
+         * material back OUT through the surface it came in by, roughly
+         * backward and outward, not onward. Straight back is also where the
+         * open room actually is: the mover just came through those exact
+         * cells, so the ejecta has somewhere to fly into instead of wedging
+         * against whatever is still ahead of the mover. rng_below(&s->rng,
+         * 3) picks which of the three, so a single struck cell does not
+         * always spray the same way.
          *
          * `entry.speed` HERE IS ALREADY POST-DRAG - the charge above already
          * ran and mutated it in place, so both the floor check and the
@@ -2729,7 +2799,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
             impulse_t *t = &deferred[deferred_count++];
             t->index = (uint16_t)at;
             t->cell  = displaced;
-            t->dir   = entry.dir;
+            t->dir   = (uint8_t)((entry.dir + 3 + rng_below(&s->rng, 3)) & 7);
             t->speed = (uint8_t)(entry.speed / SAND_IMPULSE_TRANSFER_DIVISOR);
         }
 

@@ -21144,60 +21144,177 @@ static void test_a_flying_grain_keeps_its_outward_push_while_falling(void)
  * CELL_IS_EMPTY() on that same straight-down cell, saw sand (not empty),
  * and declared the chunk settled - dropping it from impulse tracking after
  * a single row of fall, even though the very next step's drift would have
- * happily swapped it another row down had it still been tracked. speed 0
- * (via sand_impulse_dislodge()) forces every push-roll to fail, so this
- * scene is driven entirely by gravity-drift plus the settled check - no
- * lateral movement to confound the result. */
-static void test_a_thrown_static_chunk_over_a_powder_keeps_falling_instead_of_settling_on_it(void)
+ * happily swapped it another row down had it still been tracked.
+ *
+ * TWO TESTS NOW, NOT ONE - device feedback for rung 4 ("a thrown chunk
+ * entering a powder bank does not stop") added SAND_IMPULSE_SINK_MIN_SPEED
+ * (sand.h), which narrows can_impulse_enter_gravity_ward() (sand.c, the one
+ * predicate the drift and this settled check both call) so a SPENT
+ * KIND_STATIC entry may only continue into a genuinely CELL_IS_EMPTY()
+ * cell. The single test that used to live here drove a speed-0 entry -
+ * spent from its very first step, by design, to isolate drift-vs-settle
+ * disagreement from any lateral push - and asserted it reached the bottom
+ * row. That assertion is now exactly backwards for a spent entry: rung 4
+ * says a spent chunk over a packed bank settles right there instead of
+ * swapping through the whole thing. Splitting keeps BOTH halves of the
+ * history alive rather than picking one: an ENERGETIC chunk must still
+ * sink all the way through - the original bug this section guards against,
+ * a chunk settling after only one row - while a SPENT one must now rest
+ * instead of sinking forever, this rung's own new guarantee. Neither test
+ * touches the OTHER concern (drift/settle agreement on the CANDIDATE list
+ * itself), which test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_
+ * of_settling_and_both_eventually_land, below, still covers on its own.
+ *
+ * BOTH SCENES FILL THE ENTIRE ROW THE CHUNK SITS OVER, not just the one
+ * column beneath it, and both call sand_clear() first rather than trusting
+ * `cells` to already be blank - two things the original single test got
+ * away without. Neither matters for an ENERGETIC entry, which can swap
+ * through any non-static occupant regardless of what is either side of it,
+ * but a SPENT entry can now be turned aside by an EMPTY diagonal exactly
+ * as readily as it is stopped by a full one: a single narrow column (the
+ * original scene's own shape) leaves both diagonal neighbours of a spent
+ * chunk empty, and CELL_IS_EMPTY() there is true, so the chunk slides
+ * sideways into open air and free-falls the rest of the way down - not
+ * "no opening anywhere," which is what the spent test actually needs to
+ * exercise. Measured directly: the narrow-column shape under the spent
+ * test below settles at row 5, not row SETTLE_TOP_ROW, purely from that
+ * sideways escape route - whatever residue `cells` happened to still hold
+ * from an earlier test decided which column it escaped into. Filling every
+ * column removes both problems at once. */
+enum { SETTLE_COL = 3, SETTLE_TOP_ROW = 0 };
+
+static void test_an_energetic_static_chunk_over_a_powder_bank_still_sinks_to_the_bottom(void)
 {
     fixture();
+    sand_clear(&s);
     sand_enable_impulses(&s, impulse_buf, W * H);
 
-    sand_set(&s, 3, 0, STONE);
-    for (int y = 1; y < H; y++) {
-        sand_set(&s, 3, y, SAND);
+    sand_set(&s, SETTLE_COL, SETTLE_TOP_ROW, STONE);
+    for (int y = SETTLE_TOP_ROW + 1; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND);
+        }
     }
-    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+    sand_impulse_dislodge(&s, SETTLE_COL, SETTLE_TOP_ROW, 0, 255,
+                          SAND_IMPULSE_SPEED_RAMP);
 
     for (int i = 0; i < H; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
-        "a thrown KIND_STATIC chunk directly over a powder column must "
-        "keep sinking through it, one row per step, until it reaches the "
-        "bottom - settling after only one row means the old CELL_IS_EMPTY "
-        "support check disagreed with the drift's own can_impulse_enter() "
-        "rule and dropped the chunk from tracking too early");
+        "an ENERGETIC thrown KIND_STATIC chunk - well above SAND_IMPULSE_"
+        "SINK_MIN_SPEED for the whole fall, since the plain ramp only "
+        "costs it 2 speed a step - must still sink through an entire "
+        "packed powder bank to the bottom, one row per step, exactly as "
+        "before rung 4: settling after only one row is the original bug "
+        "this test guards against, and rung 4's new SPENT narrowing must "
+        "not have reopened it for anything that still has push left");
 }
 
-/* THE SAME DISAGREEMENT, OVER A LIQUID - and the user's own explicit call
- * (see step_impulses()'s own comment on the gravity-drift block, sand.c):
- * a thrown, ENERGETIC chunk sinks into water (and lava, its own dedicated
- * test below) rather than resting on the surface the way an ordinary,
- * never-thrown KIND_STATIC cell would (see
- * test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder,
- * this file, for that other half of the distinction). */
-static void test_a_thrown_static_chunk_sinks_into_water_instead_of_resting_on_its_surface(void)
+static void test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_forever(void)
 {
     fixture();
+    sand_clear(&s);
     sand_enable_impulses(&s, impulse_buf, W * H);
 
-    sand_set(&s, 3, 0, STONE);
-    for (int y = 1; y < H; y++) {
-        sand_set(&s, 3, y, WATER);
+    sand_set(&s, SETTLE_COL, SETTLE_TOP_ROW, STONE);
+    for (int y = SETTLE_TOP_ROW + 1; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, SAND);
+        }
     }
-    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+    sand_impulse_dislodge(&s, SETTLE_COL, SETTLE_TOP_ROW, 0, 0,
+                          SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SETTLE_TOP_ROW, first_row_holding(MAT_STONE),
+        "a SPENT thrown KIND_STATIC chunk - speed 0, below SAND_IMPULSE_"
+        "SINK_MIN_SPEED from its very first step, forcing every push-roll "
+        "to fail so the scene is driven entirely by gravity-drift plus the "
+        "settled check - must rest right where it landed once every "
+        "gravity-ward candidate is genuinely occupied, rather than "
+        "swapping through the entire bank the way an unconditional "
+        "gravity-drift once did (device feedback: a thrown chunk entering "
+        "a powder bank did not stop)");
+}
+
+/* THE SAME SPLIT, OVER A LIQUID - and the user's own explicit call (see
+ * step_impulses()'s own comment on the gravity-drift block, sand.c): an
+ * ENERGETIC chunk sinks into water (and lava, its own dedicated test
+ * below) rather than resting on the surface the way an ordinary,
+ * never-thrown KIND_STATIC cell would (see
+ * test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder,
+ * this file, for that other half of the distinction) - while a SPENT one
+ * now rests on the surface instead, the KNOWN, CHOSEN TRADE named in
+ * SAND_IMPULSE_SINK_MIN_SPEED's own comment (sand.h): this floor is not
+ * kind-aware, so a spent chunk stalls on a liquid exactly as it does on a
+ * powder, not only several cells down as an energetic one would. */
+static void test_an_energetic_static_chunk_still_sinks_into_water_instead_of_resting_on_its_surface(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    /* CELL_MAKE(MAT_WATER, MASS_MAX), NOT THE WATER MACRO - the WATER
+     * macro is only half mass (variant 8 of MASS_MAX's own 15), which
+     * leaves ordinary liquid equalisation room to reshuffle it into a
+     * genuinely empty cell somewhere in the column within a step or two,
+     * exactly the sideways-escape problem this section's own top comment
+     * describes for a spent entry. A fully packed column has no such gap
+     * to find. */
+    sand_set(&s, SETTLE_COL, SETTLE_TOP_ROW, STONE);
+    for (int y = SETTLE_TOP_ROW + 1; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    sand_impulse_dislodge(&s, SETTLE_COL, SETTLE_TOP_ROW, 0, 255,
+                          SAND_IMPULSE_SPEED_RAMP);
 
     for (int i = 0; i < H; i++) {
         sand_step(&s, 0, 1000, 0);
     }
 
     TEST_ASSERT_EQUAL_INT_MESSAGE(H - 1, first_row_holding(MAT_STONE),
-        "a thrown KIND_STATIC chunk over a water column must sink all the "
-        "way to the bottom rather than stopping at the surface - the old "
-        "drift's own liquid exclusion (deleted) plus the old CELL_IS_EMPTY "
-        "support check both would have stopped it at row 1");
+        "an ENERGETIC thrown KIND_STATIC chunk over a water column must "
+        "still sink all the way to the bottom rather than stopping at the "
+        "surface - the old drift's own liquid exclusion stays deleted, "
+        "and rung 4's new SPENT narrowing must not apply to anything that "
+        "still has push left");
+}
+
+static void test_a_spent_static_chunk_rests_on_water_instead_of_sinking_forever(void)
+{
+    fixture();
+    sand_clear(&s);
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    /* CELL_MAKE(MAT_WATER, MASS_MAX), NOT THE WATER MACRO - see the
+     * energetic test just above for why the half-mass WATER macro leaves
+     * ordinary equalisation room to open a genuine gap on its own. */
+    sand_set(&s, SETTLE_COL, SETTLE_TOP_ROW, STONE);
+    for (int y = SETTLE_TOP_ROW + 1; y < H; y++) {
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+    sand_impulse_dislodge(&s, SETTLE_COL, SETTLE_TOP_ROW, 0, 0,
+                          SAND_IMPULSE_SPEED_RAMP);
+
+    for (int i = 0; i < H; i++) {
+        sand_step(&s, 0, 1000, 0);
+    }
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(SETTLE_TOP_ROW, first_row_holding(MAT_STONE),
+        "a SPENT thrown KIND_STATIC chunk over a water column must rest "
+        "on the surface instead of sinking forever - the known, chosen "
+        "trade named in SAND_IMPULSE_SINK_MIN_SPEED's own comment (sand.h): "
+        "this floor is not kind-aware, so a spent chunk stalls on a "
+        "liquid exactly as readily as on a powder");
 }
 
 /* THE INVARIANT GUARD. Deleting the drift's liquid exclusion is only safe
@@ -21234,10 +21351,24 @@ static void test_a_thrown_static_chunk_sinks_into_water_instead_of_resting_on_it
  * surface would not be mistaken for one. The row assertion first confirms
  * the scene actually exercises a sink (not "stayed on the surface because
  * the exclusion is still there," which would make the conservation
- * assertions vacuous). */
+ * assertions vacuous).
+ *
+ * SPEED 255, NOT 0, SINCE RUNG 4 - this scene originally drove a speed-0
+ * entry, harmless before SAND_IMPULSE_SINK_MIN_SPEED existed because the
+ * gravity-drift was unconditional regardless of speed. It is not harmless
+ * now: a spent entry (speed 0, below that floor) only continues into a
+ * genuinely CELL_IS_EMPTY() cell (can_impulse_enter_gravity_ward(),
+ * sand.c), and this scene's own pool has no empty cell anywhere for it to
+ * find, so a speed-0 chunk here would settle at row 0 and never exercise
+ * the sink this test measures at all. 255 keeps the chunk ENERGETIC for
+ * the whole 8-row fall (the plain ramp only costs 2 speed a step), which
+ * is what the swap-conservation claim below was always actually about -
+ * see SAND_IMPULSE_SINK_MIN_SPEED's own comment (sand.h) for why an
+ * energetic chunk still sinks into a liquid exactly as before. */
 static void test_a_thrown_static_chunk_conserves_lava_mass_on_sink(void)
 {
     fixture();
+    sand_clear(&s);
     sand_enable_impulses(&s, impulse_buf, W * H);
 
     enum { POOL_TOP = 2 };
@@ -21251,7 +21382,7 @@ static void test_a_thrown_static_chunk_conserves_lava_mass_on_sink(void)
     const long lava_mass_before  = mass_of(&s, W, H, MAT_LAVA);
     const int  lava_count_before = count_of(MAT_LAVA);
 
-    sand_impulse_dislodge(&s, 3, 0, 0, 0, SAND_IMPULSE_SPEED_RAMP);
+    sand_impulse_dislodge(&s, 3, 0, 0, 255, SAND_IMPULSE_SPEED_RAMP);
 
     for (int i = 0; i < H; i++) {
         sand_step(&s, 0, 1000, 0);
@@ -21495,16 +21626,26 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
  * PLOW_STEPS IS SHORT ON PURPOSE - long enough to cover the fall to the
  * floor (PLOW_H - 1 rows) plus a few, not long enough to let post-landing
  * wandering (still tracked, still rolling sideways through open ground with
- * nothing left to displace) dilute the signal. Measured both ways: at 80
- * steps the three averages over PLOW_SEEDS seeds sit at roughly 14.2 (air)
- * / 8.9 (water) / 7.3 (dirt) cells and the unmodified file's own equivalent
- * numbers already cluster within a few percent of each other by chance,
- * which is the right shape pre-fix but leaves too little room for genuine
+ * nothing left to displace) dilute the signal. Measured both ways, back
+ * when this rung first shipped at SAND_IMPULSE_DRAG_SHIFT 2: at 80 steps the
+ * three averages over PLOW_SEEDS seeds sat at roughly 14.2 (air) / 8.9
+ * (water) / 7.3 (dirt) cells and the unmodified file's own equivalent
+ * numbers already clustered within a few percent of each other by chance,
+ * which was the right shape pre-fix but left too little room for genuine
  * noise on either side of the assertions. At 15 steps the unmodified file's
- * three averages sit at 12.5 / 12.0 / 12.6 - indistinguishable, exactly as
+ * three averages sat at 12.5 / 12.0 / 12.6 - indistinguishable, exactly as
  * they must be with no drag mechanism to tell dirt from water from air -
- * while the fixed file's separate out to 12.5 / 8.8 / 7.3, the same
- * mechanism-driven ordering, just measured where it is least diluted. */
+ * while the fixed file's separated out to 12.5 / 8.8 / 7.3, the same
+ * mechanism-driven ordering, just measured where it was least diluted.
+ *
+ * RESHARPENED, NOT JUST RECONFIRMED, AT DRAG_SHIFT 0 - device feedback
+ * (rung 4) said even that separation was not enough: a chunk still crossed
+ * a real bank of dirt too far to read as an impact. At the new figure,
+ * this same 15-step measurement now sits at 12.5 (air) / 3.6 (dirt) / 5.2
+ * (water) - roughly the "first few layers" and "sink partway into a pool"
+ * the device report asked for, not the old 7.3 / 8.8 that merely ordered
+ * dirt behind water correctly. PLOW_STEPS itself did not need to change -
+ * the separation only got sharper. */
 #define PLOW_W 40
 #define PLOW_H 10
 #define PLOW_SEEDS 32
@@ -22979,7 +23120,7 @@ static void test_the_two_wall_explosion_scene_bounces_more_than_once_before_sett
  * linear, confirmed by running the SAME scene with no mover in it at all)
  * that is comparable to whatever transfer adds on top. "Zero with transfer
  * removed" is consequently the wrong bar for water and was checked, not
- * assumed: at 200 seeds, this exact scene measures 260 cells outside its
+ * assumed: at 200 seeds, this exact scene measures 387 cells outside its
  * own original footprint with transfer's own gate hard-mutated to `false`,
  * not zero - that is water's own ordinary equalisation, present with or
  * without this rung's own change, and no geometry tried (a taller block, a
@@ -22989,10 +23130,17 @@ static void test_the_two_wall_explosion_scene_bounces_more_than_once_before_sett
  * enough to suppress it, blocked transfer too (a transferred entry can
  * never breach a KIND_STATIC wall regardless - can_impulse_enter()'s own
  * rule, unconditional for a KIND_STATIC target). What the SAME hard-mutated
- * run does show is a real, reproducible MARGIN over that baseline - 422
- * with transfer against 260 without, both at the same 200 seeds - so the
+ * run does show is a real, reproducible MARGIN over that baseline - 454
+ * with transfer against 387 without, both at the same 200 seeds - so the
  * water test below asserts against that margin (a threshold clearly above
- * 260, clearly below 422) rather than against zero. */
+ * 387, clearly below 454) rather than against zero.
+ *
+ * RECONFIRMED, RUNG 4: both numbers moved from the rung 3 measurement (260
+ * baseline, 422 with transfer) once SAND_IMPULSE_DRAG_SHIFT dropped to 0 and
+ * the transfer direction became a backward cone rather than the mover's own
+ * heading (see the TRANSFER site's own comment, step_impulses(), sand.c) -
+ * this is a different mechanism now, so it earned a fresh measurement rather
+ * than trusting the old one to still be in the right place. */
 
 #define EJECTA_W 40
 #define EJECTA_H 20
@@ -23088,11 +23236,16 @@ static long ejecta_dirt_total(uint8_t *cells, impulse_t *buf)
     return total;
 }
 
-/* MEASURED, 200 seeds: 31 dirt cells end up outside the bank's own 2x4
- * footprint. RED CHECK, live: with the transfer site's own gate in
+/* MEASURED, 200 seeds: 50 dirt cells end up outside the bank's own 2x4
+ * footprint (was 31 before rung 4 dropped SAND_IMPULSE_DRAG_SHIFT to 0 and
+ * pointed the transfer at a backward cone instead of the mover's own
+ * heading - see the TRANSFER site's own comment, step_impulses(), sand.c -
+ * both raise how much of what a struck cell picks up actually clears the
+ * bank's own footprint, so a bigger number here is the fix working, not
+ * drift). RED CHECK, live: with the transfer site's own gate in
  * step_impulses() (sand.c) hard-mutated to `false` and reverted after,
  * this exact scene measures exactly 0 - every seed, no exceptions. Dirt
- * packed and resting does not spread on its own; every one of the 31 is a
+ * packed and resting does not spread on its own; every one of the 50 is a
  * cell transfer flung. */
 static void test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits(void)
 {
@@ -23164,14 +23317,20 @@ static long ejecta_water_total(uint8_t *cells, impulse_t *buf)
     return total;
 }
 
-/* MEASURED, 200 seeds: 422 water cells outside the layer's own original
- * footprint, against 260 for the SAME scene with transfer's own gate
+/* MEASURED, 200 seeds: 454 water cells outside the layer's own original
+ * footprint, against 387 for the SAME scene with transfer's own gate
  * hard-mutated to `false` (this section's own top comment has the reasoning
- * for why 260, not 0, is the right baseline here). EJECTA_WATER_THRESHOLD
- * sits comfortably above that measured baseline and comfortably below the
- * measured total - a regression that silently disabled transfer for
- * liquids would drop this scene back to the 260 baseline and trip it. */
-#define EJECTA_WATER_THRESHOLD 350
+ * for why 387, not 0, is the right baseline here, and why both this and the
+ * 454 figure moved from rung 3's 260/422 once drag and the transfer
+ * direction changed). EJECTA_WATER_THRESHOLD sits comfortably above that
+ * measured baseline and comfortably below the measured total - a regression
+ * that silently disabled transfer for liquids would drop this scene back to
+ * the 387 baseline and trip it. RAISED FROM 350, WHICH THIS RUNG'S OWN
+ * NUMBERS BROKE - 350 sat above the OLD 260 baseline, but the new 387
+ * baseline sits above 350 too, which would have made the threshold pass
+ * even with transfer silently disabled; re-measuring rather than reusing
+ * the old figure is what caught it. */
+#define EJECTA_WATER_THRESHOLD 420
 static void test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits(void)
 {
     uint8_t *cells = malloc((size_t)EJECTA_W * EJECTA_H);
@@ -23189,8 +23348,8 @@ static void test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits(void
     char why[512];
     snprintf(why, sizeof why,
         "summed across 200 seeds, water flung outside the pool's own "
-        "original footprint must clear %d - measured 422 with transfer, "
-        "260 for the same scene with transfer's own gate hard-mutated off "
+        "original footprint must clear %d - measured 454 with transfer, "
+        "387 for the same scene with transfer's own gate hard-mutated off "
         "(water's own baseline sideways spread, unrelated to this rung); "
         "this threshold sits between the two, so a regression that quietly "
         "disabled transfer for liquids falls back to the baseline and "
@@ -23204,15 +23363,26 @@ static void test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits(void
  * between two measured numbers rather than at zero, because water spreads
  * on its own whatever this rung does. This one measures the MECHANISM in a
  * single step with one struck cell: the transfer entry has to exist, at the
- * cell the mover just vacated, carrying the mover's own direction and half
- * its post-drag speed. Between them, a regression has nowhere to hide - if
- * water physics on main ever drifts the threshold's own numbers, this still
- * says whether transfer itself is alive.
+ * cell the mover just vacated, carrying half the mover's post-drag speed
+ * and a direction in the BACKWARD CONE (one of `dir+3`, `dir+4`, `dir+5` -
+ * see the TRANSFER site's own comment, step_impulses(), sand.c, for why
+ * that replaced the mover's own heading: queuing along the mover's own
+ * direction drove struck material deeper into whatever it hit instead of
+ * spraying it back out, which is why nothing visibly ejected on device).
+ * Between them, a regression has nowhere to hide - if water physics on
+ * main ever drifts the threshold's own numbers, this still says whether
+ * transfer itself is alive.
+ *
+ * MEMBERSHIP, NOT EQUALITY, on direction - rng_below(&s->rng, 3) (the
+ * transfer site) picks which of the three cone directions fires, so this
+ * cannot pin one exact value the way DIR_RIGHT alone once could; asserting
+ * membership in the 3-direction set is the honest version of the same
+ * claim, not a weaker stand-in for it.
  *
  * Found by scanning rather than by index: the liquid passes run before the
  * flight pass and splash_displace() (sand_liquid.c) queues entries of its
  * own, so nothing guarantees which slot the transfer lands in. */
-static void test_a_struck_water_cell_is_handed_the_movers_own_impulse(void)
+static void test_a_struck_water_cell_is_handed_impulse_in_a_backward_cone_from_the_mover(void)
 {
     fixture();
     sand_enable_impulses(&s, impulse_buf, W * H);
@@ -23250,10 +23420,22 @@ static void test_a_struck_water_cell_is_handed_the_movers_own_impulse(void)
         CELL_MATERIAL(s.impulse_buf[found].cell),
         "and the entry queued there must be the WATER that was struck, not "
         "the chunk that struck it");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(DIR_RIGHT, s.impulse_buf[found].dir,
-        "momentum goes the way the mover was going - not the reflection, "
-        "which is what happens to something that bounced, and this cell "
-        "did not bounce, it got hit");
+
+    const int cone[3] = { (DIR_RIGHT + 3) & 7, (DIR_RIGHT + 4) & 7,
+                          (DIR_RIGHT + 5) & 7 };
+    bool in_cone = false;
+    for (int k = 0; k < 3; k++) {
+        if (s.impulse_buf[found].dir == cone[k]) {
+            in_cone = true;
+            break;
+        }
+    }
+    TEST_ASSERT_TRUE_MESSAGE(in_cone,
+        "the struck cell's direction must be one of dir+3/dir+4/dir+5 - "
+        "a backward cone, straight back and 45 degrees either side - not "
+        "the mover's own heading: a struck cell squeezes back out through "
+        "the surface it was hit through, it does not get shoved further "
+        "along the exact path that just hit it");
     TEST_ASSERT_EQUAL_INT_MESSAGE(mover_speed / SAND_IMPULSE_TRANSFER_DIVISOR,
         s.impulse_buf[found].speed,
         "carrying exactly its share of the mover's own post-drag speed");
@@ -28919,8 +29101,10 @@ void run_sand_suite(void)
     RUN_TEST(test_two_overlapping_blasts_share_the_buffer_evenly);
     RUN_TEST(test_a_blast_wakes_the_blocks_it_touches);
     RUN_TEST(test_a_flying_grain_keeps_its_outward_push_while_falling);
-    RUN_TEST(test_a_thrown_static_chunk_over_a_powder_keeps_falling_instead_of_settling_on_it);
-    RUN_TEST(test_a_thrown_static_chunk_sinks_into_water_instead_of_resting_on_its_surface);
+    RUN_TEST(test_an_energetic_static_chunk_over_a_powder_bank_still_sinks_to_the_bottom);
+    RUN_TEST(test_a_spent_static_chunk_rests_on_a_powder_bank_instead_of_sinking_forever);
+    RUN_TEST(test_an_energetic_static_chunk_still_sinks_into_water_instead_of_resting_on_its_surface);
+    RUN_TEST(test_a_spent_static_chunk_rests_on_water_instead_of_sinking_forever);
     RUN_TEST(test_a_thrown_static_chunk_conserves_lava_mass_on_sink);
     RUN_TEST(test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling_and_both_eventually_land);
     RUN_TEST(test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder);
@@ -28946,7 +29130,7 @@ void run_sand_suite(void)
     RUN_TEST(test_the_two_wall_explosion_scene_bounces_more_than_once_before_settling);
     RUN_TEST(test_a_thrown_powder_grain_flings_dirt_out_of_the_bank_it_hits);
     RUN_TEST(test_a_thrown_powder_grain_flings_water_out_of_the_pool_it_hits);
-    RUN_TEST(test_a_struck_water_cell_is_handed_the_movers_own_impulse);
+    RUN_TEST(test_a_struck_water_cell_is_handed_impulse_in_a_backward_cone_from_the_mover);
     RUN_TEST(test_a_thrown_powder_grain_travels_less_far_through_dirt_than_through_air);
     RUN_TEST(test_a_long_plow_through_a_wide_bank_never_exhausts_the_impulse_buffer);
     RUN_TEST(test_a_thrown_powder_grain_conserves_the_dirt_it_ejects);
