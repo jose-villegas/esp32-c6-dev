@@ -739,6 +739,27 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * round with its own device evidence, not this constant's job to predict. */
 #define SAND_IMPULSE_DRAG_SHIFT  2
 
+/* RESTITUTION FLOOR for the KIND_STATIC wall-bounce (step_impulses()'s
+ * blocked branch, sand.c) - below this, a blocked entry just waits, same
+ * as it always has; at or above it, it reflects off the blocking surface's
+ * approximate normal (blocker_normal()/reflect_off_normal(), sand.c) and
+ * pays restitution for the privilege. Not a polish knob: see
+ * step_impulses()'s own roll comment (its "A DETERMINISTIC, NEVER-ROLLED
+ * VARIANT..." paragraph) for the reverted-attempt history this rung can
+ * reopen if bouncing were left undamped and unfloored - pieces that never
+ * settle because they keep finding just enough energy to bounce again.
+ * Every bounce ALSO costs restitution (half the speed on a head-on
+ * reflection, a quarter on a glancing one - see the charge site), so nothing
+ * here is immortal even without this floor, but at SAND_IMPULSE_SPEED_RAMP
+ * 2 the plain linear ramp alone takes 255 / 2 ~= 128 steps to exhaust - a
+ * long time for something to keep visibly rattling in a corner before
+ * restitution alone brings it under a floor. 64 is a STARTING FIGURE, not a
+ * measurement - same status as SAND_IMPULSE_DRAG_SHIFT above - a quarter of
+ * the uint8_t range, picked so a chunk still carrying real launch energy
+ * keeps bouncing while one that has mostly spent itself just settles,
+ * closing off the bounce-in-place regime the history above describes. */
+#define SAND_IMPULSE_BOUNCE_MIN_SPEED  64
+
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
  * not a property of sand_impulse() itself, which takes speed as a plain
  * parameter and assumes nothing about what any particular caller wants.

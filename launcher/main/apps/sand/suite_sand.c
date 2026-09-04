@@ -21015,6 +21015,620 @@ static void test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp(voi
         "before this rung existed");
 }
 
+/* --- Rung 2: reflection off solids, with restitution ----------------------
+ *
+ * step_impulses()'s blocked branch (sand.c) now turns a KIND_STATIC mover's
+ * "wait against the wall" into "bounce off it, along the reflection of its
+ * own travel direction about the blocking surface's approximate normal" -
+ * blocker_normal() reads the wall, reflect_off_normal() turns that into a
+ * new ring direction, and restitution (half speed on a head-on reflection,
+ * a quarter on a glancing one) plus the SAND_IMPULSE_BOUNCE_MIN_SPEED floor
+ * (sand.h) are what keep this from reopening the bounce-in-place pathology
+ * step_impulses()'s own roll comment records the history of. Water/acid
+ * keep their existing flat 180 flip untouched - this only widens
+ * KIND_STATIC.
+ *
+ * QUANTISED BY DOMINANCE, NOT BY SIGN - blocker_normal()'s own comment
+ * (sand.c) has the full account, but the shape of it matters here too: a
+ * first version summed the arc's negated unit vectors and took the SIGN of
+ * each axis independently, which degenerates for every diagonal `dir` (the
+ * arc's centre cell is always covered - that is what "blocked" means - and
+ * on a diagonal throw it alone already pins both signs to the mover's own
+ * reverse, so a diagonal bounce could only ever reverse, never glance,
+ * whatever the wall looked like). Comparing MAGNITUDES instead - the axis
+ * with the larger push wins outright, both count only when they are close
+ * - fixes that: a chunk thrown down-right into a flat floor (down AND
+ * down-right covered, right open) now reads a normal of pure "up", the
+ * vertical push winning over the single-cell horizontal one, and glances
+ * up-right rather than reversing. Axis-aligned throws still always
+ * reverse off a flat wall - a flat wall's own normal has no other axis to
+ * weigh against - which is the correct physics, not a remaining gap. See
+ * test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table
+ * below for the full 8-direction x 4-configuration ground truth this was
+ * checked against. */
+
+/* THE EXHAUSTIVE ARC TABLE - blocker_normal()/reflect_off_normal()'s own
+ * counterpart to test_cover_primitive_matches_the_exhaustive_shape_table
+ * above: a primitive whose whole point is a geometric rule checked at only
+ * one or two hand-picked directions is not really tested, since exactly
+ * that gap is what let a degenerate quantisation (sign instead of
+ * dominance - see blocker_normal()'s own comment in sand_priv.h) through
+ * for every diagonal direction while every axis-aligned one kept working.
+ * Every one of the 8 ring directions, crossed with all 4 ways the 3-cell
+ * arc (L = flank at dir-1, C = centre at dir, R = flank at dir+1) can be
+ * covered - C is always covered, since that is the blocked branch's own
+ * precondition (see blocker_normal()'s comment) - is 32 cases, and this
+ * checks the primitive DIRECTLY, the same way the cover-mask table above
+ * calls cover_mask()/covered_at() directly rather than only ever
+ * exercising them through a stochastic scene.
+ *
+ * THE GROUND TRUTH BELOW IS NOT RE-DERIVED FROM THE FORMULA THIS PINS -
+ * it would be circular, and it is exactly how the original sign-quantised
+ * bug shipped clean: every hand test agreed with itself. These 32 values
+ * were computed independently (by hand, cross-checked component by
+ * component against blocker_normal()'s own dominance rule and
+ * reflect_off_normal()'s r = d*|n|^2 - 2(d.n)n) before being written down
+ * here - if a future change to either primitive disagrees with a row
+ * below, the change is what is wrong, not the table. */
+static const int blocker_arc_table[8][4][2] = {
+    /* dir 0: down. Axis-aligned - every config reverses (normal up,
+     * reflect up), the flat-wall case: there is no other axis to weigh
+     * a corner against. */
+    { { 4, 4 }, { 4, 4 }, { 4, 4 }, { 4, 4 } },
+    /* dir 1: down-right. */
+    { { 5, 5 },   /* -C-: normal up-left,  reflect up-left  (head-on)   */
+      { 4, 3 },   /* LC-: normal up,       reflect up-right (glances)  */
+      { 6, 7 },   /* -CR: normal left,     reflect down-left           */
+      { 5, 5 } }, /* LCR: normal up-left,  reflect up-left  (head-on)  */
+    /* dir 2: right. Axis-aligned - always reverses. */
+    { { 6, 6 }, { 6, 6 }, { 6, 6 }, { 6, 6 } },
+    /* dir 3: up-right. */
+    { { 7, 7 },   /* -C-: down-left,  down-left              */
+      { 6, 5 },   /* LC-: left,       up-left                */
+      { 0, 1 },   /* -CR: down,       down-right             */
+      { 7, 7 } }, /* LCR: down-left,  down-left               */
+    /* dir 4: up. Axis-aligned - always reverses. */
+    { { 0, 0 }, { 0, 0 }, { 0, 0 }, { 0, 0 } },
+    /* dir 5: up-left. */
+    { { 1, 1 },   /* -C-: down-right, down-right              */
+      { 0, 7 },   /* LC-: down,       down-left               */
+      { 2, 3 },   /* -CR: right,      up-right                */
+      { 1, 1 } }, /* LCR: down-right, down-right               */
+    /* dir 6: left. Axis-aligned - always reverses. */
+    { { 2, 2 }, { 2, 2 }, { 2, 2 }, { 2, 2 } },
+    /* dir 7: down-left. */
+    { { 3, 3 },   /* -C-: up-right,   up-right                */
+      { 2, 1 },   /* LC-: right,      down-right              */
+      { 4, 5 },   /* -CR: up,         up-left                 */
+      { 3, 3 } }, /* LCR: up-right,   up-right                 */
+};
+
+static void test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table(void)
+{
+    fixture();
+    sand_clear(&s);
+    const int cx = W / 2, cy = H / 2;
+
+    for (int dir = 0; dir < 8; dir++) {
+        const int *l = ring_dir(dir - 1);
+        const int *c = ring_dir(dir);
+        const int *r = ring_dir(dir + 1);
+
+        for (int cfg = 0; cfg < 4; cfg++) {
+            const bool has_l = (cfg & 1) != 0;
+            const bool has_r = (cfg & 2) != 0;
+
+            for (int i = 0; i < 8; i++) {
+                const int *d = ring_dir(i);
+                sand_set(&s, cx + d[0], cy + d[1], CELL_EMPTY);
+            }
+            sand_set(&s, cx + c[0], cy + c[1], STONE);   /* C: always covered */
+            if (has_l) {
+                sand_set(&s, cx + l[0], cy + l[1], STONE);
+            }
+            if (has_r) {
+                sand_set(&s, cx + r[0], cy + r[1], STONE);
+            }
+
+            const int expected_normal  = blocker_arc_table[dir][cfg][0];
+            const int expected_reflect = blocker_arc_table[dir][cfg][1];
+
+            const int normal = blocker_normal(&s, cx, cy, dir);
+            char msg[160];
+            snprintf(msg, sizeof msg,
+                     "dir=%d cfg=%d (L=%d R=%d): blocker_normal() must "
+                     "match the ground-truth table exactly", dir, cfg,
+                     has_l, has_r);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(expected_normal, normal, msg);
+
+            const int reflect = reflect_off_normal(dir, normal);
+            snprintf(msg, sizeof msg,
+                     "dir=%d cfg=%d (L=%d R=%d): reflect_off_normal() must "
+                     "match the ground-truth table exactly", dir, cfg,
+                     has_l, has_r);
+            TEST_ASSERT_EQUAL_INT_MESSAGE(expected_reflect, reflect, msg);
+        }
+    }
+}
+
+/* HEAD-ON REVERSAL - single step, exact arithmetic (the formula itself is
+ * the claim, following rung 1's own drag-pin tests): a KIND_STATIC chunk
+ * thrown square into a flat, wide floor must end up travelling the exact
+ * OPPOSITE direction, at exactly half its already-ramped speed. The floor
+ * spans the full grid width so all three of blocker_normal()'s arc cells
+ * are covered and the quantised sum reduces to pure "up" - the head-on
+ * case (see this section's own worked-table cross-check in the code
+ * review, table row 1). */
+static void test_a_thrown_chunk_reverses_direction_bouncing_off_a_flat_floor(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 3, SX = 4, DIR_DOWN = 0, DIR_UP = 4 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, STONE);
+    sand_impulse_dislodge(&s, SX, ROW, DIR_DOWN, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(DIR_UP, s.impulse_buf[0].dir,
+        "a chunk thrown straight down into a flat, wide floor must bounce "
+        "back the exact opposite way it came, not merely lose speed while "
+        "still travelling down - today it just waits there forever, same "
+        "direction, until its flight ages out");
+    const uint8_t expected = (uint8_t)((255 - SAND_IMPULSE_SPEED_RAMP) >> 1);
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
+        "a head-on bounce must cost exactly half the already-ramped speed "
+        "- restitution's head-on branch - not the plain ramp alone and not "
+        "the glancing branch's quarter");
+}
+
+/* GLANCING DEFLECTION - same single-step, exact-arithmetic shape as the
+ * head-on test above, and now the SPEC'S OWN scene: a chunk thrown
+ * DOWN-RIGHT into a FLAT floor (not a corner - blocker_normal()'s
+ * dominance rule is what makes a flat floor produce a glance here rather
+ * than a reverse; see this section's own intro comment and
+ * blocker_normal()'s in sand.c). The mover sits on stone directly below it
+ * AND down-right of it (both part of the floor), with open space to its
+ * right - the vertical push from two covered cells dominates the single
+ * horizontal one, so the normal reads as pure "up" rather than "up-left",
+ * and reflecting a down-right travel off a pure-up normal sends the chunk
+ * UP-RIGHT: neither reversed (that would be up-left) nor still travelling
+ * down-right. This is the test that proves the normal is real rather than
+ * a dressed-up 180 flip. */
+static void test_a_thrown_chunk_deflects_off_a_flat_floor_instead_of_reversing(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 3, SX = 4, DIR_DOWN_RIGHT = 1, DIR_UP_RIGHT = 3, DIR_UP_LEFT = 5 };
+    sand_set(&s, SX - 1, ROW + 1, STONE);   /* floor: down-left of the mover -
+                                              * not in blocker_normal()'s arc
+                                              * for this dir, only here so
+                                              * gravity-drift finds no
+                                              * opening and cannot be what
+                                              * moves the mover */
+    sand_set(&s, SX,     ROW + 1, STONE);   /* floor: down - arc flank L */
+    sand_set(&s, SX + 1, ROW + 1, STONE);   /* floor: down-right - arc
+                                              * centre C, and the move
+                                              * target that blocks this
+                                              * throw */
+    /* (SX + 1, ROW), right - arc flank R - is left open on purpose: a
+     * FLAT floor, not a corner, is the whole point of this scene. */
+    sand_set(&s, SX, ROW, STONE);           /* the mover itself */
+    sand_impulse_dislodge(&s, SX, ROW, DIR_DOWN_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(DIR_UP_LEFT, s.impulse_buf[0].dir,
+        "must not be a flat 180 - DIR_UP_LEFT is straight back the way it "
+        "came, which is what a dressed-up flip (or the water/acid rule "
+        "this rung deliberately leaves alone) would produce here instead");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(DIR_DOWN_RIGHT, s.impulse_buf[0].dir,
+        "must not keep travelling in its original direction either - it "
+        "was genuinely blocked, this is not a missed collision");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(DIR_UP_RIGHT, s.impulse_buf[0].dir,
+        "reflecting a down-right travel about a flat floor's normal must "
+        "send the chunk UP-RIGHT - the vertical push from the floor's two "
+        "covered arc cells dominates the single horizontal one");
+    const uint8_t ramped = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP);
+    const uint8_t expected = (uint8_t)(ramped - (ramped >> 2));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
+        "a glancing (non-head-on) bounce must cost exactly a quarter of "
+        "the already-ramped speed, not the head-on branch's half");
+}
+
+/* THE FLOOR GUARD - the pin against the bounce-in-place pathology
+ * step_impulses()'s own roll comment records the history of: below
+ * SAND_IMPULSE_BOUNCE_MIN_SPEED, a blocked KIND_STATIC entry must just
+ * wait, exactly as it always has, not bounce at all. A deliberately
+ * oversized `ramp` (not a realistic caller) is the cleanest way to land
+ * the roll - which reads entry.speed BEFORE this step's own ramp - at its
+ * reliable, near-certain value of 255, while still landing entry.speed
+ * AFTER the ramp comfortably under the floor for this one step. */
+static void test_a_low_speed_entry_below_the_bounce_floor_still_just_waits(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 3, SX = 4, DIR_DOWN = 0, BIG_RAMP = 200 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, STONE);
+    sand_impulse_dislodge(&s, SX, ROW, DIR_DOWN, 255, BIG_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    const uint8_t expected_speed = (uint8_t)(255 - BIG_RAMP);
+    TEST_ASSERT_TRUE_MESSAGE(expected_speed < SAND_IMPULSE_BOUNCE_MIN_SPEED,
+        "fixture check: this scene must actually land under the floor, or "
+        "the test proves nothing");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(DIR_DOWN, s.impulse_buf[0].dir,
+        "below SAND_IMPULSE_BOUNCE_MIN_SPEED a blocked entry must keep "
+        "waiting in its ORIGINAL direction, exactly as it did before this "
+        "rung existed");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected_speed, s.impulse_buf[0].speed,
+        "and must not pay any restitution either - the plain ramp only, "
+        "same as the old plain wait, with no extra charge for a bounce "
+        "that never happened");
+}
+
+/* GRID EDGE REFLECTS - sand_at()'s off-grid-is-STONE convention
+ * (step_impulses()'s own comment above) has to fold into this bounce for
+ * free, the same way it already folds into can_impulse_enter()'s own
+ * blocking rule: a chunk thrown at the edge of the board must bounce off
+ * it exactly as it would off a real wall there, not wait at the edge
+ * forever. BEHAVIOURAL, not a whitebox pin - this is not one of the three
+ * tests where asserting on impulse_buf directly is honest (see this file's
+ * own drag-rung precedent), so this reads the BOARD instead.
+ *
+ * DELIBERATELY AIRBORNE, NOT RESTING ON A FLOOR AT THE EDGE ITSELF - a
+ * first version of this test put the mover on a full-width floor directly
+ * under it, the same shape test_a_thrown_chunk_reverses_direction_
+ * bouncing_off_a_flat_floor uses. That measurably broke: with genuine
+ * gravity-relative support right there, step_impulses()'s own SETTLED
+ * check (its "SUPPORTED, NOT MERELY ROLLED" block) drops the entry from
+ * tracking the very first time a single push-roll fails - usually the
+ * NEXT step, since a bounce more than halves `speed` and the roll is
+ * literally that number out of 256 - freezing it back at EDGE_X before it
+ * ever gets a second chance to execute its new (bounced) direction. That
+ * is a real, separate interaction (a chunk resting on solid ground gets
+ * roughly ONE shot to skid before "settled" wins), not a rung 2 bug, and
+ * it is why THIS scene instead drops the mover from open air well above a
+ * distant floor: while genuinely still falling, a failed push-roll never
+ * reads as settled (the gravity-relative candidates below it are open, so
+ * step_impulses() keeps it tracked and falling every step, per the "A
+ * SUPPORT THAT IS ITSELF IN FLIGHT" / has_opening logic - here it is
+ * simpler still, the opening is just open air), so it keeps getting fresh
+ * chances at its current direction on the way down - plenty of opportunity
+ * for the post-bounce leftward push to actually fire before it lands.
+ * Confirmed with a throwaway host probe (same production code, gcc -O1):
+ * across 20 seeds this exact scene always ended up strictly left of
+ * EDGE_X, settling in 13 to 15 steps. */
+#define EDGE_W 8
+#define EDGE_H 16
+#define EDGE_SEEDS 8
+#define EDGE_MAX_STEPS 60
+
+static void test_a_chunk_bounces_off_the_grid_edge_instead_of_waiting_there_forever(void)
+{
+    uint8_t *edge_cells = malloc((size_t)EDGE_W * EDGE_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(edge_cells,
+        "grid-edge-bounce grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(EDGE_W * EDGE_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "grid-edge-bounce impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    for (uint32_t k = 1; k <= (uint32_t)EDGE_SEEDS; k++) {
+        memset(edge_cells, 0, (size_t)EDGE_W * EDGE_H);
+        sand_t g;
+        sand_init(&g, edge_cells, EDGE_W, EDGE_H, k);
+        sand_enable_impulses(&g, buf, EDGE_W * EDGE_H);
+
+        for (int x = 0; x < EDGE_W; x++) {
+            sand_set(&g, x, EDGE_H - 1, STONE);
+        }
+        enum { EDGE_X = EDGE_W - 1, SY = 1, DIR_RIGHT = 2 };
+        sand_set(&g, EDGE_X, SY, STONE);
+        sand_impulse_dislodge(&g, EDGE_X, SY, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+        int steps = 0;
+        while (steps < EDGE_MAX_STEPS && g.impulse_count > 0) {
+            sand_step(&g, 0, 1000, 0);
+            steps++;
+        }
+
+        int fx = -1;
+        for (int x = 0; x < EDGE_W; x++) {
+            for (int y = 0; y < EDGE_H - 1; y++) {
+                if (CELL_MATERIAL(sand_at(&g, x, y)) == MAT_STONE) {
+                    fx = x;
+                }
+            }
+        }
+        char msg[320];
+        snprintf(msg, sizeof msg,
+                 "seed %u: fixture check - the thrown chunk must still be "
+                 "on the board somewhere above the floor row, not vanished",
+                 k);
+        TEST_ASSERT_TRUE_MESSAGE(fx >= 0, msg);
+        snprintf(msg, sizeof msg,
+                 "seed %u: a chunk thrown at the grid edge must end up "
+                 "STRICTLY LEFT of EDGE_X (%d) - the old behaviour left it "
+                 "waiting exactly there, unmoved, for the rest of its "
+                 "(linear-ramped, ~128-step) flight, because "
+                 "can_impulse_enter() reads the off-grid target as STONE "
+                 "and the plain wait never changes direction", k, EDGE_X);
+        TEST_ASSERT_TRUE_MESSAGE(fx < EDGE_X, msg);
+    }
+
+    free(buf);
+    free(edge_cells);
+}
+
+/* ANTI-PINBALL, BEHAVIOURAL - a chunk thrown into a fully closed stone box
+ * must come to rest (s.impulse_count reaches 0) within a BOUNDED number of
+ * steps, not rattle around the box indefinitely - the exact failure mode
+ * step_impulses()'s own roll comment's reverted-attempt history warns a
+ * bounce mechanism can reopen if left undamped and unfloored.
+ *
+ * BOX_MAX_STEPS (50) is measured against the ACTUAL 16 seeds this test
+ * runs (k = 1..BOX_SEEDS, throw direction k % 8), not a separate sample -
+ * a throwaway host probe (same production sand.c/sand.h/sand_priv.h this
+ * test links, gcc -O1, no test-only shortcuts) ran exactly this scene at
+ * exactly these seeds and measured settle-step counts of 3 to 27, worst
+ * case 27 (seed 12, throw direction 4 - straight up). 50 is under 2x that
+ * measured worst case - real headroom, not an order of magnitude padding
+ * it can never trip.
+ *
+ * A WIDER SWEEP WAS ALSO RUN TO CHECK THE TAIL BEHAVIOUR THIS FIXED SET
+ * MIGHT BE HIDING: 300,000 seeds, same box-and-throw shape, found a slow-
+ * growing worst case (44 at seed 76, 47 at 2,532, 48 at 11,316, 49 at
+ * 34,412, 53 at 49,844, 54 at 57,300, nothing higher in the remaining
+ * ~242,700 seeds) - a heavy but visibly converging tail, always the same
+ * "thrown straight up" direction. This test does not chase that tail: it
+ * runs the same fixed 16 seeds every time (deterministic, no run-to-run
+ * variance to guard against), and 50 is chosen with real margin over
+ * THOSE seeds' own worst case, not the wider distribution's.
+ *
+ * THIS BOUND DOES NOT RELIABLY CATCH A RESTITUTION REGRESSION, AND SAYING
+ * SO IS MORE HONEST THAN PRETENDING OTHERWISE. In a fully enclosed box,
+ * unlike the two open-scene tests below, the entry bounces many times
+ * before it can possibly settle, so the PRE-EXISTING linear ramp
+ * (SAND_IMPULSE_SPEED_RAMP, sand.h - not this rung's own code) ends up
+ * the dominant thing bounding settle time here, not restitution. Deleting
+ * restitution's speed charge entirely (a throwaway mutation, reverted
+ * immediately) moved this test's OWN 16-seed worst case from 27 to only
+ * 30 - both comfortably under 50, so no bound in the "real headroom, not
+ * an order of magnitude" range this rung's other two tests use can split
+ * the two. What THIS bound DOES catch, confirmed the same way: deleting
+ * the RAMP decrement entirely - simulating the literal reverted-attempt
+ * pathology step_impulses()'s own comment describes, "never settle" -
+ * broke this exact test (seed 4, throw direction 4, still rattling past
+ * 50 steps, and past the old 150 too) while every other test in this rung
+ * stayed silent about it. So this bound is a genuine backstop against
+ * that specific historical failure mode, not a restitution pin - the two
+ * open-scene tests below cover restitution instead, where it is actually
+ * the dominant mechanism.
+ * REUSES THE 8x8 GLOBAL FIXTURE ARRAYS (cells[], impulse_buf[]) rather
+ * than a heap allocation - the box is exactly W x H, so nothing bigger is
+ * needed, unlike the wider drag-rung and wall-notch scenes elsewhere in
+ * this file. Averaged in the sense of "checked against every seed", not
+ * summed - "a single run of a chaotic scene is not evidence", same idiom
+ * as test_water_does_not_drill_into_oil_when_tilted above, but this
+ * property (bounded, not a distance) is a per-seed pass/fail rather than
+ * something to sum. */
+#define BOX_SEEDS 16
+#define BOX_MAX_STEPS 50
+
+static void test_a_chunk_thrown_into_a_closed_box_comes_to_rest(void)
+{
+    for (uint32_t k = 1; k <= (uint32_t)BOX_SEEDS; k++) {
+        memset(cells, 0, sizeof cells);
+        sand_init(&s, cells, W, H, k);
+        sand_enable_impulses(&s, impulse_buf, W * H);
+
+        for (int x = 0; x < W; x++) {
+            sand_set(&s, x, 0, STONE);
+            sand_set(&s, x, H - 1, STONE);
+        }
+        for (int y = 0; y < H; y++) {
+            sand_set(&s, 0, y, STONE);
+            sand_set(&s, W - 1, y, STONE);
+        }
+        const int cx = W / 2, cy = H / 2;
+        sand_set(&s, cx, cy, STONE);
+        const int dir = (int)(k % 8);
+        sand_impulse_dislodge(&s, cx, cy, dir, 255, SAND_IMPULSE_SPEED_RAMP);
+
+        int steps = 0;
+        while (steps < BOX_MAX_STEPS && s.impulse_count > 0) {
+            sand_step(&s, 0, 1000, 0);
+            steps++;
+        }
+
+        char msg[192];
+        snprintf(msg, sizeof msg,
+                 "seed %u, throw direction %d: still rattling after "
+                 "BOX_MAX_STEPS (%d) steps in a fully closed box - this is "
+                 "the bounce-in-place pathology this rung must not reopen",
+                 k, dir, BOX_MAX_STEPS);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, s.impulse_count, msg);
+    }
+}
+
+/* THE REGRESSION THAT MATTERS MOST - reflection must not turn ordinary
+ * landing into bouncing. A chunk thrown straight down through open air
+ * onto a plain floor must still come to rest close to where gravity alone
+ * would put it (directly on the floor), within a bounded number of steps,
+ * not just eventually.
+ *
+ * OPEN_MAX_STEPS (20) and the expected landing row are both measured, same
+ * probe methodology as BOX_MAX_STEPS above: across 64 seeds this exact
+ * scene (a lone floor at the bottom of a tall, otherwise open grid, mover
+ * dropped from near the top at full speed) settled in 7 to 13 steps and
+ * landed on OPEN_H - 2 - directly on the floor - every single time. 20 is
+ * over 1.5x that measured worst case - and TIGHT ENOUGH TO MATTER: the
+ * same probe with restitution's speed charge temporarily deleted (a
+ * throwaway mutation, reverted immediately) rose to a 33-step worst case
+ * over the same 64 seeds, so this bound is deliberately set below that
+ * regressed figure rather than padded past it - a restitution regression
+ * here trips this test, it does not just make the answer slower. */
+#define OPEN_W 8
+#define OPEN_H 16
+#define OPEN_SEEDS 8
+#define OPEN_MAX_STEPS 20
+
+static void test_a_chunk_dropped_on_flat_ground_still_settles_on_it(void)
+{
+    uint8_t *open_cells = malloc((size_t)OPEN_W * OPEN_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(open_cells,
+        "open-floor settle grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(OPEN_W * OPEN_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "open-floor settle impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    for (uint32_t k = 1; k <= (uint32_t)OPEN_SEEDS; k++) {
+        memset(open_cells, 0, (size_t)OPEN_W * OPEN_H);
+        sand_t g;
+        sand_init(&g, open_cells, OPEN_W, OPEN_H, k);
+        sand_enable_impulses(&g, buf, OPEN_W * OPEN_H);
+
+        for (int x = 0; x < OPEN_W; x++) {
+            sand_set(&g, x, OPEN_H - 1, STONE);
+        }
+        enum { SX = OPEN_W / 2, SY = 1, DIR_DOWN = 0 };
+        sand_set(&g, SX, SY, STONE);
+        sand_impulse_dislodge(&g, SX, SY, DIR_DOWN, 255, SAND_IMPULSE_SPEED_RAMP);
+
+        int steps = 0;
+        while (steps < OPEN_MAX_STEPS && g.impulse_count > 0) {
+            sand_step(&g, 0, 1000, 0);
+            steps++;
+        }
+
+        char msg[192];
+        snprintf(msg, sizeof msg,
+                 "seed %u: still airborne or bouncing after OPEN_MAX_STEPS "
+                 "(%d) steps of an ordinary drop onto open, flat ground",
+                 k, OPEN_MAX_STEPS);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, g.impulse_count, msg);
+
+        int landed_y = -1;
+        for (int x = 0; x < OPEN_W; x++) {
+            if (CELL_MATERIAL(sand_at(&g, x, OPEN_H - 2)) == MAT_STONE) {
+                landed_y = OPEN_H - 2;
+            }
+        }
+        snprintf(msg, sizeof msg,
+                 "seed %u: the dropped chunk must rest directly on the "
+                 "floor (row %d), not hover, sink through, or wander off "
+                 "sideways to a different row", k, OPEN_H - 2);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(OPEN_H - 2, landed_y, msg);
+    }
+
+    free(buf);
+    free(open_cells);
+}
+
+/* A BRUSH-DRAWN WALL, NOT A CLEAN ONE-CELL ONE - clean walls have hidden
+ * real shape-dependent bugs in this simulation before (see
+ * test_lava_in_a_wall_notch_never_bursts above, and cover_mask()'s own
+ * comment in sand_priv.h). Four overlapping stone discs, radius 2 to 4,
+ * centres about 3 cells apart - the way a person actually draws a wall
+ * with a round brush, notches and bulges included - rather than a flat
+ * one-cell-thick line. A chunk thrown into it must still come to rest,
+ * conserving itself exactly (nothing created or destroyed by a bounce),
+ * within a bounded number of steps. Direction is deliberately NOT
+ * asserted - the wall's own irregular shape makes the exact bounce path
+ * uninteresting; conservation and boundedness are the properties that
+ * matter here.
+ *
+ * WALL_MAX_STEPS (50) is measured the same way as BOX_MAX_STEPS above:
+ * this exact scene, run across 64 seeds against the production code, took
+ * 17 to 38 steps to settle, every seed conserving the thrown chunk
+ * exactly. 50 is about 1.3x that measured worst case - and, same as
+ * OPEN_MAX_STEPS above, deliberately tight rather than padded: the same
+ * probe with restitution's speed charge temporarily deleted rose to a
+ * 60-step worst case over the same 64 seeds, so a restitution regression
+ * here trips this test too. */
+#define WALL_W 24
+#define WALL_H 16
+#define WALL_SEEDS 16
+#define WALL_MAX_STEPS 50
+
+static void test_a_chunk_thrown_into_a_brush_drawn_wall_conserves_itself_and_settles(void)
+{
+    uint8_t *wall_cells = malloc((size_t)WALL_W * WALL_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(wall_cells,
+        "brush-wall settle grid must fit in what the framebuffer leaves");
+    impulse_t *buf = malloc((size_t)(WALL_W * WALL_H) * sizeof *buf);
+    TEST_ASSERT_NOT_NULL_MESSAGE(buf,
+        "brush-wall settle impulse queue must fit in what the framebuffer "
+        "leaves");
+
+    for (uint32_t k = 1; k <= (uint32_t)WALL_SEEDS; k++) {
+        memset(wall_cells, 0, (size_t)WALL_W * WALL_H);
+        sand_t g;
+        sand_init(&g, wall_cells, WALL_W, WALL_H, k);
+        sand_enable_impulses(&g, buf, WALL_W * WALL_H);
+
+        for (int x = 0; x < WALL_W; x++) {
+            sand_set(&g, x, WALL_H - 1, STONE);
+        }
+        /* Four brush strokes, radius 2-4, centres ~3 apart - a hand-drawn
+         * wall with real notches, not a flat line. */
+        sand_spawn(&g, 8,  8, 3, MAT_STONE);
+        sand_spawn(&g, 11, 7, 2, MAT_STONE);
+        sand_spawn(&g, 14, 9, 4, MAT_STONE);
+        sand_spawn(&g, 17, 6, 3, MAT_STONE);
+
+        const int before = sand_count(&g);
+
+        enum { SX = 2, SY = 2, DIR_RIGHT = 2 };
+        sand_set(&g, SX, SY, STONE);
+        sand_impulse_dislodge(&g, SX, SY, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+        int steps = 0;
+        while (steps < WALL_MAX_STEPS && g.impulse_count > 0) {
+            sand_step(&g, 0, 1000, 0);
+            steps++;
+        }
+
+        char msg[160];
+        snprintf(msg, sizeof msg,
+                 "seed %u: still rattling around the brush-drawn wall "
+                 "after WALL_MAX_STEPS (%d) steps", k, WALL_MAX_STEPS);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(0, g.impulse_count, msg);
+
+        snprintf(msg, sizeof msg,
+                 "seed %u: exactly one cell (the thrown chunk) must have "
+                 "been added relative to the wall alone - a bounce must "
+                 "never create or destroy a cell", k);
+        TEST_ASSERT_EQUAL_INT_MESSAGE(before + 1, sand_count(&g), msg);
+    }
+
+    free(buf);
+    free(wall_cells);
+}
+
 /* THE REGRESSION GUARD. Every test above this line already existed the day
  * a real device reported: "in water nothing happens, in sand also no
  * holes, i can see some faint movement when near pixels they do move but
@@ -26632,6 +27246,14 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displaces);
     RUN_TEST(test_a_thrown_powder_grain_loses_no_drag_displacing_dirt);
     RUN_TEST(test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp);
+    RUN_TEST(test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table);
+    RUN_TEST(test_a_thrown_chunk_reverses_direction_bouncing_off_a_flat_floor);
+    RUN_TEST(test_a_thrown_chunk_deflects_off_a_flat_floor_instead_of_reversing);
+    RUN_TEST(test_a_low_speed_entry_below_the_bounce_floor_still_just_waits);
+    RUN_TEST(test_a_chunk_bounces_off_the_grid_edge_instead_of_waiting_there_forever);
+    RUN_TEST(test_a_chunk_thrown_into_a_closed_box_comes_to_rest);
+    RUN_TEST(test_a_chunk_dropped_on_flat_ground_still_settles_on_it);
+    RUN_TEST(test_a_chunk_thrown_into_a_brush_drawn_wall_conserves_itself_and_settles);
     RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);
     RUN_TEST(test_a_blast_queues_impulses_on_every_side_of_the_centre);
     RUN_TEST(test_detonating_empty_space_still_flashes_the_core);
