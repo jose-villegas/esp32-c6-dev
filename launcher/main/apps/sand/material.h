@@ -83,47 +83,95 @@ typedef uint8_t cell_t;
  * and about to break. Three levels of frost is not much resolution, but it
  * is the difference between a state you can see and one you cannot, and
  * the levels above ambient are the ones doing the interesting work. */
-/* SOIL packs TWO things into its four bits: a carried tone in the top
- * bit and moisture in the low three.
+/* SOIL reads its nibble by STATE rather than by a fixed field split: which
+ * half of the value it is in says whether it holds a dry TONE or a wet
+ * MOISTURE, rather than one bit always meaning tone and three always
+ * meaning moisture regardless of which state the cell is actually in.
  *
- * Moisture alone had the whole nibble, and the top half of it was dead.
- * Measured over six waterings of a dirt bank, 99.98% of soil cells sat at
- * 7 or below and 94.6% at 3 or below - half-the-difference diffusion
- * spreads water thin almost immediately, so saturation is a state soil
- * passes through rather than one it sits in. Three bits cost 0.02% of
- * observed states.
+ *     0 .. SOIL_DRY_TONES - 1     DRY. The value IS the tone, 0 palest to
+ *                                 SOIL_DRY_TONES - 1 darkest-dry.
+ *     SOIL_DRY_TONES ..           WET. moisture = value - (SOIL_DRY_TONES-1),
+ *     SOIL_DRY_TONES - 1          1 up to SOIL_MOISTURE_MAX.
+ *       + SOIL_MOISTURE_MAX
+ *     MATERIAL_VARIANTS - 1       UNUSED. A corrupt cell here reads as
+ *                                 moisture SOIL_MOISTURE_MAX in every
+ *                                 accessor below AND in the palette (see
+ *                                 material.c), rather than as an
+ *                                 unpredictable eighth colour - one more
+ *                                 value than the ranges above need, so it
+ *                                 degrades instead of aliasing a real one.
  *
- * What the freed bit buys is the one thing soil could not have: a shade
- * that TRAVELS WITH THE GRAIN. Dirt was drawn with a positional hash, like
- * stone and wood, and that is fine for materials that never move - but
- * dirt falls and piles, so the texture stayed nailed to the screen while
- * the dirt slid underneath it. Reported as "the dirt shading even seems to
- * be related to screen pos, the pattern repeats", which is exactly what a
- * screen-space hash is.
+ * This was a fixed split instead - one bit of carried tone, three of
+ * moisture, so SOIL_TONES was 2 - and it undersold dry soil specifically.
+ * A WATERED bank had a real gradient, because moisture is laid out by
+ * percolation cell by cell; a DRY one had exactly two colours, because two
+ * tones is all one bit can ever say, and that is most of what a pile looks
+ * like once it stops being watered. Splitting by state instead of by bit
+ * position gives the dry side of the nibble every value the wet side does
+ * not need at that moment - eight tones instead of two - and costs the wet
+ * side nothing it was using: a saturated bed's own variation was always
+ * going to be the moisture gradient itself, not an independent tone,
+ * because that gradient is what percolation already draws down a pile.
+ * The trade is real - a UNIFORMLY wet bed has one flat colour where it used
+ * to have two - but a uniformly wet bed is the one case moisture itself
+ * cannot shade regardless, and it is the rarer of the two flat cases this
+ * fixes one of.
  *
- * A carried tone instead means a poured bank keeps the pattern it was
- * poured with, and the strata show the shape of the pile - the thing sand
- * has always done with its shade, and the thing dirt was missing. It costs
- * no render-side work at all, because palette[] is indexed by the whole
- * cell byte: the tone and the wetness ramp are simply different entries. */
-#define SOIL_MOISTURE_BITS  3
-#define SOIL_MOISTURE_MAX   ((1u << SOIL_MOISTURE_BITS) - 1u)
-#define SOIL_TONES          (MATERIAL_VARIANTS >> SOIL_MOISTURE_BITS)
+ * Dry tone is also no longer noise. It is picked at POUR time, banded the
+ * way sand's shade is (see random_cell() in sand.c), and re-picked at the
+ * moment a cell crosses back to dry, biased by how wet its surroundings
+ * still are right then (see soil_dry_out() in sand_reactions.c) - so a
+ * pile that dried from the top down keeps that as a visible imprint:
+ * pale where the front left nothing behind, darker wherever it was still
+ * handing water off when it happened. Tone and moisture together are one
+ * monotone luminance ramp across variants 0 through
+ * SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX (see material.c's SOIL_SHADES) -
+ * bone-dry-palest at one end, saturated at the other, with nothing in
+ * between reading as an unrelated colour. */
+#define SOIL_DRY_TONES      8
+#define SOIL_MOISTURE_MAX   7
 
-#define CELL_MOISTURE(c)    ((uint8_t)(CELL_VARIANT(c) & SOIL_MOISTURE_MAX))
-#define CELL_SOIL_TONE(c)   ((uint8_t)(CELL_VARIANT(c) >> SOIL_MOISTURE_BITS))
+#define CELL_MOISTURE(c)                                                 \
+    ((uint8_t)(CELL_VARIANT(c) < SOIL_DRY_TONES                          \
+                   ? 0u                                                  \
+                   : (CELL_VARIANT(c) - (SOIL_DRY_TONES - 1u) >          \
+                              SOIL_MOISTURE_MAX                          \
+                          ? SOIL_MOISTURE_MAX                            \
+                          : CELL_VARIANT(c) - (SOIL_DRY_TONES - 1u))))
 
-/* Same cell, same tone, different wetness. */
+/* Meaningful only while CELL_MOISTURE(c) == 0 - a wet cell's variant is
+ * moisture, not a tone, and this reads it anyway rather than refusing,
+ * because a caller that already knows the cell is dry (or does not care)
+ * should not have to special-case the read. */
+#define CELL_SOIL_TONE(c)   CELL_VARIANT(c)
+
+/* Setting m > 0 makes a WET cell, and a wet cell carries no tone of its
+ * own - see this block's own comment - so this DISCARDS whatever the
+ * nibble held before, tone or moisture alike.
+ *
+ * NEVER call this with m == 0. There is no tone to fall back on once the
+ * old one is gone, so a naive implementation has exactly one thing it can
+ * write for "dry" - a fixed value, the same for every cell regardless of
+ * where it is - which is precisely the flatness this whole re-encoding
+ * exists to undo. A cell crossing to zero moisture has to go through
+ * soil_dry_out() (sand_reactions.c) instead, which picks a tone from what
+ * is still wet nearby rather than leaving every drying cell identical. */
 #define CELL_WITH_MOISTURE(c, m)                                          \
-    CELL_MAKE(CELL_MATERIAL(c),                                           \
-              (uint8_t)((CELL_VARIANT(c) & ~SOIL_MOISTURE_MAX) |          \
-                        ((m) & SOIL_MOISTURE_MAX)))
+    CELL_MAKE(CELL_MATERIAL(c),                                          \
+              (uint8_t)((SOIL_DRY_TONES - 1u) + ((m) & SOIL_MOISTURE_MAX)))
 
-/* And soil built from scratch, tone and wetness given separately. */
+/* Soil built from scratch, tone and moisture given separately - the one
+ * place a caller MAY legitimately ask for moisture 0 with a specific tone,
+ * because unlike CELL_WITH_MOISTURE above there is no prior cell whose
+ * tone this would be throwing away: it is either brand new (random_cell()
+ * picking a pour's tone) or the tone was already worked out by the caller
+ * (soil_dry_out() itself). m > 0 wins and tone is ignored, the same "wet
+ * has no tone" rule CELL_WITH_MOISTURE follows. */
 #define CELL_SOIL(mat, tone, m)                                           \
-    CELL_MAKE((mat), (uint8_t)((((tone) & (SOIL_TONES - 1))               \
-                                    << SOIL_MOISTURE_BITS) |              \
-                               ((m) & SOIL_MOISTURE_MAX)))
+    CELL_MAKE((mat), (uint8_t)((m) != 0                                  \
+                                    ? (SOIL_DRY_TONES - 1u) +             \
+                                          ((m) & SOIL_MOISTURE_MAX)       \
+                                    : ((tone) & (SOIL_DRY_TONES - 1u))))
 
 #define SAND_AMBIENT_HEAT 3
 
@@ -262,10 +310,11 @@ typedef enum {
 /* SAND's shade range is split near the top, and the top band is CULLET:
  * sand that used to be glass.
  *
- * The same trick as soil's tone and free for the same reason - sand's
- * variant is already a shade, so saying "this grain came from a pane"
- * costs no bits at all, only four of the sixteen shades it could have
- * been. Twelve is still far more variation than a dune needs.
+ * Free for the same reason soil's dry tones cost nothing beyond the
+ * moisture range they sit beside (material.h's SOIL_DRY_TONES comment) -
+ * sand's variant is already a shade, so saying "this grain came from a
+ * pane" costs no bits at all, only four of the sixteen shades it could
+ * have been. Twelve is still far more variation than a dune needs.
  *
  * Shattered glass was already placed at the very top of the ramp, being
  * whatever place_reacted() hands a new cell, so it was already the
@@ -285,9 +334,13 @@ typedef enum {
 
 /* How many shades a freshly PAINTED grain may pick from. Everything else
  * gets the whole range; sand stops short of its reserved band, which is
- * what keeps the band meaning anything. */
+ * what keeps the band meaning anything, and dirt stops short of the wet
+ * range for the same reason - a freshly poured cell is dry by definition
+ * (see random_cell() in sand.c), so it has no business picking a "shade"
+ * from the half of the nibble that means moisture. */
 #define MATERIAL_SHADE_SPAN(m)                                            \
-    ((m) == MAT_SAND ? SAND_DUNE_SHADES : MATERIAL_VARIANTS)
+    ((m) == MAT_SAND ? SAND_DUNE_SHADES                                  \
+                      : (m) == MAT_DIRT ? SOIL_DRY_TONES : MATERIAL_VARIANTS)
 
 /* How many materials hide behind MAT_EXTENDED - one per value of the low
  * nibble. */

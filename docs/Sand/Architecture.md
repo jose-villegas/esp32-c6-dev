@@ -37,7 +37,7 @@ that row:
 | non-zero (transient) | life remaining, counts down to 0 = gone | gas, fire |
 | `heat_ramp != 0` | **temperature, 0-15, resting at 3** - and the palette index, so the cell's colour *is* its temperature. Below 3 is frost, above it is heat | glass, stone |
 | `burn_decay != 0` | **how much is left to burn**; 0 is unlit, and anything else means the cell is on fire | wood |
-| `dries != 0` | **a carried tone in the top bit, moisture 0-7 in the low three** - the one variant that is split, see below | dirt |
+| `dries != 0` | **read by STATE, not a fixed bit split**: variant 0-7 is a dry tone, 8-14 is moisture 1-7, 15 is unused - see below | dirt |
 
 Reusing one nibble for three different jobs is deliberate, not a
 shortcut: the alternative is a second byte per cell, which at this grid
@@ -64,7 +64,7 @@ there as an immovable block.
 | 6 | wood | `KIND_STATIC` | never | `density=150`; fuel, does not burn on its own. Its variant is **burn progress**, which is what let ember stop being a slot of its own - a burning log is wood with a non-zero variant. Also what a plant hardens into |
 | 7 | steam | `KIND_GAS` | rises | `sight=20`, `mobility=160` (fastest); water that got hot |
 | 8 | smoke | `KIND_GAS` | rises | `sight=24` (widest), `decay=16` (longest-lived); fuel that burned out |
-| 9 | dirt | `KIND_POWDER` | falls | `density=62` (just above sand); soaks up any liquid and dries out again. Variant is a **tone plus moisture** - the one split nibble. Took the slot ember gave up |
+| 9 | dirt | `KIND_POWDER` | falls | `density=62` (just above sand); soaks up any liquid and dries out again. Variant is a dry **tone** or a **moisture** level depending on which state the cell is in, never both at once - the one state-split nibble. Took the slot ember gave up |
 | 10 | oil | `KIND_LIQUID` | falls | `density=22` (floats on water); fuel, burns only where it meets air |
 | 11 | lava | `KIND_LIQUID` | falls | `density=45`, `decay=0` (**must** stay 0); a liquid that is also a heat source |
 | 12 | acid | `KIND_LIQUID` | falls | `density=38` (sinks in water, floats on lava), `mobility=220`; dissolves what opts in |
@@ -280,15 +280,24 @@ be saved for something that has to move or carry a variant.
 **Reinterpret a nibble.** Free, and already the pattern: liquids read the
 variant as fill, transients as life remaining, glass and stone as
 temperature, wood as how far along it has burned. A material needing two
-small quantities can split its own nibble - dirt does, and how it got
+small quantities can read its own nibble by STATE, one range meaning one
+thing and a disjoint range meaning another - dirt does, and how it got
 there is the useful part.
 
-Moisture had all four bits and used the bottom of them. Measured over six
-waterings of a dirt bank, 99.98% of soil cells sat at 7 or below: the
+Moisture had all four bits and used only the bottom three of them, a fixed
+bit split (one carried-tone bit, three of moisture) that gave the same
+tiny two-tone range to soil however wet or dry it was. Measured over six
+waterings of a dirt bank, 99.98% of soil cells sat at moisture 7 or below:
 diffusion spreads water thin almost at once, so saturation is a state soil
-passes THROUGH rather than one it sits in. The top bit was dead, and
-measuring that is what turned "dirt needs a carried shade, and there are no
-bits" into a bit that was already there.
+passes THROUGH rather than one it sits in - which meant the tone bit was
+earning its keep on a wet cell only rarely, and on a DRY one (variant 0, the
+commonest value dirt has) it bought nothing at all, since a bit split by
+POSITION rather than by state gives a dry cell the same one bit of tone a
+saturated one gets. Re-encoding by state instead - variant 0-7 a dry tone,
+8-14 moisture 1-7 - gives dry soil the full eight-value range for exactly
+the case (bone dry, the commonest) that most needed it, at the cost of an
+independent tone on wet soil, which has the moisture gradient itself to
+show variation with.
 
 Worth doing in that order. The counter-argument to splitting is always that
 the range is needed, and it is usually asserted rather than measured.
