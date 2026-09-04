@@ -368,6 +368,7 @@ typedef struct {
     int      lava_cooloff; /* see sand_set_lava_cooloff() */
     int      lava_burst;   /* see sand_set_lava_burst() */
     int      acid_rain;    /* see sand_set_acid_rain() */
+    int      acid_dilute_mass_bias; /* see sand_set_acid_dilute_mass_bias() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1006,12 +1007,25 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * fixed, the split itself only needed a small lean rather than a strong
  * one - 134 (roughly 52.3%) for one round - and then, once the win/lose
  * split was no longer the only thing standing between either liquid and
- * unbounded growth, no lean at all: 128 is an exact 50/50 coin flip.
+ * unbounded growth, no lean at all.
+ *
+ * 118, NOT 128 - the naive "half of 256" - because this constant is not
+ * read against the full 256-wide roll. SAND_ACID_DILUTE_EVAPORATE_CHANCE
+ * is checked FIRST in the ladder (step_one_dissolver_cell(),
+ * sand_reactions.c) and its 20-in-256 comes out of the roll's low end
+ * before the water/acid split is even reached, so this constant is only
+ * ever compared against the REMAINING (256 - 20) = 236-wide range. 128
+ * shipped there for one round and was quietly a 128:108 lean toward
+ * water (54%/46%) at zero mass bias, not the even split its own comment
+ * claimed - caught by review, not by a test, since nothing pinned the
+ * unbiased split's exact ratio. 118 is genuinely half of the 236 that is
+ * actually on offer once evaporate has taken its cut: 20 + 118 + 118 =
+ * 256, splitting the water/acid ladder into two equal 118-wide bands.
  * Whichever side wins a given bite is now decided entirely by
  * SAND_ACID_DILUTE_MASS_BIAS below (local backing) rather than a fixed
  * preference baked into the base rate. Starting bias, not a measured
  * one - tune on device like every other constant here. */
-#define SAND_ACID_DILUTE_TO_WATER_CHANCE 128
+#define SAND_ACID_DILUTE_TO_WATER_CHANCE 118
 
 /* MASS MATTERS - a single roll at the fixed split above can't tell a lone
  * drop of acid resting on a lake from a whole poured-on slab of it; every
@@ -1030,15 +1044,32 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * symmetric: since only acid cells ever roll this reaction, a deep, pure
  * acid pool always reads as "backed" from its own side even while an
  * equally deep pool of water sits right next to it, so water could pour
- * onto an acid puddle forever and still not reliably win - see
- * test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid
- * (suite_sand.c), which is what caught it. With the difference: two
- * equally deep pools facing each other net to zero bias and the base
- * split above holds exactly as it always did; a lone grain of either
- * material still reads as 0 on its own side, so an isolated drop in a
- * big lake gets pushed even further toward diluting (the lake's own
- * water_backing pulls the split up), and it is only once one side's
- * local mass genuinely outweighs the other's that the roll tips.
+ * onto an acid puddle forever and still not reliably win. With the
+ * difference: two equally deep pools facing each other net to zero bias
+ * and the base split above holds exactly as it always did; a lone grain
+ * of either material still reads as 0 on its own side, so an isolated
+ * drop in a big lake gets pushed even further toward diluting (the
+ * lake's own water_backing pulls the split up), and it is only once one
+ * side's local mass genuinely outweighs the other's that the roll tips.
+ *
+ * That fixes a pour of ACID onto a pool of water cleanly -
+ * test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water (suite_sand.c)
+ * checks it with an A/B (bias on vs off) comparison and passes. The
+ * reverse direction does NOT get the same clean win, and this constant
+ * alone cannot fix it: acid's density (38) is higher than water's (30),
+ * so a poured acid grain sinks into and disperses through the pool it
+ * lands in, reading as an isolated, weakly-backed intruder the way this
+ * mechanism assumes - but water sits and floats on TOP of acid instead,
+ * so the acid cells actually being bitten stay backed by the deep acid
+ * pool underneath them the whole time, never reading as isolated at all.
+ * test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid (suite_sand.c)
+ * documents this directly: biasing the roll measurably HURTS that
+ * direction rather than helping it (3451 tap-side acid cells biased vs
+ * 3623 unbiased at the same step count), so that test asserts on sheer
+ * volume of conversion instead of an A/B comparison. Flagged, not
+ * silently patched - fixing it for real would need something that reads
+ * density/position, not just local backing counts, and that is a real
+ * design decision rather than a tuning knob.
  *
  * Purely local either way - no global concentration tracking, up to 8
  * bounds-checked reads total (4 for each cell's own neighbours), the
@@ -1747,7 +1778,17 @@ void sand_set_boils(sand_t *s, int chance);
  * figure - steam's own deliberately rare one, today). A test that wants
  * a deterministic one-step condensation forces this to 255 instead of
  * looping a number of steps scaled to however rare the real figure ends
- * up being tuned. */
+ * up being tuned.
+ *
+ * NOT THE ONLY COLLAPSE ON THE BOARD - acid rain (SAND_ACID_RAIN_CHANCE,
+ * below) is a second one, a mixed gas/steam pocket collapsing into acid
+ * rather than a uniform square collapsing into one material, and it is
+ * gated on raw material identity in step_one_reacting_row() rather than
+ * on r->condenses or this override. A test relying on
+ * sand_set_condenses(s, 0) to mean "no mechanic here destroys cells" -
+ * several already do, to keep a strict grain-count assertion honest -
+ * also needs sand_set_acid_rain(s, 0) if its board can ever hold both
+ * MAT_GAS and MAT_STEAM together in a 4x4 pocket. */
 void sand_set_condenses(sand_t *s, int chance);
 #define SAND_CONDENSES_PER_MATERIAL (-1)
 
@@ -1906,6 +1947,24 @@ void sand_set_acid_rain(sand_t *s, int chance);
  * the same reason SAND_LAVA_COOLOFF_DEFAULT is: acid rain is not read
  * from any one material's own row, only the one constant. */
 #define SAND_ACID_RAIN_DEFAULT (-1)
+
+/* Overrides SAND_ACID_DILUTE_MASS_BIAS (above), the same override shape
+ * as every other tunable in this file - added specifically so a test
+ * can isolate the mass-bias mechanism's own effect: forced to 0, a
+ * water/acid contest is a pure, unbiased coin flip regardless of local
+ * backing, letting a test compare "with bias" against "without" instead
+ * of only ever measuring the two together. Unlike the chance-in-256
+ * setters above this is not clamped to [0, 255] - the constant it
+ * overrides is a per-neighbour multiplier, not a roll threshold, and
+ * has no such ceiling of its own. */
+void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
+
+/* The sentinel sand_set_acid_dilute_mass_bias(s, bias < 0) restores, and
+ * what sand_init() itself starts every sand_t at - "use
+ * SAND_ACID_DILUTE_MASS_BIAS", the same _DEFAULT naming SAND_LAVA_
+ * COOLOFF_DEFAULT and SAND_ACID_RAIN_DEFAULT use for a constant with no
+ * per-material table figure to fall back to. */
+#define SAND_ACID_DILUTE_MASS_BIAS_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,

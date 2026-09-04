@@ -3944,7 +3944,7 @@ static void test_quenching_costs_the_water_a_unit_of_mass(void)
  * comment (sand.h) for why: whether anything is left behind at all, and
  * if so, gas or smoke (biased toward smoke). 2000 independent fire/acid
  * pairs, one step, counted - the same loose statistical-bias shape
- * test_water_wins_the_dilution_more_often_than_acid_does already uses for
+ * test_the_dilution_split_favours_neither_side already uses for
  * SAND_ACID_DILUTE_TO_WATER_CHANCE, for the same reason: asserting on the
  * bias itself, not a single sample, and without hard-coding exact counts
  * a future retune of either constant would break. */
@@ -5552,7 +5552,23 @@ static void test_snow_melts_in_any_liquid(void)
  * more of whatever it touched. That would be an exploit rather than a
  * flourish - acid is spent as it dissolves, so snow that melted into
  * acid would be a bucket that refills itself, and snow melting into oil
- * would be a fuel printer. */
+ * would be a fuel printer.
+ *
+ * Checked by whether water ever APPEARED across the window, not whether
+ * it is still there at the very end. The acid direction in particular
+ * is a busy scene by 600 steps: melted water can dilute into the acid
+ * pool it landed on (see step_one_dissolver_cell()'s own comment,
+ * sand_reactions.c), and once that pool's own steam can actually rise
+ * and condense back into water the way it always should have (a real
+ * bug this file's own place_cell()-bypass fix corrected - the vapour
+ * used to sit frozen in place, unable to go anywhere), the scene has
+ * more genuine give-and-take in it than it used to, not less. A single
+ * end-of-window snapshot can land on a step where every last drop of
+ * melted water has momentarily gone back into acid, which is a real
+ * possible state of a healthy simulation, not evidence that melting
+ * ever produced the wrong material - that only ever needs one sighting
+ * to disprove, and this window is long enough to reliably catch it if
+ * it were happening. */
 static void test_melting_snow_makes_water_not_more_of_the_liquid(void)
 {
     static const uint8_t liquids[] = { MAT_OIL, MAT_ACID };
@@ -5571,14 +5587,17 @@ static void test_melting_snow_makes_water_not_more_of_the_liquid(void)
             sand_set(&s, x, 0, SNOW);
         }
 
-        for (int i = 0; i < 600; i++) {
+        bool water_seen = false;
+        for (int i = 0; i < 600 && !water_seen; i++) {
             sand_step(&s, 0, 1000, 0);
+            water_seen = count_cells_of(MAT_WATER) > 0;
         }
 
-        TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_WATER) > 0,
-            "snow melted by oil or acid has to leave WATER behind - it is "
-            "frozen water, and turning into whatever dissolved it would "
-            "make a snowbank a factory for that liquid");
+        TEST_ASSERT_TRUE_MESSAGE(water_seen,
+            "snow melted by oil or acid has to leave WATER behind at some "
+            "point - it is frozen water, and turning into whatever "
+            "dissolved it would make a snowbank a factory for that "
+            "liquid");
     }
 }
 
@@ -15982,23 +16001,23 @@ static void test_acid_and_water_dilute_each_other(void)
 }
 
 /* No longer a bias to measure - SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h)
- * is an exact 50/50 coin flip now, once SAND_ACID_DILUTE_MASS_BIAS's own
- * local backing is the only thing that is supposed to tip a bite one way
- * or the other (see the ladder's own comment, sand_reactions.c). This
- * fixture's packed, symmetric layout gives every interior column a net
- * backing of zero (see acid_water_dilute_fixture's own comment), so the
- * base rate is exactly what this measures. Checked in a single step so
- * the two outcome counts are independent per-column samples, same
- * reasoning this test always used, just no longer expecting one side to
- * win the count - only that neither side is left out entirely, and that
- * the two stay in the same neighbourhood rather than one swamping the
- * other the way a real bias would produce. Not an exact 1:1 ratio even
- * at a true 50/50 split - SAND_ACID_DILUTE_EVAPORATE_CHANCE is checked
- * FIRST in the ladder and eats its 20-in-256 out of what would otherwise
- * be acid's own share, not split evenly between the two, so water's
- * raw count structurally comes out a bit ahead of acid's even with no
- * lean at all; the tolerance below allows for that, not for an actual
- * favouring of either side. */
+ * is 118, genuinely half of the 236-wide range left over once
+ * SAND_ACID_DILUTE_EVAPORATE_CHANCE's 20-in-256 has already been taken
+ * off the top of the ladder (see that constant's own comment for why
+ * 128 - half of the FULL 256 - was a bug, not just a rounder number),
+ * so SAND_ACID_DILUTE_MASS_BIAS's own local backing is the only thing
+ * that is supposed to tip a bite one way or the other (see the ladder's
+ * own comment, sand_reactions.c). This fixture's packed, symmetric
+ * layout gives every interior column a net backing of zero (see
+ * acid_water_dilute_fixture's own comment), so the base rate is exactly
+ * what this measures. Checked in a single step so the two outcome
+ * counts are independent per-column samples, same reasoning this test
+ * always used, just no longer expecting one side to win the count -
+ * only that neither side is left out entirely, and that the two stay in
+ * the same neighbourhood rather than one swamping the other the way a
+ * real bias would produce. The tolerance below is ordinary sampling
+ * noise now, not a structural asymmetry to absorb - the split itself is
+ * genuinely even. */
 static void test_the_dilution_split_favours_neither_side(void)
 {
     uint8_t *dilute_cells = malloc((size_t)DILUTE_W * DILUTE_H);
@@ -16033,14 +16052,10 @@ static void test_the_dilution_split_favours_neither_side(void)
         "independent columns - a 50/50 split still means both sides win "
         "regularly, not that one of them stops happening");
 
-    /* Two-thirds, not near-equality - see this test's own top comment
-     * for why water's raw count structurally comes out a bit ahead even
-     * at a true 50/50 split (SAND_ACID_DILUTE_EVAPORATE_CHANCE eats its
-     * share out of acid's side of the ladder, not split evenly). Loose
-     * enough to absorb that and ordinary sampling noise, tight enough
-     * that the old, clearly-biased split (roughly 500-ish vs 250-ish at
-     * this width, back when this constant read 141) would still fail
-     * it. */
+    /* Two-thirds, not near-equality - loose enough to absorb ordinary
+     * sampling noise at this fixture's width, tight enough that the
+     * old, clearly-biased split (roughly 500-ish vs 250-ish at this
+     * width, back when this constant read 141) would still fail it. */
     const int smaller = (water_wins < acid_wins) ? water_wins : acid_wins;
     const int larger  = (water_wins < acid_wins) ? acid_wins : water_wins;
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(larger * 2 / 3, smaller,
@@ -16051,7 +16066,7 @@ static void test_the_dilution_split_favours_neither_side(void)
 }
 
 /* A dedicated fixture for the two pairing tests below - alternating
- * acid/water columns separated by a column of STONE, not an empty gap.
+ * acid/water columns separated by a column of GLASS, not an empty gap.
  * Two different designs were tried first and both broke for their own
  * reason:
  *
@@ -16072,11 +16087,22 @@ static void test_the_dilution_split_favours_neither_side(void)
  *   water or acid may already have drifted sideways into the gap,
  *   scrambling the one-pair-per-column layout before a single bite ever
  *   lands.
+ * - STONE was tried next, on the assumption that a wall would simply
+ *   never be a dissolve target - wrong, and caught only by measuring
+ *   it: stone IS dissolvable (material.c, dissolvable=60, "stone gives
+ *   way to acid now, just slowly"), so an acid cell whose own water
+ *   neighbour's give-roll happened to miss would fall through to the
+ *   stone beside it and could eat the separator instead - rare enough
+ *   in ONE step that the single-step tests below still passed on a
+ *   slightly reduced sample, but a real, silent hole in what the
+ *   fixture claimed to guarantee.
  *
- * STONE closes both holes at once: not dissolvable (an acid cell's only
- * candidate is ever its own water cell straight up), and not something
- * anything can flow into (nothing moves before reactions runs, same as
- * the fully packed fixture's own stability). */
+ * GLASS closes both holes for real: acid's own material comment names
+ * it "the sole exception" left once stone stopped being immune
+ * (acid_tank()'s own comment, this file, makes the same point), and
+ * like stone it is not something anything can flow into (nothing moves
+ * before reactions runs, same as the fully packed fixture's own
+ * stability). */
 #define SEPARATED_W 4000
 #define SEPARATED_H 2
 static sand_t  separated_dilute_sim;
@@ -16092,8 +16118,8 @@ static void acid_water_separated_fixture(uint8_t *cells)
             sand_set(&separated_dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
             sand_set(&separated_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
         } else {
-            sand_set(&separated_dilute_sim, x, 0, STONE);
-            sand_set(&separated_dilute_sim, x, 1, STONE);
+            sand_set(&separated_dilute_sim, x, 0, GLASS);
+            sand_set(&separated_dilute_sim, x, 1, GLASS);
         }
     }
 }
@@ -16174,11 +16200,18 @@ static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
  * and 1) is much lower than water's (220) - "slowly dilutes", not
  * readily - so a single step is not a safe bet the way the water fixture
  * is; the tests below step this fixture repeatedly instead (300 steps,
- * same budget as before) and read the FINAL state, not one snapshot -
- * each column's oil cell reacts with the acid below it at most once
- * ever (once it stops being MAT_OIL there is nothing left to dissolve in
- * a two-material fixture), so there is no risk of a later step
- * overwriting an earlier column's own result. */
+ * same budget as before).
+ *
+ * They do NOT read the final state after all 300 steps, though - a
+ * column's oil cell does react with the acid below it at most once ever
+ * (once it stops being MAT_OIL there is nothing left to dissolve in a
+ * two-material fixture), but MAT_GAS is buoyant and this fixture is only
+ * two rows tall with nowhere "up" to rise to, so a gas cell born in one
+ * column can drift sideways into a neighbour's over the remaining steps.
+ * Each test below classifies a column the instant it stops holding
+ * MAT_OIL instead, before any later step's drift has a chance to touch
+ * it - see either test's own comment for why that specific instant is
+ * safe. */
 #define OIL_DILUTE_W 400
 #define OIL_DILUTE_H 2
 static sand_t  oil_dilute_sim;
@@ -16197,49 +16230,52 @@ static void acid_oil_dilute_fixture(uint8_t *cells)
 
 /* SAND_ACID_OIL_TO_GAS_CHANCE (sand.h): a bitten oil cell mostly boils
  * into gas now, acid is the minority outcome that survives from the old
- * "always becomes acid" rule. Step the fixture out to where essentially
- * every column has fired at most once (see the fixture's own comment)
- * and read the final state in one pass - no per-step tracking needed,
- * a column's oil cell can only ever change once.
+ * "always becomes acid" rule.
  *
- * Reads BOTH cells of a column together, not a fixed row index - a
- * column whose original acid cell died outright (SAND_ACID_OIL_DEATH_
- * CHANCE, below) leaves an empty cell for whatever the oil turned into
- * to fall into by ordinary gravity before this reads the final state,
- * so "the oil cell specifically ends up at row 0" is not something a
- * settled board can promise. What IS still decidable without caring
- * which row anything landed in: a column still holding MAT_OIL anywhere
- * never got bitten this run (skip it, no sample); otherwise MAT_GAS
- * appearing anywhere in the column means oil boiled off, and its
- * absence (only MAT_ACID and/or one empty cell left) means oil spread
- * into more acid instead - those two outcomes are the only ones this
- * two-material fixture can produce once the oil is gone, and evaporates
- * is disabled so nothing else can introduce gas from elsewhere. */
+ * Classifies each column the instant its own oil cell disappears, not
+ * from a final-state read taken after the fixture has run to completion.
+ * MAT_GAS is buoyant (see try_bubble(), sand_gas.c) and this fixture is
+ * only two rows tall with nowhere "up" left to rise to, so over 300 steps
+ * a gas cell born in one column has plenty of opportunity to drift
+ * sideways into a neighbour's - at which point "MAT_GAS appears
+ * somewhere in this column" stops meaning "this column's own oil boiled
+ * off" and a final read cannot tell the two apart. Sampling the column
+ * the moment it stops holding MAT_OIL sidesteps that: at that instant the
+ * only step that has touched it is the one that just ran the reaction
+ * itself, so what is sitting in the two cells is still that step's own
+ * output. Each column is then marked done and never resampled, so a
+ * later step's drift cannot re-classify it. */
 static void test_oil_mostly_boils_off_into_gas_not_acid(void)
 {
     uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
+    bool    *done = calloc((size_t)OIL_DILUTE_W, sizeof(bool));
     TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
         "acid/oil dilution grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(done, "per-column done tracking must fit");
     acid_oil_dilute_fixture(oil_dilute_cells);
 
+    int gas = 0, acid_spread = 0;
     for (int i = 0; i < 300; i++) {
         sand_step(&oil_dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < OIL_DILUTE_W; x++) {
+            if (done[x]) {
+                continue;
+            }
+            const uint8_t m0 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0));
+            const uint8_t m1 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 1));
+            if (m0 == MAT_OIL || m1 == MAT_OIL) {
+                continue; /* not bitten yet - still a live sample */
+            }
+            done[x] = true;
+            if (m0 == MAT_GAS || m1 == MAT_GAS) {
+                gas++;
+            } else {
+                acid_spread++;
+            }
+        }
     }
 
-    int gas = 0, acid_spread = 0;
-    for (int x = 0; x < OIL_DILUTE_W; x++) {
-        const uint8_t m0 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0));
-        const uint8_t m1 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 1));
-        if (m0 == MAT_OIL || m1 == MAT_OIL) {
-            continue; /* never bitten in this window - no sample here */
-        }
-        if (m0 == MAT_GAS || m1 == MAT_GAS) {
-            gas++;
-        } else {
-            acid_spread++;
-        }
-    }
-
+    free(done);
     free(oil_dilute_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, gas,
@@ -16260,45 +16296,53 @@ static void test_oil_mostly_boils_off_into_gas_not_acid(void)
  * remaining mass gone in this one bite - instead of pay_quench_cost()'s
  * ordinary one-unit chip. Both are reachable, neither is a certainty.
  *
- * Same both-cells-of-the-column reasoning as the test above, and for the
- * same reason: a died-outright column can settle with its surviving
- * cell in either row. An empty cell anywhere in a bitten column can only
- * be the original acid, since the oil-derived cell is always either gas
- * or acid, never empty - so its presence unambiguously marks a one-shot
- * death (there is no other way to reach CELL_EMPTY in this fixture,
- * gradual attrition would need MASS_MAX consecutive bites on the exact
- * same cell, and each column's oil neighbour only ever offers one).
- * Symmetrically, an acid cell at exactly MASS_MAX - 1 anywhere in the
- * column marks the ordinary one-unit chip having landed instead -
- * MASS_MAX itself would be a FRESH acid cell born from the oil-becomes-
- * acid branch, not the one that did the eating. */
+ * Same instant-of-transition sampling as the test above, and for the
+ * same reason: MAT_GAS drifting between columns over 300 steps would
+ * make a final-state read unreliable, and here it is worse than merely
+ * unreliable - a gas cell that later drifts back OUT of a column it
+ * passed through leaves an empty cell behind, which is exactly what a
+ * genuine died-outright column also looks like, so a final read could
+ * mistake ordinary gas traffic for a death that never happened. Sampled
+ * the instant a column stops holding MAT_OIL, before any step but its
+ * own reaction has touched it, that ambiguity cannot arise: an empty
+ * cell can only be the original acid cell gone in one bite (the
+ * oil-derived cell is always gas or acid, never empty), and an acid
+ * cell at exactly MASS_MAX - 1 can only be the ordinary one-unit chip
+ * (MASS_MAX itself is a fresh acid cell born from the oil-becomes-acid
+ * branch, not the one that did the eating). */
 static void test_the_acid_that_ate_oil_can_die_in_a_single_bite(void)
 {
     uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
+    bool    *done = calloc((size_t)OIL_DILUTE_W, sizeof(bool));
     TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
         "acid/oil dilution grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(done, "per-column done tracking must fit");
     acid_oil_dilute_fixture(oil_dilute_cells);
 
+    int died_outright = 0, chipped_by_one = 0;
     for (int i = 0; i < 300; i++) {
         sand_step(&oil_dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < OIL_DILUTE_W; x++) {
+            if (done[x]) {
+                continue;
+            }
+            const cell_t c0 = sand_at(&oil_dilute_sim, x, 0);
+            const cell_t c1 = sand_at(&oil_dilute_sim, x, 1);
+            if (CELL_MATERIAL(c0) == MAT_OIL || CELL_MATERIAL(c1) == MAT_OIL) {
+                continue; /* not bitten yet - still a live sample */
+            }
+            done[x] = true;
+            if (CELL_IS_EMPTY(c0) || CELL_IS_EMPTY(c1)) {
+                died_outright++;
+            }
+            if ((CELL_MATERIAL(c0) == MAT_ACID && CELL_VARIANT(c0) == MASS_MAX - 1)
+                || (CELL_MATERIAL(c1) == MAT_ACID && CELL_VARIANT(c1) == MASS_MAX - 1)) {
+                chipped_by_one++;
+            }
+        }
     }
 
-    int died_outright = 0, chipped_by_one = 0;
-    for (int x = 0; x < OIL_DILUTE_W; x++) {
-        const cell_t c0 = sand_at(&oil_dilute_sim, x, 0);
-        const cell_t c1 = sand_at(&oil_dilute_sim, x, 1);
-        if (CELL_MATERIAL(c0) == MAT_OIL || CELL_MATERIAL(c1) == MAT_OIL) {
-            continue; /* never bitten in this window - no sample here */
-        }
-        if (CELL_IS_EMPTY(c0) || CELL_IS_EMPTY(c1)) {
-            died_outright++;
-        }
-        if ((CELL_MATERIAL(c0) == MAT_ACID && CELL_VARIANT(c0) == MASS_MAX - 1)
-            || (CELL_MATERIAL(c1) == MAT_ACID && CELL_VARIANT(c1) == MASS_MAX - 1)) {
-            chipped_by_one++;
-        }
-    }
-
+    free(done);
     free(oil_dilute_cells);
 
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, died_outright,
@@ -16337,34 +16381,45 @@ static void test_acid_evaporates_into_gas_when_forced(void)
         "in a single step");
 }
 
-/* SAND_ACID_DILUTE_MASS_BIAS's actual point, end to end - the single-step
- * fixtures above only ever measure ONE bite, which is enough to prove the
- * bias exists but not that it does what it was added for: a LOPSIDED
- * volume, kept up over time, should be able to turn the smaller side into
- * more of the larger one, not just nudge one column's coin flip.
+/* SAND_ACID_DILUTE_MASS_BIAS's actual point, end to end - proven by
+ * comparing the SAME sustained pour with the mechanism forced off
+ * (sand_set_acid_dilute_mass_bias(&sim, 0), a pure unbiased coin flip)
+ * against the same pour with it left at its real default, rather than
+ * by watching one biased run alone approach total saturation.
  *
- * A basin, not a fixture pair - one pool at the bottom, walled in by
- * STONE on the floor so nothing drains out of bounds (see
- * test_snow_melts_in_any_liquid's own fixture for the same wall), with
- * the OTHER material re-painted across the whole top row every single
- * step before sand_step() runs. That is "pour X non-stop": the top row
- * is a fixed-size tap, never growing, so the final census is not simply
- * "there is more poured material because more of it was ever placed" -
- * the pool starts out outnumbering the tap by POOL_DEPTH rows to 1, so
- * the tap has to actually win the reaction, repeatedly, to flip it.
+ * That was the bug in the first version of this test: at 400 steps, a
+ * 100-wide tap re-filled every single step pours 40,000 cells into a
+ * 4,900-cell basin - roughly eight times its capacity - which empties
+ * the pool through sheer poured VOLUME regardless of whether the
+ * reaction favours the tap at all. Confirmed directly: forcing the
+ * win/lose split to make the tap NEVER win a single bite still left
+ * the test passing, because the tap material displaces the pool by
+ * gravity and refill alone once enough of it has been poured. Given
+ * unlimited attempts against a fixed-size pool, sheer resupply wins
+ * eventually even at a neutral 50/50 split - see this file's own
+ * pour_and_count() history for why "does the tap end up dominant" was
+ * never actually testing SAND_ACID_DILUTE_MASS_BIAS.
  *
- * Both directions share this shape, so one fixture builds either one -
- * `pool` is what starts deep and gets poured on, `tap` is what re-fills
- * row 0 every step. */
+ * Cut down to a step budget short enough that NEITHER run saturates
+ * (leaving room for a difference to show at all) and turned into an
+ * A/B comparison instead: the local-backing mechanism's whole claim is
+ * that it makes a sustained excess convert its opposite FASTER, so
+ * that is what gets measured - the biased run must convert strictly
+ * more of the pool than the identically-seeded unbiased run does in
+ * the same window, not just "some, eventually". */
 #define DILUTE_POUR_W          100
 #define DILUTE_POUR_H          50
 #define DILUTE_POUR_POOL_DEPTH 20
-#define DILUTE_POUR_STEPS      400
+#define DILUTE_POUR_STEPS      150
 static sand_t  dilute_pour_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
- * own comment above for why. */
-static void acid_water_pour_fixture(uint8_t *cells, material_id_t pool) {
+ * own comment above for why. Same seed every call, deliberately - an
+ * A/B comparison wants the same random inputs on both legs, with only
+ * the mass-bias override differing, not seed-to-seed noise on top. */
+static void
+acid_water_pour_fixture(uint8_t *cells, material_id_t pool)
+{
     sand_init(&dilute_pour_sim, cells, DILUTE_POUR_W, DILUTE_POUR_H, 17u);
     sand_set_evaporates(&dilute_pour_sim, 0); /* isolate the mass bias from
                                                 * the unrelated ambient
@@ -16381,7 +16436,9 @@ static void acid_water_pour_fixture(uint8_t *cells, material_id_t pool) {
     }
 }
 
-static void pour_and_count(material_id_t tap, int *out_pool_mat, int *out_tap_mat) {
+static void
+pour_and_count(material_id_t tap, int *out_pool_mat, int *out_tap_mat)
+{
     for (int i = 0; i < DILUTE_POUR_STEPS; i++) {
         for (int x = 0; x < DILUTE_POUR_W; x++) {
             sand_set(&dilute_pour_sim, x, 0, CELL_MAKE(tap, MASS_MAX));
@@ -16405,40 +16462,77 @@ static void pour_and_count(material_id_t tap, int *out_pool_mat, int *out_tap_ma
     *out_tap_mat  = tap_mat;
 }
 
-static void test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water(void) {
+/* Runs the whole pour, with the mass-bias override forced to `bias`
+ * (negative restores the real default), and returns how much of the
+ * tap material the pool ended up holding - the higher this is, the
+ * more the pool converted. */
+static int
+pour_and_measure_tap_gain(material_id_t pool, material_id_t tap, int bias)
+{
     uint8_t *cells = malloc((size_t)DILUTE_POUR_W * DILUTE_POUR_H);
     TEST_ASSERT_NOT_NULL_MESSAGE(cells,
         "acid/water pour grid must fit in what the framebuffer leaves");
-    acid_water_pour_fixture(cells, MAT_WATER);
+    acid_water_pour_fixture(cells, pool);
+    sand_set_acid_dilute_mass_bias(&dilute_pour_sim, bias);
 
-    int water_left, acid_now;
-    pour_and_count(MAT_ACID, &water_left, &acid_now);
+    int pool_left, tap_now;
+    pour_and_count(tap, &pool_left, &tap_now);
 
     free(cells);
-
-    TEST_ASSERT_GREATER_THAN_MESSAGE(water_left, acid_now,
-        "a pool that started as all water, poured on with acid every "
-        "single step for 400 steps, must end up mostly acid - "
-        "SAND_ACID_DILUTE_MASS_BIAS is supposed to let a sustained excess "
-        "actually win, not just tilt one isolated bite");
+    return tap_now;
 }
 
-static void test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid(void) {
-    uint8_t *cells = malloc((size_t)DILUTE_POUR_W * DILUTE_POUR_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
-        "acid/water pour grid must fit in what the framebuffer leaves");
-    acid_water_pour_fixture(cells, MAT_ACID);
+static void
+test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water(void)
+{
+    const int tap_now_unbiased = pour_and_measure_tap_gain(MAT_WATER, MAT_ACID, 0);
+    const int tap_now_biased   = pour_and_measure_tap_gain(MAT_WATER, MAT_ACID, -1);
 
-    int acid_left, water_now;
-    pour_and_count(MAT_WATER, &acid_left, &water_now);
+    TEST_ASSERT_GREATER_THAN_MESSAGE(tap_now_unbiased, tap_now_biased,
+        "SAND_ACID_DILUTE_MASS_BIAS is supposed to let a sustained excess "
+        "of acid convert the water pool FASTER than an unbiased coin "
+        "flip does in the same window - identically seeded runs, forced "
+        "to bias 0 vs the real default, ended up converting the same "
+        "amount, so the mechanism is not doing anything measurable");
+}
 
-    free(cells);
+/* NOT an A/B bias comparison, unlike the sibling test above - measured
+ * directly, and it goes the WRONG way here: forcing bias to 0 converted
+ * MORE of the acid pool than the real default did (3623 vs 3451 at 150
+ * steps, one fixed seed). SAND_ACID_DILUTE_MASS_BIAS is not neutral in
+ * this direction, it is actively counterproductive, and the reason is
+ * density, not a bug in the bias arithmetic itself: acid (density 38)
+ * sinks and disperses through water when poured on top of it, so a
+ * poured acid grain is usually an isolated cell surrounded by water -
+ * exactly the case SAND_ACID_DILUTE_MASS_BIAS's own comment (sand.h)
+ * already covers ("an isolated drop in a big lake gets pushed even
+ * further toward diluting"). Water (density 30) does the opposite when
+ * poured onto acid: being LESS dense, it sits on top rather than
+ * penetrating, so the acid cells actually doing the biting - only acid
+ * ever rolls this reaction - stay backed by the deep, undisturbed pool
+ * beneath them the whole time, and the bias tips every one of those
+ * bites further toward "acid wins" instead of helping water win faster.
+ * A real, structural asymmetry between the two pour directions, not
+ * something this test should paper over by asserting a relationship
+ * that does not hold - flagged for a design decision, not silently
+ * fixed here, since the working direction above was tuned deliberately
+ * and changing the bias formula to help this direction too risks
+ * breaking that one.
+ *
+ * What IS still true, and worth pinning: water overwhelms a sustained
+ * acid pool by sheer volume alone even with bias doing nothing useful
+ * for it - the tap ends up the clear majority of the basin regardless. */
+static void
+test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid(void)
+{
+    const int tap_now = pour_and_measure_tap_gain(MAT_ACID, MAT_WATER, -1);
 
-    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_left, water_now,
-        "a pool that started as all acid, poured on with water every "
-        "single step for 400 steps, must end up mostly water - the same "
-        "property has to hold in both directions, not just the one "
-        "SAND_ACID_DILUTE_TO_WATER_CHANCE already favoured");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(DILUTE_POUR_W * (DILUTE_POUR_H - 1) / 2, tap_now,
+        "a sustained pour of water onto an acid pool must still end up "
+        "the clear majority of the basin - SAND_ACID_DILUTE_MASS_BIAS "
+        "does not help this direction (see this test's own comment for "
+        "why), but sheer poured volume against a fixed-size pool still "
+        "has to win eventually");
 }
 
 static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)

@@ -3647,13 +3647,17 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
  * defaulting to zero is what keeps acid from eating the container it is
  * standing in, the floor it is standing on, or the air above it.
  *
- * The bite costs the acid one unit of its own mass, through the same
- * pay_quench_cost() a liquid pays to put out a fire, because it is the
- * same kind of transaction: the liquid is CONSUMED rather than merely
- * consulted. Without that a single cell of acid dissolves an unbounded
- * amount of anything and remains a single cell - the exact mistake
- * oil-soaked ash made before soaking became a real transfer, and worth
- * naming twice because it is the easy one to make.
+ * The bite always costs the acid something - never a free eat - but how
+ * much varies by what it ate. Against oil and the generic sand/wood/stone
+ * targets, the ordinary cost is one unit of mass via the same
+ * pay_quench_cost() a liquid pays to put out a fire (the liquid is
+ * CONSUMED rather than merely consulted), but a separate, much higher
+ * death-roll can spend the whole cell in one bite instead - deliberately,
+ * so the acid itself has a real chance to run out rather than dissolving
+ * an unbounded amount of anything while remaining a single cell forever.
+ * That "acid never pays" mistake is the one oil-soaked ash made before
+ * soaking became a real transfer, and worth naming twice because it is
+ * the easy one to make.
  *
  * At most one neighbour per step, so a cell of acid surrounded by sand
  * eats into it rather than opening a hole on all four sides at once.
@@ -3841,8 +3845,10 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
                     water_backing++;
                 }
             }
+            const int mass_bias = (s->acid_dilute_mass_bias >= 0)
+                                       ? s->acid_dilute_mass_bias : SAND_ACID_DILUTE_MASS_BIAS;
             const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE
-                                           + (water_backing - acid_backing) * SAND_ACID_DILUTE_MASS_BIAS;
+                                           + (water_backing - acid_backing) * mass_bias;
 
             /* ONE roll, a three-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
              * own comment (sand.h) for why this replaced two independent
@@ -3856,27 +3862,30 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
                 place_reacted(s, x, y, self_at, MAT_GAS);
             } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE + water_wins_chance) {
                 /* WATER WINS - water is the source, spent boiling off
-                 * into its own MAT_STEAM; acid is the target, converted
-                 * into water. Mass carries over from whichever cell it
-                 * started on. */
-                row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
-                mark_rows(s, y, y);
-                wake_block_and_neighbors(s, x, y);
-
-                s->cells[at] = CELL_MAKE(MAT_STEAM, CELL_VARIANT(n));
-                mark_rows(s, ny, ny);
-                wake_block_and_neighbors(s, nx, ny);
+                 * into its own MAT_STEAM at a fresh full life via
+                 * place_reacted(), the same as every other vapour-
+                 * creation path in this file. An earlier version of
+                 * this carried the old WATER cell's own mass nibble
+                 * across instead - a bug, not a deliberate choice: mass
+                 * and life-remaining are different fields (material.c),
+                 * and a half-drained water cell says nothing about how
+                 * long its steam should live. Acid is the target,
+                 * converted into water - mass DOES carry over here,
+                 * since both sides of THIS conversion are liquids
+                 * sharing the same mass semantic. Both writes go
+                 * through place_cell()/place_reacted() rather than a
+                 * raw store, so the new steam's content flags
+                 * (may_have_gas, may_have_condenser) actually get
+                 * latched instead of leaving it permanently inert. */
+                place_cell(s, x, y, self_at, CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x])));
+                place_reacted(s, nx, ny, at, MAT_STEAM);
             } else {
                 /* ACID WINS - acid is the source, spent boiling off into
-                 * its own MAT_GAS; water is the target, converted into
-                 * acid. */
-                row[x] = CELL_MAKE(MAT_GAS, CELL_VARIANT(row[x]));
-                mark_rows(s, y, y);
-                wake_block_and_neighbors(s, x, y);
-
-                s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
-                mark_rows(s, ny, ny);
-                wake_block_and_neighbors(s, nx, ny);
+                 * its own MAT_GAS at a fresh full life, same reasoning
+                 * as above. Water is the target, converted into acid,
+                 * mass carried over. */
+                place_reacted(s, x, y, self_at, MAT_GAS);
+                place_cell(s, nx, ny, at, CELL_MAKE(MAT_ACID, CELL_VARIANT(n)));
             }
             return true;
         }
@@ -4478,7 +4487,7 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
     }
 
     const int acid_rain = (s->acid_rain >= 0) ? s->acid_rain : SAND_ACID_RAIN_CHANCE;
-    if ((int)(rng_next(&s->rng) & 0xFF) >= acid_rain) {
+    if (acid_rain == 0 || (int)(rng_next(&s->rng) & 0xFF) >= acid_rain) {
         return false;
     }
 
