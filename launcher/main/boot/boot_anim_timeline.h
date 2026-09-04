@@ -71,7 +71,7 @@
 #define BOOT_ANIM_TITLE_TURNS_PHASE 92000
 
 /* peak wobble swing right at the start */
-#define BOOT_ANIM_TITLE_AMPLITUDE_PX 24
+#define BOOT_ANIM_TITLE_AMPLITUDE_PX 15
 
 /* the small idle wave once a letter has landed */
 #define BOOT_ANIM_TITLE_WAVE_AMPLITUDE_PX 12
@@ -79,10 +79,10 @@
 #define BOOT_ANIM_TITLE_WAVE_PERIOD_MS 900
 #define BOOT_ANIM_TITLE_WAVE_STAGGER_MS 75
 /* which typeface draws the title - 0 the 40px Computer Modern coverage atlas, 1 the shell's own 8x8 bitmap; see boot_anim.c's draw_title() */
-#define BOOT_ANIM_TITLE_FONT 0
+#define BOOT_ANIM_TITLE_FONT 1
 
 /* integer pixel multiplier the title is drawn at - 1 suits a font rasterized at its final size, ~5 is what the 8x8 bitmap needs */
-#define BOOT_ANIM_TITLE_SCALE 1
+#define BOOT_ANIM_TITLE_SCALE 5
 
 /* when the idle wave starts calming back to stillness - at or past total_ms it never does, which is the default */
 #define BOOT_ANIM_TITLE_WAVE_OUT_MS 3200
@@ -91,16 +91,16 @@
 #define BOOT_ANIM_TITLE_WAVE_FADE_MS 1500
 
 /* how far down the viewer's frame the title's own centre lands - see boot_anim.h's own comment on this section for the frame it is in */
-#define BOOT_ANIM_TITLE_VIEW_Y 50
+#define BOOT_ANIM_TITLE_VIEW_Y 40
 
 /* how far into the viewer's frame the title's own left edge starts - see boot_anim.h's own comment on this section for where the default came from */
-#define BOOT_ANIM_TITLE_VIEW_X 135
+#define BOOT_ANIM_TITLE_VIEW_X 95
 
 /* drop shadow offset, pixels right (negative is left) - 0/0 disables it */
-#define BOOT_ANIM_TITLE_SHADOW_DX 3
+#define BOOT_ANIM_TITLE_SHADOW_DX 5
 
 /* drop shadow offset, pixels down (negative is up) */
-#define BOOT_ANIM_TITLE_SHADOW_DY 3
+#define BOOT_ANIM_TITLE_SHADOW_DY 5
 
 /* shadow density, 0..255 - 0 invisible, 255 solid, between is a dithered fake transparency (see gfx_fill_rect_dither() in gfx.c) */
 #define BOOT_ANIM_TITLE_SHADOW_ALPHA 128
@@ -205,6 +205,6 @@ static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] 
       BOOT_ANIM_EASE_LINEAR },
     {  4300,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1024,   4096,      0 }, {   -256,   -384,      0 }, {    307,    307,    307 },
+      {  -1024,   4096,      0 }, {   -256,      0,      0 }, {    307,    307,    307 },
       BOOT_ANIM_EASE_LINEAR },
 };
