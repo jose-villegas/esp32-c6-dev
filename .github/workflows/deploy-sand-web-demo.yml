@@ -1,0 +1,68 @@
+name: Deploy Sand Web Demo
+
+# Builds the sand app's browser demo (main/apps/sand/tools/web/) to
+# WebAssembly and publishes it to GitHub Pages. Independent of the
+# firmware/host-test workflows in this same folder - see host-tests.yml's
+# own top comment for why these are separate files rather than one - and
+# touches none of them: this compiles the same portable sand sources with
+# emcc instead of gcc/idf.py, into a self-contained static site.
+#
+# Requires GitHub Pages enabled for this repo with source "GitHub Actions"
+# (Settings -> Pages -> Build and deployment -> Source) - a one-time repo
+# setting this workflow cannot make for itself.
+#
+# dist/ is never committed (see tools/web/.gitignore) - this workflow is
+# what produces it, fresh, every time.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "launcher/main/apps/sand/material.c"
+      - "launcher/main/apps/sand/material.h"
+      - "launcher/main/apps/sand/sand.c"
+      - "launcher/main/apps/sand/sand.h"
+      - "launcher/main/apps/sand/sand_priv.h"
+      - "launcher/main/apps/sand/sand_liquid.c"
+      - "launcher/main/apps/sand/sand_gas.c"
+      - "launcher/main/apps/sand/sand_reactions.c"
+      - "launcher/main/apps/sand/tilt.c"
+      - "launcher/main/apps/sand/tilt.h"
+      - "launcher/main/apps/sand/tools/web/**"
+      - "launcher/main/gfx/gfx_color.h"
+      - "launcher/main/util/rng.h"
+      - "launcher/main/util/intmath.h"
+      - ".github/workflows/deploy-sand-web-demo.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: latest
+
+      - name: Build
+        run: launcher/main/apps/sand/tools/web/build_web.sh
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: launcher/main/apps/sand/tools/web/dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4

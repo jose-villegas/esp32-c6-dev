@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Sand</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <div id="stage">
+    <canvas id="canvas" width="368" height="448"></canvas>
+    <div id="loading">Loading&hellip;</div>
+    <button id="fullscreen-btn" hidden aria-label="Fullscreen">&#9974;</button>
+  </div>
+
+  <div id="panel">
+    <div id="palette"></div>
+
+    <div class="row" id="modes">
+      <button class="mode" data-mode="0">Paint</button>
+      <button class="mode" data-mode="1">Erase</button>
+      <button class="mode" data-mode="2">Detonate</button>
+    </div>
+
+    <div class="row">
+      <label id="source-label">
+        <input type="checkbox" id="source-toggle">
+        Source (persistent tap)
+      </label>
+    </div>
+
+    <div id="tilt-block">
+      <div id="tilt-pad">
+        <div id="tilt-handle"></div>
+      </div>
+      <div id="tilt-hint">Drag to tilt &middot; double-click to reset</div>
+    </div>
+
+    <div class="row">
+      <button id="shake-btn">Shake</button>
+      <button id="clear-btn">Clear</button>
+      <button id="tilt-btn" hidden>Use device tilt</button>
+    </div>
+
+    <div class="row">
+      <label>
+        Quality
+        <select id="quality">
+          <option value="2">ULTRA</option>
+          <option value="3">HIGH</option>
+          <option value="4" selected>NORMAL</option>
+          <option value="6">LOW</option>
+          <option value="8">VERY LOW</option>
+        </select>
+      </label>
+    </div>
+  </div>
+</div>
+
+<script src="sand.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
