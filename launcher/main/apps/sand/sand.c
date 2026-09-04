@@ -2725,8 +2725,7 @@ static void step_impulses(sand_t *s, int dx, int dy)
         if (!CELL_IS_EMPTY(displaced) &&
             (materials[mat_id].kind == KIND_STATIC ||
              materials[mat_id].kind == KIND_POWDER)) {
-            const uint8_t drag =
-                (uint8_t)(material_of(displaced)->density >> SAND_IMPULSE_DRAG_SHIFT);
+            const uint8_t drag = impulse_drag_of(displaced);
             entry.speed = (entry.speed > drag) ? (uint8_t)(entry.speed - drag) : 0;
         }
 

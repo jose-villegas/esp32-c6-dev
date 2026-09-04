@@ -671,6 +671,30 @@ covered_at(const sand_t *s, int x, int y, int w, int h, uint8_t density)
     return cover_mask(s, x, y, w, h, density) == COVER_LID;
 }
 
+/* What one cell of `displaced` costs a mover ploughing through it - see
+ * SAND_IMPULSE_DRAG_SHIFT and its two per-kind companions in sand.h.
+ *
+ * KIND MATTERS ON TOP OF DENSITY, on device evidence: packed grain jams
+ * against itself and stops a chunk in a couple of layers, where a fluid
+ * parts around one and lets it sink a good way in before it loses the
+ * energy to keep going. Density alone gave both the same shape of
+ * resistance, so a bank of dirt read as too soft and a pool as too stiff
+ * at the same time - no single shift could fix both, which is what these
+ * two exist to say. Saturating: a doubled density can exceed a byte, and
+ * a cost above 255 means the same thing 255 does, since speed is one. */
+static inline uint8_t impulse_drag_of(cell_t displaced)
+{
+    const material_t *m = material_of(displaced);
+    unsigned d = (unsigned)m->density >> SAND_IMPULSE_DRAG_SHIFT;
+
+    if (m->kind == KIND_POWDER) {
+        d <<= SAND_IMPULSE_DRAG_POWDER_SHIFT;
+    } else if (m->kind == KIND_LIQUID) {
+        d >>= SAND_IMPULSE_DRAG_LIQUID_SHIFT;
+    }
+    return (uint8_t)(d > 255u ? 255u : d);
+}
+
 static inline void clear_content_flags(sand_t *s)
 {
     s->may_have_liquid      = false;

@@ -758,6 +758,27 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * around it, so widening to them would move two tuned features at once. */
 #define SAND_IMPULSE_DRAG_SHIFT  0
 
+/* Per-kind adjustments on top of the density-derived cost above, applied by
+ * impulse_drag_of() (sand.c). Density alone made a bank of dirt read as too
+ * soft and a pool as too stiff AT THE SAME TIME, which no single shift can
+ * fix - the two media do not just differ in how much they resist, they
+ * differ in shape. Packed grain jams against itself and stops a chunk in a
+ * couple of layers; a fluid parts around it and lets it sink a good way
+ * before the energy runs out.
+ *
+ * At these figures, cost per cell of travel including the plain ramp:
+ *
+ *     dirt / sand   62 or 60, doubled     ~126   about 2 cells
+ *     water         30, halved             ~17   about 15 cells
+ *     lava          45, halved             ~24   about 10 cells
+ *
+ * Both are device-tuned, not derived - the dirt figure is what "it should
+ * only reach the first few layers" turned out to mean, and the liquid one
+ * is what kept a chunk sinking the way it looked right doing before this
+ * whole mechanism existed. */
+#define SAND_IMPULSE_DRAG_POWDER_SHIFT  1
+#define SAND_IMPULSE_DRAG_LIQUID_SHIFT  1
+
 /* THE FLOOR BELOW WHICH A KIND_STATIC ENTRY IS SPENT, for the gravity-drift
  * move AND the settled check right after it in step_impulses() (sand.c,
  * the "AIRBORNE SOLIDS FALL TOO" block and the has_opening loop just below
@@ -869,7 +890,7 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * lose" shape. 2 is a STARTING FIGURE, not a measurement - same status as
  * SAND_IMPULSE_DRAG_SHIFT and SAND_IMPULSE_BOUNCE_MIN_SPEED above, picked
  * from the existing idiom rather than a device sweep. */
-#define SAND_IMPULSE_TRANSFER_DIVISOR  2
+#define SAND_IMPULSE_TRANSFER_DIVISOR  1
 
 /* THE TRANSFER FLOOR - below this post-drag speed, a mover does not queue a
  * transfer at all, the same shape SAND_IMPULSE_BOUNCE_MIN_SPEED already
