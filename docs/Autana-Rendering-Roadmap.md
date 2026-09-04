@@ -612,12 +612,18 @@ liquids, fire, heat and reactions for free; block sleeping so a static
 level costs almost nothing; and the sand app's dirty tracking, which
 keeps every present cheap in a fixed-camera room.
 
-- **Levels are blocks of a material.** A level is a grid of N×N-cell
-  blocks, N per level (at 2×2 px cells, 16 gives 11×14 blocks per screen,
-  8 gives 23×28), each block one material. A level editor paints them,
-  previews through the *real* compiled sand code on the host — the boot
-  animation editor already does exactly this — and bakes the level to a
-  header with the regenerate command in its banner (esp32c6-ems.9).
+- **Levels are placed blocks of a material.** A level is an ordered list
+  of rectangles, each "material *m*, size (*w*, *h*), at (*x*, *y*)" in
+  cell units (maintainer, 2026-09-04) — not a uniform tile grid. Loading
+  a room fills the rectangles into the instance's grid in list order, so
+  a later block overwrites an earlier one and carving is just a block of
+  empty. A list of a few dozen records is a few hundred bytes, so levels
+  are tiny as baked headers and a larger world costs nothing to keep in
+  flash. A level editor draws the rectangles, previews through the *real*
+  compiled sand code on the host — the boot animation editor already does
+  exactly this — and bakes the level to a header with the regenerate
+  command in its banner (esp32c6-ems.9). Entity spawns and event
+  triggers are records in the same list.
 - **Materials and reactions are data, not scripts.** A script per cell
   per step is two orders of magnitude over budget, and a Lua-sized VM
   does not fit beside the framebuffer. The form that works is the one the
