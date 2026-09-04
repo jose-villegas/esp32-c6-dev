@@ -53,12 +53,13 @@ flowchart LR
   subgraph G["Phases 3-5 - the games"]
     ems4["Raycaster + FPS [ems.4]"]:::game
     ems5["Rolling ball [ems.5]"]:::game
-    ems6["Platformer on the<br/>sand substrate [ems.6]"]:::game
+    ems6["Platformer: sand world first,<br/>tiles + sim windows next [ems.6]"]:::game
   end
   ems7["S3 port [ems.7]"]:::port
   ems8["Host render harness<br/>frame -> .bmp diff [ems.8]"]:::side
   ems9["Level editor: material<br/>blocks, bake [ems.9]"]:::side
   ems10["Materials + reactions<br/>as baked data [ems.10]"]:::side
+  ems11["Sand core as an instance:<br/>any size, several alive [ems.11]"]:::side
   iu5["Reaction pair-matrix [iu5]"]:::side
   v10["Tilt / shake library [1v0]"]:::side
   fyq["Sand perf round 5 [fyq]"]:::side
@@ -75,8 +76,10 @@ flowchart LR
   v10 --> ems5
   ems9 --> ems6
   ems10 --> ems6
+  ems11 --> ems6
   v10 --> ems6
   iu5 --> ems10
+  ems2 -.->|scrolling track| ems6
   ems3 --> ems7
   fyq --> v10
   ems8 -.-> ems3
@@ -127,13 +130,13 @@ flowchart TB
 
   FPS["FPS: gyro look,<br/>buttons move"]:::game
   BALL["Rolling ball:<br/>physics + lighting"]:::game
-  PLAT["Platformer:<br/>rooms, parallax, 2D light"]:::game
+  PLAT["Platformer:<br/>tiles and/or sand world,<br/>parallax, 2D light"]:::game
 
   RC["render/rc - raycaster<br/>DDA per column, textured<br/>vertical spans, depth array"]:::r
   R3D["render/r3d - span rasterizer<br/>flat / Gouraud / dithered / affine,<br/>ordering table, per-band z"]:::r
   M7["Mode-7 floor<br/>per-scanline affine plane"]:::r
-  SPR["render/r2d - sprites +<br/>collision against the grid"]:::r
-  SIM["sim/sand - the automaton as world:<br/>materials + reactions as data,<br/>block sleeping, dirty rows"]:::r
+  SPR["render/r2d - tiles, line scroll,<br/>sprites, collision, sim-window<br/>compositing"]:::r
+  SIM["sim/sand - the automaton as instances:<br/>full-screen world, or VFX windows<br/>over tiles; materials as data"]:::r
 
   GFX["gfx band mode + dirty bands<br/>mode request at enter()"]:::core
   CM["colormap / palettes + CLUT<br/>textures + Bayer dither"]:::core
@@ -145,7 +148,7 @@ flowchart TB
   BALL -.->|v1| M7
   PLAT --> SPR
   PLAT --> SIM
-  SPR --> SIM
+  SIM -.->|VFX windows| SPR
   RC --> GFX
   R3D --> GFX
   M7 --> GFX
@@ -577,16 +580,37 @@ This is where the band rasterizer from 3.3/3.4 earns its place:
   bus than a full frame. A smooth follow camera gives that up for every
   frame it moves. Decide this before the level format is designed.
 
-### 4.3 Platformer with parallax and 2D lighting → the sand app as the world
+### 4.3 Platformer with parallax and 2D lighting → two tracks, and the mix
 
-Decided 2026-09-04, replacing the tile engine first planned here: the
-platformer runs on the sand automaton as its world substrate. Noita is the
-precedent — a platformer where the world is a falling-sand simulation and
-the player is a sprite colliding against cells. What it buys is everything
-already built and tuned: destructible terrain, liquids, fire, heat and
-reactions for free; block sleeping so a static level costs almost nothing;
-and the sand app's dirty tracking, which keeps every present cheap where a
-scrolling tile engine would have touched every pixel every frame.
+This game is exploratory by design (maintainer, 2026-09-04): two ways to
+build the world are both kept, and the interesting question is how they
+combine. The architectural requirement that makes the combination
+possible is stated at the end, because it has to be built before either
+track gets far.
+
+**Track A — the tile engine, scrolling.**
+
+- Layered tile map with **parallax scrolling** (layers move at different
+  rates); each layer is a blit of 16×16 or 32×32 tiles, a screen is 23×28
+  of them at 16 px. Saturn-style **line scroll** (a per-row offset table
+  per layer) gives parallax, water and shimmer from one mechanism.
+- Scrolling defeats dirty tracking (every pixel moves), so this track
+  needs 3.2 and 3.3 like the 3D apps: a full frame every frame, streamed
+  in bands — a band is a slice of the tile rows, which is natural.
+- **2D lighting**: a light map at tile (or 8 px) resolution multiplied
+  through the colormap, plus per-pixel normal-mapped lighting only inside
+  each light's radius. Dithered radial gradients handle soft edges.
+  Per-pixel parallax *mapping* (a raymarch per pixel) is not on the
+  table; a one-step normal/height UV offset gives most of that cue.
+
+**Track B — the sand automaton as the world.**
+
+Noita is the precedent — a platformer where the world is a falling-sand
+simulation and the player is a sprite colliding against cells. What it
+buys is everything already built and tuned: destructible terrain,
+liquids, fire, heat and reactions for free; block sleeping so a static
+level costs almost nothing; and the sand app's dirty tracking, which
+keeps every present cheap in a fixed-camera room.
 
 - **Levels are blocks of a material.** A level is a grid of N×N-cell
   blocks, N per level (at 2×2 px cells, 16 gives 11×14 blocks per screen,
@@ -624,13 +648,55 @@ scrolling tile engine would have touched every pixel every frame.
   Per-pixel normal-mapped lighting stays an option inside a light's
   radius only.
 
-This also changes the engine framing: the sand app graduates from
+**Track C — the mix: the automaton as a VFX and terrain layer over
+tiles.** This is where the two stop being alternatives:
+
+- **Windowed simulation.** Run the automaton only inside small
+  rectangular *sim windows* anchored in world space — a torch's fire, a
+  pipe pouring water, sand released by a trap, an explosion, smoke and
+  sparks — composited over the scrolling tile map. A 48×48-cell window is
+  2.3 KB and a few microseconds when settled; a dozen of them are cheaper
+  than one full grid. Empty cells are transparent, so the tiles show
+  through. The cellular automaton becomes the particle system, with
+  physics the particle system never had: water pools, fire spreads,
+  steam rises and condenses.
+- **Tiles as boundary.** A window reads the tile map's collision mask as
+  its static solid cells, so liquid flows over floors and fire climbs
+  walls without the tiles being cells. Grains leaving a window are
+  dropped, or the window grows or moves to follow them, per effect.
+- **Destructible tiles.** On impact a tile converts into cells inside a
+  window (rubble, sand, a burst pipe), which is destructible terrain in a
+  scrolling game; settled cells can optionally bake back into a tile so
+  the window can close.
+- **Coupling both ways.** Cells touching an entity apply the material's
+  effect (fire damage, wetness, burial); tiles and entities seed cells
+  (an emitter tile, a thrown flask); the game reads cell counts for
+  triggers (the pool is full, the fire is out).
+- **Where each track leads.** In a scrolling game the automaton's dirty
+  tracking buys nothing (the frame is full anyway), so its cost is only
+  the windows' step, which is small. In a room-based game the whole
+  screen can be one window and Track B falls out as the special case.
+
+**The architectural requirement: the sand core as an instance.** Today the
+simulation is one grid at one size owned by the app. Every option above
+needs it to be a value: `(cells, width, height, material table, rng,
+boundary mask)`, with `step(instance)` and `draw(instance, destination,
+offset, scale)` taking it as a parameter, several instances alive at
+once, and the boundary supplied by the host (a room's edges, a tile
+mask). The host test grids already run at other sizes, so the core is
+closer to this than the app is; the work is making it explicit and
+keeping the byte-identical fingerprint for the sand app itself
+(esp32c6-ems.11). Once that exists, Track B is one full-screen instance,
+Track C is many small ones, and the same materials, reactions, editor
+and baked data serve both.
+
+This changes the engine framing either way: the sand app graduates from
 showcase to the world-simulation layer (`sim/` in section 5), and the
 tilt library, the editor pattern and the reaction table become engine
-pieces rather than app internals. The separate tile renderer and
-line-scroll parallax are demoted to "if a scrolling game ever wants
-them". Band mode is no longer a prerequisite for this game: it lives in
-full-fb mode on the sand dirty tracker.
+pieces rather than app internals. Band mode is a prerequisite for Track
+A and C's scrolling; Track B lives in full-fb mode on the sand dirty
+tracker. The first prototype is Track B, because it needs the least new
+code; Track A and C are explored from there, not after it.
 
 ---
 
@@ -647,9 +713,11 @@ gfx/        framebuffer or band buffers, present, primitives, dirty tracking
             (today's gfx.c minus the driver, plus band mode)
 core/       fixed.h, intmath.h, rng.h, tween.h, an arena allocator,
             the authored-timeline system graduated from boot_anim (esp32c6-do5)
-sim/        the sand automaton as a world substrate: materials and reactions
-            as baked data, block sleeping, rooms (today: apps/sand/ minus app_sand.c)
-render/     r2d: sprites, blits, collision against the sim grid, colormap lighting
+sim/        the sand automaton as an instance: any size, several alive, host
+            boundary mask; materials and reactions as baked data; block
+            sleeping (today: apps/sand/ minus app_sand.c)
+render/     r2d: tiles, line scroll, sprites, blits, sim-window compositing,
+            collision against tiles or a sim grid, colormap lighting
             r3d: transform/clip (from small3dlib via esp32c6-xnq), bin, spans, z
             rc:  raycaster
 game/       physics, entities, tilt/shake (esp32c6-1v0), level/event tables
@@ -698,7 +766,7 @@ document; pre-existing issues are named where they apply.
 | **2. r3d v1** | esp32c6-ems.3 own span rasterizer: flat, Gouraud, affine texture, colormap lighting; transform/clip via esp32c6-xnq; triangle binning; half-res mode | ≥ 60 fps on a 500-triangle textured scene at half-res (bus permitting: needs 80 MHz or interlace), ≥ 30 at full; cycles/pixel ≤ 16 for flat, ≤ 24 textured |
 | **3. Raycaster and the FPS prototype** | esp32c6-ems.4 `render/rc`, column-major textures, per-column depth sprites, gyro look via esp32c6-1v0, buttons move | 60 fps full-res walls + sprites, playable on the glass |
 | **4. Rolling ball** | esp32c6-ems.5 heightfield mesh on r3d, lit-disc ball, 2.5D fixed-point physics, gyro gravity | 30+ fps full-res, physics stable at dt 16–33 ms |
-| **5. Platformer on the sand substrate** | esp32c6-ems.6 sprite + collision layer over the automaton, rooms, per-block lighting; esp32c6-ems.9 level editor (blocks of a material, preview through the real sand code, bake); esp32c6-ems.10 materials and reactions as baked data | ≥ 30 fps in a playable room with the automaton live and entities colliding; a frame with nothing moving sends zero bands |
+| **5. Platformer, two tracks and the mix** | esp32c6-ems.11 sand core as an instance (size-agnostic, several alive, host-supplied boundary); esp32c6-ems.6 Track B first: sprite + collision layer over the automaton, rooms, per-block lighting; esp32c6-ems.9 level editor; esp32c6-ems.10 materials as baked data; then Track A tiles + line scroll in band mode and Track C sim windows over tiles | Track B: ≥ 30 fps in a playable room with the automaton live, zero bands sent when nothing moves. Track A/C: 60 fps scrolling with three layers and a dozen live sim windows |
 | **6. S3 port** | esp32c6-ems.7 `platform/esp32s3`, PSRAM full-frame double buffer, present on core 1, FPU/PIE fast paths behind the same interfaces | Same three games, same tests, on the second board |
 | **Throughout** | graduate boot-anim tech (esp32c6-do5, esp32c6-xnq); esp32c6-ems.8 host render harness; inlining-cliff gate (esp32c6-e72) | Every graduated piece has a second consumer and a reference test |
 
@@ -769,10 +837,14 @@ cheapest path to something that is unmistakably a game.
    perspective-correction cadence, all pixel-exact against a slow
    reference on the host. small3dlib stays vendored only until the boot
    animation stops including it, then the component is deleted.
-5. **Decided 2026-09-04: the platformer runs on the sand automaton**, in
-   rooms with a fixed camera, with levels authored as blocks of a
-   material and materials/reactions as baked data rather than runtime
-   scripts (section 4.3). The tile engine is demoted, not deleted.
+5. **Decided 2026-09-04: the platformer is exploratory, with both world
+   models kept.** Track B (the sand automaton as the world, fixed-camera
+   rooms, levels as blocks of a material, materials and reactions as
+   baked data rather than runtime scripts) is the first prototype; Track
+   A (tiles, scrolling, line scroll) stays a full option; Track C (the
+   automaton as windowed VFX and destructible terrain over tiles) is the
+   direction to explore. All three need the sand core to become an
+   instance (section 4.3, esp32c6-ems.11).
 
 ---
 
