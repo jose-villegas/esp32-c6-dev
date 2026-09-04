@@ -4428,61 +4428,50 @@ step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
 }
 
 /* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
- * feature itself; this is its mechanism, the same "fake collapse" idiom
- * step_one_condensing_cell() just above already uses, scaled up and
- * generalised to two materials instead of one. Unlike that 2x2 check,
- * this is not keyed off a single reaction_t field - MAT_GAS and
- * MAT_STEAM are named directly by their caller in step_one_reacting_row()
- * below, the same way acid_bubble() above names MAT_ACID directly rather
- * than adding a flag that would only ever be true for one material,
- * since either species can legitimately be the block's own top-left
- * corner.
+ * full rationale; this is the mechanism. Same 2x2/4-cells-into-1 "fake
+ * collapse" idiom step_one_condensing_cell() just above uses, sized to
+ * match it exactly (an earlier version checked a 4x4 block instead) -
+ * but keyed on TWO materials in a fixed 2-and-2 split rather than one,
+ * so MAT_GAS and MAT_STEAM are named directly by the caller in
+ * step_one_reacting_row() below instead of gating on a reaction_t field,
+ * the same reason acid_bubble() above names MAT_ACID directly. With
+ * exactly four cells and two required of each, only a 2-and-2 split can
+ * ever pass - a three-and-one split fails whichever side is short.
  *
- * A COLLAPSE, same as condensation, not a like-for-like replacement -
- * caught directly: the first version of this converted the WHOLE 4x4
- * (16 cells) into 16 fresh acid cells, no reduction at all, unlike
- * condensation's own 4-cells-into-1 shrink just above. Acid is one of
- * this simulation's biggest producers of gas and steam (dilution,
- * eating oil, eating sand/wood/stone, its own ambient boil-off all leave
- * one or the other), so handing every cell a matching pocket held
- * straight back into MORE acid, at full count, turned "acid rain" into a
- * feedback loop that could keep a lake topped up indefinitely - the
- * exact opposite of the finite "acid has a budget" rule the rest of
- * this file spends real effort enforcing. Fixed at the same ratio
- * condensation itself already uses (4 cells in, 1 surviving): the
- * block's own top-left 2x2 - not the whole 4x4 - becomes acid, and
- * every other cell in the block clears to empty. Sixteen cells of vapor
- * raining down four cells of acid, not sixteen.
+ * The survivor resolves 50/50 to Acid or Water, not always Acid: a
+ * pocket that is half gas and half steam has no more claim on being
+ * acid's own rain than plain water's. SAND_ACID_RAIN_CHANCE's own
+ * comment covers why the YIELD (one surviving cell, not the whole
+ * pocket) is what actually closed the feedback-loop risk; the coin flip
+ * is a separate, explicitly requested balance choice on top of that.
  *
- * (x, y) is only ever checked as the block's own top-left corner - same
- * scan-order argument as step_one_condensing_cell() just above: a
- * genuine matching 4x4 is always reached from its own actual top-left
- * cell first, scanning left to right, top to bottom, and once it fires -
- * clearing every cell in the block - any other gas or steam cell that
- * WAS part of it is no longer gas or steam by the time its own turn
- * comes. A cheap, honest miss otherwise, not a case worth special-
- * casing away. */
+ * The caller reports FOUND_DISSOLVER | FOUND_MOISTURE | FOUND_CONDENSING
+ * on a successful collapse (step_one_reacting_row(), below) rather than
+ * this function reporting anything itself - see that call site's own
+ * comment for why: the survivor is written at (x, y), the walk's own
+ * current position, so the walk will never revisit it or arm those
+ * flags by any other path this same pass. */
 static inline bool
 step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
-    if (x + 3 >= w || y + 3 >= h) {
+    if (x + 1 >= w || y + 1 >= h) {
         return false;
     }
+    const size_t at    = (size_t)y * (size_t)w + (size_t)x;
+    const size_t at_r  = at + 1;
+    const size_t at_d  = at + (size_t)w;
+    const size_t at_dr = at_d + 1;
+    const uint8_t m0 = CELL_MATERIAL(s->cells[at]);
+    const uint8_t m1 = CELL_MATERIAL(s->cells[at_r]);
+    const uint8_t m2 = CELL_MATERIAL(s->cells[at_d]);
+    const uint8_t m3 = CELL_MATERIAL(s->cells[at_dr]);
 
-    int steam_count = 0, gas_count = 0;
-    for (int dy = 0; dy < 4; dy++) {
-        for (int dx = 0; dx < 4; dx++) {
-            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
-            const uint8_t mat = CELL_MATERIAL(s->cells[at]);
-            if (mat == MAT_STEAM) {
-                steam_count++;
-            } else if (mat == MAT_GAS) {
-                gas_count++;
-            } else {
-                return false;
-            }
-        }
+    if ((m0 != MAT_STEAM && m0 != MAT_GAS) || (m1 != MAT_STEAM && m1 != MAT_GAS)
+        || (m2 != MAT_STEAM && m2 != MAT_GAS) || (m3 != MAT_STEAM && m3 != MAT_GAS)) {
+        return false;
     }
-    if (steam_count < 2 || gas_count < 2) {
+    const int steam_count = (m0 == MAT_STEAM) + (m1 == MAT_STEAM)
+                             + (m2 == MAT_STEAM) + (m3 == MAT_STEAM);
+    if (steam_count != 2) {
         return false;
     }
 
@@ -4491,16 +4480,13 @@ step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
         return false;
     }
 
-    for (int dy = 0; dy < 4; dy++) {
-        for (int dx = 0; dx < 4; dx++) {
-            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
-            if (dx < 2 && dy < 2) {
-                place_reacted(s, x + dx, y + dy, at, MAT_ACID);
-            } else {
-                place_cell(s, x + dx, y + dy, at, CELL_EMPTY);
-            }
-        }
-    }
+    /* A coin flip, not a certainty - see this function's own header
+     * comment for why acid is no likelier than plain water here. */
+    const uint8_t residue = (rng_next(&s->rng) & 1) ? MAT_ACID : MAT_WATER;
+    place_reacted(s, x, y, at, residue);
+    place_cell(s, x + 1, y, at_r, CELL_EMPTY);
+    place_cell(s, x, y + 1, at_d, CELL_EMPTY);
+    place_cell(s, x + 1, y + 1, at_dr, CELL_EMPTY);
     return true;
 }
 
@@ -4569,19 +4555,36 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
          * MAT_ACID directly in the dissolves branch: this is inherently
          * about these two specific materials, not a trait a future
          * material could opt into. Checked ahead of the ordinary
-         * condensing branch below, since a steam cell that IS part of a
-         * matching acid-rain block should convert to acid rather than
-         * also rolling to condense into water this same step - the two
-         * are mutually exclusive outcomes for the same cell, and acid
-         * rain is the narrower, more specific match. No flag of its own
-         * to arm or clear: this can never fire without steam existing
-         * somewhere in its own 4x4, and steam's mere presence anywhere
-         * is already what arms may_have_condenser via the branch just
-         * below, so a board with steam on it already keeps this pass
-         * running for as long as either mechanic needs it to. */
-        if ((CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM)
-            && step_one_acid_rain_cell(s, x, y, w, h)) {
-            continue;
+         * condensing branch below since, with both windows now the same
+         * 2x2 size, a window this fires on can never also satisfy
+         * condensation (that needs four IDENTICAL cells; this needs a
+         * 2-and-2 split) - the ordering costs nothing, it just has to
+         * pick one.
+         *
+         * found |= ... on a hit is NOT optional the way it looks: the
+         * survivor (Acid or Water) is written at (x, y), the walk's own
+         * current position, and the walk never revisits a cell it has
+         * already passed this pass - so unlike every other branch here,
+         * nothing else is going to give the new cell its own turn to
+         * report FOUND_DISSOLVER/FOUND_MOISTURE, and the steam this
+         * collapse just consumed cannot report FOUND_CONDENSING either.
+         * Skipping this - as an earlier version of this branch did -
+         * left may_have_dissolver/may_have_moisture/may_have_condenser
+         * all cleared at the end of THIS SAME pass, stranding the new
+         * cell inert (no bubbling, no boiling, no further dissolving)
+         * until something unrelated re-armed one of the three; measured
+         * directly, a rained acid cell sealed against stone ate nothing
+         * across 200 steps where an identical sand_set()-placed acid
+         * cell in the same box ate normally. Over-arms by one bit when
+         * the flip lands on Water rather than Acid (FOUND_DISSOLVER is
+         * irrelevant to a water cell) - harmless, the same direction
+         * step_one_condensing_cell()'s own FOUND_CONDENSING report below
+         * already errs in (set before the roll is even known to hit). */
+        if (CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM) {
+            if (step_one_acid_rain_cell(s, x, y, w, h)) {
+                found |= FOUND_DISSOLVER | FOUND_MOISTURE | FOUND_CONDENSING;
+                continue;
+            }
         }
         /* Condensing, on its own presence-not-activity footing exactly
          * like dissolving above: a steam cell that finds no complete
