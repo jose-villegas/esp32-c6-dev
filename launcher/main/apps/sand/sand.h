@@ -1185,12 +1185,32 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * becomes acid, the other twelve cells clear to empty (sixteen cells of
  * vapor rain down four cells of acid, not sixteen), and this chance
  * dropped alongside it, from 32 down to 8, once the smaller yield made
- * the chance worth tuning again. Chance-in-256, checked only once a full
- * 4x4 has already been confirmed to hold nothing but gas and steam with
- * at least two of
- * each. Starting bias, not a measured one - tune on device like every
- * other constant here. */
-#define SAND_ACID_RAIN_CHANCE 8
+ * the chance worth tuning again.
+ *
+ * 8 still read as close to certain on device once the yield fix landed -
+ * the same "many independent windows" arithmetic that broke 1-in-256 on
+ * the old 16-cell yield is still in play here, just scaled down rather
+ * than eliminated: a sizeable vapor pocket offers dozens of overlapping
+ * qualifying 4x4 origins at once, so even a small per-window chance adds
+ * up to at least one collapse most steps for as long as the pocket lasts.
+ *
+ * Dropped the rest of the way to 1 - the rarest a single byte-wide roll
+ * can express, and (deliberately) the same figure steam's own condense-
+ * to-water roll uses (reaction_t.condenses, MAT_STEAM's row in
+ * material.c) - rather than composing a second roll on top to chase a
+ * fraction of that rate: simpler to reason about, and pinning both
+ * "rain" mechanics to the same per-window floor reads as consistent
+ * rather than arbitrary. A big enough vapor pocket will still offer
+ * enough overlapping windows to convert readily even at 1-in-256 per
+ * window (see the paragraph above) - that scaling is inherent to how
+ * many windows a large pocket offers, not something this single
+ * per-window constant can fix on its own.
+ *
+ * Chance-in-256, checked only once a full 4x4 has already been confirmed
+ * to hold nothing but gas and steam with at least two of each. Starting
+ * bias, not a measured one - tune on device like every other constant
+ * here. */
+#define SAND_ACID_RAIN_CHANCE 1
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
