@@ -21,15 +21,18 @@
  * instead of a microui panel.
  *
  * web_render() DOES call the real material_colours() (material.c) - the
- * same function app_sand.c's paint_row_n() calls - with a real edge mask
- * and a real LOCAL DEPTH walk (see compute_local_depth() below), so liquid
- * pools get the same depth-graded interior shading the device shows. What
- * it still does not reproduce is paint_row_n()'s own sub-pixel PATTERNS -
- * the glass shine sweep, foam dither, and the HATCHED/SPECKLED diagonal
- * pixel arrangement material_colours() can also return (its col[1]/col[2])
- * - every cell block here is filled uniformly with col[0], the body colour.
- * The simulation itself - materials, reactions, liquids, gases, tilt - is
- * the genuine, unmodified article throughout.
+ * same function app_sand.c's paint_row_n() calls - with a real edge mask, a
+ * real per-cell hash, and a real LOCAL DEPTH walk (see compute_local_depth()
+ * below), so liquid pools get the same depth-graded interior shading the
+ * device shows. It also reproduces paint_row_n()'s own per-pixel HATCHED
+ * pattern (see the shine block in web_render() below) - the travelling
+ * glass shine, the woven diagonal grain, and water's foam dither (via
+ * material_set_foam_phase(), advanced in web_step()) - using the same
+ * material_shine_direction() and SHINE_* constants app_sand.c does. The
+ * simulation AND its rendering are the genuine, unmodified article; the one
+ * thing this file does not do is app_sand.c's SPARSE, dirty-row-only
+ * repaint - see compute_local_depth()'s own comment for why that never
+ * needed porting here.
  *===========================================================================*/
 #include <stdint.h>
 #include <stdlib.h>
@@ -95,6 +98,14 @@ static const cell_t brushes[] = {
 
 #define WEB_IMPULSE_MAX  4096
 
+/* Same constants as app_sand.c's own (see there for the tuning history):
+ * the travelling shine's period/speed, and how often water's foam dither
+ * phase advances. */
+#define SHINE_PERIOD   64
+#define SHINE_STEP_MS  40
+#define SHINE_STEP_PX   2
+#define FOAM_PHASE_MS  90
+
 static uint8_t   *grid;
 static impulse_t *impulse_buf;
 static uint8_t   *pixels;   /* WEB_SCREEN_W * WEB_SCREEN_H * 4 bytes, RGBA8888 -
@@ -117,6 +128,19 @@ static uint32_t pour_accumulator_ms;
  * surface" for a liquid is a fact about gravity, not about the grid, and
  * web_render() has no gravity sample of its own to read. */
 static int last_gx, last_gy = WEB_COUNTS_PER_G;
+
+/* The travelling shine's own state - see app_sand.c's identical statics for
+ * the full account of each. shine_ux_q8/shine_uy_q8 default to the same
+ * (1,1) diagonal app_sand.c starts with, for a frame drawn before web_step()
+ * has ever run. */
+static int      shine_offset;
+static uint32_t shine_elapsed_ms;
+static int      shine_ux_q8 = 181;
+static int      shine_uy_q8 = 181;
+
+/* Water's foam dither clock - see material_set_foam_phase()'s own comment
+ * in material.h, and FOAM_PHASE_MS above. */
+static uint32_t foam_elapsed_ms;
 
 /* True once web_init() has run - guards web_step()/web_render() against a
  * stray call before the grid exists, the same role failed's RUNNING-with-
@@ -235,6 +259,20 @@ void web_step(uint32_t dt_ms, int ax, int ay, int az, int rotation)
     const int flow = tilt_strength(&tilt);
     const int shake = tilt_shake(&tilt);
     const int jostle = shake > 40 ? shake : 0;   /* SHAKE_DEADZONE, app_sand.c */
+
+    /* Visual clocks, advanced every call regardless of free fall below -
+     * purely cosmetic state, same as app_sand.c's own sand_frame(), which
+     * updates these unconditionally too. */
+    material_shine_direction(gx, gy, &shine_ux_q8, &shine_uy_q8);
+    shine_elapsed_ms += dt_ms;
+    if (shine_elapsed_ms >= SHINE_STEP_MS) {
+        const uint32_t steps = shine_elapsed_ms / SHINE_STEP_MS;
+        shine_elapsed_ms -= steps * SHINE_STEP_MS;
+        shine_offset = (int)(((unsigned)shine_offset + steps * SHINE_STEP_PX)
+                             & (SHINE_PERIOD - 1));
+    }
+    foam_elapsed_ms += dt_ms;
+    material_set_foam_phase(foam_elapsed_ms / FOAM_PHASE_MS);
 
     if (tilt_in_free_fall(&tilt)) {
         return;
@@ -505,21 +543,72 @@ void web_render(void)
                 : depth_liquid;
 
             gfx_color_t col[3];
-            material_colours(c, material_grain_hash(cx, cy), mask, depth, col);
-            const uint32_t rgb = gfx_color_rgb888(col[0]);
-            const uint8_t r = (uint8_t)(rgb >> 16);
-            const uint8_t g = (uint8_t)(rgb >> 8);
-            const uint8_t b = (uint8_t)rgb;
+            const material_pattern_t pat = material_colours(
+                c, material_grain_hash(cx, cy), mask, depth, col);
 
             const int px0 = cx * cell_px;
             const int px1 = px0 + cell_px < WEB_SCREEN_W ? px0 + cell_px : WEB_SCREEN_W;
 
+            if (pat != MATERIAL_HATCHED) {
+                /* FLAT and SPECKLED both land here, same as app_sand.c's
+                 * own paint_row_n(): a speckled cell already arrived with a
+                 * different col[0], chosen once from this cell's own hash,
+                 * so it needs no per-pixel work of its own either. */
+                const uint32_t rgb = gfx_color_rgb888(col[0]);
+                const uint8_t r = (uint8_t)(rgb >> 16);
+                const uint8_t g = (uint8_t)(rgb >> 8);
+                const uint8_t b = (uint8_t)rgb;
+
+                for (int py = py0; py < py1; py++) {
+                    uint8_t *out = rgba + ((size_t)py * WEB_SCREEN_W + px0) * 4;
+                    for (int px = px0; px < px1; px++) {
+                        out[0] = r;
+                        out[1] = g;
+                        out[2] = b;
+                        out[3] = 255;
+                        out += 4;
+                    }
+                }
+                continue;
+            }
+
+            /* MATERIAL_HATCHED - the woven diagonal grain plus the
+             * travelling shine band, in SCREEN pixel coordinates so both
+             * run unbroken across cell boundaries rather than restarting
+             * per cell. Exact port of app_sand.c's paint_row_n() own
+             * per-pixel loop (its own comment has the full derivation of
+             * every term below) - only the destination (an RGBA byte
+             * buffer here, the RGB565 framebuffer there) differs. */
+            const uint32_t rgb0 = gfx_color_rgb888(col[0]);
+            const uint32_t rgb1 = gfx_color_rgb888(col[1]);
+            const uint32_t rgb2 = gfx_color_rgb888(col[2]);
+
+            const int base = (cx + cy) * cell_px;
+            const int diff = (cx - cy) * cell_px;
+            const int shine_base_q8 =
+                (cx * cell_px) * shine_ux_q8 + (cy * cell_px) * shine_uy_q8;
+
             for (int py = py0; py < py1; py++) {
+                const int dy = py - py0;
                 uint8_t *out = rgba + ((size_t)py * WEB_SCREEN_W + px0) * 4;
+
                 for (int px = px0; px < px1; px++) {
-                    out[0] = r;
-                    out[1] = g;
-                    out[2] = b;
+                    const int dx = px - px0;
+
+                    const bool grain = (((base + dx + dy) & 7) == 0) ||
+                                       (((diff + dx - dy) & 7) == 0);
+
+                    const int shine_q8 =
+                        shine_base_q8 + dx * shine_ux_q8 + dy * shine_uy_q8;
+                    const int along = ((shine_q8 >> 8) + shine_offset)
+                                      & (SHINE_PERIOD - 1);
+
+                    const uint32_t rgb = (along < cell_px)
+                        ? rgb2 : (grain ? rgb1 : rgb0);
+
+                    out[0] = (uint8_t)(rgb >> 16);
+                    out[1] = (uint8_t)(rgb >> 8);
+                    out[2] = (uint8_t)rgb;
                     out[3] = 255;
                     out += 4;
                 }
