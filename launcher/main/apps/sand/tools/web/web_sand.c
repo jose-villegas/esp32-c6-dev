@@ -18,12 +18,18 @@
  * browser canvas repaint of a 368x448 image is trivial, unlike the ESP32's
  * SPI bus, so web_render() below always redraws the whole frame rather than
  * tracking which rows changed. The HTML/JS side draws its own palette UI
- * instead of a microui panel. And web_render() paints each cell as a flat
- * block of material_palette()'s own colour - not app_sand.c's paint_row_n()
- * extras (the glass shine sweep, foam dither, local-depth liquid shading),
- * which are real device-rendering polish this demo does not reproduce. The
- * simulation itself - materials, reactions, liquids, gases, tilt - is the
- * genuine, unmodified article.
+ * instead of a microui panel.
+ *
+ * web_render() DOES call the real material_colours() (material.c) - the
+ * same function app_sand.c's paint_row_n() calls - with a real edge mask
+ * and a real LOCAL DEPTH walk (see compute_local_depth() below), so liquid
+ * pools get the same depth-graded interior shading the device shows. What
+ * it still does not reproduce is paint_row_n()'s own sub-pixel PATTERNS -
+ * the glass shine sweep, foam dither, and the HATCHED/SPECKLED diagonal
+ * pixel arrangement material_colours() can also return (its col[1]/col[2])
+ * - every cell block here is filled uniformly with col[0], the body colour.
+ * The simulation itself - materials, reactions, liquids, gases, tilt - is
+ * the genuine, unmodified article throughout.
  *===========================================================================*/
 #include <stdint.h>
 #include <stdlib.h>
@@ -34,6 +40,7 @@
 #include "material.h"
 #include "sand.h"
 #include "tilt.h"
+#include "util/intmath.h"
 
 /* Duplicated from gfx.h's GFX_WIDTH/GFX_HEIGHT, the same way palette.h
  * already duplicates them - gfx.h drags in bsp/esp-bsp.h, which this file,
@@ -95,6 +102,8 @@ static uint8_t   *pixels;   /* WEB_SCREEN_W * WEB_SCREEN_H * 4 bytes, RGBA8888 -
                               * which is how JS gets at it without needing
                               * raw malloc/free exported across the wasm
                               * boundary. */
+static uint8_t   *depth_buf; /* grid_w * grid_h bytes - see
+                               * compute_local_depth() below. */
 static sand_t      sim;
 static tilt_t      tilt;
 
@@ -102,6 +111,12 @@ static int grid_w, grid_h, cell_px;
 static int brush_index;
 static uint32_t sim_accumulator_q8;
 static uint32_t pour_accumulator_ms;
+
+/* This frame's gravity, cached by web_step() for web_render()'s own local-
+ * depth walk (see compute_local_depth()) - which direction is "toward the
+ * surface" for a liquid is a fact about gravity, not about the grid, and
+ * web_render() has no gravity sample of its own to read. */
+static int last_gx, last_gy = WEB_COUNTS_PER_G;
 
 /* True once web_init() has run - guards web_step()/web_render() against a
  * stray call before the grid exists, the same role failed's RUNNING-with-
@@ -122,13 +137,15 @@ int web_init(int cell_px_in)
 
     free(grid);
     free(impulse_buf);
+    free(depth_buf);
 
     grid        = malloc((size_t)grid_w * grid_h);
+    depth_buf   = malloc((size_t)grid_w * grid_h);
     impulse_buf = malloc((size_t)WEB_IMPULSE_MAX * sizeof(*impulse_buf));
     if (!pixels) {
         pixels = malloc((size_t)WEB_SCREEN_W * WEB_SCREEN_H * 4);
     }
-    if (!grid || !pixels) {
+    if (!grid || !depth_buf || !pixels) {
         ready = 0;
         return 0;
     }
@@ -213,6 +230,8 @@ void web_step(uint32_t dt_ms, int ax, int ay, int az, int rotation)
 
     const int gx = tilt_x(&tilt);
     const int gy = tilt_y(&tilt);
+    last_gx = gx;
+    last_gy = gy;
     const int flow = tilt_strength(&tilt);
     const int shake = tilt_shake(&tilt);
     const int jostle = shake > 40 ? shake : 0;   /* SHAKE_DEADZONE, app_sand.c */
@@ -309,9 +328,118 @@ void web_clear(void)
 }
 
 /*---------------------------------------------------------------------------
- * Render - flat per-cell colour, full frame every call. See this file's own
- * top comment for what is deliberately left out.
+ * Render - one flat colour per cell block, full frame every call, but that
+ * colour now comes from the real material_colours() (material.c) - the same
+ * function app_sand.c's paint_row_n() calls - fed a real edge mask, a real
+ * per-cell hash, and a real LOCAL DEPTH for liquids, so a pool of water,
+ * lava, oil or acid gets the same depth-graded interior shading the device
+ * shows. Still not the full paint_row_n(): the HATCHED/SPECKLED sub-pixel
+ * patterns material_colours() also returns (col[1]/col[2], the glass shine
+ * sweep, foam dither) are not drawn here - every cell block is filled
+ * uniformly with col[0], the body colour. See this file's own top comment.
  *-------------------------------------------------------------------------*/
+
+/* This frame's LOCAL DEPTH scale, in Q8 - see material.h's own comment on
+ * material_colours()'s `depth` parameter, and app_sand.c's LOCAL DEPTH
+ * block for the derivation this mirrors: `256 * len(gx,gy) / dominant_axis`,
+ * the ratio that turns a raw walk-step COUNT (depth_buf[], below) into true
+ * distance along the actual gravity ray. Set by compute_local_depth(),
+ * read by web_render() right after. */
+static unsigned local_depth_scale_q8;
+
+/* Fills depth_buf[] with each liquid cell's LOCAL DEPTH, as a RAW STEP
+ * COUNT (0..MATERIAL_LIQUID_DEPTH_BAND) - the projection into Q8 true
+ * distance (local_depth_scale_q8 above) is applied once, per cell, in
+ * web_render(), exactly the way app_sand.c's own local_depth_scale_q8
+ * comment describes: "PROJECTED AT COMBINE TIME... a raw count is
+ * gravity-agnostic".
+ *
+ * A MUCH simpler walk than app_sand.c's own paint_row_n() version of this
+ * mechanism, for one reason: that one has to survive a SPARSE, cross-frame
+ * repaint (only dirty rows redrawn, some frames apart, in whatever order
+ * draw_dirty_rows() visits them) - which is the entire reason it carries a
+ * double buffer, a hold-then-commit debounce, and a "which row does the
+ * buffer actually describe" guard (see its own top comment for the device
+ * report - a flooded 45-degree flip - each one fixed). This file redraws
+ * the WHOLE grid, EVERY frame, in a single pass that always visits rows (or
+ * columns) in surface-to-deep order - so every neighbour this walk reads
+ * was already computed earlier in THIS SAME call, always. There is no
+ * staleness to debounce against: a boundary cell's depth is 0, immediately,
+ * correctly, every time, with no hold-and-see. */
+static void compute_local_depth(void)
+{
+    const int gx = last_gx, gy = last_gy;
+    const int ax = im_abs(gx), ay = im_abs(gy);
+    const int dominant = ay >= ax ? ay : ax;
+
+    if (dominant == 0) {
+        /* Free fall, or no gravity sample yet - nothing is "toward the
+         * surface" in any direction, so every liquid reads flat, unshaded
+         * (depth 0) rather than reusing whatever direction happened to be
+         * current last frame. */
+        memset(depth_buf, 0, (size_t)grid_w * grid_h);
+        local_depth_scale_q8 = 0;
+        return;
+    }
+    local_depth_scale_q8 = (unsigned)(256u * (unsigned)im_len(gx, gy) / (unsigned)dominant);
+
+    if (ay >= ax) {
+        const int vdir = gy > 0 ? 1 : -1;
+        const int y0 = vdir > 0 ? 0 : grid_h - 1;
+        const int y_end = vdir > 0 ? grid_h : -1;
+
+        for (int cy = y0; cy != y_end; cy += vdir) {
+            const uint8_t *row = &grid[(size_t)cy * grid_w];
+            const int ny = cy - vdir;
+            const bool has_prev = ny >= 0 && ny < grid_h;
+            const uint8_t *prev_row = has_prev ? &grid[(size_t)ny * grid_w] : NULL;
+            const uint8_t *prev_depth = has_prev ? &depth_buf[(size_t)ny * grid_w] : NULL;
+            uint8_t *depth_row = &depth_buf[(size_t)cy * grid_w];
+
+            for (int cx = 0; cx < grid_w; cx++) {
+                if (material_of(row[cx])->kind != KIND_LIQUID) {
+                    depth_row[cx] = 0u;
+                    continue;
+                }
+                const bool same = has_prev &&
+                    CELL_MATERIAL(prev_row[cx]) == CELL_MATERIAL(row[cx]);
+                if (!same) {
+                    depth_row[cx] = 0u;
+                    continue;
+                }
+                const unsigned src = prev_depth[cx];
+                depth_row[cx] = (uint8_t)(src < MATERIAL_LIQUID_DEPTH_BAND
+                    ? src + 1u : MATERIAL_LIQUID_DEPTH_BAND);
+            }
+        }
+    } else {
+        const int hdir = gx > 0 ? 1 : -1;
+        const int x0 = hdir > 0 ? 0 : grid_w - 1;
+        const int x_end = hdir > 0 ? grid_w : -1;
+
+        for (int cy = 0; cy < grid_h; cy++) {
+            const uint8_t *row = &grid[(size_t)cy * grid_w];
+            uint8_t *depth_row = &depth_buf[(size_t)cy * grid_w];
+
+            for (int cx = x0; cx != x_end; cx += hdir) {
+                if (material_of(row[cx])->kind != KIND_LIQUID) {
+                    depth_row[cx] = 0u;
+                    continue;
+                }
+                const int nx = cx - hdir;
+                const bool same = nx >= 0 && nx < grid_w &&
+                    CELL_MATERIAL(row[nx]) == CELL_MATERIAL(row[cx]);
+                if (!same) {
+                    depth_row[cx] = 0u;
+                    continue;
+                }
+                const unsigned src = depth_row[nx];
+                depth_row[cx] = (uint8_t)(src < MATERIAL_LIQUID_DEPTH_BAND
+                    ? src + 1u : MATERIAL_LIQUID_DEPTH_BAND);
+            }
+        }
+    }
+}
 
 /* The pixel buffer's own address, for JS to read directly out of wasm
  * memory (via HEAPU8) after each web_render() call - see web_render()'s own
@@ -333,21 +461,57 @@ void web_render(void)
         return;
     }
 
-    uint8_t *rgba = pixels;
-    const gfx_color_t *pal = material_palette();
+    compute_local_depth();
 
-    for (int gy = 0; gy < grid_h; gy++) {
-        const uint8_t *row = &grid[(size_t)gy * grid_w];
-        const int py0 = gy * cell_px;
+    uint8_t *rgba = pixels;
+
+    for (int cy = 0; cy < grid_h; cy++) {
+        const uint8_t *row       = &grid[(size_t)cy * grid_w];
+        const uint8_t *above     = cy > 0          ? &grid[(size_t)(cy - 1) * grid_w] : NULL;
+        const uint8_t *below     = cy < grid_h - 1 ? &grid[(size_t)(cy + 1) * grid_w] : NULL;
+        const uint8_t *depth_row = &depth_buf[(size_t)cy * grid_w];
+
+        const int py0 = cy * cell_px;
         const int py1 = py0 + cell_px < WEB_SCREEN_H ? py0 + cell_px : WEB_SCREEN_H;
 
-        for (int gx = 0; gx < grid_w; gx++) {
-            const uint32_t rgb = gfx_color_rgb888(pal[row[gx]]);
+        for (int cx = 0; cx < grid_w; cx++) {
+            const cell_t c = row[cx];
+
+            /* Same edge mask app_sand.c's paint_row_n() builds - see its own
+             * comment (app_sand.c) for why the diagonal bits are gated
+             * behind "already a cardinal edge, and water" rather than
+             * always computed. */
+            unsigned mask =
+                ((cx > 0          && CELL_IS_EMPTY(row[cx - 1])) ? MATERIAL_EDGE_LEFT  : 0u) |
+                ((cx < grid_w - 1 && CELL_IS_EMPTY(row[cx + 1])) ? MATERIAL_EDGE_RIGHT : 0u) |
+                ((above != NULL   && CELL_IS_EMPTY(above[cx]))   ? MATERIAL_EDGE_UP    : 0u) |
+                ((below != NULL   && CELL_IS_EMPTY(below[cx]))   ? MATERIAL_EDGE_DOWN  : 0u);
+
+            if ((mask & MATERIAL_EDGE_CARDINAL) != 0 && CELL_MATERIAL(c) == MAT_WATER) {
+                mask |=
+                    ((cx > 0          && above != NULL && CELL_IS_EMPTY(above[cx - 1])) ? MATERIAL_EDGE_UP_LEFT    : 0u) |
+                    ((cx < grid_w - 1 && above != NULL && CELL_IS_EMPTY(above[cx + 1])) ? MATERIAL_EDGE_UP_RIGHT   : 0u) |
+                    ((cx > 0          && below != NULL && CELL_IS_EMPTY(below[cx - 1])) ? MATERIAL_EDGE_DOWN_LEFT  : 0u) |
+                    ((cx < grid_w - 1 && below != NULL && CELL_IS_EMPTY(below[cx + 1])) ? MATERIAL_EDGE_DOWN_RIGHT : 0u);
+            }
+
+            const unsigned depth_raw = ((unsigned)depth_row[cx] * local_depth_scale_q8) >> 8;
+            const unsigned depth_liquid = depth_raw < MATERIAL_LIQUID_DEPTH_BAND
+                ? depth_raw : MATERIAL_LIQUID_DEPTH_BAND;
+            /* A root borrows `depth` for its own reading - see material_
+             * colours()'s own comment on this in material.h. */
+            const unsigned depth = (c == MATX(MATX_ROOT))
+                ? material_root_neighbours(above, row, below, cx, grid_w)
+                : depth_liquid;
+
+            gfx_color_t col[3];
+            material_colours(c, material_grain_hash(cx, cy), mask, depth, col);
+            const uint32_t rgb = gfx_color_rgb888(col[0]);
             const uint8_t r = (uint8_t)(rgb >> 16);
             const uint8_t g = (uint8_t)(rgb >> 8);
             const uint8_t b = (uint8_t)rgb;
 
-            const int px0 = gx * cell_px;
+            const int px0 = cx * cell_px;
             const int px1 = px0 + cell_px < WEB_SCREEN_W ? px0 + cell_px : WEB_SCREEN_W;
 
             for (int py = py0; py < py1; py++) {
