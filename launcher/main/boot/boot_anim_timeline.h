@@ -199,6 +199,6 @@ static const boot_anim_keyframe_t boot_anim_keyframes[BOOT_ANIM_KEYFRAME_COUNT] 
       BOOT_ANIM_EASE_LINEAR },
     {  4300,
       {      0,      0,  -5120 }, {      0,      0,      0 }, {    512,    512,    512 },
-      {  -1024,   4096,      0 }, {   -256,   -384,      0 }, {    307,    307,    307 },
+      {  -1024,   4096,      0 }, {   -256,      0,      0 }, {    307,    307,    307 },
       BOOT_ANIM_EASE_LINEAR },
 };
