@@ -115,7 +115,7 @@
 #define BOOT_ANIM_GRID_HUE_SPREAD 64
 
 #define BOOT_ANIM_GRID_WHITEN_MAX 32
-#define BOOT_ANIM_GRID_CEILING_MAX 64
+#define BOOT_ANIM_GRID_CEILING_MAX 96
 #define BOOT_ANIM_GRID_MAX 64
 /* small3dlib's S3L_Camera.focalLength - 0 is an orthographic
  * projection (see boot_anim.h's "The projection" section), any other
