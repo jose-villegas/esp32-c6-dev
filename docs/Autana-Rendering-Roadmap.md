@@ -16,6 +16,141 @@ one, and every phase ends with a number, not a feeling.
 
 ---
 
+## 0. At a glance
+
+Four pictures that carry most of the document. Details and numbers are in
+the sections they point to.
+
+### The work and what blocks what
+
+Beads issue ids in brackets; solid arrows are dependencies, dotted ones
+are "helps but does not block". Phase numbers match section 6.
+
+```mermaid
+flowchart LR
+  classDef done fill:#2d6a4f,color:#fff,stroke:none
+  classDef p0 fill:#1d3557,color:#fff,stroke:none
+  classDef p1 fill:#457b9d,color:#fff,stroke:none
+  classDef p2 fill:#e76f51,color:#fff,stroke:none
+  classDef game fill:#f4a261,color:#000,stroke:none
+  classDef port fill:#6d597a,color:#fff,stroke:none
+  classDef side fill:#adb5bd,color:#000,stroke:none
+
+  subgraph P0["Phase 0 - attribution"]
+    e6c["Frame-time row<br/>sim + draw + present [e6c]"]:::p0
+    ems1["Cube perf at -O2,<br/>cycles per covered pixel [ems.1]"]:::p0
+  end
+  subgraph P1["Phase 1 - bus and overlap"]
+    kfg["80 MHz QSPI<br/>root cause [kfg]"]:::p1
+    i91["Present pipelining<br/>for sand [91i]"]:::p1
+    ems2["Band-mode framebuffer:<br/>2-band ring, per-band z,<br/>mode request at enter() [ems.2]"]:::p1
+    rpt["Resolution / colour<br/>system settings [rpt]"]:::p1
+  end
+  subgraph P2["Phase 2 - r3d"]
+    xnq["Extract S3L transform<br/>from boot_anim [xnq]"]:::side
+    ems3["Span rasterizer, binning,<br/>ordering table, colormap [ems.3]"]:::p2
+  end
+  subgraph G["Phases 3-5 - the games"]
+    ems4["Raycaster + FPS [ems.4]"]:::game
+    ems5["Rolling ball [ems.5]"]:::game
+    ems6["r2d + platformer [ems.6]"]:::game
+  end
+  ems7["S3 port [ems.7]"]:::port
+  ems8["Host render harness<br/>frame -> .bmp diff [ems.8]"]:::side
+  v10["Tilt / shake library [1v0]"]:::side
+  fyq["Sand perf round 5 [fyq]"]:::side
+
+  e6c --> kfg
+  e6c --> i91
+  e6c --> ems2
+  rpt --> ems2
+  ems2 --> ems3
+  xnq --> ems3
+  ems2 --> ems4
+  v10 --> ems4
+  ems3 --> ems5
+  v10 --> ems5
+  ems2 --> ems6
+  ems3 --> ems7
+  fyq --> v10
+  ems8 -.-> ems3
+  ems8 -.-> ems6
+  kfg -.-> ems4
+  kfg -.-> ems6
+```
+
+### Where a frame's time goes, today and in band mode
+
+Today the shell runs `frame()` then `gfx_present()`, and present blocks
+until the last DMA transfer drains. Band mode renders band *k+1* while
+band *k* is on the bus, so frame time is max(render, bus) plus one band.
+Bus numbers are measured (40 MHz); render is the cube's stale figure and
+is only there for shape.
+
+```
+time (ms) 0         10        20        30        40        50
+          |---------|---------|---------|---------|---------|
+today     [ render ~28 ms                  ][ present 17.6 ]      ~46 ms/frame
+          CPU busy ─────────────────────────  CPU idle ──────
+
+band mode CPU  [r0][r1][r2][r3][r4][r5][r6]                       ~31 ms/frame,
+          DMA      [s0][s1][s2][s3][s4][s5][s6]                   bus-bound once
+                                                                  render < bus
++ 80 MHz  DMA      [s0][s1][s2][s3][s4][s5][s6]  (9.6 ms total)
+```
+
+### Memory, today and in band mode
+
+Heap after the raw panel driver is ~424 KiB. Every buffer that matters:
+
+```
+today, full-fb    [framebuffer 322 KiB ....................................][sand 41][gather 16][free ~40]
+
+band mode, 64-row [band A 47][band B 47][z 47][freed for the app ~180 KB ..................][gather 16][free]
+band mode, 32-row [A 24][B 24][z 24][freed for the app ~250 KB ..............................][gather 16][free]
+half-res, full-fb [fb 80 KiB ......][freed ~240 KB .................................][sand 41][gather 16][free]
+```
+
+### Which renderer each game uses
+
+```mermaid
+flowchart TB
+  classDef game fill:#f4a261,color:#000,stroke:none
+  classDef r fill:#457b9d,color:#fff,stroke:none
+  classDef core fill:#1d3557,color:#fff,stroke:none
+
+  FPS["FPS: gyro look,<br/>buttons move"]:::game
+  BALL["Rolling ball:<br/>physics + lighting"]:::game
+  PLAT["Platformer:<br/>parallax + 2D light"]:::game
+
+  RC["render/rc - raycaster<br/>DDA per column, textured<br/>vertical spans, depth array"]:::r
+  R3D["render/r3d - span rasterizer<br/>flat / Gouraud / dithered / affine,<br/>ordering table, per-band z"]:::r
+  M7["Mode-7 floor<br/>per-scanline affine plane"]:::r
+  R2D["render/r2d - tiles, line scroll,<br/>sprites, colormap light map"]:::r
+
+  GFX["gfx band mode + dirty bands<br/>mode request at enter()"]:::core
+  CM["colormap + CLUT textures<br/>+ Bayer dither"]:::core
+  FX["core: fixed.h, rng, tween,<br/>tilt/shake, timelines"]:::core
+
+  FPS --> RC
+  FPS -.-> M7
+  BALL --> R3D
+  BALL -.->|v1| M7
+  PLAT --> R2D
+  RC --> GFX
+  R3D --> GFX
+  M7 --> GFX
+  R2D --> GFX
+  RC --> CM
+  R3D --> CM
+  R2D --> CM
+  FPS --> FX
+  BALL --> FX
+  PLAT --> FX
+```
+
+---
+
 ## 1. Reference points, and what they say about our gap
 
 Public software renderers on this class of chip are a useful sanity check
