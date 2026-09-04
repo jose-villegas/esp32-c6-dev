@@ -21517,7 +21517,17 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
  * anything else through plain sand_impulse(), which a KIND_STATIC cell
  * would just refuse. `cells` is memset here rather than by each caller,
  * matching test_water_does_not_drill_into_oil_when_tilted's own
- * drag_cells above - a fresh sand_init() alone never clears the array. */
+ * drag_cells above - a fresh sand_init() alone never clears the array.
+ *
+ * A DIRT medium must be built with a DRY variant (0 .. SOIL_DRY_TONES-1,
+ * material.h) - the callers below use 0, the same tone every other dirt
+ * scene in this file uses. Anything from SOIL_DRY_TONES up is WET, and wet
+ * soil carries moisture that percolates and dries while the measurement is
+ * running: passing variant 8 here measures a medium that is quietly
+ * changing state under the chunk, and moves dirt's own averaged distance
+ * from 7.25 cells to 6.66. Drag itself reads per-material density and does
+ * not care, so nothing fails - the scene just stops being the one the test
+ * name claims. */
 static void plow_build(sand_t *g, uint8_t *cells, impulse_t *buf, int buf_max,
                        uint32_t seed, material_id_t mover, cell_t medium)
 {
@@ -21585,7 +21595,7 @@ static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_air(v
     impulse_t buf[4];
 
     const long air_total  = plow_total_distance(cells, buf, 0);
-    const long dirt_total = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 8));
+    const long dirt_total = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 0));
 
     free(cells);
 
@@ -21605,7 +21615,7 @@ static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water
     impulse_t buf[4];
 
     const long water_total = plow_total_distance(cells, buf, CELL_MAKE(MAT_WATER, MASS_MAX));
-    const long dirt_total  = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 8));
+    const long dirt_total  = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 0));
 
     free(cells);
 
@@ -21633,7 +21643,7 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
         sand_set(&s, x, ROW + 1, STONE);
     }
     sand_set(&s, SX, ROW, STONE);
-    sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 8));
+    sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 0));
     sand_impulse_dislodge(&s, SX, ROW, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
 
     sand_step(&s, 0, 1000, 0);
@@ -21665,7 +21675,7 @@ static void test_a_thrown_powder_grain_loses_no_drag_displacing_dirt(void)
         sand_set(&s, x, ROW + 1, STONE);
     }
     sand_set(&s, SX, ROW, CELL_MAKE(MAT_SAND, 8));
-    sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 8));
+    sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 0));
     sand_impulse(&s, SX, ROW, DIR_RIGHT, 255);
 
     sand_step(&s, 0, 1000, 0);
