@@ -29,6 +29,9 @@ launcher/
     │   ├── gfx.{h,c}           owns THE framebuffer, primitives, text
     │   ├── gfx_color.h         what a pixel is            (host-tested)
     │   ├── gfx_dirty.h         which bands changed        (host-tested)
+    │   ├── gfx_font.h          what a font IS             (host-tested)
+    │   ├── gfx_font_roles.h    which font plays which part (host-tested)
+    │   ├── fonts/              GENERATED - see tools/gen_font.py
     │   └── icons.{h,c}         artwork no font provides   (host-tested)
     ├── ui/             microui integration, shared by the shell and apps
     │   ├── ui.{h,c}
@@ -65,11 +68,13 @@ and means something different by each:
 
 ## Generated sources
 
-Three generated files live in the tree, each following the same four rules
+Four generated files live in the tree, each following the same four rules
 below: `main/boot/boot_anim_curve.h` (`tools/gen_zeta_curve.py`),
 `main/boot/boot_anim_timeline.h` (`tools/gen_boot_anim_timeline.py`, from
-`main/boot/boot_anim_timeline.json`), and `main/boot/boot_anim_image.h`
-(`tools/gen_boot_anim_image.py`, from `design/boot/boot.png`).
+`main/boot/boot_anim_timeline.json`), `main/boot/boot_anim_image.h`
+(`tools/gen_boot_anim_image.py`, from `design/boot/boot.png`), and
+`main/gfx/fonts/font_lmroman_40.h` (`tools/gen_font.py`, from
+`design/fonts/LatinModern/lmroman10-bold.otf`).
 
 `boot_anim_curve.h` holds the zeta function evaluated along the critical
 line. That is not something to compute on a chip with no FPU, and it never
@@ -78,7 +83,16 @@ and the result ships in flash. `boot_anim_image.h` holds the same idea
 applied to a photograph the boot animation crossfades to: no PNG decoder on
 this chip, no PSRAM to decode into, so the pixel data - already rotated into
 panel space and packed into the panel's own byte-swapped RGB565 - ships in
-flash the same way.
+flash the same way. `font_lmroman_40.h` is the same idea a third time: no
+TrueType rasterizer here either, so `gen_font.py` renders the glyphs once on
+a host - at one fixed pixel size, on a common baseline, with a real
+proportional advance table - and the coverage atlas ships in flash.
+
+A font atlas is the one generated artifact whose SIZE is a live design
+constraint rather than a curiosity: at 8 bits of coverage per pixel,
+`font_lmroman_40.h` is 274 KiB, comparable to the photograph. That is what
+makes it worth caring whether a font is referenced at all - see "Text and
+fonts" below.
 
 Four rules, and the last is the one that matters:
 
@@ -108,7 +122,12 @@ content against - its independent check is instead two `_Static_assert`s in
 `boot_anim.c` pinning the shipped array's shape to the panel's own
 `GFX_WIDTH`/`GFX_HEIGHT`, plus real visual verification through
 `tools/boot_anim_editor_server.py`'s render view (the same workflow used for
-every other render-affecting change in this tree).
+every other render-affecting change in this tree). A font atlas has no math
+to check either, and its independent check is that the shipped METRICS are
+used for real: `suite_boot_anim.c` lays the title out with whichever font
+the timeline actually authors and asserts the letters land where summing
+that font's own advances says they should, so an atlas whose advance table
+did not match its glyphs would move the word and fail.
 
 **Two different rules for keeping a generated file current, by design.**
 `boot_anim_editor_server.py`'s dev server updates both `boot_anim_timeline.h`
@@ -125,6 +144,14 @@ running `gen_boot_anim_image.py` by hand would. The next asset type decides
 which rule it follows the same way: state the browser is actively editing
 gets a scratch copy and waits for an explicit save; a file on disk that the
 generator only mirrors gets regenerated in place on demand.
+
+A font atlas takes a third answer: neither, run `gen_font.py` by hand. It is
+not live state the editor holds, and unlike the photograph it is not
+something anyone edits in place either - a typeface arrives once, is
+rasterized at a chosen size, and then does not change until someone
+deliberately picks a different face or size. Regenerating it on an mtime
+check would spend seconds of rasterizing on every render to notice nothing
+had changed.
 
 ---
 
@@ -535,6 +562,48 @@ Measured: an idle launcher went from 66.7 fps to the 1 kHz tick ceiling,
 because it now paints and sends nothing at all. `test/suites/suite_ui.c` covers
 the independence claim directly - it builds two windows, changes one, and
 asserts the other's bands stay clean.
+
+### Text and fonts
+
+A font here is a `gfx_font_t` (`gfx/gfx_font.h`): an atlas of glyph bitmaps,
+a cell size, the codepoint range it covers, and an optional per-glyph advance
+table. Two kinds ship, and the difference is `bpp`:
+
+- **1 bit per pixel** - `gfx_font_8x8`, the built-in bitmap. Monospace, and
+  crisp at any integer `scale`, which is why it survives being drawn at 5x.
+- **8 bits per pixel** - a coverage atlas from `tools/gen_font.py`, with real
+  proportional advances. Anti-aliased, and rasterized AT one pixel size:
+  scaling it up resamples and blurs, so it wants `scale` 1.
+
+Drawing is the same call either way (`gfx_text_font()`), which dispatches on
+`bpp` internally; the 8bpp path blends each glyph pixel's coverage into the
+framebuffer through `gfx_fill_rect_blend()`. That is the one fill in `gfx.c`
+that READS the destination - affordable at glyph scale, and deliberately not
+how full-frame compositing works (see `gfx_blit_dither()`, which dithers
+precisely because it is full-frame).
+
+**Ask for a role, not a typeface.** `gfx/gfx_font_roles.h` is the one place
+that says which concrete font plays which part - `gfx_font_ui()` is the UI/
+body-text role, and it is what everything not authored draws with: microui,
+the boot animation's axis labels, the POST report, diagnostics. Call sites
+say what they want; one file says what that currently is, so retyping the UI
+is a one-line edit rather than a grep.
+
+**Roles resolve at compile time, and that is load-bearing.** A coverage atlas
+is 274 KiB, and the linker only drops one nothing references - which is not a
+theory: pointing the boot animation's timeline at the bitmap font made the
+Computer Modern atlas vanish from the map and the image fall by that much. So
+each role is a `static inline` accessor returning a fixed font, and the
+header includes only the font headers for typefaces actually assigned a role.
+A registry resolving a role variable at runtime would reference every
+candidate from one translation unit and force them all to link, in every
+build, whether or not that build ever selects them.
+
+Not everything about text is a role. The boot animation's title typeface is
+an AUTHORED timeline knob (`title_font`/`title_scale`, with a dropdown in the
+editor) - a per-animation choice, not a system-wide one - and a "label" role
+was deliberately not created, because labels use the UI typeface at a smaller
+`scale`, and scale is a call-site argument rather than a role.
 
 ### What an app may and may not do
 
