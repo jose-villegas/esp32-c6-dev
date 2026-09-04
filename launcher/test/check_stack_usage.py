@@ -101,8 +101,6 @@ PRE_EXISTING_STACK_DEBT = {
     ("suite_sand.c",
      "test_a_sparse_repaint_does_not_band_a_tall_liquid_column"): 1792,
     ("suite_sand.c",
-     "test_oil_dilutes_into_acid_but_the_acid_pays_for_it"): 1696,
-    ("suite_sand.c",
      "test_a_settled_edge_does_not_flicker_stale_to_fresh"): 1488,
     ("suite_sand.c",
      "test_the_blend_has_no_jump_crossing_45_degrees"): 1216,

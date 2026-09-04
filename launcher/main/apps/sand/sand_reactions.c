@@ -3747,13 +3747,17 @@ conduct_heat(sand_t* s, int x, int y, int w, int h) {
  * defaulting to zero is what keeps acid from eating the container it is
  * standing in, the floor it is standing on, or the air above it.
  *
- * The bite costs the acid one unit of its own mass, through the same
- * pay_quench_cost() a liquid pays to put out a fire, because it is the
- * same kind of transaction: the liquid is CONSUMED rather than merely
- * consulted. Without that a single cell of acid dissolves an unbounded
- * amount of anything and remains a single cell - the exact mistake
- * oil-soaked ash made before soaking became a real transfer, and worth
- * naming twice because it is the easy one to make.
+ * The bite always costs the acid something - never a free eat - but how
+ * much varies by what it ate. Against oil and the generic sand/wood/stone
+ * targets, the ordinary cost is one unit of mass via the same
+ * pay_quench_cost() a liquid pays to put out a fire (the liquid is
+ * CONSUMED rather than merely consulted), but a separate, much higher
+ * death-roll can spend the whole cell in one bite instead - deliberately,
+ * so the acid itself has a real chance to run out rather than dissolving
+ * an unbounded amount of anything while remaining a single cell forever.
+ * That "acid never pays" mistake is the one oil-soaked ash made before
+ * soaking became a real transfer, and worth naming twice because it is
+ * the easy one to make.
  *
  * At most one neighbour per step, so a cell of acid surrounded by sand
  * eats into it rather than opening a hole on all four sides at once.
@@ -3887,60 +3891,127 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
         /* DILUTION, not an eat - a water neighbour never vanishes the way
          * sand or wood does below. The dissolves/dissolvable roll above
          * already decided "this bite lands on water"; this decides which
-         * of the two cells the bite actually changes, biased toward water
-         * per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h). Either way the
-         * CELL_VARIANT (mass) of whichever cell flips carries over
-         * unchanged - a swap, not a creation - which is also why
-         * pay_quench_cost() below does not apply to this branch: nothing
-         * is being spent, so this returns before reaching it. */
+         * side wins, per SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h), and
+         * BOTH cells change, symmetrically either way: whichever material
+         * wins boils off into its own vapour (its own SOURCE cell, spent
+         * doing the winning - MAT_STEAM for water, MAT_GAS for acid,
+         * each material's own ordinary boils_to), and whichever material
+         * loses is converted into the winner's TARGET cell instead of
+         * simply vanishing. CELL_VARIANT (mass) carries over from
+         * whichever cell it started on, into whatever that cell becomes -
+         * a conversion, not a creation, on both ends now, which is also
+         * why pay_quench_cost() below does not apply to this branch:
+         * nothing is being spent as a bite cost, the transformation
+         * itself is the cost. Earlier versions of this left the winning
+         * side's cell untouched (a free water cell minted from nothing
+         * when water won, a free acid cell when acid won) - reported
+         * directly as the reason a body of water, or a body of acid,
+         * could only ever grow from this interaction and never actually
+         * shrink no matter how the win/lose split was tuned. */
         if (CELL_MATERIAL(n) == MAT_WATER) {
-            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_TO_WATER_CHANCE) {
-                row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
-                mark_rows(s, y, y);
-                wake_block_and_neighbors(s, x, y);
+            /* SAND_ACID_DILUTE_MASS_BIAS (sand.h): count how many of the
+             * ACID cell's own cardinal neighbours are themselves acid, and
+             * how many of the WATER cell's own cardinal neighbours are
+             * themselves water (up to 3 each, besides the one direction
+             * that already links the two of them) - a lone grain of
+             * either material reads as 0 either way. Only the DIFFERENCE
+             * between the two moves the split: a deep acid pool meeting
+             * an equally deep water pool nets to zero (neither is more
+             * "backed" than the other, so the base bias holds exactly as
+             * it always did), and it is only once one side's local mass
+             * genuinely outweighs the other's that this tips the roll.
+             * Measuring acid's backing alone was tried first and reads
+             * simpler, but it is not actually symmetric: since only acid
+             * cells ever roll this reaction, a deep, PURE acid pool
+             * always looks "backed" from its own side even while an
+             * equally deep pool of water is piled up right next to it -
+             * water pouring onto acid could not win even in the
+             * relentless-pour tests below, no matter how much of it
+             * accumulated. Eight bounds-checked reads at most, still
+             * cheap, just no longer one-sided. */
+            int acid_backing = 0, water_backing = 0;
+            for (int bd = 0; bd < 4; bd++) {
+                const int abx = x + reaction_dirs[bd][0];
+                const int aby = y + reaction_dirs[bd][1];
+                if ((unsigned)abx < (unsigned)w && (unsigned)aby < (unsigned)h
+                    && CELL_MATERIAL(s->cells[(size_t)aby * (size_t)w + (size_t)abx]) == MAT_ACID) {
+                    acid_backing++;
+                }
 
-                /* A small "fizzle" at the moment water actually wins -
-                 * explicitly asked for, and only for this outcome (not
-                 * the rarer acid-spreads branch below): a puff of gas
-                 * into whatever empty cell is nearby, the same residue
-                 * idiom emit_into_empty_neighbor() already gives ember's
-                 * flame and wet dirt's steam (just a no-op if nothing
-                 * empty is adjacent, same as those).
-                 *
-                 * An impulse pop was tried alongside this too (reusing
-                 * acid_bubble()'s own direction math), then dropped -
-                 * unlike a bubble breaking an exposed surface, dilution
-                 * mostly happens fully submerged, where a thrown grain
-                 * has nowhere open to actually go. Not gated on exposure
-                 * the way acid_bubble() itself is - it would have almost
-                 * always had nothing to do, which is exactly the "wasted
-                 * call" this session already flagged once for acid_bubble()
-                 * itself (see ACID_BUBBLE_INVESTIGATION.md) and is not
-                 * worth repeating here. */
-                emit_into_empty_neighbor(s, x, y, w, h, MAT_GAS);
+                const int wbx = nx + reaction_dirs[bd][0];
+                const int wby = ny + reaction_dirs[bd][1];
+                if ((unsigned)wbx < (unsigned)w && (unsigned)wby < (unsigned)h
+                    && CELL_MATERIAL(s->cells[(size_t)wby * (size_t)w + (size_t)wbx]) == MAT_WATER) {
+                    water_backing++;
+                }
+            }
+            const int mass_bias = (s->acid_dilute_mass_bias >= 0)
+                                       ? s->acid_dilute_mass_bias : SAND_ACID_DILUTE_MASS_BIAS;
+            const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE
+                                           + (water_backing - acid_backing) * mass_bias;
+
+            /* ONE roll, a three-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
+             * own comment (sand.h) for why this replaced two independent
+             * rolls. */
+            const int roll = (int)(rng_next(&s->rng) & 0xFF);
+            const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+            if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
+                /* Acid's own ambient-style boil-off, unrelated to who
+                 * wins the water/acid split below - see this constant's
+                 * own comment (sand.h). Only the acid cell is touched. */
+                place_reacted(s, x, y, self_at, MAT_GAS);
+            } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE + water_wins_chance) {
+                /* WATER WINS - water is the source, spent boiling off
+                 * into its own MAT_STEAM at a fresh full life via
+                 * place_reacted(), the same as every other vapour-
+                 * creation path in this file. An earlier version of
+                 * this carried the old WATER cell's own mass nibble
+                 * across instead - a bug, not a deliberate choice: mass
+                 * and life-remaining are different fields (material.c),
+                 * and a half-drained water cell says nothing about how
+                 * long its steam should live. Acid is the target,
+                 * converted into water - mass DOES carry over here,
+                 * since both sides of THIS conversion are liquids
+                 * sharing the same mass semantic. Both writes go
+                 * through place_cell()/place_reacted() rather than a
+                 * raw store, so the new steam's content flags
+                 * (may_have_gas, may_have_condenser) actually get
+                 * latched instead of leaving it permanently inert. */
+                place_cell(s, x, y, self_at, CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x])));
+                place_reacted(s, nx, ny, at, MAT_STEAM);
             } else {
-                s->cells[at] = CELL_MAKE(MAT_ACID, CELL_VARIANT(n));
-                mark_rows(s, ny, ny);
-                wake_block_and_neighbors(s, nx, ny);
+                /* ACID WINS - acid is the source, spent boiling off into
+                 * its own MAT_GAS at a fresh full life, same reasoning
+                 * as above. Water is the target, converted into acid,
+                 * mass carried over. */
+                place_reacted(s, x, y, self_at, MAT_GAS);
+                place_cell(s, nx, ny, at, CELL_MAKE(MAT_ACID, CELL_VARIANT(n)));
             }
             return true;
         }
 
-        /* OIL DILUTES INTO ACID - unlike water's free swap just above,
-         * this one still pays the normal cost: pay_quench_cost() below is
-         * NOT skipped here, so the acid that did the eating still spends
-         * a unit of its own mass to grow this new acid cell. Net acid
-         * does not simply increase for free the way it would if this
-         * were wired the same way water's swap is - explicitly asked for
-         * ("it should also dissolve while doing so, so we end with a bit
-         * less of acid"). Always converts, no coin flip: oil either
-         * isn't touched this bite (the dissolvable roll above failed) or
-         * it always becomes acid when it is - the randomness lives
-         * entirely in whether the bite lands at all, the same as it does
-         * for sand or wood below. */
+        /* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - see
+         * SAND_ACID_OIL_TO_GAS_CHANCE and SAND_ACID_OIL_DEATH_CHANCE
+         * (sand.h) for the full story. The bitten oil cell mostly turns
+         * to gas rather than acid; the acid cell separately rolls a much
+         * higher chance to die outright - spend its whole remaining mass
+         * in this one bite - instead of pay_quench_cost()'s ordinary
+         * one-unit chip. The two rolls are independent: which way the
+         * oil goes says nothing about whether the acid survives doing
+         * it. */
         if (CELL_MATERIAL(n) == MAT_OIL) {
-            place_reacted(s, nx, ny, at, MAT_ACID);
-            pay_quench_cost(s, x, y, w);
+            const uint8_t oil_residue = ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_TO_GAS_CHANCE)
+                                         ? MAT_GAS : MAT_ACID;
+            place_reacted(s, nx, ny, at, oil_residue);
+
+            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_OIL_DEATH_CHANCE) {
+                const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+                s->cells[self_at] = CELL_EMPTY;
+                mark_rows(s, y, y);
+                wake_block_and_neighbors(s, x, y);
+            } else {
+                pay_quench_cost(s, x, y, w);
+            }
             return true;
         }
 
@@ -3963,10 +4034,19 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             wake_block_and_neighbors(s, nx, ny);
         }
 
-        /* The acid pays, and may spend itself doing it - pay_quench_cost()
-         * clears the cell when its last unit goes. Done after the target
-         * is dealt with so the two can never both survive a bite. */
-        pay_quench_cost(s, x, y, w);
+        /* The acid pays, and may spend itself doing it. SAND_ACID_EAT_
+         * DEATH_CHANCE (sand.h) rolls first for a chance to die outright -
+         * its whole remaining mass gone in this one bite - and only falls
+         * back to pay_quench_cost()'s ordinary one-unit chip if that
+         * roll misses. Done after the target is dealt with so the two
+         * can never both survive a bite. */
+        if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_EAT_DEATH_CHANCE) {
+            row[x] = CELL_EMPTY;
+            mark_rows(s, y, y);
+            wake_block_and_neighbors(s, x, y);
+        } else {
+            pay_quench_cost(s, x, y, w);
+        }
         return true;
     }
     return false;
@@ -4447,6 +4527,83 @@ step_one_condensing_cell(sand_t* s, int x, int y, int w, int h, const reaction_t
     return true;
 }
 
+/* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
+ * feature itself; this is its mechanism, the same "fake collapse" idiom
+ * step_one_condensing_cell() just above already uses, scaled up and
+ * generalised to two materials instead of one. Unlike that 2x2 check,
+ * this is not keyed off a single reaction_t field - MAT_GAS and
+ * MAT_STEAM are named directly by their caller in step_one_reacting_row()
+ * below, the same way acid_bubble() above names MAT_ACID directly rather
+ * than adding a flag that would only ever be true for one material,
+ * since either species can legitimately be the block's own top-left
+ * corner.
+ *
+ * A COLLAPSE, same as condensation, not a like-for-like replacement -
+ * caught directly: the first version of this converted the WHOLE 4x4
+ * (16 cells) into 16 fresh acid cells, no reduction at all, unlike
+ * condensation's own 4-cells-into-1 shrink just above. Acid is one of
+ * this simulation's biggest producers of gas and steam (dilution,
+ * eating oil, eating sand/wood/stone, its own ambient boil-off all leave
+ * one or the other), so handing every cell a matching pocket held
+ * straight back into MORE acid, at full count, turned "acid rain" into a
+ * feedback loop that could keep a lake topped up indefinitely - the
+ * exact opposite of the finite "acid has a budget" rule the rest of
+ * this file spends real effort enforcing. Fixed at the same ratio
+ * condensation itself already uses (4 cells in, 1 surviving): the
+ * block's own top-left 2x2 - not the whole 4x4 - becomes acid, and
+ * every other cell in the block clears to empty. Sixteen cells of vapor
+ * raining down four cells of acid, not sixteen.
+ *
+ * (x, y) is only ever checked as the block's own top-left corner - same
+ * scan-order argument as step_one_condensing_cell() just above: a
+ * genuine matching 4x4 is always reached from its own actual top-left
+ * cell first, scanning left to right, top to bottom, and once it fires -
+ * clearing every cell in the block - any other gas or steam cell that
+ * WAS part of it is no longer gas or steam by the time its own turn
+ * comes. A cheap, honest miss otherwise, not a case worth special-
+ * casing away. */
+static inline bool
+step_one_acid_rain_cell(sand_t* s, int x, int y, int w, int h) {
+    if (x + 3 >= w || y + 3 >= h) {
+        return false;
+    }
+
+    int steam_count = 0, gas_count = 0;
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
+            const uint8_t mat = CELL_MATERIAL(s->cells[at]);
+            if (mat == MAT_STEAM) {
+                steam_count++;
+            } else if (mat == MAT_GAS) {
+                gas_count++;
+            } else {
+                return false;
+            }
+        }
+    }
+    if (steam_count < 2 || gas_count < 2) {
+        return false;
+    }
+
+    const int acid_rain = (s->acid_rain >= 0) ? s->acid_rain : SAND_ACID_RAIN_CHANCE;
+    if (acid_rain == 0 || (int)(rng_next(&s->rng) & 0xFF) >= acid_rain) {
+        return false;
+    }
+
+    for (int dy = 0; dy < 4; dy++) {
+        for (int dx = 0; dx < 4; dx++) {
+            const size_t at = (size_t)(y + dy) * (size_t)w + (size_t)(x + dx);
+            if (dx < 2 && dy < 2) {
+                place_reacted(s, x + dx, y + dy, at, MAT_ACID);
+            } else {
+                place_cell(s, x + dx, y + dy, at, CELL_EMPTY);
+            }
+        }
+    }
+    return true;
+}
+
 /* One row's share of the scan - only burning cells are dispatched; keyed
  * on reaction_t.burns (material.h), NOT on kind == KIND_STATIC. Stone
  * and ember both share that kind, and every unused material slot shares
@@ -4503,6 +4660,27 @@ step_one_reacting_row(sand_t* s, int y, int w, int h) {
                 acid_bubble(s, x, y);
             }
             step_one_dissolver_cell(s, row, x, y, w, h, r);
+            continue;
+        }
+        /* ACID RAIN - see SAND_ACID_RAIN_CHANCE's own comment (sand.h).
+         * MAT_GAS and MAT_STEAM are named directly here rather than
+         * gated behind a reaction_t field of their own - the same
+         * reasoning acid_bubble() above already gives for naming
+         * MAT_ACID directly in the dissolves branch: this is inherently
+         * about these two specific materials, not a trait a future
+         * material could opt into. Checked ahead of the ordinary
+         * condensing branch below, since a steam cell that IS part of a
+         * matching acid-rain block should convert to acid rather than
+         * also rolling to condense into water this same step - the two
+         * are mutually exclusive outcomes for the same cell, and acid
+         * rain is the narrower, more specific match. No flag of its own
+         * to arm or clear: this can never fire without steam existing
+         * somewhere in its own 4x4, and steam's mere presence anywhere
+         * is already what arms may_have_condenser via the branch just
+         * below, so a board with steam on it already keeps this pass
+         * running for as long as either mechanic needs it to. */
+        if ((CELL_MATERIAL(c) == MAT_GAS || CELL_MATERIAL(c) == MAT_STEAM)
+            && step_one_acid_rain_cell(s, x, y, w, h)) {
             continue;
         }
         /* Condensing, on its own presence-not-activity footing exactly
