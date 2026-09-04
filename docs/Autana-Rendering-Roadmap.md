@@ -738,6 +738,26 @@ both, for different jobs:
   which shows layers and compositing without the device; (3) the
   shifting grid with tile-mask fill, the first scroll test; (4) the
   momentum coupling, one parameter once the rest exists.
+- **Locality is the performance model** (maintainer, 2026-09-04). The
+  simulation never needs to run full-screen; full-screen is the special
+  case of one big window. A level designer places a *torch*, and that is
+  an emitter record in the level's rectangle list: "instance of 16×32
+  cells, this material set, at world (x, y), on layer n". Loading the
+  level creates the instance, the game tracks its quad on screen, and
+  the draw composites it at the quad's offset and scale. Effects are
+  authored in the editor the same way terrain is.
+- **Parallax as level of detail.** A background window runs cheaper in
+  three independent, per-window ways: bigger cells (a 16×32 instance
+  drawn at 4×4 px covers what a 32×64 one does at a quarter of the step
+  cost), a lower step rate (every second or fourth frame, invisible at
+  parallax speeds), and a dimmer palette light level for depth. The
+  foreground layer gets full resolution and full rate. All three are
+  free once the instance carries its own size and the draw takes a
+  scale.
+- **Keep the quad axis-aligned with an integer scale** (1×, 2×, 4× cells
+  to pixels). A rotated or arbitrarily scaled quad turns the cheap blit
+  into a per-pixel affine sample — the Mode-7 cost class — which is not
+  worth paying for smoke.
 - **Left open on purpose:** what happens when two windows meet — merge
   into one, or stay independent. Effects can stay independent; terrain
   cannot, and that boundary is exactly where the active-area grid takes
