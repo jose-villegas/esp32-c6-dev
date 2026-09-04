@@ -16,7 +16,12 @@ name: Deploy Sand Web Demo
 
 on:
   push:
-    branches: [main]
+    # Also this branch, temporarily: workflow_dispatch can't target a
+    # workflow GitHub has never seen registered on the default branch, and
+    # this is the fastest way to get a first Pages deploy live for review
+    # before it merges to main. Drop the second entry once this branch
+    # merges - main alone is the steady-state trigger.
+    branches: [main, claude/sand-app-web-demo-d58abb]
     paths:
       - "launcher/main/apps/sand/material.c"
       - "launcher/main/apps/sand/material.h"
