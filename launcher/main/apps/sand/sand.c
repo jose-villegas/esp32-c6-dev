@@ -187,6 +187,8 @@ void sand_init(sand_t *s, uint8_t *cells, int w, int h, uint32_t seed)
     s->lava_cooloff = SAND_LAVA_COOLOFF_DEFAULT; /* see sand_set_lava_cooloff() */
     s->lava_burst   = SAND_LAVA_BURST_DEFAULT;   /* see sand_set_lava_burst() */
     s->acid_rain    = SAND_ACID_RAIN_DEFAULT;    /* see sand_set_acid_rain() */
+    s->acid_dilute_mass_bias = SAND_ACID_DILUTE_MASS_BIAS_DEFAULT; /* see
+                                          * sand_set_acid_dilute_mass_bias() */
     /* The array itself need not be touched - every reader below goes
      * through emitter_count, so an entry past it is simply never looked
      * at, the same way sand_spawn_cell()'s clipped cells are never looked
@@ -1404,6 +1406,11 @@ void sand_set_acid_rain(sand_t *s, int chance)
     } else {
         s->acid_rain = chance > 255 ? 255 : chance;
     }
+}
+
+void sand_set_acid_dilute_mass_bias(sand_t *s, int bias)
+{
+    s->acid_dilute_mass_bias = (bias < 0) ? SAND_ACID_DILUTE_MASS_BIAS_DEFAULT : bias;
 }
 
 /* can_enter()/cell_open()/move_to() moved to sand_priv.h (still
