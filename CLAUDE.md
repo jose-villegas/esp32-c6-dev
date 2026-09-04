@@ -175,17 +175,28 @@ identically to x86, not just that the logic is right on a laptop).
 
 ### Generated files
 
-Three generated files live in the tree, each with its own generator in
+Four generated files live in the tree, each with its own generator in
 `launcher/tools/` and its checked-in output in the tree it belongs to:
 `boot_anim_curve.h` (`gen_zeta_curve.py`), `boot_anim_timeline.h`
-(`gen_boot_anim_timeline.py`, from `boot_anim_timeline.json`), and
-`boot_anim_image.h` (`gen_boot_anim_image.py`, from `design/boot/boot.png`).
+(`gen_boot_anim_timeline.py`, from `boot_anim_timeline.json`),
+`boot_anim_image.h` (`gen_boot_anim_image.py`, from `design/boot/boot.png`),
+and `gfx/fonts/font_lmroman_40.h` (`gen_font.py`, from
+`design/fonts/LatinModern/lmroman10-bold.otf` - there is no TrueType
+rasterizer on the chip, so glyphs are rendered once on a host into an 8bpp
+coverage atlas with a proportional advance table).
 The convention they all follow: banner naming the exact regenerate command,
 generator validates itself before emitting, and the shipped artifact is
 tested independently of the generator (against the underlying math where
-there is one, or - for an asset like the photo, with no math to check pixel
-content against - against structural facts a `_Static_assert` can pin down
-plus real visual verification, not against the generator's own logic).
+there is one, or - for an asset like the photo or a font, with no math to
+check pixel content against - against structural facts a `_Static_assert`
+can pin down, or by using the shipped metrics for real, plus visual
+verification; never against the generator's own logic).
+
+A font atlas is 274 KiB, so which fonts a build REFERENCES is a real flash
+decision, not bookkeeping: call sites ask `gfx/gfx_font_roles.h` for a role
+(`gfx_font_ui()`) rather than naming a typeface, and roles resolve at
+compile time specifically so the linker drops an atlas nothing selected. See
+`docs/Launcher-Architecture.md`'s "Text and fonts".
 
 ## Documentation map
 
