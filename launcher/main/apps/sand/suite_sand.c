@@ -19011,6 +19011,112 @@ static void test_condensation_needs_a_genuine_2x2_square(void)
         "condense, even with the roll forced to succeed every time");
 }
 
+/* Acid rain - SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
+ * feature, step_one_acid_rain_cell()'s own (sand_reactions.c) for the
+ * mechanism. sand_set_acid_rain(&s, 255) forces a deterministic,
+ * single-step conversion, the same discipline
+ * test_a_2x2_block_of_steam_condenses_into_one_water_cell just above
+ * already uses for the sibling mechanic this one extends.
+ *
+ * Sealed on top and both sides exactly like that test's own fixture -
+ * see its comment for why (sand_step_gas() runs before
+ * sand_step_reactions() within one sand_step() call, so an unsealed
+ * pocket can scatter before the reactions pass ever sees it intact) -
+ * and column-striped (steam, gas, steam, gas) rather than any other
+ * arrangement of the required two-of-each: a 2x2 all-steam sub-block
+ * anywhere in the 4x4 would also satisfy ordinary condensation, muddying
+ * which mechanic actually fired, and no two adjacent columns share a
+ * material here, so no such sub-block exists (condenses is also
+ * explicitly disabled below, belt and braces). */
+static void test_a_qualifying_gas_steam_pocket_collapses_into_an_acid_core(void)
+{
+    fixture();
+    sand_set_acid_rain(&s, 255);
+    sand_set_condenses(&s, 0);
+    sand_set_mobility(&s, 0);
+
+    for (int x = 1; x <= 4; x++) {
+        sand_set(&s, x, 0, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, 5, y, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            sand_set(&s, x, y, ((x % 2) == 1) ? STEAM : GAS);
+        }
+    }
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 1, 1)),
+        "a forced roll must collapse the pocket into acid at its own "
+        "top-left 2x2, the same ratio condensation itself uses");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 2, 1)),
+        "the top-left 2x2's other three cells must survive as acid too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 1, 2)),
+        "the top-left 2x2's other three cells must survive as acid too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 2, 2)),
+        "the top-left 2x2's other three cells must survive as acid too");
+
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            if (x <= 2 && y <= 2) {
+                continue; /* the surviving 2x2, checked above */
+            }
+            char msg[96];
+            snprintf(msg, sizeof msg,
+                     "cell (%d,%d) must clear to empty - only the top-left "
+                     "2x2 is supposed to survive the collapse", x, y);
+            TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, x, y)), msg);
+        }
+    }
+}
+
+/* One cell short of the two-of-each requirement (one steam, fifteen
+ * gas - still a pure gas/steam pocket, still boxed in identically) must
+ * never collapse, no matter how the roll would have gone - the same
+ * "needs a genuine match, not almost one" property
+ * test_condensation_needs_a_genuine_2x2_square just above already
+ * checks for its own sibling mechanic. */
+static void test_acid_rain_needs_at_least_two_of_each_species(void)
+{
+    fixture();
+    sand_set_acid_rain(&s, 255);
+    sand_set_condenses(&s, 0);
+    sand_set_mobility(&s, 0);
+
+    for (int x = 1; x <= 4; x++) {
+        sand_set(&s, x, 0, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, 5, y, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            sand_set(&s, x, y, GAS);
+        }
+    }
+    sand_set(&s, 1, 1, STEAM);
+
+    sand_step(&s, 0, 1000, 0);
+
+    int acid_seen = 0;
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_ACID) {
+                acid_seen++;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, acid_seen,
+        "three steam cells short of the two-steam/two-gas requirement "
+        "must never collapse into acid, even with the roll forced to "
+        "succeed every time");
+}
+
 /* --- dirty rows: nothing changes without saying so ---------------------- */
 
 /* The invariant the renderer depends on, asserted directly for every
@@ -26545,6 +26651,8 @@ void run_sand_suite(void)
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
     RUN_TEST(test_a_2x2_block_of_steam_condenses_into_one_water_cell);
     RUN_TEST(test_condensation_needs_a_genuine_2x2_square);
+    RUN_TEST(test_a_qualifying_gas_steam_pocket_collapses_into_an_acid_core);
+    RUN_TEST(test_acid_rain_needs_at_least_two_of_each_species);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);
     RUN_TEST(test_grains_are_never_created_or_destroyed);

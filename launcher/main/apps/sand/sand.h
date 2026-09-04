@@ -367,6 +367,7 @@ typedef struct {
     int      condenses;    /* see sand_set_condenses() */
     int      lava_cooloff; /* see sand_set_lava_cooloff() */
     int      lava_burst;   /* see sand_set_lava_burst() */
+    int      acid_rain;    /* see sand_set_acid_rain() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1120,6 +1121,46 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * one - tune on device like every other constant here. */
 #define SAND_ACID_EAT_DEATH_CHANCE 40
 
+/* ACID RAIN - a mixed pocket of MAT_GAS and MAT_STEAM, sitting together
+ * in a 4x4 block (at least two cells of each; the rest either species
+ * too, nothing else), has a small chance to collapse into acid - see
+ * step_one_acid_rain_cell() (sand_reactions.c) for the mechanism itself.
+ * Explicitly requested as an extension of the existing steam-to-water
+ * condensation trick (reaction_t.condenses, material.c) - condensation
+ * already lets this codebase fake "rain" by collapsing a settled pocket
+ * of steam into water; this is the same cosmetic collapse idea,
+ * generalised to a mixed two-material pocket instead of a uniform one-
+ * material square, producing acid instead of water - acid rain, not
+ * plain rain.
+ *
+ * A COLLAPSE, same ratio condensation itself uses (4 cells in, 1
+ * surviving), not a like-for-like replacement - the first version of
+ * this converted the WHOLE 4x4 (16 cells) into 16 fresh acid cells, and
+ * that was a real bug, not a stylistic choice: acid is one of this
+ * simulation's biggest producers of gas and steam (dilution, eating oil,
+ * eating sand/wood/stone, its own ambient boil-off all leave one or the
+ * other), so handing every cell of a matching pocket straight back into
+ * more acid, at full count, turned this into a feedback loop that could
+ * keep a lake topped up indefinitely - confirmed directly, a snow-melt
+ * scene's acid lake stayed at 16 live cells past 600 steps instead of
+ * running dry the way it always used to.
+ *
+ * The yield alone was not enough, either - tuning the chance down as far
+ * as 1 (the rarest a single byte-wide roll can express) did not fix the
+ * ORIGINAL 16-cell version by itself, because a gas/steam-rich scene
+ * offers many independent qualifying windows every single step;
+ * lowering any one roll's odds does not change how many rolls get
+ * attempted. It took BOTH fixes together: the block's own top-left 2x2
+ * becomes acid, the other twelve cells clear to empty (sixteen cells of
+ * vapor rain down four cells of acid, not sixteen), and this chance
+ * dropped alongside it, from 32 down to 8, once the smaller yield made
+ * the chance worth tuning again. Chance-in-256, checked only once a full
+ * 4x4 has already been confirmed to hold nothing but gas and steam with
+ * at least two of
+ * each. Starting bias, not a measured one - tune on device like every
+ * other constant here. */
+#define SAND_ACID_RAIN_CHANCE 8
+
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
  * sand_reactions.c): unconditionally leaving a cell of gas or smoke
@@ -1848,6 +1889,23 @@ void sand_set_lava_burst(sand_t *s, int chance);
  * the same reason SAND_LAVA_COOLOFF_DEFAULT is: this has no per-material
  * table figure to fall back to, only the one constant. */
 #define SAND_LAVA_BURST_DEFAULT (-1)
+
+/* Overrides SAND_ACID_RAIN_CHANCE (below), the same shape as
+ * sand_set_lava_cooloff()/sand_set_lava_burst() just above and for the
+ * same reason: a test that wants a qualifying gas/steam pocket to
+ * collapse (or never collapse) deterministically cannot wait out a
+ * natural roll and stay fast the way test_a_2x2_block_of_steam_
+ * condenses_into_one_water_cell (suite_sand.c) already does for the
+ * sibling mechanic this one extends. Clamped to [0, 255] exactly like
+ * every other chance-in-256 setter in this file. */
+void sand_set_acid_rain(sand_t *s, int chance);
+
+/* The sentinel sand_set_acid_rain(s, chance < 0) restores, and what
+ * sand_init() itself starts every sand_t at - "use
+ * SAND_ACID_RAIN_CHANCE", named _DEFAULT rather than _PER_MATERIAL for
+ * the same reason SAND_LAVA_COOLOFF_DEFAULT is: acid rain is not read
+ * from any one material's own row, only the one constant. */
+#define SAND_ACID_RAIN_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
