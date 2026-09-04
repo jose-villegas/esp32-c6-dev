@@ -1150,12 +1150,21 @@ static void title_glyph_origin(int view_x, int view_y, int glyph_w,
 void draw_title(uint32_t now_ms, uint8_t ink)
 {
     const gfx_color_t c = gfx_color_mix(COL_BG, COL_WHITE, ink);
-    /* &gfx_font_lmroman_40, not gfx_default_font() - the title has its
-     * own font now (tools/gen_font.py, main/gfx/fonts/font_lmroman_
-     * 40.h), a real proportional coverage atlas rather than the shell's
-     * 8x8 bitmap - see BOOT_ANIM_TITLE_SCALE's own comment in boot_anim.h
-     * for why that also means SCALE dropped to 1. */
-    const gfx_font_t *font = &gfx_font_lmroman_40;
+    /* Which typeface is AUTHORED (title_font in the JSON) rather than
+     * fixed here - see BOOT_ANIM_TITLE_FONT's own comment in boot_anim.h
+     * for why it and title_scale are a pair. The default 0 is the title's
+     * own 40px Computer Modern coverage atlas (tools/gen_font.py, main/gfx/
+     * fonts/font_lmroman_40.h); 1 is the shell's 8x8 bitmap, kept
+     * selectable because comparing the two on the real panel is the only
+     * way to judge a typeface, and because a bitmap title is a legitimate
+     * look rather than merely the thing that came before.
+     *
+     * gfx_default_font() rather than &gfx_font_8x8 directly: the shell's
+     * idea of its own default is that function's to change, and a title
+     * asking for "the built-in one" should follow it if it ever does. */
+    const gfx_font_t *font = (BOOT_ANIM_TITLE_FONT == BOOT_ANIM_TITLE_FONT_8X8)
+                                 ? gfx_default_font()
+                                 : &gfx_font_lmroman_40;
     const int glyph_w = gfx_font_width(font, "A", -1, BOOT_ANIM_TITLE_SCALE);
     const int glyph_h = gfx_font_height(font, BOOT_ANIM_TITLE_SCALE);
     char one[2] = { 0, 0 };

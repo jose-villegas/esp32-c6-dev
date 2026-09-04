@@ -247,6 +247,26 @@ def validate(cfg):
              "enormous one and the crossfade would silently never finish" %
              (timing["image_start_ms"], timing["image_fade_ms"]))
 
+    if timing["title_font"] not in (0, 1):
+        fail("title_font must be 0 (Computer Modern, 40px) or 1 (the 8x8 "
+             "bitmap), not %r - draw_title() switches on it and an "
+             "unknown id would leave the title undrawn" %
+             (timing["title_font"],))
+
+    if timing["title_scale"] < 1:
+        fail("title_scale must be at least 1 (%r given) - gfx_text_font() "
+             "clamps anything below that to 1 anyway, so a 0 here reads as "
+             "an authored intent the renderer silently ignores" %
+             (timing["title_scale"],))
+
+    # Not a hard failure: an 8x8 bitmap at 1x is a legitimate thing to want
+    # to LOOK at while tuning, it is just far too small to ship as a title.
+    if timing["title_font"] == 1 and timing["title_scale"] < 3:
+        warn("title_font 1 (the 8x8 bitmap) at title_scale %d gives a %dpx "
+             "title - the bitmap font needs about 5x to reach the ~40px the "
+             "coverage atlas has at 1x"
+             % (timing["title_scale"], 8 * timing["title_scale"]))
+
     if timing["title_wave_out_ms"] < 0 or timing["title_wave_fade_ms"] < 0:
         fail("title_wave_out_ms/title_wave_fade_ms must not be negative "
              "(%r/%r given) - boot_anim_title_wave_reach() hands both to "
@@ -397,6 +417,12 @@ TIMING_ORDER = [
      "the small idle wave once a letter has landed"),
     ("title_wave_period_ms", "BOOT_ANIM_TITLE_WAVE_PERIOD_MS", None),
     ("title_wave_stagger_ms", "BOOT_ANIM_TITLE_WAVE_STAGGER_MS", None),
+    ("title_font", "BOOT_ANIM_TITLE_FONT",
+     "which typeface draws the title - 0 the 40px Computer Modern coverage "
+     "atlas, 1 the shell's own 8x8 bitmap; see boot_anim.c's draw_title()"),
+    ("title_scale", "BOOT_ANIM_TITLE_SCALE",
+     "integer pixel multiplier the title is drawn at - 1 suits a font "
+     "rasterized at its final size, ~5 is what the 8x8 bitmap needs"),
     ("title_wave_out_ms", "BOOT_ANIM_TITLE_WAVE_OUT_MS",
      "when the idle wave starts calming back to stillness - at or past "
      "total_ms it never does, which is the default"),
@@ -551,6 +577,13 @@ def main():
     # image_start_ms above already uses.
     timing.setdefault("title_wave_out_ms", timing.get("total_ms", 5800))
     timing.setdefault("title_wave_fade_ms", 600)
+    # title_font/title_scale are newer again. A file baked before they
+    # existed was drawn with the 40px Computer Modern atlas at 1x, since
+    # that pairing was hardcoded in boot_anim.h at the time - so 0/1 is
+    # what reproduces it, not the 8x8-at-5x pairing that predates the
+    # custom font entirely.
+    timing.setdefault("title_font", 0)
+    timing.setdefault("title_scale", 1)
 
     validate(cfg)
 

@@ -1353,15 +1353,32 @@ static inline uint8_t boot_anim_grid_whiten(uint32_t now_ms)
 #define BOOT_ANIM_TITLE     "Autana"
 #define BOOT_ANIM_TITLE_LEN 6
 
-/* 1, not scaled up: the title used to draw gfx_font_8x8 (an 8px cell) at
- * 5x to reach a legible ~40px glyph height; it now draws
- * gfx_font_lmroman_40 (tools/gen_font.py, main/gfx/fonts/font_lmroman_
- * 40.h), which was rasterized AT 40px in the first place - see
- * boot_anim.c's draw_title() for where that font is actually named. Scaling
- * an already-40px coverage atlas up again would blur it for no reason a
- * bitmap font's own blockiness ever had to pay for. */
-#define BOOT_ANIM_TITLE_SCALE 1
+/* BOOT_ANIM_TITLE_FONT and BOOT_ANIM_TITLE_SCALE are both AUTHORED now
+ * (title_font/title_scale in the JSON, generated into boot_anim_timeline.h)
+ * rather than fixed here, because they only make sense chosen together:
+ * gfx_font_8x8 has an 8px cell and needs ~5x to reach a legible title,
+ * while gfx_font_lmroman_40 was rasterized AT 40px and wants 1 - scaling an
+ * already-40px coverage atlas up again would blur it for no reason a bitmap
+ * font's own blockiness ever had to pay for. Pairing them as two knobs
+ * rather than deriving the scale from the font keeps "which typeface" and
+ * "how big" independently tunable, which is what makes trying the old
+ * bitmap title a two-field edit in the editor instead of a rebuild.
+ *
+ * boot_anim.c's draw_title() is where the id is turned into an actual
+ * gfx_font_t - see boot_anim_title_font_id_t there; this header stays free
+ * of the font atlases themselves (they are ~900 KiB of generated table, and
+ * boot_anim.h is included by host tests that only ever want the metrics). */
 #define BOOT_ANIM_TITLE_GAP   3    /* extra px of tracking between glyphs */
+
+/* What title_font's own integers mean. Named here rather than left as bare
+ * 0/1 at the one comparison in draw_title(), and kept in the same header
+ * the generator's constant lands in so the two cannot drift: gen_boot_anim_
+ * timeline.py's validate() rejects any id outside this list, and would have
+ * to be edited alongside this enum to add a third typeface. */
+typedef enum {
+    BOOT_ANIM_TITLE_FONT_LMROMAN_40 = 0,
+    BOOT_ANIM_TITLE_FONT_8X8        = 1,
+} boot_anim_title_font_id_t;
 
 /* The viewer's frame this whole section lays out in - see this section's
  * own top comment. GFX_HEIGHT x GFX_WIDTH (448 x 368) turned a quarter, not
