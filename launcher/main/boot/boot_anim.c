@@ -35,6 +35,7 @@
 #include "display/display.h"
 #include "gfx/fonts/font_lmroman_40.h"
 #include "gfx/gfx.h"
+#include "gfx/gfx_font_roles.h"
 #include "util/fixed.h"
 #include "util/intmath.h"
 
@@ -607,9 +608,14 @@ static void draw_label(int x, int y, const char *text, uint8_t ink)
 {
     /* Asked for at LABEL_SCALE rather than through gfx_text_width(), which
      * answers for GFX_GLYPH_SCALE - the 16px size the menu is laid out
-     * around. An axis label wants to be small. */
-    const int w = gfx_font_width(gfx_default_font(), text, -1, LABEL_SCALE);
-    const int h = gfx_font_height(gfx_default_font(), LABEL_SCALE);
+     * around. An axis label wants to be small.
+     *
+     * gfx_font_ui() (gfx/gfx_font_roles.h), not a font named here: a label
+     * is UI/body text at a smaller scale, not a typeface of its own - see
+     * that file's "roles deliberately not defined" for why this did not
+     * become a separate role. */
+    const int w = gfx_font_width(gfx_font_ui(), text, -1, LABEL_SCALE);
+    const int h = gfx_font_height(gfx_font_ui(), LABEL_SCALE);
 
     gfx_text_scaled(x - w / 2, y - h / 2, text, lit(COL_TICK, ink),
                     LABEL_SCALE);
@@ -1159,11 +1165,19 @@ void draw_title(uint32_t now_ms, uint8_t ink)
      * way to judge a typeface, and because a bitmap title is a legitimate
      * look rather than merely the thing that came before.
      *
-     * gfx_default_font() rather than &gfx_font_8x8 directly: the shell's
-     * idea of its own default is that function's to change, and a title
-     * asking for "the built-in one" should follow it if it ever does. */
+     * gfx_font_ui() rather than &gfx_font_8x8 directly: the UI/body role is
+     * that accessor's to change (gfx/gfx_font_roles.h), and a title asking
+     * for "the built-in one" should follow it if it ever does - the same
+     * reasoning this line applied to gfx_default_font() before that role
+     * existed. gfx_font_lmroman_40 is still named directly, not through the
+     * registry: it is this animation's own authored candidate, not a system
+     * role, and staying out of gfx_font_roles.h is what keeps it droppable
+     * by the linker on a build whose timeline picks the bitmap instead (see
+     * that file's own comment on why an unassigned font must not be
+     * #included there) - verified in launcher.map for this change, same as
+     * the timeline flip that first proved the ternary folds. */
     const gfx_font_t *font = (BOOT_ANIM_TITLE_FONT == BOOT_ANIM_TITLE_FONT_8X8)
-                                 ? gfx_default_font()
+                                 ? gfx_font_ui()
                                  : &gfx_font_lmroman_40;
     const int glyph_w = gfx_font_width(font, "A", -1, BOOT_ANIM_TITLE_SCALE);
     const int glyph_h = gfx_font_height(font, BOOT_ANIM_TITLE_SCALE);
