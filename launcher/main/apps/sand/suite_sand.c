@@ -21665,7 +21665,7 @@ static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displ
  * same dirt cell must lose only the plain ramp, no drag term at all - see
  * SAND_IMPULSE_DRAG_SHIFT's own comment in sand.h for why powders are out
  * of scope for this rung. */
-static void test_a_thrown_powder_grain_loses_no_drag_displacing_dirt(void)
+static void test_a_thrown_powder_grain_pays_drag_displacing_dirt(void)
 {
     fixture();
     sand_enable_impulses(&s, impulse_buf, W * H);
@@ -21684,11 +21684,88 @@ static void test_a_thrown_powder_grain_loses_no_drag_displacing_dirt(void)
         "the single push roll here succeeds on the order of 99.6% of the "
         "time at speed 255 - losing tracking on this one step means the "
         "scene itself is broken, not that this run was merely unlucky");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP, s.impulse_buf[0].speed,
-        "a KIND_POWDER mover must lose only the plain ramp displacing "
-        "dirt, no drag term at all - this rung's drag is scoped to "
-        "KIND_STATIC movers only, and this is the scope pin for that "
-        "scope");
+    const uint8_t expected = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
+                             (materials[MAT_DIRT].density >> SAND_IMPULSE_DRAG_SHIFT));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
+        "a KIND_POWDER mover pays the same density-scaled drag a "
+        "KIND_STATIC one does - a thrown grain is most of what a blast "
+        "actually puts in the air, so leaving powders out made the whole "
+        "mechanism imperceptible on the device even though it worked");
+}
+
+/* THE SCOPE PIN, now that powders are in: the boundary is LIQUIDS, and it
+ * has to stay where it is. Water and acid decay geometrically
+ * (SAND_SPLASH_SPEED_DECAY_SHIFT) instead of on the plain ramp, and the
+ * splash and cascade features are tuned around that shape - charging them
+ * drag on top would move a tuned feature nobody asked to move. A liquid
+ * mover only ever displaces another liquid (can_impulse_enter(), sand.c),
+ * so water into water is the whole of the case. */
+static void test_a_thrown_liquid_grain_pays_no_drag_displacing_water(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, TX = 2, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, CELL_MAKE(MAT_WATER, MASS_MAX));
+    sand_set(&s, TX, ROW, CELL_MAKE(MAT_WATER, MASS_MAX));
+    sand_impulse(&s, SX, ROW, DIR_RIGHT, 255);
+
+    sand_step(&s, 0, 1000, 0);
+
+    /* Not == 1, unlike the two pins above: this is the only one of the
+     * three whose mover is a liquid, and the liquid passes run BEFORE the
+     * flight pass every step - splash_displace() (sand_liquid.c) queues
+     * impulses of its own, so the buffer legitimately holds more than the
+     * one this test put there. Ours is still entry 0: it was queued first,
+     * and step_impulses()'s compaction keeps surviving entries in order. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(
+        255 - (255 >> SAND_SPLASH_SPEED_DECAY_SHIFT), s.impulse_buf[0].speed,
+        "a KIND_LIQUID mover must lose exactly its own geometric decay and "
+        "no drag term at all - drag stops at liquids on purpose, and this "
+        "is what says so");
+}
+
+/* A THROWN GRAIN BOUNCES OFF A WALL TOO, not just a dislodged chunk - the
+ * same reason powders had to be let into drag. A blast against a stone
+ * wall puts far more sand in the air than it ever dislodges stone, and
+ * every one of those grains used to stall against the wall and sit there
+ * until its flight aged out. Thrown right into a wall with the floor
+ * carrying on beneath it: the arc is wall + floor-corner, which dominance-
+ * quantises to a normal of `left` and reflects head-on back to `left`,
+ * paying the head-on half. */
+static void test_a_thrown_powder_grain_bounces_off_a_wall_instead_of_waiting(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, TX = 2, DIR_RIGHT = 2, DIR_LEFT = 6 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, CELL_MAKE(MAT_SAND, 8));
+    sand_set(&s, TX, ROW, STONE);
+    sand_impulse(&s, SX, ROW, DIR_RIGHT, 255);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "a blocked entry waits rather than being dropped, so the grain "
+        "must still be tracked whether or not it bounced");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(DIR_LEFT, s.impulse_buf[0].dir,
+        "a thrown KIND_POWDER grain must reflect off the wall it hits, "
+        "not keep its original heading and stall against it for the rest "
+        "of its flight");
+    TEST_ASSERT_EQUAL_INT_MESSAGE((255 - SAND_IMPULSE_SPEED_RAMP) >> 1,
+        s.impulse_buf[0].speed,
+        "and it must pay the head-on half of its remaining speed for the "
+        "bounce, exactly as a thrown chunk does");
 }
 
 /* OPEN AIR MUST COST NOTHING BUT THE RAMP - the pin that says
@@ -27983,7 +28060,9 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thrown_chunk_travels_less_far_through_dirt_than_through_air);
     RUN_TEST(test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water);
     RUN_TEST(test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displaces);
-    RUN_TEST(test_a_thrown_powder_grain_loses_no_drag_displacing_dirt);
+    RUN_TEST(test_a_thrown_powder_grain_pays_drag_displacing_dirt);
+    RUN_TEST(test_a_thrown_liquid_grain_pays_no_drag_displacing_water);
+    RUN_TEST(test_a_thrown_powder_grain_bounces_off_a_wall_instead_of_waiting);
     RUN_TEST(test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp);
     RUN_TEST(test_blocker_normal_and_reflect_off_normal_match_the_exhaustive_arc_table);
     RUN_TEST(test_a_thrown_chunk_reverses_direction_bouncing_off_a_flat_floor);
