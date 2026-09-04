@@ -1090,6 +1090,32 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_ACID_OIL_TO_GAS_CHANCE 220
 #define SAND_ACID_OIL_DEATH_CHANCE  128
 
+/* THE GENERIC EAT ALSO HAS TO COST SOMETHING - reported directly: pouring
+ * sand over acid barely shrinks the acid, even though a lot of sand gets
+ * eaten in the process. Sand (dissolvable=200), wood (160) and stone (60)
+ * all fall through to the SAME shared branch at the bottom of
+ * step_one_dissolver_cell() (sand_reactions.c, unlike water and oil which
+ * both get their own dedicated ones) and have always paid
+ * pay_quench_cost()'s flat one-unit chip per bite - a full MASS_MAX-unit
+ * acid cell can eat up to MASS_MAX cells of anything on that path before
+ * running out, and against a material as freely dissolvable as sand,
+ * landing that many bites does not take long, so the acid reads as
+ * barely spending itself for how much it visibly destroys.
+ *
+ * Same fix as oil's SAND_ACID_OIL_DEATH_CHANCE, same shape: after the
+ * normal fizz/residue handling, a further roll gives the acid a real
+ * chance to die outright - its whole remaining mass gone in this one
+ * bite - instead of always just the one-unit chip. Picked lower than
+ * oil's 128: oil is dissolved rarely (dissolvable=16, "one bite in
+ * sixteen") so a near coin-flip death rate there still reads as acid
+ * mostly surviving contact with it, but sand/wood/stone are dissolved
+ * MUCH more readily (dissolvable up to 200) - the same death rate here
+ * would let a single bite of ordinary sand kill a full acid cell about
+ * as often as not, which reads as acid being unable to eat sand at all
+ * rather than eating it at a real cost. Starting bias, not a measured
+ * one - tune on device like every other constant here. */
+#define SAND_ACID_EAT_DEATH_CHANCE 40
+
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
  * sand_reactions.c): unconditionally leaving a cell of gas or smoke
