@@ -3925,10 +3925,19 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
             wake_block_and_neighbors(s, nx, ny);
         }
 
-        /* The acid pays, and may spend itself doing it - pay_quench_cost()
-         * clears the cell when its last unit goes. Done after the target
-         * is dealt with so the two can never both survive a bite. */
-        pay_quench_cost(s, x, y, w);
+        /* The acid pays, and may spend itself doing it. SAND_ACID_EAT_
+         * DEATH_CHANCE (sand.h) rolls first for a chance to die outright -
+         * its whole remaining mass gone in this one bite - and only falls
+         * back to pay_quench_cost()'s ordinary one-unit chip if that
+         * roll misses. Done after the target is dealt with so the two
+         * can never both survive a bite. */
+        if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_EAT_DEATH_CHANCE) {
+            row[x] = CELL_EMPTY;
+            mark_rows(s, y, y);
+            wake_block_and_neighbors(s, x, y);
+        } else {
+            pay_quench_cost(s, x, y, w);
+        }
         return true;
     }
     return false;

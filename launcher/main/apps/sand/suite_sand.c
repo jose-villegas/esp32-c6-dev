@@ -15745,9 +15745,17 @@ static void test_sand_turns_to_glass_under_sustained_heat(void)
 }
 
 /* Dissolving is a TRANSFER, like quenching a fire or soaking a grain: the
- * acid is consumed by the work it does. Asserted as an exact ratio, since
- * it is exactly one unit of acid mass per cell removed. */
-static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
+ * acid is consumed by the work it does. No longer an exact one-unit-per-
+ * cell ratio - SAND_ACID_EAT_DEATH_CHANCE (sand.h) gives every bite a
+ * chance to cost the acid its WHOLE remaining mass instead of just one
+ * unit, so mass spent can only ever be >= cells eaten now, not always
+ * equal to it. Checked both ways: the floor still holds (a bite can
+ * never cost less than one unit - dissolving still is not free), and
+ * over 400 steps against 8 sand cells and 8 separate acid cells, the
+ * death roll landing at least once is close enough to certain that
+ * spending MORE than one unit on at least one of those bites is the
+ * real assertion here, not just the floor. */
+static void test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved(void)
 {
     const long acid_before = acid_tank(2, 2);
     const int sand_before = count_cells_of(MAT_SAND);
@@ -15757,11 +15765,17 @@ static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
     }
 
     const int eaten = sand_before - count_cells_of(MAT_SAND);
+    const long spent = acid_before - mass_held_by(MAT_ACID);
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, eaten, "setup: something eaten");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(eaten, acid_before - mass_held_by(MAT_ACID),
-        "every cell dissolved must cost the acid exactly one unit of its "
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(eaten, spent,
+        "every cell dissolved must cost the acid AT LEAST one unit of its "
         "own mass - without that a single drop eats an unbounded amount "
         "and remains a single drop");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(eaten, spent,
+        "SAND_ACID_EAT_DEATH_CHANCE is supposed to let at least one of "
+        "these bites cost more than the ordinary one-unit chip - mass "
+        "spent came out exactly equal to cells eaten, as if the death "
+        "roll never landed at all across 8 acid cells and 400 steps");
 }
 
 /* The consequence of that, and the reason it is worth paying for: a
@@ -26459,7 +26473,7 @@ void run_sand_suite(void)
     RUN_TEST(test_snow_melts_in_any_liquid);
     RUN_TEST(test_melting_snow_makes_water_not_more_of_the_liquid);
     RUN_TEST(test_snow_keeps_on_dry_ground);
-    RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
+    RUN_TEST(test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_acid_and_water_dilute_each_other);
