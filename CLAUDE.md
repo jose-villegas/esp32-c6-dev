@@ -203,6 +203,7 @@ don't read all of them per session:
 | [`docs/Testing-Guide.md`](docs/Testing-Guide.md) | Host/device test suites, why release builds carry no test code |
 | [`docs/Settings-App-Plan.md`](docs/Settings-App-Plan.md) | Planned: split Diagnostics' dev-toggle page into its own Settings app |
 | [`docs/Log-Level-Plan.md`](docs/Log-Level-Plan.md) | Planned: per-build-variant log-severity ceiling |
+| [`docs/Autana-Rendering-Roadmap.md`](docs/Autana-Rendering-Roadmap.md) | Proposal: the rendering/engine roadmap (band-mode framebuffer, span rasterizer, raycaster, the three target games, S3 port) |
 
 `scripts/` also has OmniRoute/Ollama-backed doc/code audit automation --
 `audit-docs.sh` and `update-docs.sh` at the core, plus `fix-audited-code.sh`
