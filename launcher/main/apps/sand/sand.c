@@ -2575,6 +2575,23 @@ static void step_impulses(sand_t *s, int dx, int dy)
          * grand total is untouched whichever of the two cases this was. */
         const cell_t displaced = s->cells[nat];
 
+        /* MEDIUM DRAG - KIND_STATIC ONLY. Charged here, at the move site,
+         * rather than folded into the ramp above `rolled_move`'s own decay:
+         * open air (nothing displaced) must cost exactly nothing, so a
+         * flight through empty space stays byte-for-byte what it always
+         * was and none of sand_explode()'s own swept tuning (SAND_IMPULSE_
+         * SPEED_RAMP, SAND_EXPLODE_CORE_DIVISOR - see their comments in
+         * sand.h) moves. See SAND_IMPULSE_DRAG_SHIFT's own comment for what
+         * the number means and why KIND_STATIC only - liquid and powder
+         * movers already carry their own decay or were what that tuning
+         * measured, and widening this to them is a later round. Saturating
+         * at 0, same idiom as the ramp two hundred lines up. */
+        if (!CELL_IS_EMPTY(displaced) && materials[mat_id].kind == KIND_STATIC) {
+            const uint8_t drag =
+                (uint8_t)(material_of(displaced)->density >> SAND_IMPULSE_DRAG_SHIFT);
+            entry.speed = (entry.speed > drag) ? (uint8_t)(entry.speed - drag) : 0;
+        }
+
         s->cells[nat] = entry.cell;
         s->cells[at]  = displaced;
         latch_content_flags(s, entry.cell);

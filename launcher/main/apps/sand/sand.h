@@ -722,6 +722,23 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * first once it is. */
 #define SAND_IMPULSE_SPEED_RAMP  2
 
+/* EXTRA speed charged at the move site, on top of the ordinary ramp above,
+ * per non-empty cell a KIND_STATIC mover displaces - see step_impulses()'s
+ * own comment at the charge site for why there rather than folded into the
+ * ramp. `density >> SAND_IMPULSE_DRAG_SHIFT` is the cost, so a heavier
+ * medium costs more: open air (nothing displaced) costs nothing, water (30)
+ * costs 7, dirt or sand (60-62) cost 15 - roughly an order of magnitude
+ * more than the plain ramp's 2, which is the point: today a thrown chunk
+ * crosses a bank of dirt exactly as fast as open air, and this is meant to
+ * be felt immediately, not shaved off gradually. A SHIFT rather than a
+ * flat divide keeps the cost a single-instruction saturating operation, the
+ * same idiom SAND_SPLASH_SPEED_DECAY_SHIFT already uses elsewhere in this
+ * file. 2 is a STARTING FIGURE, not a measurement - picked from the table
+ * above, not from a device sweep - because KIND_STATIC is the only kind
+ * this rung touches; widening drag to liquid or powder movers is a later
+ * round with its own device evidence, not this constant's job to predict. */
+#define SAND_IMPULSE_DRAG_SHIFT  2
+
 /* sand_explode()'s OWN choice of what speed to hand every entry it queues -
  * not a property of sand_impulse() itself, which takes speed as a plain
  * parameter and assumes nothing about what any particular caller wants.

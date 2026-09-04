@@ -20734,6 +20734,287 @@ static void test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_pow
         "queued into impulse tracking in the first place");
 }
 
+/* --- Rung 1: medium drag on a thrown KIND_STATIC chunk --------------------
+ *
+ * step_impulses() (sand.c) now charges extra `speed` loss at the move site,
+ * per non-empty cell a KIND_STATIC mover displaces, proportional to that
+ * cell's own `density` (SAND_IMPULSE_DRAG_SHIFT, sand.h) - a thrown wall
+ * chunk should cross a bank of dirt slower than it crosses open air, not
+ * teleport through it at the same rate. KIND_STATIC only; see SAND_IMPULSE_
+ * DRAG_SHIFT's own comment for why liquid and powder movers are out of
+ * scope for this rung.
+ *
+ * TWO SHAPES OF TEST, NOT ONE. The two below actually measure horizontal
+ * distance travelled - the thing the feature exists to change, and the
+ * thing a name like "travels less far" has to mean, following the
+ * interfacial-drag idiom above (test_water_does_not_drill_into_oil_when_
+ * tilted): averaged over PLOW_SEEDS seeds, because "a single run of a
+ * chaotic scene is not evidence" is exactly as true here as it is there.
+ * The two after that are single-step, single-displaced-cell pins on the
+ * exact arithmetic (speed == 255 - SAND_IMPULSE_SPEED_RAMP - (density >>
+ * SAND_IMPULSE_DRAG_SHIFT)) - asserting on s.impulse_buf[0].speed directly
+ * is honest ONLY there, because for that one test the formula itself IS
+ * the claim, not a stand-in for it.
+ *
+ * A FIRST VERSION OF THE DISTANCE TESTS FLOORED THE FLIGHT ROW DIRECTLY
+ * BENEATH ITSELF, which was wrong twice over. First: with no vertical
+ * opening ever available, a single missed push roll - a roughly 1-in-256
+ * event every step, `rolled_move`, step_impulses() - ended the flight
+ * immediately instead of costing one step's worth of distance the way it
+ * would in the open field sand_explode() actually throws into, turning
+ * "distance travelled" into the stopping point of a race against a
+ * shrinking success chance rather than a measurement of drag. Second, and
+ * worse: a wide packed medium is not inert while it waits to be hit -
+ * try_slide_impl() (sand_priv.h) draws one s->rng number for EVERY resting
+ * powder cell EVERY step regardless of whether it moves, so a wide bank of
+ * dirt measurably shifts which random numbers the impulse's own roll
+ * consumes relative to open air. Confirmed by running that version against
+ * the UNMODIFIED file: dirt already "won" against water there, averaged
+ * over seeds and all, with no drag mechanism to explain it.
+ *
+ * THE FIX IS OPEN SPACE, NOT A FLOOR UNDER THE FLIGHT ROW. `medium` fills
+ * ONLY row 0, the row the chunk is thrown along; every row below it is
+ * empty, down to a single STONE floor at the very bottom of a grid tall
+ * enough to give real room to fall. A missed push roll now finds a real
+ * opening on the very next gravity-drift check (`has_opening`,
+ * step_impulses()) and simply keeps falling instead of settling - exactly
+ * the "still airborne" path the code already has for this. The medium
+ * itself is not inert either: with nothing under IT, ordinary gravity
+ * (the ordinary sweep, which runs before step_impulses() every step) pulls
+ * unsupported dirt or water down into the open space below just as the
+ * falling chunk arrives there, so the chunk keeps encountering displaceable
+ * medium for several steps of its fall rather than only the one row it
+ * started in - confirmed by tracing a single seed step by step: the chunk
+ * left row 0 after its very first move, and the cell it swapped into on
+ * EVERY later step was already the falling medium material, not open air.
+ * That is a real, mechanism-driven difference between dirt and water
+ * (materials that fall) and open air (nothing to fall), not an artefact of
+ * scene geometry.
+ *
+ * PLOW_STEPS IS SHORT ON PURPOSE - long enough to cover the fall to the
+ * floor (PLOW_H - 1 rows) plus a few, not long enough to let post-landing
+ * wandering (still tracked, still rolling sideways through open ground with
+ * nothing left to displace) dilute the signal. Measured both ways: at 80
+ * steps the three averages over PLOW_SEEDS seeds sit at roughly 14.2 (air)
+ * / 8.9 (water) / 7.3 (dirt) cells and the unmodified file's own equivalent
+ * numbers already cluster within a few percent of each other by chance,
+ * which is the right shape pre-fix but leaves too little room for genuine
+ * noise on either side of the assertions. At 15 steps the unmodified file's
+ * three averages sit at 12.5 / 12.0 / 12.6 - indistinguishable, exactly as
+ * they must be with no drag mechanism to tell dirt from water from air -
+ * while the fixed file's separate out to 12.5 / 8.8 / 7.3, the same
+ * mechanism-driven ordering, just measured where it is least diluted. */
+#define PLOW_W 40
+#define PLOW_H 10
+#define PLOW_SEEDS 32
+#define PLOW_STEPS 15
+
+/* `medium` fills row 0 (unless empty) for `mover`, thrown right from
+ * (1, 0), to fly and fall through; a single STONE floor spans the very
+ * bottom row. STATIC movers go through sand_impulse_dislodge()
+ * (unconditional, matching this suite's other thrown-chunk tests);
+ * anything else through plain sand_impulse(), which a KIND_STATIC cell
+ * would just refuse. `cells` is memset here rather than by each caller,
+ * matching test_water_does_not_drill_into_oil_when_tilted's own
+ * drag_cells above - a fresh sand_init() alone never clears the array. */
+static void plow_build(sand_t *g, uint8_t *cells, impulse_t *buf, int buf_max,
+                       uint32_t seed, material_id_t mover, cell_t medium)
+{
+    memset(cells, 0, (size_t)PLOW_W * PLOW_H);
+    sand_init(g, cells, PLOW_W, PLOW_H, seed);
+    sand_enable_impulses(g, buf, buf_max);
+
+    for (int x = 0; x < PLOW_W; x++) {
+        sand_set(g, x, PLOW_H - 1, STONE);
+    }
+    sand_set(g, 1, 0, CELL_MAKE(mover, 8));
+    if (!CELL_IS_EMPTY(medium)) {
+        for (int x = 2; x < PLOW_W; x++) {
+            sand_set(g, x, 0, medium);
+        }
+    }
+
+    enum { DIR_RIGHT = 2 };
+    if (materials[mover].kind == KIND_STATIC) {
+        sand_impulse_dislodge(g, 1, 0, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+    } else {
+        sand_impulse(g, 1, 0, DIR_RIGHT, 255);
+    }
+}
+
+/* The mover's current column, wherever it ended up - flying or settled,
+ * anywhere above the floor row. Scans every row EXCEPT the floor (which is
+ * STONE across the whole width and would otherwise be mistaken for the
+ * mover on any seed where it has not yet reached the bottom). */
+static int plow_mover_x(sand_t *g)
+{
+    for (int y = 0; y < PLOW_H - 1; y++) {
+        for (int x = 0; x < PLOW_W; x++) {
+            if (CELL_MATERIAL(sand_at(g, x, y)) == MAT_STONE) {
+                return x;
+            }
+        }
+    }
+    return -1;
+}
+
+/* Summed, not averaged, across PLOW_SEEDS seeds 1..PLOW_SEEDS - matching
+ * test_water_does_not_drill_into_oil_when_tilted's own `total` shape
+ * above. Every caller uses the SAME seed set (1..PLOW_SEEDS), so a
+ * comparison between two calls is apples to apples. */
+static long plow_total_distance(uint8_t *cells, impulse_t *buf, cell_t medium)
+{
+    long total = 0;
+    for (uint32_t k = 1; k <= (uint32_t)PLOW_SEEDS; k++) {
+        sand_t g;
+        plow_build(&g, cells, buf, 4, k, MAT_STONE, medium);
+        for (int i = 0; i < PLOW_STEPS; i++) {
+            sand_step(&g, 0, 1000, 0);
+        }
+        total += plow_mover_x(&g) - 1;
+    }
+    return total;
+}
+
+static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_air(void)
+{
+    uint8_t *cells = malloc((size_t)PLOW_W * PLOW_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "plow grid must fit in what the framebuffer leaves");
+    impulse_t buf[4];
+
+    const long air_total  = plow_total_distance(cells, buf, 0);
+    const long dirt_total = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 8));
+
+    free(cells);
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(air_total, dirt_total,
+        "a thrown KIND_STATIC chunk must travel less far, summed across "
+        "the same seeds, through a bank of dirt than through open air - "
+        "today it crosses both at exactly the same rate and simply "
+        "teleports the dirt behind it, which is the reported bug this "
+        "rung fixes");
+}
+
+static void test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water(void)
+{
+    uint8_t *cells = malloc((size_t)PLOW_W * PLOW_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "plow grid must fit in what the framebuffer leaves");
+    impulse_t buf[4];
+
+    const long water_total = plow_total_distance(cells, buf, CELL_MAKE(MAT_WATER, MASS_MAX));
+    const long dirt_total  = plow_total_distance(cells, buf, CELL_MAKE(MAT_DIRT, 8));
+
+    free(cells);
+
+    TEST_ASSERT_LESS_THAN_INT_MESSAGE(water_total, dirt_total,
+        "drag must be ordered by density, not a flat penalty - dirt (62) "
+        "is denser than water (30), so summed across the same seeds it "
+        "must charge more speed per cell displaced and leave the chunk "
+        "travelling less far");
+}
+
+/* THE FORMULA ITSELF, single step, single displaced cell - the one place in
+ * this rung where asserting on s.impulse_buf[0].speed directly is honest
+ * rather than a stand-in for the thing the feature actually does, because
+ * here the arithmetic IS the claim. A floor under the row (matching
+ * test_a_flying_water_grain_does_not_swap_into_dirt_in_its_path above)
+ * keeps ordinary gravity from pulling the dirt cell (or the mover) out of
+ * the row before the impulse gets its one step. */
+static void test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displaces(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, TX = 2, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, STONE);
+    sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 8));
+    sand_impulse_dislodge(&s, SX, ROW, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    const uint8_t expected = (uint8_t)(255 - SAND_IMPULSE_SPEED_RAMP -
+                             (materials[MAT_DIRT].density >> SAND_IMPULSE_DRAG_SHIFT));
+    TEST_ASSERT_EQUAL_INT_MESSAGE(expected, s.impulse_buf[0].speed,
+        "speed lost displacing a single dirt cell must equal exactly the "
+        "plain ramp plus (density >> SAND_IMPULSE_DRAG_SHIFT) - this is "
+        "the formula step_impulses() actually implements, not an "
+        "inequality standing in for it");
+}
+
+/* THE SCOPE PIN, same one-step shape: a KIND_POWDER mover displacing the
+ * same dirt cell must lose only the plain ramp, no drag term at all - see
+ * SAND_IMPULSE_DRAG_SHIFT's own comment in sand.h for why powders are out
+ * of scope for this rung. */
+static void test_a_thrown_powder_grain_loses_no_drag_displacing_dirt(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, TX = 2, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, CELL_MAKE(MAT_SAND, 8));
+    sand_set(&s, TX, ROW, CELL_MAKE(MAT_DIRT, 8));
+    sand_impulse(&s, SX, ROW, DIR_RIGHT, 255);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP, s.impulse_buf[0].speed,
+        "a KIND_POWDER mover must lose only the plain ramp displacing "
+        "dirt, no drag term at all - this rung's drag is scoped to "
+        "KIND_STATIC movers only, and this is the scope pin for that "
+        "scope");
+}
+
+/* OPEN AIR MUST COST NOTHING BUT THE RAMP - the pin that says
+ * sand_explode()'s own swept tuning (SAND_IMPULSE_SPEED_RAMP,
+ * SAND_EXPLODE_CORE_DIVISOR, sand.h) did not move when drag arrived, and
+ * the reason the two distance tests above can compare a medium against air
+ * at all. Structural rather than a measured figure: a blast throws most of
+ * its grains through empty space, so if a future change ever makes drag a
+ * flat per-move charge instead of a density-scaled one, every explosion in
+ * the app changes shape at once and this is what says so. The same one-step
+ * shape as the two pins above, with an EMPTY cell ahead instead of dirt. */
+static void test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp(void)
+{
+    fixture();
+    sand_enable_impulses(&s, impulse_buf, W * H);
+
+    enum { ROW = 4, SX = 1, DIR_RIGHT = 2 };
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, ROW + 1, STONE);
+    }
+    sand_set(&s, SX, ROW, STONE);
+    sand_impulse_dislodge(&s, SX, ROW, DIR_RIGHT, 255, SAND_IMPULSE_SPEED_RAMP);
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(1, s.impulse_count,
+        "the single push roll here succeeds on the order of 99.6% of the "
+        "time at speed 255 - losing tracking on this one step means the "
+        "scene itself is broken, not that this run was merely unlucky");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(255 - SAND_IMPULSE_SPEED_RAMP,
+        s.impulse_buf[0].speed,
+        "a chunk moving into an EMPTY cell must lose exactly the plain "
+        "ramp and not one speck more - drag is charged per cell displaced, "
+        "so flight through open air has to stay byte-for-byte what it was "
+        "before this rung existed");
+}
+
 /* THE REGRESSION GUARD. Every test above this line already existed the day
  * a real device reported: "in water nothing happens, in sand also no
  * holes, i can see some faint movement when near pixels they do move but
@@ -26346,6 +26627,11 @@ void run_sand_suite(void)
     RUN_TEST(test_a_thrown_static_chunk_conserves_lava_mass_on_sink);
     RUN_TEST(test_a_chunk_stacked_on_an_in_flight_chunk_waits_instead_of_settling_and_both_eventually_land);
     RUN_TEST(test_an_ordinary_static_solid_still_does_not_sink_into_liquid_or_powder);
+    RUN_TEST(test_a_thrown_chunk_travels_less_far_through_dirt_than_through_air);
+    RUN_TEST(test_a_thrown_chunk_travels_less_far_through_dirt_than_through_water);
+    RUN_TEST(test_a_thrown_chunk_loses_speed_proportional_to_the_density_it_displaces);
+    RUN_TEST(test_a_thrown_powder_grain_loses_no_drag_displacing_dirt);
+    RUN_TEST(test_a_thrown_chunk_displacing_nothing_loses_only_the_plain_ramp);
     RUN_TEST(test_a_blast_in_a_packed_bed_opens_a_cavity_and_reaches_beyond_the_radius);
     RUN_TEST(test_a_blast_queues_impulses_on_every_side_of_the_centre);
     RUN_TEST(test_detonating_empty_space_still_flashes_the_core);
