@@ -2555,9 +2555,47 @@ static void step_impulses(sand_t *s, int dx, int dy)
              * new failure mode. Every other material keeps the plain wait,
              * unchanged - see splash_displace()'s own comment in
              * sand_liquid.c for why this scope matches the splash feature
-             * itself, water and acid only. */
+             * itself, water and acid only.
+             *
+             * A THROWN KIND_STATIC CHUNK REFLECTS TOO, off the blocking
+             * surface's approximate normal rather than a flat 180 - a wall
+             * chunk glancing off a floor should skid onward, not bounce
+             * straight back the way a droplet's flat flip above does.
+             * blocker_normal() (this file) reads the three-cell arc ahead of
+             * the mover for what it hit, reflect_off_normal() turns that
+             * into a new ring direction, and either returning -1 (no static
+             * neighbour found, or the reflection degenerates) leaves `entry`
+             * untouched below - the plain wait, same as ever.
+             *
+             * FLOORED AT SAND_IMPULSE_BOUNCE_MIN_SPEED and CHARGED
+             * RESTITUTION every time it fires - both mandatory, not polish;
+             * see that constant's own comment in sand.h for the
+             * bounce-in-place pathology an unfloored, undamped version of
+             * this reopens (step_impulses()'s own roll comment above
+             * records the history). Half the speed on a HEAD-ON reflection
+             * (the new direction is exactly opposite the old one - a wall
+             * met square-on), a quarter otherwise (a glancing hit, which
+             * should read as skidding onward, not braking hard). Costing a
+             * head-on bounce more is the physically right shape and the one
+             * that damps the worst case - repeated head-on bounces in a
+             * narrow gap - hardest, while leaving a chunk skidding along a
+             * wall mostly intact. */
             if (mat_id == MAT_WATER || mat_id == MAT_ACID) {
                 entry.dir = (entry.dir + 4) & 7;
+            } else if (materials[mat_id].kind == KIND_STATIC &&
+                       entry.speed >= SAND_IMPULSE_BOUNCE_MIN_SPEED) {
+                const int normal = blocker_normal(s, x, y, entry.dir);
+                const int reflected = (normal < 0)
+                                          ? -1
+                                          : reflect_off_normal(entry.dir, normal);
+                if (reflected >= 0) {
+                    const bool head_on =
+                        (reflected == ((entry.dir + 4) & 7));
+                    entry.dir = (uint8_t)reflected;
+                    entry.speed = head_on
+                        ? (uint8_t)(entry.speed >> 1)
+                        : (uint8_t)(entry.speed - (entry.speed >> 2));
+                }
             }
             s->impulse_buf[kept++] = entry;
             continue;
