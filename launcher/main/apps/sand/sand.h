@@ -992,35 +992,70 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * constant only decides the OUTCOME once that roll has already landed:
  * whether the acid cell that bit becomes water (dilution, the more
  * common case) or the water cell it bit becomes acid instead (acid
- * spreading). Chance-in-256 that WATER wins. Started at 192 (3 in 4),
- * toned down to 160 (about 5 in 8) once reported as too strongly one-
- * sided, then tightened further to a 55/45 split (141) - close enough
- * to even that acid spreading reads as a real, regular outcome rather
- * than the rare exception it was at the wider splits. Starting bias,
- * not a measured one - tune on device like every other constant here. */
+ * spreading). Chance-in-256 that WATER wins, BEFORE
+ * SAND_ACID_DILUTE_MASS_BIAS below adjusts it for this particular acid
+ * cell. Started at 192 (3 in 4), toned down to 160 (about 5 in 8) once
+ * reported as too strongly one-sided, then tightened further to a 55/45
+ * split (141) - close enough to even that acid spreading reads as a
+ * real, regular outcome rather than the rare exception it was at the
+ * wider splits. Starting bias, not a measured one - tune on device like
+ * every other constant here. */
 #define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
 
-/* EVAPORATION ON DILUTION - once the roll above has already decided the
- * acid cell wins (becomes water), a second, independent roll gives that
- * outcome a further chance to boil off into MAT_GAS instead of actually
- * becoming water. Requested directly: a puddle sitting under a steady
- * drip of acid was growing without bound, one full water cell born per
- * winning bite with nothing ever leaving the system - this is the mass
- * sink that was missing, distinct from r->evaporates (material.c), which
- * is acid's own ambient boil-off and fires whether or not water is
- * anywhere nearby. Chance-in-256, checked only inside the water-wins
- * branch, so it does not touch the 55/45 split above at all: the acid
- * cell either becomes water as before, or - at this rate instead -
- * evaporates on the spot, no separate fizzle puff on top of it (unlike
- * the ordinary water-wins case) since evaporating in place already IS
- * the gas escaping. Starting bias, not a measured one - tune on device
- * like every other constant here. Picked small (1 in 8) deliberately:
- * test_water_wins_the_dilution_more_often_than_acid_does (suite_sand.c)
- * still needs literal acid-becomes-water bites to clearly outnumber
- * acid-wins bites over 4000 columns, which stops working somewhere past
- * roughly 1 in 5 at the current 55/45 split - the margin is documented
- * there, re-check it before raising this past a small trim. */
-#define SAND_ACID_DILUTE_EVAPORATE_CHANCE 32
+/* MASS MATTERS - a single roll at the fixed split above can't tell a lone
+ * drop of acid resting on a lake from a whole poured-on slab of it; every
+ * bite looked the same, so a huge amount of acid dumped on a small puddle
+ * never read as different from a trickle, and the same was true in
+ * reverse for a lake poured onto a puddle of acid. Fixed directly:
+ * step_one_dissolver_cell() counts how many of the ACID cell's own
+ * cardinal neighbours are themselves acid, and separately how many of
+ * the WATER cell's own cardinal neighbours are themselves water (0 to 3
+ * each), and rolls against SAND_ACID_DILUTE_TO_WATER_CHANCE adjusted by
+ * the DIFFERENCE between the two, water_backing minus acid_backing,
+ * times this constant.
+ *
+ * The difference matters, not either count alone - a first version only
+ * ever measured the acid side and subtracted, which is NOT actually
+ * symmetric: since only acid cells ever roll this reaction, a deep, pure
+ * acid pool always reads as "backed" from its own side even while an
+ * equally deep pool of water sits right next to it, so water could pour
+ * onto an acid puddle forever and still not reliably win - see
+ * test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid
+ * (suite_sand.c), which is what caught it. With the difference: two
+ * equally deep pools facing each other net to zero bias and the base
+ * split above holds exactly as it always did; a lone grain of either
+ * material still reads as 0 on its own side, so an isolated drop in a
+ * big lake gets pushed even further toward diluting (the lake's own
+ * water_backing pulls the split up), and it is only once one side's
+ * local mass genuinely outweighs the other's that the roll tips.
+ *
+ * Purely local either way - no global concentration tracking, up to 8
+ * bounds-checked reads total (4 for each cell's own neighbours), the
+ * same kind of local rule the rest of this automaton already relies on
+ * to produce a macro-scale effect. Starting bias, not a measured one -
+ * tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_MASS_BIAS 24
+
+/* EVAPORATION ON DILUTION - a flat slice of the SAME roll that decides
+ * water-wins-vs-acid-wins (see the single-roll ladder in
+ * step_one_dissolver_cell(), sand_reactions.c - deliberately one roll,
+ * not the two independent ones an earlier version of this used, to keep
+ * the interaction from growing another moving part) gives every acid/
+ * water bite a small, unconditional chance to boil the acid cell off
+ * into MAT_GAS instead of resolving into either water or more acid.
+ * Requested directly: a puddle sitting under a steady drip of acid was
+ * growing without bound, one full water cell born per winning bite with
+ * nothing ever leaving the system - this is the mass sink that was
+ * missing, distinct from r->evaporates (material.c), which is acid's own
+ * ambient boil-off and fires whether or not water is anywhere nearby.
+ * Chance-in-256 out of the full roll (not nested inside the water-wins
+ * branch the way it first shipped), checked first in the ladder, ahead
+ * of SAND_ACID_DILUTE_MASS_BIAS's adjustment - so evaporating is exactly
+ * as likely for a lone drop as for a poured-on slab. No separate fizzle
+ * puff on top of it the way the ordinary water-wins case gets one; boiling
+ * off in place already is the gas escaping. Starting bias, not a
+ * measured one - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),

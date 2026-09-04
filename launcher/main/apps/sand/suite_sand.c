@@ -16202,6 +16202,110 @@ static void test_acid_evaporates_into_gas_when_forced(void)
         "in a single step");
 }
 
+/* SAND_ACID_DILUTE_MASS_BIAS's actual point, end to end - the single-step
+ * fixtures above only ever measure ONE bite, which is enough to prove the
+ * bias exists but not that it does what it was added for: a LOPSIDED
+ * volume, kept up over time, should be able to turn the smaller side into
+ * more of the larger one, not just nudge one column's coin flip.
+ *
+ * A basin, not a fixture pair - one pool at the bottom, walled in by
+ * STONE on the floor so nothing drains out of bounds (see
+ * test_snow_melts_in_any_liquid's own fixture for the same wall), with
+ * the OTHER material re-painted across the whole top row every single
+ * step before sand_step() runs. That is "pour X non-stop": the top row
+ * is a fixed-size tap, never growing, so the final census is not simply
+ * "there is more poured material because more of it was ever placed" -
+ * the pool starts out outnumbering the tap by POOL_DEPTH rows to 1, so
+ * the tap has to actually win the reaction, repeatedly, to flip it.
+ *
+ * Both directions share this shape, so one fixture builds either one -
+ * `pool` is what starts deep and gets poured on, `tap` is what re-fills
+ * row 0 every step. */
+#define DILUTE_POUR_W          100
+#define DILUTE_POUR_H          50
+#define DILUTE_POUR_POOL_DEPTH 20
+#define DILUTE_POUR_STEPS      400
+static sand_t  dilute_pour_sim;
+
+/* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
+ * own comment above for why. */
+static void acid_water_pour_fixture(uint8_t *cells, material_id_t pool) {
+    sand_init(&dilute_pour_sim, cells, DILUTE_POUR_W, DILUTE_POUR_H, 17u);
+    sand_set_evaporates(&dilute_pour_sim, 0); /* isolate the mass bias from
+                                                * the unrelated ambient
+                                                * evaporates roll - same
+                                                * reasoning as the other
+                                                * dilution fixtures above. */
+    for (int x = 0; x < DILUTE_POUR_W; x++) {
+        sand_set(&dilute_pour_sim, x, DILUTE_POUR_H - 1, STONE);
+    }
+    for (int y = DILUTE_POUR_H - 1 - DILUTE_POUR_POOL_DEPTH; y < DILUTE_POUR_H - 1; y++) {
+        for (int x = 0; x < DILUTE_POUR_W; x++) {
+            sand_set(&dilute_pour_sim, x, y, CELL_MAKE(pool, MASS_MAX));
+        }
+    }
+}
+
+static void pour_and_count(material_id_t tap, int *out_pool_mat, int *out_tap_mat) {
+    for (int i = 0; i < DILUTE_POUR_STEPS; i++) {
+        for (int x = 0; x < DILUTE_POUR_W; x++) {
+            sand_set(&dilute_pour_sim, x, 0, CELL_MAKE(tap, MASS_MAX));
+        }
+        sand_step(&dilute_pour_sim, 0, 1000, 0);
+    }
+
+    int pool_mat = 0, tap_mat = 0;
+    const material_id_t pool = (tap == MAT_ACID) ? MAT_WATER : MAT_ACID;
+    for (int y = 0; y < DILUTE_POUR_H - 1; y++) {
+        for (int x = 0; x < DILUTE_POUR_W; x++) {
+            const uint8_t m = CELL_MATERIAL(sand_at(&dilute_pour_sim, x, y));
+            if (m == pool) {
+                pool_mat++;
+            } else if (m == tap) {
+                tap_mat++;
+            }
+        }
+    }
+    *out_pool_mat = pool_mat;
+    *out_tap_mat  = tap_mat;
+}
+
+static void test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water(void) {
+    uint8_t *cells = malloc((size_t)DILUTE_POUR_W * DILUTE_POUR_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water pour grid must fit in what the framebuffer leaves");
+    acid_water_pour_fixture(cells, MAT_WATER);
+
+    int water_left, acid_now;
+    pour_and_count(MAT_ACID, &water_left, &acid_now);
+
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(water_left, acid_now,
+        "a pool that started as all water, poured on with acid every "
+        "single step for 400 steps, must end up mostly acid - "
+        "SAND_ACID_DILUTE_MASS_BIAS is supposed to let a sustained excess "
+        "actually win, not just tilt one isolated bite");
+}
+
+static void test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid(void) {
+    uint8_t *cells = malloc((size_t)DILUTE_POUR_W * DILUTE_POUR_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water pour grid must fit in what the framebuffer leaves");
+    acid_water_pour_fixture(cells, MAT_ACID);
+
+    int acid_left, water_now;
+    pour_and_count(MAT_WATER, &acid_left, &water_now);
+
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_left, water_now,
+        "a pool that started as all acid, poured on with water every "
+        "single step for 400 steps, must end up mostly water - the same "
+        "property has to hold in both directions, not just the one "
+        "SAND_ACID_DILUTE_TO_WATER_CHANCE already favoured");
+}
+
 static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)
 {
     fixture();
@@ -21201,8 +21305,19 @@ static void test_the_four_liquid_scene_keeps_reacting_after_settling(void)
         "lava quenched by water should still be leaving a good showing of "
         "stone at the end of the window - if it isn't, the scene has gone "
         "quiet and the device test beside it is measuring almost nothing");
-    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, steam,
-        "water boiled and fire quenched should still be leaving a good "
+    /* 50 down to 8 - SAND_ACID_DILUTE_MASS_BIAS (sand.h) means the acid
+     * band in this scene now genuinely contests the water band it sits
+     * against instead of always losing to it, so less water survives the
+     * crossing to reach lava and boil. Intentional: the whole point of
+     * that constant is a big local mass of one liquid actually winning
+     * against another, and this scene's inverted acid-over-water band is
+     * exactly that shape. Still checked against a floor, not dropped
+     * entirely - steam production really did fall (measured 11 at the
+     * constants current when this was retuned), so a floor of 0 would
+     * stop catching a genuine regression; 8 leaves headroom below that
+     * without asking for the old, pre-mass-bias showing back. */
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(8, steam,
+        "water boiled and fire quenched should still be leaving some "
         "showing of steam at the end of the window - if it isn't, the "
         "scene has gone quiet and the device test beside it is measuring "
         "almost nothing");
@@ -26247,6 +26362,8 @@ void run_sand_suite(void)
     RUN_TEST(test_water_winning_dilution_spawns_a_gas_puff);
     RUN_TEST(test_oil_dilutes_into_acid_but_the_acid_pays_for_it);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
+    RUN_TEST(test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water);
+    RUN_TEST(test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
     RUN_TEST(test_water_does_not_drill_into_oil_when_tilted);

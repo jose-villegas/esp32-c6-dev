@@ -3794,31 +3794,64 @@ step_one_dissolver_cell(sand_t* s, uint8_t* row, int x, int y, int w, int h, con
          * pay_quench_cost() below does not apply to this branch: nothing
          * is being spent, so this returns before reaching it. */
         if (CELL_MATERIAL(n) == MAT_WATER) {
-            if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_TO_WATER_CHANCE) {
-                /* SAND_ACID_DILUTE_EVAPORATE_CHANCE (sand.h): a second,
-                 * independent roll gives the water-wins outcome a further
-                 * chance to boil the acid cell off into gas instead of
-                 * actually becoming water - the mass sink that keeps a
-                 * steady drip of acid from growing an unbounded puddle.
-                 * No fizzle puff on top of this one; evaporating in place
-                 * already is the gas escaping. */
-                if ((int)(rng_next(&s->rng) & 0xFF) < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
-                    const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
-                    place_reacted(s, x, y, self_at, MAT_GAS);
-                    return true;
+            /* SAND_ACID_DILUTE_MASS_BIAS (sand.h): count how many of the
+             * ACID cell's own cardinal neighbours are themselves acid, and
+             * how many of the WATER cell's own cardinal neighbours are
+             * themselves water (up to 3 each, besides the one direction
+             * that already links the two of them) - a lone grain of
+             * either material reads as 0 either way. Only the DIFFERENCE
+             * between the two moves the split: a deep acid pool meeting
+             * an equally deep water pool nets to zero (neither is more
+             * "backed" than the other, so the base bias holds exactly as
+             * it always did), and it is only once one side's local mass
+             * genuinely outweighs the other's that this tips the roll.
+             * Measuring acid's backing alone was tried first and reads
+             * simpler, but it is not actually symmetric: since only acid
+             * cells ever roll this reaction, a deep, PURE acid pool
+             * always looks "backed" from its own side even while an
+             * equally deep pool of water is piled up right next to it -
+             * water pouring onto acid could not win even in the
+             * relentless-pour tests below, no matter how much of it
+             * accumulated. Eight bounds-checked reads at most, still
+             * cheap, just no longer one-sided. */
+            int acid_backing = 0, water_backing = 0;
+            for (int bd = 0; bd < 4; bd++) {
+                const int abx = x + reaction_dirs[bd][0];
+                const int aby = y + reaction_dirs[bd][1];
+                if ((unsigned)abx < (unsigned)w && (unsigned)aby < (unsigned)h
+                    && CELL_MATERIAL(s->cells[(size_t)aby * (size_t)w + (size_t)abx]) == MAT_ACID) {
+                    acid_backing++;
                 }
 
+                const int wbx = nx + reaction_dirs[bd][0];
+                const int wby = ny + reaction_dirs[bd][1];
+                if ((unsigned)wbx < (unsigned)w && (unsigned)wby < (unsigned)h
+                    && CELL_MATERIAL(s->cells[(size_t)wby * (size_t)w + (size_t)wbx]) == MAT_WATER) {
+                    water_backing++;
+                }
+            }
+            const int water_wins_chance = SAND_ACID_DILUTE_TO_WATER_CHANCE
+                                           + (water_backing - acid_backing) * SAND_ACID_DILUTE_MASS_BIAS;
+
+            /* ONE roll, a three-way ladder - see SAND_ACID_DILUTE_EVAPORATE_CHANCE's
+             * own comment (sand.h) for why this replaced two independent
+             * rolls. */
+            const int roll = (int)(rng_next(&s->rng) & 0xFF);
+            if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE) {
+                const size_t self_at = (size_t)y * (size_t)w + (size_t)x;
+                place_reacted(s, x, y, self_at, MAT_GAS);
+            } else if (roll < SAND_ACID_DILUTE_EVAPORATE_CHANCE + water_wins_chance) {
                 row[x] = CELL_MAKE(MAT_WATER, CELL_VARIANT(row[x]));
                 mark_rows(s, y, y);
                 wake_block_and_neighbors(s, x, y);
 
                 /* A small "fizzle" at the moment water actually wins -
                  * explicitly asked for, and only for this outcome (not
-                 * the rarer acid-spreads branch below): a puff of gas
-                 * into whatever empty cell is nearby, the same residue
-                 * idiom emit_into_empty_neighbor() already gives ember's
-                 * flame and wet dirt's steam (just a no-op if nothing
-                 * empty is adjacent, same as those).
+                 * the acid-spreads branch below, nor the evaporate one
+                 * above): a puff of gas into whatever empty cell is
+                 * nearby, the same residue idiom emit_into_empty_neighbor()
+                 * already gives ember's flame and wet dirt's steam (just
+                 * a no-op if nothing empty is adjacent, same as those).
                  *
                  * An impulse pop was tried alongside this too (reusing
                  * acid_bubble()'s own direction math), then dropped -
