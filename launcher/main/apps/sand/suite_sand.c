@@ -3765,6 +3765,48 @@ static void test_pouring_stone_never_arms_the_reactions_pass(void)
     }
 }
 
+/* A DRY BOARD WITH SAND ON IT HAS TO LET THE MOISTURE PASS GO.
+ *
+ * Sand soaks but does not dry, so its variant is a SHADE, not a wetness -
+ * and step_one_soaking_cell() reads CELL_MOISTURE() off every cell it
+ * runs on, sand included. Soil's dry tones put real values in the low
+ * half of the nibble, so that read only returns zero for a shade below
+ * SOIL_DRY_TONES: a grain shaded any higher reported moisture it never
+ * had, the pass kept setting FOUND_MOISTURE, and may_have_moisture -
+ * which only ever CLEARS from that flag, never sets from it - could
+ * never go back down once any water had armed it.
+ *
+ * Same justification for touching the field directly as
+ * test_pouring_stone_never_arms_the_reactions_pass above: the only
+ * symptom is a full-board pass that never switches off again, which
+ * costs frame time on device and changes no simulation output at all,
+ * so there is nothing behavioural to assert on instead.
+ *
+ * The shade is set explicitly rather than poured, because the pour band
+ * decides which shades a brushful gets and this needs the specific half
+ * of the range that used to lie. */
+static void test_sand_alone_lets_the_moisture_pass_switch_off_again(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (uint8_t shade = 0; shade < SAND_DUNE_SHADES; shade++) {
+        sand_clear(&s);
+        sand_set(&s, W / 2, H - 1, CELL_MAKE(MAT_SAND, shade));
+
+        /* Whatever armed it is gone - a puddle that has since dried, or
+         * the soil it was watering taken off the board. */
+        s.may_have_moisture = true;
+        sand_step(&s, 0, 1000, 0);
+
+        char why[128];
+        snprintf(why, sizeof why,
+                 "a lone sand grain at shade %u kept the moisture pass "
+                 "armed - its shade is being read as wetness", shade);
+        TEST_ASSERT_FALSE_MESSAGE(s.may_have_moisture, why);
+    }
+}
+
 static void test_placing_fire_arms_both_gas_and_fire_passes(void)
 {
     fixture();
@@ -3944,7 +3986,7 @@ static void test_quenching_costs_the_water_a_unit_of_mass(void)
  * comment (sand.h) for why: whether anything is left behind at all, and
  * if so, gas or smoke (biased toward smoke). 2000 independent fire/acid
  * pairs, one step, counted - the same loose statistical-bias shape
- * test_water_wins_the_dilution_more_often_than_acid_does already uses for
+ * test_the_dilution_split_favours_neither_side already uses for
  * SAND_ACID_DILUTE_TO_WATER_CHANCE, for the same reason: asserting on the
  * bias itself, not a single sample, and without hard-coding exact counts
  * a future retune of either constant would break. */
@@ -5552,7 +5594,23 @@ static void test_snow_melts_in_any_liquid(void)
  * more of whatever it touched. That would be an exploit rather than a
  * flourish - acid is spent as it dissolves, so snow that melted into
  * acid would be a bucket that refills itself, and snow melting into oil
- * would be a fuel printer. */
+ * would be a fuel printer.
+ *
+ * Checked by whether water ever APPEARED across the window, not whether
+ * it is still there at the very end. The acid direction in particular
+ * is a busy scene by 600 steps: melted water can dilute into the acid
+ * pool it landed on (see step_one_dissolver_cell()'s own comment,
+ * sand_reactions.c), and once that pool's own steam can actually rise
+ * and condense back into water the way it always should have (a real
+ * bug this file's own place_cell()-bypass fix corrected - the vapour
+ * used to sit frozen in place, unable to go anywhere), the scene has
+ * more genuine give-and-take in it than it used to, not less. A single
+ * end-of-window snapshot can land on a step where every last drop of
+ * melted water has momentarily gone back into acid, which is a real
+ * possible state of a healthy simulation, not evidence that melting
+ * ever produced the wrong material - that only ever needs one sighting
+ * to disprove, and this window is long enough to reliably catch it if
+ * it were happening. */
 static void test_melting_snow_makes_water_not_more_of_the_liquid(void)
 {
     static const uint8_t liquids[] = { MAT_OIL, MAT_ACID };
@@ -5571,14 +5629,17 @@ static void test_melting_snow_makes_water_not_more_of_the_liquid(void)
             sand_set(&s, x, 0, SNOW);
         }
 
-        for (int i = 0; i < 600; i++) {
+        bool water_seen = false;
+        for (int i = 0; i < 600 && !water_seen; i++) {
             sand_step(&s, 0, 1000, 0);
+            water_seen = count_cells_of(MAT_WATER) > 0;
         }
 
-        TEST_ASSERT_TRUE_MESSAGE(count_cells_of(MAT_WATER) > 0,
-            "snow melted by oil or acid has to leave WATER behind - it is "
-            "frozen water, and turning into whatever dissolved it would "
-            "make a snowbank a factory for that liquid");
+        TEST_ASSERT_TRUE_MESSAGE(water_seen,
+            "snow melted by oil or acid has to leave WATER behind at some "
+            "point - it is frozen water, and turning into whatever "
+            "dissolved it would make a snowbank a factory for that "
+            "liquid");
     }
 }
 
@@ -11309,19 +11370,24 @@ static void test_dirt_takes_on_moisture_and_dries_out_again(void)
         "makes a patch fertile for good");
 }
 
-/* Freshly drawn dirt is dry, and freshly made dirt is barely wet.
+/* Freshly drawn dirt is dry, and freshly poured dirt is banded the way a
+ * freshly poured grain of sand is - see random_cell() (sand.c).
  *
- * The variant is moisture, so a random shade would hand the player soil
- * that arrives already watered - the fourth meaning this variant can carry
- * and the fourth time a random shade would have been wrong. */
+ * A brushful is centred on ONE pour band with the same +/-1 jitter sand's
+ * own shade uses, so it is NOT expected to use every one of
+ * SOIL_DRY_TONES - that was only ever true of the old two-tone encoding,
+ * where "one tone" and "the whole dry range" were the same statement. It
+ * only has to be more than a single flat fill, which is the flatness
+ * eight tones exist to fix. */
 static void test_new_dirt_starts_dry_in_a_random_tone(void)
 {
     fixture();
     sand_clear(&s);
     sand_spawn(&s, W / 2, H / 2, 2, MAT_DIRT);
 
-    int seen[SOIL_TONES];
+    bool seen[SOIL_DRY_TONES];
     memset(seen, 0, sizeof seen);
+    int distinct = 0;
 
     for (int y = 0; y < H; y++) {
         for (int x = 0; x < W; x++) {
@@ -11330,78 +11396,307 @@ static void test_new_dirt_starts_dry_in_a_random_tone(void)
                 continue;
             }
             TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_MOISTURE(c),
-                "painted dirt must arrive bone dry - the low bits of its "
-                "variant are moisture, and soil that arrives watered is "
-                "fertile ground for free");
-            seen[CELL_SOIL_TONE(c)] = 1;
+                "painted dirt must arrive bone dry - variant 0..7 is a dry "
+                "tone and variant 8 and up is moisture (material.h), and "
+                "soil that arrives already wet is fertile ground for "
+                "free");
+            const uint8_t tone = CELL_SOIL_TONE(c);
+            TEST_ASSERT_TRUE_MESSAGE(tone < SOIL_DRY_TONES,
+                "a freshly poured cell's tone must stay inside the dry "
+                "range - anything at or past SOIL_DRY_TONES would alias a "
+                "moisture level instead of a tone");
+            if (!seen[tone]) {
+                seen[tone] = true;
+                distinct++;
+            }
         }
     }
 
-    /* The other half of the variant is a carried tone, and unlike the
-     * moisture it IS random - it is what makes a poured bank keep the
-     * pattern it was poured with instead of sliding under a texture
-     * pinned to the screen. */
-    for (int t = 0; t < SOIL_TONES; t++) {
-        TEST_ASSERT_TRUE_MESSAGE(seen[t],
-            "a brushful of dirt must use every tone - one tone is a flat "
-            "fill, which is what the screen-space grain was there to hide");
-    }
+    TEST_ASSERT_TRUE_MESSAGE(distinct > 1,
+        "a brushful of dirt must show more than one tone - a single flat "
+        "fill is exactly the flatness this many tones exist to avoid");
 }
 
-
-/* Soil's tone is CARRIED, and wetting it must not repaint it.
+/* And a SECOND pour, once the pour clock has moved on, must land on a
+ * different band - a bank built from several pours shows its layers, the
+ * same way build_layered_dune_scene()'s sand does.
  *
- * This is the whole reason the tone is in the cell rather than hashed from
- * screen position: it has to travel with the grain, so a poured bank keeps
- * the pattern it was poured with and the strata show the shape of the
- * pile. A tone that got recomputed - from position, or from the moisture,
- * or clobbered by a soak that wrote the whole variant - would put the
- * texture back on the screen where it started.
- *
- * The moisture assert is half the test: without it, code that never
- * touched the variant at all would pass. */
-static void test_soil_keeps_its_tone_through_wetting_and_drying(void)
+ * The pour clock is jumped directly (sand_t's own `pour_phase` field,
+ * reached the same way this file already reaches into sand_priv.h for
+ * ring_dir()/cover_mask() - see this file's own top comment) rather than
+ * run forward through 64 real steps of physics: what is under test is the
+ * band bookkeeping in random_cell() (sand.c), not whether a pile settles
+ * in a grid this small, and running real steps would let scatter carry
+ * grains sideways across the very columns this test tells apart. */
+static void test_consecutive_dirt_pours_land_on_different_bands(void)
 {
     fixture();
     sand_clear(&s);
-    sand_set_soak(&s, SAND_SOAK_PER_MATERIAL);
 
-    uint8_t tone[W];
-    for (int x = 0; x < W; x++) {
-        tone[x] = (uint8_t)(x % SOIL_TONES);
-        sand_set(&s, x, H - 1, STONE);
-        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, tone[x], 0));
-        sand_set(&s, x, H - 3, CELL_MAKE(MAT_WATER, MASS_MAX));
-    }
-
-    int ever_wet = 0;
-    for (int i = 0; i < 600; i++) {
-        sand_step(&s, 0, 1000, 0);
-        for (int x = 0; x < W; x++) {
-            const cell_t c = sand_at(&s, x, H - 2);
-            if (CELL_MATERIAL(c) != MAT_DIRT) {
-                continue;
+    sand_spawn(&s, 1, H / 2, 1, MAT_DIRT);
+    int first_tone = -1;
+    for (int y = 0; y < H && first_tone < 0; y++) {
+        for (int x = 0; x < W / 2 && first_tone < 0; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                first_tone = CELL_SOIL_TONE(c);
             }
-            if (CELL_MOISTURE(c) != 0) {
-                ever_wet = 1;
-            }
-            TEST_ASSERT_EQUAL_INT_MESSAGE(tone[x], CELL_SOIL_TONE(c),
-                "soil must keep the tone it was laid down with, however "
-                "wet it gets - a tone that is recomputed or overwritten is "
-                "a texture pinned to the screen again");
         }
     }
-    TEST_ASSERT_TRUE_MESSAGE(ever_wet,
-        "the soil has to have actually got wet, or this passes on soil "
-        "nothing ever happened to");
+
+    /* One tick of POUR_BAND_SHIFT (sand.c, not exposed here - duplicated
+     * by value with this comment tying the two together, the same
+     * discipline MATERIAL_LIQUID_DEPTH_BAND's own comment (material.h)
+     * asks of any two constants that have to agree). */
+    s.pour_phase = 1u << 6;
+
+    sand_spawn(&s, 6, H / 2, 1, MAT_DIRT);
+    int second_tone = -1;
+    for (int y = 0; y < H && second_tone < 0; y++) {
+        for (int x = W / 2; x < W && second_tone < 0; x++) {
+            const cell_t c = sand_at(&s, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                second_tone = CELL_SOIL_TONE(c);
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(first_tone >= 0 && second_tone >= 0,
+        "both pours must have landed something to compare");
+    TEST_ASSERT_NOT_EQUAL_MESSAGE(first_tone, second_tone,
+        "a pour once the band has moved on must land on a different tone "
+        "- two pours that always agreed would mean the band never moves "
+        "at all");
 }
 
-/* And the two tones have to LOOK different.
+/* A dry tone travels with the grain exactly the way a sand shade does -
+ * see test_a_grain_keeps_its_shade_as_it_falls, whose pattern this
+ * repeats for dirt. */
+static void test_a_dry_dirt_grain_keeps_its_tone_as_it_falls(void)
+{
+    fixture();
+    const cell_t grain = CELL_SOIL(MAT_DIRT, 5, 0);
+    sand_set(&s, 3, 0, grain);
+
+    for (int i = 0; i < 3; i++) {
+        sand_step(&s, 0, 1, 0);
+    }
+
+    TEST_ASSERT_EQUAL_UINT8_MESSAGE(grain, sand_at(&s, 3, 3),
+        "a dry tone must travel with the grain, or a falling pile of dirt "
+        "shimmers the way a falling pile of sand used to");
+}
+
+/* WETTING DISCARDS THE TONE, AND DRYING PICKS A FRESH ONE.
  *
- * Everything above is bookkeeping if the palette paints them the same, and
- * nothing else would notice - the whole point of the bit is visual. Checked
- * at every wetness, because the ramps are built per tone and a mistake in
- * one end of one of them would otherwise hide. */
+ * A wet cell carries no tone of its own (material.h's own comment on
+ * soil's state split), so there is nothing of an old tone left to come
+ * back once a cell dries out again - it is reassigned from scratch by
+ * soil_dry_out() (sand_reactions.c), biased by whatever is still wet
+ * nearby. Painted at tone 5, then wetted, then dried back out again with
+ * nothing else on the board to bias from (stone on every side but the
+ * top, which stays empty), it must land back on tone 0 - landing on tone
+ * 5 again would mean the original tone had survived a round trip through
+ * being wet that it has no way to survive honestly. */
+static void test_soil_loses_its_tone_across_a_wetting_and_gets_a_fresh_one_drying(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    const int x = W / 2, y = H / 2;
+    sand_set(&s, x - 1, y, STONE);
+    sand_set(&s, x + 1, y, STONE);
+    sand_set(&s, x, y + 1, STONE);
+    sand_set(&s, x, y, CELL_SOIL(MAT_DIRT, 5, SOIL_MOISTURE_MAX));
+
+    int still_wet = 1;
+    for (int i = 0; i < 4000 && still_wet; i++) {
+        sand_step(&s, 0, 1000, 0);
+        still_wet = CELL_MOISTURE(sand_at(&s, x, y)) != 0;
+    }
+    TEST_ASSERT_FALSE_MESSAGE(still_wet,
+        "an isolated cell with nowhere to hand its moisture off to must "
+        "still dry out on its own, through ambient decay alone");
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, CELL_SOIL_TONE(sand_at(&s, x, y)),
+        "with no neighbour left to bias from, a cell drying out must land "
+        "on tone 0, not the tone - 5 - it was originally painted with");
+}
+
+/* THE DRYING-FRONT IMPRINT: a donor cell that empties itself by handing
+ * its very last unit of moisture to a drier neighbour dries out biased by
+ * THAT neighbour, not bone pale - see soil_dry_out()'s own comment
+ * (sand_reactions.c). This is what makes a pile that dried top-down
+ * legible as having dried top-down: pale where nothing was left to give
+ * to, darker wherever a cell was still watering something the moment it
+ * ran out.
+ *
+ * Four independent columns, spaced two apart so a diagonal percolation
+ * attempt from one never reaches another (the gap between them is left
+ * EMPTY, and step_one_soaking_cell()'s percolation scan skips an empty
+ * candidate outright) - not because the mechanism is unreliable, but
+ * because WHICH of percolation or plain ambient decay fires first on any
+ * one column is still a roll (percolation is by far the likelier of the
+ * two here, but this only needs to see the hand-off happen once to prove
+ * it is wired in at all, and four independent rolls make that as close
+ * to certain as a test should ask for). */
+static void test_soil_dries_biased_by_the_neighbour_it_just_watered(void)
+{
+    fixture();
+    sand_clear(&s);
+
+    for (int x = 0; x < W; x++) {
+        sand_set(&s, x, H - 1, STONE);
+    }
+    for (int x = 0; x < W; x += 2) {
+        sand_set(&s, x, H - 3, CELL_SOIL(MAT_DIRT, 5, 1));   /* about to run dry */
+        sand_set(&s, x, H - 2, CELL_SOIL(MAT_DIRT, 5, 0));   /* dry, room for water */
+    }
+
+    bool done[W];
+    memset(done, 0, sizeof done);
+    bool saw_any_dry = false, saw_biased_dry = false;
+
+    for (int i = 0; i < 4000; i++) {
+        sand_step(&s, 0, 1000, 0);
+        for (int x = 0; x < W; x += 2) {
+            if (done[x]) {
+                continue;
+            }
+            const cell_t donor = sand_at(&s, x, H - 3);
+            if (CELL_MATERIAL(donor) != MAT_DIRT || CELL_MOISTURE(donor) != 0) {
+                continue;
+            }
+            done[x] = true;
+            saw_any_dry = true;
+            const uint8_t sink_m = CELL_MOISTURE(sand_at(&s, x, H - 2));
+            if (sink_m != 0 && CELL_SOIL_TONE(donor) == sink_m) {
+                saw_biased_dry = true;
+            }
+        }
+    }
+
+    TEST_ASSERT_TRUE_MESSAGE(saw_any_dry,
+        "at least one donor must actually dry out within the budget, or "
+        "this proves nothing");
+    TEST_ASSERT_TRUE_MESSAGE(saw_biased_dry,
+        "at least one donor drying at the exact moment it hands its last "
+        "unit of moisture to a drier neighbour must carry that "
+        "neighbour's resulting moisture as its own dry tone - always "
+        "landing on tone 0 regardless of what it just watered would mean "
+        "the imprint was never wired in");
+}
+
+/* A WHOLE BANK, watered and then left to dry, must not come back flat.
+ *
+ * The narrow test above proves the imprint is wired into one hand-off.
+ * This one asks the question the feature actually exists to answer, on
+ * the scene that produced the complaint: pour a bank, soak it, take the
+ * water away, wait until the last cell is bone dry, and see whether what
+ * is left has any structure in it at all.
+ *
+ * It starts every cell at the SAME tone deliberately. Any spread at the
+ * end is therefore the drying itself talking, not the pour band it was
+ * laid down with - the two are separate sources of tone and this test is
+ * only about the second. */
+#define DRY_BANK_W 16
+#define DRY_BANK_H 14
+
+static void test_a_watered_bank_does_not_dry_back_to_one_flat_tone(void)
+{
+    static uint8_t grid[DRY_BANK_W * DRY_BANK_H];
+    sand_t t;
+    sand_init(&t, grid, DRY_BANK_W, DRY_BANK_H, 12345u);
+    sand_clear(&t);
+    sand_set_soak(&t, SAND_SOAK_PER_MATERIAL);
+
+    for (int x = 0; x < DRY_BANK_W; x++) {
+        sand_set(&t, x, DRY_BANK_H - 1, STONE);
+        for (int y = DRY_BANK_H - 6; y < DRY_BANK_H - 1; y++) {
+            sand_set(&t, x, y, CELL_SOIL(MAT_DIRT, 0, 0));
+        }
+        for (int y = DRY_BANK_H - 9; y < DRY_BANK_H - 6; y++) {
+            sand_set(&t, x, y, CELL_MAKE(MAT_WATER, MASS_MAX));
+        }
+    }
+
+    for (int i = 0; i < 3000; i++) {
+        sand_step(&t, 0, 1000, 0);
+    }
+    for (int y = 0; y < DRY_BANK_H; y++) {
+        for (int x = 0; x < DRY_BANK_W; x++) {
+            if (CELL_MATERIAL(sand_at(&t, x, y)) == MAT_WATER) {
+                sand_set(&t, x, y, 0);
+            }
+        }
+    }
+
+    bool wet = true;
+    for (int i = 0; i < 40000 && wet; i++) {
+        sand_step(&t, 0, 1000, 0);
+        wet = false;
+        for (int y = 0; y < DRY_BANK_H && !wet; y++) {
+            for (int x = 0; x < DRY_BANK_W; x++) {
+                const cell_t c = sand_at(&t, x, y);
+                if (CELL_MATERIAL(c) == MAT_DIRT && CELL_MOISTURE(c) != 0) {
+                    wet = true;
+                    break;
+                }
+            }
+        }
+    }
+    TEST_ASSERT_FALSE_MESSAGE(wet,
+        "the bank has to actually finish drying inside the budget, or "
+        "everything below this is measuring a half-dry pile");
+
+    int hist[SOIL_DRY_TONES];
+    memset(hist, 0, sizeof hist);
+    int total = 0;
+    for (int y = 0; y < DRY_BANK_H; y++) {
+        for (int x = 0; x < DRY_BANK_W; x++) {
+            const cell_t c = sand_at(&t, x, y);
+            if (CELL_MATERIAL(c) == MAT_DIRT) {
+                hist[CELL_SOIL_TONE(c)]++;
+                total++;
+            }
+        }
+    }
+
+    int distinct = 0, commonest = 0;
+    for (int i = 0; i < SOIL_DRY_TONES; i++) {
+        if (hist[i] != 0) {
+            distinct++;
+        }
+        if (hist[i] > commonest) {
+            commonest = hist[i];
+        }
+    }
+
+    char why[192];
+    snprintf(why, sizeof why,
+             "%d cells, %d distinct tones, commonest holds %d "
+             "(%d/%d/%d/%d/%d/%d/%d/%d)",
+             total, distinct, commonest, hist[0], hist[1], hist[2],
+             hist[3], hist[4], hist[5], hist[6], hist[7]);
+    /* THREE tones and no tone holding half the bank. Measured on this
+     * scene it comes out 27/25/24/3/1/0/0/0 across 80 cells - the top of
+     * the bank dries first with nothing wet left beside it and lands
+     * pale, while the cells under it dry while still passing water down
+     * and carry that with them.
+     *
+     * The top of the range stays empty here and that is not a fault: a
+     * cell only ever empties from a single level, handing it to a
+     * neighbour that then holds one more than it did, so reaching tone 6
+     * or 7 needs soil that was ALREADY damp to hand to - deep in a much
+     * bigger pile, or a root pulling through wet ground. Asserting the
+     * whole range would be asserting a scene this test does not build.
+     *
+     * The floor is set where a regression would actually land: lose the
+     * imprint and every cell dries through the unbiased path onto tone 0,
+     * which is one distinct tone holding all eighty. */
+    TEST_ASSERT_TRUE_MESSAGE(distinct >= 3 && commonest * 2 < total, why);
+}
+
 /* Rec.601 luminance of a panel colour, 0-255.
  *
  * The palette stores GFX_RGB, which is RGB565 with the bytes swapped for
@@ -11418,49 +11713,43 @@ static int panel_luminance(gfx_color_t c)
     return (int)((299u * r + 587u * g + 114u * b) / 1000u);
 }
 
-static void test_the_two_soil_tones_are_different_colours(void)
+/* ONE MONOTONE RAMP, not two independently-shifted tones that each had to
+ * clear the other.
+ *
+ * Soil's whole nibble is read by STATE now - a dry tone below
+ * SOIL_DRY_TONES, a moisture level from there up (material.h's own
+ * comment) - so the constraint that used to bound how far apart two
+ * tones could be pushed no longer applies: this used to be
+ * test_the_two_soil_tones_are_different_colours, asserting "the wettest
+ * soil of the pale tone must still be darker than the driest soil of the
+ * dark one", which cleared by only seven points of luminance, "all the
+ * headroom there is". Reading by state removes the constraint outright -
+ * there is only one ramp left to be monotone, not two to keep from
+ * overlapping - and replaces it with something stronger: EVERY variant
+ * must be darker than the one before it, the whole way from bone dry to
+ * saturated. */
+static void test_soil_is_one_monotone_luminance_ramp(void)
 {
     const gfx_color_t *pal = material_palette();
+    const int top = SOIL_DRY_TONES - 1 + SOIL_MOISTURE_MAX;
 
-    for (unsigned m = 0; m <= SOIL_MOISTURE_MAX; m++) {
-        const cell_t lo = CELL_SOIL(MAT_DIRT, 0, m);
-        const cell_t hi = CELL_SOIL(MAT_DIRT, 1, m);
+    int prev_lum = 256; /* brighter than anything panel_luminance() can return */
+    for (int v = 0; v <= top; v++) {
+        const int lum = panel_luminance(pal[CELL_MAKE(MAT_DIRT, (uint8_t)v)]);
         char why[96];
-        snprintf(why, sizeof why, "soil tones at moisture %u", m);
-        TEST_ASSERT_TRUE_MESSAGE(pal[lo] != pal[hi], why);
+        snprintf(why, sizeof why,
+            "soil variant %d must be strictly darker than variant %d", v, v - 1);
+        TEST_ASSERT_TRUE_MESSAGE(lum < prev_lum, why);
+        prev_lum = lum;
     }
 
-    /* And wetness still has to read, or the stain a watering leaves is
-     * invisible and the tone has eaten the ramp it was added beside. */
-    TEST_ASSERT_TRUE_MESSAGE(
-        pal[CELL_SOIL(MAT_DIRT, 0, 0)] !=
-        pal[CELL_SOIL(MAT_DIRT, 0, SOIL_MOISTURE_MAX)],
-        "dry soil and saturated soil of the SAME tone must differ - the "
-        "wetness ramp is how a watered patch shows at all");
-
-    /* And it has to read the RIGHT WAY ROUND across both tones at once,
-     * which is the tighter constraint and the one that decided how far
-     * apart the tones could go.
-     *
-     * The two tones were pushed apart because one poured bank against the
-     * next was barely visible - soil has a single bit of tone, so that
-     * pair carries alone what a whole twelve-shade band carries for sand.
-     * But push it too far and the ramps overlap: saturated LIGHT-tone soil
-     * comes out lighter than bone-dry DARK-tone soil, and a well-watered
-     * bank looks drier than a parched one. Measured, that happens at 5/4;
-     * 4/3 clears it by about seven points of luminance, which is all the
-     * headroom there is. Anything that moves DIRT_DRY, DIRT_WET or the
-     * SOIL_TONE_LO/HI shifts has to come back through here. */
-    {
-        const gfx_color_t wettest_pale =
-            pal[CELL_SOIL(MAT_DIRT, SOIL_TONES - 1, SOIL_MOISTURE_MAX)];
-        const gfx_color_t driest_dark = pal[CELL_SOIL(MAT_DIRT, 0, 0)];
-        TEST_ASSERT_TRUE_MESSAGE(
-            panel_luminance(wettest_pale) < panel_luminance(driest_dark),
-            "the wettest soil of the PALE tone must still be darker than "
-            "the driest soil of the dark one - otherwise watering a bank "
-            "can make it look drier, and the stain stops meaning wet");
-    }
+    /* Variant top+1 (15, unused) degrades to the saturated end rather
+     * than rendering whatever an unrelated garbage colour a corrupt low
+     * nibble would otherwise land on. */
+    TEST_ASSERT_EQUAL_MESSAGE(pal[CELL_MAKE(MAT_DIRT, (uint8_t)top)],
+        pal[CELL_MAKE(MAT_DIRT, (uint8_t)(top + 1))],
+        "the unused top variant must degrade to the same colour as the "
+        "saturated end, not an unrelated garbage colour");
 }
 
 
@@ -15327,28 +15616,23 @@ static void test_a_moving_grain_keeps_the_shade_it_was_poured_with(void)
 }
 
 
-/* Sand that turns to soil hands its SHADE on as the soil's tone.
+/* Sand that turns to soil arrives WET, and a wet cell carries no tone of
+ * its own (material.h's own comment on soil's state split) - so the
+ * grain's shade, which used to become the new soil's tone, now simply
+ * has nowhere to go. That is the trade this re-encoding makes: soil got
+ * its dry tones back by giving up an independent tone while wet, and wet
+ * soil's own variation is the moisture gradient percolation lays down
+ * instead of a carried tone - see step_one_soaking_cell()'s own comment
+ * on its soaks_to branch (sand_reactions.c).
  *
- * This is what carries a poured pattern across the one reaction that
- * destroys the material holding it. Rain on a dune does not just wet it,
- * it converts it - and if the new soil picked its own tone, everything
- * the sand remembered about how it was poured would go with the grain.
- *
- * It matters more than it used to. Poured shades are laid down in bands
- * now, so what the sand remembers is which pour it came from, and this
- * derivation is why three layers of sand are still three layers after
- * they have been rained into soil. Measured on a three-pour pile: the
- * first pour's core comes out one tone and the later shells the other.
- *
- * The collapse is real and worth stating rather than discovering: twelve
- * dune shades map onto two soil tones, so about a third of consecutive
- * layer boundaries land on the same tone and stop being visible once
- * wet. That is soil having one bit to spend, not the derivation being
- * wrong - and the alternative mappings are worse. Taking the LOW bit of
- * the shade instead alternates perfectly on paper and falls apart in
- * practice, because a pour is a band plus or minus one and that jitter
- * splits a single pour across both tones. */
-static void test_wet_sand_becomes_soil_in_the_tone_its_shade_implies(void)
+ * What survives instead is simpler: whichever end of the dune band a
+ * grain came from, it converts to the SAME moisture - the one unit
+ * `soaks` just took - because the shade plays no part in the conversion
+ * at all any more. This used to be
+ * test_wet_sand_becomes_soil_in_the_tone_its_shade_implies, pinning the
+ * derivation that carried a shade across into a tone; there is no
+ * derivation left to pin. */
+static void test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own(void)
 {
     const uint8_t dark_shade = 1;                       /* low half  */
     const uint8_t pale_shade = SAND_DUNE_SHADES - 1;    /* high half */
@@ -15381,19 +15665,16 @@ static void test_wet_sand_becomes_soil_in_the_tone_its_shade_implies(void)
     TEST_ASSERT_EQUAL_MESSAGE(MAT_DIRT, CELL_MATERIAL(from_pale),
         "and so must the pale one");
 
-    TEST_ASSERT_EQUAL_MESSAGE(dark_shade >> SOIL_MOISTURE_BITS,
-        CELL_SOIL_TONE(from_dark),
-        "soil made from a grain must take the tone that grain's SHADE "
-        "implies - the pattern a dune was poured with has to survive being "
-        "rained into soil, or the layers wash out the moment it gets wet");
-    TEST_ASSERT_EQUAL_MESSAGE(pale_shade >> SOIL_MOISTURE_BITS,
-        CELL_SOIL_TONE(from_pale),
-        "and a grain from the other end of the band must come out the "
-        "other tone, or the derivation is carrying nothing at all");
-    TEST_ASSERT_TRUE_MESSAGE(
-        CELL_SOIL_TONE(from_dark) != CELL_SOIL_TONE(from_pale),
-        "which between them means two grains from opposite ends of the "
-        "dune band must not become the same soil");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_MOISTURE(from_dark) != 0,
+        "soil made from a soaking grain must arrive WET, not dry with a "
+        "tone borrowed from the grain's own shade");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_MOISTURE(from_pale) != 0,
+        "and so must the pale one");
+    TEST_ASSERT_EQUAL_MESSAGE(CELL_VARIANT(from_dark), CELL_VARIANT(from_pale),
+        "with no tone left to carry over, two grains from opposite ends "
+        "of the dune band must land on the exact same soil variant once "
+        "both have soaked - shade no longer has anything to say about "
+        "it");
 }
 
 /* Every material has a colour, and every extended material has one too.
@@ -15745,9 +16026,17 @@ static void test_sand_turns_to_glass_under_sustained_heat(void)
 }
 
 /* Dissolving is a TRANSFER, like quenching a fire or soaking a grain: the
- * acid is consumed by the work it does. Asserted as an exact ratio, since
- * it is exactly one unit of acid mass per cell removed. */
-static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
+ * acid is consumed by the work it does. No longer an exact one-unit-per-
+ * cell ratio - SAND_ACID_EAT_DEATH_CHANCE (sand.h) gives every bite a
+ * chance to cost the acid its WHOLE remaining mass instead of just one
+ * unit, so mass spent can only ever be >= cells eaten now, not always
+ * equal to it. Checked both ways: the floor still holds (a bite can
+ * never cost less than one unit - dissolving still is not free), and
+ * over 400 steps against 8 sand cells and 8 separate acid cells, the
+ * death roll landing at least once is close enough to certain that
+ * spending MORE than one unit on at least one of those bites is the
+ * real assertion here, not just the floor. */
+static void test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved(void)
 {
     const long acid_before = acid_tank(2, 2);
     const int sand_before = count_cells_of(MAT_SAND);
@@ -15757,11 +16046,17 @@ static void test_acid_spends_a_unit_of_itself_per_cell_dissolved(void)
     }
 
     const int eaten = sand_before - count_cells_of(MAT_SAND);
+    const long spent = acid_before - mass_held_by(MAT_ACID);
     TEST_ASSERT_GREATER_THAN_INT_MESSAGE(0, eaten, "setup: something eaten");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(eaten, acid_before - mass_held_by(MAT_ACID),
-        "every cell dissolved must cost the acid exactly one unit of its "
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(eaten, spent,
+        "every cell dissolved must cost the acid AT LEAST one unit of its "
         "own mass - without that a single drop eats an unbounded amount "
         "and remains a single drop");
+    TEST_ASSERT_GREATER_THAN_INT_MESSAGE(eaten, spent,
+        "SAND_ACID_EAT_DEATH_CHANCE is supposed to let at least one of "
+        "these bites cost more than the ordinary one-unit chip - mass "
+        "spent came out exactly equal to cells eaten, as if the death "
+        "roll never landed at all across 8 acid cells and 400 steps");
 }
 
 /* The consequence of that, and the reason it is worth paying for: a
@@ -15967,21 +16262,25 @@ static void test_acid_and_water_dilute_each_other(void)
         "reaction is not firing at all");
 }
 
-/* The bias itself, not just that dilution happens at all - measured in a
- * single step so the two outcome counts are independent per-column
- * samples rather than counts that could keep compounding into each
- * other across multiple steps. Expected counts at this fixture's width
- * and the current constants (r->dissolves=60/256, water's
- * dissolvable=220/256, SAND_ACID_DILUTE_TO_WATER_CHANCE=141/256, a
- * tight 55/45 split): roughly 440 columns where the acid cell becomes
- * water, roughly 360 where the water cell becomes acid instead - a
- * narrow bias, which is exactly why this fixture is 4000 columns wide
- * rather than the 400 it started at (see the fixture's own comment) -
- * a loose assertion (water-wins strictly greater than acid-wins, both
- * counts positive) needs that much sample size to clear the gap
- * reliably at this bias, without hard-coding the exact expected counts
- * a future retune of any of those three constants would break. */
-static void test_water_wins_the_dilution_more_often_than_acid_does(void)
+/* No longer a bias to measure - SAND_ACID_DILUTE_TO_WATER_CHANCE (sand.h)
+ * is 118, genuinely half of the 236-wide range left over once
+ * SAND_ACID_DILUTE_EVAPORATE_CHANCE's 20-in-256 has already been taken
+ * off the top of the ladder (see that constant's own comment for why
+ * 128 - half of the FULL 256 - was a bug, not just a rounder number),
+ * so SAND_ACID_DILUTE_MASS_BIAS's own local backing is the only thing
+ * that is supposed to tip a bite one way or the other (see the ladder's
+ * own comment, sand_reactions.c). This fixture's packed, symmetric
+ * layout gives every interior column a net backing of zero (see
+ * acid_water_dilute_fixture's own comment), so the base rate is exactly
+ * what this measures. Checked in a single step so the two outcome
+ * counts are independent per-column samples, same reasoning this test
+ * always used, just no longer expecting one side to win the count -
+ * only that neither side is left out entirely, and that the two stay in
+ * the same neighbourhood rather than one swamping the other the way a
+ * real bias would produce. The tolerance below is ordinary sampling
+ * noise now, not a structural asymmetry to absorb - the split itself is
+ * genuinely even. */
+static void test_the_dilution_split_favours_neither_side(void)
 {
     uint8_t *dilute_cells = malloc((size_t)DILUTE_W * DILUTE_H);
     TEST_ASSERT_NOT_NULL_MESSAGE(dilute_cells,
@@ -16012,88 +16311,169 @@ static void test_water_wins_the_dilution_more_often_than_acid_does(void)
         "independent columns");
     TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_wins,
         "expected at least some water-becomes-acid dilutions in 4000 "
-        "independent columns - SAND_ACID_DILUTE_TO_WATER_CHANCE biases "
-        "the outcome, it does not eliminate the other side entirely");
-    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_wins, water_wins,
-        "SAND_ACID_DILUTE_TO_WATER_CHANCE is supposed to favour water - "
-        "acid becoming water should be clearly more common than water "
-        "becoming acid, not the other way round or a coin flip");
+        "independent columns - a 50/50 split still means both sides win "
+        "regularly, not that one of them stops happening");
+
+    /* Two-thirds, not near-equality - loose enough to absorb ordinary
+     * sampling noise at this fixture's width, tight enough that the
+     * old, clearly-biased split (roughly 500-ish vs 250-ish at this
+     * width, back when this constant read 141) would still fail it. */
+    const int smaller = (water_wins < acid_wins) ? water_wins : acid_wins;
+    const int larger  = (water_wins < acid_wins) ? acid_wins : water_wins;
+    TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(larger * 2 / 3, smaller,
+        "water_wins and acid_wins should stay in the same neighbourhood "
+        "now that SAND_ACID_DILUTE_TO_WATER_CHANCE is an even coin flip - "
+        "one badly outnumbering the other means something is still "
+        "favouring a side");
 }
 
-/* A third dedicated fixture, checking the "fizzle" water's win of the
- * roll spawns - a puff of gas into a nearby empty cell, see
- * step_one_dissolver_cell()'s own comment (an impulse pop was tried
- * alongside this too, then dropped as a wasted call: dilution mostly
- * happens fully submerged, where a thrown grain has nowhere open to go,
- * unlike acid_bubble()'s own exposed-rim case). Alternating acid/empty
- * columns in the acid row, on purpose: the two dilution fixtures above
- * are deliberately fully packed (the right shape for measuring the
- * material-swap outcome itself), which leaves emit_into_empty_neighbor()
- * nothing to ever succeed into - this one gives every acid cell an empty
- * neighbour to puff into instead. */
-#define FIZZLE_W 400
-#define FIZZLE_H 2
-static sand_t  fizzle_sim;
+/* A dedicated fixture for the two pairing tests below - alternating
+ * acid/water columns separated by a column of GLASS, not an empty gap.
+ * Two different designs were tried first and both broke for their own
+ * reason:
+ *
+ * - The packed dilute_sim fixture above lets an acid cell's LEFT or
+ *   RIGHT neighbour be another acid cell. Once that neighbour has
+ *   already won its own water-wins bite earlier in the same left-to-
+ *   right row scan, it has already turned into water by the time THIS
+ *   cell's own dissolve search reaches it - a failed give-roll on the
+ *   water directly above falls through to left/right next, and can land
+ *   on that freshly-converted neighbour instead. A water-wins column's
+ *   steam ended up written to the column beside it, not above it -
+ *   correct behaviour, just not what a test assuming "the water cell is
+ *   always directly above" can tell apart from a bug.
+ * - An EMPTY gap between pairs (the old "fizzle" fixture's own idiom)
+ *   does not have that problem, but introduces a different one: an
+ *   empty cell is something a liquid can spread INTO, and the main
+ *   sweep runs before reactions do - by the time this pass even starts,
+ *   water or acid may already have drifted sideways into the gap,
+ *   scrambling the one-pair-per-column layout before a single bite ever
+ *   lands.
+ * - STONE was tried next, on the assumption that a wall would simply
+ *   never be a dissolve target - wrong, and caught only by measuring
+ *   it: stone IS dissolvable (material.c, dissolvable=60, "stone gives
+ *   way to acid now, just slowly"), so an acid cell whose own water
+ *   neighbour's give-roll happened to miss would fall through to the
+ *   stone beside it and could eat the separator instead - rare enough
+ *   in ONE step that the single-step tests below still passed on a
+ *   slightly reduced sample, but a real, silent hole in what the
+ *   fixture claimed to guarantee.
+ *
+ * GLASS closes both holes for real: acid's own material comment names
+ * it "the sole exception" left once stone stopped being immune
+ * (acid_tank()'s own comment, this file, makes the same point), and
+ * like stone it is not something anything can flow into (nothing moves
+ * before reactions runs, same as the fully packed fixture's own
+ * stability). */
+#define SEPARATED_W 4000
+#define SEPARATED_H 2
+static sand_t  separated_dilute_sim;
 
 /* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
  * own comment above for why. */
-static void acid_water_fizzle_fixture(uint8_t *cells)
+static void acid_water_separated_fixture(uint8_t *cells)
 {
-    sand_init(&fizzle_sim, cells, FIZZLE_W, FIZZLE_H, 13u);
-    sand_set_evaporates(&fizzle_sim, 0);
-    /* Water only over the SAME even columns as the acid below it -
-     * leaving row 0 empty at the odd columns too, not just row 1, is
-     * what keeps this stable. The first attempt left row 0 fully water
-     * with only row 1 gapped, and every odd-column water cell fell
-     * straight down into the empty acid-row cell below it before
-     * reactions ever ran, scrambling the water-above-acid pairing this
-     * fixture depends on - gravity runs in the main sweep, before
-     * step_reactions() gets a turn. An empty column with nothing above
-     * it has nothing left to fall. */
-    for (int x = 0; x < FIZZLE_W; x += 2) {
-        sand_set(&fizzle_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
-        sand_set(&fizzle_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+    sand_init(&separated_dilute_sim, cells, SEPARATED_W, SEPARATED_H, 7u);
+    sand_set_evaporates(&separated_dilute_sim, 0);
+    for (int x = 0; x < SEPARATED_W; x++) {
+        if (x % 2 == 0) {
+            sand_set(&separated_dilute_sim, x, 0, CELL_MAKE(MAT_WATER, MASS_MAX));
+            sand_set(&separated_dilute_sim, x, 1, CELL_MAKE(MAT_ACID, MASS_MAX));
+        } else {
+            sand_set(&separated_dilute_sim, x, 0, GLASS);
+            sand_set(&separated_dilute_sim, x, 1, GLASS);
+        }
     }
 }
 
-static void test_water_winning_dilution_spawns_a_gas_puff(void)
+/* Both outcomes of the win/lose split now change BOTH cells, not just
+ * one - see step_one_dissolver_cell()'s own comment (sand_reactions.c).
+ * The winning side is not left untouched any more, it boils into its own
+ * vapour (MAT_STEAM for water, MAT_GAS for acid) at the same moment the
+ * losing side converts into the winner's material - a deterministic
+ * PAIR, not two independent coin flips, so wherever one half of a pair
+ * is seen the other must be too, every single time. */
+static void test_water_winning_the_dilution_boils_the_water_cell_to_steam(void)
 {
-    uint8_t *fizzle_cells = malloc((size_t)FIZZLE_W * FIZZLE_H);
-    TEST_ASSERT_NOT_NULL_MESSAGE(fizzle_cells,
-        "acid/water fizzle grid must fit in what the framebuffer leaves");
-    acid_water_fizzle_fixture(fizzle_cells);
+    uint8_t *cells = malloc((size_t)SEPARATED_W * SEPARATED_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water separated grid must fit in what the framebuffer leaves");
+    acid_water_separated_fixture(cells);
+    sand_step(&separated_dilute_sim, 0, 1000, 0);
 
-    bool gas_seen = false;
-    for (int i = 0; i < 10 && !gas_seen; i++) {
-        sand_step(&fizzle_sim, 0, 1000, 0);
-        for (int x = 0; x < FIZZLE_W && !gas_seen; x++) {
-            for (int y = 0; y < FIZZLE_H && !gas_seen; y++) {
-                gas_seen = (CELL_MATERIAL(sand_at(&fizzle_sim, x, y)) == MAT_GAS);
-            }
+    int water_wins = 0, water_wins_with_steam = 0;
+    for (int x = 0; x < SEPARATED_W; x += 2) {
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 1)) != MAT_WATER) {
+            continue; /* not a water-wins column - see the sibling test */
+        }
+        water_wins++;
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 0)) == MAT_STEAM) {
+            water_wins_with_steam++;
         }
     }
 
-    /* Freed BEFORE the assertion: Unity longjmps out of a failure, so a
-     * free() after one never runs - see drop_impulse_buf's own comment
-     * above. */
-    free(fizzle_cells);
+    free(cells);
 
-    TEST_ASSERT_TRUE_MESSAGE(gas_seen,
-        "water winning a dilution must leave a puff of gas behind - the "
-        "only source of MAT_GAS in this fixture (evaporates disabled, no "
-        "sand/wood/oil for a normal dissolve to fizz off of)");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_wins,
+        "expected at least some acid-becomes-water dilutions in 2000 "
+        "independent pairs to check steam against");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(water_wins, water_wins_with_steam,
+        "every column where the acid cell became water must ALSO show "
+        "the water cell that won boiled into steam - the two are one "
+        "outcome of the same roll, not independent");
+}
+
+static void test_acid_winning_the_dilution_boils_the_acid_cell_to_gas(void)
+{
+    uint8_t *cells = malloc((size_t)SEPARATED_W * SEPARATED_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water separated grid must fit in what the framebuffer leaves");
+    acid_water_separated_fixture(cells);
+    sand_step(&separated_dilute_sim, 0, 1000, 0);
+
+    int acid_wins = 0, acid_wins_with_gas = 0;
+    for (int x = 0; x < SEPARATED_W; x += 2) {
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 0)) != MAT_ACID) {
+            continue; /* not an acid-wins column - see the sibling test */
+        }
+        acid_wins++;
+        if (CELL_MATERIAL(sand_at(&separated_dilute_sim, x, 1)) == MAT_GAS) {
+            acid_wins_with_gas++;
+        }
+    }
+
+    free(cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_wins,
+        "expected at least some water-becomes-acid dilutions in 2000 "
+        "independent pairs to check gas against");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(acid_wins, acid_wins_with_gas,
+        "every column where the water cell became acid must ALSO show "
+        "the acid cell that won boiled into gas - the two are one "
+        "outcome of the same roll, not independent");
 }
 
 /* A dedicated fixture for oil's own dilution - oil directly above acid,
  * oil on top because that is ALREADY the stable density ordering (oil's
  * density is 22, acid's is 38 - oil floats on acid on its own, see
  * MAT_OIL's own comment in material.c), so nothing moves due to
- * gravity/density before reactions runs. Oil's dissolvable (40) is much
- * lower than water's (220) - "slowly dilutes", not readily - so this
- * needs more columns than the water fixture to land a comfortable
- * sample in one step: expected conversions at 400 columns and the
- * current constants (r->dissolves=60/256, oil's dissolvable=40/256) is
- * about 15. */
+ * gravity/density before reactions runs. Oil's dissolvable (16 - retuned
+ * more than once, see its own comment in material.c for the earlier 40
+ * and 1) is much lower than water's (220) - "slowly dilutes", not
+ * readily - so a single step is not a safe bet the way the water fixture
+ * is; the tests below step this fixture repeatedly instead (300 steps,
+ * same budget as before).
+ *
+ * They do NOT read the final state after all 300 steps, though - a
+ * column's oil cell does react with the acid below it at most once ever
+ * (once it stops being MAT_OIL there is nothing left to dissolve in a
+ * two-material fixture), but MAT_GAS is buoyant and this fixture is only
+ * two rows tall with nowhere "up" to rise to, so a gas cell born in one
+ * column can drift sideways into a neighbour's over the remaining steps.
+ * Each test below classifies a column the instant it stops holding
+ * MAT_OIL instead, before any later step's drift has a chance to touch
+ * it - see either test's own comment for why that specific instant is
+ * safe. */
 #define OIL_DILUTE_W 400
 #define OIL_DILUTE_H 2
 static sand_t  oil_dilute_sim;
@@ -16110,70 +16490,131 @@ static void acid_oil_dilute_fixture(uint8_t *cells)
     }
 }
 
-/* Unlike water's free swap, oil converting into acid is explicitly
- * supposed to cost the eating acid a unit of its own mass too - "it
- * should also dissolve while doing so, so we end with a bit less of
- * acid" was the ask. Checked directly: for every column where the oil
- * cell became acid this step, the acid cell right below it must have
- * lost exactly the one unit pay_quench_cost() always takes, the same
- * bite cost eating sand or wood pays. */
-static void test_oil_dilutes_into_acid_but_the_acid_pays_for_it(void)
+/* SAND_ACID_OIL_TO_GAS_CHANCE (sand.h): a bitten oil cell mostly boils
+ * into gas now, acid is the minority outcome that survives from the old
+ * "always becomes acid" rule.
+ *
+ * Classifies each column the instant its own oil cell disappears, not
+ * from a final-state read taken after the fixture has run to completion.
+ * MAT_GAS is buoyant (see try_bubble(), sand_gas.c) and this fixture is
+ * only two rows tall with nowhere "up" left to rise to, so over 300 steps
+ * a gas cell born in one column has plenty of opportunity to drift
+ * sideways into a neighbour's - at which point "MAT_GAS appears
+ * somewhere in this column" stops meaning "this column's own oil boiled
+ * off" and a final read cannot tell the two apart. Sampling the column
+ * the moment it stops holding MAT_OIL sidesteps that: at that instant the
+ * only step that has touched it is the one that just ran the reaction
+ * itself, so what is sitting in the two cells is still that step's own
+ * output. Each column is then marked done and never resampled, so a
+ * later step's drift cannot re-classify it. */
+static void test_oil_mostly_boils_off_into_gas_not_acid(void)
 {
     uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
+    bool    *done = calloc((size_t)OIL_DILUTE_W, sizeof(bool));
     TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
         "acid/oil dilution grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(done, "per-column done tracking must fit");
     acid_oil_dilute_fixture(oil_dilute_cells);
 
-    /* dissolvable=1 (material.c) is the rarest a single byte-wide roll
-     * can express, so a single step is no longer a safe bet at 400
-     * columns the way it was before that field got tuned down - see its
-     * own comment for the earlier 40. Instead, step until the FIRST
-     * conversion appears anywhere on the (still perfectly uniform, so no
-     * ordinary liquid mass-flow to confuse the reading) board, and check
-     * only that one - one clean sample is enough to prove the invariant,
-     * and every column stays independent right up until the moment it
-     * flips. 300 steps at 400 columns is comfortably past the point
-     * where a first conversion is virtually certain to have landed. */
-    int mass_before[OIL_DILUTE_W];
-    for (int x = 0; x < OIL_DILUTE_W; x++) {
-        mass_before[x] = CELL_VARIANT(sand_at(&oil_dilute_sim, x, 1));
-    }
-
-    int converted_x = -1;
-    for (int i = 0; i < 300 && converted_x < 0; i++) {
+    int gas = 0, acid_spread = 0;
+    for (int i = 0; i < 300; i++) {
         sand_step(&oil_dilute_sim, 0, 1000, 0);
         for (int x = 0; x < OIL_DILUTE_W; x++) {
-            if (CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0)) == MAT_ACID) {
-                converted_x = x;
-                break;
+            if (done[x]) {
+                continue;
+            }
+            const uint8_t m0 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 0));
+            const uint8_t m1 = CELL_MATERIAL(sand_at(&oil_dilute_sim, x, 1));
+            if (m0 == MAT_OIL || m1 == MAT_OIL) {
+                continue; /* not bitten yet - still a live sample */
+            }
+            done[x] = true;
+            if (m0 == MAT_GAS || m1 == MAT_GAS) {
+                gas++;
+            } else {
+                acid_spread++;
             }
         }
     }
 
-    /* Not freed here, ahead of this assertion, the way the rest of this
-     * file's converted fixtures are - oil_dilute_sim still points into
-     * oil_dilute_cells and the mass_after read just below still needs
-     * it live. If this assertion itself fails, the buffer leaks, same
-     * as any other test failure in this run; the freed-before-assert
-     * rule this file otherwise follows is about avoiding a leak on the
-     * COMMON path, not eliminating every failure-path leak. */
-    TEST_ASSERT_TRUE_MESSAGE(converted_x >= 0,
-        "expected at least one oil-to-acid conversion within 300 steps "
-        "across 400 independent columns");
-
-    const int mass_after = CELL_VARIANT(sand_at(&oil_dilute_sim, converted_x, 1));
-
-    /* Freed BEFORE the final assertion: Unity longjmps out of a failure,
-     * so a free() after one never runs - see drop_impulse_buf's own
-     * comment above. All reads of oil_dilute_cells are done by this
-     * point. */
+    free(done);
     free(oil_dilute_cells);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(mass_before[converted_x] - 1, mass_after,
-        "the acid that converted an oil neighbour into acid must still "
-        "pay pay_quench_cost()'s usual one unit of mass for the bite, "
-        "the same as eating sand or wood would - the conversion is not "
-        "supposed to be free the way water's own swap is");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, gas,
+        "expected at least one oil-to-gas conversion within 300 steps "
+        "across 400 independent columns");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_spread,
+        "SAND_ACID_OIL_TO_GAS_CHANCE biases the outcome, it does not "
+        "eliminate the other side entirely - acid spreading into oil "
+        "should still happen sometimes");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(acid_spread, gas,
+        "SAND_ACID_OIL_TO_GAS_CHANCE is supposed to favour gas heavily - "
+        "oil boiling off should be clearly more common than oil turning "
+        "into more acid");
+}
+
+/* SAND_ACID_OIL_DEATH_CHANCE (sand.h): the acid that ate an oil cell
+ * separately rolls a much higher chance to die outright - its whole
+ * remaining mass gone in this one bite - instead of pay_quench_cost()'s
+ * ordinary one-unit chip. Both are reachable, neither is a certainty.
+ *
+ * Same instant-of-transition sampling as the test above, and for the
+ * same reason: MAT_GAS drifting between columns over 300 steps would
+ * make a final-state read unreliable, and here it is worse than merely
+ * unreliable - a gas cell that later drifts back OUT of a column it
+ * passed through leaves an empty cell behind, which is exactly what a
+ * genuine died-outright column also looks like, so a final read could
+ * mistake ordinary gas traffic for a death that never happened. Sampled
+ * the instant a column stops holding MAT_OIL, before any step but its
+ * own reaction has touched it, that ambiguity cannot arise: an empty
+ * cell can only be the original acid cell gone in one bite (the
+ * oil-derived cell is always gas or acid, never empty), and an acid
+ * cell at exactly MASS_MAX - 1 can only be the ordinary one-unit chip
+ * (MASS_MAX itself is a fresh acid cell born from the oil-becomes-acid
+ * branch, not the one that did the eating). */
+static void test_the_acid_that_ate_oil_can_die_in_a_single_bite(void)
+{
+    uint8_t *oil_dilute_cells = malloc((size_t)OIL_DILUTE_W * OIL_DILUTE_H);
+    bool    *done = calloc((size_t)OIL_DILUTE_W, sizeof(bool));
+    TEST_ASSERT_NOT_NULL_MESSAGE(oil_dilute_cells,
+        "acid/oil dilution grid must fit in what the framebuffer leaves");
+    TEST_ASSERT_NOT_NULL_MESSAGE(done, "per-column done tracking must fit");
+    acid_oil_dilute_fixture(oil_dilute_cells);
+
+    int died_outright = 0, chipped_by_one = 0;
+    for (int i = 0; i < 300; i++) {
+        sand_step(&oil_dilute_sim, 0, 1000, 0);
+        for (int x = 0; x < OIL_DILUTE_W; x++) {
+            if (done[x]) {
+                continue;
+            }
+            const cell_t c0 = sand_at(&oil_dilute_sim, x, 0);
+            const cell_t c1 = sand_at(&oil_dilute_sim, x, 1);
+            if (CELL_MATERIAL(c0) == MAT_OIL || CELL_MATERIAL(c1) == MAT_OIL) {
+                continue; /* not bitten yet - still a live sample */
+            }
+            done[x] = true;
+            if (CELL_IS_EMPTY(c0) || CELL_IS_EMPTY(c1)) {
+                died_outright++;
+            }
+            if ((CELL_MATERIAL(c0) == MAT_ACID && CELL_VARIANT(c0) == MASS_MAX - 1)
+                || (CELL_MATERIAL(c1) == MAT_ACID && CELL_VARIANT(c1) == MASS_MAX - 1)) {
+                chipped_by_one++;
+            }
+        }
+    }
+
+    free(done);
+    free(oil_dilute_cells);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, died_outright,
+        "SAND_ACID_OIL_DEATH_CHANCE (sand.h) is supposed to let the acid "
+        "that ate an oil cell die outright, from full mass to nothing in "
+        "the same bite - none did across 400 independent columns");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, chipped_by_one,
+        "SAND_ACID_OIL_DEATH_CHANCE is a chance, not a certainty - "
+        "pay_quench_cost()'s ordinary one-unit chip must still be "
+        "reachable too, not replaced outright");
 }
 
 /* evaporates forced to 255 so this is a one-step, deterministic
@@ -16200,6 +16641,160 @@ static void test_acid_evaporates_into_gas_when_forced(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 3, 3)),
         "a cell of acid with evaporates forced to 255 must turn to gas "
         "in a single step");
+}
+
+/* SAND_ACID_DILUTE_MASS_BIAS's actual point, end to end - proven by
+ * comparing the SAME sustained pour with the mechanism forced off
+ * (sand_set_acid_dilute_mass_bias(&sim, 0), a pure unbiased coin flip)
+ * against the same pour with it left at its real default, rather than
+ * by watching one biased run alone approach total saturation.
+ *
+ * That was the bug in the first version of this test: at 400 steps, a
+ * 100-wide tap re-filled every single step pours 40,000 cells into a
+ * 4,900-cell basin - roughly eight times its capacity - which empties
+ * the pool through sheer poured VOLUME regardless of whether the
+ * reaction favours the tap at all. Confirmed directly: forcing the
+ * win/lose split to make the tap NEVER win a single bite still left
+ * the test passing, because the tap material displaces the pool by
+ * gravity and refill alone once enough of it has been poured. Given
+ * unlimited attempts against a fixed-size pool, sheer resupply wins
+ * eventually even at a neutral 50/50 split - see this file's own
+ * pour_and_count() history for why "does the tap end up dominant" was
+ * never actually testing SAND_ACID_DILUTE_MASS_BIAS.
+ *
+ * Cut down to a step budget short enough that NEITHER run saturates
+ * (leaving room for a difference to show at all) and turned into an
+ * A/B comparison instead: the local-backing mechanism's whole claim is
+ * that it makes a sustained excess convert its opposite FASTER, so
+ * that is what gets measured - the biased run must convert strictly
+ * more of the pool than the identically-seeded unbiased run does in
+ * the same window, not just "some, eventually". */
+#define DILUTE_POUR_W          100
+#define DILUTE_POUR_H          50
+#define DILUTE_POUR_POOL_DEPTH 20
+#define DILUTE_POUR_STEPS      150
+static sand_t  dilute_pour_sim;
+
+/* cells is HEAP, not static file scope - see acid_water_dilute_fixture's
+ * own comment above for why. Same seed every call, deliberately - an
+ * A/B comparison wants the same random inputs on both legs, with only
+ * the mass-bias override differing, not seed-to-seed noise on top. */
+static void
+acid_water_pour_fixture(uint8_t *cells, material_id_t pool)
+{
+    sand_init(&dilute_pour_sim, cells, DILUTE_POUR_W, DILUTE_POUR_H, 17u);
+    sand_set_evaporates(&dilute_pour_sim, 0); /* isolate the mass bias from
+                                                * the unrelated ambient
+                                                * evaporates roll - same
+                                                * reasoning as the other
+                                                * dilution fixtures above. */
+    for (int x = 0; x < DILUTE_POUR_W; x++) {
+        sand_set(&dilute_pour_sim, x, DILUTE_POUR_H - 1, STONE);
+    }
+    for (int y = DILUTE_POUR_H - 1 - DILUTE_POUR_POOL_DEPTH; y < DILUTE_POUR_H - 1; y++) {
+        for (int x = 0; x < DILUTE_POUR_W; x++) {
+            sand_set(&dilute_pour_sim, x, y, CELL_MAKE(pool, MASS_MAX));
+        }
+    }
+}
+
+static void
+pour_and_count(material_id_t tap, int *out_pool_mat, int *out_tap_mat)
+{
+    for (int i = 0; i < DILUTE_POUR_STEPS; i++) {
+        for (int x = 0; x < DILUTE_POUR_W; x++) {
+            sand_set(&dilute_pour_sim, x, 0, CELL_MAKE(tap, MASS_MAX));
+        }
+        sand_step(&dilute_pour_sim, 0, 1000, 0);
+    }
+
+    int pool_mat = 0, tap_mat = 0;
+    const material_id_t pool = (tap == MAT_ACID) ? MAT_WATER : MAT_ACID;
+    for (int y = 0; y < DILUTE_POUR_H - 1; y++) {
+        for (int x = 0; x < DILUTE_POUR_W; x++) {
+            const uint8_t m = CELL_MATERIAL(sand_at(&dilute_pour_sim, x, y));
+            if (m == pool) {
+                pool_mat++;
+            } else if (m == tap) {
+                tap_mat++;
+            }
+        }
+    }
+    *out_pool_mat = pool_mat;
+    *out_tap_mat  = tap_mat;
+}
+
+/* Runs the whole pour, with the mass-bias override forced to `bias`
+ * (negative restores the real default), and returns how much of the
+ * tap material the pool ended up holding - the higher this is, the
+ * more the pool converted. */
+static int
+pour_and_measure_tap_gain(material_id_t pool, material_id_t tap, int bias)
+{
+    uint8_t *cells = malloc((size_t)DILUTE_POUR_W * DILUTE_POUR_H);
+    TEST_ASSERT_NOT_NULL_MESSAGE(cells,
+        "acid/water pour grid must fit in what the framebuffer leaves");
+    acid_water_pour_fixture(cells, pool);
+    sand_set_acid_dilute_mass_bias(&dilute_pour_sim, bias);
+
+    int pool_left, tap_now;
+    pour_and_count(tap, &pool_left, &tap_now);
+
+    free(cells);
+    return tap_now;
+}
+
+static void
+test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water(void)
+{
+    const int tap_now_unbiased = pour_and_measure_tap_gain(MAT_WATER, MAT_ACID, 0);
+    const int tap_now_biased   = pour_and_measure_tap_gain(MAT_WATER, MAT_ACID, -1);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(tap_now_unbiased, tap_now_biased,
+        "SAND_ACID_DILUTE_MASS_BIAS is supposed to let a sustained excess "
+        "of acid convert the water pool FASTER than an unbiased coin "
+        "flip does in the same window - identically seeded runs, forced "
+        "to bias 0 vs the real default, ended up converting the same "
+        "amount, so the mechanism is not doing anything measurable");
+}
+
+/* NOT an A/B bias comparison, unlike the sibling test above - measured
+ * directly, and it goes the WRONG way here: forcing bias to 0 converted
+ * MORE of the acid pool than the real default did (3623 vs 3451 at 150
+ * steps, one fixed seed). SAND_ACID_DILUTE_MASS_BIAS is not neutral in
+ * this direction, it is actively counterproductive, and the reason is
+ * density, not a bug in the bias arithmetic itself: acid (density 38)
+ * sinks and disperses through water when poured on top of it, so a
+ * poured acid grain is usually an isolated cell surrounded by water -
+ * exactly the case SAND_ACID_DILUTE_MASS_BIAS's own comment (sand.h)
+ * already covers ("an isolated drop in a big lake gets pushed even
+ * further toward diluting"). Water (density 30) does the opposite when
+ * poured onto acid: being LESS dense, it sits on top rather than
+ * penetrating, so the acid cells actually doing the biting - only acid
+ * ever rolls this reaction - stay backed by the deep, undisturbed pool
+ * beneath them the whole time, and the bias tips every one of those
+ * bites further toward "acid wins" instead of helping water win faster.
+ * A real, structural asymmetry between the two pour directions, not
+ * something this test should paper over by asserting a relationship
+ * that does not hold - flagged for a design decision, not silently
+ * fixed here, since the working direction above was tuned deliberately
+ * and changing the bias formula to help this direction too risks
+ * breaking that one.
+ *
+ * What IS still true, and worth pinning: water overwhelms a sustained
+ * acid pool by sheer volume alone even with bias doing nothing useful
+ * for it - the tap ends up the clear majority of the basin regardless. */
+static void
+test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid(void)
+{
+    const int tap_now = pour_and_measure_tap_gain(MAT_ACID, MAT_WATER, -1);
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(DILUTE_POUR_W * (DILUTE_POUR_H - 1) / 2, tap_now,
+        "a sustained pour of water onto an acid pool must still end up "
+        "the clear majority of the basin - SAND_ACID_DILUTE_MASS_BIAS "
+        "does not help this direction (see this test's own comment for "
+        "why), but sheer poured volume against a fixed-size pool still "
+        "has to win eventually");
 }
 
 static void test_a_little_acid_cannot_eat_an_unlimited_amount(void)
@@ -18770,6 +19365,112 @@ static void test_condensation_needs_a_genuine_2x2_square(void)
     TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
         "three steam cells beside one that is not steam must never "
         "condense, even with the roll forced to succeed every time");
+}
+
+/* Acid rain - SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
+ * feature, step_one_acid_rain_cell()'s own (sand_reactions.c) for the
+ * mechanism. sand_set_acid_rain(&s, 255) forces a deterministic,
+ * single-step conversion, the same discipline
+ * test_a_2x2_block_of_steam_condenses_into_one_water_cell just above
+ * already uses for the sibling mechanic this one extends.
+ *
+ * Sealed on top and both sides exactly like that test's own fixture -
+ * see its comment for why (sand_step_gas() runs before
+ * sand_step_reactions() within one sand_step() call, so an unsealed
+ * pocket can scatter before the reactions pass ever sees it intact) -
+ * and column-striped (steam, gas, steam, gas) rather than any other
+ * arrangement of the required two-of-each: a 2x2 all-steam sub-block
+ * anywhere in the 4x4 would also satisfy ordinary condensation, muddying
+ * which mechanic actually fired, and no two adjacent columns share a
+ * material here, so no such sub-block exists (condenses is also
+ * explicitly disabled below, belt and braces). */
+static void test_a_qualifying_gas_steam_pocket_collapses_into_an_acid_core(void)
+{
+    fixture();
+    sand_set_acid_rain(&s, 255);
+    sand_set_condenses(&s, 0);
+    sand_set_mobility(&s, 0);
+
+    for (int x = 1; x <= 4; x++) {
+        sand_set(&s, x, 0, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, 5, y, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            sand_set(&s, x, y, ((x % 2) == 1) ? STEAM : GAS);
+        }
+    }
+
+    sand_step(&s, 0, 1000, 0);
+
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 1, 1)),
+        "a forced roll must collapse the pocket into acid at its own "
+        "top-left 2x2, the same ratio condensation itself uses");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 2, 1)),
+        "the top-left 2x2's other three cells must survive as acid too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 1, 2)),
+        "the top-left 2x2's other three cells must survive as acid too");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 2, 2)),
+        "the top-left 2x2's other three cells must survive as acid too");
+
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            if (x <= 2 && y <= 2) {
+                continue; /* the surviving 2x2, checked above */
+            }
+            char msg[96];
+            snprintf(msg, sizeof msg,
+                     "cell (%d,%d) must clear to empty - only the top-left "
+                     "2x2 is supposed to survive the collapse", x, y);
+            TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, x, y)), msg);
+        }
+    }
+}
+
+/* One cell short of the two-of-each requirement (one steam, fifteen
+ * gas - still a pure gas/steam pocket, still boxed in identically) must
+ * never collapse, no matter how the roll would have gone - the same
+ * "needs a genuine match, not almost one" property
+ * test_condensation_needs_a_genuine_2x2_square just above already
+ * checks for its own sibling mechanic. */
+static void test_acid_rain_needs_at_least_two_of_each_species(void)
+{
+    fixture();
+    sand_set_acid_rain(&s, 255);
+    sand_set_condenses(&s, 0);
+    sand_set_mobility(&s, 0);
+
+    for (int x = 1; x <= 4; x++) {
+        sand_set(&s, x, 0, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        sand_set(&s, 0, y, STONE);
+        sand_set(&s, 5, y, STONE);
+    }
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            sand_set(&s, x, y, GAS);
+        }
+    }
+    sand_set(&s, 1, 1, STEAM);
+
+    sand_step(&s, 0, 1000, 0);
+
+    int acid_seen = 0;
+    for (int y = 1; y <= 4; y++) {
+        for (int x = 1; x <= 4; x++) {
+            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_ACID) {
+                acid_seen++;
+            }
+        }
+    }
+    TEST_ASSERT_EQUAL_INT_MESSAGE(0, acid_seen,
+        "three steam cells short of the two-steam/two-gas requirement "
+        "must never collapse into acid, even with the roll forced to "
+        "succeed every time");
 }
 
 /* --- dirty rows: nothing changes without saying so ---------------------- */
@@ -22096,8 +22797,19 @@ static void test_the_four_liquid_scene_keeps_reacting_after_settling(void)
         "lava quenched by water should still be leaving a good showing of "
         "stone at the end of the window - if it isn't, the scene has gone "
         "quiet and the device test beside it is measuring almost nothing");
+    /* Dropped to 8 for one round while SAND_ACID_DILUTE_MASS_BIAS (sand.h)
+     * let the acid band in this scene genuinely contest the water band it
+     * sits against without water paying any cost of its own for losing -
+     * every bite either grew a new water cell for free or grew a new acid
+     * cell for free, so whichever side got the local upper hand snowballed.
+     * Restored to 50 once the water/acid dilution ladder made BOTH
+     * outcomes cost the winning side a cell (see that ladder's own comment,
+     * sand_reactions.c) - water is no longer a runaway resource once
+     * either side genuinely has to pay to win, and steam production is
+     * back over 500 at the constants current when this was re-measured,
+     * comfortably clearing the original floor again. */
     TEST_ASSERT_GREATER_OR_EQUAL_INT_MESSAGE(50, steam,
-        "water boiled and fire quenched should still be leaving a good "
+        "water boiled and fire quenched should still be leaving some "
         "showing of steam at the end of the window - if it isn't, the "
         "scene has gone quiet and the device test beside it is measuring "
         "almost nothing");
@@ -23123,12 +23835,13 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * path at all. Sand slowly BECOMES dirt (material.c's MAT_SAND row:
  * `.soaks = 8, .soaks_to = MAT_DIRT`) while the dirt it becomes goes on
  * drinking, far faster (MAT_DIRT: `.soaks = 60`) and only slowly gives that
- * moisture back up (`.dries = 5`, a twelfth of its own soak rate). Dirt has
- * nowhere else to put what it absorbs - its variant nibble IS the moisture
- * level (material.h's CELL_MOISTURE()/SOIL_MOISTURE_MAX, 0 dry to 7
- * saturated) - so this scene's own composition keeps changing while it
- * runs: the sand/dirt split at the end is not the split it was poured
- * with.
+ * moisture back up (`.dries = 2`, a thirtieth of its own soak rate). A wet
+ * dirt cell's variant IS the moisture level while it is wet (material.h's
+ * CELL_MOISTURE()/SOIL_MOISTURE_MAX, 0 dry to 7 saturated; the same nibble
+ * reads as a dry TONE once it is not, which is what pays for the shading
+ * this scene never looks at) - so this scene's own composition keeps
+ * changing while it runs: the sand/dirt split at the end is not the split
+ * it was poured with.
  *
  * REACTION DISPATCH UNDER SUSTAINED LOAD is the thing this scene exists to
  * measure, not just liquid movement, and getting that to actually happen
@@ -23142,11 +23855,16 @@ static void test_the_boiler_scene_keeps_boiling_across_the_window(void)
  * KIND_LIQUID - and the very first reactions pass clears it straight back
  * off, since nothing wet is touching anything that soaks. Nothing in
  * plain liquid movement ever re-arms it after that. Dirt is what breaks
- * the silence: a soil cell holding any moisture keeps re-arming the flag
+ * the silence: a soil cell holding any MOISTURE keeps re-arming the flag
  * on every write that touches it (sand_priv.h: `r->dries != 0 &&
- * CELL_VARIANT(cell) != 0`), so once this scene is wet, the reactions
+ * CELL_MOISTURE(cell) != 0`), so once this scene is wet, the reactions
  * pass keeps running every step for as long as any dirt anywhere is damp
- * - which, measured, is the whole window below.
+ * - which, measured, is the whole window below. CELL_MOISTURE(), not the
+ * raw variant this comment used to name: a DRY cell's variant is a tone,
+ * and testing the whole nibble latched this for seven of every eight dry
+ * cells for good, whether or not anything on the board was ever wet -
+ * fixed alongside the re-encoding that gave dry soil those eight tones in
+ * the first place (see material.h's own comment on soil's state split).
  *
  * EQUAL, AND MIXED DOWN TO ONE CELL. Sand and dirt are painted as a
  * single-cell checkerboard - material = (x + y) & 1 - rather than as two
@@ -26929,6 +27647,7 @@ void run_sand_suite(void)
     RUN_TEST(test_fire_burning_out_marks_its_row_dirty);
     RUN_TEST(test_fire_spreads_through_a_connected_pocket_in_one_step);
     RUN_TEST(test_pouring_stone_never_arms_the_reactions_pass);
+    RUN_TEST(test_sand_alone_lets_the_moisture_pass_switch_off_again);
     RUN_TEST(test_placing_fire_arms_both_gas_and_fire_passes);
 
     RUN_TEST(test_wood_does_not_catch_instantly);
@@ -26982,8 +27701,12 @@ void run_sand_suite(void)
     RUN_TEST(test_wet_sand_becomes_dirt_and_spends_the_water);
     RUN_TEST(test_dirt_takes_on_moisture_and_dries_out_again);
     RUN_TEST(test_new_dirt_starts_dry_in_a_random_tone);
-    RUN_TEST(test_soil_keeps_its_tone_through_wetting_and_drying);
-    RUN_TEST(test_the_two_soil_tones_are_different_colours);
+    RUN_TEST(test_consecutive_dirt_pours_land_on_different_bands);
+    RUN_TEST(test_a_dry_dirt_grain_keeps_its_tone_as_it_falls);
+    RUN_TEST(test_soil_loses_its_tone_across_a_wetting_and_gets_a_fresh_one_drying);
+    RUN_TEST(test_soil_dries_biased_by_the_neighbour_it_just_watered);
+    RUN_TEST(test_a_watered_bank_does_not_dry_back_to_one_flat_tone);
+    RUN_TEST(test_soil_is_one_monotone_luminance_ramp);
     RUN_TEST(test_soaking_is_off_unless_asked_for);
     RUN_TEST(test_only_water_wets_what_it_touches);
     RUN_TEST(test_the_grain_hash_does_not_stripe);
@@ -26991,7 +27714,7 @@ void run_sand_suite(void)
     RUN_TEST(test_steam_melts_ice_and_plain_gas_does_not);
     RUN_TEST(test_two_pours_apart_in_time_lay_down_different_shades);
     RUN_TEST(test_a_moving_grain_keeps_the_shade_it_was_poured_with);
-    RUN_TEST(test_wet_sand_becomes_soil_in_the_tone_its_shade_implies);
+    RUN_TEST(test_wet_sand_becomes_soil_wet_with_no_tone_of_its_own);
     RUN_TEST(test_a_root_darkens_as_more_root_grows_around_it);
     RUN_TEST(test_root_neighbours_are_counted_across_three_rows);
     RUN_TEST(test_the_right_extended_materials_are_grained);
@@ -27134,14 +27857,18 @@ void run_sand_suite(void)
     RUN_TEST(test_snow_melts_in_any_liquid);
     RUN_TEST(test_melting_snow_makes_water_not_more_of_the_liquid);
     RUN_TEST(test_snow_keeps_on_dry_ground);
-    RUN_TEST(test_acid_spends_a_unit_of_itself_per_cell_dissolved);
+    RUN_TEST(test_acid_spends_at_least_a_unit_of_itself_per_cell_dissolved);
     RUN_TEST(test_acid_fizzes_while_it_eats);
     RUN_TEST(test_the_fizz_rises_out_of_the_acid);
     RUN_TEST(test_acid_and_water_dilute_each_other);
-    RUN_TEST(test_water_wins_the_dilution_more_often_than_acid_does);
-    RUN_TEST(test_water_winning_dilution_spawns_a_gas_puff);
-    RUN_TEST(test_oil_dilutes_into_acid_but_the_acid_pays_for_it);
+    RUN_TEST(test_the_dilution_split_favours_neither_side);
+    RUN_TEST(test_water_winning_the_dilution_boils_the_water_cell_to_steam);
+    RUN_TEST(test_acid_winning_the_dilution_boils_the_acid_cell_to_gas);
+    RUN_TEST(test_oil_mostly_boils_off_into_gas_not_acid);
+    RUN_TEST(test_the_acid_that_ate_oil_can_die_in_a_single_bite);
     RUN_TEST(test_acid_evaporates_into_gas_when_forced);
+    RUN_TEST(test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water);
+    RUN_TEST(test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid);
     RUN_TEST(test_a_little_acid_cannot_eat_an_unlimited_amount);
     RUN_TEST(test_every_liquid_declares_a_mobility);
     RUN_TEST(test_water_does_not_drill_into_oil_when_tilted);
@@ -27186,6 +27913,8 @@ void run_sand_suite(void)
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
     RUN_TEST(test_a_2x2_block_of_steam_condenses_into_one_water_cell);
     RUN_TEST(test_condensation_needs_a_genuine_2x2_square);
+    RUN_TEST(test_a_qualifying_gas_steam_pocket_collapses_into_an_acid_core);
+    RUN_TEST(test_acid_rain_needs_at_least_two_of_each_species);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);
     RUN_TEST(test_grains_are_never_created_or_destroyed);

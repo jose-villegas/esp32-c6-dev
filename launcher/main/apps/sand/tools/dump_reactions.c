@@ -1493,26 +1493,17 @@ static uint8_t representative_variant(material_id_t material)
     const int span = MATERIAL_SHADE_SPAN(material);
     const int mid  = span / 2;
 
-    /* A drying material's variant is moisture in the low bits and a
-     * carried tone in the top one - see material.h's own comment on
-     * SOIL_MOISTURE_BITS. A fresh cell is bone dry (moisture 0, exactly,
-     * not centred - random_cell() never randomises this half); the tone
-     * half IS randomised there, so it gets the same centring as the plain
-     * shade band below, folded into SOIL_TONES's own range. SOIL_TONES is
-     * 2, so "middle" is not a value rng_below() could draw as a middle
-     * either - it is simply mid's own parity, which is what an even-valued
-     * band (as `mid` always is on this table's spans) would hand
-     * random_cell() on 7 of every 8 calls, before the eighth-chance flip
-     * to the other tone that makes this the ordinary case, not a rare one. */
-    if (reactions[material].dries != 0) {
-        const unsigned tone = (unsigned)mid % SOIL_TONES;
-        return (uint8_t)(tone << SOIL_MOISTURE_BITS);
-    }
-
     /* The plain case: a shade, centred on the band's own middle. Sand
      * stops short of the top four shades (SAND_CULLET_BASE in material.h)
-     * so a painted dune can never read as cullet; MATERIAL_SHADE_SPAN()
-     * already encodes that for every material, sand included. */
+     * so a painted dune can never read as cullet; a drying material stops
+     * short of its own wet range the same way (SOIL_DRY_TONES) so a
+     * painted cell can never read as moisture - MATERIAL_SHADE_SPAN()
+     * already encodes both for every material this table has, and a
+     * freshly poured cell of a drying material IS just a dry tone, banded
+     * exactly like a shade (material.h's own comment on soil's state
+     * split; random_cell() in sand.c is where the real jitter this only
+     * centres on happens), so there is no separate case left to write
+     * here the way the old fixed-bit-split encoding needed. */
     return (uint8_t)mid;
 }
 

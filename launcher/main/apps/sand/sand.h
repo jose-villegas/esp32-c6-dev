@@ -367,6 +367,8 @@ typedef struct {
     int      condenses;    /* see sand_set_condenses() */
     int      lava_cooloff; /* see sand_set_lava_cooloff() */
     int      lava_burst;   /* see sand_set_lava_burst() */
+    int      acid_rain;    /* see sand_set_acid_rain() */
+    int      acid_dilute_mass_bias; /* see sand_set_acid_dilute_mass_bias() */
 
     /* Persistent point sources - see sand_add_emitter() below.
      *
@@ -1021,22 +1023,212 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
 #define SAND_ACID_BUBBLE_CHANCE 40
 #define SAND_ACID_BUBBLE_SPEED  220
 
-/* DILUTION - water touching acid rolls a chance to become one or the
- * other, biased toward water, reusing the same trigger acid's ordinary
- * eating already has: the dissolves/dissolvable pair in
- * step_one_dissolver_cell() (sand_reactions.c). No new field for "does
- * this happen at all" - MAT_WATER's own `dissolvable` (material.c)
- * answers that exactly the way sand's or wood's already does, and this
- * constant only decides the OUTCOME once that roll has already landed:
- * whether the acid cell that bit becomes water (dilution, the more
- * common case) or the water cell it bit becomes acid instead (acid
- * spreading). Chance-in-256 that WATER wins. Started at 192 (3 in 4),
- * toned down to 160 (about 5 in 8) once reported as too strongly one-
- * sided, then tightened further to a 55/45 split (141) - close enough
- * to even that acid spreading reads as a real, regular outcome rather
- * than the rare exception it was at the wider splits. Starting bias,
- * not a measured one - tune on device like every other constant here. */
-#define SAND_ACID_DILUTE_TO_WATER_CHANCE 141
+/* DILUTION - water touching acid rolls a chance to decide who wins,
+ * reusing the same trigger acid's ordinary eating already has: the
+ * dissolves/dissolvable pair in step_one_dissolver_cell()
+ * (sand_reactions.c). No new field for "does this happen at all" -
+ * MAT_WATER's own `dissolvable` (material.c) answers that exactly the
+ * way sand's or wood's already does, and this constant only decides the
+ * OUTCOME once that roll has already landed. Chance-in-256 that WATER
+ * wins, BEFORE SAND_ACID_DILUTE_MASS_BIAS below adjusts it for this
+ * particular acid cell.
+ *
+ * BOTH cells change on either outcome now, symmetrically - see the
+ * ladder's own comment in step_one_dissolver_cell() for the mechanism
+ * (the winner boils into its own vapour, the loser converts into the
+ * winner's material) - so this constant is now a close-to-even coin
+ * flip, not a strong lean: 192 (3 in 4) toned down to 160, then to a
+ * 55/45 split at 141 while the winning side's cell was still left
+ * untouched (a free cell of whichever material won, every single time,
+ * which is what actually needed fixing - see SAND_ACID_DILUTE_MASS_BIAS
+ * below and the ladder's own comment for the full story). With that
+ * fixed, the split itself only needed a small lean rather than a strong
+ * one - 134 (roughly 52.3%) for one round - and then, once the win/lose
+ * split was no longer the only thing standing between either liquid and
+ * unbounded growth, no lean at all.
+ *
+ * 118, NOT 128 - the naive "half of 256" - because this constant is not
+ * read against the full 256-wide roll. SAND_ACID_DILUTE_EVAPORATE_CHANCE
+ * is checked FIRST in the ladder (step_one_dissolver_cell(),
+ * sand_reactions.c) and its 20-in-256 comes out of the roll's low end
+ * before the water/acid split is even reached, so this constant is only
+ * ever compared against the REMAINING (256 - 20) = 236-wide range. 128
+ * shipped there for one round and was quietly a 128:108 lean toward
+ * water (54%/46%) at zero mass bias, not the even split its own comment
+ * claimed - caught by review, not by a test, since nothing pinned the
+ * unbiased split's exact ratio. 118 is genuinely half of the 236 that is
+ * actually on offer once evaporate has taken its cut: 20 + 118 + 118 =
+ * 256, splitting the water/acid ladder into two equal 118-wide bands.
+ * Whichever side wins a given bite is now decided entirely by
+ * SAND_ACID_DILUTE_MASS_BIAS below (local backing) rather than a fixed
+ * preference baked into the base rate. Starting bias, not a measured
+ * one - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_TO_WATER_CHANCE 118
+
+/* MASS MATTERS - a single roll at the fixed split above can't tell a lone
+ * drop of acid resting on a lake from a whole poured-on slab of it; every
+ * bite looked the same, so a huge amount of acid dumped on a small puddle
+ * never read as different from a trickle, and the same was true in
+ * reverse for a lake poured onto a puddle of acid. Fixed directly:
+ * step_one_dissolver_cell() counts how many of the ACID cell's own
+ * cardinal neighbours are themselves acid, and separately how many of
+ * the WATER cell's own cardinal neighbours are themselves water (0 to 3
+ * each), and rolls against SAND_ACID_DILUTE_TO_WATER_CHANCE adjusted by
+ * the DIFFERENCE between the two, water_backing minus acid_backing,
+ * times this constant.
+ *
+ * The difference matters, not either count alone - a first version only
+ * ever measured the acid side and subtracted, which is NOT actually
+ * symmetric: since only acid cells ever roll this reaction, a deep, pure
+ * acid pool always reads as "backed" from its own side even while an
+ * equally deep pool of water sits right next to it, so water could pour
+ * onto an acid puddle forever and still not reliably win. With the
+ * difference: two equally deep pools facing each other net to zero bias
+ * and the base split above holds exactly as it always did; a lone grain
+ * of either material still reads as 0 on its own side, so an isolated
+ * drop in a big lake gets pushed even further toward diluting (the
+ * lake's own water_backing pulls the split up), and it is only once one
+ * side's local mass genuinely outweighs the other's that the roll tips.
+ *
+ * That fixes a pour of ACID onto a pool of water cleanly -
+ * test_a_relentless_pour_of_acid_overwhelms_a_pool_of_water (suite_sand.c)
+ * checks it with an A/B (bias on vs off) comparison and passes. The
+ * reverse direction does NOT get the same clean win, and this constant
+ * alone cannot fix it: acid's density (38) is higher than water's (30),
+ * so a poured acid grain sinks into and disperses through the pool it
+ * lands in, reading as an isolated, weakly-backed intruder the way this
+ * mechanism assumes - but water sits and floats on TOP of acid instead,
+ * so the acid cells actually being bitten stay backed by the deep acid
+ * pool underneath them the whole time, never reading as isolated at all.
+ * test_a_relentless_pour_of_water_overwhelms_a_pool_of_acid (suite_sand.c)
+ * documents this directly: biasing the roll measurably HURTS that
+ * direction rather than helping it (3451 tap-side acid cells biased vs
+ * 3623 unbiased at the same step count), so that test asserts on sheer
+ * volume of conversion instead of an A/B comparison. Flagged, not
+ * silently patched - fixing it for real would need something that reads
+ * density/position, not just local backing counts, and that is a real
+ * design decision rather than a tuning knob.
+ *
+ * Purely local either way - no global concentration tracking, up to 8
+ * bounds-checked reads total (4 for each cell's own neighbours), the
+ * same kind of local rule the rest of this automaton already relies on
+ * to produce a macro-scale effect. Starting bias, not a measured one -
+ * tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_MASS_BIAS 24
+
+/* EVAPORATION ON DILUTION - a flat slice of the SAME roll that decides
+ * water-wins-vs-acid-wins (see the single-roll ladder in
+ * step_one_dissolver_cell(), sand_reactions.c - deliberately one roll,
+ * not the two independent ones an earlier version of this used, to keep
+ * the interaction from growing another moving part) gives every acid/
+ * water bite a small, unconditional chance to boil the ACID cell off
+ * into MAT_GAS before the win/lose split even runs, regardless of who
+ * would otherwise have won. Distinct from r->evaporates (material.c),
+ * which is acid's own ambient boil-off and fires whether or not water is
+ * anywhere nearby - this one only fires at the moment of an actual
+ * acid/water bite. Distinct too from the mass sink the win/lose split
+ * itself now carries on both its own outcomes (see that split's own
+ * comment) - this bucket existed before that fix landed and is kept
+ * as its own separate, smaller chance rather than folded in, since it is
+ * the one outcome that skips the water cell entirely. Chance-in-256 out
+ * of the full roll, checked first in the ladder, ahead of
+ * SAND_ACID_DILUTE_MASS_BIAS's adjustment - so evaporating is exactly as
+ * likely for a lone drop as for a poured-on slab. Starting bias, not a
+ * measured one - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_EVAPORATE_CHANCE 20
+
+/* OIL BOILS OFF, IT DOES NOT BREED MORE ACID - reported directly: a
+ * whole pool of oil was ending up entirely acid. The old rule always
+ * converted a bitten oil cell into a FRESH, full-mass acid cell
+ * (place_reacted() gives every new ordinary material a full life - see
+ * its own comment, sand_reactions.c) while the acid doing the eating
+ * only ever paid pay_quench_cost()'s ordinary one-unit nick, the same
+ * price eating sand or wood costs. One unit spent to mint an entire new
+ * full acid cell, on nearly every bite that landed - net acid could only
+ * grow, never actually shrink, and a burning pool of oil was in effect a
+ * (slow) acid factory. Two independent fixes in step_one_dissolver_cell()
+ * (sand_reactions.c):
+ *
+ * - the bitten oil cell mostly turns to MAT_GAS now, not acid -
+ *   SAND_ACID_OIL_TO_GAS_CHANCE, chance-in-256 that it does. Acid still
+ *   spreading into the oil is the minority outcome that survives, not
+ *   the only one, the same "mostly, not always" shape water's own
+ *   dilution keeps for its own minority branch.
+ * - the acid cell separately rolls SAND_ACID_OIL_DEATH_CHANCE for a MUCH
+ *   higher chance to die OUTRIGHT - spend its whole remaining mass in
+ *   this one bite, cell cleared the same way pay_quench_cost() already
+ *   clears a cell whose last unit just went - instead of the ordinary
+ *   one-unit chip every other dissolve pays. Explicitly asked for:
+ *   eating oil is supposed to be something that can consume the acid
+ *   doing it, not a near-free way to breed more of it. */
+#define SAND_ACID_OIL_TO_GAS_CHANCE 220
+#define SAND_ACID_OIL_DEATH_CHANCE  128
+
+/* THE GENERIC EAT ALSO HAS TO COST SOMETHING - reported directly: pouring
+ * sand over acid barely shrinks the acid, even though a lot of sand gets
+ * eaten in the process. Sand (dissolvable=200), wood (160) and stone (60)
+ * all fall through to the SAME shared branch at the bottom of
+ * step_one_dissolver_cell() (sand_reactions.c, unlike water and oil which
+ * both get their own dedicated ones) and have always paid
+ * pay_quench_cost()'s flat one-unit chip per bite - a full MASS_MAX-unit
+ * acid cell can eat up to MASS_MAX cells of anything on that path before
+ * running out, and against a material as freely dissolvable as sand,
+ * landing that many bites does not take long, so the acid reads as
+ * barely spending itself for how much it visibly destroys.
+ *
+ * Same fix as oil's SAND_ACID_OIL_DEATH_CHANCE, same shape: after the
+ * normal fizz/residue handling, a further roll gives the acid a real
+ * chance to die outright - its whole remaining mass gone in this one
+ * bite - instead of always just the one-unit chip. Picked lower than
+ * oil's 128: oil is dissolved rarely (dissolvable=16, "one bite in
+ * sixteen") so a near coin-flip death rate there still reads as acid
+ * mostly surviving contact with it, but sand/wood/stone are dissolved
+ * MUCH more readily (dissolvable up to 200) - the same death rate here
+ * would let a single bite of ordinary sand kill a full acid cell about
+ * as often as not, which reads as acid being unable to eat sand at all
+ * rather than eating it at a real cost. Starting bias, not a measured
+ * one - tune on device like every other constant here. */
+#define SAND_ACID_EAT_DEATH_CHANCE 40
+
+/* ACID RAIN - a mixed pocket of MAT_GAS and MAT_STEAM, sitting together
+ * in a 4x4 block (at least two cells of each; the rest either species
+ * too, nothing else), has a small chance to collapse into acid - see
+ * step_one_acid_rain_cell() (sand_reactions.c) for the mechanism itself.
+ * Explicitly requested as an extension of the existing steam-to-water
+ * condensation trick (reaction_t.condenses, material.c) - condensation
+ * already lets this codebase fake "rain" by collapsing a settled pocket
+ * of steam into water; this is the same cosmetic collapse idea,
+ * generalised to a mixed two-material pocket instead of a uniform one-
+ * material square, producing acid instead of water - acid rain, not
+ * plain rain.
+ *
+ * A COLLAPSE, same ratio condensation itself uses (4 cells in, 1
+ * surviving), not a like-for-like replacement - the first version of
+ * this converted the WHOLE 4x4 (16 cells) into 16 fresh acid cells, and
+ * that was a real bug, not a stylistic choice: acid is one of this
+ * simulation's biggest producers of gas and steam (dilution, eating oil,
+ * eating sand/wood/stone, its own ambient boil-off all leave one or the
+ * other), so handing every cell of a matching pocket straight back into
+ * more acid, at full count, turned this into a feedback loop that could
+ * keep a lake topped up indefinitely - confirmed directly, a snow-melt
+ * scene's acid lake stayed at 16 live cells past 600 steps instead of
+ * running dry the way it always used to.
+ *
+ * The yield alone was not enough, either - tuning the chance down as far
+ * as 1 (the rarest a single byte-wide roll can express) did not fix the
+ * ORIGINAL 16-cell version by itself, because a gas/steam-rich scene
+ * offers many independent qualifying windows every single step;
+ * lowering any one roll's odds does not change how many rolls get
+ * attempted. It took BOTH fixes together: the block's own top-left 2x2
+ * becomes acid, the other twelve cells clear to empty (sixteen cells of
+ * vapor rain down four cells of acid, not sixteen), and this chance
+ * dropped alongside it, from 32 down to 8, once the smaller yield made
+ * the chance worth tuning again. Chance-in-256, checked only once a full
+ * 4x4 has already been confirmed to hold nothing but gas and steam with
+ * at least two of
+ * each. Starting bias, not a measured one - tune on device like every
+ * other constant here. */
+#define SAND_ACID_RAIN_CHANCE 8
 
 /* QUENCHING A FLAME - acid putting out fire is not water's clean,
  * deterministic flash to steam (see step_one_burning_cell(),
@@ -1624,7 +1816,17 @@ void sand_set_boils(sand_t *s, int chance);
  * figure - steam's own deliberately rare one, today). A test that wants
  * a deterministic one-step condensation forces this to 255 instead of
  * looping a number of steps scaled to however rare the real figure ends
- * up being tuned. */
+ * up being tuned.
+ *
+ * NOT THE ONLY COLLAPSE ON THE BOARD - acid rain (SAND_ACID_RAIN_CHANCE,
+ * below) is a second one, a mixed gas/steam pocket collapsing into acid
+ * rather than a uniform square collapsing into one material, and it is
+ * gated on raw material identity in step_one_reacting_row() rather than
+ * on r->condenses or this override. A test relying on
+ * sand_set_condenses(s, 0) to mean "no mechanic here destroys cells" -
+ * several already do, to keep a strict grain-count assertion honest -
+ * also needs sand_set_acid_rain(s, 0) if its board can ever hold both
+ * MAT_GAS and MAT_STEAM together in a 4x4 pocket. */
 void sand_set_condenses(sand_t *s, int chance);
 #define SAND_CONDENSES_PER_MATERIAL (-1)
 
@@ -1766,6 +1968,41 @@ void sand_set_lava_burst(sand_t *s, int chance);
  * the same reason SAND_LAVA_COOLOFF_DEFAULT is: this has no per-material
  * table figure to fall back to, only the one constant. */
 #define SAND_LAVA_BURST_DEFAULT (-1)
+
+/* Overrides SAND_ACID_RAIN_CHANCE (below), the same shape as
+ * sand_set_lava_cooloff()/sand_set_lava_burst() just above and for the
+ * same reason: a test that wants a qualifying gas/steam pocket to
+ * collapse (or never collapse) deterministically cannot wait out a
+ * natural roll and stay fast the way test_a_2x2_block_of_steam_
+ * condenses_into_one_water_cell (suite_sand.c) already does for the
+ * sibling mechanic this one extends. Clamped to [0, 255] exactly like
+ * every other chance-in-256 setter in this file. */
+void sand_set_acid_rain(sand_t *s, int chance);
+
+/* The sentinel sand_set_acid_rain(s, chance < 0) restores, and what
+ * sand_init() itself starts every sand_t at - "use
+ * SAND_ACID_RAIN_CHANCE", named _DEFAULT rather than _PER_MATERIAL for
+ * the same reason SAND_LAVA_COOLOFF_DEFAULT is: acid rain is not read
+ * from any one material's own row, only the one constant. */
+#define SAND_ACID_RAIN_DEFAULT (-1)
+
+/* Overrides SAND_ACID_DILUTE_MASS_BIAS (above), the same override shape
+ * as every other tunable in this file - added specifically so a test
+ * can isolate the mass-bias mechanism's own effect: forced to 0, a
+ * water/acid contest is a pure, unbiased coin flip regardless of local
+ * backing, letting a test compare "with bias" against "without" instead
+ * of only ever measuring the two together. Unlike the chance-in-256
+ * setters above this is not clamped to [0, 255] - the constant it
+ * overrides is a per-neighbour multiplier, not a roll threshold, and
+ * has no such ceiling of its own. */
+void sand_set_acid_dilute_mass_bias(sand_t *s, int bias);
+
+/* The sentinel sand_set_acid_dilute_mass_bias(s, bias < 0) restores, and
+ * what sand_init() itself starts every sand_t at - "use
+ * SAND_ACID_DILUTE_MASS_BIAS", the same _DEFAULT naming SAND_LAVA_
+ * COOLOFF_DEFAULT and SAND_ACID_RAIN_DEFAULT use for a constant with no
+ * per-material table figure to fall back to. */
+#define SAND_ACID_DILUTE_MASS_BIAS_DEFAULT (-1)
 
 /* How often a gas grain attempts its spontaneous rise/slide at all, as a
  * chance in 256 - see material.h's `mobility` field. 255, the default,
