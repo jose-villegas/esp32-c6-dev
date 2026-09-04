@@ -21,7 +21,7 @@
         "grid_hue_ms": 700,
         "grid_hue_spread": 64,
         "grid_whiten_max": 32,
-        "grid_ceiling_max": 64,
+        "grid_ceiling_max": 96,
         "grid_max": 64,
         "pen_finish_ms": 4800,
         "wave_start_ms": 4200,
