@@ -1002,11 +1002,15 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * untouched (a free cell of whichever material won, every single time,
  * which is what actually needed fixing - see SAND_ACID_DILUTE_MASS_BIAS
  * below and the ladder's own comment for the full story). With that
- * fixed, the split itself only needs a small lean, not a strong one: 134
- * (roughly 52.3%, about a 2.5-point favour toward water) rather than
- * 141's 5-point one. Starting bias, not a measured one - tune on device
- * like every other constant here. */
-#define SAND_ACID_DILUTE_TO_WATER_CHANCE 134
+ * fixed, the split itself only needed a small lean rather than a strong
+ * one - 134 (roughly 52.3%) for one round - and then, once the win/lose
+ * split was no longer the only thing standing between either liquid and
+ * unbounded growth, no lean at all: 128 is an exact 50/50 coin flip.
+ * Whichever side wins a given bite is now decided entirely by
+ * SAND_ACID_DILUTE_MASS_BIAS below (local backing) rather than a fixed
+ * preference baked into the base rate. Starting bias, not a measured
+ * one - tune on device like every other constant here. */
+#define SAND_ACID_DILUTE_TO_WATER_CHANCE 128
 
 /* MASS MATTERS - a single roll at the fixed split above can't tell a lone
  * drop of acid resting on a lake from a whole poured-on slab of it; every
