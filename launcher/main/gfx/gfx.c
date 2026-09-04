@@ -1,5 +1,6 @@
 #include "gfx/gfx.h"
 #include "gfx/gfx_dirty.h"
+#include "gfx/gfx_font_roles.h"
 #include "util/intmath.h"
 
 #include <stdlib.h>
@@ -831,18 +832,21 @@ void gfx_blit_dither(int x, int y, int w, int h, const gfx_color_t *src,
  * Text
  *
  * One font-aware path (gfx_text_font(), gfx_font_width()) that everything
- * else here delegates to, passing gfx_default_font() - see gfx_font.h for
- * what a gfx_font_t is and why it exists: honouring microui's mu_Font is a
- * later task, in files this one steers clear of, and that task needs a font
- * to point AT. gfx_default_font() wraps font8x8_basic.h's data, which is
- * public-domain 8x8 bitmap data: one byte per row, and within a row bit 0 is
- * the LEFTMOST pixel - see gfx_font_8x8's own comment in gfx_font.h.
- *-------------------------------------------------------------------------*/
-
-const gfx_font_t *gfx_default_font(void)
-{
-    return &gfx_font_8x8;
-}
+ * else here delegates to, passing gfx_font_ui() - see gfx_font.h for what a
+ * gfx_font_t is and why it exists: honouring microui's mu_Font is a later
+ * task, in files this one steers clear of, and that task needs a font to
+ * point AT. gfx_font_ui() (gfx_font_roles.h) wraps font8x8_basic.h's data,
+ * which is public-domain 8x8 bitmap data: one byte per row, and within a
+ * row bit 0 is the LEFTMOST pixel - see gfx_font_8x8's own comment in
+ * gfx_font.h.
+ *
+ * This used to be its own function here, gfx_default_font(), returning
+ * &gfx_font_8x8 directly - the one entry the scheme had before more than
+ * one role existed. It is retired in favour of gfx_font_ui(): "gfx's own
+ * built-in default" and "the font the UI role names" were always the same
+ * question asked twice, and every caller (ui.c, boot_anim.c, this file)
+ * wanted the same answer either way, so there is no longer a reason to
+ * make a caller pick which of two names to spell. */
 
 int gfx_font_width(const gfx_font_t *font, const char *text, int len,
                    int scale)
@@ -852,12 +856,12 @@ int gfx_font_width(const gfx_font_t *font, const char *text, int len,
 
 int gfx_text_width(const char *text, int len)
 {
-    return gfx_font_width(gfx_default_font(), text, len, GFX_GLYPH_SCALE);
+    return gfx_font_width(gfx_font_ui(), text, len, GFX_GLYPH_SCALE);
 }
 
 int gfx_text_height(void)
 {
-    return gfx_font_height(gfx_default_font(), GFX_GLYPH_SCALE);
+    return gfx_font_height(gfx_font_ui(), GFX_GLYPH_SCALE);
 }
 
 void gfx_text(int x, int y, const char *text, gfx_color_t color)
@@ -1023,7 +1027,7 @@ void gfx_text_font(int x, int y, const char *text, gfx_color_t color,
 void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
                      int scale, int quarter_turns)
 {
-    gfx_text_font(x, y, text, color, scale, quarter_turns, gfx_default_font());
+    gfx_text_font(x, y, text, color, scale, quarter_turns, gfx_font_ui());
 }
 
 /*---------------------------------------------------------------------------

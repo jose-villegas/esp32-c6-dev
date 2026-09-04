@@ -250,14 +250,16 @@ void gfx_text_turned(int x, int y, const char *text, gfx_color_t color,
 int gfx_text_width(const char *text, int len);
 int gfx_text_height(void);
 
-/* The font every gfx_text*() call above draws with. gfx_font.h's gfx_font_t
- * is what carries a font from here on; this is the one entry the scheme has
- * today. A caller that wants a specific font rather than "whatever gfx draws
- * with" - microui's mu_Font, once something honours it - asks for this. */
-const gfx_font_t *gfx_default_font(void);
+/* The font every gfx_text*() call above draws with is gfx_font_ui()
+ * (gfx/gfx_font_roles.h) - the UI/body-text role, not something this file
+ * names itself any more (it used to, as gfx_default_font(); see that role's
+ * own comment for why the two questions turned out to be one). A caller
+ * that wants a specific font rather than "whatever gfx draws with" - or
+ * that wants to name a role directly instead of reaching through this
+ * file - asks gfx_font_roles.h for it. */
 
 /* The single font-aware drawing path gfx_text(), gfx_text_scaled() and
- * gfx_text_turned() all delegate to, passing gfx_default_font(). Same
+ * gfx_text_turned() all delegate to, passing gfx_font_ui(). Same
  * (x, y)-is-the-first-glyph's-cell and turn convention as gfx_text_turned().
  *
  * Draws bpp==1 (1-bit mask, e.g. gfx_font_8x8) and bpp==8 (8-bit coverage
@@ -278,9 +280,9 @@ void gfx_text_font_dither(int x, int y, const char *text, gfx_color_t color,
                           const gfx_font_t *font, uint8_t alpha);
 
 /* gfx_text_width()'s general form: the width `text` would draw at in
- * `font`, at `scale`. gfx_text_width() is this called with
- * gfx_default_font(). See gfx_font_text_width() in gfx_font.h for the pure
- * metric this wraps, and its own comment for the `len < 0` contract. */
+ * `font`, at `scale`. gfx_text_width() is this called with gfx_font_ui().
+ * See gfx_font_text_width() in gfx_font.h for the pure metric this wraps,
+ * and its own comment for the `len < 0` contract. */
 int gfx_font_width(const gfx_font_t *font, const char *text, int len,
                    int scale);
 

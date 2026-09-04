@@ -31,6 +31,7 @@
 #include "esp_log.h"
 
 #include "gfx/gfx.h"
+#include "gfx/gfx_font_roles.h"
 #include "gfx/icons.h"
 
 static const char *TAG = "ui";
@@ -70,18 +71,18 @@ static uint32_t layout_generation;
  * `font` is whatever ctx.style->font held when the widget that wants
  * metrics ran - see ui_set_font() in ui.h for how it gets there. It is
  * NULL only before ui_init() has run (mu_init() leaves it that way, and
- * ui_init() is what first sets it); fall back to gfx_default_font() rather
- * than deref a NULL, so a widget measured before ui_init() gets a sane
- * answer instead of a crash. */
+ * ui_init() is what first sets it); fall back to gfx_font_ui() (the UI/
+ * body-text role - gfx/gfx_font_roles.h) rather than deref a NULL, so a
+ * widget measured before ui_init() gets a sane answer instead of a crash. */
 static int measure_text_width(mu_Font font, const char *str, int len)
 {
-    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_default_font();
+    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
     return gfx_font_text_width(f, str, len, GFX_GLYPH_SCALE);
 }
 
 static int measure_text_height(mu_Font font)
 {
-    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_default_font();
+    const gfx_font_t *f = font ? (const gfx_font_t *)font : gfx_font_ui();
     return gfx_font_height(f, GFX_GLYPH_SCALE);
 }
 
@@ -185,7 +186,7 @@ void ui_set_text_style(ui_text_style_t style)
  * ui_set_text_style()'s comment above for the full argument this mirrors. */
 void ui_set_font(const gfx_font_t *font)
 {
-    ctx.style->font = (mu_Font)(font ? font : gfx_default_font());
+    ctx.style->font = (mu_Font)(font ? font : gfx_font_ui());
 }
 
 static bool transforms_equal(ui_transform_t a, ui_transform_t b)
@@ -256,7 +257,7 @@ void ui_init(void)
     mu_init(&ctx);
     ctx.text_width  = measure_text_width;
     ctx.text_height = measure_text_height;
-    ctx.style->font = (mu_Font)gfx_default_font();
+    ctx.style->font = (mu_Font)gfx_font_ui();
 
     base_draw_frame = ctx.draw_frame;
     ctx.draw_frame  = styled_draw_frame;
@@ -475,7 +476,7 @@ static void draw_command(const mu_Command *cmd)
         const mu_Color ink  = cmd->text.color;
         const mu_Color halo = ui_text_halo(ink);
         const gfx_font_t *font = cmd->text.font ?
-            (const gfx_font_t *)cmd->text.font : gfx_default_font();
+            (const gfx_font_t *)cmd->text.font : gfx_font_ui();
         const int quarter = ui_transform_quarter(t);
 
         /* WHY THE WHOLE STRING'S BOX IS MAPPED, NOT JUST ITS ORIGIN

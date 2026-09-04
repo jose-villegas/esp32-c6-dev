@@ -123,6 +123,7 @@ if(CONFIG_LAUNCHER_SELFTEST)
         "../test/suites/suite_gfx_dirty.c"
         "../test/suites/suite_gfx_color.c"
         "../test/suites/suite_gfx_font.c"
+        "../test/suites/suite_gfx_font_roles.c"
         "../test/suites/suite_icons.c"
         "../test/suites/suite_ui.c"
         "../test/suites/suite_ui_style.c"
