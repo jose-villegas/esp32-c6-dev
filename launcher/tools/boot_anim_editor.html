@@ -522,6 +522,17 @@ const FIELD_GROUPS = [
  * the JSON file needs to see, not something to hide behind a mouseover).
  * A key missing here falls back to showing its own raw name as the label,
  * so a newly-added field never renders as blank. */
+/* The scale each typeface is meant to be drawn at, indexed by title_font's
+ * own id (boot_anim_title_font_id_t in boot_anim.h). Not a preference - it
+ * falls out of how each font was made: gfx_font_lmroman_40 was rasterized
+ * AT 40px so 1 is its native size and anything above it resamples a
+ * coverage atlas (blurry); gfx_font_8x8 is an 8px bitmap whose whole point
+ * is that integer multiples stay crisp, and 5 is what reaches a comparable
+ * ~40px title. Used when the typeface CHANGES; the scale stays editable
+ * afterwards for anyone who wants a bigger or smaller title than the
+ * font's own natural one. */
+const TITLE_FONT_NATURAL_SCALE = { 0: 1, 1: 5 };
+
 const FIELD_LABELS = {
   total_ms: 'total animation length',
   fade_start_ms: 'dissolve to the launcher starts',
@@ -553,7 +564,7 @@ const FIELD_LABELS = {
   title_wave_amplitude_px: 'idle wave amplitude once a letter has landed',
   title_wave_period_ms: 'idle wave cycle time',
   title_wave_stagger_ms: 'idle wave phase offset, per letter',
-  title_scale: 'pixel multiplier (1 suits the 40px atlas, ~5 the 8x8)',
+  title_scale: 'size multiplier - 8x8 bitmap draws at 8xthis; the 40px atlas is native at 1 and resamples above it',
   title_wave_out_ms: 'when the idle wave starts calming (total_ms = never)',
   title_wave_fade_ms: 'how long the calming takes (0 = stop dead)',
   title_height_px: 'how far down the frame the title lands',
@@ -944,6 +955,19 @@ function renderConsts() {
          [1, 'Built-in 8x8 bitmap (the old default)']],
         v => {
           state.timing.title_font = v;
+          /* Carry title_scale to the new typeface's OWN natural scale
+           * rather than leaving whatever suited the last one. The two are
+           * separate knobs on purpose (see BOOT_ANIM_TITLE_FONT's comment
+           * in boot_anim.h), but a multiplier only means anything relative
+           * to a cell size: 1 against the 8px bitmap is an 8px title, so
+           * switching to it and leaving the scale alone renders something
+           * that looks broken rather than like the font being considered.
+           * Overwriting a tuned value is the right trade here - a scale
+           * chosen for a 40px atlas was never going to be the one you
+           * wanted for an 8px cell - and it stays editable right below. */
+          state.timing.title_scale = TITLE_FONT_NATURAL_SCALE[v] || 1;
+          const scaleInput = document.getElementById('timingField_title_scale');
+          if (scaleInput) scaleInput.value = state.timing.title_scale;
           renderDebounced();
         });
     }
