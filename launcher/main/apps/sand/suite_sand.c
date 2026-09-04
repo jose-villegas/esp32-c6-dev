@@ -19369,71 +19369,162 @@ static void test_condensation_needs_a_genuine_2x2_square(void)
 
 /* Acid rain - SAND_ACID_RAIN_CHANCE's own comment (sand.h) for the
  * feature, step_one_acid_rain_cell()'s own (sand_reactions.c) for the
- * mechanism. sand_set_acid_rain(&s, 255) forces a deterministic,
- * single-step conversion, the same discipline
- * test_a_2x2_block_of_steam_condenses_into_one_water_cell just above
- * already uses for the sibling mechanic this one extends.
+ * mechanism. sand_set_acid_rain(&s, 255) makes a single-step conversion
+ * overwhelmingly likely, not strictly certain - it is still a roll
+ * against a byte-wide field, 255 in 256, not the 256-and-up special case
+ * util/rng.h's own rng_chance() helper reserves for "always" - the same
+ * discipline test_a_2x2_block_of_steam_condenses_into_one_water_cell just
+ * above already leans on for the sibling mechanic this one extends, and
+ * this fixture now matches that one's own footprint exactly: acid rain is
+ * a 2x2 pocket, sized like plain rain, not the bigger 4x4 an earlier
+ * version checked.
  *
  * Sealed on top and both sides exactly like that test's own fixture -
  * see its comment for why (sand_step_gas() runs before
  * sand_step_reactions() within one sand_step() call, so an unsealed
- * pocket can scatter before the reactions pass ever sees it intact) -
- * and column-striped (steam, gas, steam, gas) rather than any other
- * arrangement of the required two-of-each: a 2x2 all-steam sub-block
- * anywhere in the 4x4 would also satisfy ordinary condensation, muddying
- * which mechanic actually fired, and no two adjacent columns share a
- * material here, so no such sub-block exists (condenses is also
- * explicitly disabled below, belt and braces). */
-static void test_a_qualifying_gas_steam_pocket_collapses_into_an_acid_core(void)
+ * pocket can scatter before the reactions pass ever sees it intact).
+ * Column-striped (steam, gas) rather than diagonal or any other
+ * arrangement of the required two-of-each: with only four cells total,
+ * no arrangement can accidentally also satisfy ordinary condensation
+ * (that needs all four cells identical, and two-of-each never is), so
+ * unlike the old 4x4 fixture there is no ambiguity left to design
+ * around - condenses is still explicitly disabled below, belt and
+ * braces.
+ *
+ * Does NOT assert which of Acid or Water the corner becomes - that is
+ * a genuine 50/50 coin flip (see step_one_acid_rain_cell()'s own
+ * comment), and this test's job is the COLLAPSE SHAPE, not the outcome
+ * of that flip; test_acid_rain_resolves_to_both_acid_and_water below
+ * checks the flip itself, across many independent pockets. */
+static void test_a_qualifying_gas_steam_pocket_collapses_into_one_cell(void)
 {
     fixture();
     sand_set_acid_rain(&s, 255);
     sand_set_condenses(&s, 0);
     sand_set_mobility(&s, 0);
 
-    for (int x = 1; x <= 4; x++) {
-        sand_set(&s, x, 0, STONE);
-    }
-    for (int y = 1; y <= 4; y++) {
-        sand_set(&s, 0, y, STONE);
-        sand_set(&s, 5, y, STONE);
-    }
-    for (int y = 1; y <= 4; y++) {
-        for (int x = 1; x <= 4; x++) {
-            sand_set(&s, x, y, ((x % 2) == 1) ? STEAM : GAS);
-        }
-    }
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 2, 4, STONE);
+    sand_set(&s, 5, 3, STONE);
+    sand_set(&s, 5, 4, STONE);
+
+    sand_set(&s, 3, 3, STEAM);
+    sand_set(&s, 3, 4, STEAM);
+    sand_set(&s, 4, 3, GAS);
+    sand_set(&s, 4, 4, GAS);
 
     sand_step(&s, 0, 1000, 0);
 
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 1, 1)),
-        "a forced roll must collapse the pocket into acid at its own "
-        "top-left 2x2, the same ratio condensation itself uses");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 2, 1)),
-        "the top-left 2x2's other three cells must survive as acid too");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 1, 2)),
-        "the top-left 2x2's other three cells must survive as acid too");
-    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_ACID, CELL_MATERIAL(sand_at(&s, 2, 2)),
-        "the top-left 2x2's other three cells must survive as acid too");
-
-    for (int y = 1; y <= 4; y++) {
-        for (int x = 1; x <= 4; x++) {
-            if (x <= 2 && y <= 2) {
-                continue; /* the surviving 2x2, checked above */
-            }
-            char msg[96];
-            snprintf(msg, sizeof msg,
-                     "cell (%d,%d) must clear to empty - only the top-left "
-                     "2x2 is supposed to survive the collapse", x, y);
-            TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, x, y)), msg);
-        }
-    }
+    const uint8_t corner_mat = CELL_MATERIAL(sand_at(&s, 3, 3));
+    TEST_ASSERT_TRUE_MESSAGE(corner_mat == MAT_ACID || corner_mat == MAT_WATER,
+        "a forced roll must collapse the pocket at its own top-left "
+        "corner into either Acid or Water - the 50/50 coin flip - not "
+        "leave it as gas/steam or anything else");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 3)),
+        "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 3, 4)),
+        "and clear the other three corners of the square");
+    TEST_ASSERT_TRUE_MESSAGE(CELL_IS_EMPTY(sand_at(&s, 4, 4)),
+        "and clear the other three corners of the square");
 }
 
-/* One cell short of the two-of-each requirement (one steam, fifteen
- * gas - still a pure gas/steam pocket, still boxed in identically) must
- * never collapse, no matter how the roll would have gone - the same
- * "needs a genuine match, not almost one" property
+/* Guards step_one_reacting_row()'s own found |= FOUND_DISSOLVER report at
+ * its acid-rain call site (sand_reactions.c) the same way
+ * test_lava_quenched_into_stone_mid_pass_arms_the_heat_holder_flag guards
+ * may_have_heat_holder: the survivor a matching pocket collapses into is
+ * written at the row walk's own current scan position and never gets a
+ * turn of its own this same pass, so nothing but that call site's own
+ * report keeps may_have_dissolver armed once the pass ends. Skip that
+ * report and the new acid is created inert - it sits there and never
+ * dissolves anything again, since sand_step_reactions() early-returns on
+ * every later step and ordinary liquid movement does not call
+ * latch_content_flags() to re-arm it (measured directly while diagnosing
+ * this: a rained acid cell sealed in the room below ate none of its 12
+ * surrounding stone cells across 200 steps with the report missing,
+ * against 2 of 12 eaten in the same room once it was restored).
+ *
+ * A full sealed 4x4 room, not just the acid's own immediate neighbours -
+ * sand_set_mobility(0) reads as NO VISCOSITY for a liquid (see
+ * liquid_may_move()'s own comment, sand_liquid.c - a documented trap,
+ * not this test's own invention: 0 means "moves every step", the
+ * opposite of "pinned in place"), so the acid drifts around inside the
+ * room rather than sitting still at its own birth cell. The room gives
+ * it four walls to eventually reach regardless of which way it wanders,
+ * the same shape the control comparison above used to first measure
+ * this bug.
+ *
+ * Seeded to land the coin flip on Acid specifically (see the loop) so
+ * there is one concrete follow-up behaviour - does the acid actually go
+ * on to dissolve some wall of the room it is boxed in - to assert on,
+ * not two; may_have_moisture's equivalent for a rained Water cell has no
+ * comparably cheap single observable, and the same found |= report line
+ * covers both bits together regardless of which one fires. */
+static void test_a_rained_acid_cell_keeps_dissolving_after_the_collapse(void)
+{
+    bool found_acid_seed = false;
+    for (unsigned seed = 1u; seed < 64u && !found_acid_seed; seed++) {
+        sand_init(&s, cells, W, H, seed);
+        sand_set_acid_rain(&s, 255);
+        sand_set_condenses(&s, 0);
+        sand_set_mobility(&s, 0);
+
+        for (int x = 2; x <= 5; x++) {
+            sand_set(&s, x, 2, STONE);
+            sand_set(&s, x, 5, STONE);
+        }
+        sand_set(&s, 2, 3, STONE);
+        sand_set(&s, 5, 3, STONE);
+        sand_set(&s, 2, 4, STONE);
+        sand_set(&s, 5, 4, STONE);
+
+        sand_set(&s, 3, 3, STEAM);
+        sand_set(&s, 3, 4, STEAM);
+        sand_set(&s, 4, 3, GAS);
+        sand_set(&s, 4, 4, GAS);
+
+        sand_step(&s, 0, 1000, 0);
+
+        if (CELL_MATERIAL(sand_at(&s, 3, 3)) != MAT_ACID) {
+            continue; /* the coin flip landed on Water this seed - try another */
+        }
+        found_acid_seed = true;
+
+        TEST_ASSERT_TRUE_MESSAGE(s.may_have_dissolver,
+            "the acid a collapse just produced must leave may_have_dissolver "
+            "armed - it was created behind the row walk's own scan pointer, "
+            "so nothing else this same pass reports it");
+
+        int stone_left = 12;
+        for (int i = 0; i < 120 && stone_left == 12; i++) {
+            sand_step(&s, 0, 1000, 0);
+            stone_left = 0;
+            for (int yy = 2; yy <= 5; yy++) {
+                for (int xx = 2; xx <= 5; xx++) {
+                    if ((xx == 2 || xx == 5 || yy == 2 || yy == 5)
+                        && CELL_MATERIAL(sand_at(&s, xx, yy)) == MAT_STONE) {
+                        stone_left++;
+                    }
+                }
+            }
+        }
+        TEST_ASSERT_TRUE_MESSAGE(stone_left < 12,
+            "a rained acid cell sealed in a stone room must go on to "
+            "dissolve some of that room's walls within 120 further steps - "
+            "if may_have_dissolver silently cleared at the end of the "
+            "collapse's own pass, the acid is created inert and never eats "
+            "anything again");
+    }
+    TEST_ASSERT_TRUE_MESSAGE(found_acid_seed,
+        "setup: none of the first 64 seeds landed the coin flip on Acid - "
+        "widen the seed range, this test never exercised its own scenario");
+}
+
+/* One cell short of the two-of-each requirement (one steam, three gas -
+ * still a pure gas/steam pocket, still boxed in identically) must never
+ * collapse, no matter how the roll would have gone - the same "needs a
+ * genuine match, not almost one" property
  * test_condensation_needs_a_genuine_2x2_square just above already
  * checks for its own sibling mechanic. */
 static void test_acid_rain_needs_at_least_two_of_each_species(void)
@@ -19443,34 +19534,97 @@ static void test_acid_rain_needs_at_least_two_of_each_species(void)
     sand_set_condenses(&s, 0);
     sand_set_mobility(&s, 0);
 
-    for (int x = 1; x <= 4; x++) {
-        sand_set(&s, x, 0, STONE);
-    }
-    for (int y = 1; y <= 4; y++) {
-        sand_set(&s, 0, y, STONE);
-        sand_set(&s, 5, y, STONE);
-    }
-    for (int y = 1; y <= 4; y++) {
-        for (int x = 1; x <= 4; x++) {
-            sand_set(&s, x, y, GAS);
-        }
-    }
-    sand_set(&s, 1, 1, STEAM);
+    sand_set(&s, 3, 2, STONE);
+    sand_set(&s, 4, 2, STONE);
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 2, 4, STONE);
+    sand_set(&s, 5, 3, STONE);
+    sand_set(&s, 5, 4, STONE);
+
+    sand_set(&s, 3, 3, STEAM);
+    sand_set(&s, 4, 3, GAS);
+    sand_set(&s, 3, 4, GAS);
+    sand_set(&s, 4, 4, GAS);
 
     sand_step(&s, 0, 1000, 0);
 
-    int acid_seen = 0;
-    for (int y = 1; y <= 4; y++) {
-        for (int x = 1; x <= 4; x++) {
-            if (CELL_MATERIAL(sand_at(&s, x, y)) == MAT_ACID) {
-                acid_seen++;
-            }
+    /* Not just "the corner didn't become acid or water" - a miss must
+     * leave the whole pocket untouched, the same strength
+     * test_condensation_needs_a_genuine_2x2_square just above asserts
+     * for its own sibling mechanic (MAT_STEAM there, not merely
+     * "not MAT_WATER"). A future bug that cleared the block without
+     * placing a residue - or picked the wrong corner - would pass the
+     * weaker check and fail this one. */
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_STEAM, CELL_MATERIAL(sand_at(&s, 3, 3)),
+        "one steam cell short of the two-steam/two-gas requirement must "
+        "never collapse, even with the roll forced to succeed every time");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 4, 3)),
+        "and must leave the rest of the pocket exactly as it was");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 3, 4)),
+        "and must leave the rest of the pocket exactly as it was");
+    TEST_ASSERT_EQUAL_INT_MESSAGE(MAT_GAS, CELL_MATERIAL(sand_at(&s, 4, 4)),
+        "and must leave the rest of the pocket exactly as it was");
+}
+
+/* SAND_ACID_RAIN_CHANCE's own comment (sand.h): the surviving cell is a
+ * genuine 50/50 coin flip between Acid and Water, not always Acid.
+ * ACID_RAIN_TRIALS independent collapses, forced acid_rain=255 so every
+ * one fires - the roll under test here is the SECOND one, the residue
+ * coin flip, which has no override of its own and so has to be observed
+ * through real RNG variation across many independent trials instead.
+ *
+ * One shared sealed pocket on the ordinary WxH fixture, repainted and
+ * re-stepped ACID_RAIN_TRIALS times in a row, rather than ACID_RAIN_TRIALS
+ * side-by-side pockets on a bespoke wide grid - the trials are independent
+ * either way (a fresh RNG draw per collapse), and this needs neither a
+ * malloc nor a second sand_t: the shared 8x8 fixture already has room for
+ * one sealed 2x2 with stone to spare, and the survivor is fully
+ * overwritten by the next trial's steam/gas repaint before it could ever
+ * be re-observed. An unbiased coin: P(all ACID_RAIN_TRIALS trials agree)
+ * is 2 * 0.5^ACID_RAIN_TRIALS, astronomically small at 40 - the same bar
+ * test_wet_dirt_can_still_steam_before_spoiling_at_least_sometimes (this
+ * file) computes for its own many-independent-attempts test. */
+#define ACID_RAIN_TRIALS 40
+static void test_acid_rain_resolves_to_both_acid_and_water(void)
+{
+    fixture();
+    sand_set_acid_rain(&s, 255);
+    sand_set_condenses(&s, 0);
+    sand_set_mobility(&s, 0);
+
+    for (int x = 2; x <= 5; x++) {
+        sand_set(&s, x, 2, STONE);
+        sand_set(&s, x, 5, STONE);
+    }
+    sand_set(&s, 2, 3, STONE);
+    sand_set(&s, 5, 3, STONE);
+    sand_set(&s, 2, 4, STONE);
+    sand_set(&s, 5, 4, STONE);
+
+    int acid_seen = 0, water_seen = 0;
+    for (int trial = 0; trial < ACID_RAIN_TRIALS; trial++) {
+        sand_set(&s, 3, 3, STEAM);
+        sand_set(&s, 3, 4, STEAM);
+        sand_set(&s, 4, 3, GAS);
+        sand_set(&s, 4, 4, GAS);
+
+        sand_step(&s, 0, 1000, 0);
+
+        const uint8_t mat = CELL_MATERIAL(sand_at(&s, 3, 3));
+        if (mat == MAT_ACID) {
+            acid_seen++;
+        } else if (mat == MAT_WATER) {
+            water_seen++;
         }
     }
-    TEST_ASSERT_EQUAL_INT_MESSAGE(0, acid_seen,
-        "three steam cells short of the two-steam/two-gas requirement "
-        "must never collapse into acid, even with the roll forced to "
-        "succeed every time");
+
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, acid_seen,
+        "expected at least one acid-rain collapse to resolve to Acid "
+        "across ACID_RAIN_TRIALS independent trials");
+    TEST_ASSERT_GREATER_THAN_MESSAGE(0, water_seen,
+        "expected at least one acid-rain collapse to resolve to Water "
+        "across ACID_RAIN_TRIALS independent trials - always Acid would "
+        "mean the coin flip is not actually being rolled");
 }
 
 /* --- dirty rows: nothing changes without saying so ---------------------- */
@@ -27018,8 +27172,10 @@ void run_sand_suite(void)
     RUN_TEST(test_wood_and_steam_grain_count_is_conserved);
     RUN_TEST(test_a_2x2_block_of_steam_condenses_into_one_water_cell);
     RUN_TEST(test_condensation_needs_a_genuine_2x2_square);
-    RUN_TEST(test_a_qualifying_gas_steam_pocket_collapses_into_an_acid_core);
+    RUN_TEST(test_a_qualifying_gas_steam_pocket_collapses_into_one_cell);
+    RUN_TEST(test_a_rained_acid_cell_keeps_dissolving_after_the_collapse);
     RUN_TEST(test_acid_rain_needs_at_least_two_of_each_species);
+    RUN_TEST(test_acid_rain_resolves_to_both_acid_and_water);
 
     RUN_TEST(test_every_cell_change_marks_its_row_dirty);
     RUN_TEST(test_grains_are_never_created_or_destroyed);
