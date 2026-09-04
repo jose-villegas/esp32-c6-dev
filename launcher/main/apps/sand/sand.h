@@ -729,14 +729,21 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * step_impulses()'s own comment at the charge site for why there rather
  * than folded into the ramp. The cost is `density >> this`, so a heavier
  * medium costs more: open air (nothing displaced) costs nothing, water (30)
- * costs 7, dirt or sand (60-62) cost 15 - roughly an order of magnitude
- * more than the plain ramp's 2, which is the point: today a thrown chunk
- * crosses a bank of dirt exactly as fast as open air, and this is meant to
- * be felt immediately, not shaved off gradually. A SHIFT rather than a
- * flat divide keeps the cost a single-instruction saturating operation, the
- * same idiom SAND_SPLASH_SPEED_DECAY_SHIFT already uses elsewhere in this
- * file. 2 is a STARTING FIGURE, not a measurement - picked from the table
- * above, not from a device sweep.
+ * costs 30, dirt or sand (60-62) cost 60-62 - at shift 0 the cost IS the
+ * density, not a fraction of it. A SHIFT rather than a flat divide keeps
+ * the cost a single-instruction saturating operation, the same idiom
+ * SAND_SPLASH_SPEED_DECAY_SHIFT already uses elsewhere in this file.
+ *
+ * 0, MEASURED AGAINST DEVICE FEEDBACK, NOT PICKED FROM A TABLE - shift 2
+ * (dirt/sand cost 15, water cost 7) was the starting figure this constant
+ * shipped with, and a real throw against a real bank of sand on device
+ * did not stop: a chunk at full speed still drove roughly 15 cells into a
+ * bank before running out of speed at shift 2, plainly not "the first few
+ * layers" the maintainer asked for. `density >> 0` is the identity - drag
+ * IS the density, honestly - so dirt or sand (62 + the plain ramp's 2 = 64
+ * a cell) spends the full 255 of speed in four cells, and water (30 + 2 =
+ * 32 a cell) in about eight. Four and eight are the numbers this figure is
+ * now judged against, not the table above.
  *
  * POWDERS WERE OUT AND ARE NOW IN, on device evidence. Scoping this to
  * KIND_STATIC movers first was deliberate - a thrown grain is what
@@ -749,7 +756,52 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * reason that has not changed: they carry their own geometric decay
  * (SAND_SPLASH_SPEED_DECAY_SHIFT) and the splash/cascade feature is tuned
  * around it, so widening to them would move two tuned features at once. */
-#define SAND_IMPULSE_DRAG_SHIFT  2
+#define SAND_IMPULSE_DRAG_SHIFT  0
+
+/* THE FLOOR BELOW WHICH A KIND_STATIC ENTRY IS SPENT, for the gravity-drift
+ * move AND the settled check right after it in step_impulses() (sand.c,
+ * the "AIRBORNE SOLIDS FALL TOO" block and the has_opening loop just below
+ * it) - see can_impulse_enter_gravity_ward()'s own comment (sand.c) for the
+ * one predicate both now call, so they can never again disagree about what
+ * "open" means the way they once did before impulse_gravity_candidates()
+ * unified the candidate list itself.
+ *
+ * WHY THIS HAS TO EXIST AT ALL: drag (SAND_IMPULSE_DRAG_SHIFT, above) only
+ * charges at the PUSH move site - a KIND_STATIC entry's unconditional
+ * gravity-drift pays no drag at all, ever, by design ("gating this on
+ * speed would tie 'still falling' to 'still has outward energy left', which
+ * is backwards" - that block's own comment). Stronger drag alone therefore
+ * stops the sideways travel but does nothing to the drift, which keeps
+ * swapping a spent chunk downward through an entire bank one row a step
+ * until it reaches the bottom - reported on device as "a thrown chunk
+ * entering a powder bank does not stop." An entry below this floor is
+ * SPENT - genuinely out of push, not merely between rolls - and a spent
+ * entry may only continue into a cell that is genuinely CELL_IS_EMPTY(),
+ * never swap through an occupant the way an energetic entry still can.
+ * Above the floor, nothing changes: an energetic chunk still swaps through
+ * powder and liquid exactly as it always has, so a hard impact still
+ * buries itself - this only ends the drift's own free ride once the push
+ * that justified it is gone.
+ *
+ * 1, SO IT MEANS EXACTLY "speed is zero" - the narrowest floor that is
+ * still a floor at all, deliberately not a bigger number: this is meant to
+ * catch an entry that has nothing left, not one that merely has little,
+ * and `speed` already saturates at 0 rather than wrapping (SAND_IMPULSE_
+ * SPEED_RAMP's own comment), so 1 is the first value genuine exhaustion
+ * can never reach.
+ *
+ * THE KNOWN, CHOSEN TRADE: this floor is not kind-aware, so a spent chunk
+ * now comes to rest inside a liquid too, not only a powder - roughly eight
+ * cells down in water at SAND_IMPULSE_DRAG_SHIFT's new figure, rather than
+ * sinking all the way to the floor of a deep pool. The maintainer measured
+ * liquid behaviour as already looking fine and chose this one simple rule
+ * over a second, kind-aware version anyway - simplicity over splitting
+ * powder from liquid, accepted with the trade-off named rather than
+ * discovered later on device. If a chunk stalling mid-pool ever looks
+ * wrong in practice, the fix is to make this predicate ask a different
+ * question for KIND_LIQUID than for KIND_POWDER, not to raise or lower
+ * this number. */
+#define SAND_IMPULSE_SINK_MIN_SPEED  1
 
 /* RESTITUTION FLOOR for the wall-bounce (step_impulses()'s
  * blocked branch, sand.c) - below this, a blocked entry just waits, same
@@ -794,13 +846,21 @@ void sand_impulse_dislodge(sand_t *s, int x, int y, int dir, int speed,
  * Today a flying cell simply swaps with whatever it displaces and the
  * medium closes behind it with no further effect; this is what lets a
  * struck cell pick up impulse of its own instead, including flying clean
- * out of the volume it was sitting in. Direction is the MOVER'S OWN `dir` -
- * momentum goes the way the blow came from, not the reflection the mover
- * itself would take off a wall (that is what happens to something that
- * BOUNCED, and a struck cell did not bounce, it got hit) - see the transfer
- * site's own comment for the rest of the scope (KIND_STATIC/KIND_POWDER
- * movers only, matching drag's own scope just above; any non-static
- * displaced cell, powder or liquid alike).
+ * out of the volume it was sitting in.
+ *
+ * DIRECTION IS A BACKWARD CONE, NOT THE MOVER'S OWN `dir` - one of `dir+3`,
+ * `dir+4` (straight back) or `dir+5`, picked with rng_below(). Queuing the
+ * struck cell along the mover's own heading was tried first and reported
+ * as the reason nothing ever visibly sprayed off a bank: pushing struck
+ * material further ALONG the impact just drives it deeper into whatever it
+ * was already part of, the opposite of the wanted crater. What a real
+ * impact actually does is squeeze material back out through the surface it
+ * came in by, roughly backward and outward - straight back is also where
+ * the open room is, since the mover just came through those exact cells, so
+ * the ejecta has somewhere to go instead of wedging further into the bank.
+ * See the transfer site's own comment for the rest of the scope
+ * (KIND_STATIC/KIND_POWDER movers only, matching drag's own scope just
+ * above; any non-static displaced cell, powder or liquid alike).
  *
  * SAND_IMPULSE_TRANSFER_DIVISOR halves the mover's own post-drag `speed`
  * for the transferred entry - the same halving idiom SAND_CASCADE_SPEED_
